@@ -17,6 +17,12 @@
 // has to be in the context it was written from. Anything that fails, or is late,
 // falls back to the pool in elevenLabsCalls.ts (chooseOpening). A first call
 // (no context yet) uses the pool: there is nothing to pick up.
+//
+// 2026-10-08 (Royce, after a 10-call eval where 4 of 9 outbound calls opened on
+// "the PDF went out this morning, wanted to make sure it landed"): an outbound
+// opening comes from WHY Co called, a moment in their life (services/callReason.ts,
+// held by the call gate), never from something Co owes or sent. Any opening that
+// leads with Co's homework is refused in code, inbound and outbound.
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { checkNoEmotionLabelOnCall } from "../harness/emotion.js";
@@ -25,6 +31,7 @@ import { MODELS } from "../models.js";
 import { stockLine } from "../harness/stockLines.js";
 import { cuesIn } from "./voiceCues.js";
 import { narratesInternalState, selfContradiction } from "./speakable.js";
+import { SENSITIVE, heldCallReason, leadsWithCoHomework, renderCallReason, type CallReason } from "./callReason.js";
 
 export const OPENING_WRITER = {
   minContext: 300,
@@ -53,13 +60,27 @@ export function openingContext(summary: string): string {
     .join("\n\n");
 }
 
-export function openingPrompt(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; recent?: string[] }): string {
+// What the outbound line opens on: the reason Co called (their moment), or, for a call they asked for, them.
+const NOT_CO_WORK = "Never open on Co's own work: nothing Co sent, made, drafted, delivered, owes or is working on (no \"did it land\", no \"did you get the doc\").";
+export function outboundOpeningGuide(reason: CallReason | null | undefined): string {
+  if (reason && reason.kind !== "member_asked" && reason.kind !== "intake") {
+    if (reason.sensitive)
+      return `Co is calling about something personal in their life. Don't name it: whoever picks up hears this line. Greet them warmly and ask one open, light question about them. ${NOT_CO_WORK}`;
+    // Their words stay out of the guide: they often carry the feeling ("nervous about the Q&A"), which the first line never names
+    // (2026-10-08 live check: 3 of 3 lines asked "still feeling nervous?"). The call brain gets them ({{call_reason}}).
+    return `Co called because of this, a moment in their life: ${reason.text}. Open on it: greet them, then one light question about the thing itself (how it went, how it's shaping up, whether it's still on), never about how they feel about it. Their moment, in a friend's words. ${NOT_CO_WORK}`;
+  }
+  if (reason?.kind === "intake") return `This is their first real conversation with Co: Co called to get to know them. Greet them and open on them. ${NOT_CO_WORK}`;
+  return `${reason?.kind === "member_asked" ? "They asked Co to call. " : ""}Then pick up ONE specific, real thing about them and their week, as a light question or as "last we talked ...": something they said, have coming up or are working on, whatever a friend who knows them would naturally bring up. ${NOT_CO_WORK}`;
+}
+
+export function openingPrompt(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; recent?: string[]; reason?: CallReason | null }): string {
   return `You're writing the first thing Co says when a phone call connects. Co is a calm, warm companion who already knows ${o.firstName || "this person"} and has talked with them before. ${o.direction === "outbound" ? `Co is calling them, so Co says who it is ("it's Co").` : "They called Co."}
 
 What Co knows about them (this is all you may use):
 ${o.summary.slice(0, OPENING_WRITER.maxContext)}
 
-Write ONE spoken line, two short sentences at most and under 28 words, greeting ${o.firstName || "them"} by name.${o.direction === "inbound" ? ` They called Co, so they likely have something on their mind: greet them warmly and let them lead. A light touch of one real thing is fine; never open with Co's own agenda.` : ` Then pick up from ONE specific, real thing in what Co knows, as a light question or as "last we talked ...". It can be the newest thread, something Co owes them, or something about them and their week: whatever a friend who knows them would naturally bring up.`}
+Write ONE spoken line, two short sentences at most and under 28 words, greeting ${o.firstName || "them"} by name.${o.direction === "inbound" ? ` They called Co, so they likely have something on their mind: greet them warmly and let them lead. A light touch of one real thing about them is fine; never open with Co's own agenda. ${NOT_CO_WORK}` : ` ${outboundOpeningGuide(o.reason)}`}
 Never pick up something they've already told Co is off, changed or done, and never repeat back news from the last call as if it were new. Never say Co did, drafted, sent or found something unless what Co knows says it was done: something Co still owes them is still owed.
 ${o.recent?.length ? `How you opened your last calls with them (never reuse their words, and don't lead with the same thing again):
 ${o.recent.map((l) => `- ${l}`).join("\n")}
@@ -76,7 +97,6 @@ Rules:
 Reply with only the line.`;
 }
 
-const SENSITIVE = /\b(?:biops\w*|diagnos\w*|cancer|surgery|hospital\w*|chemo\w*|therap\w*|pregnan\w*|miscarr\w*|passed away|funeral|grie\w+|died|death|divorc\w*|breakup|break-up|lawsuit|lawyer|attorney|bankrupt\w*|debt|eviction|rehab|diagnosed|medical|illness)\b/i;
 const FEELING_WORD = /\b(?:stress(?:ed)?|overwhelm\w*|anxi\w*|worr(?:y|ied|ies)|nervous|sad|upset|frustrat\w*|exhaust\w*|burn(?:ed|t)? out|lonely|depress\w*|scared|afraid|angry|annoyed|discourag\w*|feeling|feel)\b/i;
 const RELATIVE_TIME = /\b(?:today|tonight|tomorrow|yesterday|this (?:week|weekend|morning|afternoon|evening)|next (?:week|weekend|month)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 const CO_DID = /\bI(?:'ve| have)?\s+(?:just\s+|already\s+)?(drafted|sent|finished|wrote|put together|pulled together|made|built|found|booked|set up|lined up)\b/i;
@@ -111,6 +131,9 @@ export function openingProblems(raw: string, summary: string, firstName: string)
   // the after-call check had found nothing good enough to send for).
   const did = line.match(CO_DID);
   if (did && !new RegExp(`\\b${did[1].toLowerCase().replace(/\s+/g, "\\s+")}\\b`).test(summary.toLowerCase())) return `claims Co ${did[1].toLowerCase()} something the record doesn't show`;
+  // Never Co's homework, inbound or outbound (2026-10-08: "the PDF went out this morning, wanted to make sure it landed"):
+  // the opening is about them, never a deliverable Co sent, owes or is working on (services/callReason.ts).
+  if (leadsWithCoHomework(line, summary)) return "leads with Co's homework";
   // Every name, place and number in it has to be in what it was written from.
   const hay = summary.toLowerCase().replace(/’/g, "'");
   for (const sentence of line.split(/(?<=[.!?])\s+/)) {
@@ -147,10 +170,17 @@ export async function recentOpenings(userId: string, n = 4): Promise<string[]> {
   return rows.map((r: any) => String(r.line)).filter(Boolean);
 }
 
-export async function writeOpening(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number; userId?: string }): Promise<{ line: string | null; why?: string }> {
+// The context the line is written from and checked against: the trimmed call context, plus why Co called (outbound), so the
+// moment it opens on is in what Co knows.
+export function openingSource(summary: string, direction: "inbound" | "outbound", reason?: CallReason | null): string {
+  const base = openingContext(summary);
+  return direction === "outbound" && reason ? `${base}\n\nWhy Co is calling: ${renderCallReason(reason)}` : base;
+}
+
+export async function writeOpening(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number; userId?: string; reason?: CallReason | null }): Promise<{ line: string | null; why?: string }> {
   if (o.summary.trim().length < OPENING_WRITER.minContext) return { line: null, why: "no context yet (a first call)" };
   // Written from, and checked against, the same trimmed context.
-  const summary = openingContext(o.summary);
+  const summary = openingSource(o.summary, o.direction, o.reason);
   try {
     const model = o.direction === "outbound" ? OPENING_WRITER.outboundModel : OPENING_WRITER.inboundModel;
     const recent = o.userId ? await recentOpenings(o.userId).catch(() => [] as string[]) : [];
@@ -187,8 +217,10 @@ export async function writeOpening(o: { firstName: string; direction: "inbound" 
 // ---------- written while it rings
 const pending = new Map<string, { at: number; line: Promise<{ line: string | null; why?: string }> }>();
 
+// Outbound: the reason the call gate held for this call (services/callReason.ts) is what the line opens on.
 export function prebuildOpening(userId: string, firstName: string, direction: "inbound" | "outbound", summary: Promise<string>, now = Date.now()): void {
-  pending.set(userId, { at: now, line: summary.then((s) => writeOpening({ firstName, direction, summary: s, userId })).catch(() => ({ line: null, why: "failed" })) });
+  const reason = direction === "outbound" ? (heldCallReason(userId, now)?.result.reason ?? null) : null;
+  pending.set(userId, { at: now, line: summary.then((s) => writeOpening({ firstName, direction, summary: s, userId, reason })).catch(() => ({ line: null, why: "failed" })) });
 }
 
 export async function takeOpening(userId: string, waitMs = OPENING_WRITER.takeBudgetMs, now = Date.now()): Promise<{ line: string | null; why?: string }> {

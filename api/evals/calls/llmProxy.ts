@@ -126,7 +126,8 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("last night's words are the signal", M.memberStateSignal("Um, I've just been kinda stressed, uh, lately, and I'm just trying to figure out what's next."));
   sys = ""; spoken.length = 0;
   for await (const _ of P.runCallLlm(baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: "Can you send the PDF on Sequent AI?" }] }), { stream: spy(text(long)), onSpoken: (s) => spoken.push(s) })) { /* drain */ }
-  check("any other turn: no note, no cap", !/they told you how they are/.test(sys) && spoken.length === 6, spoken.length);
+  // 2026-10-08: one question per turn is a hard rule in code: the turn ends at its first question ("Want the links?").
+  check("any other turn: no note, and the turn ends at its first question", !/they told you how they are/.test(sys) && /\?$/.test(spoken[spoken.length - 1] ?? "") && spoken.filter((x) => /\?$/.test(x)).length === 1, spoken);
   // the tool round after the same drained message keeps the note
   sys = ""; spoken.length = 0;
   const afterTool = baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: yes[0] }, { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "assess_conversation_coverage", arguments: "{}" } }] }, { role: "tool", tool_call_id: "t1", content: "{}" }] });
@@ -353,7 +354,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const bNote = CT.buildCallTools({ userId: "member-b", callKey: "member-b:tokB", turnWords: "", callWords: "", lastCoLine: null, member, dryRun: true }).note;
     check("another member's call never carries this call's record", !/Done earlier on this call/.test(bNote));
     const route = fs.readFileSync(new URL("../../src/routes/callLlm.ts", import.meta.url), "utf8");
-    check("the route builds the tools only for the verified member (call token), never from the request's say-so", /if \(userId && process\.env\.CALL_TOOLS !== "off"\)/.test(route) && /buildCallTools\(\{ userId, callKey/.test(route));
+    check("the route builds the tools only for the verified member (call token), never from the request's say-so", /if \(userId && !voiceOnly && process\.env\.CALL_TOOLS !== "off"\)/.test(route) && /buildCallTools\(\{ userId, callKey/.test(route));
     const w = R.callWordsOf({ messages: [{ role: "system", content: "S" }, { role: "assistant", content: "Want me to put it in a doc?" }, { role: "user", content: "Yes." }, { role: "user", content: "Please take the lead." }] } as any);
     check("their words this turn are their lines since Co last spoke; Co's last line is kept for a yes to an offer", w.turnWords === "Yes. Please take the lead." && w.lastCoLine === "Want me to put it in a doc?");
   }

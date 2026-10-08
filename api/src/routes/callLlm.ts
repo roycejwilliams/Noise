@@ -63,10 +63,13 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     const userId = verifyCallToken(String(extra.user_id ?? ""), extra.call_token) ? String(extra.user_id) : null;
     const theirLine = lastUserLine(body);
     const t0 = Date.now();
+    // The agent's mode (custom_llm request_headers, services/elevenLabsCalls.ts): voice-only keeps the voice speakable and one question
+    // to a turn, and does nothing else (no tools, no checks).
+    const voiceOnly = String(req.headers["x-co-mode"] ?? "") === "voice";
     // Co's own tools on the call (services/callTools.ts), for the verified member only. CALL_TOOLS=off is the kill switch.
     const callKey = `${userId}:${String(extra.call_token ?? "")}`;
     let tools: CallToolset | null = null;
-    if (userId && process.env.CALL_TOOLS !== "off") {
+    if (userId && !voiceOnly && process.env.CALL_TOOLS !== "off") {
       try {
         const T = await import("../services/callTools.js");
         const member = await memberOnCall(callKey, userId);
@@ -83,6 +86,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     const deps: ProxyDeps = {
       stream: upstream,
       clean: process.env.CALL_LLM_CLEAN !== "off",
+      voiceOnly,
       onSpoken: (s) => {
         spoken++;
         // A spoken "I'll text you the links" opens a task when the turn ends (below), unless a tool already did the thing.

@@ -196,6 +196,56 @@ export function promiseFacts(rows: { at: Date | string; content: string }[]): { 
   return out;
 }
 
+// One item, said once (Royce, 2026-10-08 call eval: 4 of 9 outbound calls opened with "the PDF went out, wanted to make sure it
+// landed"; the same deliverable sat in the call context five times: the promise, the "Not sent yet" line, the open loop, the
+// recap, a thread). Lines about the same thing collapse into one; anything they already have (a delivery receipt, a promise
+// marked sent) is marked "they have it" and moved out of "where things stand", so it never reads as a reason to talk. It's
+// mentioned only if it changed since they last heard about it, or they ask. Pure.
+export type CarriedLine = { text: string; from: "promise" | "loop" | "thread" | "recap"; sent?: boolean };
+export type Delivered = { title: string; at: Date | string };
+const stem = (w: string) => w.replace(/(?:ing|ed)$/, "").replace(/(?:ment)$/, "");
+const stems = (s: string) => new Set([...meaningWords(s)].map(stem));
+const sameThing = (a: string, b: string) => {
+  const A = stems(a), B = stems(b);
+  const small = Math.min(A.size, B.size);
+  return small > 0 && shared(A, B) >= Math.max(2, Math.ceil(small * 0.5));
+};
+// A line that is about a deliverable Co owes or sent (a doc, plan, brief, PDF, draft, write-up, options, research).
+const DELIVERABLE = /\b(?:doc|document|pdf|plan|brief|draft|write-?up|outline|memo|deck|options|research|shortlist|one-pager|sheet)\b/i;
+export function collapseCarried(lines: CarriedLine[], delivered: Delivered[], zoneDay: (d: Date | string) => string): { open: CarriedLine[]; theyHaveIt: string[]; covered: (text: string) => boolean } {
+  const handled: { title: string; at: Date | string }[] = [...delivered];
+  // A promise marked sent is handled too: its words are the title.
+  for (const l of lines) if (l.from === "promise" && l.sent) handled.push({ title: l.text.replace(/^-?\s*[^:]*:\s*Promised on the call:\s*/i, "").replace(/\.\s*Sent\.?$/i, ""), at: "" });
+  // One call often says one deliverable three ways ("draft and text a plan", "text the drafted planning document", "plan will be
+  // delivered once ready"): a deliverable promised on the same call day as one that went counts as that one.
+  const dayOf = (t: string) => t.match(/^-?\s*([A-Z][a-z]{2} \d{1,2}):/)?.[1] ?? null;
+  // Two deliverable mentions are the same thing on two distinctive shared words ("the post-event presence doc" and "Co Presence
+  // Plan: After the ... Event"); a looser match than for open items, because both name a deliverable.
+  const sameDeliverable = (text: string, title: string) => { const A = stems(text), B = stems(title); return shared(A, B) >= 2 || sameThing(text, title); };
+  const byTitle = (text: string) => DELIVERABLE.test(text) && handled.some((h) => sameDeliverable(text, h.title));
+  const sentDays = new Set(lines.filter((l) => l.from === "promise" && DELIVERABLE.test(l.text) && (l.sent || byTitle(l.text))).map((l) => dayOf(l.text)).filter(Boolean));
+  const isHandled = (text: string) => DELIVERABLE.test(text) && (byTitle(text) || (!!dayOf(text) && sentDays.has(dayOf(text))));
+  const open: CarriedLine[] = [];
+  for (const l of lines) {
+    if ((l.from === "promise" && l.sent) || isHandled(l.text)) continue;
+    // A duplicate of something already kept (the promise and its open loop): one line, the more specific (longer) one.
+    const dup = open.findIndex((o) => sameThing(o.text, l.text));
+    if (dup >= 0) {
+      if (l.text.length > open[dup].text.length && l.from !== "recap") open[dup] = l;
+      continue;
+    }
+    if (l.from === "promise" || l.from === "loop") open.push(l);
+  }
+  const theyHaveIt: string[] = [];
+  const seen: string[] = [];
+  for (const h of handled) {
+    if (!h.title.trim() || seen.some((x) => sameThing(x, h.title))) continue;
+    seen.push(h.title);
+    theyHaveIt.push(`- "${h.title.slice(0, 120)}"${h.at ? ` (sent ${zoneDay(h.at)})` : ""}`);
+  }
+  return { open, theyHaveIt, covered: (text: string) => isHandled(text) || open.some((o) => o.from !== "recap" && sameThing(o.text, text) && DELIVERABLE.test(text)) };
+}
+
 export const CONTEXT_MAX = 4500;
 // Each part's share of CONTEXT_MAX (they add up to a little under it, with room for the short profile lines).
 export const CONTEXT_SHARES = { corrections: 700, picture: 1300, ownWords: 750, openAsks: 450, recap: 450, recentTexts: 450 };
@@ -393,7 +443,7 @@ export function pairCalls(rows: { created_at: Date | string; memory_type: string
 //   8. what was sent lately, last and bounded, with the facts on file
 // A thread line stamped OLD goes to 7. A section that doesn't fit is skipped,
 // not the end of the build, so a long one can't take every later short one with it.
-export function assembleCallSummary(o: { now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number }): string {
+export function assembleCallSummary(o: { haveIt?: string | null; now?: string | null; lastCalls?: string | null; settled?: string | null; lessons: string[]; sentLines: string[]; threads: { text: string; line?: string }[]; base: string; max?: number; sentMax?: number }): string {
   const max = o.max ?? CALL_CONTEXT_MAX;
   const sentMax = o.sentMax ?? CALL_SENT_MAX;
   const now = o.now ? `Where things stand now (start here). ${o.now}` : null;
@@ -418,7 +468,9 @@ export function assembleCallSummary(o: { now?: string | null; lastCalls?: string
   }
   const sent = kept.length ? `${header}${kept.join("\n")}` : null;
   const reserve = sent ? sent.length + 2 : 0;
-  const parts = [now, lastCalls, threads, settled, lessons, ...o.base.split("\n\n"), olderThreads].filter((x): x is string => !!x);
+  // What they already have goes after what's current: background, never a reason to talk.
+  const haveIt = o.haveIt ? `They already have these (not news, never a reason to call or an opener; mention one only if it changed since they last heard about it, or they ask):\n${o.haveIt}` : null;
+  const parts = [now, lastCalls, threads, settled, lessons, ...o.base.split("\n\n"), haveIt, olderThreads].filter((x): x is string => !!x);
   let summary = "";
   for (const part of parts) {
     const next = summary ? `${summary}\n\n${part}` : part;
@@ -463,24 +515,43 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // Their zone (services/memberTime.ts), or Pacific: every day and stamp in the briefing is theirs.
   const zone = wordsZone(await memberZone(userId));
 
-  // 1. What Co is carrying for them (open loops, the same as a text reply reads).
-  // What Co said on a call it would do, and what came of it (harness/callGrounding.ts), first:
-  // the thing Co owes them is the most likely pickup.
-  const promised = (await strip(promiseFacts(callRows.filter((r) => r.memory_type === "promise_result").map((r) => ({ at: r.created_at, content: String(r.content) }))).slice(0, 3).map((r) => `- ${dayLabel(r.at, zone)}: ${r.text}`))).map((l) => withCorrectedNames(l, corrections));
+  // 1. What Co is carrying for them (open loops, the same as a text reply reads), each item once; what they already have apart.
+  // What Co said on a call it would do, and what came of it (harness/callGrounding.ts).
+  const promisedFacts = promiseFacts(callRows.filter((r) => r.memory_type === "promise_result").map((r) => ({ at: r.created_at, content: String(r.content) }))).slice(0, 3);
   const loopItems = p.model?.loops ? p.model.loops.replace(/^What you're carrying for them right now, and where each stands \([^)]*\): /, "").replace(/\.$/, "").split("; ") : [];
-  const loopLines = await strip(loopItems.map((l) => `- ${l.length > 240 ? `${l.slice(0, 240).replace(/[ ,;(]+[^ ,;(]*$/, "")}...` : l}`));
+  // What they have: delivery receipts, and Co's record of documents it sent (co_facts, which predates receipts).
+  const [receipts, sentDocs] = await Promise.all([
+    import("./deliveryReceipts.js").then(async (R) => (await R.pgReceipts.forUser(userId, 10)).map((r) => ({ title: r.title, at: r.deliveredAt }))).catch(() => [] as Delivered[]),
+    pool
+      .query(`SELECT object_label, happened_at FROM co_facts WHERE owner_user_id = $1 AND relation = 'sent' AND object_label LIKE 'a document%' AND happened_at > NOW() - INTERVAL '30 days' ORDER BY happened_at DESC LIMIT 10`, [userId])
+      .then((r) => r.rows.map((x: any) => ({ title: String(x.object_label).replace(/^a document(?: \([^)]*\))?:\s*/i, ""), at: x.happened_at as Date })))
+      .catch(() => [] as Delivered[]),
+  ]);
+  const delivered: Delivered[] = [...receipts, ...sentDocs];
+  const carried = collapseCarried(
+    [
+      ...promisedFacts.map((f) => ({ text: `${dayLabel(f.at, zone)}: ${f.text}`, from: "promise" as const, sent: /\bSent\.$/.test(f.text) })),
+      ...loopItems.map((l) => ({ text: l, from: "loop" as const })),
+    ],
+    delivered,
+    (d) => dayLabel(d, zone),
+  );
+  const promised = await strip(carried.open.filter((l) => l.from === "promise").map((l) => `- ${l.text}`));
+  const loopLines = await strip(carried.open.filter((l) => l.from === "loop").map((l) => `- ${l.text.length > 240 ? `${l.text.slice(0, 240).replace(/[ ,;(]+[^ ,;(]*$/, "")}...` : l.text}`));
+  const haveIt = (await strip(carried.theyHaveIt)).join("\n");
   const loops = [
-    promised.length ? `What you said on a call you'd do, and what came of it:\n${promised.join("\n")}` : null,
+    promised.length ? `What you said on a call you'd do, still open:\n${promised.join("\n")}` : null,
     loopLines.length ? `What you're carrying for them and where each stands (say where one stands when they ask what you're doing or when it changes what they should do next; what you already told them on a call isn't news, and it never opens a call):\n${loopLines.join("\n")}` : null,
   ].filter(Boolean).join("\n");
   // 2. The last calls: Co's own summary of each (or their first words on it), names as corrected.
   const pastCalls = pairCalls(callRows);
   const calls = await Promise.all(pastCalls.map(async (c) => ({ ...c, summary: c.summary ? withCorrectedNames(await stripOne(c.summary), corrections) || null : null, theirWords: (await strip(c.theirWords)).map((w) => withCorrectedNames(w, corrections)) })));
-  const lastCalls = renderLastCalls(calls, now, zone);
+  // A past call's sentence about something they already have (the doc that "will be sent") is not repeated as a pickup.
+  const lastCalls = renderLastCalls(calls.map((c) => ({ ...c, summary: c.summary ? c.summary.split(/(?<=[.!?])\s+/).filter((x) => !carried.covered(x)).join(" ") || null : null })), now, zone);
   // 3 and 7. Their open threads, newest first, stamped; corrected ones dropped.
   const threadList = [...(p.model?.threadList ?? [])].sort((a, b) => +new Date(b.lastTouchedAt ?? b.openedAt) - +new Date(a.lastTouchedAt ?? a.openedAt));
   const stamped = threadList
-    .filter((t) => keep(t.text, t.lastTouchedAt ?? t.openedAt))
+    .filter((t) => keep(t.text, t.lastTouchedAt ?? t.openedAt) && !carried.covered(t.text))
     .map((t) => ({ t, st: stampOf({ saidOn: t.openedAt, confirmedOn: t.lastTouchedAt, dueOn: t.dueDate }, now, zone) }))
     .filter((x) => !x.st.drop)
     .map((x) => `${x.t.text} (${x.st.label})`);
@@ -490,7 +561,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // 5. Lessons.
   const lessons = await strip(turn?.lessons ?? []);
   // 6. The rest, with corrected goals, wants and recap sentences left out.
-  const recap = p.recap ? withCorrectedNames(p.recap.text.split(/(?<=[.!?])\s+/).filter((s) => keep(s, p.recap!.at)).join(" "), corrections) : "";
+  const recap = p.recap ? withCorrectedNames(p.recap.text.split(/(?<=[.!?])\s+/).filter((s) => keep(s, p.recap!.at) && !carried.covered(s)).join(" "), corrections) : "";
   const who = p.model?.who ? await stripOne(p.model.who) : "";
   // Their own words lately, newest kept first within a bound (a pasted screenshot can run long), one paragraph.
   const theirWords: string[] = [];
@@ -513,7 +584,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     .join("\n\n");
 
   const sentLines = await strip(sentDetailLines({ sent }, 7));
-  const summary = assembleCallSummary({ now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base });
+  const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base });
 
   const asks = turn?.asks ?? [];
   const ledger = turn?.ledger.lines ?? [];

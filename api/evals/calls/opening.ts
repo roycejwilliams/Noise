@@ -50,7 +50,7 @@ check("nothing sent: no empty sent block, the rest intact", !assembleCallSummary
 check("a single sent line longer than its cap is skipped, not truncated mid-fact", assembleCallSummary({ lessons: [], sentLines: ["x".repeat(CALL_SENT_MAX + 50), "short one"], threads: [], base: "" }).includes("- short one"));
 check("empty in, empty out", assembleCallSummary({ lessons: [], sentLines: [], threads: [], base: "" }) === "");
 const ctxSrc = read("src/services/callContext.ts");
-check("buildCallKnowledge uses the assembly (no second, stopping loop)", /const summary = assembleCallSummary\(\{ now: loops \|\| null, lastCalls: lastCalls \|\| null, settled: settled \|\| null, lessons, sentLines, threads, base \}\);/.test(ctxSrc) && !/if \(next\.length > CALL_CONTEXT_MAX\) break;/.test(ctxSrc));
+check("buildCallKnowledge uses the assembly (no second, stopping loop)", /const summary = assembleCallSummary\(\{ haveIt: haveIt \|\| null, now: loops \|\| null, lastCalls: lastCalls \|\| null, settled: settled \|\| null, lessons, sentLines, threads, base \}\);/.test(ctxSrc) && !/if \(next\.length > CALL_CONTEXT_MAX\) break;/.test(ctxSrc));
 check("the call reads the same model of the person as texting (personModel.ts)", /personModelParts\(userId\)/.test(ctxSrc) && /p\.model\?\.threadList/.test(ctxSrc) && /p\.model\?\.loops/.test(ctxSrc));
 
 // ---- the opening line
@@ -143,7 +143,8 @@ check("a sentence-start name not in the context is refused", bad("Hey Royce, it'
   const owes = "Where things stand now: Co owes Royce a post-event branding plan for Co's post-event presence after the launch, waiting on Jacqueline's input. " + "pad ".repeat(100);
   const r = openingProblems("Hey Royce, it's Co. Have you had a chance to review that post-event branding plan I owe you, or still waiting on Jacqueline's input?", owes, "Royce");
   check("the 10/8 opening (reviewed a plan Co still owes) is refused as contradicting itself", /^contradicts itself/.test(r ?? ""), r);
-  check("a good one on the same context passes: \"I still owe you that planning doc on Co's post-event presence…\"", openingProblems("Hey Royce, it's Co. I still owe you that branding plan on Co's post-event presence. Has Jacqueline weighed in?", owes, "Royce") === null, openingProblems("Hey Royce, it's Co. I still owe you that branding plan on Co's post-event presence. Has Jacqueline weighed in?", owes, "Royce"));
+  // 2026-10-08 (Royce): an opening never leads with Co's homework, owed or sent (services/callReason.ts). This one used to pass.
+  check("an opening on what Co still owes is refused as Co's homework: \"I still owe you that branding plan…\"", openingProblems("Hey Royce, it's Co. I still owe you that branding plan on Co's post-event presence. Has Jacqueline weighed in?", owes, "Royce") === "leads with Co's homework", openingProblems("Hey Royce, it's Co. I still owe you that branding plan on Co's post-event presence. Has Jacqueline weighed in?", owes, "Royce"));
   check("\"still\" with a completion verb is refused", /^contradicts itself/.test(openingProblems("Hey Royce, it's Co. Is the branding plan still finished?", owes, "Royce") ?? ""));
   check("two clauses with opposite states of one thing are refused", /^contradicts itself/.test(openingProblems("Hey Royce, it's Co. The branding plan is done, but the plan isn't finished.", owes, "Royce") ?? ""));
   check("an either-or question is not a contradiction", openingProblems("Hey Royce, it's Co. Did Jacqueline's input come back, or still waiting on her?", owes, "Royce") === null, openingProblems("Hey Royce, it's Co. Did Jacqueline's input come back, or still waiting on her?", owes, "Royce"));
@@ -214,7 +215,8 @@ check("no stock line survives anywhere in the built call prompt", stockLine(prom
 {
   const ctx = "Where things stand now: promised on the call a plan on Co's post-event presence after the Sequin AI event. Not sent yet.";
   check("the opening never narrates Co's own state", openingProblems("Hey Royce, it's Co. I still haven't found anything solid yet for that planning doc on Co's post-event presence to text you.", ctx, "Royce") !== null && openingProblems("Hey Royce, it's Co. Working on the Sequin plan now, want an update?", ctx, "Royce") !== null);
-  check("a plain pickup of what Co owes passes", openingProblems("Hey Royce, it's Co. The Sequin AI plan is still coming, want to shape it together first?", ctx, "Royce") === null, openingProblems("Hey Royce, it's Co. The Sequin AI plan is still coming, want to shape it together first?", ctx, "Royce"));
+  // 2026-10-08 (Royce): Co's owed work is never the opening (it used to pass as "a plain pickup of what Co owes").
+  check("a pickup of what Co owes is refused as Co's homework", openingProblems("Hey Royce, it's Co. The Sequin AI plan is still coming, want to shape it together first?", ctx, "Royce") === "leads with Co's homework", openingProblems("Hey Royce, it's Co. The Sequin AI plan is still coming, want to shape it together first?", ctx, "Royce"));
   const pf = promiseFacts([
     { at: "2026-10-08T00:30:34Z", content: 'Looked into "draft and text a plan on Co\'s post-event presence" after the call, as Co said it would, and found nothing good enough to send yet.' },
     { at: "2026-10-08T00:30:55Z", content: 'Looked into "draft and text a plan on Co\'s post-event presence" after the call, as Co said it would, and found nothing good enough to send yet.' },

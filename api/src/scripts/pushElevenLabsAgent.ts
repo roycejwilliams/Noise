@@ -24,21 +24,23 @@ const dryRun = process.argv.includes("--dry-run");
 
 // The call brain's own endpoint (ELEVENLABS_LLM_PROXY=1): ElevenLabs holds our shared secret as a workspace secret and sends it as the
 // bearer token. Created once; unset the variable and push again to go back to the direct Haiku path.
-async function proxyConfig(apiUrl: string): Promise<{ url: string; secretId: string } | null> {
-  if (process.env.ELEVENLABS_LLM_PROXY !== "1") return null;
+// ELEVENLABS_LLM_PROXY=voice: the endpoint in voice-only mode (speakable text, one question a turn; nothing else), 2026-10-08.
+async function proxyConfig(apiUrl: string): Promise<{ url: string; secretId: string; voiceOnly?: boolean } | null> {
+  if (process.env.ELEVENLABS_LLM_PROXY !== "1" && process.env.ELEVENLABS_LLM_PROXY !== "voice") return null;
+  const voiceOnly = process.env.ELEVENLABS_LLM_PROXY === "voice";
   const secret = process.env.CALL_LLM_PROXY_SECRET;
   if (!secret) throw new Error("ELEVENLABS_LLM_PROXY=1 needs CALL_LLM_PROXY_SECRET (the same value on the API server).");
   const url = `${apiUrl.replace(/\/$/, "")}/co/el/llm`;
-  if (dryRun) return { url, secretId: "(workspace secret co_call_llm_proxy)" };
+  if (dryRun) return { url, secretId: "(workspace secret co_call_llm_proxy)", voiceOnly };
   const key = process.env.ELEVENLABS_API_KEY!;
   const H = { "xi-api-key": key, "Content-Type": "application/json" };
   const list = await (await fetch("https://api.elevenlabs.io/v1/convai/secrets", { headers: H })).json();
   const found = (list.secrets ?? []).find((x: any) => x.name === "co_call_llm_proxy");
-  if (found) return { url, secretId: found.secret_id };
+  if (found) return { url, secretId: found.secret_id, voiceOnly };
   const made = await fetch("https://api.elevenlabs.io/v1/convai/secrets", { method: "POST", headers: H, body: JSON.stringify({ type: "new", name: "co_call_llm_proxy", value: secret }) });
   const body = await made.json().catch(() => ({}));
   if (!made.ok || !body.secret_id) throw new Error(`creating the workspace secret failed: ${made.status} ${JSON.stringify(body).slice(0, 200)}`);
-  return { url, secretId: body.secret_id };
+  return { url, secretId: body.secret_id, voiceOnly };
 }
 
 async function main() {

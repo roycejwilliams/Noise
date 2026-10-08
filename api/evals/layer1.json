@@ -129,6 +129,8 @@
     "evals/sweepFind/queries.ts",
     "evals/coldstart/rules.ts",
     "evals/proactive/memberState.ts",
-    "evals/deploy/coTestDeps.ts"
+    "evals/deploy/coTestDeps.ts",
+    "evals/calls/contextAndVoice.ts",
+    "evals/calls/reasonGate.ts"
   ]
 }

@@ -157,6 +157,10 @@ export type ProxyDeps = {
   // Called when the member's last words say they are drained (the turn gets the note and a two-sentence cap).
   onState?: () => void;
   clean?: boolean;
+  // Voice only (Royce, 2026-10-08: the direct path had no way to keep dashes out of the voice or hold a turn to one question). The
+  // stream is only made speakable (a dash becomes a full stop) and ends at its first question; nothing is fact-checked, held back,
+  // regenerated or added (no tools, no turn notes). The model's words are its own.
+  voiceOnly?: boolean;
   // Co's own tools for the call's member (services/callTools.ts), run here mid-turn. Without them a turn is text plus
   // ElevenLabs' tools, as before.
   tools?: CallToolset | null;
@@ -179,14 +183,15 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const model = CALL_LLM_MODEL;
   const chunk = (delta: Record<string, unknown>, finish: string | null = null): OaiChunk => ({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finish }] });
   const clean = deps.clean !== false;
-  const co = deps.tools ?? null;
-  let sources: SpokenSources | null = clean ? callSources(b, co?.records ?? "") : null;
+  const voiceOnly = !!deps.voiceOnly;
+  const co = voiceOnly ? null : (deps.tools ?? null);
+  let sources: SpokenSources | null = clean && !voiceOnly ? callSources(b, co?.records ?? "") : null;
   yield chunk({ role: "assistant", content: "" });
 
   // Their state outranks the agenda: the member's last words, not Co's, and only on the first request of a turn (a tool round passes through).
   const lastAt = b.messages.map((m) => m.role).lastIndexOf("user");
   const sameTurn = lastAt >= 0 && b.messages.slice(lastAt + 1).every((m) => m.role === "tool" || (m.role === "assistant" && !textOf(m.content).trim()));
-  const drained = clean && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
+  const drained = clean && !voiceOnly && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
   if (drained) deps.onState?.();
   const mk = () => new SpeakableStream({});
   let stream: SpeakableStream | null = null;
@@ -204,8 +209,15 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const heldWhy: string[] = [];
   const unsureSaid = new Set<string>();
   let heldEvent = false;
+  // One question per turn, a hard rule in code (2026-10-08 call eval: 5 of 10 calls asked two in one turn): once a question is
+  // said, the turn ends there ("Once you've asked it, stop", the call prompt).
+  let asked = false;
   const say = (s: string): string | null => {
     const sentence = s.trim();
+    if (clean && asked) {
+      deps.onDropped?.(sentence, "after the turn's question");
+      return null;
+    }
     // Goodbye once (2026-10-08 live call: "Take care tonight." then, after "you too", "Take care, Royce."). Once Co has said
     // goodbye, another goodbye isn't spoken; ending the call is all that's left.
     if (saidGoodbye && GOODBYE.test(sentence)) {
@@ -233,6 +245,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       }
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
+    if (/\?["')\]]*\s*$/.test(sentence)) asked = true;
     spokeAny = true;
     spokenLines.push(line);
     deps.onSpoken?.(line);

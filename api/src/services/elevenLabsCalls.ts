@@ -103,6 +103,8 @@ export async function registerElevenLabsCall(o: {
         direction: o.direction,
         right_now: o.rightNow ?? "",
         finds_now: o.findsNow ?? "Nothing to offer right now. Don't offer an event.",
+        // Why Co is calling, from their life (services/callReason.ts, held by the call gate): "" when they called Co.
+        call_reason: await import("./callReason.js").then((m) => m.callReasonVariable(o.userId, o.direction)).catch(() => ""),
       },
     },
   } as any) as unknown as Promise<string>;
@@ -209,11 +211,15 @@ Lines about them carry a stamp: when they said it, and OLD when it has gone stal
 Their words reach you through speech recognition, and short names suffer most. Your own name, Co, often arrives as "you", "Coach" or "go" ("building you" means building Co). Boardy arrives as "Bumble", "Boredy" or "birdie". When a line only makes sense with one of these names, read it that way, and never say the misheard word back as if it were a name.
 # Offers and promises
 Name an event, place or time only if it is in "What Co has found for them" or they said it. If you can't point to the line it came from, don't name it: look it up now, or say you don't have it.
-A promise to text or send something is a real task the moment you say it. Say it once, plainly, and only when it is true.`;
+A promise to text or send something is a real task the moment you say it. Say it once, plainly, and only when it is true.
+Something they already have (a document or plan Co sent, under "They already have these") is never why you called and never how you open. Bring it up only if it changed since they last heard about it, or they ask.`;
 
 // Filled per call (services/callBriefing.ts): their clock, and what Co has found for them, fetched while the phone rang.
 export const CALL_NOW = `# Right now
 {{right_now}}
+
+# Why you called (empty when they called you)
+{{call_reason}}
 
 # What Co has found for them
 {{finds_now}}`;
@@ -319,7 +325,8 @@ export function buildAgentConfig(o: {
   turnEagerness?: string;
   temperature?: number;
   // The call brain behind our own endpoint (services/callLlmProxy.ts) instead of ElevenLabs' Haiku. Off: the direct path.
-  proxy?: { url: string; secretId: string; model?: string } | null;
+  // voiceOnly: the endpoint only keeps the voice speakable and one question to a turn (services/callLlmProxy.ts voiceOnly).
+  proxy?: { url: string; secretId: string; model?: string; voiceOnly?: boolean } | null;
 }): Record<string, unknown> {
   return {
     name: o.name,
@@ -352,12 +359,12 @@ export function buildAgentConfig(o: {
         disable_first_message_interruptions: true,
         language: "en",
         max_conversation_duration_message: "I need to wrap up for now. This was really good, I'll be in touch soon.",
-        dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "", right_now: "", finds_now: "" } },
+        dynamic_variables: { dynamic_variable_placeholders: { first_name: "there", context_summary: "", user_id: "", call_token: "", direction: "", right_now: "", finds_now: "", call_reason: "" } },
         prompt: {
           prompt: promptForElevenLabs(o.prompt),
           llm: o.proxy ? "custom-llm" : (o.llm ?? AGENT_DEFAULTS.llm),
           // Without the proxy custom_llm is sent as null: the agent update merges, and a stored custom_llm with a direct model is rejected.
-          custom_llm: o.proxy ? { url: o.proxy.url, model_id: o.proxy.model ?? CALL_LLM_MODEL, api_key: { secret_id: o.proxy.secretId }, api_type: "chat_completions" } : null,
+          custom_llm: o.proxy ? { url: o.proxy.url, model_id: o.proxy.model ?? CALL_LLM_MODEL, api_key: { secret_id: o.proxy.secretId }, api_type: "chat_completions", ...(o.proxy.voiceOnly ? { request_headers: { "x-co-mode": "voice" } } : {}) } : null,
           temperature: o.temperature ?? AGENT_DEFAULTS.temperature,
           // If the main model is slow to start, ElevenLabs falls to another; pin it to the same model so the voice and style don't shift mid-call.
           // Behind our endpoint there is no fallback (2026-10-08): ElevenLabs' backup would answer from its own Haiku, without Co's tools,
