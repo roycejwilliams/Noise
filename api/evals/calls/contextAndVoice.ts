@@ -95,6 +95,14 @@ const day = () => "Oct 8";
     check("Co's own help line earlier in the call makes it a safety call", call([["user", "it's been heavy"], ["assistant", "You can call or text 988, any time."], ["user", "yeah"]]));
     check("an ordinary call is not a safety call", !call([["user", "we played it safe with the menu"], ["assistant", "Smart. What's the headcount?"], ["user", "about forty, drive safe tonight"]]));
   }
+  const stock = await run("Don't worry about the time. And I hear you. Feeling invisible in a full room is its own kind of tired. When did it start?");
+  check(`voice: a sentence that's only a stock phrase isn't said, the rest is ("${stock}")`, !/hear you/i.test(stock) && /invisible in a full room/.test(stock) && /When did it start\?/.test(stock));
+  const stockLead = await run("[softly] I hear you. Going through the motions while nobody sees you wears you down.");
+  check(`voice: a stock phrase leading a reply is dropped too ("${stockLead}")`, !/hear you/i.test(stockLead) && /Going through the motions/.test(stockLead));
+  const stockSpecific = await run("I hear you, and the part about Sam leaving the studio is the piece I'd sit with.");
+  check(`voice: a sentence that goes on to say something specific is kept whole ("${stockSpecific}")`, /I hear you, and the part about Sam/.test(stockSpecific));
+  const stockOnly = await run("I hear you.");
+  check(`voice: a reply that's only a stock phrase is still said, never silence ("${stockOnly}")`, /I hear you\./.test(stockOnly));
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));
   check("voice-only: no tools and no turn notes are added to the request", (seenReq?.tools ?? []).every((t: any) => t.name === "end_call") && !/This turn: they told you how they are/.test(JSON.stringify(seenReq?.system ?? "")));

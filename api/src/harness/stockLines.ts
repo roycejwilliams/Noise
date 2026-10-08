@@ -48,6 +48,17 @@ export function repeatedOpeners(lines: string[]): string[] {
   return [...n].filter(([, c]) => c >= 3).map(([o]) => o);
 }
 
+// Pure: a sentence that is nothing but a stock phrase ("And I hear you.", "I hear that."), the kind the voice can drop without losing
+// anything said (2026-10-08 call eval, safety_hint: "And I hear you." mid-reply). A sentence that goes on to say something
+// specific is kept: the model's words, not the check's, decide what the member hears.
+export function stockSentence(sentence: string): boolean {
+  const t = norm(sentence).replace(/\[[a-z ]+\]\s*/gi, "").trim();
+  const phrase = stockLine(t);
+  if (!phrase) return false;
+  const rest = t.toLowerCase().replace(phrase, " ").replace(/\b(?:and|but|yeah|okay|ok|so|honestly|really|jordan)\b/g, " ").replace(/[^a-z']+/g, " ").trim();
+  return rest.split(/\s+/).filter(Boolean).length <= 1;
+}
+
 export function stockReport(lines: string[]): { stock: { line: string; phrase: string }[]; repeated: string[] } {
   const stock = lines.flatMap((line) => { const phrase = stockLine(line); return phrase ? [{ line, phrase }] : []; });
   return { stock, repeated: repeatedOpeners(lines) };
