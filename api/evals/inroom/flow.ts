@@ -12,6 +12,25 @@
 // finding() = an open defect from the analysis: it FAILS while the defect reproduces and passes once fixed.
 import { W, reset, addMember, addEvent, ask, goal, check, finding, results, type Member } from "./world.js";
 
+// The clock is pinned to 18:00 UTC today (2026-10-08 fix): a member with no time zone may only be texted 16:00-24:00 UTC
+// (harness/proactive.ts localHourOk), so outside that window a direct ask is queued instead of sent and the result depended
+// on when the test ran. Event times are all relative to now, so they move with the pinned clock.
+{
+  const RealDate = Date;
+  const pinned = new RealDate();
+  pinned.setUTCHours(18, 0, 0, 0);
+  const offset = pinned.getTime() - RealDate.now();
+  class PinnedDate extends RealDate {
+    constructor(...a: any[]) {
+      super(...((a.length ? a : [RealDate.now() + offset]) as [any]));
+    }
+    static now() {
+      return RealDate.now() + offset;
+    }
+  }
+  (globalThis as any).Date = PinnedDate;
+}
+
 const S = await import("../../src/services/eventScoring.js");
 const H = await import("../../src/services/eventGuestMatchHandoff.js");
 const U = await import("../../src/services/eventUnmatchedFollowUp.js");

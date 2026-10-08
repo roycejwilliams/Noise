@@ -1,28 +1,10 @@
-# The research scoreboard as a standing eval (Royce, 2026-10-07: "any change to readers or extraction re-runs it, and a
-# regression blocks the merge like a failing test"). The one live run allowed on a push or PR, and only when a reader or
-# extraction file changes: the general reader on 12 hand-checked sites (api/evals/browserPilot/round2.ts), Haiku 5.5, about
+# The research scoreboard (Royce, 2026-10-07), run by hand: the general reader on 12 hand-checked sites (api/evals/browserPilot/round2.ts), Haiku 5.5, about
 # $0.02 a run, capped at $0.50. It fails on ANY confident-wrong answer, on right answers more than 2 under the baseline, or when
 # the hand-checked truth has gone stale (re-check it and update round2.ts + baseline.json).
-# Make "scoreboard" a required check on co-test / main for it to block the merge.
 name: research-scoreboard
 on:
-  pull_request:
-    paths:
-      - "api/src/services/sdkGeneralReader.ts"
-      - "api/src/services/sdkBrowserReader.ts"
-      - "api/src/services/peerspaceSlot.ts"
-      - "api/src/services/browserRead.ts"
-      - "api/src/services/researchQuality.ts"
-      - "api/src/services/researchBrief.ts"
-      - "api/src/services/taskWeb.ts"
-      - "api/src/models.ts"
-      - "api/evals/browserPilot/**"
-  push:
-    paths:
-      - "api/src/services/sdkGeneralReader.ts"
-      - "api/src/services/researchQuality.ts"
-      - "api/src/services/researchBrief.ts"
-      - "api/evals/browserPilot/**"
+  # Manual only (Royce, 2026-10-07): run it from the Actions tab or `gh workflow run research-scoreboard.yml`
+  # after changing a reader or extraction. It no longer runs on pushes or PRs, so stale hand-checked truth never blocks anything.
   workflow_dispatch: {}
 jobs:
   scoreboard:

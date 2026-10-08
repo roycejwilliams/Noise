@@ -97,6 +97,9 @@ globalThis.fetch = async function meteredFetch(input, init) {
 
   const isAnthropic = /api\.anthropic\.com$/.test(host);
   const isEmbed = /api\.openai\.com$/.test(host) && /\/embeddings/.test(url);
+  // EVAL_ALLOW_HOSTS (a one-off live end-to-end run, on request): these hosts, and only these, pass unmetered, e.g. api.x.com.
+  const allowed = String(process.env.EVAL_ALLOW_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  if (allowed.some((h) => host.toLowerCase() === h || host.toLowerCase().endsWith(`.${h}`))) return real(input, init);
   if (!isAnthropic && !isEmbed) throw new Error(`LAYER 2: a live eval tried a call to ${host}, which a metered run does not allow (model calls only: Haiku, and Sonnet for grading).`);
 
   const id = `${process.pid}-${++seq}`;
