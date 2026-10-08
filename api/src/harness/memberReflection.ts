@@ -19,6 +19,7 @@ import { recordDecision, type GateCheck } from "./core.js";
 import { enqueueCandidate } from "./proactive.js";
 import { PROACTIVE_PURPOSE } from "./proactivePurpose.js";
 import { listThreads, renderThreads, type MemberThread } from "./memberThreads.js";
+import { localStamp, memberZone } from "../services/memberTime.js";
 
 export type WeekFacts = {
   sends: { type: string; purpose: string; at: string; message: string }[];
@@ -26,6 +27,8 @@ export type WeekFacts = {
   lastReplyAt: string | null;
   offerShare: number | null; // offers / all proactive sends this week
   threads: MemberThread[];
+  // Their zone (services/memberTime.ts): times are shown in it, with the zone named.
+  zone?: string | null;
 };
 
 export type ReflectionMove = { move: "check_in" | "hold"; threadId: string | null; reasoning: string };
@@ -52,13 +55,13 @@ export function reflectionPrompt(firstName: string, f: WeekFacts): string {
   return `Look back at Co's last week with ${firstName} and decide Co's one next move as their companion.
 
 What Co texted them first this week (oldest first):
-${f.sends.map((s) => `- [${s.at}] (${s.purpose}) ${s.message.slice(0, 200)}`).join("\n") || "(nothing)"}
+${f.sends.map((s) => `- [${localStamp(`${s.at}:00Z`, f.zone)}] (${s.purpose}) ${s.message.slice(0, 200)}`).join("\n") || "(nothing)"}
 
 Replies from them this week: ${f.replies}
 Share of Co's texts that were offers (events, people): ${f.offerShare == null ? "n/a" : `${Math.round(f.offerShare * 100)}%`}
 
 What they're in the middle of:
-${f.threads.length ? f.threads.map((t) => `[${t.id}] ${renderThreads([t]).slice(2)}`).join("\n") : "(nothing open)"}
+${f.threads.length ? f.threads.map((t) => `[${t.id}] ${renderThreads([t], new Date(), f.zone ?? null).slice(2)}`).join("\n") : "(nothing open)"}
 
 Choose "check_in" on ONE of their threads when it would mean something to them now (it's been a while, a date passed, or Co has mostly been sending offers), or "hold" when Co should give them space. Say why in one or two plain sentences.
 
@@ -90,6 +93,7 @@ async function weekFacts(userId: string): Promise<WeekFacts> {
     lastReplyAt: replies.rows[0]?.last ? new Date(replies.rows[0].last).toISOString().slice(0, 16) : null,
     offerShare: counted.length ? counted.filter((r) => r.purpose === "offer").length / counted.length : null,
     threads,
+    zone: await memberZone(userId),
   };
 }
 

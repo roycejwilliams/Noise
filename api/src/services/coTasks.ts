@@ -334,11 +334,75 @@ export async function markTexted(userId: string, id: number): Promise<void> {
 export async function startResearchBrief(input: { userId: string; theirWords: string; goal: string; params: Record<string, unknown> }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   const open = await openTasks(input.userId);
   if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
-  if (open.some((t) => t.kind === "research_brief")) return { ok: false, why: "a research brief is already being put together for them" };
+  // openTasks reads work tasks only, so the old check here (open.some(kind === "research_brief")) could never be true and a
+  // repeated ask started another brief while the first was still running. Read the open briefs themselves; the insert re-checks.
+  const busy = briefAlreadyOpen(await recentBriefs(input.userId));
+  if (busy) return { ok: false, why: busy };
   const { rows } = await pool.query(
     `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, kind, followup, source)
-     VALUES ($1, $2, $3, '[]'::jsonb, 'research and send the brief', NOW(), $4::jsonb, 'research_brief', $5::jsonb, 'ask') RETURNING *`,
+     SELECT $1, $2, $3, '[]'::jsonb, 'research and send the brief', NOW(), $4::jsonb, 'research_brief', $5::jsonb, 'ask'
+     WHERE NOT EXISTS (SELECT 1 FROM co_tasks WHERE user_id = $1 AND kind = 'research_brief' AND status = 'open') RETURNING *`,
     [input.userId, input.goal.trim().slice(0, 200), input.theirWords.trim().slice(0, 400), JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), JSON.stringify(input.params)],
   );
+  if (!rows[0]) return { ok: false, why: "a research brief is already being put together for them" };
   return { ok: true, task: rowTo(rows[0]) };
+}
+
+// ---------------------------------------------------------------- research briefs, as the reply sees them
+// A brief isn't a work task (no steps, no model loop: services/researchBrief.ts), so openTasks leaves it out and everything that
+// counts or wakes work tasks is unchanged. The reply still has to see it: "what are you working on for me?" answers from these
+// lines too, and a finished brief stays in view for a few days so "did you send that?" has its answer.
+export type BriefView = { id: number; goal: string; theirWords: string; status: CoTask["status"]; createdAt: string; closedAt: string | null; outcome: string | null; held: { text: string; at: string } | null };
+export const BRIEF_VISIBLE_DAYS = 3;
+
+export async function recentBriefs(userId: string, days = BRIEF_VISIBLE_DAYS): Promise<BriefView[]> {
+  const { rows } = await pool.query(
+    `SELECT id, goal, their_words, status, created_at, closed_at, outcome, next_check_at, followup FROM co_tasks
+     WHERE user_id = $1 AND kind = 'research_brief' AND (status = 'open' OR closed_at > NOW() - make_interval(days => $2))
+     ORDER BY created_at DESC LIMIT 6`,
+    [userId, days],
+  );
+  return rows.map((r: any) => ({
+    id: Number(r.id),
+    goal: String(r.goal ?? ""),
+    theirWords: String(r.their_words ?? ""),
+    status: r.status,
+    createdAt: new Date(r.created_at).toISOString(),
+    closedAt: r.closed_at ? new Date(r.closed_at).toISOString() : null,
+    outcome: r.outcome ?? null,
+    held: r.status === "open" && r.followup?.held?.text ? { text: String(r.followup.held.text), at: r.next_check_at ? new Date(r.next_check_at).toISOString() : "" } : null,
+  }));
+}
+
+// Pure: why a new brief can't start, given their briefs, or null. One runs at a time; one that's finished but waiting for their
+// hours to tell them is still theirs to hear first.
+export function briefAlreadyOpen(briefs: Pick<BriefView, "status" | "held">[]): string | null {
+  const open = briefs.filter((b) => b.status === "open");
+  if (!open.length) return null;
+  const held = open.find((b) => b.held);
+  return held
+    ? `the last research brief already finished, and what it came to goes to them in their hours: "${held.held!.text.slice(0, 200)}". Tell them that now instead of starting another`
+    : "a research brief is already being put together for them";
+}
+
+// Pure: the reply's lines for their briefs, in their local time.
+export function briefFactLines(briefs: BriefView[], zone?: string | null): string[] {
+  const at = (x: string) => localStamp(x, zone ?? null);
+  return briefs.map((b) => {
+    const what = `"${b.goal}" (their words: "${b.theirWords.slice(0, 160)}")`;
+    if (b.status === "open" && b.held) return `Research brief #${b.id} for them, ${what}, is finished but hasn't reached them yet (it was outside their hours). What it came to: "${b.held.text}". That goes to them${b.held.at ? ` around ${at(b.held.at)}` : " in their morning"}, unless you tell them first.`;
+    if (b.status === "open") return `Co is putting together research brief #${b.id} for them, ${what}, since ${at(b.createdAt)}. It runs in the background and goes to them as a document when it's done.`;
+    if (b.status === "done") return `Research brief #${b.id}, ${what}, finished${b.closedAt ? ` ${at(b.closedAt)}` : ""}: ${b.outcome ?? "sent"}.`;
+    return `Research brief #${b.id}, ${what}, stopped${b.closedAt ? ` ${at(b.closedAt)}` : ""} without a brief: ${b.outcome ?? "no reason recorded"}.`;
+  });
+}
+
+// A brief's last line to them, held to their hours: the task stays open (still theirs to hear) and wakes when the line can go.
+export async function holdBriefLine(userId: string, id: number, held: { text: string; status: "done" | "dropped"; outcome: string }, at: Date): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{held}', $3::jsonb), next_check_at = $4, plan_next = 'tell them what the brief came to', updated_at = NOW()
+     WHERE user_id = $1 AND id = $2 AND status = 'open' AND kind = 'research_brief'`,
+    [userId, id, JSON.stringify(held), at],
+  );
+  return (rowCount ?? 0) > 0;
 }

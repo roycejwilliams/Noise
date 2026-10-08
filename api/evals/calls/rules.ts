@@ -14,7 +14,6 @@ import {
   isRealUserUtterance,
   nextAllowedCallTime,
   stripVoicemailGreetingLines,
-  UNKNOWN_TZ_WINDOW_UTC,
 } from "../../src/harness/callGate.js";
 import { cityChangeAllowed } from "../../src/services/profileExtraction.js";
 import { personAskedForThis } from "../../src/harness/callGrounding.js";
@@ -118,10 +117,12 @@ check(
 check("known timezone, daytime there, allowed", callHourOk("America/New_York", new Date("2026-09-17T18:00:00Z"))); // 2pm ET
 check("known timezone, 3am there, blocked", !callHourOk("America/Los_Angeles", new Date("2026-09-17T10:00:00Z"))); // 3am PT
 
+// Unknown zone (2026-10-07): the texts' rule, 9am-8pm Pacific as a zone (PDT on Sep 17: 16:00-03:00 UTC).
 for (let h = 0; h < 24; h++) {
   const t = new Date(Date.UTC(2026, 8, 17, h, 0, 0));
-  const expected = h >= UNKNOWN_TZ_WINDOW_UTC.start && h < UNKNOWN_TZ_WINDOW_UTC.end;
-  check(`unknown timezone, ${h}:00 UTC ${expected ? "allowed" : "blocked"}`, callHourOk(null, t) === expected);
+  const pacificHour = (h + 24 - 7) % 24;
+  const expected = pacificHour >= 9 && pacificHour < 20;
+  check(`unknown timezone, ${h}:00 UTC (${pacificHour}:00 PDT) ${expected ? "allowed" : "blocked"}`, callHourOk(null, t) === expected);
 }
 check("nextAllowedCallTime is a no-op when already in the window", nextAllowedCallTime(null, new Date("2026-09-17T18:00:00Z")).getTime() === new Date("2026-09-17T18:00:00Z").getTime());
 check("nextAllowedCallTime rolls forward to the window when outside it", callHourOk(null, nextAllowedCallTime(null, new Date("2026-09-17T10:00:00Z"))));

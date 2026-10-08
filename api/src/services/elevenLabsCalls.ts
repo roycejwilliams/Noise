@@ -26,7 +26,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import pool from "../db/db.js";
 import { DateTime } from "luxon";
-import { getTimezoneForCity } from "./geocoding.js";
+import { memberZone } from "./memberTime.js";
 
 let client: ElevenLabsClient | null = null;
 export function elevenLabs(): ElevenLabsClient {
@@ -451,7 +451,7 @@ async function chooseOpeningUnbounded(userId: string, firstName: string, directi
       pool.query(`SELECT proposal->>'template' AS template FROM harness_decisions WHERE decision = 'call.opening' AND user_id = $1 ORDER BY created_at DESC LIMIT 1`, [userId]),
       pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]),
     ]);
-    const zone = prof[0]?.city ? await getTimezoneForCity(prof[0].city).catch(() => null) : null;
+    const zone = await memberZone(userId);
     const hour = zone ? DateTime.now().setZone(zone).hour : null;
     const pick = pickOpening({ direction, firstCall: calls.length === 0, hour, firstName, last: last[0]?.template ?? null });
     pool

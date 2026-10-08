@@ -1,15 +1,18 @@
-// Member-local time for Co's commitments (Royce, 2026-10-08: "Every commitment carries a window in member-local time, and a miss
-// warns BEFORE the window passes"). One helper the commitment code shares: what "tonight", "in an hour", "tomorrow morning" or
-// "by Friday" means for them, the last moment Co can still text them inside that window, and whether a next check lands past it.
+// Member-local time (Royce, 2026-10-07: "Co is time-aware at all times. Every decision that touches time runs against the member's
+// local time, not the server's"). The one helper every time decision reads a member's zone through, plus Co's commitment windows
+// (Royce, 2026-10-08: "Every commitment carries a window in member-local time, and a miss warns BEFORE the window passes").
 //
-// Their zone: co_profiles.city through geocoding.getTimezoneForCity (no zone is stored).
-// The one fallback, when no zone is known: their words are read in Pacific time (FALLBACK_ZONE, where the club is), and whether a
-// moment is sendable is the existing send gate's own answer (services/localHours.ts isReasonableLocalHour: 9am-8pm local, or the
-// conservative 16:00-24:00 UTC window with no zone). The send rule itself is not changed here; deadline math only asks it.
+// Their zone: stored on co_profiles.timezone, set from their city (geocoding.getTimezoneForCity) and refreshed whenever the city
+// changes: co_profiles.timezone_city records the city the zone came from, so a city that differs from it (whichever path wrote it)
+// re-derives the zone on the next read, and the two city writers (routes/co.ts, services/profileExtraction.ts) refresh it at once.
+// The city on file is the only travel signal; there is no travel detection.
+// The one fallback, when no zone is known: Pacific (FALLBACK_ZONE, services/localHours.ts; the club is in San Francisco), applied
+// as a zone so it follows DST. Their words are read in it, their day is its day, and the send rule (9am-8pm, unchanged) is measured
+// in it, for texts and calls alike.
 import { DateTime } from "luxon";
-import { isReasonableLocalHour, nextReasonableHour } from "./localHours.js";
+import { FALLBACK_ZONE, isReasonableLocalHour, nextReasonableHour } from "./localHours.js";
 
-export const FALLBACK_ZONE = "America/Los_Angeles";
+export { FALLBACK_ZONE };
 // The task cron wakes every 15 minutes: the warn-by sits this far inside the last sendable moment, so a check due at the
 // warn-by still runs (and can still text) before the window's texting closes.
 export const WARN_MARGIN_MIN = 20;
@@ -20,23 +23,67 @@ export const validZone = (zone: string | null | undefined): string | null => (zo
 // The zone their words are read in: theirs, else the fallback.
 export const wordsZone = (zone: string | null | undefined): string => validZone(zone) ?? FALLBACK_ZONE;
 export const localOf = (at: Date, zone: string | null | undefined): DateTime => DateTime.fromJSDate(at).setZone(wordsZone(zone));
+// Their calendar day (YYYY-MM-DD) at a moment: what "today", "yesterday" and "per day" mean for them.
+export const localDay = (at: Date | string, zone: string | null | undefined): string => localOf(typeof at === "string" ? new Date(at) : at, zone).toISODate()!;
+// The last moment of a calendar day (YYYY-MM-DD) in their zone.
+export const endOfLocalDay = (day: string, zone: string | null | undefined): Date => DateTime.fromISO(day, { zone: wordsZone(zone) }).endOf("day").toJSDate();
 
-// The send gate's answer for this moment (9am-8pm their time; unchanged).
+// The send gate's answer for this moment (9am-8pm their time, or the fallback zone's; one rule for texts and calls).
 export const sendableAt = (at: Date, zone: string | null | undefined): boolean => isReasonableLocalHour(validZone(zone), at);
 export const nextSendable = (after: Date, zone: string | null | undefined): Date => nextReasonableHour(validZone(zone), after);
 
-// Their zone from their city, or null. Never throws.
-export async function memberZone(userId: string): Promise<string | null> {
+const cityKey = (c: string | null | undefined) => String(c ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+
+// Pure: the zone a profile row stands for, and what to store when the stored one is missing or came from another city.
+// - A stored zone derived from the city on file is used as is (no lookup).
+// - No zone stored, or the city changed since it was derived: the zone is looked up from the city and stored with that city.
+// - No city: a stored zone (the last one known) is kept; else none (callers use the fallback).
+// - A lookup that fails keeps the stored zone (the last known) and isn't marked refreshed, so the next read tries again.
+export async function zoneFromProfile(
+  p: { city?: string | null; timezone?: string | null; timezone_city?: string | null },
+  lookup: (city: string) => Promise<string | null>,
+): Promise<{ zone: string | null; store: { timezone: string; timezone_city: string } | null }> {
+  const stored = validZone(p.timezone);
+  const city = String(p.city ?? "").trim();
+  if (!city) return { zone: stored, store: null };
+  if (stored && cityKey(p.timezone_city) === cityKey(city)) return { zone: stored, store: null };
+  const found = validZone(await lookup(city).catch(() => null));
+  if (!found) return { zone: stored, store: null };
+  return { zone: found, store: { timezone: found, timezone_city: String(p.city) } };
+}
+
+type Db = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
+const lookupCity = async (city: string) => (await import("./geocoding.js")).getTimezoneForCity(city);
+
+// Their zone, or null when none is known (a time decision then measures in FALLBACK_ZONE: wordsZone / memberZoneOrFallback).
+// Reads the stored zone; derives and stores it when it's missing or the city changed. Never throws.
+export async function memberZone(userId: string, deps: { db?: Db; lookup?: (city: string) => Promise<string | null> } = {}): Promise<string | null> {
   try {
-    const pool = (await import("../db/db.js")).default;
-    const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]);
-    const city = rows[0]?.city;
-    if (!city) return null;
-    const { getTimezoneForCity } = await import("./geocoding.js");
-    return validZone(await getTimezoneForCity(String(city)).catch(() => null));
+    const db: Db = deps.db ?? (await import("../db/db.js")).default;
+    const { rows } = await db
+      .query(`SELECT city, timezone, timezone_city FROM co_profiles WHERE user_id = $1`, [userId])
+      // Before the column migration has run: the city alone.
+      .catch(() => db.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]));
+    if (!rows[0]) return null;
+    const r = await zoneFromProfile(rows[0], deps.lookup ?? lookupCity);
+    if (r.store) {
+      // Only if the city is still the one it came from (a concurrent city write re-derives on its own).
+      await db
+        .query(`UPDATE co_profiles SET timezone = $2, timezone_city = $3 WHERE user_id = $1 AND city = $3`, [userId, r.store.timezone, r.store.timezone_city])
+        .catch((err: any) => console.error("memberZone: storing the zone failed (non-fatal):", err?.message ?? err));
+    }
+    return r.zone;
   } catch {
     return null;
   }
+}
+
+// Right after a city write: re-derive and store the zone now. Never throws.
+export const refreshMemberZone = (userId: string): Promise<string | null> => memberZone(userId);
+
+// Their zone or the fallback: the zone a time decision is measured in.
+export async function memberZoneOrFallback(userId: string): Promise<string> {
+  return wordsZone(await memberZone(userId));
 }
 
 // A moment, in their words, for a model or a fact line: "Tue Oct 7, 7:30pm PDT".

@@ -11,6 +11,7 @@ import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { latestAskEntry, goalEntries } from "../harness/profileWrite.js";
 import { stampOf } from "./factLabels.js";
+import { FALLBACK_ZONE, memberZone, wordsZone } from "./memberTime.js";
 import type { PersonModelParts } from "./personModel.js";
 import { DateTime } from "luxon";
 
@@ -279,7 +280,8 @@ export const CALL_SENT_MAX = 1800;
 export const LAST_CALLS = 3;
 const LAST_CALLS_DAYS = 30;
 const OLDER_CALL_CHARS = 320;
-const ZONE = "America/Los_Angeles";
+// Only the fallback (services/memberTime.ts); the briefing passes their zone.
+const ZONE = FALLBACK_ZONE;
 
 // ---- corrected and retired items
 // The words that carry an item's meaning (three letters or more, so a name like Joy counts; a light plural strip).
@@ -458,11 +460,13 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const corrections = p.corrections;
   const keep = (text: string, at?: Date | string | null) => !retiredBy(text, corrections, at);
   const now = new Date();
+  // Their zone (services/memberTime.ts), or Pacific: every day and stamp in the briefing is theirs.
+  const zone = wordsZone(await memberZone(userId));
 
   // 1. What Co is carrying for them (open loops, the same as a text reply reads).
   // What Co said on a call it would do, and what came of it (harness/callGrounding.ts), first:
   // the thing Co owes them is the most likely pickup.
-  const promised = (await strip(promiseFacts(callRows.filter((r) => r.memory_type === "promise_result").map((r) => ({ at: r.created_at, content: String(r.content) }))).slice(0, 3).map((r) => `- ${dayLabel(r.at)}: ${r.text}`))).map((l) => withCorrectedNames(l, corrections));
+  const promised = (await strip(promiseFacts(callRows.filter((r) => r.memory_type === "promise_result").map((r) => ({ at: r.created_at, content: String(r.content) }))).slice(0, 3).map((r) => `- ${dayLabel(r.at, zone)}: ${r.text}`))).map((l) => withCorrectedNames(l, corrections));
   const loopItems = p.model?.loops ? p.model.loops.replace(/^What you're carrying for them right now, and where each stands \([^)]*\): /, "").replace(/\.$/, "").split("; ") : [];
   const loopLines = await strip(loopItems.map((l) => `- ${l.length > 240 ? `${l.slice(0, 240).replace(/[ ,;(]+[^ ,;(]*$/, "")}...` : l}`));
   const loops = [
@@ -472,17 +476,17 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // 2. The last calls: Co's own summary of each (or their first words on it), names as corrected.
   const pastCalls = pairCalls(callRows);
   const calls = await Promise.all(pastCalls.map(async (c) => ({ ...c, summary: c.summary ? withCorrectedNames(await stripOne(c.summary), corrections) || null : null, theirWords: (await strip(c.theirWords)).map((w) => withCorrectedNames(w, corrections)) })));
-  const lastCalls = renderLastCalls(calls, now);
+  const lastCalls = renderLastCalls(calls, now, zone);
   // 3 and 7. Their open threads, newest first, stamped; corrected ones dropped.
   const threadList = [...(p.model?.threadList ?? [])].sort((a, b) => +new Date(b.lastTouchedAt ?? b.openedAt) - +new Date(a.lastTouchedAt ?? a.openedAt));
   const stamped = threadList
     .filter((t) => keep(t.text, t.lastTouchedAt ?? t.openedAt))
-    .map((t) => ({ t, st: stampOf({ saidOn: t.openedAt, confirmedOn: t.lastTouchedAt, dueOn: t.dueDate }, now) }))
+    .map((t) => ({ t, st: stampOf({ saidOn: t.openedAt, confirmedOn: t.lastTouchedAt, dueOn: t.dueDate }, now, zone) }))
     .filter((x) => !x.st.drop)
     .map((x) => `${x.t.text} (${x.st.label})`);
   const threads = (await strip(stamped)).map((text) => ({ text, line: text }));
   // 4. Settled.
-  const settled = renderSettled(corrections);
+  const settled = renderSettled(corrections, zone);
   // 5. Lessons.
   const lessons = await strip(turn?.lessons ?? []);
   // 6. The rest, with corrected goals, wants and recap sentences left out.

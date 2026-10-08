@@ -57,7 +57,7 @@ check("web searches reserve the shared budget and keep only results that prove t
 check("opted-out or archived members' tasks are dropped", /sms_opted_out \|\| person\.archived_at/.test(tt));
 check("due tasks are claimed so two runs never work one", /FOR UPDATE SKIP LOCKED/.test(src("services/coTasks.ts")) && /\*\/15 \* \* \* \*/.test(src("jobs/index.ts")));
 check("the tools are Co's, guarded like every other ability", ["startTask", "updateTask", "closeTask"].every((t) => new RegExp(`tool: "${t}"`).test(src("services/capabilities.ts")) && new RegExp(`${t}: tool\\(`).test(src("agent/conversationTools.ts"))));
-check("replies read open tasks as scheduled facts", /openTasks\(userId\)\.then\(async \(t\) => taskFactLines\(t, undefined, /.test(src("services/turnContext.ts")) && /opts\.turn\?\.tasks \?\? \[\]\) addFact\(rf, "scheduled"/.test(src("harness/replyGrounding.ts")));
+check("replies read open tasks as scheduled facts", /openTasks\(userId\)\.then\(\(t\) => taskFactLines\(t, undefined, zone\)\)/.test(src("services/turnContext.ts")) && /opts\.turn\?\.tasks \?\? \[\]\) addFact\(rf, "scheduled"/.test(src("harness/replyGrounding.ts")));
 
 check("at most 3 web searches per wake-up", /filter\(\(d\) => d\.startsWith\("web:"\)\)\.length >= 3/.test(tt));
 

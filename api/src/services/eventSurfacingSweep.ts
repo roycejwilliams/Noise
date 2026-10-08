@@ -1,5 +1,5 @@
 import pool from "../db/db.js";
-import { getTimezoneForCity } from "./geocoding.js";
+import { endOfLocalDay, localDay, memberZone } from "./memberTime.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
@@ -94,10 +94,10 @@ async function tier3ShownAt(userId: string, name: string): Promise<Date[]> {
 
 // What happens to something already shown: new, a reminder, back once after
 // a month unanswered, or never (harness/matchGate.ts repeatRule).
-async function repeatFor(userId: string, match: TierMatch): Promise<{ action: RepeatAction; reason: string }> {
+async function repeatFor(userId: string, match: TierMatch, zone: string | null = null): Promise<{ action: RepeatAction; reason: string }> {
   const extra = "event_api_id" in match ? [] : await tier3ShownAt(userId, match.name);
   const history = await offerHistory(userId, match, extra);
-  return repeatRule(history, repeatInput(match, isShortNotice(match)), new Date().toISOString().slice(0, 10), new Date());
+  return repeatRule(history, repeatInput(match, isShortNotice(match, zone)), localDay(new Date(), zone), new Date());
 }
 
 // One thing at a time, paced by a backlog (Royce, 2026-08-30) — "I don't
@@ -196,20 +196,35 @@ function relevantDate(match: TierMatch): string | null {
   return null;
 }
 
-function daysUntilDate(dateStr: string): number {
-  const todayStr = new Date().toISOString().slice(0, 10);
+// Days from their today (in their zone, else Pacific; never the server's UTC day, which turns over at 5pm Pacific) to a date.
+function daysUntilDate(dateStr: string, zone: string | null = null, now = new Date()): number {
+  const todayStr = localDay(now, zone);
   const msPerDay = 1000 * 60 * 60 * 24;
-  return (new Date(`${dateStr}T00:00:00Z`).getTime() - new Date(`${todayStr}T00:00:00Z`).getTime()) / msPerDay;
+  return (new Date(`${dateStr.slice(0, 10)}T00:00:00Z`).getTime() - new Date(`${todayStr}T00:00:00Z`).getTime()) / msPerDay;
 }
 
-function isPastEvent(match: TierMatch): boolean {
+export function isPastEvent(match: TierMatch, zone: string | null = null, now = new Date()): boolean {
   const date = relevantDate(match);
-  return date !== null && daysUntilDate(date) < 0;
+  return date !== null && daysUntilDate(date, zone, now) < 0;
 }
 
-function isShortNotice(match: TierMatch): boolean {
+function isShortNotice(match: TierMatch, zone: string | null = null): boolean {
   const date = relevantDate(match);
-  return date !== null && daysUntilDate(date) >= 0 && daysUntilDate(date) <= SHORT_NOTICE_DAYS;
+  return date !== null && daysUntilDate(date, zone) >= 0 && daysUntilDate(date, zone) <= SHORT_NOTICE_DAYS;
+}
+
+// Pure: when a queued offer stops being offerable (Royce, 2026-10-07: evening Pacific events were dropped at 5pm Pacific, when the
+// old `${date}T23:59:00Z` expiry passed, 2-4 hours before they started). An event with a known start: at its start. An event with
+// only a date: the end of that day in the event's own zone (its page's), else theirs, else Pacific. A deadline: the end of that
+// day in their zone. Undated: two weeks.
+export function offerExpiresAt(match: TierMatch, zone: string | null, now = new Date()): Date {
+  const startAt = match.kind !== "opportunity" ? match.details?.startAt : null;
+  const start = startAt ? new Date(startAt) : null;
+  if (start && !Number.isNaN(start.getTime())) return start;
+  const date = relevantDate(match);
+  const end = date ? endOfLocalDay(date.slice(0, 10), match.details?.timezone ?? zone) : null;
+  if (end && !Number.isNaN(end.getTime())) return end;
+  return new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
 }
 
 // The real, periodic "Luma & X asks surface periodically" mechanism (Royce,
@@ -331,9 +346,8 @@ type SweepSearchTrace = {
   did?: string[];
 };
 
-async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
-  // Their time zone, so event dates are their local calendar dates.
-  const timezone = candidate.city ? await getTimezoneForCity(candidate.city).catch(() => null) : null;
+async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
+  // Their time zone (memberTime.ts), so event dates are their local calendar dates.
   // Feelings shape how Co says it, never whether they hear about something
   // (2026-09-18); frustration with what Co has found sends the real thing
   // instead of a tease (attemptEventSurfacing, revealNow).
@@ -364,7 +378,7 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items:
   // reminder when it's close, back once after a month unanswered. The gate
   // used to drop those forever inside the search (2026-09-18: twelve SF
   // events shown in texted searches were excluded from every later sweep).
-  const repeats = await Promise.all(matches.map((m) => repeatFor(candidate.userId, m)));
+  const repeats = await Promise.all(matches.map((m) => repeatFor(candidate.userId, m, timezone)));
   const fresh = matches.filter((_, i) => repeats[i].action === "new" || repeats[i].action === "resurface");
   const again = new Set(matches.filter((_, i) => repeats[i].action === "resurface"));
   const reminders = matches.filter((_, i) => repeats[i].action === "remind");
@@ -373,7 +387,7 @@ async function findFreshPending(candidate: SurfacingCandidate): Promise<{ items:
     .sort((a, b) => bias[b.tier] - bias[a.tier] || a.tier - b.tier)
     .map((match) => {
       const date = relevantDate(match);
-      const source: "full" | "urgent" = date !== null && daysUntilDate(date) <= URGENT_WINDOW_DAYS ? "urgent" : "full";
+      const source: "full" | "urgent" = date !== null && daysUntilDate(date, timezone) <= URGENT_WINDOW_DAYS ? "urgent" : "full";
       return { askText: candidate.askText, match, source, ...(again.has(match) ? { again: true } : {}) };
     })
     .concat(reminders.map((match) => ({ askText: candidate.askText, match, source: "urgent" as const, reminder: true })));
@@ -429,7 +443,12 @@ export async function alreadyFoundOpenings(userId: string): Promise<TierMatch[]>
   const matches: TierMatch[] = [
     ...backlogs.rows.flatMap((r: any) => ((r.items as BacklogItem[]) ?? []).map((i) => i.match)),
     ...queued.rows.map((r: any) => r.match as TierMatch),
-  ].filter((m): m is TierMatch => !!m && m.tier === 3 && !isPastEvent(m));
+  ].filter((m): m is TierMatch => !!m && m.tier === 3);
+  const zone = await memberZone(userId);
+  return dedupeOpenings(matches.filter((m) => !isPastEvent(m, zone)));
+}
+
+function dedupeOpenings(matches: TierMatch[]): TierMatch[] {
   const seen = new Set<string>();
   return matches.filter((m) => {
     const key = m.name.toLowerCase();
@@ -456,20 +475,20 @@ async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | 
 
 // Shown to them since it was queued (in a texted search or an earlier offer):
 // a new pitch is stale, a reminder isn't.
-async function shownSinceQueued(userId: string, item: BacklogItem): Promise<boolean> {
+async function shownSinceQueued(userId: string, item: BacklogItem, zone: string | null): Promise<boolean> {
   if (item.reminder) return false;
-  return (await repeatFor(userId, item.match)).action !== (item.again ? "resurface" : "new");
+  return (await repeatFor(userId, item.match, zone)).action !== (item.again ? "resurface" : "new");
 }
 
 // Drops anything at the front that's gone stale — already offered through
 // some other path, already decided by the harness, or a real event/deadline
 // that's fully passed while it sat waiting its turn — without losing what's
-// behind it.
-async function dropStaleFront(userId: string, items: BacklogItem[]): Promise<BacklogItem[]> {
+// behind it. "Passed" is their day, not the server's.
+async function dropStaleFront(userId: string, items: BacklogItem[], zone: string | null): Promise<BacklogItem[]> {
   let rest = items;
   while (
     rest.length &&
-    ((await shownSinceQueued(userId, rest[0])) || isPastEvent(rest[0].match) || (await alreadyDecided(userId, rest[0])))
+    ((await shownSinceQueued(userId, rest[0], zone)) || isPastEvent(rest[0].match, zone) || (await alreadyDecided(userId, rest[0])))
   ) {
     rest = rest.slice(1);
   }
@@ -504,21 +523,23 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // Search every day, not only when the backlog is empty, and merge
   // anything new behind what's already queued. Urgent items (happening
   // soon) move to the front so they aren't stuck behind a later event.
-  const queued = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId));
-  const { items: found, trace } = await findFreshPending(candidate);
+  // Their zone (or Pacific): "today", "past" and "short notice" are their days, never the server's.
+  const zone = await memberZone(candidate.userId);
+  const queued = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId), zone);
+  const { items: found, trace } = await findFreshPending(candidate, zone);
   // A reminder replaces an older queued pitch for the same event.
   const merged = [
     ...queued.filter((q) => !found.some((f) => f.reminder && sameMatch(f.match, q.match))),
     ...found.filter((f) => f.reminder || !queued.some((q) => sameMatch(q.match, f.match))),
   ];
   const pending = await dropStaleFront(candidate.userId, [
-    ...merged.filter((i) => i.source === "urgent" || isShortNotice(i.match)),
+    ...merged.filter((i) => i.source === "urgent" || isShortNotice(i.match, zone)),
     ...interleaveByTier(
-      merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match))),
+      merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match, zone))),
       await lastOfferedTier(candidate.userId),
       await waitingOfferTiers(candidate.userId),
     ),
-  ]);
+  ], zone);
   await saveBacklog(candidate.userId, candidate.askId, pending);
 
   // Every run is recorded, so a quiet week can be traced to where things
@@ -567,7 +588,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       skipped.push({ name: item.match.name, why: "already queued" });
       continue;
     }
-    if (tierAlreadyCovered(item, coveredTiers, isShortNotice(item.match))) {
+    if (tierAlreadyCovered(item, coveredTiers, isShortNotice(item.match, zone))) {
       skipped.push({ name: item.match.name, why: `tier ${item.match.tier} already has an offer waiting` });
       continue;
     }
@@ -608,13 +629,13 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       userId: candidate.userId,
       type: "event_offer",
       targetKey,
-      summary: `${item.reminder ? "Reminder, already shown to them: " : ""}${item.match.kind === "opportunity" ? "An opportunity" : "An event"} that fits ${candidate.fromProfile ? "what they've shared" : `their ask "${item.askText.slice(0, 120)}"`}: "${item.match.name}"${date ? ` (${date})` : ""}${isShortNotice(item.match) ? ", short notice" : ""}`,
+      summary: `${item.reminder ? "Reminder, already shown to them: " : ""}${item.match.kind === "opportunity" ? "An opportunity" : "An event"} that fits ${candidate.fromProfile ? "what they've shared" : `their ask "${item.askText.slice(0, 120)}"`}: "${item.match.name}"${date ? ` (${date})` : ""}${isShortNotice(item.match, zone) ? ", short notice" : ""}`,
       payload,
-      // Expires at the end of the event's (or deadline's) day; an undated
-      // opportunity gets two weeks.
-      expiresAt: date ? new Date(`${date}T23:59:00Z`) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+      // Expires at the event's start (or the end of its day, or the
+      // deadline's, in local time); an undated opportunity gets two weeks.
+      expiresAt: offerExpiresAt(match, zone),
       // Short notice is the most time-bound thing Co can send.
-      priority: isShortNotice(item.match) ? 95 : trace.widened ? 85 : undefined,
+      priority: isShortNotice(item.match, zone) ? 95 : trace.widened ? 85 : undefined,
     });
     if (ok) {
       await log("act", "queued", { queued: { name: item.match.name, tier: item.match.tier, date }, skipped });

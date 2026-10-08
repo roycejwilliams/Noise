@@ -1,6 +1,7 @@
 // Kept free of imports that need API keys, so the code evals can test it.
 import { DateTime } from "luxon";
 import type { EventDetails } from "./eventDetails.js";
+import { FALLBACK_ZONE } from "./localHours.js";
 
 // Pure: order scored events for offering. Open before sold out, then by the
 // offer score when there is one (ask plus profile), else the ask score.
@@ -28,7 +29,7 @@ export function offerScore(askSimilarity: number, profileSimilarity: number | nu
 // Co's home time zone, used when a person has no city or zone on file. The
 // server runs in UTC on Railway, so falling back to "local" made an evening
 // ask in San Francisco search tomorrow's calendar (code review, 2026-09-17).
-export const CO_DEFAULT_TIMEZONE = "America/Los_Angeles";
+export const CO_DEFAULT_TIMEZONE = FALLBACK_ZONE;
 
 export function searchZone(zone: string | null | undefined): { zone: string; defaulted: boolean } {
   if (zone && DateTime.now().setZone(zone).isValid) return { zone, defaulted: false };
@@ -36,13 +37,13 @@ export function searchZone(zone: string | null | undefined): { zone: string; def
   return { zone: fallback, defaulted: true };
 }
 
-// Today's date where they are, YYYY-MM-DD. UTC only when no zone is known.
+// Today's date where they are, YYYY-MM-DD; with no zone known, the fallback zone's (Pacific), never the server's UTC day.
 export function localToday(now: Date, zone?: string | null): string {
   if (zone) {
     const d = DateTime.fromJSDate(now).setZone(zone);
     if (d.isValid) return d.toISODate()!;
   }
-  return now.toISOString().slice(0, 10);
+  return DateTime.fromJSDate(now).setZone(FALLBACK_ZONE).toISODate()!;
 }
 
 // Pure: at most `max` events, spread across the days they fall on (round
@@ -81,5 +82,6 @@ export function localDate(startAt: string, zone?: string | null): string {
     const d = DateTime.fromISO(startAt, { zone: "utc" }).setZone(zone);
     if (d.isValid) return d.toISODate()!;
   }
-  return startAt.slice(0, 10);
+  const d = DateTime.fromISO(startAt, { zone: "utc" }).setZone(FALLBACK_ZONE);
+  return d.isValid && /T/.test(startAt) ? d.toISODate()! : startAt.slice(0, 10);
 }

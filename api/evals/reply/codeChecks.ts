@@ -329,7 +329,7 @@ onboardingCaseCases.push(
     [offerScore(0.1, 0.7, true) === 0.7, "a what's-on ask is ordered by the profile"],
     [(() => { const o = orderForOffering([{ name: "a", similarity: 0.5, offerScore: 0.3 }, { name: "b", similarity: 0.4, offerScore: 0.5 }]); return o[0].name === "b"; })(), "ordering uses the offer score when there is one"],
     [localDate("2026-09-18T02:00:00.000Z", "America/Los_Angeles") === "2026-09-17", "a 7pm Thursday SF event is Thursday, not Friday"],
-    [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-18", "without a zone, the UTC date is kept"],
+    [localDate("2026-09-18T02:00:00.000Z", null) === "2026-09-17", "without a zone, the Pacific date (the one fallback), not the UTC one (2026-10-07)"],
   );
 }
 

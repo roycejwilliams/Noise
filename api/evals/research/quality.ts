@@ -25,7 +25,7 @@ check("missing budget or date isn't load-bearing: searched around, shown as unkn
 check("sources below the bar are skipped", Q.belowTheBar("https://sf.funcheap.com/free-zoo-day/") && Q.belowTheBar("https://www.groupon.com/deals/x") && !Q.belowTheBar("https://www.sfmoma.org/event/x/") && !Q.belowTheBar("https://www.eventbrite.com/e/portfolio-night-1"));
 const tool = src("agent/loopTools.ts");
 check("the brief tool asks first when a load-bearing fact is missing (nothing starts)", /const q = Q\.assembleQuery\("venue", input\.what, known\);\s*if \(!q\.ok\) return \{ ok: false, askThem: q\.question/.test(tool));
-check("the task backstops it: missing facts are asked, never searched on a guess", /if \(!q\.ok\) \{[\s\S]{0,200}await say\(q\.question\)/.test(src("services/researchBrief.ts")));
+check("the task backstops it: missing facts are asked, never searched on a guess", /if \(!q\.ok\) \{[\s\S]{0,200}await tellThenClose\(q\.question, "dropped"/.test(src("services/researchBrief.ts")));
 check("options are read only from their own page (never a listicle), up to six asked of the search", /k\.official \|\| PEERSPACE_LISTING/.test(src("services/researchBrief.ts")) && /max: BRIEF_LIMITS\.maxOptions/.test(src("services/researchBrief.ts")) && /Up to \$\{Math\.min\(6, Math\.max\(1, opts\.max \?\? 3\)\)\}/.test(src("services/taskWeb.ts")));
 check("the task's search is the assembled query, not the raw ask", /findVenueOptions\(task\.userId, q\.query,/.test(src("services/researchBrief.ts")));
 

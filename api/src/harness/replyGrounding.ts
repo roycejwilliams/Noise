@@ -30,6 +30,7 @@ import { tasteSummary } from "../services/outcomes.js";
 import { handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
+import { memberZone } from "../services/memberTime.js";
 import { sourceOf } from "../services/messageFormat.js";
 import { getPersonSnapshot, renderSnapshot } from "./personSnapshot.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -168,11 +169,13 @@ export async function gatherReplyFacts(
   if (linkAsk) addInstruction(rf, linkAsk);
   // Every source is a separate read, so they run together: in series this
   // was six round trips before the reply could even start drafting.
+  // Their zone (services/memberTime.ts): "today" in the date notes is their day.
+  const zone = await memberZone(userId);
   const [corrections, snapshot, sent, notes, scheduled, reveal, preference, callFailure, sendHeld] = await Promise.all([
     recentCallCorrections(userId),
     opts.turn ? Promise.resolve(opts.turn.snapshot) : getPersonSnapshot(userId).catch(() => null),
     recentlySent(userId),
-    recentSearchNotes(userId),
+    recentSearchNotes(userId, zone),
     pool
       .query(
         `SELECT scheduled_for, timezone FROM scheduled_calls WHERE user_id = $1 AND status = 'pending' AND scheduled_for > NOW() ORDER BY scheduled_for LIMIT 3`,
@@ -272,6 +275,9 @@ export async function gatherReplyFacts(
   }
   // Co's own open tasks: real scheduled work, so saying when it'll get back to them is true.
   for (const line of opts.turn?.tasks ?? []) addFact(rf, "scheduled", line);
+  // Their research briefs (services/coTasks.ts briefFactLines): one still running or held for their hours is scheduled; one that
+  // finished or stopped is Co's record of what it did.
+  for (const line of opts.turn?.briefs ?? []) addFact(rf, /^Co is putting together|hasn't reached them yet/.test(line) ? "scheduled" : "did_before", line);
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
@@ -291,7 +297,7 @@ export async function gatherReplyFacts(
     try {
       const { match } = JSON.parse(reveal.rows[0].content) as { match: any };
       // Offers stored before details existed get them on demand.
-      addEventFacts(rf, await enrichMatch(match));
+      addEventFacts(rf, await enrichMatch(match), null, zone);
     } catch {
       // Malformed or pre-fix content shape; nothing reliable to add.
     }
@@ -315,7 +321,7 @@ export function countOf(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-async function recentSearchNotes(userId: string): Promise<string[]> {
+async function recentSearchNotes(userId: string, zone: string | null): Promise<string[]> {
   const { rows } = await pool
     .query(
       `SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content LIKE '[search]%' AND created_at > NOW() - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 5`,
@@ -323,11 +329,11 @@ async function recentSearchNotes(userId: string): Promise<string[]> {
     )
     .catch(() => ({ rows: [] as any[] }));
   // Dated, so an earlier search is never taken as the answer to a new ask.
-  return rows.map((r: any) => searchNoteLine(String(r.content), new Date(r.created_at), localToday()));
+  return rows.map((r: any) => searchNoteLine(String(r.content), new Date(r.created_at), localToday(zone), zone));
 }
 
-export function searchNoteLine(content: string, at: Date, today: string): string {
-  const d = DateTime.fromJSDate(at).setZone(DEFAULT_ZONE).toISODate()!;
+export function searchNoteLine(content: string, at: Date, today: string, zone: string | null = DEFAULT_ZONE): string {
+  const d = localToday(zone, at);
   return `${d === today ? "Earlier today" : `On ${DateTime.fromISO(d).toFormat("cccc, LLLL d")}`}, ${content.replace("[search] ", "")}${d === today ? "" : " That was an earlier search: a new ask needs a new one."}`;
 }
 
@@ -412,10 +418,11 @@ export function addEventFacts(
   rf: ReplyFacts,
   match: { name: string; event_date?: string; deadline?: string; url?: string; kind?: string; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; audience?: string; statedDates?: { start: string; end?: string | null } },
   asked?: Days | null,
+  zone: string | null = DEFAULT_ZONE,
 ): void {
   const label = match.kind === "opportunity" ? "Opportunity" : "Event";
   // Whether it's still ahead, against today (services/dateGuard.ts).
-  const note = dateNote(readDates(itemDays(match), localToday(), asked));
+  const note = dateNote(readDates(itemDays(match, zone), localToday(zone), asked));
   addFact(rf, "known", `${label} Co told them about: "${match.name}"${match.event_date ? `, on ${match.event_date}` : ""}${match.deadline ? `, application deadline ${match.deadline}` : ""}${note}.`);
   addFact(rf, "known", match.url ? `Link for "${match.name}": ${match.url}` : `There is no link on file for "${match.name}".`);
   // The real record (event page or source post), so "tell me more" gets

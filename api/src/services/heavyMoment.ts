@@ -15,7 +15,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { enqueueCandidate } from "../harness/proactive.js";
 import { signalTarget, type EmotionSignal } from "../harness/emotion.js";
-import { getTimezoneForCity } from "./geocoding.js";
+import { memberZone } from "./memberTime.js";
 
 export const HEAVY = {
   // How far back a signal can be and still start a check-in.
@@ -128,7 +128,7 @@ export async function queueHeavyCheckins(now = new Date()): Promise<number> {
        FROM emotion_signals WHERE user_id = $1 AND created_at > $2 ORDER BY created_at`,
       [u.user_id, new Date(now.getTime() - HEAVY.lookbackHours * 3_600_000)],
     );
-    const tz = u.city ? await getTimezoneForCity(u.city).catch(() => null) : null;
+    const tz = await memberZone(u.user_id);
     const ep = pickEpisode(sig.map((s: any) => ({ ...s, at: new Date(s.at) })), now, tz);
     if (!ep || ep.expiresAt <= now) continue;
     const { queued: ok } = await enqueueCandidate({

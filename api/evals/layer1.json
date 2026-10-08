@@ -9,6 +9,7 @@
     "evals/proactive/run.ts",
     "evals/proactive/rules.ts",
     "evals/proactive/cadence.ts",
+    "evals/proactive/durableSends.ts",
     "evals/events/audience.ts",
     "evals/plan/rules.ts",
     "evals/rhythm/rules.ts",
@@ -102,6 +103,7 @@
     "evals/calls/speakable.ts",
     "evals/calls/followThrough.ts",
     "evals/tasks/windows.ts",
+    "evals/tasks/looseEnds.ts",
     "evals/calls/llmProxy.ts",
     "evals/calls/provenance.ts",
     "evals/calls/spokenGrounding.ts",
@@ -114,6 +116,7 @@
     "evals/inroom/flow.ts",
     "evals/browserPilot/rules.ts",
     "evals/docs/researchBrief.ts",
-    "evals/research/quality.ts"
+    "evals/research/quality.ts",
+    "evals/time/local.ts"
   ]
 }

@@ -19,6 +19,7 @@
 // against the other member's owner-only facts (privateFactLeak).
 import pool from "../db/db.js";
 import { DEFAULT_ZONE, dateNote, localToday, readDates } from "./dateGuard.js";
+import { memberZone } from "./memberTime.js";
 
 export type Visibility = "owner" | "room" | "team";
 export type CoFact = {
@@ -146,8 +147,9 @@ export function rowsNamedIn(rows: LedgerRow[], text: string): LedgerRow[] {
 export const DOCUMENT_LABEL = /^a document \(PDF\)/;
 export const DOCUMENT_AGAIN = "They can have it again, redone or updated, whenever they ask: a request to send it again, resend it, update it, or the same request repeated means call writeDocument again, never \"it's already up\".";
 
-export function ledgerLine(r: LedgerRow, today = localToday()): string {
-  const day = r.at.toISOString().slice(0, 10);
+export function ledgerLine(r: LedgerRow, today = localToday(), zone: string | null = DEFAULT_ZONE): string {
+  // Their day, not the UTC one: a 6pm Pacific send is that Pacific day (Royce, 2026-10-07).
+  const day = localToday(zone, r.at);
   // The thing's own date, when known, read against today (dateGuard.ts).
   const note = r.when ? dateNote(readDates({ start: r.when, end: r.whenEnd && r.whenEnd >= r.when ? r.whenEnd : r.when }, today)) : "";
   if (r.relation === "sent" && DOCUMENT_LABEL.test(r.label)) return `On ${day} Co sent them "${r.label}". ${DOCUMENT_AGAIN}`;
@@ -176,7 +178,8 @@ export function sendsNamedIn(all: LedgerRow[], message: string): LedgerRow[] {
   return rowsNamedIn(all, message).filter((r) => (r.relation === "sent" && (!DOCUMENT_LABEL.test(r.label) || ASKS_IF_SENT.test(message))) || (r.relation === "texted" && /https?:\/\//.test(r.label)));
 }
 
-export async function ledgerFacts(userId: string, context: string): Promise<{ lines: string[]; named: string[] }> {
+export async function ledgerFacts(userId: string, context: string, zoneIn?: string | null): Promise<{ lines: string[]; named: string[] }> {
+  const zone = zoneIn !== undefined ? zoneIn : await memberZone(userId);
   const { rows } = await pool
     .query(
       `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end FROM co_facts
@@ -187,7 +190,8 @@ export async function ledgerFacts(userId: string, context: string): Promise<{ li
     .catch(() => ({ rows: [] as any[] }));
   const all: LedgerRow[] = rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null }));
   const message = context.split("\n")[0] ?? "";
-  return { lines: ledgerLinesFrom(all, context), named: sendsNamedIn(all, message).map((r) => ledgerLine(r)) };
+  const today = localToday(zone);
+  return { lines: ledgerLinesFrom(all, context, Date.now(), zone), named: sendsNamedIn(all, message).map((r) => ledgerLine(r, today, zone)) };
 }
 
 // Pure half, newest first in: the last two weeks of sends (from replies and
@@ -209,15 +213,15 @@ export function dedupeRows(rows: LedgerRow[]): LedgerRow[] {
 // many recent sends there are (2026-09-27: "Did you ever send me the AgentFi
 // thing?" lost the Sep 21 send to the 20 newest sends and to matches on Co's
 // own wording, and Co said it never sent it).
-export function ledgerLinesFrom(allRows: LedgerRow[], context: string, now = Date.now()): string[] {
-  const today = localToday(DEFAULT_ZONE, new Date(now));
+export function ledgerLinesFrom(allRows: LedgerRow[], context: string, now = Date.now(), zone: string | null = DEFAULT_ZONE): string[] {
+  const today = localToday(zone, new Date(now));
   const all = dedupeRows(allRows);
   const [message = "", ...coLines] = context.split("\n");
   const theyNamed = rowsNamedIn(all, message).slice(0, 12);
   const recentCut = now - 14 * 24 * 3_600_000;
   const recent = all.filter((r) => !theyNamed.includes(r) && r.at.getTime() >= recentCut && (r.relation === "sent" || r.relation === "texted")).slice(0, 20);
   const coNamed = rowsNamedIn(all.filter((r) => !theyNamed.includes(r) && !recent.includes(r)), coLines.join("\n")).slice(0, 6);
-  return [...theyNamed, ...recent, ...coNamed].sort((a, b) => a.at.getTime() - b.at.getTime()).map((r) => ledgerLine(r, today));
+  return [...theyNamed, ...recent, ...coNamed].sort((a, b) => a.at.getTime() - b.at.getTime()).map((r) => ledgerLine(r, today, zone));
 }
 
 // ------------------------------------------------------------ privacy

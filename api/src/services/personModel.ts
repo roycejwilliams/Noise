@@ -32,16 +32,18 @@ export function renderPersonModel(p: PersonModelParts, opts: { maxDid?: number }
 }
 
 export async function personModelParts(userId: string): Promise<PersonModelParts> {
+  // Their zone (services/memberTime.ts): thread stamps, ledger days and loop "today" are theirs.
+  const zone = await (await import("./memberTime.js")).memberZone(userId);
   const [snap, threads, ledger, loops] = await Promise.all([
     getPersonSnapshot(userId).catch(() => null),
     listThreads(userId).catch(() => []),
-    ledgerFacts(userId, "").catch(() => ({ lines: [] as string[], named: [] as string[] })),
+    ledgerFacts(userId, "", zone).catch(() => ({ lines: [] as string[], named: [] as string[] })),
     pool
       .query(`SELECT title, status, detail, due_date, source, last_confirmed_at, decay_asked_at FROM open_loops WHERE user_id = $1 AND closed_at IS NULL ORDER BY due_date NULLS LAST, changed_at DESC LIMIT 8`, [userId])
       .then((r) => r.rows.map((x: any) => ({ title: x.title, status: x.status, detail: x.detail, source: x.source, lastConfirmedAt: x.last_confirmed_at ? new Date(x.last_confirmed_at) : null, decayAskedAt: x.decay_asked_at ? new Date(x.decay_asked_at) : null, closedAt: null, closedReason: null, dueDate: x.due_date ? String(x.due_date instanceof Date ? x.due_date.toISOString() : x.due_date).slice(0, 10) : null }) as Pick<LoopRow, "title" | "status" | "detail" | "dueDate" | "source" | "lastConfirmedAt" | "decayAskedAt" | "closedAt" | "closedReason">))
       .catch(() => []),
   ]);
-  return { who: renderSnapshot(snap), threads: renderThreads(threads.slice(0, 6)), did: ledger.lines, loops: describeLoops(loops, { draftOnly: true }), threadList: threads };
+  return { who: renderSnapshot(snap), threads: renderThreads(threads.slice(0, 6), new Date(), zone), did: ledger.lines, loops: describeLoops(loops, { draftOnly: true, zone }), threadList: threads };
 }
 
 // Background prompts (the sweep, which writes member-facing offers, and Co's

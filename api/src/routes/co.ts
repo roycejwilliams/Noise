@@ -1075,6 +1075,8 @@ router.put(
       );
 
       if (!result.rows[0]) return res.status(404).send("Profile not found.");
+      // A city change moves their stored zone with it (services/memberTime.ts).
+      if (filteredKeys.includes("city")) await (await import("../services/memberTime.js")).refreshMemberZone(req.params.user_id);
 
       return res.status(200).send({ success: true, data: result.rows[0] });
     } catch (error) {

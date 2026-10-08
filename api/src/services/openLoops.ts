@@ -12,9 +12,10 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { DateTime } from "luxon";
 import { decayAction, isDraftable, stateOf, type LifecycleRow } from "./loopLifecycle.js";
+import { endOfLocalDay, localDay as memberLocalDay, memberZone } from "./memberTime.js";
 
-const LOOP_ZONE = "America/Los_Angeles";
-const localDay = (d: Date) => DateTime.fromJSDate(d).setZone(LOOP_ZONE).toISODate()!;
+// Days are the member's (services/memberTime.ts): each reader passes their zone; with none, the fallback (Pacific).
+const localDay = (d: Date, zone: string | null = null) => memberLocalDay(d, zone);
 
 export const LOOP_STATUSES = ["open", "waiting_on_reply", "unconfirmed", "decision_needed", "done", "dropped"] as const;
 export type LoopStatus = (typeof LOOP_STATUSES)[number];
@@ -58,9 +59,9 @@ export function deriveLoops(src: {
 // Pure: what the reply reads each turn. withIds (text replies, which have
 // updateLoop) gives each loop the id updateLoop names it by; calls, tasks and
 // the sweep read it without, since nothing there takes an id.
-export function describeLoops(rows: (Pick<LoopRow, "title" | "status" | "detail" | "dueDate" | "source"> & { id?: number; inMotion?: boolean; lastConfirmedAt?: Date | null; closedAt?: Date | null; closedReason?: string | null; decayAskedAt?: Date | null })[], opts: { withIds?: boolean; now?: Date; today?: string; draftOnly?: boolean } = {}): string | null {
+export function describeLoops(rows: (Pick<LoopRow, "title" | "status" | "detail" | "dueDate" | "source"> & { id?: number; inMotion?: boolean; lastConfirmedAt?: Date | null; closedAt?: Date | null; closedReason?: string | null; decayAskedAt?: Date | null })[], opts: { withIds?: boolean; now?: Date; today?: string; draftOnly?: boolean; zone?: string | null } = {}): string | null {
   const now = opts.now ?? new Date();
-  const today = opts.today ?? localDay(now);
+  const today = opts.today ?? localDay(now, opts.zone ?? null);
   const live = rows.filter((r) => r.status !== "done" && r.status !== "dropped" && !r.closedAt);
   // A row with no confirmation date predates the lifecycle: unconfirmed, never stated as current.
   const draftable = (r: (typeof rows)[number]) => !!r.inMotion && !opts.draftOnly ? true : isDraftable({ status: r.status, closedAt: r.closedAt ?? null, closedReason: r.closedReason ?? null, dueDate: r.dueDate, lastConfirmedAt: r.lastConfirmedAt ?? null, decayAskedAt: r.decayAskedAt ?? null }, now, today);
@@ -91,7 +92,8 @@ async function sources(userId: string, now: Date): Promise<LoopSources> {
       return { complete: false, rows: [] };
     });
   const [tasks, brief, asks, offers] = await Promise.all([
-    q(`SELECT id, goal, deadline, awaiting_reply, their_reply_at, notes FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind = 'work' ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
+    // A research brief in progress is something Co is carrying for them too (it closes by the same task status read).
+    q(`SELECT id, goal, deadline, awaiting_reply, their_reply_at, notes FROM co_tasks WHERE user_id = $1 AND status = 'open' AND kind IN ('work', 'research_brief') ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
     q(`SELECT brief, updated_at FROM search_briefs WHERE user_id = $1`, [userId]),
     q(`SELECT ask_id, ask_text, awaiting_response_since, last_mentioned_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
     q(`SELECT target_key, payload->'match'->>'name' AS name FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND decided_at > NOW() - interval '2 days' ORDER BY decided_at DESC LIMIT ${SOURCE_READ_CAP}`, [userId]),
@@ -310,11 +312,12 @@ export async function setLoopStatus(
 // unless its due date is within 2 days.
 export const WAKE_EVERY_HOURS = 6;
 export const URGENT_WITHIN_DAYS = 2;
-export function shouldWake(l: Pick<LoopRow, "taskId" | "changedAt" | "seenAt" | "wokeAt" | "status" | "dueDate">, now: Date): boolean {
+export function shouldWake(l: Pick<LoopRow, "taskId" | "changedAt" | "seenAt" | "wokeAt" | "status" | "dueDate">, now: Date, zone: string | null = null): boolean {
   if (!l.taskId || l.status === "done" || l.status === "dropped") return false;
   if (l.seenAt && l.seenAt.getTime() >= l.changedAt.getTime()) return false;
   if (!l.wokeAt || now.getTime() - l.wokeAt.getTime() >= WAKE_EVERY_HOURS * 3_600_000) return true;
-  return !!l.dueDate && new Date(`${l.dueDate}T23:59:59Z`).getTime() - now.getTime() <= URGENT_WITHIN_DAYS * 86_400_000;
+  // The due date ends at the end of THEIR day, not 23:59 UTC (4:59pm Pacific).
+  return !!l.dueDate && endOfLocalDay(l.dueDate, zone).getTime() - now.getTime() <= URGENT_WITHIN_DAYS * 86_400_000;
 }
 
 export async function runLoopSync(): Promise<void> {
@@ -337,7 +340,8 @@ export async function runLoopSync(): Promise<void> {
         console.error("openLoops: reading pending loop changes failed:", err?.message ?? err);
         return { rows: [] as any[] };
       });
-    for (const l of pending.map(toRow).filter((x) => shouldWake(x, now))) {
+    const zone = pending.length ? await memberZone(u.user_id) : null;
+    for (const l of pending.map(toRow).filter((x) => shouldWake(x, now, zone))) {
       // One statement: the loop counts as woken only if its task really was.
       const woke = await pool
         .query(
@@ -368,10 +372,10 @@ export type DecayDeps = {
   ask: (l: LoopRow) => Promise<boolean>; // true when an ask is queued (or already pending)
 };
 export async function runLoopDecay(now = new Date(), deps: DecayDeps = realDecayDeps()): Promise<{ closed: number; asked: number; expired: number }> {
-  const today = localDay(now);
+  // Each member's own day (a loop row carries its member's zone; none: the fallback).
   const out = { closed: 0, asked: 0, expired: 0 };
   for (const l of await deps.live()) {
-    const a = decayAction(l as LifecycleRow, now, today);
+    const a = decayAction(l as LifecycleRow, now, localDay(now, (l as LoopRow & { zone?: string | null }).zone ?? null));
     if (a.kind === "close_date_passed") { await deps.close(l.id, "date_passed"); out.closed++; }
     else if (a.kind === "expire") { await deps.expire(l.id); out.expired++; }
     else if (a.kind === "ask" && out.asked < MAX_ASKS_PER_PASS) { if (await deps.ask(l)) out.asked++; }
@@ -389,7 +393,11 @@ function realDecayDeps(): DecayDeps {
            FROM open_loops o JOIN users u ON u.id = o.user_id LEFT JOIN co_tasks t ON t.id = o.task_id
            WHERE o.closed_at IS NULL AND o.source <> 'ask' AND o.status NOT IN ('done', 'dropped') AND u.archived_at IS NULL AND u.sms_opted_out = false`,
         )
-        .then((r) => r.rows.map((x: any) => ({ ...toRow(x), inMotion: !!x.in_motion, userId: x.user_id }))),
+        .then(async (r) => {
+          const zones = new Map<string, string | null>();
+          for (const id of new Set<string>(r.rows.map((x: any) => x.user_id))) zones.set(id, await memberZone(id));
+          return r.rows.map((x: any) => ({ ...toRow(x), inMotion: !!x.in_motion, userId: x.user_id, zone: zones.get(x.user_id) ?? null }));
+        }),
     close: async (id, reason) => { await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = $2, closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND closed_at IS NULL`, [id, reason]); },
     expire: async (id) => { await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = 'expired', closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND closed_at IS NULL`, [id]); },
     ask: async (l) => {
@@ -402,10 +410,10 @@ function realDecayDeps(): DecayDeps {
       const r = await enqueueCandidate({
         userId,
         type: "loop_check",
-        targetKey: `loop_check:${l.id}:${localDay(new Date())}`,
+        targetKey: `loop_check:${l.id}:${localDay(new Date(), (l as LoopRow & { zone?: string | null }).zone ?? null)}`,
         topicKey: `loop:${l.id}`,
         summary: `Ask once whether "${l.title.slice(0, 60)}" is still on their plate`,
-        payload: { loopId: l.id, title: l.title, lastConfirmedOn: l.lastConfirmedAt ? localDay(l.lastConfirmedAt) : null },
+        payload: { loopId: l.id, title: l.title, lastConfirmedOn: l.lastConfirmedAt ? localDay(l.lastConfirmedAt, (l as LoopRow & { zone?: string | null }).zone ?? null) : null },
         dueAt: new Date(),
         expiresAt: new Date(Date.now() + 3 * 86_400_000),
       }).catch(() => ({ queued: false }));
@@ -415,8 +423,8 @@ function realDecayDeps(): DecayDeps {
 }
 
 // What drafting may state as current, from the rows of one member: open AND recently confirmed (services/loopLifecycle.ts isDraftable).
-export function draftableLoops<T extends Pick<LoopRow, "status" | "closedAt" | "closedReason" | "dueDate" | "lastConfirmedAt" | "decayAskedAt">>(rows: T[], now = new Date()): T[] {
-  const today = localDay(now);
+export function draftableLoops<T extends Pick<LoopRow, "status" | "closedAt" | "closedReason" | "dueDate" | "lastConfirmedAt" | "decayAskedAt">>(rows: T[], now = new Date(), zone: string | null = null): T[] {
+  const today = localDay(now, zone);
   return rows.filter((r) => isDraftable(r, now, today));
 }
 export { stateOf };

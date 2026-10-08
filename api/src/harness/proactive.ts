@@ -35,7 +35,8 @@ import pool from "../db/db.js";
 import { recordProactiveText } from "../services/coFacts.js";
 import sendblue, { cleanCoMessage } from "../services/sendblue.js";
 import { writeMemory } from "../services/memory.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
+import { hoursZone, isReasonableLocalHour } from "../services/localHours.js";
+import { localStamp, memberZone } from "../services/memberTime.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
@@ -318,21 +319,13 @@ export function engagementTier(now: Date, lastInboundAt: Date | null, unanswered
   return days <= ENGAGEMENT.dormantDays ? "dormant" : "gone";
 }
 
+// The one hours rule texts and calls share (services/localHours.ts): 9am-8pm their time, Pacific as a zone when theirs isn't known.
 export function localHourOk(now: Date, timezone: string | null): boolean {
-  if (timezone) {
-    const local = DateTime.fromJSDate(now).setZone(timezone);
-    if (local.isValid) return local.hour >= RULES.startHour && local.hour < RULES.endHour;
-  }
-  const utcHour = now.getUTCHours();
-  return utcHour >= 16;
+  return isReasonableLocalHour(timezone, now);
 }
 
 function startOfLocalDay(now: Date, timezone: string | null): Date {
-  if (timezone) {
-    const local = DateTime.fromJSDate(now).setZone(timezone);
-    if (local.isValid) return local.startOf("day").toJSDate();
-  }
-  return new Date(now.getTime() - DAY);
+  return DateTime.fromJSDate(now).setZone(hoursZone(timezone)).startOf("day").toJSDate();
 }
 
 function unansweredSince(send: SendRecord, lastInboundAt: Date | null): boolean {
@@ -400,7 +393,7 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
     checks.push({
       name: "local_hours",
       pass: localHourOk(state.now, state.timezone),
-      reason: `outside ${RULES.startHour}am-${RULES.endHour - 12}pm ${state.timezone ?? "(no time zone, US-safe UTC window)"}`,
+      reason: `outside ${RULES.startHour}am-${RULES.endHour - 12}pm ${state.timezone ?? "Pacific (no time zone on file)"}`,
     });
   }
   if (!opts.ignorePacing) {
@@ -980,7 +973,7 @@ async function loadPerson(userId: string): Promise<(Person & { optedOut: boolean
   );
   const r = rows[0];
   if (!r?.phone_number) return null;
-  const timezone = r.city ? await getTimezoneForCity(r.city).catch(() => null) : null;
+  const timezone = await memberZone(userId);
   return {
     userId,
     firstName: r.first_name || "there",
@@ -1106,7 +1099,7 @@ export function readRelevance(text: string): { relevant: boolean; why: string } 
 // Co reads it against the conversation since. null when Co couldn't answer:
 // the caller holds it for the next tick, neither sending nor archiving.
 export async function stillRelevant(c: Candidate, about: { recentConversation: string; now: Date; timezone: string | null }): Promise<{ relevant: boolean; why: string } | null> {
-  const day = (d: Date) => DateTime.fromJSDate(d).setZone(about.timezone ?? "America/Los_Angeles").toFormat("cccc LLL d, h:mm a");
+  const day = (d: Date) => localStamp(d, about.timezone);
   try {
     const { text } = await Promise.race([
       generateText({
@@ -1355,16 +1348,17 @@ export async function sendExempt(opts: {
 // maybeAskCandidateDirectly and networkIntroNudge.ts's
 // askCandidateDirectly sent a raw sendblue message with no opt-out or hours
 // check at all, since the trigger was the OTHER person's reply, not this
-// recipient's). Sends now if it's inside their local hours; otherwise
-// schedules exactly one in-process retry for the next local 9am instead of
-// texting at night. Opt-out is still enforced by sendExempt itself, at send
-// time, whichever branch runs.
+// recipient's), and for relays, reminders and stale heads-ups. Sends now if
+// it's inside their local hours; otherwise queues it for their next local 9am
+// instead of texting at night. Opt-out is still enforced by sendExempt itself,
+// at send time, whichever branch runs.
 //
-// Best-effort, not a durable queue: a process restart between now and the
-// scheduled retry loses it. Acceptable here since these are low-volume,
-// reply-triggered sends, not a cron-polled backlog — unlike the announcement
-// and event-change queues, which are DB-backed because they're seeded from
-// a webhook that has no in-process continuation to hold a timer on.
+// Durable (2026-10-07): the held send is a deferred_sends row the minute cron
+// sends (services/deferredSends.ts), not an in-process timer a restart or
+// deploy lost. `after` is what the send means for the record (a relay's
+// status, a reminder's sent_at, an intro ask's pending offer); it runs only
+// once the text actually went, now or in the morning, so nothing says "sent"
+// while it's only queued.
 export async function sendExemptWhenAllowed(opts: {
   userId: string;
   phoneNumber: string;
@@ -1372,19 +1366,27 @@ export async function sendExemptWhenAllowed(opts: {
   targetKey: string;
   messages: string[];
   timezone: string | null;
-}): Promise<{ sent: boolean; queued: boolean; reason?: string }> {
-  if (localHourOk(new Date(), opts.timezone)) {
-    const result = await sendExempt(opts).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+  after?: import("../services/deferredSends.js").AfterSend;
+  now?: Date;
+}): Promise<{ sent: boolean; queued: boolean; reason?: string; dueAt?: Date }> {
+  const D = await import("../services/deferredSends.js");
+  const now = opts.now ?? new Date();
+  const { after, ...send } = opts;
+  if (localHourOk(now, opts.timezone)) {
+    const result = await sendExempt({ ...send, now }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+    const o = D.outcomeOf(result, false);
+    // Inline "already sent" is an earlier send of the same key, not this one: the caller's record stays as it was.
+    if (result.reason !== "already sent") await D.runAfter(after, o === "sent" ? "sent" : o === "skipped" ? "skipped" : "failed");
     return { sent: result.sent, queued: false, reason: result.reason };
   }
-  const at = nextLocalHour(new Date(), opts.timezone, RULES.startHour);
-  const delayMs = Math.max(0, at.getTime() - Date.now());
-  setTimeout(() => {
-    sendExempt(opts).catch((err: any) =>
-      console.error(`sendExemptWhenAllowed(${opts.type}): deferred send failed for ${opts.userId} (non-fatal):`, err?.message ?? err),
-    );
-  }, delayMs);
-  return { sent: false, queued: true, reason: `outside local hours, retrying at ${at.toISOString()}` };
+  const at = nextLocalHour(now, opts.timezone, RULES.startHour);
+  const q = await D.enqueueDeferredSend({ ...send, dueAt: at, after }).catch((err: any) => ({ queued: false, reason: `queue failed: ${String(err?.message ?? err)}` }) as { queued: boolean; reason?: string });
+  if (!q.queued) {
+    console.error(`sendExemptWhenAllowed(${opts.type}): not queued for ${opts.userId}: ${q.reason}`);
+    if (q.reason !== "already sent") await D.runAfter(after, "failed");
+    return { sent: false, queued: false, reason: q.reason };
+  }
+  return { sent: false, queued: true, reason: `outside local hours, queued for ${at.toISOString()}`, dueAt: at };
 }
 
 // Layer 6 in-room nudges during a live event are sent by eventScoring.ts,
@@ -1754,19 +1756,11 @@ export async function runProactiveDispatch(registry: ProactiveRegistry): Promise
   await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
 }
 
-// Next local `hour`:00 strictly after `after`, in their time zone (US-safe
-// 17:00 UTC when unknown). Used for "the morning after" debriefs.
+// Next local `hour`:00 strictly after `after`, in their time zone (the
+// fallback zone, Pacific, when unknown). Used for "the morning after" debriefs.
 export function nextLocalHour(after: Date, timezone: string | null, hour: number): Date {
-  if (timezone) {
-    const local = DateTime.fromJSDate(after).setZone(timezone);
-    if (local.isValid) {
-      let t = local.set({ hour, minute: 0, second: 0, millisecond: 0 });
-      if (t <= local) t = t.plus({ days: 1 });
-      return t.toJSDate();
-    }
-  }
-  const t = new Date(after);
-  t.setUTCHours(17, 0, 0, 0);
-  if (t <= after) t.setUTCDate(t.getUTCDate() + 1);
-  return t;
+  const local = DateTime.fromJSDate(after).setZone(hoursZone(timezone));
+  let t = local.set({ hour, minute: 0, second: 0, millisecond: 0 });
+  if (t <= local) t = t.plus({ days: 1 });
+  return t.toJSDate();
 }

@@ -83,11 +83,15 @@ export function wantsDocument(goal: string, theirWords?: string | null): boolean
 export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at: Date }, sends: Sent[]): { kept: boolean; by: Sent | null; why: string } {
   const what = `${goalBody(p.goal)} ${p.theirWords ?? ""}`;
   const kind: Sent["kind"] | "any" = wantsDocument(p.goal, p.theirWords) ? "document" : WANTS_LINKS.test(what) ? "link" : "any";
-  // Anything else: a link or document, or a real text about it (its own, or one that shares what the promise is about).
+  // Anything else: something about the promised thing, i.e. sent by the task keeping it, or sharing what the promise is about
+  // (its goal or their words). A link or document on another subject doesn't keep it (2026-10-07: any unrelated doc or link did),
+  // and a text also has to be a real message, not a stub.
+  const theirs = PLACEHOLDER.test(norm(p.theirWords)) ? "" : String(p.theirWords ?? "");
+  const about = (s: Sent) => !!s.forThis || overlap(goalBody(p.goal), s.text) > 0 || (!!theirs && overlap(theirs, s.text) > 0);
   const fits = (s: Sent) =>
     kind === "document" ? s.kind === "document"
     : kind === "link" ? s.kind === "link" || s.kind === "document"
-    : s.kind !== "text" || (s.text.trim().length >= 20 && (!!s.forThis || overlap(goalBody(p.goal), s.text) > 0));
+    : about(s) && (s.kind !== "text" || s.text.trim().length >= 20);
   const after = sends.filter((s) => s.at.getTime() > p.at.getTime()).sort((x, y) => x.at.getTime() - y.at.getTime());
   const by = after.find(fits) ?? null;
   if (by) return { kept: true, by, why: `${by.kind === "document" ? "a document" : by.kind === "link" ? "a link" : "a text"} went out at ${by.at.toISOString().slice(0, 16).replace("T", " ")} UTC, after the promise` };

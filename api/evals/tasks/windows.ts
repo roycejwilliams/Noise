@@ -66,7 +66,7 @@ const local = (iso: string | Date, zone = SF) => new Date(iso).toLocaleString("e
 
   const unk = M.commitmentWindow("I'll text you the options tonight.", evening, null);
   check("unknown zone: the words are read in the one fallback (Pacific)", M.FALLBACK_ZONE === SF && local(unk.deadline) === "10/07, 23:59" && unk.zone === null);
-  check("unknown zone: the warn-by follows the unchanged send gate (16:00-24:00 UTC), so it's their morning, never a text the gate would block", new Date(unk.warnBy).toISOString() === "2026-10-08T16:00:00.000Z", unk.warnBy);
+  check("unknown zone: the warn-by follows the send gate measured in Pacific (9am-8pm, 2026-10-07): 7:40pm Pacific, never a text the gate would block", new Date(unk.warnBy).toISOString() === "2026-10-08T02:40:00.000Z", unk.warnBy);
   check("unknown zone, invalid string: same fallback", M.commitmentWindow("tonight", evening, "Not/AZone").zone === null);
 
   const noon = new Date("2026-10-07T20:00:00Z"); // 1pm SF

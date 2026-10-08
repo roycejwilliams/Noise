@@ -6,8 +6,7 @@
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { resolveAskWindow } from "./askWindow.js";
-import { CO_DEFAULT_TIMEZONE } from "./eventOrder.js";
-import { getTimezoneForCity } from "./geocoding.js";
+import { memberZoneOrFallback } from "./memberTime.js";
 
 // An ask with no time frame stays open this long, renewed each time they
 // restate it.
@@ -23,10 +22,8 @@ export function askExpiresAt(askText: string, saidAt: DateTime): Date {
 }
 
 export async function askExpiresAtForUser(userId: string, askText: string, saidAt: Date = new Date()): Promise<Date> {
-  const { rows } = await pool
-    .query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId])
-    .catch(() => ({ rows: [] as any[] }));
-  const zone = rows[0]?.city ? ((await getTimezoneForCity(rows[0].city).catch(() => null)) ?? CO_DEFAULT_TIMEZONE) : CO_DEFAULT_TIMEZONE;
+  // Their zone, or the fallback (services/memberTime.ts).
+  const zone = await memberZoneOrFallback(userId);
   return askExpiresAt(askText, DateTime.fromJSDate(saidAt).setZone(zone));
 }
 

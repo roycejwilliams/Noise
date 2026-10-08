@@ -21,7 +21,6 @@ import { notToTeammate } from "./teamLines.js";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
-import { writeMemory } from "./memory.js";
 
 export function relayEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.CO_RELAY === "on";
@@ -102,7 +101,7 @@ export async function recordConnection(a: string, b: string, source: string): Pr
 
 async function relaysToday(from: string, to: string): Promise<number> {
   const { rows } = await pool
-    .query(`SELECT count(*)::int AS n FROM member_relays WHERE from_user = $1 AND to_user = $2 AND status = 'sent' AND created_at > NOW() - INTERVAL '24 hours'`, [from, to])
+    .query(`SELECT count(*)::int AS n FROM member_relays WHERE from_user = $1 AND to_user = $2 AND status IN ('sent', 'queued') AND created_at > NOW() - INTERVAL '24 hours'`, [from, to])
     .catch(() => ({ rows: [{ n: RELAY_PER_PAIR_PER_DAY }] as any[] }));
   return Number(rows[0]?.n ?? RELAY_PER_PAIR_PER_DAY);
 }
@@ -119,7 +118,7 @@ async function ownRecentTexts(userId: string, current: string): Promise<string[]
 
 // ---------------------------------------------------------------- the relay
 
-export type RelayResult = { ok: true; to: string; note: string } | { ok: false; error: string; reason: string };
+export type RelayResult = { ok: true; to: string; note: string; queued: boolean } | { ok: false; error: string; reason: string };
 
 export async function relayMessage(opts: { fromUserId: string; fromFirstName: string; to: string; message: string; currentText: string }): Promise<RelayResult> {
   const log = (outcome: "act" | "skip", action: string, extra: Record<string, unknown> = {}) =>
@@ -160,13 +159,28 @@ export async function relayMessage(opts: { fromUserId: string; fromFirstName: st
   const { sendExemptWhenAllowed } = await import("../harness/proactive.js");
   const { getTimezoneForCity } = await import("./geocoding.js");
   const zone = phoneRows[0]?.city ? await getTimezoneForCity(phoneRows[0].city).catch(() => null) : null;
-  const r = await sendExemptWhenAllowed({ userId: to.userId, phoneNumber: phone, type: "direct_ask", targetKey: `relay:${id}`, messages: [text], timezone: zone });
+  // Its status, sent_at and the recipient's "Co replied:" line are written only once it actually reaches them
+  // (relayDelivered, and sendExempt's own text_exchange write): queued for their morning, it reads as queued.
+  const r = await sendExemptWhenAllowed({ userId: to.userId, phoneNumber: phone, type: "direct_ask", targetKey: `relay:${id}`, messages: [text], timezone: zone, after: { kind: "relay", payload: { relayId: id } } });
   const status = r.sent ? "sent" : r.queued ? "queued" : "failed";
-  await pool.query(`UPDATE member_relays SET status = $2 WHERE id = $1`, [id, status === "queued" ? "sent" : status]).catch(() => {});
-  if (status !== "failed") await writeMemory(to.userId, "text_exchange", `Co replied: ${text}`).catch(() => {});
+  if (status === "queued") await pool.query(`UPDATE member_relays SET status = 'queued' WHERE id = $1 AND status = 'pending'`, [id]).catch(() => {});
   await log(status === "failed" ? "skip" : "act", status, { toUser: to.userId, relayId: id });
   if (status === "failed") return { ok: false, reason: "failed", error: `The message to ${to.firstName} didn't go through. Say so plainly.` };
-  return { ok: true, to: to.firstName, note: status === "queued" ? `Queued for ${to.firstName}'s morning (it's outside their hours now).` : `Sent to ${to.firstName}.` };
+  return {
+    ok: true,
+    to: to.firstName,
+    queued: status === "queued",
+    note: status === "queued" ? `Queued for ${to.firstName}'s morning (it's outside their hours now); it hasn't reached them yet.` : `Sent to ${to.firstName}.`,
+  };
+}
+
+// The relay's record once its send is settled (services/deferredSends.ts runs it, now or in the morning).
+export async function relayDelivered(relayId: number, outcome: "sent" | "skipped" | "failed"): Promise<void> {
+  if (outcome === "sent") {
+    await pool.query(`UPDATE member_relays SET status = 'sent', sent_at = COALESCE(sent_at, NOW()) WHERE id = $1`, [relayId]);
+  } else {
+    await pool.query(`UPDATE member_relays SET status = $2 WHERE id = $1 AND status IN ('pending', 'queued')`, [relayId, outcome]);
+  }
 }
 
 // What each side's Co knows about relays, as facts. The sender only ever
@@ -175,9 +189,9 @@ export async function relayFacts(userId: string): Promise<string[]> {
   if (!relayEnabled()) return [];
   const { rows } = await pool
     .query(
-      `SELECT r.from_user, r.to_user, r.message, r.created_at, uf.first_name AS from_name, ut.first_name AS to_name
+      `SELECT r.from_user, r.to_user, r.message, r.status, COALESCE(r.sent_at, r.created_at) AS created_at, uf.first_name AS from_name, ut.first_name AS to_name
        FROM member_relays r JOIN users uf ON uf.id = r.from_user JOIN users ut ON ut.id = r.to_user
-       WHERE (r.from_user = $1 OR r.to_user = $1) AND r.status = 'sent' AND r.created_at > NOW() - INTERVAL '7 days'
+       WHERE (r.from_user = $1 OR r.to_user = $1) AND r.status IN ('sent', 'queued') AND r.created_at > NOW() - INTERVAL '7 days'
        ORDER BY r.created_at`,
       [userId],
     )
@@ -185,10 +199,15 @@ export async function relayFacts(userId: string): Promise<string[]> {
   const day = (d: Date) => DateTime.fromJSDate(d).toFormat("cccc, LLL d");
   const out: string[] = [];
   for (const r of rows) {
+    // Queued for the recipient's morning: the sender hears it's waiting; the recipient's Co knows nothing until it reaches them.
+    if (r.status === "queued") {
+      if (r.from_user === userId) out.push(`Co has queued their message to ${r.to_name} ("${r.message}") for ${r.to_name}'s morning, since it was outside ${r.to_name}'s hours. It has NOT reached ${r.to_name} yet.`);
+      continue;
+    }
     if (r.to_user === userId) {
       out.push(`${r.from_name} asked Co to pass this along to them on ${day(r.created_at)}: "${r.message}". Co sends nothing back to ${r.from_name} unless they explicitly ask it to, in their own words.`);
     } else {
-      const back = rows.find((x: any) => x.from_user === r.to_user && x.to_user === userId && x.created_at > r.created_at);
+      const back = rows.find((x: any) => x.status === "sent" && x.from_user === r.to_user && x.to_user === userId && x.created_at > r.created_at);
       out.push(
         back
           ? `Co passed their message to ${r.to_name} on ${day(r.created_at)} ("${r.message}"), and ${r.to_name} asked Co to send back: "${back.message}".`
@@ -211,28 +230,48 @@ export async function addReminder(userId: string, what: string, when: string, zo
   return { ok: true, at: at.toFormat("cccc, LLLL d 'at' h:mm a") };
 }
 
-// Due reminders, sent to the member who asked (never anyone else).
+// Due reminders, sent to the member who asked (never anyone else). queued_at claims one so the 5-minute cron never picks
+// it up twice; sent_at and the "Co replied:" line are written only once it actually goes out (reminderDelivered, and
+// sendExempt's own text_exchange write), which at night is their 9am (services/deferredSends.ts).
 export async function sendDueReminders(): Promise<number> {
   const { rows } = await pool
     .query(
       `SELECT r.id, r.user_id, r.what, u.phone_number, cp.city FROM member_reminders r JOIN users u ON u.id = r.user_id
        LEFT JOIN co_profiles cp ON cp.user_id = r.user_id
-       WHERE r.sent_at IS NULL AND r.due_at <= NOW() AND r.due_at > NOW() - INTERVAL '2 days' LIMIT 20`,
+       WHERE r.sent_at IS NULL AND r.queued_at IS NULL AND r.due_at <= NOW() AND r.due_at > NOW() - INTERVAL '2 days' LIMIT 20`,
     )
     .catch(() => ({ rows: [] as any[] }));
   const { sendExemptWhenAllowed } = await import("../harness/proactive.js");
   const { getTimezoneForCity } = await import("./geocoding.js");
   let n = 0;
   for (const r of rows) {
-    const claimed = await pool.query(`UPDATE member_reminders SET sent_at = NOW() WHERE id = $1 AND sent_at IS NULL RETURNING id`, [r.id]).catch(() => ({ rows: [] as any[] }));
-    if (!claimed.rows[0] || !r.phone_number) continue;
+    if (!r.phone_number) continue;
+    const claimed = await pool.query(`UPDATE member_reminders SET queued_at = NOW() WHERE id = $1 AND sent_at IS NULL AND queued_at IS NULL RETURNING id`, [r.id]).catch(() => ({ rows: [] as any[] }));
+    if (!claimed.rows[0]) continue;
     const zone = r.city ? await getTimezoneForCity(r.city).catch(() => null) : null;
-    const text = `Reminder you asked for: ${r.what}`;
-    const s = await sendExemptWhenAllowed({ userId: r.user_id, phoneNumber: r.phone_number, type: "direct_ask", targetKey: `reminder:${r.id}`, messages: [text], timezone: zone });
-    if (s.sent || s.queued) {
-      await writeMemory(r.user_id, "text_exchange", `Co replied: ${text}`).catch(() => {});
-      n++;
-    }
+    const s = await sendExemptWhenAllowed({ userId: r.user_id, phoneNumber: r.phone_number, type: "direct_ask", targetKey: `reminder:${r.id}`, messages: [reminderText(r.what)], timezone: zone, after: { kind: "reminder", payload: { reminderId: r.id } } });
+    if (s.sent || s.queued) n++;
   }
   return n;
+}
+
+export const reminderText = (what: string) => `Reminder you asked for: ${what}`;
+
+// The reminder's record once its send is settled: sent_at only when it went.
+export async function reminderDelivered(reminderId: number, outcome: "sent" | "skipped" | "failed"): Promise<void> {
+  if (outcome === "sent") await pool.query(`UPDATE member_reminders SET sent_at = COALESCE(sent_at, NOW()) WHERE id = $1`, [reminderId]);
+  await recordDecision({ layer: 3, decision: "relay.reminder", userId: null, outcome: outcome === "sent" ? "act" : "skip", action: outcome, proposal: { reminderId } }).catch(() => {});
+}
+
+// Reminders that came due outside their hours and are waiting for their morning: Co knows they haven't gone yet.
+export async function reminderFacts(userId: string): Promise<string[]> {
+  const { rows } = await pool
+    .query(
+      `SELECT r.what, r.due_at FROM member_reminders r
+       JOIN deferred_sends d ON d.user_id = r.user_id AND d.target_key = 'reminder:' || r.id AND d.status IN ('queued', 'sending')
+       WHERE r.user_id = $1 AND r.sent_at IS NULL AND r.queued_at IS NOT NULL ORDER BY r.due_at`,
+      [userId],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return rows.map((r: any) => `The reminder they asked for ("${r.what}") came due outside their hours. It's queued for their morning and has NOT been sent yet.`);
 }

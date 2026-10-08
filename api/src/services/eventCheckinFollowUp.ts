@@ -1,5 +1,5 @@
 import pool from "../db/db.js";
-import { getTimezoneForCity } from "./geocoding.js";
+import { memberZone } from "./memberTime.js";
 import { getEventDetails } from "./luma.js";
 import { enqueueDebrief, type NamedOutcome } from "./recommendationOutcome.js";
 import type { ScorableGuest } from "./eventScoring.js";
@@ -146,7 +146,7 @@ export async function enqueueDueEventCheckinFollowUps(): Promise<void> {
      LIMIT 50`,
   );
   for (const row of rows) {
-    const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+    const timezone = await memberZone(row.user_id);
     // send_at was scheduled as end_at + CHECKIN_FOLLOWUP_DELAY_HOURS.
     const eventEnd = new Date(new Date(row.send_at).getTime() - CHECKIN_FOLLOWUP_DELAY_HOURS * 60 * 60 * 1000);
     // Only mark 'queued' on an actual queue (code review, 2026-09-17) — see

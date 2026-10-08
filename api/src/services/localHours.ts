@@ -8,32 +8,32 @@ import { DateTime } from "luxon";
 export const REASONABLE_HOUR_START = 9;
 export const REASONABLE_HOUR_END = 20;
 
-// With no usable time zone, only the UTC hours when every continental US zone
-// is inside 9am-8pm count: 16:00-24:00 UTC (9am Pacific to 8pm Eastern, give
-// or take DST). Same window as the proactive harness's localHourOk.
-export const NO_TIMEZONE_UTC_START_HOUR = 16;
+// The one fallback when a member's zone isn't known (Royce, 2026-10-07: "Co is time-aware at all times... against the member's local
+// time, not the server's"): Pacific, where the club is (San Francisco), applied as a ZONE so it follows DST. It replaced two fixed-UTC
+// guesses (texts 16:00-24:00 UTC, calls 17:00-24:00 UTC), which were Pacific in summer only: after DST ends, 16:00 UTC is 8am PST.
+// Every reader of a member's zone goes through services/memberTime.ts, which re-exports this.
+export const FALLBACK_ZONE = "America/Los_Angeles";
 
-// Used to fail OPEN when timezone was null/unresolvable (code review,
-// 2026-09-17): the missed-call text, event-change texts, and the auto-intake
-// call gate all went out at any hour for someone with no city on file, which
-// is exactly the 2am contact this gate exists to stop. Now a missing or
-// invalid zone gets the conservative US-safe UTC window instead.
+// The zone a moment is measured in: theirs when it's a real zone, else the fallback.
+export function hoursZone(timezone: string | null | undefined): string {
+  return timezone && DateTime.now().setZone(timezone).isValid ? timezone : FALLBACK_ZONE;
+}
+
+// 9am-8pm in their zone (or the fallback zone). One rule for texts and calls (harness/proactive.ts localHourOk and
+// harness/callGate.ts callHourOk both call this).
 //
 // No DST edge case here: `now` is a real, already-resolved UTC instant; the
 // classic DST ambiguities only occur when constructing an instant FROM a
 // local wall-time, which this never does.
-export function isReasonableLocalHour(timezone: string | null, now: Date = new Date()): boolean {
-  if (timezone) {
-    const local = DateTime.fromJSDate(now).setZone(timezone);
-    if (local.isValid) return local.hour >= REASONABLE_HOUR_START && local.hour < REASONABLE_HOUR_END;
-  }
-  return now.getUTCHours() >= NO_TIMEZONE_UTC_START_HOUR;
+export function isReasonableLocalHour(timezone: string | null | undefined, now: Date = new Date()): boolean {
+  const local = DateTime.fromJSDate(now).setZone(hoursZone(timezone));
+  return local.hour >= REASONABLE_HOUR_START && local.hour < REASONABLE_HOUR_END;
 }
 
 // The next instant (on the hour) that isReasonableLocalHour allows, at or
 // after `after`. Used to queue a text for the morning instead of sending it
 // at night.
-export function nextReasonableHour(timezone: string | null, after: Date = new Date()): Date {
+export function nextReasonableHour(timezone: string | null | undefined, after: Date = new Date()): Date {
   if (isReasonableLocalHour(timezone, after)) return after;
   const t = new Date(after);
   t.setUTCMinutes(0, 0, 0);

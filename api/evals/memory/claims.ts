@@ -189,9 +189,9 @@ check("an ordinary line with no attribution is untouched", unb("The advisor idea
 
 // ---- wiring
 const mc = src("services/memoryCompaction.ts");
-check("the recap is no longer a model revising its own last recap", !/Your previous recap of them/.test(mc) && /refreshClaims\(userId\)/.test(mc) && /renderRecap\(live, new Date\(\)\)/.test(mc) && !/generateText/.test(mc));
+check("the recap is no longer a model revising its own last recap", !/Your previous recap of them/.test(mc) && /refreshClaims\(userId\)/.test(mc) && /renderRecap\(live, new Date\(\), await \(await import\("\.\/memberTime\.js"\)\)\.memberZone\(userId\)\)/.test(mc) && !/generateText/.test(mc));
 check("expired claims leave the recap daily, even for a quiet member", /await expireRecaps\(\)/.test(src("jobs/index.ts")));
-check("only a claim still inside its lifetime is stored", /if \(!isLive\(c, now, ZONE\)\) continue;/.test(src("services/claims.ts")));
+check("only a claim still inside its lifetime is stored", /if \(!isLive\(c, now, zone\)\) continue;/.test(src("services/claims.ts")));
 check("a call's text and a member's own texts are the only sources (never Co's lines)", src("services/claims.ts").includes("\\[to [A-Za-z]+\\]") && src("services/claims.ts").includes("user\\s*:"));
 check("the claim extractor keeps prompts out of the trace store and says a test prompt is not a claim", /recordInputs: false, recordOutputs: false/.test(src("services/claims.ts")) && /A test prompt, a hypothetical/.test(src("services/claims.ts")));
 check("the post-call text gets what they said and Co's read as separate, labelled facts", /live_things_they_said/.test(src("jobs/postCallFollowUp.ts")) && /background_co_read_orientation_only_never_say_you_told_me/.test(src("jobs/postCallFollowUp.ts")));

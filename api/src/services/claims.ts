@@ -12,9 +12,11 @@ import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
+import { FALLBACK_ZONE, memberZone, wordsZone } from "./memberTime.js";
 import { checkProvenance, expiresOn, isLive, KIND_LIST, renderLive, sameClaim, type Claim, type Kind, type Provenance } from "./factLabels.js";
 
-const ZONE = "America/Los_Angeles";
+// Days are the member's (services/memberTime.ts); ZONE is only the fallback when theirs isn't known.
+const ZONE = FALLBACK_ZONE;
 // Judgment about what is stale is Sonnet's job (Royce's model policy), as the recap always was.
 const CLAIMS_MODEL = MODELS.sonnet;
 
@@ -22,10 +24,10 @@ export type Source = { at: string; text: string };
 export type Proposed = { text?: unknown; provenance?: unknown; kind?: unknown; quote?: unknown; said_on?: unknown };
 
 // What the member said, with when, from a transcript of exchanges: only their lines.
-export function theirWordsOf(rows: { content: string; created_at: Date | string }[]): Source[] {
+export function theirWordsOf(rows: { content: string; created_at: Date | string }[], zone: string = ZONE): Source[] {
   const out: Source[] = [];
   for (const r of rows) {
-    const at = DateTime.fromJSDate(new Date(r.created_at)).setZone(ZONE).toISODate()!;
+    const at = DateTime.fromJSDate(new Date(r.created_at)).setZone(zone).toISODate()!;
     const c = String(r.content);
     if (/ \[to [A-Za-z]+\]\s*$/.test(c)) continue; // their talk with a teammate is not about them
     const said = c.match(/^User said:\s*([\s\S]*)$/i);
@@ -36,7 +38,7 @@ export function theirWordsOf(rows: { content: string; created_at: Date | string 
 }
 
 // The model's proposals, checked and finished by code.
-export function finishClaims(proposed: Proposed[], sources: Source[], today: string): Claim[] {
+export function finishClaims(proposed: Proposed[], sources: Source[], today: string, zone: string = ZONE): Claim[] {
   const all = sources.map((s) => s.text).join("\n");
   const out: Claim[] = [];
   for (const p of proposed) {
@@ -51,13 +53,13 @@ export function finishClaims(proposed: Proposed[], sources: Source[], today: str
     const latest = sources.reduce((m, s) => (s.at > m ? s.at : m), "");
     const saidOn = src?.at ?? (latest || today);
     const base = { text, provenance: checked.provenance, kind, quote: checked.quote, saidOn, confirmedOn: saidOn };
-    out.push({ ...base, expiresOn: expiresOn(base) });
+    out.push({ ...base, expiresOn: expiresOn(base, zone) });
   }
   return out;
 }
 
 // Merge new claims into what is held: the same claim said again is re-confirmed (its clock moves), a new one is added.
-export function mergeClaims(held: Claim[], fresh: Claim[]): Claim[] {
+export function mergeClaims(held: Claim[], fresh: Claim[], zone: string = ZONE): Claim[] {
   const out = held.map((c) => ({ ...c }));
   for (const f of fresh) {
     const i = out.findIndex((h) => sameClaim(h, f));
@@ -67,7 +69,7 @@ export function mergeClaims(held: Claim[], fresh: Claim[]): Claim[] {
     if (f.provenance === "user_said") {
       const confirmedOn = f.saidOn > h.confirmedOn ? f.saidOn : h.confirmedOn;
       const next = { ...h, provenance: "user_said" as Provenance, quote: f.quote ?? h.quote, text: f.saidOn >= h.saidOn ? f.text : h.text, confirmedOn, saidOn: h.saidOn > f.saidOn ? h.saidOn : f.saidOn };
-      out[i] = { ...next, expiresOn: expiresOn(next) };
+      out[i] = { ...next, expiresOn: expiresOn(next, zone) };
     }
   }
   return out;
@@ -88,8 +90,15 @@ export async function heldClaims(userId: string): Promise<Claim[]> {
 // First run for a member reads this far back, so what they said long ago (their city, what they are building) is not lost.
 export const FIRST_RUN_DAYS = 120;
 
-export async function liveClaims(userId: string, now = new Date()): Promise<Claim[]> {
-  return (await heldClaims(userId)).filter((c) => isLive(c, now, ZONE));
+export async function liveClaims(userId: string, now = new Date(), zoneIn?: string | null): Promise<Claim[]> {
+  const zone = wordsZone(zoneIn !== undefined ? zoneIn : await memberZone(userId));
+  return (await heldClaims(userId)).filter((c) => isLive(c, now, zone));
+}
+
+// Their live claims, labelled and dated in their zone: what a reply or a call reads.
+export async function liveClaimsRendered(userId: string, now = new Date()): Promise<ReturnType<typeof renderLive>> {
+  const zone = wordsZone(await memberZone(userId));
+  return renderLive(await liveClaims(userId, now, zone), now, zone);
 }
 
 // The model's read of what they said. It proposes; finishClaims decides.
@@ -123,8 +132,9 @@ Return ONLY JSON: {"claims": [{"text": "...", "provenance": "user_said", "kind":
 // Nightly: read what is new, merge it in, and let what has expired go. Returns the live claims.
 // Atomic: the member's claims are rewritten in one transaction under a per-member lock, from a read that must have succeeded, and
 // nothing is rewritten when the model call failed (the held claims stay as they were and the marker does not move).
-export async function refreshClaims(userId: string, now = new Date(), deps: { propose?: typeof proposeClaims; db?: { connect: () => Promise<any> } } = {}): Promise<Claim[]> {
-  const today = DateTime.fromJSDate(now).setZone(ZONE).toISODate()!;
+export async function refreshClaims(userId: string, now = new Date(), deps: { propose?: typeof proposeClaims; db?: { connect: () => Promise<any> }; zone?: string | null } = {}): Promise<Claim[]> {
+  const zone = wordsZone(deps.zone !== undefined ? deps.zone : await memberZone(userId));
+  const today = DateTime.fromJSDate(now).setZone(zone).toISODate()!;
   const client = await (deps.db ?? pool).connect();
   try {
     await client.query("BEGIN");
@@ -136,13 +146,13 @@ export async function refreshClaims(userId: string, now = new Date(), deps: { pr
       [userId, since],
     );
     const held = await heldClaimsStrict(userId, client);
-    const sources = theirWordsOf(exchanges);
+    const sources = theirWordsOf(exchanges, zone);
     const proposed = sources.length ? await (deps.propose ?? proposeClaims)(sources, held, today) : [];
-    const merged = mergeClaims(held, finishClaims(proposed, sources, today));
+    const merged = mergeClaims(held, finishClaims(proposed, sources, today, zone), zone);
     await client.query(`DELETE FROM member_claims WHERE user_id = $1`, [userId]);
     for (const c of merged) {
       // What has expired is dropped here, not carried: the table holds only claims still inside their lifetime.
-      if (!isLive(c, now, ZONE)) continue;
+      if (!isLive(c, now, zone)) continue;
       await client.query(
         `INSERT INTO member_claims (user_id, text, provenance, kind, quote, said_on, confirmed_on, expires_on) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [userId, c.text, c.provenance, c.kind, c.quote, c.saidOn, c.confirmedOn, c.expiresOn],
@@ -150,7 +160,7 @@ export async function refreshClaims(userId: string, now = new Date(), deps: { pr
     }
     await client.query(`INSERT INTO member_claims_state (user_id, refreshed_at) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET refreshed_at = EXCLUDED.refreshed_at`, [userId, now]);
     await client.query("COMMIT");
-    return merged.filter((c) => isLive(c, now, ZONE));
+    return merged.filter((c) => isLive(c, now, zone));
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
@@ -169,8 +179,8 @@ export function splitRecap(recap: string): { theySaid: string; coRead: string } 
 }
 
 // The recap: only live claims, each labelled; what they said apart from what Co read into it.
-export function renderRecap(claims: Claim[], now: Date): string {
-  const r = renderLive(claims, now, ZONE);
+export function renderRecap(claims: Claim[], now: Date, zone: string | null = ZONE): string {
+  const r = renderLive(claims, now, wordsZone(zone));
   const sec = (title: string, lines: string[]) => (lines.length ? `${title}\n${lines.map((l) => `- ${l}`).join("\n")}` : "");
   return [
     sec("Who they are (they said):", r.enduring),

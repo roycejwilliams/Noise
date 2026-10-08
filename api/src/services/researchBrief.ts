@@ -174,6 +174,16 @@ export async function findVenueOptions(userId: string, query: string, ask: Venue
   return finds;
 }
 
+// Pure: after trying to send a brief's closing line, what happens to the task. "told": it went (or already had, same target key),
+// close as planned. "hold": it's outside their hours, so keep the task open and say it when their hours start (bounded by the
+// task's wake-ups, so a line that never fits can't loop). "untold": paused, opted out or failed: close as dropped and say so.
+export const BRIEF_HOLD_MAX_WAKES = 6;
+export function briefLineOutcome(r: { sent: boolean; reason?: string }, wakes: number): "told" | "hold" | "untold" {
+  if (r.sent || r.reason === "already sent") return "told";
+  if (r.reason === "outside local hours" && wakes < BRIEF_HOLD_MAX_WAKES) return "hold";
+  return "untold";
+}
+
 type BriefParams = { what?: string; city?: string | null; neighborhood?: string | null; date?: string | null; start?: string | null; headcount?: number | null; budget?: string | null; title?: string; memberContext?: string[]; wantsGoogle?: boolean; again?: boolean };
 
 // The background run of one research-brief task (services/taskTurn.ts runDueTasks): find (or, for "send it again", re-check the
@@ -195,7 +205,25 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const zone = city ? await import("./geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
   const slot = p.date && p.start ? { date: p.date, start: p.start } : null;
   const { sendExempt } = await import("../harness/proactive.js");
-  const say = (text: string) => sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true }).catch(() => {});
+  // A line to them that ends the brief (what it came to, or the question it needs first). Outside their hours it used to be
+  // dropped while the task closed as done, so they never heard (2026-10-07). Now: told, then closed; outside their hours, held
+  // to their morning with the task kept open; never told for any other reason, closed as dropped and saying so.
+  const tellThenClose = async (text: string, status: "done" | "dropped", outcome: string) => {
+    const r = await sendExempt({ userId: task.userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `research_brief:${task.id}`, messages: [text], timezone: zone, respectHours: true }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
+    const next = briefLineOutcome(r, task.wakes);
+    if (next === "hold") {
+      const { holdBriefLine } = await import("./coTasks.js");
+      const { nextSendable } = await import("./memberTime.js");
+      if (await holdBriefLine(task.userId, task.id, { text, status, outcome }, nextSendable(new Date(), zone))) return;
+    }
+    await closeTask(task.userId, task.id, next === "told" ? status : "dropped", next === "told" ? outcome : `${outcome}; never told them (${r.reason ?? "not sent"})`);
+  };
+  // A line held from an earlier run: say it now (the find isn't run again).
+  const held = (task.followup as any)?.held as { text: string; status: "done" | "dropped"; outcome: string } | undefined;
+  if (held?.text) {
+    await tellThenClose(held.text, held.status, held.outcome);
+    return;
+  }
 
   let finds: ResearchFind[] = [];
   let rechecked = 0;
@@ -215,8 +243,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     const q = Q.assembleQuery("venue", p.what, state);
     if (!q.ok) {
       // The tool asks first; this is the backstop. Never search on a guess.
-      await say(q.question);
-      await closeTask(task.userId, task.id, "dropped", `asked them first: missing ${q.missing.join(", ")}`);
+      await tellThenClose(q.question, "dropped", `asked them first: missing ${q.missing.join(", ")}`);
       return;
     }
     finds = await findVenueOptions(task.userId, q.query, { what: p.what, city, slot }, zone).catch((err: any) => {
@@ -234,8 +261,8 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const theirs = [await loadTheirWords(task.userId).catch(() => ""), task.theirWords].join("\n");
   const problems = [...researchProblems(doc), ...documentProblems(doc, { theirs })];
   if (problems.length) {
-    await say(finds.length ? "I looked, but I couldn't verify enough to put a brief together that I'd stand behind. I'll tell you what I can check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?");
-    await closeTask(task.userId, task.id, "done", `no brief: ${problems.slice(0, 3).join("; ")}`);
+    const line = finds.length ? "I looked, but I couldn't verify enough to put a brief together that I'd stand behind. I'll tell you what I can check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?";
+    await tellThenClose(line, "done", `no brief: ${problems.slice(0, 3).join("; ")}`);
     return;
   }
   const to = { userId: task.userId, firstName: String(person.first_name ?? ""), phone: person.phone_number, zone };

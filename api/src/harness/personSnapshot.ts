@@ -15,6 +15,7 @@
 // produce the newer facts.
 import { goalEntries } from "./profileWrite.js";
 import { notToTeammate } from "../services/teamLines.js";
+import { localStamp, memberZone } from "../services/memberTime.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -41,6 +42,8 @@ export type SnapshotInputs = {
   // Where they say they are headed: goal-typed entries only, never an ask. Orientation, not a search.
   goals?: string[];
   outcomes: string[];
+  // Their zone (services/memberTime.ts): the times shown are theirs, with the zone named.
+  zone?: string | null;
 };
 
 // Rebuilt at most this often while they're actively talking.
@@ -52,7 +55,7 @@ export function snapshotPrompt(input: SnapshotInputs): string {
 ${input.previous ? `Your previous picture (may be out of date):\n${JSON.stringify(input.previous, null, 2)}` : "No previous picture."}
 
 What ${input.firstName} has said recently, oldest first (their own words and call summaries):
-${input.recentStatements.map((s) => `- [${s.at}] ${s.text}`).join("\n") || "(nothing recent)"}
+${input.recentStatements.map((s) => `- [${localStamp(`${s.at}:00Z`, input.zone)}] ${s.text}`).join("\n") || "(nothing recent)"}
 
 What they're asking Co to look for right now (errands, not who they are):
 ${input.openAsks.map((a) => `- ${a}`).join("\n") || "(nothing open)"}
@@ -159,6 +162,7 @@ async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
     openAsks: asks.rows.map((r: any) => r.ask_text),
     goals: goalEntries(intentRow.rows[0]?.intent).map((g) => String(g.text)).slice(0, 6),
     outcomes,
+    zone: await memberZone(userId),
   };
 }
 
@@ -178,14 +182,14 @@ async function loadOutcomeLines(userId: string): Promise<string[]> {
 // person has no check"): a read of the new snapshot against their own words
 // from the last 48 hours. A problem means the snapshot kept something they've
 // since changed, or dropped a new fact they stated.
-export function snapshotCheckPrompt(snapshot: PersonSnapshot, recent: { at: string; text: string }[]): string {
+export function snapshotCheckPrompt(snapshot: PersonSnapshot, recent: { at: string; text: string }[], zone: string | null = null): string {
   return `Here is Co's current picture of someone, and what they've said in the last 48 hours.
 
 Picture:
 ${renderSnapshot(snapshot) || "(empty)"}
 
 What they said, oldest first:
-${recent.map((s) => `- [${s.at}] ${s.text}`).join("\n")}
+${recent.map((s) => `- [${localStamp(`${s.at}:00Z`, zone)}] ${s.text}`).join("\n")}
 
 The picture also draws on things they said before this window, so a line these messages don't mention is fine. Only list:
 - a line their recent words contradict (they said something newer that changes it), or anything about Co itself rather than them ("contradicted");
@@ -211,7 +215,7 @@ async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: {
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
       experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check" },
-      prompt: snapshotCheckPrompt(snapshot, recent),
+      prompt: snapshotCheckPrompt(snapshot, recent, await memberZone(userId)),
     });
     return (parseModelJson<{ problems?: SnapshotProblem[] }>(text).problems ?? []).filter((p) => p && p.kind);
   } catch (err: any) {
@@ -280,7 +284,7 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
         experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads" },
-        prompt: snapshotAndThreadsPrompt(snapshotPrompt(input), threads.threadsPrompt(input.firstName, onFile, lines.slice(-80))),
+        prompt: snapshotAndThreadsPrompt(snapshotPrompt(input), threads.threadsPrompt(input.firstName, onFile, lines.slice(-80), input.zone ?? null)),
       });
       let both: any = null;
       try {

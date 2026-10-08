@@ -3,6 +3,7 @@ import { getEventDetails, getEventGuestList, type LumaEventDetail } from "./luma
 import { matchGuestsToUsers } from "./eventScoring.js";
 import { runEventChangeNotificationAgent } from "../agent/eventChangeNotification.js";
 import { getTimezoneForCity } from "./geocoding.js";
+import { memberZone } from "./memberTime.js";
 import { isReasonableLocalHour } from "./localHours.js";
 
 // "Proactive event-change/cancellation texts" board item. Event Updated
@@ -74,7 +75,7 @@ async function notifyMatchedGuests(eventId: string, eventName: string, message: 
   const matched = await matchGuestsToUsers(guests);
   await Promise.all(
     matched.map(async (person) => {
-      const timezone = person.city ? await getTimezoneForCity(person.city) : null;
+      const timezone = await memberZone(person.user_id);
       if (!isReasonableLocalHour(timezone)) {
         // event_id included (code review, 2026-09-17) — see
         // runEventChangeNotificationAgent's changeKey comment for why.
