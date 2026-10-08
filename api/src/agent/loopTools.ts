@@ -925,10 +925,14 @@ export function loopTools(
       execute: async ({ goal, state, why }) => {
         const G = await import("../services/goalEdges.js");
         const { goalTexts } = await import("../services/goalJourney.js");
-        const { rows } = await pool.query(`SELECT goals, intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
-        const onFile = goalTexts(rows[0]?.intent, rows[0]?.goals);
-        const match = onFile.find((g) => g.trim().toLowerCase() === goal.trim().toLowerCase()) ?? onFile.find((g) => G.restates(goal, g) || G.restates(g, goal));
-        if (!match) return { ok: false, error: "That isn't one of their goals on file. Only mark a goal they have." };
+        const { rows } = await pool.query(`SELECT goals, intent, long_term_direction FROM co_profiles WHERE user_id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
+        // Their direction is read as a goal by the sweep, so it can be marked too (review of #107).
+        const onFile = [...goalTexts(rows[0]?.intent, rows[0]?.goals), ...(rows[0]?.long_term_direction ? [String(rows[0].long_term_direction)] : [])];
+        const exact = onFile.find((g) => g.trim().toLowerCase() === goal.trim().toLowerCase());
+        const close = exact ? [exact] : onFile.filter((g) => G.restates(goal, g) || G.restates(g, goal));
+        if (!close.length) return { ok: false, error: "That isn't one of their goals on file. Only mark a goal they have." };
+        if (close.length > 1) return { ok: false, error: `That could be more than one of their goals (${close.map((g) => `"${g.slice(0, 60)}"`).join(", ")}). Call again with the goal exactly as it reads.` };
+        const match = close[0];
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was changed." };
         await G.setGoalState(ctx.userId, match, state, why, state === "active" ? "member" : "co");
         ctx.facts?.add("did_this_turn", `Marked their goal "${match.slice(0, 100)}" ${state}${why ? ` (${why.slice(0, 80)})` : ""}.`);

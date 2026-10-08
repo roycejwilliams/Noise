@@ -150,9 +150,44 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
   check("every run derives from scratch (two runs, two model calls; nothing cached)", calls === 2 && !/goal_find_edges|cached/.test(src("services/goalEdges.ts").replace(/never cached|nothing cached/g, "")));
   check("a context set-aside waits to be told (told_at NULL); one made in conversation is already said", /CASE WHEN \$6 = 'context' AND \$4 <> 'active' THEN NULL ELSE NOW\(\) END/.test(src("services/goalEdges.ts")));
   check("the next reply is handed the untold set-aside as a hint to raise naturally, never a list", /Co stopped looking for things for their goal/.test(src("harness/replyGrounding.ts")) && /goalSetAsides = await import\("\.\/goalEdges\.js"\)/.test(src("services/turnContext.ts")));
-  check("told once a sent reply raises it; else one more hint (at most a few replies)", G.raisedGoal("Still want things for the Sequin AI November launch?", ROYCE[0]) && !G.raisedGoal("Good morning, how was the run?", ROYCE[0]) && G.TELL_MAX_HINTS === 4 && /noteGoalHints\(input\.userId, \[aside\]/.test(src("agent/conversationReply.ts")));
+  check("told once a sent reply raises it; else one more hint", G.raisedGoal("Still want things for the Sequin AI November launch party?", ROYCE[0]) && !G.raisedGoal("Good morning, how was the run?", ROYCE[0]) && /noteGoalHints\(input\.userId, \[aside\]/.test(src("agent/conversationReply.ts")));
   check("done at their word: closing a goal marks it done (it stays on file)", /setGoalState\(userId, String\(goal\.text\), "done"/.test(src("services/goalJourney.ts")));
   check("Co can mark a goal done, stale or active again (markGoal, registry entry), only a goal on file", /markGoal: tool\(/.test(src("agent/loopTools.ts")) && /That isn't one of their goals on file/.test(src("agent/loopTools.ts")) && /tool: "markGoal"/.test(src("services/capabilities.ts")));
+}
+
+// ---- 7. the review of #107
+{
+  // A model timeout never switches off a real find request.
+  const asks = [{ id: 7, text: "find a running club in the Marina" }];
+  const down = harness(() => { throw new Error("timeout"); }, { asks });
+  await plan(down, ["find a running club in the Marina"]);
+  check("a model timeout retires no find request (only an answer that was read, or Co's own task)", down.helped.length === 0, down.helped);
+  const coDown = harness(() => { throw new Error("timeout"); }, { asks: [{ id: 8, text: "have Co draft planning docs for branding and launch strategy with Sequin AI" }] });
+  await plan(coDown, [ROYCE[1]]);
+  check("...Co's own task is still caught in code without the model", coDown.helped.join() === "8");
+  // Marking a goal active again sticks: older corrections, a window that had passed, a newer goal don't re-stale it.
+  const goal = "raise a pre-seed round in December";
+  const corrections = [{ field: "goals", old_value: "raise a pre-seed round in December", new_value: "raising in January instead", corrected_at: "2026-10-01T17:00:00Z" }];
+  const reaffirmed = new Map([[G.goalHash(goal), { goalHash: G.goalHash(goal), goal, state: "active", reason: "they still want it", source: "member", changedAt: new Date("2026-10-05T17:00:00Z"), toldAt: new Date(), hints: 0 }]]);
+  const back = harness(() => JSON.stringify([{ n: 1, kind: "findable", edges: ["pre-seed founder programs SF"], until: null, superseded_by: null }]), { states: reaffirmed as any, corrections });
+  const bp = await plan(back, [goal]);
+  check("marked active again after a correction: the older correction doesn't re-stale it", bp.setAside.length === 0 && !!bp.searchText, bp.setAside);
+  const fresh = harness(() => JSON.stringify([{ n: 1, kind: "findable", edges: ["pre-seed founder programs SF"], until: null, superseded_by: null }]), { corrections });
+  const fp = await plan(fresh, [goal]);
+  check("...while without that, the same correction does make it stale", fp.setAside.length === 1);
+  // A wrong model date doesn't stale a goal that names no date; the direction never supersedes a goal.
+  const slip = G.parseEdges(["find a climbing gym community"], JSON.stringify([{ n: 1, kind: "findable", edges: ["SF climbing gym community"], until: "2025-11-30" }]), null, { today: "2026-10-08" });
+  check("a past date on a goal that names no date is a model slip: ignored", slip[0].until === null);
+  const dated = G.parseEdges(["the November launch party"], JSON.stringify([{ n: 1, kind: "work", edges: [], until: "2025-11-30" }]), null, { today: "2026-10-08" });
+  check("...a goal that names its month keeps its date", dated[0].until === "2025-11-30");
+  const dir = G.parseEdges(["find founder dinners", "build a life in SF"], JSON.stringify([{ n: 1, kind: "findable", edges: ["SF founder dinners"], superseded_by: 2 }, { n: 2, kind: "work", edges: [] }]), null, { direction: 1 });
+  check("their long-term direction never supersedes a goal", dir[0].supersededBy === null);
+  // A goal with no meaning words never matches everything.
+  check("an empty word set never 'restates' (it used to match any goal or ask)", !G.restates("find a running club", "AI") && !G.restates("AI", "find a running club"));
+  // Told: a question that names the goal, not two shared words; no cap that silences it for good.
+  check("told only when the reply asks about it by name", G.raisedGoal("Still want things for the pre-seed round in December?", "raise a pre-seed round in December") && !G.raisedGoal("Found a running club near you.", "find a running club in the Marina"));
+  check("a set-aside is never dropped by a hint cap", G.TELL_MAX_HINTS === Infinity && !/AND hints < \$2/.test(src("services/goalEdges.ts")));
+  check("markGoal reaches their direction, and refuses an ambiguous match", /long_term_direction FROM co_profiles/.test(src("agent/loopTools.ts")) && /That could be more than one of their goals/.test(src("agent/loopTools.ts")));
 }
 
 console.log(`goals lifecycle: ${total - failed}/${total} passed`);

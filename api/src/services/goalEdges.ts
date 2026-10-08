@@ -25,13 +25,15 @@ import { memberTerms, queryProblems } from "./sweepQuery.js";
 
 export type GoalKind = "findable" | "work" | "co_task";
 export type GoalState = "active" | "done" | "stale";
-export type GoalEdge = { goal: string; kind: GoalKind; edges: string[]; why: string; until: string | null; supersededBy: string | null };
+// explicit: the kind came from a model answer that was read (or Co's own task in code), not the fallback when it couldn't be read.
+export type GoalEdge = { goal: string; kind: GoalKind; edges: string[]; why: string; until: string | null; supersededBy: string | null; explicit?: boolean };
 export type GoalStateRow = { goalHash: string; goal: string; state: GoalState; reason: string; source: "context" | "member" | "co"; changedAt: Date; toldAt: Date | null; hints: number };
 export type Correction = { field: string; old_value: string | null; new_value: string | null; corrected_at: string | Date };
 
 export const EDGE_LIMITS = { perGoal: 2, chars: 140, timeoutMs: 8000 } as const;
-// A goal set aside from context is raised in at most this many replies, then it's left to the next goal check-in.
-export const TELL_MAX_HINTS = 4;
+// A goal set aside from context is offered to the reply until it's raised (review of #107: a cap let it go silent for good). The count
+// is kept for the record; a hint is a suggestion the reply takes only when it fits.
+export const TELL_MAX_HINTS = Infinity;
 
 // ---------- pure
 
@@ -45,7 +47,8 @@ const words = (s: string) => (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(
 // An edge that is the goal restated (most of its words are the goal's) is not a findable edge: dropped in code.
 export function restates(edge: string, goal: string): boolean {
   const e = words(edge), g = new Set(words(goal));
-  if (!e.length) return true;
+  // Nothing to compare (a goal like "AI" or "5k"): never a match (review of #107: it matched everything).
+  if (!e.length || !g.size) return edge.trim().toLowerCase() === goal.trim().toLowerCase() && !!edge.trim();
   return e.filter((w) => g.has(w)).length / e.length >= 0.75 || edge.trim().toLowerCase() === goal.trim().toLowerCase();
 }
 
@@ -70,7 +73,9 @@ Answer only with JSON: [{"n": 1, "kind": "...", "edges": ["..."], "until": null,
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 // Pure: the model's answer, checked in code. Co tasks are Co tasks whatever the model said; restated edges are dropped; a date must
 // be a real date; a goal can only be superseded by a later goal in the list.
-export function parseEdges(goals: string[], raw: string, firstName?: string | null): GoalEdge[] {
+// today: a stated window already over before the goal could matter is a model slip unless the goal names a month or date (review of #107).
+// direction: the index of their long-term direction in the list (appended last), which never supersedes a goal.
+export function parseEdges(goals: string[], raw: string, firstName?: string | null, o: { today?: string; direction?: number | null } = {}): GoalEdge[] {
   let arr: any[] = [];
   try {
     const m = raw.match(/\[[\s\S]*\]/);
@@ -86,26 +91,33 @@ export function parseEdges(goals: string[], raw: string, firstName?: string | nu
     const r = rows[i];
     const k = String(r.kind ?? "");
     const kind: GoalKind = isCoTaskGoal(goal) ? "co_task" : k === "findable" || k === "co_task" ? (k as GoalKind) : "work";
+    const explicit = isCoTaskGoal(goal) || (!!arr.length && (k === "findable" || k === "co_task" || k === "work"));
     const edges = (Array.isArray(r.edges) ? r.edges : [])
       .map((e: unknown) => String(e ?? "").replace(/\s+/g, " ").trim().slice(0, EDGE_LIMITS.chars))
       .filter((e: string) => e && !goals.some((g) => restates(e, g)) && !queryProblems(e, { terms, source: "events" }).length)
       .slice(0, EDGE_LIMITS.perGoal);
-    const until = typeof r.until === "string" && ISO.test(r.until) && DateTime.fromISO(r.until).isValid ? r.until : null;
+    const named = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}\/\d{1,2}|\d{4}-\d{2}|this (?:week|weekend|month)|tonight|tomorrow)\b/i.test(goal);
+    let until = typeof r.until === "string" && ISO.test(r.until) && DateTime.fromISO(r.until).isValid ? r.until : null;
+    if (until && o.today && until < o.today && !named) until = null;
     const by = Number(r.superseded_by);
-    const supersededBy = Number.isInteger(by) && by > i + 1 && by <= goals.length ? goals[by - 1] : null;
+    const supersededBy = Number.isInteger(by) && by > i + 1 && by <= goals.length && by - 1 !== o.direction ? goals[by - 1] : null;
     const why = String(r.why ?? "").trim().slice(0, 200) || (edges.length ? "" : arr.length ? "no findable side" : "couldn't be read this time");
-    return { goal, kind, edges, why, until, supersededBy };
+    return { goal, kind, edges, why, until, supersededBy, explicit };
   });
 }
 
 // Pure: what a goal is now, from this run's reading. Done stays done; a passed window or newer words make it stale; else active.
-export function lifecycle(e: GoalEdge, o: { today: string; corrections: Correction[]; prior: GoalStateRow | null; retired: (goal: string, c: Correction[]) => Correction | null }): { state: GoalState; reason: string } {
+// A goal they (or Co, with them) said is still on wins over anything older (review of #107: markGoal active didn't stick): corrections
+// before it don't count, a window that had already passed when they said it doesn't, and neither does a newer goal on file then.
+export function lifecycle(e: GoalEdge, o: { today: string; corrections: Correction[]; prior: GoalStateRow | null; retired: (goal: string, c: Correction[], lastSaid?: Date | string | null) => Correction | null }): { state: GoalState; reason: string } {
   if (o.prior?.state === "done") return { state: "done", reason: o.prior.reason };
   if (o.prior?.state === "stale" && o.prior.source !== "context") return { state: "stale", reason: o.prior.reason };
-  if (e.until && e.until < o.today) return { state: "stale", reason: `its window passed (${e.until})` };
-  const c = o.retired(e.goal, o.corrections);
+  const reaffirmed = o.prior?.state === "active" && o.prior.source !== "context" ? o.prior.changedAt : null;
+  const reaffirmedDay = reaffirmed ? DateTime.fromJSDate(reaffirmed).toISODate()! : null;
+  if (e.until && e.until < o.today && !(reaffirmedDay && e.until < reaffirmedDay)) return { state: "stale", reason: `its window passed (${e.until})` };
+  const c = o.retired(e.goal, o.corrections, reaffirmed);
   if (c) return { state: "stale", reason: `they said since: "${String(c.new_value ?? "that's no longer the plan").slice(0, 120)}"` };
-  if (e.supersededBy) return { state: "stale", reason: `replaced by a newer goal: "${e.supersededBy.slice(0, 120)}"` };
+  if (e.supersededBy && !reaffirmed) return { state: "stale", reason: `replaced by a newer goal: "${e.supersededBy.slice(0, 120)}"` };
   return { state: "active", reason: "" };
 }
 
@@ -130,7 +142,7 @@ export type GoalDeps = {
   states: (userId: string) => Promise<Map<string, GoalStateRow>>;
   setState: (userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]) => Promise<void>;
   corrections: (userId: string) => Promise<Correction[]>;
-  retired: (goal: string, c: Correction[]) => Correction | null;
+  retired: (goal: string, c: Correction[], lastSaid?: Date | string | null) => Correction | null;
   findAsks: (userId: string) => Promise<{ id: number; text: string }[]>;
   helpAsk: (userId: string, id: number) => Promise<void>;
   log: (d: { userId: string; action: string; proposal: Record<string, unknown>; reason?: string | null }) => Promise<void>;
@@ -138,9 +150,10 @@ export type GoalDeps = {
 
 // One member's goals for this sweep: read fresh, derived fresh, the lifecycle applied, set-asides recorded, goal-derived find
 // requests retired. Returns what to search (or null with the reasons each goal was passed).
-export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null }, deps: GoalDeps): Promise<GoalPlan> {
+// direction: their long-term direction, read as a goal but never superseding one (review of #107).
+export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null; direction?: string | null }, deps: GoalDeps): Promise<GoalPlan> {
   const today = DateTime.fromJSDate(o.now).setZone(o.zone && DateTime.now().setZone(o.zone).isValid ? o.zone : "America/Los_Angeles").toISODate()!;
-  const uniq = [...new Set(goals.map((g) => g.trim()).filter(Boolean))];
+  const uniq = [...new Set([...goals, ...(o.direction ? [o.direction] : [])].map((g) => g.trim()).filter(Boolean))];
   const states = await deps.states(userId).catch(() => new Map<string, GoalStateRow>());
   // Done or stale goals stay on file and out of the search; only active ones are read and derived.
   const live = uniq.filter((g) => {
@@ -148,7 +161,8 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
     return !s || s.state === "active";
   });
   const raw = live.length ? await deps.model(edgePrompt(live, { city: o.city, today })).catch(() => "") : "";
-  const derived = parseEdges(live, raw, o.firstName);
+  const dir = o.direction ? live.indexOf(o.direction.trim()) : -1;
+  const derived = parseEdges(live, raw, o.firstName, { today, direction: dir >= 0 ? dir : null });
   const corrections = await deps.corrections(userId).catch(() => [] as Correction[]);
   const active: GoalEdge[] = [], passed: { goal: string; why: string }[] = [], setAside: GoalPlan["setAside"] = [];
   for (const e of derived) {
@@ -162,7 +176,8 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
     else passed.push({ goal: e.goal, why: `${e.kind}: ${e.why || "no findable side"}` });
   }
   // Find requests saved from a goal that isn't findable (or from a goal set aside) stop being searched.
-  const notFindable = [...derived.filter((e) => e.kind !== "findable").map((e) => e.goal), ...setAside.map((s) => s.goal)];
+  // Only on an answer that was read, or Co's own task in code: a model timeout never switches off a real find request (review of #107).
+  const notFindable = [...derived.filter((e) => e.kind !== "findable" && e.explicit).map((e) => e.goal), ...setAside.map((s) => s.goal)];
   let retiredAsks = 0;
   if (notFindable.length) {
     for (const a of await deps.findAsks(userId).catch(() => [])) {
@@ -206,14 +221,17 @@ export async function setGoalState(userId: string, goal: string, state: GoalStat
 
 // The set-asides they haven't heard about yet, for the reply's hint.
 export async function untoldSetAsides(userId: string): Promise<GoalStateRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM goal_states WHERE user_id = $1 AND state <> 'active' AND source = 'context' AND told_at IS NULL AND hints < $2 ORDER BY changed_at`, [userId, TELL_MAX_HINTS]);
+  const { rows } = await pool.query(`SELECT * FROM goal_states WHERE user_id = $1 AND state <> 'active' AND source = 'context' AND told_at IS NULL ORDER BY changed_at`, [userId]);
   return rows.map(fromStateRow);
 }
 
-// Pure: whether a sent reply raised the set-aside goal (shares at least two of its meaning words).
+// Pure: whether a sent reply raised the set-aside goal: at least three of its meaning words, or half of them when it has fewer, and
+// a question about it (review of #107: two shared words marked a different goal told). markGoal marks it told too.
 export function raisedGoal(sent: string, goal: string): boolean {
   const g = new Set(words(goal).filter((w) => w.length > 3));
-  return words(sent).filter((w) => g.has(w)).length >= 2;
+  if (!g.size) return false;
+  const shared = new Set(words(sent).filter((w) => g.has(w))).size;
+  return shared >= Math.min(3, Math.ceil(g.size / 2)) && /\?/.test(sent);
 }
 
 // After a reply went out: told when it raised the goal; else one more hint used.
@@ -240,7 +258,7 @@ export const realGoalDeps: GoalDeps = {
   setState: setGoalState,
   corrections: async (userId) => (await pool.query(`SELECT field, old_value, new_value, corrected_at FROM profile_corrections WHERE user_id = $1 ORDER BY corrected_at DESC LIMIT 40`, [userId])).rows,
   // The same check that retires a corrected thread in the call context (services/callContext.ts).
-  retired: (goal, c) => retiredBy(goal, c as any) as Correction | null,
+  retired: (goal, c, lastSaid) => retiredBy(goal, c as any, lastSaid ?? undefined) as Correction | null,
   findAsks: async (userId) => (await pool.query(`SELECT id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find'`, [userId])).rows.map((r: any) => ({ id: Number(r.id), text: String(r.ask_text ?? "") })),
   helpAsk: async (userId, id) => {
     await pool.query(`UPDATE ask_checkins SET kind = 'help', kind_checked_at = NOW() WHERE id = $1 AND user_id = $2 AND kind = 'find'`, [id, userId]);

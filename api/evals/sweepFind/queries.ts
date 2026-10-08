@@ -51,6 +51,14 @@ const terms = Q.memberTerms({ firstName: "Royce", goals: GOALS });
   check("the edge prompt asks for the thing, never their names or a description of them", /Never a name \(theirs, their company, partners or people\), never a description of them/.test(G.edgePrompt(["x"], { city: "SF", today: "2026-10-08" })));
 }
 
+{
+  // The review of #107: capitalized category words in goals are not names, and the prompt's own examples pass.
+  const t = Q.memberTerms({ firstName: "Royce", goals: ["Host Events for the club", "Connect with Founders building in AI", "Meet other AI Founders in SF", "I want to meet Investors", "Join a Book Club", "Get into Climbing", "partnering with Sequin AI for a November launch"] });
+  check("Events, Founders, AI Founders, Investors, Book Club, Climbing are not member terms; Sequin AI is", !t.some((x) => /^(?:Events|Founders|AI Founders|Investors|Book Club|Climbing)$/.test(x)) && t.includes("Sequin AI"), t);
+  for (const q of ["AI founder events SF", "AI founders SF tonight", "SF tech events November 2026", "book club SF"]) check(`with those goals on file, "${q}" is allowed`, Q.queryProblems(q, { terms: t, source: "web" }).length === 0);
+  check("a one-word name matches case as written ('Royce', never 'royce' in a word list); longer names in any case", Q.queryProblems("royce gardens SF", { terms: ["Royce"], source: "web" }).length === 0 && Q.queryProblems("sequin ai launch SF", { terms: ["Sequin AI"], source: "web" }).length > 0);
+}
+
 // ---- 2. the simplicity bound
 {
   check("four content words pass; city, dates and years don't count", Q.contentWords("SF tech events November 2026").join(" ") === "tech events" && Q.queryProblems("SF AI founder events November", { terms: [], source: "web" }).length === 0);

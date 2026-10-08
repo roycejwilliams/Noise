@@ -23,6 +23,8 @@ const CONSTRAINT = new Set([
 const STOP = new Set(["the", "a", "an", "of", "for", "in", "on", "at", "to", "with", "by", "from", "near", "around", "about", "&", "-", "vs"]);
 // Acronyms and words that name a category, never a member.
 const GENERIC = new Set(["AI", "ML", "VC", "VCs", "YC", "SaaS", "B2B", "B2C", "DJ", "NYC", "SF", "LA", "US", "UK", "CEO", "CTO", "API", "LLM", "AR", "VR", "IRL", "DAO", "NFT", "PhD", "MBA", "OR", "AND", "NOT", "Co-working"]);
+// Everyday words for kinds of things and people, which goals capitalize for emphasis. Never a member's name.
+const COMMON = new Set(["event", "events", "founder", "founders", "investor", "investors", "builder", "builders", "club", "clubs", "book", "books", "community", "communities", "meetup", "meetups", "dinner", "dinners", "party", "parties", "launch", "night", "nights", "group", "groups", "team", "teams", "people", "tech", "startup", "startups", "conference", "summit", "demo", "day", "hike", "hikes", "hiking", "run", "running", "climbing", "yoga", "wellness", "art", "arts", "music", "design", "product", "engineers", "engineering", "creators", "friends", "friend", "network", "networking", "program", "programs", "cohort", "fellowship", "residency", "grant", "grants", "accelerator", "venue", "venues", "space", "spaces", "social", "supper", "series", "salon", "workshop", "workshops", "class", "classes", "hackathon", "mixer", "mixers", "brand", "branding", "strategy", "partnership", "partner", "partners", "presence", "users", "customers", "funding", "round", "seed", "pre-seed", "series", "angel", "angels", "mentor", "mentors", "advisor", "advisors", "talent", "hiring", "sales", "marketing", "growth", "fitness", "running", "cycling", "tennis", "golf", "food", "wine", "coffee", "travel", "photography", "writing", "reading", "film", "theater", "comedy", "dance", "fashion", "climate", "health", "crypto", "web3", "gaming", "sports"]);
 const MONTHS_DAYS = /^(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun|San|Francisco|Bay|Area|Oakland|Berkeley|Tech|Week|I|The|A|An)$/;
 // Words a goal sentence starts with ("Get Co in front of users", "Launch the Oct 10 night"): capitalized by position, not names.
 const STARTERS = /^(?:get|getting|launch|launching|find|finding|build|building|raise|raising|have|has|make|keep|maintain|maintaining|start|starting|host|hosting|plan|planning|meet|meeting|hire|grow|partner|partnering|connect|connected|connecting|looking|want|wants|help|ship|close|land|learn|move|pivot|pivoting|create|write|draft|run|join|go|do|be|become|stay|throw|organize|explore|figure|work|working|shifting|focus|focusing|offering|seeking|my|our|a|an|the|i|we|to|for|with|after|before|by|in|on|at)$/i;
@@ -43,6 +45,9 @@ export function memberTerms(o: { firstName?: string | null; lastName?: string | 
       while (words.length && /^(?:of|the|&)$/i.test(words[words.length - 1])) words = words.slice(0, -1);
       const parts = words.filter((w) => !MONTHS_DAYS.test(w) && !GENERIC.has(w) && !/^\d/.test(w));
       if (!parts.length || parts.every((w) => /^(?:Co|CoPatible)$/.test(w))) continue;
+      // A capitalized category word ("Host Events", "AI Founders", "a Book Club") is not a name (review of #107): a term needs at
+      // least one word that isn't an everyday category word.
+      if (parts.every((w) => COMMON.has(w.toLowerCase().replace(/'s$/, "")))) continue;
       out.add(words.join(" "));
     }
   }
@@ -84,8 +89,9 @@ export function queryProblems(q: string, o: { terms: string[]; source: QuerySour
   const out: string[] = [];
   const text = q.trim();
   if (!text) return ["it's empty"];
-  // Whole words only, never inside a hyphenated word ("Co" is not in "co-working"); short terms match case as written.
-  const hits = o.terms.filter((t) => new RegExp(`(^|[^\\w-])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\w-])`, t.length <= 3 ? "" : "i").test(text));
+  // Whole words only, never inside a hyphenated word ("Co" is not in "co-working"). A one-word term matches case as written (a name
+  // is capitalized; "events" is not "Events"); a longer one matches in any case.
+  const hits = o.terms.filter((t) => new RegExp(`(^|[^\\w-])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\w-])`, /\s/.test(t) ? "i" : "").test(text));
   if (hits.length) out.push(`it names the member or their own work (${hits.slice(0, 3).join(", ")}): describe the thing being found, not them`);
   if (ABOUT_THEM.test(text)) out.push("it describes the member: describe the thing being found; who they are is for judging the results");
   // Events search matches meaning, not keywords: only the member rule applies to it.

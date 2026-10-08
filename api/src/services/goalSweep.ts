@@ -67,9 +67,9 @@ const realDeps: GoalSweepDeps = {
   plan: async (row) => {
     const { planGoalSweep, realGoalDeps } = await import("./goalEdges.js");
     const { memberZone } = await import("./memberTime.js");
-    const goals = [...(goalSweepGoals(row) ?? []), ...(row.long_term_direction ? [String(row.long_term_direction)] : [])];
+    const goals = goalSweepGoals(row) ?? [];
     const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
-    return planGoalSweep(row.user_id, goals, { city: row.city ?? null, zone: await memberZone(row.user_id), now: new Date(), firstName: row.first_name ?? null, enjoys: row.activity_preferences ?? null, specifics: latest.concrete_preferences ?? null }, realGoalDeps);
+    return planGoalSweep(row.user_id, goals, { city: row.city ?? null, zone: await memberZone(row.user_id), now: new Date(), firstName: row.first_name ?? null, direction: row.long_term_direction ? String(row.long_term_direction) : null, enjoys: row.activity_preferences ?? null, specifics: latest.concrete_preferences ?? null }, realGoalDeps);
   },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   surface: async (row, context) => {
