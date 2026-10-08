@@ -172,10 +172,25 @@ const day = () => "Oct 8";
     let said = "";
     for await (const c of P.runCallLlm(inb, { stream: spy(text("Good, glad you called. What's on your mind? You've got the open house coming up in a few weeks.")), voiceOnly: true })) said += (c.choices[0].delta as any).content ?? "";
     check(`inbound first reply: nothing after its question to them ("${said.trim()}")`, /What's on your mind\?$/.test(said.trim()) && !/open house/.test(said));
+    const asked = { ...inb, messages: [inb.messages[0], inb.messages[1], { role: "user", content: "hey, did you find a caterer?" }] };
+    let answer = "";
+    for await (const c of P.runCallLlm(asked, { stream: spy(text("Did I find a caterer for the open house? Yes, two good ones in Nopa.")), voiceOnly: true })) answer += (c.choices[0].delta as any).content ?? "";
+    check(`inbound first reply to their own question keeps the answer ("${answer.trim()}")`, /two good ones in Nopa/.test(answer));
+    const { asksCo } = P as any;
+    check("a greeting's own question isn't asking Co something; a real question is", !asksCo("hey Co, what's up?") && !asksCo("Hey! How's it going? How are you doing?") && asksCo("hey, did you find a caterer?") && asksCo("what's up, when is the open house again?"));
     let later = "";
     const inb2 = { ...inb, messages: [...inb.messages, { role: "assistant", content: "What's on your mind?" }, { role: "user", content: "the caterer" }] };
     for await (const c of P.runCallLlm(inb2, { stream: spy(text("Which one? The Nopa folks were good.")), voiceOnly: true })) later += (c.choices[0].delta as any).content ?? "";
     check(`later turns keep statements after a question ("${later.trim()}")`, /Nopa folks/.test(later));
+  }
+  {
+    // Review of #114: "today (Oct 8):" / "yesterday (Oct 7):" labels still collapse a same-day promise the receipt covers.
+    const C = await import("../../src/services/callContext.js");
+    for (const label of ["Oct 7", "today (Oct 8)", "yesterday (Oct 7)"]) {
+      const day = label.match(/[A-Z][a-z]{2} \d{1,2}/)![0];
+      const r = (C as any).collapseCarried([{ text: `${label}: Promised on the call: text the drafted planning document. Not sent yet.`, from: "promise" }], [{ title: "Planning document", at: new Date() }], () => day);
+      check(`a same-day promise the receipt covers collapses with a "${label}" label`, r.open.length === 0, r);
+    }
   }
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));

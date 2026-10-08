@@ -218,7 +218,7 @@ const ABOUT_CO_WORK = /\b(?:co|the assistant)\b[^.]{0,40}\b(?:said|says|sent|sen
 // A promise that names no thing of its own ("text the drafted planning document", "plan will be delivered once ready"): another
 // wording of the call's deliverable. One that names something ("draft the investor update outline") is its own item.
 const GENERIC_DELIVERABLE_WORDS = new Set(["plan", "doc", "document", "pdf", "brief", "draft", "outline", "memo", "deck", "sheet", "write", "writeup", "one", "pager", "deliver", "delivere", "ready", "once", "promis", "call", "will", "the", "and", "that", "this", "your", "you", "them", "it"]);
-const genericPromise = (text: string) => [...stems(text.replace(/^-?\s*[A-Z][a-z]{2} \d{1,2}:\s*/, "").replace(/Promised on the call:\s*/i, "").replace(/\.\s*(?:Not sent yet|Sent)\.?$/i, ""))].filter((w) => !GENERIC_DELIVERABLE_WORDS.has(w)).length === 0;
+const genericPromise = (text: string) => [...stems(text.replace(/^-?\s*(?:(?:today|yesterday) \()?[A-Z][a-z]{2} \d{1,2}\)?:\s*/, "").replace(/Promised on the call:\s*/i, "").replace(/\.\s*(?:Not sent yet|Sent)\.?$/i, ""))].filter((w) => !GENERIC_DELIVERABLE_WORDS.has(w)).length === 0;
 const sameThing = (a: string, b: string) => {
   const A = stems(a), B = stems(b);
   const small = Math.min(A.size, B.size);
@@ -232,7 +232,8 @@ export function collapseCarried(lines: CarriedLine[], delivered: Delivered[], zo
   for (const l of lines) if (l.from === "promise" && l.sent) handled.push({ title: l.text.replace(/^-?\s*[^:]*:\s*Promised on the call:\s*/i, "").replace(/\.\s*Sent\.?$/i, ""), at: "" });
   // One call often says one deliverable three ways ("draft and text a plan", "text the drafted planning document", "plan will be
   // delivered once ready"): a deliverable promised on the same call day as one that went counts as that one.
-  const dayOf = (t: string) => t.match(/^-?\s*([A-Z][a-z]{2} \d{1,2}):/)?.[1] ?? null;
+  // "Oct 7:" or, for recent days, "today (Oct 8):" / "yesterday (Oct 7):" (dayLabel): the date inside either way (review of #114).
+  const dayOf = (t: string) => t.match(/^-?\s*(?:(?:today|yesterday) \()?([A-Z][a-z]{2} \d{1,2})\)?:/)?.[1] ?? null;
   // Two deliverable mentions are the same thing on two distinctive shared words ("the post-event presence doc" and "Co Presence
   // Plan: After the ... Event"); a looser match than for open items, because both name a deliverable.
   const sameDeliverable = (text: string, title: string) => { const A = stems(text), B = stems(title); return shared(A, B) >= 2 || sameThing(text, title); };

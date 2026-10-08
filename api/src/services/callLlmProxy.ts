@@ -80,6 +80,12 @@ export function memberClosed(theirLast: string): boolean {
 }
 // Co's own goodbye in its last turn, however phrased ("Alright Royce, take care.", "Enjoy tonight, bye!", "Night!", "Cheers, Jordan.").
 const CO_CLOSING = /\b(?:bye|goodbye|good ?night|night|take care|talk (?:to you )?(?:soon|later|tomorrow)|speak soon|see you|catch you later|cheers|enjoy (?:tonight|the|your|it)|have a (?:good|great|nice|lovely) (?:night|evening|one|day|weekend|time|trip))\b/i;
+// Pure: their words ask Co something, once a greeting's own question ("what's up?", "how's it going?", "how are you?") is set aside.
+const GREETING_Q = /\b(?:what'?s up|what'?s new|what'?s going on|what'?s happening|how'?s it going|how are you(?: doing)?|how'?s (?:your|ur) (?:day|night|evening|week|weekend)|how have you been|you good|sup)\b(?: (?:with you|man|dude|co))?\s*\?*/gi;
+export function asksCo(said: string): boolean {
+  const rest = said.replace(GREETING_Q, " ");
+  return /\?|\b(?:did you|have you|can you|could you|tell me|any (?:news|luck|update))\b/i.test(rest);
+}
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
@@ -239,7 +245,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const lastAt = b.messages.map((m) => m.role).lastIndexOf("user");
   // An inbound call's first reply (Co has said only its greeting): they lead, so the turn ends at Co's question to them
   // ("what's on your mind?"), never followed by Co's own topic (2026-10-08 call eval, casual_hello, twice).
-  const inboundFirst = /This call is inbound\b/i.test(b.messages.filter((m) => m.role === "system").map((m) => textOf(m.content ?? "")).join("\n")) && b.messages.filter((m) => m.role === "assistant" && textOf(m.content ?? "").trim()).length <= 1;
+  // Only their first words, and only when those don't ask Co something: an answer to "did you find a caterer?" is never cut
+  // (review of #114).
+  const inboundFirst = /This call is inbound\b/i.test(b.messages.filter((m) => m.role === "system").map((m) => textOf(m.content ?? "")).join("\n")) && b.messages.filter((m) => m.role === "assistant" && textOf(m.content ?? "").trim()).length <= 1 && b.messages.filter((m) => m.role === "user").length === 1 && !asksCo(textOf(b.messages[lastAt]?.content ?? ""));
   const sameTurn = lastAt >= 0 && b.messages.slice(lastAt + 1).every((m) => m.role === "tool" || (m.role === "assistant" && !textOf(m.content).trim()));
   const drained = clean && !voiceOnly && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
   if (drained) deps.onState?.();
