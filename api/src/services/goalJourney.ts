@@ -86,6 +86,8 @@ export async function closeGoal(userId: string, goalId: string, quote: string | 
     const now = new Date().toISOString();
     const next = intent.map((e) => (e === goal ? { ...e, status: "resolved", resolved_at: now, closed_by: "member", closed_quote: quote ? String(quote).slice(0, 240) : null } : e));
     await pool.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(next)]);
+    // The goal's state (services/goalEdges.ts): done at their word, so it stops generating searches and stays on file.
+    await import("./goalEdges.js").then((m) => m.setGoalState(userId, String(goal.text), "done", quote ? `they said: "${String(quote).slice(0, 160)}"` : "they closed it", "member")).catch(() => {});
     const { enqueueCandidate } = await import("../harness/proactive.js");
     await enqueueCandidate({
       userId,

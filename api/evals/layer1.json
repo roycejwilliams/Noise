@@ -124,6 +124,8 @@
     "evals/asks/kind.ts",
     "evals/events/revealLength.ts",
     "evals/delivery/fixes1008.ts",
-    "evals/reply-flow/fixes1008.ts"
+    "evals/reply-flow/fixes1008.ts",
+    "evals/goals/lifecycle.ts",
+    "evals/sweepFind/queries.ts"
   ]
 }

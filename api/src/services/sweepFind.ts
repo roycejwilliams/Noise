@@ -14,6 +14,7 @@ import { recordDecision } from "../harness/core.js";
 import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { gateMatches, type GatedOut } from "../harness/matchGate.js";
 import { eventCandidates, reserveXSearch, type TierMatch } from "./tieredRecommendation.js";
+import { memberTerms, QueryLedger, SWEEP_QUERY_RULES } from "./sweepQuery.js";
 
 export const SWEEP_BUDGET = { steps: 7, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
 
@@ -37,7 +38,8 @@ export const SWEEP_PASS_TOOL =
   "Note what you looked at closely and decided against, each with its link and a few words on why (wrong kind, already past, spam or promotion, not for them, too far). Call it once, alongside your keeps, when you're done. Nothing is sent; it's how Co's choices are reviewed.";
 export const PASSED_OVER_CAP = 10;
 
-export type LookedAt = { source: "x" | "web" | "events"; name: string; url: string };
+// query: the search that brought it back (the tuning log: which phrasings produce keeps, 2026-10-08).
+export type LookedAt = { source: "x" | "web" | "events"; name: string; url: string; query?: string };
 export type PassedOver = LookedAt & { why: string };
 
 // Everything looked at but not kept, X first then web then events, with Co's
@@ -49,7 +51,7 @@ export function passedOver(lookedAt: LookedAt[], keptUrls: Set<string>, reasons:
     .filter((l) => !keptUrls.has(l.url) && !seen.has(l.url) && seen.add(l.url))
     .sort((a, b) => order[a.source] - order[b.source] || Number(reasons.has(b.url)) - Number(reasons.has(a.url)))
     .slice(0, cap)
-    .map((l) => ({ source: l.source, name: l.name.slice(0, 80), url: l.url, why: (reasons.get(l.url) ?? "not kept").slice(0, 120) }));
+    .map((l) => ({ source: l.source, name: l.name.slice(0, 80), url: l.url, why: (reasons.get(l.url) ?? "not kept").slice(0, 120), ...(l.query ? { query: l.query } : {}) }));
 }
 
 // An X search that failed, said by kind and status only (never the response
@@ -89,6 +91,7 @@ Search only for this one ask. Other things they're working on (in who they are) 
 Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Co will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
 
 Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}
+${SWEEP_QUERY_RULES}
 Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them. Keeping nothing is fine when nothing fits. When you're done, note in skip() the results you looked at and passed on, each with a few words on why, in the same step as your keeps. Then stop.`;
 }
 
@@ -104,6 +107,8 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const lookedAt: LookedAt[] = [];
   const passReasons = new Map<string, string>();
   let xError: ReturnType<typeof xFailure> | null = null;
+  // Every query, run or refused (sweepQuery.ts): the member never in it, simple, phrased for its source; logged with its outcomes.
+  const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: c.goals ?? [], except: c.askText }));
   // A page kept in place of the post that pointed to it: the post counts as kept too.
   const postOf = new Map<string, string>();
   // The one model of them (services/personModel.ts).
@@ -113,6 +118,8 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       description: "Co's own events, the public event feed, and openings Co already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",
       inputSchema: z.object({ what: z.string(), when: z.string().optional() }),
       execute: async ({ what, when }) => {
+        const bad = ledger.check("events", what);
+        if (bad.length) return { ok: false, error: ledger.refusal(what, bad) };
         did.push(`events: ${what}${when ? `, ${when}` : ""}`);
         const [r, openings] = await Promise.all([
           eventCandidates(what, c.city, { when: when ?? null, userId: c.userId, timezone: opts.timezone ?? null, limit: 8 }),
@@ -120,8 +127,9 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         ]);
         for (const { match } of r.candidates) if ("url" in match && match.url) {
           found.set(match.url, match);
-          lookedAt.push({ source: "events", name: match.name, url: match.url });
+          lookedAt.push({ source: "events", name: match.name, url: match.url, query: what });
         }
+        ledger.ran("events", what, r.candidates.length);
         for (const m of openings) if ("url" in m && m.url) found.set(m.url, m);
         return {
           events: r.candidates.map(({ match, lines }) => ({ link: "url" in match ? match.url : null, details: lines })),
@@ -133,8 +141,15 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
     webSearch: tool({
       description: `Search the web; results come back checked against their own pages. Up to ${SWEEP_BUDGET.webQueries} short queries in all.`,
       inputSchema: z.object({ queries: z.array(z.string()).min(1).max(2) }),
-      execute: async ({ queries }) => {
-        const run = queries.slice(0, SWEEP_BUDGET.webQueries - webQueries);
+      execute: async ({ queries: asks }) => {
+        const refusals: string[] = [];
+        const good = asks.filter((q) => {
+          const bad = ledger.check("web", q);
+          if (bad.length) refusals.push(ledger.refusal(q, bad));
+          return !bad.length;
+        });
+        if (!good.length) return { ok: false, error: refusals.join(" ") };
+        const run = good.slice(0, SWEEP_BUDGET.webQueries - webQueries);
         if (!run.length) return { ok: false, error: "No web searches left." };
         webQueries += run.length;
         did.push(...run.map((q) => `web: ${q}`));
@@ -142,13 +157,16 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         const all = await Promise.all(run.map((q) => taskWebSearch(c.userId, q, { city: c.city, zone: opts.timezone ?? null, source: "sweep" }).catch(() => null)));
         const { checkVerified } = await import("./factCheck.js");
         const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? [])).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
+        run.forEach((q, i) => ledger.ran("web", q, all[i]?.kept?.length ?? 0));
+        const queryOf = new Map<string, string>();
+        run.forEach((q, i) => { for (const k of all[i]?.kept ?? []) if (!queryOf.has(k.url)) queryOf.set(k.url, q); });
         for (const k of kept) {
           const facts = [...k.facts, ...(k.date ? [`date: ${k.date}`] : [])].join("; ");
-          lookedAt.push({ source: "web", name: k.name, url: k.url });
+          lookedAt.push({ source: "web", name: k.name, url: k.url, query: queryOf.get(k.url) });
           found.set(k.url, { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}), ...(k.deadline ? { deadline: k.deadline } : {}) } as unknown as TierMatch);
         }
         if (all.every((r) => r && /^No web search right now/.test(r.note))) return { ok: false, error: "Web search budget is used up for today." };
-        return { results: kept.map((k) => ({ link: k.url, name: k.name, facts: k.facts, date: k.date, deadline: k.deadline })) };
+        return { results: kept.map((k) => ({ link: k.url, name: k.name, facts: k.facts, date: k.date, deadline: k.deadline })), ...(refusals.length ? { note: refusals.join(" ") } : {}) };
       },
     }),
     searchPosts: tool({
@@ -156,8 +174,10 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       inputSchema: z.object({ query: z.string() }),
       execute: async ({ query }) => {
         if (xSearches >= SWEEP_BUDGET.xSearches) return { ok: false, error: "No X searches left." };
-        xSearches++;
         const q = query.trim().slice(0, 200);
+        const bad = ledger.check("x", q);
+        if (bad.length) return { ok: false, error: ledger.refusal(q, bad) };
+        xSearches++;
         const budget = await reserveXSearch(c.userId, "sweep", q);
         if (!budget.ok) return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
         did.push(`x: ${q}`);
@@ -172,8 +192,9 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
           return { ok: false, error: xFailedNote(xError) };
         }
         xPosts += posts.length;
+        ledger.ran("x", q, posts.length);
         for (const p of posts) {
-          lookedAt.push({ source: "x", name: `${p.author ? `@${p.author}: ` : ""}${p.text.slice(0, 60)}`, url: p.url });
+          lookedAt.push({ source: "x", name: `${p.author ? `@${p.author}: ` : ""}${p.text.slice(0, 60)}`, url: p.url, query: q });
           const post = { tier: 3, kind: "opportunity", source: "x", name: p.text.slice(0, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
           found.set(p.url, post);
           // The page a post points to can be kept in its place, with the post as
@@ -243,7 +264,9 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   for (const g of gatedOut) if (g.url && !passReasons.has(g.url)) passReasons.set(g.url, `kept, then the fact gate: ${g.reasons.join("; ")}`);
   const keptUrls = new Set(gated.flatMap((m) => ("url" in m && m.url ? [String(m.url), postOf.get(String(m.url)) ?? ""] : [])).filter(Boolean));
   const passed = passedOver(lookedAt, keptUrls, passReasons);
+  // Each query beside what became of its results, and each keep with the query that found it (the tuning log, sweepQuery.ts).
+  const { queries, keptBy } = ledger.finish(lookedAt, keptUrls, gated.map((m) => ({ name: m.name, url: "url" in m && m.url ? String(m.url) : "" })), postOf);
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
-  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed } }).catch(() => {});
+  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy } }).catch(() => {});
   return { matches: gated, did };
 }

@@ -77,6 +77,8 @@ export type TurnContext = {
   docOffer?: DocOfferContext | null;
   // Documents Co delivered them, newest version each, outstanding first (services/deliveryReceipts.ts receiptLines).
   deliveries?: string[];
+  // Goals Co set aside from context that they haven't heard about yet (services/goalEdges.ts untoldSetAsides).
+  goalSetAsides?: import("./goalEdges.js").GoalStateRow[];
   // The Co event they're registered for today, if any (services/eventPresence.ts).
   todayEvent?: { eventApiId: string; name: string; startAt: string; timezone: string | null } | null;
   // Everything Co is carrying for them, one ordered view: due first, then outstanding, then done (carryingItems).
@@ -376,7 +378,8 @@ export async function assembleContext(
       .then((m) => m.loadArtifactSignals(userId, { drift, openWork, delivered: [...new Map(receipts.map((r) => [r.docKey, r])).values()].map((r) => ({ title: r.title, kind: r.kind, at: r.deliveredAt })) }))
       .catch(() => null);
   }
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer, deliveries, carrying, recentDocs, drift };
+  const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.
