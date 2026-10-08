@@ -108,6 +108,13 @@ const decisions = await pool.query(`SELECT decision, action, outcome FROM harnes
 const outbound = await pool.query(`SELECT LEFT(content, 80) AS content FROM outbound_messages WHERE user_id = $1 AND sent_at >= $2 ORDER BY sent_at`, [userId, since]).catch(() => ({ rows: [] as any[] }));
 console.log("\nco_facts rows:", JSON.stringify(facts.rows.map((r) => ({ relation: r.relation, label: r.label, source: r.source }))));
 console.log("co_tasks rows:", JSON.stringify(tasks.rows));
+// The Ellis Works turn (2026-10-08): the name they gave is on an open task, by Co's own updateTask or the backstop in their words.
+const notes = await pool.query(`SELECT id, notes FROM co_tasks WHERE user_id = $1 AND updated_at >= $2 ORDER BY id`, [userId, since]);
+const ellis = notes.rows.flatMap((r: any) => (Array.isArray(r.notes) ? r.notes : []).filter((n: any) => /ellis works/i.test(String(n?.text ?? ""))).map((n: any) => ({ task: r.id, note: String(n.text).slice(0, 200) })));
+console.log(`Ellis Works on a task: ${ellis.length ? "yes" : "NO"} ${JSON.stringify(ellis)}`);
+console.log(`Ellis turn: Co's own tools ${JSON.stringify(extra2.tools.map((t) => t.name))}; said "${extra2.said.trim()}"`);
+const backstop = decisions.rows.filter((r: any) => r.decision === "call.task_fact_backstop");
+console.log(`backstop wrote: ${backstop.length ? JSON.stringify(backstop) : "no (not needed or not taken)"}`);
 console.log("decisions:", JSON.stringify(decisions.rows));
 console.log("texts logged for the test member (never sent):", JSON.stringify(outbound.rows));
 const med = (xs: number[]) => (xs.length ? [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)] : null);

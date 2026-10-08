@@ -120,5 +120,39 @@ for (const size of [1, 3, 7, 20]) {
   for (const [line, frag] of today) check(`2026-10-08 call: no fragment from "${line.slice(0, 40)}..."`, !S.speakable(line).split(/(?<=[.?!])\s+/).some((p) => frag.test(p)), S.speakable(line));
   check("a very long run-on still closes where two clauses join", S.splitLong("We could start with the guest list for the November night at House of AI, and then we can work out how Co shows up for each person once they walk into the room and start talking.").length >= 2);
 }
+// ---- a line never contradicts itself (Royce, 2026-10-08: "no opening line where two clauses disagree")
+{
+  const caught = [
+    // The opening written for Royce on the merged code: a plan Co still owes can't have been reviewed.
+    ["Hey Royce, it's Co. Have you had a chance to review that post-event branding plan I owe you, or still waiting on Jacqueline's input?", /still owes is also something they had/],
+    ["Hey Royce, it's Co. I still owe you the planning doc. Did you get a chance to read it?", /still owes/],
+    ["Hey Royce, it's Co. What did you think of the venue list I still owe you?", /still owes/],
+    ["Hey Royce, it's Co. Did you like the sponsor brief I haven't sent yet?", /still owes/],
+    ["Hey Royce, it's Co. I sent you the brief I still owe you, any thoughts?", /still owes/],
+    ["Hey Royce, it's Co. Is the deck still finished?", /"still" with a completion verb/],
+    ["Hey Royce, it's Co. The date is locked in, but it's still up in the air.", /locked and open/],
+    ["Hey Royce, it's Co. Jacqueline got back to you on the budget, and you're still waiting on her budget notes.", /heard back and still waiting/],
+    ["Hey Royce, it's Co. The plan is done, and the plan isn't finished yet.", /done and not done/],
+  ] as const;
+  for (const [line, why] of caught) check(`contradiction caught: "${line.slice(20, 80)}..."`, why.test(S.selfContradiction(line) ?? ""), S.selfContradiction(line));
+  const fine = [
+    "Hey Royce, it's Co. I still owe you that planning doc on Co's post-event presence. Want it tonight?",
+    "Hey Royce, it's Co. I still owe you that planning doc on Co's post-event presence, so where did Jacqueline land on her input?",
+    // An either-or question asks which; it doesn't say both.
+    "Hey Royce, it's Co. Is the date locked, or still open?",
+    "Hey Royce, it's Co. Did you hear back from Sequent AI, or still waiting on them?",
+    // Two true states of two different things.
+    "Hey Royce, it's Co. The venue is booked, and the date is still up in the air.",
+    "Hey Royce, it's Co. Did you get the deck? I still owe you the budget.",
+    "Hey Royce, it's Co. Have you had a chance to look at the venue list I sent?",
+    "Hey Royce, it's Co. Still waiting on Jacqueline's input for the branding plan?",
+    "Hey Royce, it's Co. Last we talked you were finding sponsors for the October 10 event. Where did that land?",
+  ];
+  for (const line of fine) check(`a coherent line passes: "${line.slice(20, 80)}..."`, S.selfContradiction(line) === null, S.selfContradiction(line));
+  // Everything Co said on the 10/6 call, two sentences at a time (an opening's size): nothing flagged.
+  const windows = coLines.flatMap((l) => { const ss = S.speakable(l).split(/(?<=[.!?])\s+/); return ss.map((_, i) => ss.slice(i, i + 2).join(" ")); });
+  check("no real call line is flagged as contradicting itself", windows.every((w) => S.selfContradiction(w) === null), windows.filter((w) => S.selfContradiction(w)));
+}
+
 console.log(`speakable: ${total - failed}/${total} checks`);
 if (failed) process.exit(1);

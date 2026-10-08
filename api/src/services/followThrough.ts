@@ -67,12 +67,22 @@ export type Sent = { at: Date; text: string; kind: "text" | "link" | "document";
 // Only words that name a document: a plan or a summary can go out as a plain text, so they don't set the kind.
 const WANTS_DOC = /\b(?:docs?|documents?|pdfs?|write[- ]?ups?|memos?|one[- ]pagers?|research brief|venue brief)\b/i;
 const WANTS_LINKS = /\b(?:links?|urls?)\b/i;
+// A plan Co said it would put together, write up or draft is a document too (Royce, 2026-10-08: "A promised plan or doc goes through
+// writeDocument, never as a wall of text"). "Text you the plan for Saturday" stays a text: only a plan Co is writing counts.
+const WRITES_A_PLAN = /\b(?:put(?:ting)? together|pull(?:ing)? together|writ(?:e|ing) up|draft(?:ing)?|sketch(?:ing)? out|map(?:ping)? out)\b[^.!?]{0,80}\b(?:plan|planning|playbook|strategy|proposal|outline|roadmap)\b|\bplanning doc\b/i;
+
+// Pure: is this commitment a document (a doc, PDF, write-up, memo, or a plan Co is writing)? The goal is Co's own words; their
+// words count only for naming a document, never for the plan rule (their "plan" is often an event, not a page).
+export function wantsDocument(goal: string, theirWords?: string | null): boolean {
+  const g = goalBody(goal);
+  return WANTS_DOC.test(`${g} ${theirWords ?? ""}`) || WRITES_A_PLAN.test(g);
+}
 
 // Pure: was the promise kept by something sent AFTER it was made, and of the kind it promised (a document for a document,
 // a link for links)? Anything sent before the promise never counts, however well it matches.
 export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at: Date }, sends: Sent[]): { kept: boolean; by: Sent | null; why: string } {
   const what = `${goalBody(p.goal)} ${p.theirWords ?? ""}`;
-  const kind: Sent["kind"] | "any" = WANTS_DOC.test(what) ? "document" : WANTS_LINKS.test(what) ? "link" : "any";
+  const kind: Sent["kind"] | "any" = wantsDocument(p.goal, p.theirWords) ? "document" : WANTS_LINKS.test(what) ? "link" : "any";
   // Anything else: a link or document, or a real text about it (its own, or one that shares what the promise is about).
   const fits = (s: Sent) =>
     kind === "document" ? s.kind === "document"
@@ -94,10 +104,10 @@ export function promiseKeptBy(p: { goal: string; theirWords?: string | null; at:
 // happened, not when the row was written: a backfilled row can be written hours after the send).
 export async function sendsSince(userId: string, since: Date): Promise<Sent[]> {
   const [texts, facts] = await Promise.all([
-    // The after-call confirmation (services/callFollowThrough.ts) says the thing is coming; it is never the thing itself.
+    // The after-call confirmation (services/callFollowThrough.ts) and a miss warning (taskTurn.ts, type task_window) say the thing is coming; neither is the thing itself.
     pool.query(
       `SELECT om.content, om.sent_at FROM outbound_messages om WHERE om.user_id = $1 AND om.sender = 'co' AND om.sent_at > $2
-         AND NOT EXISTS (SELECT 1 FROM proactive_sends ps WHERE ps.user_id = om.user_id AND ps.type = 'call_confirm' AND ps.message = om.content)
+         AND NOT EXISTS (SELECT 1 FROM proactive_sends ps WHERE ps.user_id = om.user_id AND ps.type IN ('call_confirm', 'task_window') AND ps.message = om.content)
        ORDER BY om.sent_at LIMIT 200`,
       [userId, since],
     ),

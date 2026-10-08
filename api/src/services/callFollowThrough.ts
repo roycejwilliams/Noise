@@ -21,6 +21,7 @@ import { cleanCoMessage } from "./sendblue.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, nextLocalHour, RULES, sendExempt } from "../harness/proactive.js";
 import { recordDecision, type GateCheck } from "../harness/core.js";
 import { callKey } from "./callKey.js";
+import { deliveryWords, wordsZone } from "./memberTime.js";
 
 export const CONFIRM_TYPE = "call_confirm" as const;
 export const confirmKey = (key: string) => `call_confirm:${key}`;
@@ -36,10 +37,10 @@ export function sentenceOfGoal(goal: string): string {
 }
 
 // Pure: when they'll have it, in their day. The work starts now, so this under-promises: a draft that lands in minutes is early.
+// The same words the commitment's own window was set from (services/memberTime.ts deliveryWords), so what Co confirms is what it holds
+// itself to.
 export function deliveryWindow(now: Date, zone: string | null): string {
-  const local = zone ? DateTime.fromJSDate(now).setZone(zone) : DateTime.fromJSDate(now).setZone("America/Los_Angeles");
-  const h = local.isValid ? local.hour : 12;
-  return h < 12 ? "this morning" : h < 17 ? "this afternoon" : "tonight";
+  return deliveryWords(now, zone);
 }
 
 const STOP = new Set(["text", "send", "sent", "share", "draft", "together", "what", "after", "call", "hang", "with", "your", "that", "this", "them", "they", "then", "will", "i'll", "you'll", "just", "over", "some", "tonight", "today", "tomorrow", "right", "later", "morning", "afternoon", "evening", "minutes", "put", "pull", "write", "into", "from", "about", "have", "make", "sure", "got"]);
@@ -108,7 +109,7 @@ export type FollowThroughResult = {
 // Drafts, checks, redrafts once, falls back. Returns the text and whether it was the fallback.
 export async function writeConfirmation(o: { firstName: string; commitments: Commitment[]; theirLines: string; now: Date; zone: string | null }, draft: FollowThroughDeps["draft"]): Promise<{ text: string; fallback: boolean } | null> {
   const window = deliveryWindow(o.now, o.zone);
-  const local = DateTime.fromJSDate(o.now).setZone(o.zone ?? "America/Los_Angeles");
+  const local = DateTime.fromJSDate(o.now).setZone(wordsZone(o.zone));
   const facts: Record<string, string> = {
     co_commitment_on_call: o.commitments.map((c) => c.sentence).join(" | "),
     their_words_on_the_call: o.theirLines.slice(-1500),

@@ -121,7 +121,8 @@ export type ProactiveType =
 // kept so older records still read.
 // task_update: Co's own report on work it is doing for them over days (services/taskTurn.ts).
 // call_confirm: the text right after a call that confirms what Co said it would send (services/callFollowThrough.ts).
-export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update" | "call_confirm";
+// task_window: the one line that tells them a commitment will miss its window, and the new time, before it passes (services/taskTurn.ts).
+export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_event" | "direct_ask" | "search_result" | "task_update" | "call_confirm" | "task_window";
 
 // What each proactive message is for (companion / offer / ops) lives in
 // ./proactivePurpose.ts, dependency-free so model-free checks can read it.
@@ -1264,6 +1265,8 @@ export async function sendExempt(opts: {
   // Thread the first message under this message of theirs (an inline reply);
   // a refused one goes out plain (services/inlineReply.ts).
   replyTo?: string | null;
+  // The moment the hours check reads (a turn run on a pinned clock passes its own); the real time otherwise.
+  now?: Date;
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[] }> {
   if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
@@ -1272,7 +1275,7 @@ export async function sendExempt(opts: {
   const record = (outcome: "act" | "skip", action: string, reason?: string) =>
     recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: opts.userId, outcome, action, reason, proposal: { type: opts.type, targetKey: opts.targetKey } }).catch(() => {});
 
-  if (opts.respectHours && !localHourOk(new Date(), opts.timezone ?? null)) {
+  if (opts.respectHours && !localHourOk(opts.now ?? new Date(), opts.timezone ?? null)) {
     await record("skip", "blocked_hours", "outside local hours");
     return { sent: false, reason: "outside local hours" };
   }

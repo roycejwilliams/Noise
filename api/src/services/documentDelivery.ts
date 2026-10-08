@@ -17,6 +17,8 @@ import { docFilename, documentHtml, type Doc, type DocKind } from "./documentShe
 import { notToTeammate } from "./teamLines.js";
 
 export type DocTarget = "pdf_text" | "google_docs";
+// They asked for a Google Doc (or for it in their Drive), in their own words (agent/loopTools.ts re-exports it).
+export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|\b(?:in|to) (?:my )?(?:google )?drive\b/i;
 export type DeliverResult = { ok: true; via: DocTarget; filename: string; link?: string; shared?: boolean } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
 
 // The kinds that may become a shared Google Doc, and the optional narrowing list of members (at most two user ids).
@@ -111,6 +113,87 @@ export const DELIVERERS: Record<DocTarget, (doc: Doc, to: DeliverTo, deps: Deliv
 
 export async function deliverDocument(doc: Doc, to: DeliverTo, target: DocTarget = "pdf_text", deps?: DeliverDeps): Promise<DeliverResult> {
   return DELIVERERS[target](doc, to, deps ?? (await realDeps()));
+}
+
+export type DeliveredOk = Extract<DeliverResult, { ok: true }>;
+export type TargetsResult = { results: DeliverResult[]; sentOk: DeliveredOk[]; googleRefused: "not_yet" | "kind" | null; googleMissing: boolean };
+
+// Every target docTargets picks, in order; a Google Doc that can't be made (not connected, not allowed) falls back to the PDF.
+// One loop for every caller of writeDocument (a reply and a task keeping a promise).
+export async function deliverToTargets(doc: Doc, to: DeliverTo, o: { saveTo?: "pdf" | "google_doc" | "both"; askedForGoogle: boolean }, deliver: typeof deliverDocument = deliverDocument): Promise<TargetsResult> {
+  const { targets, googleRefused } = docTargets({ userId: to.userId, kind: doc.kind, saveTo: o.saveTo, askedForGoogle: o.askedForGoogle });
+  const results: DeliverResult[] = [];
+  let googleMissing = false;
+  for (const target of targets) {
+    const r = await deliver(doc, to, target);
+    results.push(r);
+    if (!r.ok && target === "google_docs" && (r.notConnected || r.notAllowed)) {
+      googleMissing = !!r.notConnected;
+      if (!targets.includes("pdf_text")) results.push(await deliver(doc, to, "pdf_text"));
+    }
+  }
+  return { results, sentOk: results.filter((r): r is DeliveredOk => r.ok), googleRefused, googleMissing };
+}
+
+// A document Co sends on its own (a task keeping a promise, not a reply to a text they just sent) is held to the same rules as
+// any text Co starts: inside their hours (the unchanged 9am-8pm rule), not paused, and never to someone who opted out or left,
+// re-read right before it goes. Returns why it can't go now, or null.
+export async function documentSendBlocked(userId: string, zone: string | null, now: Date = new Date()): Promise<string | null> {
+  const { proactivePaused } = await import("./proactivePause.js");
+  if (proactivePaused()) return "proactive outreach is paused";
+  const { sendableAt } = await import("./memberTime.js");
+  if (!sendableAt(now, zone)) return "it's outside their hours (9am to 8pm their time)";
+  const { rows } = await pool.query(`SELECT sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  if (!rows[0]) return "they couldn't be read";
+  if (rows[0].sms_opted_out) return "they opted out of texts";
+  if (rows[0].archived_at) return "they're no longer a member";
+  return null;
+}
+
+// The record of a document Co sent on its own: a co_facts row (the same label the reply's writeDocument writes, so "promise kept"
+// and "did I send you that?" read it, services/followThrough.ts sendsSince) and a line in their thread, so the next reply and the
+// "what are you working on" view see it.
+export async function recordDocumentSent(userId: string, doc: Pick<Doc, "title">, via: string, source: string, at: Date = new Date()): Promise<void> {
+  const { recordFact } = await import("./coFacts.js");
+  const { writeMemory } = await import("./memory.js");
+  await recordFact({ ownerUserId: userId, subject: "co", relation: "sent", label: `a document (PDF): ${doc.title}`, visibility: "owner", source, happenedAt: at, meta: { via } });
+  await writeMemory(userId, "text_exchange", `Co replied: [sent a document: ${doc.title}]`).catch((err: any) => console.error("documentDelivery: logging a sent document failed (it did send):", err?.message ?? err));
+  await import("./documentOffer.js").then((m) => m.recordDocumentWritten(userId, doc.title)).catch(() => {});
+}
+
+// A task keeping a promise sends the document it promised (the task runner's writeDocument), through the same pipeline as a
+// reply: the same input, the same grounding (their points rest on their words; Co's own plan goes in suggestions, which may lean
+// only on what Co read), the same targets. What a reply doesn't need and a task does: their hours and opt-out re-checked right
+// before it goes, and the record written here (co_facts + their thread), since no reply turn records it.
+export type TaskDocResult = { ok: true; title: string; via: string } | { ok: false; why: string; problems?: string[]; blocked?: boolean };
+export type TaskDocDeps = {
+  theirWords: (userId: string) => Promise<string>;
+  blocked: typeof documentSendBlocked;
+  deliver: typeof deliverDocument;
+  record: typeof recordDocumentSent;
+  now: () => Date;
+};
+export const realTaskDocDeps: TaskDocDeps = { theirWords: loadTheirWords, blocked: documentSendBlocked, deliver: deliverDocument, record: recordDocumentSent, now: () => new Date() };
+
+export async function sendDocumentForTask(
+  input: import("./documentSheet.js").WriteDocumentInput,
+  o: { userId: string; taskId: number; firstName: string; phone: string; zone: string | null; taskTheirWords: string; read: string },
+  deps: TaskDocDeps = realTaskDocDeps,
+): Promise<TaskDocResult> {
+  const { resolveDocument, documentProblems } = await import("./documentSheet.js");
+  const doc = resolveDocument(input);
+  const theirs = [await deps.theirWords(o.userId).catch(() => ""), o.taskTheirWords].join("\n");
+  const problems = documentProblems(doc, { theirs, read: o.read });
+  if (problems.length) return { ok: false, problems, why: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try once more: their points only in their own words; your plan, ideas and recommendations go in suggestions.` };
+  const blocked = await deps.blocked(o.userId, o.zone, deps.now());
+  if (blocked) return { ok: false, blocked: true, why: `Not sent: ${blocked}. Note it and schedule your next look for when it can go.` };
+  const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now: deps.now() };
+  const { results, sentOk } = await deliverToTargets(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords) }, deps.deliver);
+  if (!sentOk.length) return { ok: false, why: `Not sent: ${results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ") || "it didn't go out"}.` };
+  const via = sentOk.map((r) => r.via).join("+");
+  // Recorded at the real moment it went (never a pinned test clock: a send dated in the future would "keep" later promises).
+  await deps.record(o.userId, doc, via, `task:${o.taskId}`);
+  return { ok: true, title: doc.title, via };
 }
 
 // What a document may rest on: what they said in the last two weeks (their texts and their side of calls). Never Co's own lines.

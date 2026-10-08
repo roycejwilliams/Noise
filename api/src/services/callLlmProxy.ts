@@ -9,7 +9,7 @@
 // Rollback: CALL_LLM_PROXY off (the agent config goes back to ElevenLabs' own Haiku; push the agent) or CALL_LLM_CLEAN=off here
 // (the stream passes through untouched, no push needed).
 import { SpeakableStream } from "./speakable.js";
-import { SAFE_LINE, sourceCorpus, unsourced } from "./offerGuard.js";
+import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, UNSURE_NAME, UNSURE_NUMBER, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
 import { DRAINED_MAX_SENTENCES, DRAINED_NOTE, memberStateSignal } from "./memberState.js";
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
@@ -24,7 +24,16 @@ export type CallToolset = {
   names: Set<string>;
   // The system block for this turn: how to use the tools on a call, their open tasks and loops by id, what was done earlier on the call.
   note: string;
+  // Co's records for this member, without the guide's wording: their open tasks and loops, what Co did earlier on the call. What
+  // Co says aloud may stand on these (a promise about an open task is Co's own work, not an unasked one).
+  records?: string;
   run: (name: string, input: unknown, toolUseId: string) => Promise<unknown>;
+  // This turn only, after the member's words (never in the cached system block): e.g. they just gave a name that belongs on an open
+  // task, so writing it down is expected now.
+  turnNote?: string | null;
+  // When the turn is over: what was said aloud and which of Co's tools ran (services/callTools.ts records a fact Co acknowledged
+  // but didn't write down). Not awaited: the voice never waits on it.
+  afterTurn?: (t: { spoken: string[]; ran: string[] }) => Promise<unknown> | void;
 };
 
 export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-haiku-5-5";
@@ -117,6 +126,20 @@ export function corpusOf(b: OaiRequest): string {
   });
 }
 
+// What everything said aloud is checked against (offerGuard.ts spokenProblem), normalized once per turn and again when a tool
+// returns. `records` is Co's own: its open tasks and loops, what it did earlier on the call (callTools.ts note). A name or number
+// may stand on all of it; a promise of later work only on what they said on the call, the context and finds sections, what a tool
+// returned this turn and Co's records, never on the prompt's own examples.
+export function callSources(b: OaiRequest, records = "", toolResults = ""): SpokenSources {
+  const system = b.messages.filter((m) => m.role === "system" || m.role === "developer").map((m) => textOf(m.content)).join("\n");
+  const theirLines = b.messages.filter((m) => m.role === "user").map((m) => textOf(m.content));
+  const tools = [...b.messages.filter((m) => m.role === "tool").map((m) => textOf(m.content)), toolResults].filter(Boolean);
+  return {
+    all: prepareSource(sourceCorpus({ system: `${system}\n${records}\n${SPOKEN_COMMON}`, theirLines, toolResults: tools })),
+    asked: prepareSource(sourceCorpus({ system: `${knownSections(system)}\n${records}`, theirLines, toolResults: tools })),
+  };
+}
+
 export type AnthropicEvent = { type: string; index?: number; content_block?: { type: string; id?: string; name?: string }; delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: string } };
 export type OaiChunk = { id: string; object: "chat.completion.chunk"; created: number; model: string; choices: { index: 0; delta: Record<string, unknown>; finish_reason: string | null }[] };
 
@@ -152,7 +175,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const model = CALL_LLM_MODEL;
   const chunk = (delta: Record<string, unknown>, finish: string | null = null): OaiChunk => ({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finish }] });
   const clean = deps.clean !== false;
-  const corpus = clean ? corpusOf(b) : "";
+  const co = deps.tools ?? null;
+  let sources: SpokenSources | null = clean ? callSources(b, co?.records ?? "") : null;
   yield chunk({ role: "assistant", content: "" });
 
   // Their state outranks the agenda: the member's last words, not Co's, and only on the first request of a turn (a tool round passes through).
@@ -165,27 +189,53 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let spokeAny = false, blanked = false, firstTokenAt = 0, firstSentenceAt = 0;
   let toolIndex = -1;
   let finish = "stop";
-  const say = (s: string, extraCorpus = ""): string | null => {
+  // What was said aloud this turn, and whether an event offer was among what was held back (its fallback is SAFE_LINE).
+  const spokenLines: string[] = [];
+  const unsureSaid = new Set<string>();
+  let heldEvent = false;
+  const say = (s: string): string | null => {
     const sentence = s.trim();
-    if (clean) {
-      const bad = unsourced(sentence, extraCorpus ? `${corpus}\n${extraCorpus}` : corpus);
-      if (bad.length) { deps.onDropped?.(sentence, `names what nothing backs: ${bad.map((m) => m.text).join(", ")}`); blanked = true; return null; }
+    let out = s;
+    let line = sentence;
+    if (sources) {
+      // Every sentence, not only event offers: each name, place, time and number has to be backed, and a promise of later work
+      // has to be about something asked or on record (offerGuard.ts spokenProblem). An unbacked name, time or number is said as
+      // not known, once per turn; an event offer or an unasked promise is held back.
+      const p = spokenProblem(sentence, sources);
+      if (p) {
+        const why = p.kind === "promise" ? `promises later work nobody asked for: ${p.missing.join(", ")}` : `names what nothing backs: ${p.missing.join(", ")}`;
+        const unsure = p.kind === "name" ? UNSURE_NAME : p.kind === "number" ? UNSURE_NUMBER : null;
+        if (unsure && !unsureSaid.has(unsure)) {
+          unsureSaid.add(unsure);
+          deps.onDropped?.(sentence, `${why}; said "${unsure}" instead`);
+          line = unsure;
+          out = `${unsure} `;
+        } else {
+          deps.onDropped?.(sentence, why);
+          if (p.kind === "event") heldEvent = true;
+          blanked = true;
+          return null;
+        }
+      }
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
     spokeAny = true;
-    deps.onSpoken?.(sentence);
-    return s;
+    spokenLines.push(line);
+    deps.onSpoken?.(line);
+    return out;
   };
 
   // Co's own tools (services/callTools.ts) run here, mid-turn, and never reach ElevenLabs; its own tools (end_call,
   // voicemail_detection) still pass through as tool_calls. Bounded: maxToolSteps rounds, and toolBudgetMs from the request arriving.
-  const co = deps.tools ?? null;
+  const ran: string[] = [];
   const maxSteps = deps.maxToolSteps ?? CALL_TOOL_STEPS;
   const budgetMs = deps.toolBudgetMs ?? CALL_TOOL_BUDGET_MS;
   let req = toAnthropic(b, undefined, [drained ? DRAINED_NOTE : "", co?.note ?? ""].filter(Boolean).join("\n\n") || undefined);
   if (co) {
     const theirs = new Set((req.tools ?? []).map((t) => t.name));
     req.tools = [...(req.tools ?? []), ...co.defs.filter((d) => !theirs.has(d.name))];
+    // This turn's note goes after their words, past the cache breakpoint: the cached prefix (system and the call so far) is untouched.
+    if (co.turnNote) req.messages[req.messages.length - 1].content.push({ type: "text", text: co.turnNote });
   }
   // What Co's tools returned this turn also backs what Co says (an event searchEvents found can be named).
   let toolCorpus = "";
@@ -204,10 +254,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         if (!stream) stream = mk();
         if (cur?.kind === "text") cur.text += ev.delta.text;
         if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
-        for (const s of stream.push(ev.delta.text)) { const out = say(s, toolCorpus); if (out) yield chunk({ content: out }); }
+        for (const s of stream.push(ev.delta.text)) { const out = say(s); if (out) yield chunk({ content: out }); }
       } else if (ev.type === "content_block_stop") {
         if (stream) {
-          if (clean) for (const s of stream.end()) { const out = say(s, toolCorpus); if (out) yield chunk({ content: out }); }
+          if (clean) for (const s of stream.end()) { const out = say(s); if (out) yield chunk({ content: out }); }
           stream = null;
         }
         if (cur?.kind === "text" && cur.text.trim()) blocks.push({ type: "text", text: cur.text });
@@ -216,7 +266,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           let input: unknown = {};
           try { input = cur.json.trim() ? JSON.parse(cur.json) : {}; } catch { input = {}; }
           blocks.push({ type: "tool_use", id: cur.id, name: cur.name, input });
-          runs.push(runTool(co!, cur.id, cur.name, input, Math.max(0, budgetMs - (now() - t0)), deps.onTool));
+          ran.push(cur.name);
+          runs.push(runTool(co!,cur.id, cur.name, input, Math.max(0, budgetMs - (now() - t0)), deps.onTool));
         } else if (cur?.kind === "el" && !cur.args) {
           // A call tool with no input still sends valid JSON: ElevenLabs parses the arguments string.
           yield chunk({ tool_calls: [{ index: toolIndex, function: { arguments: "{}" } }] });
@@ -243,11 +294,13 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         if (ev.delta.stop_reason === "max_tokens") finish = "length";
       }
     }
-    if (stream && clean) for (const s of stream.end()) { const out = say(s, toolCorpus); if (out) yield chunk({ content: out }); }
+    if (stream && clean) for (const s of stream.end()) { const out = say(s); if (out) yield chunk({ content: out }); }
     stream = null;
     if (!runs.length) break;
     const results = await Promise.all(runs);
     for (const r of results) if (r.type === "tool_result") toolCorpus += `\n${r.content}`;
+    // What the tools returned backs what Co says next (an event searchEvents found can be named, a task it started can be promised).
+    if (clean) sources = callSources(b, co?.records ?? "", toolCorpus);
     // ElevenLabs' own tool in the same message (a goodbye with end_call): Co's tools have run; the call's tool goes out as it is.
     if (elCalled) break;
     const last = step + 1 >= maxSteps || now() - t0 >= budgetMs;
@@ -261,7 +314,14 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     deps.onToolRound?.({ step: step + 1, last });
   }
   // Everything this turn was going to say was kept back: say the one safe thing, never silence.
-  if (blanked && !spokeAny && finish !== "tool_calls") { deps.onSpoken?.(SAFE_LINE); yield chunk({ content: SAFE_LINE + " " }); }
+  // An event offer held back gets the safe line (as before); anything else held back, a plain acknowledgement, never a new promise.
+  if (blanked && !spokeAny && finish !== "tool_calls") {
+    const line = heldEvent ? SAFE_LINE : HELD_LINE;
+    spokenLines.push(line);
+    deps.onSpoken?.(line);
+    yield chunk({ content: line + " " });
+  }
+  if (co?.afterTurn) Promise.resolve().then(() => co.afterTurn!({ spoken: spokenLines, ran })).catch((err: any) => console.error("call: after-turn check failed (non-fatal):", err?.message ?? err));
   yield chunk({}, finish === "length" ? "stop" : finish);
 }
 

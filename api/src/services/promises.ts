@@ -18,6 +18,7 @@
 import { DateTime } from "luxon";
 import { TASK_LIMITS, closeTask, openTasks, startTask, type CoTask } from "./coTasks.js";
 import { OFFERS_WHAT_CO_CANT } from "./taskWeb.js";
+import { commitmentWindow, FALLBACK_ZONE, localStamp, memberZone, wordsZone } from "./memberTime.js";
 
 // A concrete later action Co says it will take, in the first person.
 const ACTION = String.raw`(?:flag(?: (?:you|me|it|that|this|one))?|dig(?:ging)? (?:into|in)|come back(?: to you)?|check (?:back|in|on)|circle back|follow up|get back to you|report back|keep you (?:posted|in the loop|updated)|let you know|update you|text you|ping you)`;
@@ -48,7 +49,8 @@ export function promiseSentence(reply: string): string | null {
 }
 
 // Pure: when Co should next look at it, from the wording of the promise.
-export function promiseHours(sentence: string, now: Date = new Date(), zone = "America/Los_Angeles"): number {
+export function promiseHours(sentence: string, now: Date = new Date(), zone: string | null = FALLBACK_ZONE): number {
+  zone = wordsZone(zone);
   const clamp = (h: number) => Math.min(TASK_LIMITS.maxHours, Math.max(TASK_LIMITS.minHours, Math.round(h)));
   if (/\b(?:in (?:an|one) hour|within the hour)\b/i.test(sentence)) return TASK_LIMITS.minHours;
   if (/\b(?:later today|today|tonight|this (?:afternoon|evening))\b/i.test(sentence)) return 4;
@@ -94,14 +96,18 @@ export async function trackPromise(o: { userId: string; reply: string; theirMess
   if (!sentence) return { ok: false, why: "no promise a task can keep" };
   if ((o.privateNames ?? []).some((n) => n && new RegExp(`\\b${n.split(/[^\w]+/).filter(Boolean).join("[-\\s]?")}\\b`, "i").test(sentence))) return { ok: false, why: "names a member it can't" };
   if (atPromiseCap(await openTasks(o.userId))) return { ok: false, why: `already keeping ${MAX_OPEN_PROMISES} promises` };
+  // Its window in their local time: what the promise said ("tonight", "by Friday"), or within a day (services/memberTime.ts).
+  const now = new Date();
+  const zone = await memberZone(o.userId);
   const r = await startTask({
     userId: o.userId,
     goal: promiseGoal(sentence),
     theirWords: theirWordsFor(o.theirMessage),
     steps: [{ text: "Do what you said, or tell them plainly where it stands" }],
     firstPlan: "Do what you promised them; if there's nothing yet, say where it stands only if they'd want to hear it",
-    inHours: promiseHours(sentence),
+    inHours: promiseHours(sentence, now, zone),
     source: "promise",
+    window: commitmentWindow(sentence, now, zone),
   });
   return r.ok ? { ok: true, task: r.task, sentence } : { ok: false, why: r.why };
 }
@@ -111,4 +117,6 @@ export async function dropPromise(userId: string, taskId: number): Promise<void>
   await closeTask(userId, taskId, "dropped", "The promise was not in the text that went out.").catch(() => {});
 }
 
-export const promiseFact = (t: CoTask) => `Started task #${t.id}: ${t.goal}. Co will work on it first around ${t.nextCheckAt?.slice(0, 16).replace("T", " ")} UTC, and tell them if there's anything to say.`;
+// In their local time (the window's zone, or the fallback), never bare UTC.
+export const promiseFact = (t: CoTask) =>
+  `Started task #${t.id}: ${t.goal}. Co will work on it first around ${t.nextCheckAt ? localStamp(t.nextCheckAt, t.window?.zone ?? null) : "soon"}, and tell them if there's anything to say.${t.window ? ` They'll have it ${t.window.words} (by ${localStamp(t.window.deadline, t.window.zone)}), or hear before then that it's moving and to when.` : ""}`;

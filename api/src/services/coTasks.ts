@@ -21,6 +21,7 @@
 import { DateTime } from "luxon";
 import { parseAskWindow } from "./askWindow.js";
 import pool from "../db/db.js";
+import { localStamp, windowLine, type CommitWindow } from "./memberTime.js";
 
 export type TaskStep = { text: string; done: boolean };
 export type TaskNote = { at: string; text: string };
@@ -50,7 +51,24 @@ export type CoTask = {
   targetKey?: string | null;
   // Where it came from: what they asked for, or a promise Co made in a reply (services/promises.ts).
   source?: "ask" | "promise";
+  // A commitment's window in their local time (services/memberTime.ts), kept in the row's followup JSON (work tasks don't use it
+  // otherwise): when Co said they'd have it, and the last moment Co can still tell them inside it.
+  window?: CommitWindow | null;
 };
+
+// Pure: a work task's commitment window, from its followup JSON.
+export function windowOf(followup: any): CommitWindow | null {
+  const w = followup?.window;
+  return w && typeof w.deadline === "string" && typeof w.warnBy === "string" ? (w as CommitWindow) : null;
+}
+
+// Pure: the first check of a commitment lands inside its window: no later than its warn-by (a "tonight" promise made at 6pm is
+// worked before 7:40pm, not at 10pm), and never sooner than five minutes out.
+export function firstCheckInWindow(next: Date, w: CommitWindow | null | undefined, now: Date): Date {
+  if (!w) return next;
+  const by = new Date(w.warnBy).getTime();
+  return by < next.getTime() ? new Date(Math.max(by - 10 * 60_000, now.getTime() + 5 * 60_000)) : next;
+}
 
 export const TASK_LIMITS = {
   maxOpen: 5,
@@ -159,14 +177,16 @@ export function mayText(t: Pick<CoTask, "lastTextedAt"> & Partial<Pick<CoTask, "
 }
 
 // What Co reads in every reply: its open work for them, as scheduled facts.
-export function taskFactLines(tasks: CoTask[], fmt: (iso: string) => string = (x) => x.slice(0, 16).replace("T", " ") + " UTC"): string[] {
+// Times are in their local time when their zone is given (services/memberTime.ts), never bare UTC.
+export function taskFactLines(tasks: CoTask[], fmt: (iso: string) => string = (x) => x.slice(0, 16).replace("T", " ") + " UTC", zone?: string | null): string[] {
+  if (zone !== undefined) fmt = (x) => localStamp(x, zone);
   return tasks
     .filter((t) => t.status === "open")
     .map((t) => {
       const done = t.steps.filter((s) => s.done).map((s) => s.text);
       const left = t.steps.filter((s) => !s.done).map((s) => s.text);
       const last = t.notes.slice(-2).map((n) => n.text);
-      return `Co is working on task #${t.id} for them: "${t.goal}" (their words: "${t.theirWords.slice(0, 160)}").${done.length ? ` Done: ${done.join("; ")}.` : ""}${left.length ? ` Still to do: ${left.join("; ")}.` : ""}${last.length ? ` Latest: ${last.join(" / ")}.` : ""}${t.deadline ? ` Their deadline: ${t.deadline}${t.finalCheckAt && !t.finalTold ? `; Co's last check before it, where it tells them where things stand, is around ${fmt(t.finalCheckAt)}` : ""}.` : ""}${t.nextCheckAt ? ` Co will work on it next around ${fmt(t.nextCheckAt)}${t.planNext ? `: ${t.planNext}` : ""}.` : ""}`;
+      return `Co is working on task #${t.id} for them: "${t.goal}" (their words: "${t.theirWords.slice(0, 160)}").${done.length ? ` Done: ${done.join("; ")}.` : ""}${left.length ? ` Still to do: ${left.join("; ")}.` : ""}${last.length ? ` Latest: ${last.join(" / ")}.` : ""}${t.deadline ? ` Their deadline: ${t.deadline}${t.finalCheckAt && !t.finalTold ? `; Co's last check before it, where it tells them where things stand, is around ${fmt(t.finalCheckAt)}` : ""}.` : ""}${t.nextCheckAt ? ` Co will work on it next around ${fmt(t.nextCheckAt)}${t.planNext ? `: ${t.planNext}` : ""}.` : ""}${t.window && !t.window.closedAt ? ` ${windowLine(t.window)}` : ""}`;
     });
 }
 
@@ -194,6 +214,7 @@ function rowTo(r: any): CoTask {
     followup: r.followup ?? null,
     targetKey: r.target_key ?? null,
     source: r.source === "promise" ? "promise" : "ask",
+    window: r.kind === "followup" || r.kind === "research_brief" ? null : windowOf(r.followup),
   };
 }
 
@@ -207,7 +228,7 @@ export async function getTask(userId: string, id: number): Promise<CoTask | null
   return rows[0] ? rowTo(rows[0]) : null;
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise"; window?: CommitWindow | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   const open = await openTasks(input.userId);
   if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
   const goal = input.goal.trim().slice(0, 200);
@@ -215,11 +236,11 @@ export async function startTask(input: { userId: string; goal: string; theirWord
   if (open.some((t) => norm(t.goal) === norm(goal))) return { ok: false, why: "already working on that" };
   const steps = cleanSteps(input.steps);
   const dl = input.deadline ?? null;
-  const next = capToFinal(new Date(Date.now() + clampNextHours(input.inHours) * HOUR), { finalCheckAt: dl?.finalCheckAt ?? null, finalTold: false }).at;
+  const next = firstCheckInWindow(capToFinal(new Date(Date.now() + clampNextHours(input.inHours) * HOUR), { finalCheckAt: dl?.finalCheckAt ?? null, finalTold: false }).at, input.window, new Date());
   const { rows } = await pool.query(
-    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, source)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10) RETURNING *`,
-    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.source ?? "ask"],
+    `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, source, followup)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11::jsonb) RETURNING *`,
+    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.source ?? "ask", input.window ? JSON.stringify({ window: input.window }) : null],
   );
   return { ok: true, task: rowTo(rows[0]) };
 }
@@ -261,12 +282,32 @@ export async function wakeOnReply(userId: string): Promise<number> {
   return rowCount ?? 0;
 }
 
+// Closing a task closes its window too (followup.window.closedAt), so nothing warns about a commitment that's finished.
 export async function closeTask(userId: string, id: number, status: "done" | "dropped" | "expired", outcome: string): Promise<boolean> {
   const { rowCount } = await pool.query(
-    `UPDATE co_tasks SET status = $3, outcome = $4, closed_at = NOW(), next_check_at = NULL, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`,
+    `UPDATE co_tasks SET status = $3, outcome = $4, closed_at = NOW(), next_check_at = NULL, updated_at = NOW(),
+       followup = CASE WHEN kind = 'work' AND followup ? 'window' THEN jsonb_set(followup, '{window,closedAt}', to_jsonb(NOW())) ELSE followup END
+     WHERE user_id = $1 AND id = $2 AND status = 'open'`,
     [userId, id, status, outcome.trim().slice(0, 300)],
   );
   return (rowCount ?? 0) > 0;
+}
+
+// A commitment's window, set or replaced (a work task's followup JSON only).
+export async function setTaskWindow(userId: string, id: number, window: CommitWindow): Promise<void> {
+  await pool.query(
+    `UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{window}', $3::jsonb), updated_at = NOW() WHERE user_id = $1 AND id = $2 AND kind = 'work'`,
+    [userId, id, JSON.stringify(window)],
+  );
+}
+
+// The next check at an exact moment (a commitment moved to their morning after a miss warning).
+export async function scheduleTaskAt(userId: string, id: number, at: Date, plan: string): Promise<CoTask | null> {
+  const { rows } = await pool.query(
+    `UPDATE co_tasks SET next_check_at = $3, plan_next = $4, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open' RETURNING *`,
+    [userId, id, at, plan.trim().slice(0, 320)],
+  );
+  return rows[0] ? rowTo(rows[0]) : null;
 }
 
 // Tasks due to wake, each claimed so two runs never work the same one.

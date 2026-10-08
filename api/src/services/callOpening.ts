@@ -24,7 +24,7 @@ import { recordDecision } from "../harness/core.js";
 import { MODELS } from "../models.js";
 import { stockLine } from "../harness/stockLines.js";
 import { cuesIn } from "./voiceCues.js";
-import { narratesInternalState } from "./speakable.js";
+import { narratesInternalState, selfContradiction } from "./speakable.js";
 
 export const OPENING_WRITER = {
   minContext: 300,
@@ -99,6 +99,9 @@ export function openingProblems(raw: string, summary: string, firstName: string)
   if (/\bhow are you\b|good to hear your voice|i remember|thinking about you/i.test(line) || stockLine(line)) return "a stock line";
   // Never narrates Co's own state ("I still haven't found anything solid yet", "working on it"): the same rule as every text (speakable.ts).
   if (narratesInternalState(line) || /\b(?:haven't|have not|still haven't) (?:found|got|gotten|finished|had a chance)\b/i.test(line)) return "narrates Co's own state";
+  // Never two clauses that can't both be true (2026-10-08: "review that post-event branding plan I owe you"): speakable.ts.
+  const clash = selfContradiction(line);
+  if (clash) return `contradicts itself: ${clash}`;
   // Co's own finished work only when the record says it (2026-10-08: "I drafted the planning doc" for a plan
   // the after-call check had found nothing good enough to send for).
   const did = line.match(CO_DID);
