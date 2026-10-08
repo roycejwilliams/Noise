@@ -18,6 +18,7 @@
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
 import type { GoalStateRow } from "../services/goalEdges.js";
+import { steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
 import { docOfferLines, type OfferKind } from "../services/documentOffer.js";
 import { findSection } from "../services/deliveryReceipts.js";
 import { driftLine } from "../services/receiptDrift.js";
@@ -94,7 +95,31 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // artifactOffer: the one offer (a plan sheet, a venue brief, a stale document's fix) this reply was told it may make; recorded only
 // if a text Co sends makes it (services/documentOffer.ts).
 // goalSetAside: a goal Co set aside from context that they haven't heard about yet (services/goalEdges.ts); the reply may raise it.
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null };
+// coldStart: set for a member with fewer than two findable interests on file (services/coldStart.ts): whether this reply was offered
+// a steering question, and why or why not; recorded after the reply goes out (agent/conversationReply.ts).
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null };
+export type ColdStartFacts = { offered: boolean; why: string; seeds: SeedCount; instruction: string | null };
+
+// Pure: the cold-start state on this reply's facts, with the steering instruction when it's on offer (services/coldStart.ts
+// steerDecision: never in a heavy moment or while frustrated with Co, never two replies in a row, never beside another question).
+// Nothing at all for a seeded member: steering stops once two findable interests are on file.
+export function addColdStartSteer(rf: ReplyFacts, cs: ColdStartView, o: { emotional: EmotionalContext | null | undefined; otherQuestion?: string | null; now?: Date }): ColdStartFacts | null {
+  if (cs.seeds.seeded) return null;
+  const d = steerDecision({ seeds: cs.seeds, heavy: heavyMoment(o.emotional), frustrated: !!o.emotional?.withCo?.frustrated, history: cs.history, lifetimeSteers: cs.lifetimeSteers, now: o.now ?? new Date(), otherQuestion: o.otherQuestion ?? null });
+  const asked = cs.history.filter((h) => h.action === "steered" && h.question).map((h) => h.question!);
+  const instruction = d.steer ? steerInstruction(cs.seeds, asked) : null;
+  if (instruction) addInstruction(rf, instruction);
+  rf.coldStart = { offered: d.steer, why: d.why, seeds: cs.seeds, instruction };
+  return rf.coldStart;
+}
+
+// Pure: take the steering back off a reply that turned out to have another question to ask (a call offer), before it drafts.
+export function withdrawColdStartSteer(rf: ReplyFacts, why: string): void {
+  const cs = rf.coldStart;
+  if (!cs?.offered) return;
+  rf.instructions = rf.instructions.filter((i) => i !== cs.instruction);
+  rf.coldStart = { ...cs, offered: false, why, instruction: null };
+}
 
 export function createReplyFacts(): ReplyFacts {
   return { facts: [], instructions: [] };
@@ -279,9 +304,11 @@ export async function gatherReplyFacts(
   // Writing something up as a document (services/documentOffer.ts): an offer still waiting on its answer, or a moment Co may offer, once.
   // The same notice covers a plan sheet, a venue brief and a stale delivered document, at most one offer a reply, never in a heavy
   // moment (this message's feeling, recorded before the reply drafts).
+  let docQuestion: string | null = null;
   {
     if (opts.turn?.docOffer) opts.turn.docOffer.moment = { heavyNow: heavyMoment(opts.turn.emotional), coLines: coLinesIn(opts.context) };
     const doc = docOfferLines(opts.turn?.docOffer, opts.turn?.message ?? "");
+    if (doc.ask || doc.hint) docQuestion = "a document offer";
     if (doc.ask) addInstruction(rf, doc.ask);
     if (doc.pending) addFact(rf, "pending", doc.pending);
     if (doc.hint) addInstruction(rf, doc.hint);
@@ -314,6 +341,9 @@ export async function gatherReplyFacts(
     rf.goalSetAside = aside;
     addHint(rf, `Co stopped looking for things for their goal "${aside.goal.slice(0, 140)}" (${aside.reason}). If it fits naturally in this reply and they aren't in a hard moment, ask in your own words whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement.`);
   }
+  // Cold start (services/coldStart.ts): fewer than two findable interests on file, so a reply may ask one easy question that lets them
+  // name something Co could find. New members and existing ones alike, only in a natural exchange, never as outreach.
+  if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
   // answers, whatever earlier messages said (2026-09-27: after two earlier

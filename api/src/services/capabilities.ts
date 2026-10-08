@@ -322,7 +322,7 @@ export const ABILITIES: Ability[] = [
     can: "Co can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",
     limits: { perTurn: 2, perDay: 10 },
-    use: "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or they want Co to keep an eye out.",
+    use: "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or they want Co to keep an eye out. Also when they tell you, in passing or answering you, about a scene they'd like to be in, a kind of event, people they'd want to meet or something they're exploring that Co could find for them: save it in their words so the search starts from it, and just carry on the conversation.",
   },
   {
     id: "reactions",

@@ -9,7 +9,7 @@ import { CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { CO_CORE, CO_LISTENING } from "../services/coCore.js";
 import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
-import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact } from "../harness/replyGrounding.js";
+import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE } from "../services/turnFailure.js";
@@ -320,6 +320,10 @@ export async function runConversationReplyAgent(
     !input.hasPendingOffer &&
     !input.recentOfferBurstActive &&
     (input.callAction === "would_benefit" || input.isThinProfileFirstMessage);
+
+  // One question a reply (services/coldStart.ts): a reply that offers a call, or answers a safety concern, never also steers.
+  if (input.safetyConcern) withdrawColdStartSteer(input.facts, "a safety concern this turn");
+  else if (callOfferEligible) withdrawColdStartSteer(input.facts, "this reply offers a call");
 
   const lastCoMessage = lastCoLine(input.recentConversation);
 
@@ -650,6 +654,14 @@ ${TOOL_TURN_RULES(input.isVoice)}
   const aside = input.facts.goalSetAside;
   if (aside && state.sent && !opts.dryRun && opts.record !== false) {
     await import("../services/goalEdges.js").then((g) => g.noteGoalHints(input.userId, [aside], state.sentMessages.join("\n"))).catch((err: any) => console.error("conversationReply: noting the goal hint failed (non-fatal):", err?.message ?? err));
+  }
+
+  // A member with fewer than two findable interests on file: what this reply did with the steering question (services/coldStart.ts),
+  // so the next reply rests after a steer and nothing already asked is asked again. Bookkeeping, never a gate on the text.
+  const cold = input.facts.coldStart;
+  if (cold && state.sent && !opts.dryRun && opts.record !== false) {
+    const [C, R] = await Promise.all([import("../services/coldStart.js"), import("../harness/repeatAsk.js")]);
+    await C.recordSteer(input.userId, { offered: cold.offered, why: cold.why, sent: state.sentMessages.join("\n"), seeds: cold.seeds, questionsIn: R.questionsIn }).catch((err: any) => console.error("conversationReply: recording the cold-start steer failed (non-fatal):", err?.message ?? err));
   }
 
   // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).

@@ -82,6 +82,12 @@ export const SIGNALS: Signal[] = [
   { key: "tier3_x_nothing_kept", label: "A week of sweeps searched X and kept nothing from it", bad: `decision = 'sweep.find' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(proposal->'did', '[]'::jsonb)) d WHERE d LIKE 'x: %') AND COALESCE((proposal->>'xKept')::int, 0) = 0 AND proposal->'xError' IS NULL`, total: `decision = 'sweep.find' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(proposal->'did', '[]'::jsonb)) d WHERE d LIKE 'x: %')`, floor: 1, minCount: 8, steady: { window: "7 days", repeatHours: 72 } },
   // A failed X search (auth, rate limit, outage: sweepFind.ts xFailure) is its own flag, never counted as "nothing kept".
   { key: "tier3_x_failed", label: "Sweeps whose X search failed (auth, rate limit or outage)", bad: `decision = 'sweep.find' AND proposal->'xError' IS NOT NULL`, total: `decision = 'sweep.find' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(proposal->'did', '[]'::jsonb)) d WHERE d LIKE 'x: %')`, floor: 0.25, minCount: 3, steady: { window: "7 days", repeatHours: 24 } },
+  // Cold start (services/coldStart.ts, 2026-10-08): a sweep for a member in their first week that came back with nothing for them
+  // is a product failure, not a quiet day. Any one is worth a look: the level over the last day, at most one alert a day. The
+  // decision carries their seeds, what was tried and why.
+  { key: "cold_start_miss", label: "New members (first week) whose sweep found nothing for them", bad: `decision = 'sweep.cold_start_miss'`, total: `decision IN ('sweep.cold_start_miss', 'sweep.cold_start_hit')`, floor: 0.01, minCount: 1, steady: { window: "24 hours", repeatHours: 24 } },
+  // Steering toward findable interests that read like a quiz: a steering reply with more than one question in it.
+  { key: "cold_start_quiz", label: "Cold-start steering replies that asked more than one question", bad: `decision = 'coldstart.reply' AND action = 'steered' AND COALESCE((proposal->>'questions')::int, 0) > 1`, total: `decision = 'coldstart.reply' AND action = 'steered'`, floor: 0.3, minCount: 2, steady: { window: "7 days", repeatHours: 72 } },
   // Drift in Co's own choices (2026-09-25, toolGuard.ts): how often a tool
   // it chose didn't actually happen, and how often it hit a hard limit.
   { key: "tool_not_done", label: "Tools Co (or an extension) chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },

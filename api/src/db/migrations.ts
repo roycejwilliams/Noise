@@ -2634,4 +2634,45 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("goal_states table init failed:", err));
+  // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
+  // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
+  // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.
+  await pool
+    .query(`ALTER TABLE proactive_sends ADD COLUMN IF NOT EXISTS kind TEXT`)
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS member_kind_preferences (
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          kind TEXT NOT NULL CHECK (kind IN ('find','intro_followup','deadline','goal_nudge','member_commitment')),
+          state TEXT NOT NULL CHECK (state IN ('suppressed','enabled')),
+          suppressed_at TIMESTAMPTZ,
+          enabled_at TIMESTAMPTZ,
+          reason TEXT,
+          evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, kind)
+        )`,
+      ),
+    )
+    .catch((err: Error) => console.error("member_kind_preferences / proactive_sends.kind init failed:", err));
+  // Member-state nudges (2026-10-08, services/memberStateNudges.ts): one row per thing Co carries for a member that can nudge (an intro,
+  // a deadline, a goal, a commitment), with the fingerprint of the state it last nudged (or tried to) for. Same fingerprint: never
+  // again; a new one re-arms it once.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_state_nudges (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        entry_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued','sent','dropped')),
+        reason TEXT,
+        queued_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, entry_key)
+      )`,
+    )
+    .catch((err: Error) => console.error("member_state_nudges table init failed:", err));
 }
