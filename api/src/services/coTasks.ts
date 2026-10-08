@@ -398,6 +398,17 @@ export function briefFactLines(briefs: BriefView[], zone?: string | null): strin
 }
 
 // A brief's last line to them, held to their hours: the task stays open (still theirs to hear) and wakes when the line can go.
+// A finished brief whose document didn't go out: kept on the task with the options, so the next wake re-sends it without
+// finding again (2026-10-08: a failed PDF closed the task as dropped and they never heard).
+export async function holdBriefDoc(userId: string, id: number, pending: { doc: unknown; options: { name: string; url: string }[]; tries: number; title: string; list: string }, at: Date): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{pendingDoc}', $3::jsonb), next_check_at = $4, plan_next = 'send the brief that did not go out', updated_at = NOW()
+     WHERE user_id = $1 AND id = $2 AND status = 'open' AND kind = 'research_brief'`,
+    [userId, id, JSON.stringify(pending), at],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
 export async function holdBriefLine(userId: string, id: number, held: { text: string; status: "done" | "dropped"; outcome: string }, at: Date): Promise<boolean> {
   const { rowCount } = await pool.query(
     `UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{held}', $3::jsonb), next_check_at = $4, plan_next = 'tell them what the brief came to', updated_at = NOW()

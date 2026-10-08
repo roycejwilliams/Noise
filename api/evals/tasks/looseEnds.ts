@@ -136,6 +136,19 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   check("the last look offers only now or skip", tools2 === "checkInNow,skip" && r2.action === "skip" && did === "skip");
 }
 
+// ---- 2026-10-08 follow-on: a brief whose PDF won't send still reaches them; "asked for space" is skip
+{
+  const RB = await import("../../src/services/researchBrief.js");
+  const { narratesInternalState } = await import("../../src/services/speakable.js");
+  const t = RB.briefOptionsText("Venue options: a launch dinner for 40", [{ name: "Perbacco", url: "https://www.perbaccosf.com/dining/" }, { name: "Mastro's", url: "https://www.mastrosrestaurants.com/private-events-san-francisco/" }]);
+  check("the fallback names what it is and lists each option with its link", /^The venue options for a launch dinner for 40 wouldn't come through as a PDF, so here they are:/.test(t) && /1\. Perbacco: https:\/\/www\.perbaccosf\.com\/dining\//.test(t) && /2\. Mastro's: https:/.test(t));
+  check("the fallback never narrates Co's state", narratesInternalState(t) === null);
+  const rb = src("services/researchBrief.ts");
+  check("a brief whose document didn't go is kept and re-sent, never closed silently", /if \(!sent\) \{[\s\S]{0,400}holdBriefDoc\(/.test(rb) && !/"the brief couldn't be sent"/.test(rb));
+  check("the retry re-sends the same document (no new find), then texts the options", /pendingDoc\?\.doc[\s\S]{0,600}deliverDocument\(pendingDoc\.doc/.test(rb) && /briefOptionsText\(pendingDoc\.title, pendingDoc\.options\)/.test(rb) && RB.DOC_RETRIES >= 1);
+  const fu = src("services/followUps.ts");
+  check("asking for space is skip, never later", /that is skip, never later/.test(fu) && /Never "later" because they asked for space/.test(fu));
+}
 console.log(`loose ends: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();
