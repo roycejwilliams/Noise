@@ -87,12 +87,18 @@ const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: s
   const live = await go(body(), { stream: scripted([text("Got it, Ellis Works, and the date stays open. I'll keep the planning doc moving with that in mind. I'll text you what I find on venues.")]).stream, tools: { defs: [], names: new Set(), note: CT.callToolsNote({ tasks, loops: null }, []), records, run: async () => ({ ok: true }) } });
   check("the live turn: 'Got it, Ellis Works' and the planning doc line reach the voice", /Got it, Ellis Works, and the date stays open\./.test(live.content) && /planning doc moving/.test(live.content), live.content);
   check("the live turn: the unasked venue promise doesn't", !/venues/i.test(live.content) && live.dropped.some((d) => /venues/.test(d) && /nobody asked for/.test(d)), live);
-  const unknown = await go(body("What's the studio called again? I forgot."), { stream: scripted([text("It's Harbor Lane Studio. They're great for dinners.")]).stream });
-  check("unknown stays unknown: a name nothing backs is said as \"I'm not sure of the name.\"", /^I'm not sure of the name\./.test(unknown.content) && !/Harbor Lane/.test(unknown.content), unknown);
-  const twice = await go(body("Who else could host?"), { stream: scripted([text("Maybe Harbor Lane Studio. Or Brightline Loft.")]).stream });
-  check("said once per turn, never twice in a row", (twice.content.match(/not sure of the name/g) ?? []).length === 1 && !/Brightline|Harbor/.test(twice.content), twice.content);
-  const num = await go(body("How many people did I say?"), { stream: scripted([text("You said 85.")]).stream });
-  check("an unbacked number is said as not known", /I'm not sure of the exact number\./.test(num.content) && !/85/.test(num.content), num.content);
+  // 2026-10-08 (Royce: "the model controls the response, no scripted lines"): a held line is never replaced with one written for Co.
+  // Co answers again, once, in its own words, told what it couldn't back and, if they asked for it, to say it doesn't know.
+  const unk = scripted([text("It's Harbor Lane Studio. They're great for dinners."), text("I don't have the studio's name on file, and I'd rather not guess.")]);
+  const unknown = await go(body("What's the studio called again? I forgot."), { stream: unk.stream });
+  check("unknown stays unknown: the unbacked name never reaches the voice; Co says it doesn't know, in its own words", !/Harbor Lane/.test(unknown.content) && /don't have the studio's name/.test(unknown.content) && !/I'm not sure of the name\./.test(unknown.content), unknown);
+  check("the retry tells Co what it couldn't back and to say it doesn't know (they asked)", unk.reqs.length === 2 && JSON.stringify(unk.reqs[1].system).includes("names what nothing backs") && JSON.stringify(unk.reqs[1].system).includes("say plainly that you don't know it"));
+  const tw = scripted([text("Maybe Harbor Lane Studio. Or Brightline Loft."), text("Maybe Harbor Lane again."), text("x")]);
+  const twice = await go(body("Who else could host?"), { stream: tw.stream });
+  check("one retry per turn, never a loop; if the retry is held too, one plain line, never silence", tw.reqs.length === 2 && !/Brightline|Harbor/.test(twice.content) && twice.content.trim().length > 0, twice.content);
+  const nm = scripted([text("You said 85."), text("I don't have the number you gave me, so tell me again?")]);
+  const num = await go(body("How many people did I say?"), { stream: nm.stream });
+  check("an unbacked number never reaches the voice; Co says so in its own words", !/85/.test(num.content) && /don't have the number/.test(num.content), num.content);
   const only = await go(body(), { stream: scripted([text("I'll text you what I find on venues.")]).stream });
   check("a turn that was only an unasked promise says a plain 'Got it.', never a new promise in its place", only.content.trim() === G.HELD_LINE && only.spoken.join(" ") === G.HELD_LINE, only);
   const ev = await go(body("Anything happening this week?"), { stream: scripted([text("There's a mixer at Foundry Hall on Friday.")]).stream });
@@ -160,7 +166,7 @@ for (const l of [G.UNSURE_NAME, G.UNSURE_NUMBER, G.HELD_LINE]) check(`"${l}" is 
   check("a plural of an everyday word is backed ('PDFs')", G.spokenProblem("Should I keep sending PDFs for now?", s2) === null, G.spokenProblem("Should I keep sending PDFs for now?", s2));
   check("a plural of a backed name is backed", G.spokenProblem("I'll keep the Google Docs for you.", s2) === null);
   const proxy = fs.readFileSync(new URL("../../src/services/callLlmProxy.ts", import.meta.url), "utf8");
-  check("'I'm not sure of the name' only answers a question they asked", /const unsure = !askedForSpecific \? null/.test(proxy));
+  check("no line is written for Co: the proxy never substitutes a sentence for a held one", !/UNSURE_NAME|UNSURE_NUMBER/.test(proxy.replace(/^import .*$/m, "")) && /Answer them again, in your own words, without it/.test(proxy));
 }
 console.log(`spokenGrounding: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

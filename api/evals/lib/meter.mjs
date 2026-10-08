@@ -128,7 +128,9 @@ globalThis.fetch = async function meteredFetch(input, init) {
   // A Haiku that production pins (4.5) is kept as asked, so its eval tests the model it really runs on.
   const pinnedHaiku = !grader && /^claude-haiku-4-5/.test(asked);
   const kind = grader ? "sonnet" : pinnedHaiku ? "haiku45" : realModels ? (/haiku/.test(asked) ? "haiku" : "sonnet") : "haiku";
-  body.model = grader ? SONNET : pinnedHaiku ? asked : realModels ? (/haiku/.test(asked) ? asked : SONNET) : HAIKU;
+  // EVAL_KEEP_MODEL=1 (a one-off comparison, on request): a real-models run keeps the exact model asked for (e.g. claude-sonnet-4-6).
+  const keepAsked = realModels && process.env.EVAL_KEEP_MODEL === "1";
+  body.model = grader ? SONNET : pinnedHaiku || keepAsked ? asked : realModels ? (/haiku/.test(asked) ? asked : SONNET) : HAIKU;
   // Haiku 4.5 rejects the effort option the production code sets for Sonnet; Haiku 5.5 accepts it (2026-10-08), so it is kept there.
   if (kind === "haiku45" || (kind === "haiku" && !/^claude-haiku-5/.test(String(body.model ?? "")))) strip(body);
   // EVAL_WEB_SEARCH=1 (a one-off live end-to-end run, on request): the search stays, metered and capped like any call.

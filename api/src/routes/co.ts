@@ -399,7 +399,7 @@ async function openingForCall(userId: string, firstName: string, direction: "inb
   const written =
     direction === "outbound"
       ? await takeOpening(userId)
-      : await withTimeout(writeOpening({ firstName, direction, summary: contextSummary, timeoutMs: OPENING_WRITER.inboundBudgetMs }), OPENING_WRITER.inboundBudgetMs, { line: null, why: "not ready in time" });
+      : await withTimeout(writeOpening({ firstName, direction, summary: contextSummary, timeoutMs: OPENING_WRITER.inboundBudgetMs, userId }), OPENING_WRITER.inboundBudgetMs, { line: null, why: "not ready in time" });
   recordOpening(userId, direction, written);
   return written.line ?? (await chooseOpening(userId, firstName, direction));
 }

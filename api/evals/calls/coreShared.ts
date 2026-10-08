@@ -40,17 +40,19 @@ const coreSentences = [parts.listening, parts.grounding, parts.memberSafety, par
 const copied = (src: string) => coreSentences.filter((s) => src.includes(s));
 check("not copied: no core sentence is retyped in the reply, the call code or the voice layer", [reply, elSrc, voiceLayer].every((s) => copied(s).length === 0), [reply, elSrc, voiceLayer].flatMap(copied).join(" | "));
 check("the safety rules stay as strict as the call guide's were", /everything else stops/.test(parts.safety) && /Ask plainly: "Are you safe right now\?"/.test(parts.safety) && /call or text 988, any time, free/.test(parts.safety) && /immediate danger, 911/.test(parts.safety) && /don't hand them off and leave/.test(parts.safety) && /for as long as they want to talk/.test(parts.safety) && /wanting to disappear, everyone being better off without them, not wanting to wake up/.test(parts.safety));
-check("no role noun for Co anywhere in the core or the voice layer", !/\b(concierge|assistant|matchmaker)\b/i.test([parts.listening, parts.grounding, parts.memberSafety, parts.safety, voiceLayer].join("\n")));
+check("no role noun for Co anywhere, except in the voice layer's own \"never a concierge, a matchmaker...\" line", !/\b(concierge|assistant|matchmaker)\b/i.test([parts.listening, parts.grounding, parts.memberSafety, parts.safety, voiceLayer.replace(/never a concierge, a matchmaker, a therapist, an assistant, or an AI product/i, "")].join("\n")));
 
 // ---- 2. no interview script
-const script = /\bPHASE\b|four phases|Rapport|Confirm Understanding|Prioritization|nine things|listening for nine|assess_conversation_coverage|coverage|checklist|ready to summarize|reflect back what you heard/i;
-check("no phase, checklist or coverage language in the voice layer", !script.test(voiceLayer), voiceLayer.match(script)?.[0]);
-check("no phase, checklist or coverage language in the built call prompt", !script.test(callPrompt), callPrompt.match(script)?.[0]);
+// 2026-10-08 (Royce): Hume's prompt is back, phases and all, as how Co organizes its attention. What stays out: the coverage tool,
+// the 15-minute wrap-up, and any ready-made line for Co to say.
+const script = /assess_conversation_coverage|elapsed_minutes|ready to summarize|"So it sounds like|"Of everything we just talked about|"That's what I needed|"Take your time\."|"Still there\?"|takes courage to sit with|finding your footing/i;
+check("no coverage tool, wrap-up timer or ready-made line in the voice layer", !script.test(voiceLayer), voiceLayer.match(script)?.[0]);
+check("no coverage tool, wrap-up timer or ready-made line in the built call prompt", !script.test(callPrompt), callPrompt.match(script)?.[0]);
 check("no coverage tool on the agent", !JSON.stringify(E.buildAgentConfig({ name: "t", prompt: voiceLayer, voiceId: "v", apiUrl: "https://x.test" })).includes("assess_conversation_coverage"));
-check("one question at a time is etiquette, not a template, and no reflect-back step", /One question at a time/.test(voiceLayer) && /not a pattern/.test(voiceLayer) && /never have to sum up what they said before you answer it/.test(voiceLayer));
-check("the voice layer covers only the phone: short spoken sentences, no lists, names said right, one goodbye then end_call", /Short sentences, one thought each/.test(voiceLayer) && /No lists/.test(voiceLayer) && /Say names back correctly/.test(voiceLayer) && /say goodbye once/.test(voiceLayer) && /end_call/.test(voiceLayer) && /never ask whether they're still there/.test(voiceLayer));
+check("one question per turn, and any reflection is in Co's own words, new every time", /Ask one question per turn/.test(voiceLayer) && /in your own words, new every time/.test(voiceLayer) && /never a stock phrase that would fit anyone/.test(voiceLayer));
+check("the phone basics hold: short spoken sentences, names as on file, goodbye once then end_call", /Short sentences, one thought each/.test(voiceLayer) && /use the spelling in what you know about them/.test(voiceLayer) && /Say that goodbye once/.test(voiceLayer) && /end_call/.test(voiceLayer) && /never asking whether they're still there/.test(voiceLayer));
 check("calls act on the call: no 'after we hang up' instruction left (2026-10-08: calls run Co's tools)", !/when (?:we|you) hang up|after we hang up|look after the call/i.test(callPrompt), callPrompt.match(/[^.\n]*(?:hang up|after the call)[^.\n]*/i)?.[0]);
-check("the voice layer is short", voiceLayer.split(/\s+/).length < 500, voiceLayer.split(/\s+/).length);
+check("the voice layer is Hume's length, not a whole second prompt", voiceLayer.split(/\s+/).length < 4000, voiceLayer.split(/\s+/).length);
 
 // ---- 3. the call context
 const NOW = new Date("2026-10-08T01:00:00Z"); // Oct 7, 6pm Pacific
@@ -102,7 +104,7 @@ check("the corrected goal never appears as current: only inside its settled line
 check("an OLD thread is listed as a question, after everything current", !/What they're in the middle of/.test(summary) && at("Older threads, not current") > at("Who they are"));
 const forOpening = O.openingContext(summary);
 check("the opening is written from the current part only: no older threads, no old side of a settled correction", !/Older threads|builder\/founder community|first paying customer|"Sequent AI"/.test(forOpening) && /Sequin AI/.test(forOpening), forOpening);
-check("the opening is told to pick up from the most recent real thread, not something already off or done", /Pick up from the most recent real thread/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })) && /Never pick up something they've already told Co is off, changed or done/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })));
+check("the opening is told to pick up one real thing (not always the same one), not something already off or done", /whatever a friend who knows them would naturally bring up/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })) && /Never pick up something they've already told Co is off, changed or done/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })));
 // The 2026-10-08 rebuild wrote "I drafted the planning doc..." for a plan the after-call check had found nothing good enough to send for.
 const pad = " pad".repeat(80);
 check("the opening can't claim work Co didn't do", O.openingProblems("Hey Royce, it's Co. I drafted the plan for Sequin AI, want it?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Co. I sent the Sequin AI notes, did they land?", "Co sent them the Sequin AI notes." + pad, "Royce") === null);

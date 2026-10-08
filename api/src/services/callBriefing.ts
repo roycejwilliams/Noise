@@ -30,7 +30,7 @@ Check-ins and calls:
 
 Never:
 - Never say when something happens unless it is in "What Co has found" or in what you know about them, with its day. Never invent an event, a time, a place or who will be there.
-- Never ask for something you already know (their city, when they're free, what they're building, who their cofounder is, what they told you last time): say what you have and ask if it's still right ("You told me weekends, is that still true?"). Anything under "what you already know" below is known.`;
+- Never ask for something you already know (their city, when they're free, what they're building, who their cofounder is, what they told you last time): say what you have and ask, in your own words, whether it's still right. Anything under "what you already know" below is known.`;
 
 export function renderFinds(f: VoiceFinds): string {
   if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;

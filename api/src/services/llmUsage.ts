@@ -18,6 +18,7 @@ export const PRICES: Record<string, { input: number; output: number; cacheWrite:
   "claude-haiku-4-5": { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
   // Prompts up to 100k tokens (the rate is 5x above that; no Co prompt comes near it).
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheWrite: 0.125, cacheRead: 0.01 },
+  "claude-sonnet-4-6": { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
 };
 export const WEB_SEARCH_USD = 0.01;
 
