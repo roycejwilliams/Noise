@@ -49,14 +49,19 @@ export const SAFETY_LINE = /\b(?:988|911|741741)\b|\bnine[- ]eight[- ]eight\b|\b
 // "safe" counts only as safety talk ("not safe", "are you safe", "I'm safe tonight"): a bare "safe" lifted the limit on a turn where
 // the member called their old life "a little... safe?" (2026-10-08 call eval, new_member: two questions got through).
 export const SAFETY_TURN = new RegExp([
+  // Broad words count only in a first-person crisis frame: "drive safe", "cutting the guest list", "my feet are killing me" and
+  // "did you miss me?" must not lift the limit (review of #111), or the one-question rule is off most of the time.
   String.raw`\bunsafe\b`,
-  String.raw`\b(?:\w+n't|not|never|are you|am I|I'?m|you'?re|be|keep (?:you|yourself|myself)|get|stay|somewhere|someplace|anywhere)(?: \w+)? (?:feel(?:ing)? |felt |being |staying |to go |to be )?safe\b`,
-  String.raw`\bsafe (?:right now|tonight|at home|place|to go)\b`,
-  String.raw`\b(?:hurt(?:ing)?|harm(?:ing)?|kill(?:ing)?) (?:yourself|myself|me|someone|others|him|her)\b|\bself[- ]harm|\bcutting\b|\bpills\b|\boverdos`,
-  String.raw`\b(?:want(?:ed)? to|wanna|going to|gonna) die\b|\bbetter off dead\b|\bsuicid`,
-  String.raw`\bend(?:ing)? (?:it|it all|things|my life|your life)\b|\bdon'?t want to (?:live|be here|wake up|exist)\b|\bbe here anymore\b`,
-  String.raw`\bcan'?t (?:do this|go on|keep going|take (?:it|this))(?: anymore)?\b|\bno way out\b|\bnot okay\b`,
-  String.raw`\bdisappear(?:ed|ing)?\b|\bnot (?:wake|be here)\b|\bbetter off without\b|\b(?:miss|care about) me\b|\bif I (?:was|were) gone\b`,
+  String.raw`\b(?:I|you|we)(?:'m| am| are|'re)? (?:\w+n't |not |never )?(?:feel(?:ing)? |felt )?safe\b`,
+  String.raw`\bare you (?:\w+ )?safe\b|\bsomewhere safe\b|\bsafe (?:place|right now)\b`,
+  String.raw`\b(?:hurt(?:ing)?|harm(?:ing)?|kill(?:ing)?) (?:yourself|myself)\b|\bharm (?:someone|others|people|me|the kids|my kids)\b`,
+  String.raw`\b(?:he|she|they|partner|husband|wife|boyfriend|girlfriend)(?:'ll| will| might| would)? (?:hit|hits|hurt|hurts|harm|harms) (?:me|the kids|my kids)\b`,
+  String.raw`\bself[- ]harm|\bI(?:'ve| have)? been cutting\b|\b(?:took|swallowed|taking) (?:a bunch of|too many|all (?:my|the|of my)) pills\b|\boverdos`,
+  String.raw`\b(?:want(?:ed)? to|wanna|going to|gonna) die\b|\bwish I (?:was|were) dead\b|\bbetter off dead\b|\bsuicid`,
+  String.raw`\bend(?:ing)? (?:it all|my life|your life)\b|\b(?:think|thinking|thought) (?:about|of) ending (?:it|things)\b|\bdon'?t want to (?:live|be alive|exist|wake up)\b|\bbe here anymore\b`,
+  String.raw`\bcan'?t (?:do this|go on|take (?:it|this)) anymore\b|\bcan'?t go on\b|\bno way out\b|\bI'?m not okay\b(?! with)`,
+  String.raw`\bif I (?:just )?(?:disappeared|was gone|were gone|wasn'?t here|died)\b|\b(?:nobody|no one) would (?:even )?(?:miss|notice|care)\b`,
+  String.raw`\bbetter off without me\b|\bnot wake up\b|\b(?:I'?m|I am|feel like) a burden\b|\bdark thoughts\b|\bgiving up on (?:life|everything)\b`,
 ].join("|"), "i");
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
