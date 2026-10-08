@@ -10,6 +10,7 @@ import "../lib/requireMeter.js";
 import { writeFileSync } from "fs";
 import { checkNoEmotionLabelOnCall } from "../../src/harness/emotion.js";
 import { stockReport } from "../../src/harness/stockLines.js";
+import { CONTEXT_CRITERIA, judgeWithContext } from "../../src/services/callEvals.js";
 import { cuesIn } from "../../src/services/voiceCues.js";
 
 const TURNS = Number(process.argv[2] ?? 10);
@@ -120,6 +121,22 @@ for (const s of SCENARIOS.filter((x) => !ONLY || x.id === ONLY)) {
     try {
       const { turns, analysis } = await simulate(s);
       const g = grade(s, turns, analysis);
+      // The source criteria, judged again with what Co was given (#113, services/callEvals.ts judgeWithContext), as a real call's
+      // grade is: correct recall from the context passes; anything nothing backs still fails.
+      const sourceFails = CONTEXT_CRITERIA.filter((k) => /failure/i.test(g.criteria[k] ?? ""));
+      if (sourceFails.length) {
+        const full = turns.filter((t) => typeof t.message === "string" && t.message.trim()).map((t) => `${t.role === "agent" ? "assistant" : "user"}: ${t.message}`).join("\n");
+        const given = [NOW, s.context ?? CONTEXT, s.direction === "outbound" ? s.reason ?? "" : "", NO_FINDS].filter(Boolean).join("\n\n");
+        const flagged = sourceFails.map((k) => `${k}: ${String((analysis?.evaluation_criteria_results?.[k] as any)?.rationale ?? "")}`);
+        const verdicts = await judgeWithContext(full, given, "", undefined, flagged).catch(() => []);
+        for (const k of sourceFails) {
+          const v = verdicts.find((x) => x.id === k);
+          if (v?.result === "success") {
+            g.criteria[k] = "success (with context)";
+            g.problems = g.problems.filter((p) => p !== `criterion failed: ${k}`);
+          } else if (v) g.problems = g.problems.map((p) => (p === `criterion failed: ${k}` ? `criterion failed: ${k} (with context: ${v.rationale.slice(0, 160)})` : p));
+        }
+      }
       results.push({ id: s.id, run: r, ...g });
       console.log(`\n=== ${s.id} #${r + 1}: ${g.coLines.length} Co lines, ${g.problems.length ? `${g.problems.length} problem(s)` : "clean"}`);
       for (const p of g.problems) console.log(`  - ${p}`);

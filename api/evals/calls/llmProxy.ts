@@ -275,13 +275,15 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     check("call tools: the line before the tool streams first, then the answer after it", /^On it, I'll take that on now\. Done, it's on my list/.test(r.content), r.content);
     check("call tools: Co's tools are offered beside ElevenLabs' end_call and voicemail_detection, with the call note in the prompt", ["end_call", "voicemail_detection", "startTask"].every((n) => up.reqs[0].tools.some((t: any) => t.name === n)) && /# Doing things on this call/.test(up.reqs[0].system[0].text));
   }
-  // 2. end_call passes through, with Co's tools on
+  // 2. end_call passes through, with Co's tools on, once they've said goodbye (#113: Co never hangs up first; the hold is tested in
+  // evals/calls/contextAndVoice.ts)
   {
+    const bye = (extra: any) => { const b: any = baseBody(extra); b.messages = [...b.messages.slice(0, -1), { role: "user", content: "Alright, I've gotta run. Bye!" }]; return b; };
     const up = scripted([[...text("Talk soon, take care."), ...tool("ec1", "end_call", '{"reason":"goodbye said"}')]]);
     let ran = 0;
-    const r = await go(baseBody(elTools), { stream: up.stream, tools: fakeSet(async () => { ran++; return { ok: true }; }) });
+    const r = await go(bye(elTools), { stream: up.stream, tools: fakeSet(async () => { ran++; return { ok: true }; }) });
     check("end_call passes through to ElevenLabs whole, after the goodbye", r.calls[0]?.function?.name === "end_call" && r.calls.map((c: any) => c.function?.arguments ?? "").join("") === '{"reason":"goodbye said"}' && r.finish === "tool_calls" && /Talk soon/.test(r.content) && ran === 0 && up.reqs.length === 1, r.calls);
-    const empty = await go(baseBody(elTools), { stream: scripted([[{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "e2", name: "end_call" } }, { type: "content_block_stop", index: 0 }]]).stream });
+    const empty = await go(bye(elTools), { stream: scripted([[{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "e2", name: "end_call" } }, { type: "content_block_stop", index: 0 }]]).stream });
     check("a call tool with no input still reaches ElevenLabs as valid JSON ({})", empty.calls.map((c: any) => c.function?.arguments ?? "").join("") === "{}", empty.calls);
     // ElevenLabs may send its own tool call back with no result: the request still pairs every tool_use with a tool_result.
     const orphan = P.toAnthropic(baseBody({ messages: [{ role: "system", content: "S" }, { role: "user", content: "hi" }, { role: "assistant", content: "Bye.", tool_calls: [{ id: "el0", type: "function", function: { name: "end_call", arguments: '{"reason":"x"}' } }] }, { role: "user", content: "wait, one more thing" }] }));
@@ -290,7 +292,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     // A goodbye that also acts: Co's tool runs, end_call still goes out, and no second model round is started.
     const ran2: string[] = [];
     const up3 = scripted([[...text("I'll note that, bye for now."), ...tool("n1", "startTask", '{"goal":"x y z"}', 1), ...tool("ec3", "end_call", '{"reason":"bye"}', 2)]]);
-    const r3 = await go(baseBody(elTools), { stream: up3.stream, tools: fakeSet(async (n) => { ran2.push(n); return { ok: true }; }) });
+    const r3 = await go(bye(elTools), { stream: up3.stream, tools: fakeSet(async (n) => { ran2.push(n); return { ok: true }; }) });
     check("a goodbye with a Co tool and end_call: the tool runs and end_call still goes out, no extra round", ran2.length === 1 && r3.calls.some((c: any) => c.function?.name === "end_call") && r3.finish === "tool_calls" && up3.reqs.length === 1);
   }
   // 3. the real guard: a tool that needs their yes is refused without it (and runs with it)

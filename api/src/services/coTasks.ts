@@ -49,8 +49,9 @@ export type CoTask = {
   kind?: "work" | "followup" | "research_brief";
   followup?: any;
   targetKey?: string | null;
-  // Where it came from: what they asked for, or a promise Co made in a reply (services/promises.ts).
-  source?: "ask" | "promise";
+  // Where it came from: what they asked for, a promise Co made in a reply (services/promises.ts), or a look-out Co said on a call
+  // it would keep (harness/callGrounding.ts openPromiseThread): its own kind, outside the send-promise cap and checks.
+  source?: "ask" | "promise" | "lookout";
   // A commitment's window in their local time (services/memberTime.ts), kept in the row's followup JSON (work tasks don't use it
   // otherwise): when Co said they'd have it, and the last moment Co can still tell them inside it.
   window?: CommitWindow | null;
@@ -213,7 +214,7 @@ function rowTo(r: any): CoTask {
     kind: r.kind === "followup" ? "followup" : r.kind === "research_brief" ? "research_brief" : "work",
     followup: r.followup ?? null,
     targetKey: r.target_key ?? null,
-    source: r.source === "promise" ? "promise" : "ask",
+    source: r.source === "promise" ? "promise" : r.source === "lookout" ? "lookout" : "ask",
     window: r.kind === "followup" || r.kind === "research_brief" ? null : windowOf(r.followup),
   };
 }
@@ -228,7 +229,7 @@ export async function getTask(userId: string, id: number): Promise<CoTask | null
   return rows[0] ? rowTo(rows[0]) : null;
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise"; window?: CommitWindow | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; window?: CommitWindow | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   const open = await openTasks(input.userId);
   if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
   const goal = input.goal.trim().slice(0, 200);

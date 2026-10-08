@@ -64,7 +64,7 @@ async function recentOpen(userId: string): Promise<{ id: number; goal: string; t
   return (await openTasks(userId)).filter((t) => new Date(t.createdAt).getTime() > since);
 }
 
-async function readWanted(prompt: string): Promise<Wanted[]> {
+export async function readWanted(prompt: string): Promise<Wanted[]> {
   const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, experimental_telemetry: { isEnabled: true, functionId: "call.tasks.read", recordInputs: false, recordOutputs: false }, prompt });
   return parseModelJson<{ tasks?: Wanted[] }>(text).tasks ?? [];
 }

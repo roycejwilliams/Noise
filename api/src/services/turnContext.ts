@@ -106,8 +106,9 @@ export function carryingItems(o: { tasks: CoTask[]; briefs: BriefView[]; receipt
     const windowDue = t.window && !t.window.closedAt ? new Date(t.window.deadline).getTime() : null;
     const deadlineDue = t.deadline ? new Date(`${t.deadline}T23:59:00Z`).getTime() : null;
     const due = (windowDue !== null && windowDue - now <= DAY) || (!!t.deadline && t.deadline <= tomorrow) || (!!t.nextCheckAt && new Date(t.nextCheckAt).getTime() <= now);
-    const promise = t.source === "promise";
-    const what = promise ? t.goal.replace(/^Keep your promise:\s*/i, "") : `"${t.goal}"`;
+    // A look-out Co said aloud on a call is a promise they heard (review of #113), never an untold task.
+    const promise = t.source === "promise" || t.source === "lookout";
+    const what = promise ? t.goal.replace(/^(?:Keep your promise|Keep an eye out, as promised on a call):\s*/i, "") : `"${t.goal}"`;
     const by = t.window && !t.window.closedAt ? ` (${t.window.words}, by ${localStamp(t.window.deadline, t.window.zone ?? o.zone)})` : t.deadline ? ` (their deadline ${t.deadline})` : "";
     items.push({ kind: promise ? "promise" : "task", label: `${promise ? `your promise, task #${t.id}` : `task #${t.id}`}: ${what}${by}`, state: due ? "due" : "outstanding", told: promise || !!t.lastTextedAt, dueMs: windowDue ?? deadlineDue });
   }

@@ -66,6 +66,20 @@ export const SAFETY_TURN = new RegExp([
   String.raw`\bif I (?:just )?(?:disappeared|was gone|were gone|wasn'?t here|died)\b|\b(?:nobody|no one) would (?:even )?(?:miss|notice|care)\b`,
   String.raw`\bbetter off without me\b|\bnot wake up\b|\b(?:I'?m|I am|feel like) a burden\b|\bdark thoughts\b|\bgiving up on (?:life|everything)\b`,
 ].join("|"), "i");
+// The member closing the call, anywhere in their last words ("ok, talk soon", "I should probably get going"). Co never hangs up
+// first (Royce, 2026-10-08): ElevenLabs' end_call passes only after this, or after Co's goodbye has had their reply.
+export const MEMBER_CLOSING = /\b(?:bye|goodbye|good ?night|talk (?:to you )?(?:soon|later|tomorrow)|take care|see (?:you|ya)|catch you later|speak soon|ttyl|signing off|(?:gotta|got to|have to|need to|should(?: probably)?|better|i'?m gonna) (?:go|run|jump|hop off|head out|get going|bounce|jet)(?! (?:with|to|ahead|for|and|over|through|back)\b)|i'?ll let you go|i'?m off(?! (?:work|today|tomorrow|on|for|this|next|until|till)\b)|heading out|hang up|end the call|that'?s (?:it|all) (?:for now|from me|i (?:had|needed)))\b/i;
+// A short closing on its own ("Later!", "Night.", "Cheers, Co.", "Peace."): only as the whole of their last sentence.
+const SHORT_CLOSING = /^(?:(?:ok(?:ay)?|alright|thanks|anyway|no|nope|nah|all good|i'?m good)[,.!]?\s+)*(?:later|night|peace|cheers|ciao|ttyl|that'?s it|that'?s all|all good|i'?m good)\b[\s\w,'!.]{0,16}$/i;
+// Pure: their last words close the call. Only the last sentence or two counts, so "I'll go with the first one" mid-thought never
+// lifts the hold (review of #113).
+export function memberClosed(theirLast: string): boolean {
+  const sentences = theirLast.trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+  const tail = sentences.slice(-2).join(" ");
+  return MEMBER_CLOSING.test(tail) || SHORT_CLOSING.test((sentences[sentences.length - 1] ?? "").trim());
+}
+// Co's own goodbye in its last turn, however phrased ("Alright Royce, take care.", "Enjoy tonight, bye!", "Night!", "Cheers, Jordan.").
+const CO_CLOSING = /\b(?:bye|goodbye|good ?night|night|take care|talk (?:to you )?(?:soon|later|tomorrow)|speak soon|see you|catch you later|cheers|enjoy (?:tonight|the|your|it)|have a (?:good|great|nice|lovely) (?:night|evening|one|day|weekend|time|trip))\b/i;
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
@@ -237,13 +251,18 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const theirLast = textOf(b.messages[lastAt]?.content ?? "");
   const askedForSpecific = /\?\s*$|\b(?:what(?:'s| is| was)|who|which|how (?:much|many)|name|number|price|cost)\b/i.test(theirLast);
   const coBefore = [...b.messages.slice(0, lastAt)].reverse().find((m) => m.role === "assistant" && textOf(m.content ?? "").trim());
-  const saidGoodbye = !!coBefore && textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2).some((x) => GOODBYE.test(x.trim()));
+  const coLastWords = coBefore ? textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2) : [];
+  const saidGoodbye = coLastWords.some((x) => GOODBYE.test(x.trim()));
+  // Looser, for end_call only: Co closed its last turn in any words, and this is their reply to it.
+  const coClosed = saidGoodbye || coLastWords.some((x) => CO_CLOSING.test(x));
   let repeatGoodbye = false;
   const heldWhy: string[] = [];
   const unsureSaid = new Set<string>();
   let heldEvent = false;
   // A stock-only sentence held back; said after all if it was the whole reply (never silence for style).
   let heldStock: string | null = null;
+  // end_call held because they hadn't said goodbye.
+  let heldEnd = false;
   const sayHeld = (): string | null => {
     const h = heldStock;
     heldStock = null;
@@ -366,6 +385,15 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
           cur = toolsOff ? { kind: "skip" } : { kind: "co", id: String(ev.content_block.id ?? `co_${step}_${runs.length}`), name, json: "" };
           continue;
         }
+        // end_call only once they've closed: their goodbye now, or any reply to Co's goodbye. Held, the call stays open a turn.
+        // Held when they haven't closed, even on a turn that says nothing (review of #113: a bare end_call mid-call still hung up
+        // first). A held turn with nothing said gets one more answer below, never dead air.
+        if (name === "end_call" && !memberClosed(theirLast) && !coClosed) {
+          deps.onDropped?.("end_call", "Co never hangs up first: they haven't said goodbye");
+          heldEnd = true;
+          cur = { kind: "skip" };
+          continue;
+        }
         cur = { kind: "el", args: false };
         // A stock-only reply held back, then the call ends: say it first rather than hang up in silence (review of #112).
         if (heldStock && !spokeAny && !blanked) { const h = sayHeld(); if (h) yield chunk({ content: h }); }
@@ -434,8 +462,30 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     }
   }
   if (heldStock && !spokeAny && !blanked && finish !== "tool_calls") { const h = sayHeld(); if (h) yield chunk({ content: h }); }
+  // end_call was held and nothing else was said: Co answers them instead, once, in its own words (never a scripted line).
+  if (heldEnd && !spokeAny && finish !== "tool_calls") {
+    const note = "You were about to end the call, but they haven't said goodbye. Don't end it and don't say goodbye: answer what they last said.";
+    const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
+    let rs: SpeakableStream | null = null;
+    try {
+      for await (const ev of deps.stream(retry)) {
+        if (ev.type === "content_block_start" && ev.content_block?.type === "text") rs = mk();
+        else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && typeof ev.delta.text === "string") {
+          if (!rs) rs = mk();
+          if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
+          for (const x of rs.push(ev.delta.text)) { const out = say(x); if (out) yield chunk({ content: out }); }
+        } else if (ev.type === "content_block_stop" && rs) {
+          if (clean) for (const x of rs.end()) { const out = say(x); if (out) yield chunk({ content: out }); }
+          rs = null;
+        }
+      }
+    } catch (err: any) {
+      console.error("call: the held-end retry failed (non-fatal):", err?.message ?? err);
+    }
+    if (heldStock && !spokeAny) { const h = sayHeld(); if (h) yield chunk({ content: h }); }
+  }
   // Last resort only (the retry was held back too, or failed): one plain line, never silence.
-  if (blanked && !spokeAny && finish !== "tool_calls") {
+  if ((blanked || heldEnd) && !spokeAny && finish !== "tool_calls") {
     const line = heldEvent ? SAFE_LINE : HELD_LINE;
     spokenLines.push(line);
     deps.onSpoken?.(line);

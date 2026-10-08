@@ -163,5 +163,19 @@ for (const size of [1, 3, 7, 20]) {
   check(`streamed a character at a time, a long sentence splits where the whole text does ("${streamed}")`, streamed === S.speakable(t) && !/I'd\./.test(streamed));
 }
 
+{
+  // #113: a question splits only at a complete boundary, never at its opening clause (2026-10-08 call eval, stale_pushback).
+  const q = "So when you think about the forty people, what's the split looking like right now between people you already know versus folks who are more new to you, genuinely from the neighborhood?";
+  const whole = S.speakable(q);
+  const st = new S.SpeakableStream();
+  const streamedQ = [...[...q].flatMap((c) => st.push(c)), ...st.end()].join("").trim();
+  check(`a long question with only an opening-clause comma stays whole, streamed or not ("${streamedQ}")`, !/people\./.test(whole) && !/people\./.test(streamedQ) && /\?$/.test(streamedQ));
+  const q2 = "I keep thinking about the guest list you described for the open house in November, and what would make the right people want to stay late?";
+  check(`a question still splits at a complete ", and" boundary ("${S.speakable(q2)}")`, /November\. What would make/.test(S.speakable(q2)));
+  const statement = "If there's ever a Co event or a room where it makes sense to put you two in the same space and talk it through properly over dinner, that's where I'd start rather than a cold intro.";
+  check(`statements still split as before ("${S.speakable(statement)}")`, S.speakable(statement).split(/(?<=\.)\s/).length >= 2);
+  check("a question is read as one before its \"?\" arrives", S.readsAsQuestion("So when you think about it, what's".split(" ")) && S.readsAsQuestion("[warmly] Are you".split(" ")) && !S.readsAsQuestion("That makes sense, and the room".split(" ")));
+}
+
 console.log(`speakable: ${total - failed}/${total} checks`);
 if (failed) process.exit(1);

@@ -58,6 +58,20 @@ const sc = src("scripts/agentTests.ts");
 check("the runner tests the live agent or the candidate config this code builds (no push), with the webhook tools stripped so a tool call can't stand in for a reply", /--candidate/.test(sc) && /t\.type !== "webhook"/.test(sc) && /buildAgentConfig\(/.test(sc));
 check("it exits 1 when any test fails, and a deliberately bad prompt can be swapped in to prove the tests can fail", /process\.exit\(failed \? 1 : 0\)/.test(sc) && /CALL_TEST_PROMPT_REPLACE/.test(sc));
 
+{
+  // #113: a source failure is judged again with the call context; correct recall is overturned, a real invention stays failed.
+  const fail = (id: string) => ({ evaluation_criteria_results: { [id]: { criteria_id: id, result: "failure", rationale: "Co said three people in the studio, not on the call." } } });
+  const ctx = (result: "success" | "failure") => ({ transcript: "assistant: Slow with three of you in the studio?\nuser: yeah", given: "runs a small studio (3 people)", records: async () => "", judge: (async () => [{ id: "no_invented_specifics", result, rationale: "r" }]) as any });
+  const seen: any[] = [];
+  const n1 = await V.recordCallEvaluation("u1", "conv_ctx1", fail("no_invented_specifics"), (async (d: any) => { seen.push(d); }) as any, ctx("success"));
+  check("a source failure the context backs is overturned (correct recall passes)", n1 === 0 && seen[0]?.outcome === "act" && /the call context/.test(JSON.stringify(seen[0]?.checks)));
+  const n2 = await V.recordCallEvaluation("u1", "conv_ctx2", fail("no_invented_specifics"), (async () => {}) as any, ctx("failure"));
+  check("a source failure the context doesn't back still counts", n2 === 1);
+  let judged = 0;
+  await V.recordCallEvaluation("u1", "conv_ctx3", fail("no_false_refusals"), (async () => {}) as any, { ...ctx("success"), judge: (async () => { judged++; return []; }) as any });
+  check("other criteria are never re-judged", judged === 0);
+}
+
 console.log(`call grading and voice tests: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit(failed ? 1 : 0);
