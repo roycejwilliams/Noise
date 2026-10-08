@@ -62,10 +62,11 @@ const src = (b = body(), toolResults = "") => P.callSources(b as any, records, t
   const t0 = performance.now();
   for (let k = 0; k < 200; k++) G.spokenProblem("Got it, Ellis Works, and the date stays open.", s);
   const per = (performance.now() - t0) / 200;
-  check(`a sentence is checked in well under a millisecond (${per.toFixed(3)}ms)`, per < 1);
+  // Bounds catch an order-of-magnitude regression, not a slow CI runner (2026-10-08: a busy runner measured 11ms for ~0.7ms work).
+  check(`a sentence is checked in about a millisecond or less (${per.toFixed(3)}ms)`, per < 5);
   const t1 = performance.now();
   for (let k = 0; k < 20; k++) src();
-  check(`a turn's sources are prepared in a few milliseconds (${((performance.now() - t1) / 20).toFixed(2)}ms)`, (performance.now() - t1) / 20 < 10);
+  check(`a turn's sources are prepared in tens of milliseconds at most (${((performance.now() - t1) / 20).toFixed(2)}ms)`, (performance.now() - t1) / 20 < 60);
   check("the check is pure: no model and no database in offerGuard's spoken check", !/generateText|anthropic\(|pool\.query/.test(fs.readFileSync(new URL("../../src/services/offerGuard.ts", import.meta.url), "utf8")));
 }
 
