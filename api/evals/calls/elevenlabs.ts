@@ -89,7 +89,7 @@ check("tools refuse a call without a valid token", /if \(!verifyCallToken\(userI
 
 // Voice-layer review fixes (2026-10-03).
 check("Co opens the call itself, so nobody waits in silence (the stored line is the fallback)", cc.agent.first_message === OPENING_LINE && OPENING_LINE === "Hey {{first_name}}, it's Co.");
-check("the opening can be set per call: the agent allows the override and registration sends it", (cfg as any).platform_settings.overrides.conversation_config_override.agent.first_message === true && /conversationConfigOverride: \{ agent: \{ firstMessage: o\.opening \}/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")) && (coSrc.match(/opening: await openingForCall\(/g) ?? []).length === 2 && /chooseOpening\(userId, firstName, direction\)/.test(coSrc));
+check("the opening can be set per call: the agent allows the override and registration sends it", (cfg as any).platform_settings.overrides.conversation_config_override.agent.first_message === true && /conversationConfigOverride: \{[\s\S]{0,200}?\.\.\.\(o\.opening \? \{ agent: \{ firstMessage: o\.opening \} \}/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")) && (coSrc.match(/opening: await openingForCall\(/g) ?? []).length === 2 && /chooseOpening\(userId, firstName, direction\)/.test(coSrc));
 {
   const seen = new Set<string>();
   for (let i = 0; i < 200; i++) seen.add(pickOpening({ direction: "outbound", firstCall: false, hour: 14, firstName: "Jordan", last: null, rand: () => i / 200 }).template);

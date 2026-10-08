@@ -67,6 +67,14 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("the last message is the member's (no accidental prefill)", a.messages[a.messages.length - 1].role === "user");
   check("Haiku 5.5 is sent no temperature (it 400s on one)", !("temperature" in P.toAnthropic({ ...body, temperature: 0.8 })));
   check("a 4.x model still gets the call's temperature", P.toAnthropic({ ...body, temperature: 0.8 }, "claude-haiku-4-5").temperature === 0.8);
+  // 2026-10-07 replay: Haiku 5.5's default thinking was ~1.5s of silence per turn (first token 2.0s -> 0.4s with it off).
+  check("Haiku 5.5 runs with thinking off (no dead air before the first word)", a.thinking?.type === "disabled");
+  check("a 4.x model is sent no thinking field (it never thinks unasked)", !("thinking" in P.toAnthropic(body, "claude-haiku-4-5")));
+  check("Sonnet 5.5 is not sent thinking: disabled (it 400s on it)", !("thinking" in P.toAnthropic(body, "claude-sonnet-5-5")));
+  const last = a.messages[a.messages.length - 1].content;
+  check("the conversation so far is cached at its last block, and only there", (last[last.length - 1] as any).cache_control?.type === "ephemeral" && a.messages.flatMap((m) => m.content).filter((b: any) => b.cache_control).length === 1);
+  const empty = P.toAnthropic(baseBody({ messages: [{ role: "system", content: "SYS" }] }));
+  check("a call with no turns yet still caches its one quiet line", (empty.messages[0].content[0] as any).cache_control?.type === "ephemeral");
 }
 
 // ---- the cleaned stream

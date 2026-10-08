@@ -87,7 +87,12 @@ export async function registerElevenLabsCall(o: {
     conversationInitiationClientData: {
       // Who the call is, for our LLM endpoint (only read when the agent is on it; harmless on the direct path).
       customLlmExtraBody: { user_id: o.userId, call_token: callToken },
-      ...(o.opening ? { conversationConfigOverride: { agent: { firstMessage: o.opening } } } : {}),
+      // This call's own words for the recognizer (their name, the names of what Co found for them) on top of the standing list.
+      // Needs the agent's asr.keywords override allowed (buildAgentConfig): push the agent before this code serves a call.
+      conversationConfigOverride: {
+        asr: { keywords: callKeywords({ firstName: o.firstName, findsNow: o.findsNow }) },
+        ...(o.opening ? { agent: { firstMessage: o.opening } } : {}),
+      },
       dynamicVariables: {
         user_id: o.userId,
         call_token: callToken,
@@ -207,6 +212,8 @@ When they want help over days (memos, resources, prep, options), never say it is
 # What you know, and how old it is
 Lines about them carry a stamp: when they said it, and OLD when it has gone stale. A line marked OLD is a question, never a fact: "Last time you were working on X. Is that still the thing?" Never ask about or state an OLD line as if it were current.
 When they push back on something you said about them ("what do you mean?", "I don't remember saying that", "what are you talking about"), check its stamp first. If it is old, your own read, or you can't tell where it came from, drop it in one short sentence ("That was an old note of mine. Scratch it.") and go back to what they are saying now. Never apologize twice, never say you got something wrong on your end, never explain the note.
+# Names the transcript gets wrong
+Their words reach you through speech recognition, and short names suffer most. Your own name, Co, often arrives as "you", "Coach" or "go" ("building you" means building Co). Boardy arrives as "Bumble", "Boredy" or "birdie". When a line only makes sense with one of these names, read it that way, and never say the misheard word back as if it were a name.
 # Offers and promises
 Name an event, place or time only if it is in "What Co has found for them" or they said it. If you can't point to the line it came from, don't name it: say you'll look and text it.
 A promise to text or send something is a real task the moment you say it. Say it once, plainly ("I'll text you those links when we hang up"), and only when it is true.
@@ -245,6 +252,32 @@ export const COVERAGE_TRANSCRIPT_CHARS = 24_000;
 // member says about Co's world, not about the member: their own names come through the call's context.
 // "Sequin" (a partner the team is working with) was heard as "Sequent" on the 10/6 call and carried into the summary and tasks.
 export const CALL_KEYWORDS = ["Co", "CoPatible", "Boardy", "Instinct", "Muse", "Luma", "House of AI", "Heavybit", "SF Tech Week", "Sequin", "Sequin AI"];
+
+// Pure: the words this call's recognizer is told to expect: the standing list, the member's first name, and the names in the titles
+// of what Co found for them (a member who says "the Oakland Join-Up" back should be heard as that). Capitalized runs only, deduped
+// without regard to case, capped so a long finds list can't crowd out the standing words (which come first).
+export const CALL_KEYWORDS_MAX = 50;
+const KEYWORD_SKIP = new Set(["a", "an", "the", "and", "or", "of", "at", "in", "on", "for", "with", "to", "by", "from", "faq", "free", "new", "night", "day", "event", "events"]);
+export function callKeywords(o: { firstName?: string | null; findsNow?: string | null }, max = CALL_KEYWORDS_MAX): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (w: string) => {
+    const t = w.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, "").trim();
+    const k = t.toLowerCase();
+    if (t.length < 2 || t.length > 40 || KEYWORD_SKIP.has(k) || seen.has(k) || out.length >= max) return;
+    seen.add(k);
+    out.push(t);
+  };
+  CALL_KEYWORDS.forEach(add);
+  if (o.firstName) add(o.firstName);
+  for (const line of (o.findsNow ?? "").split("\n")) {
+    const title = line.match(/^- ([^|]+)/)?.[1];
+    if (!title) continue;
+    // "Netic Dance Workshop with Kyle Hanagami, BlackPink Choreographer" -> "Netic Dance Workshop", "Kyle Hanagami", "BlackPink Choreographer"
+    for (const run of title.match(/[A-Z0-9][\w'&.-]*(?:\s+(?:(?:of|the|de|la|&)\s+)?[A-Z0-9][\w'&.-]*)*/g) ?? []) add(run);
+  }
+  return out;
+}
 
 export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
 
@@ -323,7 +356,8 @@ export function buildAgentConfig(o: {
     // Each call picks its own opening line (pickOpening), so the first message
     // must be overridable per call.
     // custom_llm_extra_body: the call's user id and token reach our LLM endpoint with every turn (set when the call is registered).
-    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true } }, custom_llm_extra_body: true }, ...CALL_PLATFORM_SETTINGS },
+    // asr.keywords: each call adds its own names to the recognizer's list (registerElevenLabsCall, callKeywords).
+    platform_settings: { overrides: { conversation_config_override: { agent: { first_message: true }, asr: { keywords: true } }, custom_llm_extra_body: true }, ...CALL_PLATFORM_SETTINGS },
     conversation_config: {
       asr: { user_input_audio_format: "ulaw_8000", keywords: CALL_KEYWORDS },
       tts: {

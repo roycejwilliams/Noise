@@ -21,11 +21,16 @@ export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { typ
 
 const textOf = (c: OaiContent): string => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p) => (typeof p?.text === "string" ? p.text : "")).join("") : "");
 
-type ABlock = { type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown } | { type: "tool_result"; tool_use_id: string; content: string };
+type Cache = { cache_control?: { type: "ephemeral" } };
+type ABlock = ({ type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown } | { type: "tool_result"; tool_use_id: string; content: string }) & Cache;
 export type AMessage = { role: "user" | "assistant"; content: ABlock[] };
-export type ARequest = { model: string; max_tokens: number; temperature?: number; system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[]; messages: AMessage[]; tools?: { name: string; description: string; input_schema: unknown }[]; stream: true };
+export type ARequest = { model: string; max_tokens: number; temperature?: number; thinking?: { type: "disabled" }; system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[]; messages: AMessage[]; tools?: { name: string; description: string; input_schema: unknown }[]; stream: true };
 
 export const takesTemperature = (model: string) => /^claude-(haiku|sonnet|opus)-4/.test(model);
+// Haiku 5.x thinks by default (adaptive, effort medium). On a call that thinking is dead air: the 2026-10-07 replay measured ~1.5s
+// of it before the first word (first token ~2.0s median against ~0.45s for the response headers), and on 2 of 8 turns it used the
+// whole token cap and said nothing. Off is accepted at its default effort; Sonnet/Opus 5.x reject "disabled", so only Haiku gets it.
+export const thinksByDefault = (model: string) => /^claude-haiku-5/.test(model);
 
 // Pure: the OpenAI request as an Anthropic one (system cached, tool calls and results as blocks, roles alternating, starting with the member).
 export function toAnthropic(b: OaiRequest, model = CALL_LLM_MODEL, note?: string): ARequest {
@@ -55,6 +60,10 @@ export function toAnthropic(b: OaiRequest, model = CALL_LLM_MODEL, note?: string
   // A call opens with Co's own greeting, and the model's turn must follow the member's: give it a quiet first line.
   if (!msgs.length || msgs[0].role !== "user") msgs.unshift({ role: "user", content: [{ type: "text", text: "(the call has just connected)" }] });
   if (msgs[msgs.length - 1].role === "assistant") msgs.push({ role: "user", content: [{ type: "text", text: "(go on)" }] });
+  // The conversation is cached too, not only the system prompt: each turn re-sends the whole call so far, and the next turn reads
+  // everything up to here from the cache (a 14-minute call carries ~10k tokens of history). A changed line only misses the cache.
+  const lastMsg = msgs[msgs.length - 1];
+  lastMsg.content[lastMsg.content.length - 1] = { ...lastMsg.content[lastMsg.content.length - 1], cache_control: { type: "ephemeral" } };
   const asked = b.max_completion_tokens ?? b.max_tokens;
   const tools = (b.tools ?? []).filter((t) => t?.function?.name).map((t) => ({ name: t.function.name, description: t.function.description ?? "", input_schema: t.function.parameters ?? { type: "object", properties: {} } }));
   return {
@@ -62,6 +71,7 @@ export function toAnthropic(b: OaiRequest, model = CALL_LLM_MODEL, note?: string
     max_tokens: asked && asked > 0 ? Math.min(asked, 800) : DEFAULT_MAX_TOKENS,
     // Haiku 5.5 refuses a temperature (400 "`temperature` is deprecated for this model"); only the 4.x models still take one.
     ...(typeof b.temperature === "number" && takesTemperature(model) ? { temperature: Math.min(1, Math.max(0, b.temperature)) } : {}),
+    ...(thinksByDefault(model) ? { thinking: { type: "disabled" as const } } : {}),
     system: [{ type: "text", text: system || "(no instructions were sent)", cache_control: { type: "ephemeral" } }],
     messages: msgs,
     ...(tools.length ? { tools } : {}),
