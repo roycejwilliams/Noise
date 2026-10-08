@@ -59,7 +59,7 @@ check("work Co has scheduled (in motion) is never asked about or expired, even l
 check("a loop waiting on someone else's reply is not asked about; the hard limit ends it", LC.decayAction(row({ status: "waiting_on_reply", lastConfirmedAt: day("2026-09-20") }), NOW, TODAY).kind === "none" && LC.decayAction(row({ status: "waiting_on_reply", lastConfirmedAt: day("2026-09-01") }), NOW, TODAY).kind === "expire");
 check("30 days with no signal expires it even if the ask never went out", LC.decayAction(row({ lastConfirmedAt: day("2026-09-05") }), NOW, TODAY).kind === "expire" && LC.decayAction(row({ lastConfirmedAt: day("2026-09-07") }), NOW, TODAY).kind === "ask");
 check("asked means SENT: the ask sets decay_asked_at in onSent, not at queueing", /async onSent\(c\) \{\s*await pool\.query\(`UPDATE open_loops SET decay_asked_at = NOW\(\)/.test(src("harness/proactiveRegistry.ts")) && !/decay_asked_at = NOW\(\)/.test(src("services/openLoops.ts").replace(/closed_reason[^\n]*/g, "")));
-check("an unsent ask is re-queued on a later day (the key carries the day) and never stacks while one is pending", /targetKey: `loop_check:\$\{l\.id\}:\$\{localDay\(new Date\(\)\)\}`/.test(src("services/openLoops.ts")) && /type = 'loop_check' AND status = 'pending'/.test(src("services/openLoops.ts")));
+check("an unsent ask is re-queued on a later day (the key carries the day) and never stacks while one is pending", /targetKey: `loop_check:\$\{l\.id\}:\$\{localDay\(new Date\(\), \(l as LoopRow & \{ zone\?: string \| null \}\)\.zone \?\? null\)\}`/.test(src("services/openLoops.ts")) && /type = 'loop_check' AND status = 'pending'/.test(src("services/openLoops.ts")));
 check("archived and opted-out members get no loop asks", /u\.archived_at IS NULL AND u\.sms_opted_out = false/.test(src("services/openLoops.ts")));
 
 // ---- what drafting reads
@@ -107,7 +107,7 @@ check("the reply's loops carry whether Co has them in motion", /AS in_motion FRO
 
 // ---- wiring
 const ol = src("services/openLoops.ts"), pm = src("services/personModel.ts"), mig = src("db/migrations.ts");
-check("check-ins, tasks, the sweep and calls read loops through the draft filter", /describeLoops\(loops, \{ draftOnly: true \}\)/.test(pm) && /last_confirmed_at, decay_asked_at FROM open_loops/.test(pm));
+check("check-ins, tasks, the sweep and calls read loops through the draft filter", /describeLoops\(loops, \{ draftOnly: true, zone \}\)/.test(pm) && /last_confirmed_at, decay_asked_at FROM open_loops/.test(pm));
 check("an expired or date-passed loop is a tombstone the sync never reopens (unless they signal after it)", /closed_reason IN \('co', 'expired', 'date_passed'\)/.test(ol) && /signalAt/.test(ol));
 check("what Co does at their word confirms a loop; a sync alone doesn't", /updated_at = NOW\(\), last_confirmed_at = NOW\(\)/.test(ol) && !/changed_at = NOW\(\)" : ""\}[^`]*last_confirmed_at = NOW/.test(ol));
 check("the columns exist and old rows start from their last touch", /ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS decay_asked_at/.test(mig) && /SET last_confirmed_at = COALESCE\(updated_at, changed_at, created_at\)/.test(mig));

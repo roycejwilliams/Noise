@@ -14,8 +14,10 @@
 //   upcoming  still ahead: never followed up on as if it happened
 //   undated   no date known: neither rule applies
 import { DateTime } from "luxon";
+import { FALLBACK_ZONE, hoursZone } from "./localHours.js";
 
-export const DEFAULT_ZONE = "America/Los_Angeles";
+// The one fallback (services/localHours.ts): Pacific, as a zone. Callers pass the member's zone (services/memberTime.ts).
+export const DEFAULT_ZONE = FALLBACK_ZONE;
 
 export type DateStatus = "past" | "today" | "upcoming" | "undated";
 export type Days = { start: string | null; end: string | null };
@@ -28,12 +30,13 @@ const day = (v: unknown, zone: string): string | null => {
   return d.isValid ? d.setZone(zone).toISODate() : null;
 };
 
-export function localToday(zone = DEFAULT_ZONE, now = new Date()): string {
-  return DateTime.fromJSDate(now).setZone(zone).toISODate()!;
+export function localToday(zone: string | null = DEFAULT_ZONE, now = new Date()): string {
+  return DateTime.fromJSDate(now).setZone(hoursZone(zone)).toISODate()!;
 }
 
 // Every date a thing can carry, as local days.
-export function itemDays(m: any, zone = DEFAULT_ZONE): Days {
+export function itemDays(m: any, zoneIn: string | null = DEFAULT_ZONE): Days {
+  const zone = hoursZone(zoneIn);
   const start =
     day(m?.details?.startAt, zone) ?? day(m?.event_date, zone) ?? day(m?.statedDates?.start, zone) ?? day(m?.when, zone) ?? day(m?.deadline, zone);
   const end = day(m?.details?.endAt, zone) ?? day(m?.statedDates?.end, zone) ?? null;

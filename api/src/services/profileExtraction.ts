@@ -1023,6 +1023,8 @@ export async function storeProfile(
       trajectoryEmbedding ? `[${trajectoryEmbedding.join(",")}]` : null,
     ],
   );
+  // Their stored zone follows the city (services/memberTime.ts): re-derived now when it changed, a no-op when it didn't.
+  await (await import("./memberTime.js")).refreshMemberZone(user_id);
 
   // Co Loop Stage 6 — close the loop back to Stages 3 and 5. A resolved ask
   // retires its relevance_edges rows (proof that Stage 3's call didn't need

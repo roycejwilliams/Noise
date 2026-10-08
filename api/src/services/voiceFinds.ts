@@ -7,7 +7,7 @@
 // used to run the old reply pipeline and its model gates).
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
-import { getTimezoneForCity } from "./geocoding.js";
+import { memberZoneOrFallback } from "./memberTime.js";
 import { eventCandidates, type TierMatch } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { loadBrief } from "./searchIntent.js";
@@ -56,7 +56,7 @@ export async function voiceFinds(userId: string, now: Date = new Date()): Promis
     eventCandidates(what, city, { when: brief?.when ?? null, userId, limit: 5 }).catch(() => null),
     alreadyFoundOpenings(userId).catch(() => [] as TierMatch[]),
   ]);
-  const zone = (city ? await getTimezoneForCity(city).catch(() => null) : null) ?? "America/Los_Angeles";
+  const zone = await memberZoneOrFallback(userId);
   const items: VoiceItem[] = [
     ...(brief?.shortlist ?? []).slice(0, 3).map((s) => ({ name: s.name, details: s.note ? [s.note] : [], link: s.url })),
     // Started or over: not offered. Times come back as words relative to now.

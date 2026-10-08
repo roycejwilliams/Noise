@@ -28,7 +28,7 @@ import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
 import { logJevShadow, startJevShadow } from "../services/jevShadow.js";
-import { relayFacts } from "../services/relay.js";
+import { relayFacts, reminderFacts } from "../services/relay.js";
 import { CO_WHY } from "../services/coVoice.js";
 import { assembleContext, type TurnContext } from "../services/turnContext.js";
 import { ABOUT_CO_INSTRUCTION, feedbackInstruction, readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
@@ -1680,12 +1680,12 @@ export function sendblueRouter(io: Server): Router {
           const [notes, loops, timeline, said, lens] = await Promise.all([
             loadBrief(user.id).then(describeNotes).catch(() => null),
             // Every open loop and where it stands (services/openLoops.ts).
-            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops(await o.confirmMentioned(user.id, (await o.syncOpenLoops(user.id)).rows, content), { withIds: true })).catch((): string | null => null),
+            import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops(await o.confirmMentioned(user.id, (await o.syncOpenLoops(user.id)).rows, content), { withIds: true, zone: await (await import("../services/memberTime.js")).memberZone(user.id) })).catch((): string | null => null),
             // Their local time and what's ahead, every turn (services/timeline.ts).
             import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
             // What they have told Co that still holds, each with when they said it (services/claims.ts). It is the only thing that can
             // answer "what do you mean?" or "I never said that": Co's own earlier texts are not evidence of what they said.
-            import("../services/claims.js").then(async (c) => (await import("../services/factLabels.js")).renderLive(await c.liveClaims(user.id), new Date())).catch(() => null),
+            import("../services/claims.js").then((c) => c.liveClaimsRendered(user.id, new Date())).catch(() => null),
             // Goals are the LENS (services/goalJourney.ts): handed over as an unspoken hint with the rule, never as a fact to recite.
             import("../services/goalJourney.js").then(async (g) => { const r = await pool.query(`SELECT intent, goals FROM co_profiles WHERE user_id = $1`, [user.id]); return { texts: g.goalTexts(r.rows[0]?.intent, r.rows[0]?.goals), arc: g.arcLine(r.rows[0]?.intent), rule: g.LENS_RULE }; }).catch(() => null),
           ]);
@@ -1946,7 +1946,10 @@ export function sendblueRouter(io: Server): Router {
             // wrongly flagging a same-day evening event as "already
             // passed" hours before it happens. Comparing calendar dates
             // instead means today's date is never stale.
-            const todayStr = new Date().toISOString().slice(0, 10);
+            // Their calendar day, not the server's UTC one (which turns over at 5pm Pacific).
+            const { localDay, memberZone } = await import("../services/memberTime.js");
+            const revealZone = await memberZone(user.id);
+            const todayStr = localDay(new Date(), revealZone);
             const relevantDate: string | undefined = match.event_date ?? match.deadline;
             const isStale = relevantDate && relevantDate < todayStr;
             await recordSuggestionOutcome(
@@ -1972,7 +1975,7 @@ export function sendblueRouter(io: Server): Router {
                 await new Promise((resolve) => setTimeout(resolve, 2000));
                 addFact(replyFacts, "did_this_turn", `Sent the link ${match.url} for "${match.name}" as its own message just before this reply.`);
               }
-              addEventFacts(replyFacts, match);
+              addEventFacts(replyFacts, match, null, revealZone);
               if (!match.whyItFits) addFact(replyFacts, "known", `Why "${match.name}" fits them: ${match.reason}`);
               addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier. Share why it fits now, naturally, as part of your reply: "${match.name}". Be honest it's a suggestion, not a guarantee it's right for them.${linkSent ? " Don't repeat the link or say you're \"sending\" or \"sharing\" anything, it already went out." : match.url ? " Its link didn't go through, so share it in your reply with shareLink if it helps." : " There's no link for it, so don't mention one."}`);
               // Outcome-learning loop (Royce, 2026-09-02) — schedule the
@@ -2476,6 +2479,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           // Messages passed between them and someone they're connected to: each
           // side knows only what the other chose to send (services/relay.ts).
           (await relayFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
+          // Reminders waiting for their morning read as queued, never as sent (services/deferredSends.ts).
+          (await reminderFacts(user.id).catch(() => [] as string[])).forEach((line) => addFact(replyFacts, "known", line));
           const momentNote = momentInstruction(moment);
           if (momentNote) addInstruction(replyFacts, momentNote);
           const lessons = turn?.lessons ?? [];

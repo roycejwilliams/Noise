@@ -8,7 +8,7 @@
 // to use it lives in CO_VOICE.
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
-import { getTimezoneForCity } from "./geocoding.js";
+import { memberZone, wordsZone } from "./memberTime.js";
 import { SNAPSHOT_MAX_AGE_MS } from "./googleData.js";
 import { loadBrief } from "./searchIntent.js";
 import { resolveAskWindow, whenForWindow } from "./askWindow.js";
@@ -57,18 +57,27 @@ export function renderTimeline(now: DateTime, items: TimelineItem[], zoneKnown =
   return ahead.length ? `${head} What's ahead for them: ${ahead.join("; ")}.` : head;
 }
 
-export async function timelineFor(userId: string, city: string | null, now: Date = new Date()): Promise<{ fact: string; note: string | null }> {
-  const found = city ? await getTimezoneForCity(city).catch(() => null) : null;
-  const zone = found ?? "America/Los_Angeles";
+// Pure: the member-local day bounds the timeline reads (deadlines from yesterday, plans from today, both two weeks out), computed
+// in code in their zone. SQL CURRENT_DATE is the database's (UTC) day, which is already tomorrow from 5pm Pacific.
+export function timelineDays(now: Date, zone: string | null): { today: string; from: string; until: string } {
+  const local = DateTime.fromJSDate(now).setZone(wordsZone(zone)).startOf("day");
+  return { today: local.toISODate()!, from: local.minus({ days: 1 }).toISODate()!, until: local.plus({ days: 14 }).toISODate()! };
+}
+
+// `city` is kept for callers; the zone is the stored one (services/memberTime.ts).
+export async function timelineFor(userId: string, _city: string | null, now: Date = new Date()): Promise<{ fact: string; note: string | null }> {
+  const found = await memberZone(userId);
+  const zone = wordsZone(found);
   const local = DateTime.fromJSDate(now).setZone(zone);
+  const days = timelineDays(now, found);
   const q = (sql: string, args: unknown[]) => pool.query(sql, args).then((r) => r.rows).catch(() => [] as any[]);
   const [calls, tasks, busy, plans, brief] = await Promise.all([
     q(`SELECT scheduled_for FROM scheduled_calls WHERE user_id = $1 AND status = 'pending' AND scheduled_for > NOW() AND scheduled_for < NOW() + interval '3 days' ORDER BY scheduled_for LIMIT 2`, [userId]),
-    q(`SELECT goal, deadline FROM co_tasks WHERE user_id = $1 AND status = 'open' AND deadline IS NOT NULL AND deadline >= CURRENT_DATE - 1 AND deadline < CURRENT_DATE + 14 ORDER BY deadline LIMIT 3`, [userId]),
+    q(`SELECT goal, deadline FROM co_tasks WHERE user_id = $1 AND status = 'open' AND deadline IS NOT NULL AND deadline >= $2::date AND deadline < $3::date ORDER BY deadline LIMIT 3`, [userId, days.from, days.until]),
     // Only a fresh calendar read counts as what's ahead: an old snapshot can
     // miss what they added or cancelled since (2026-10-01 code review).
     q(`SELECT s.busy FROM google_snapshots s JOIN google_connections c ON c.user_id = s.user_id WHERE s.user_id = $1 AND s.fetched_at > NOW() - make_interval(secs => $2)`, [userId, SNAPSHOT_MAX_AGE_MS / 1000]),
-    q(`SELECT event_name_raw, event_date FROM planned_event_mentions WHERE user_id = $1 AND event_date >= CURRENT_DATE AND event_date < CURRENT_DATE + 14 ORDER BY event_date LIMIT 3`, [userId]),
+    q(`SELECT event_name_raw, event_date FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date < $3::date ORDER BY event_date LIMIT 3`, [userId, days.today, days.until]),
     loadBrief(userId).catch(() => null),
   ]);
   const items: TimelineItem[] = [

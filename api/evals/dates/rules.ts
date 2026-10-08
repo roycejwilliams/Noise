@@ -57,8 +57,8 @@ check("an earlier search says it's earlier", /^On Thursday, September 24, Co sea
 check("today's search doesn't", /^Earlier today, /.test(searchNoteLine("[search] Co searched.", new Date(), D.localToday())) && !/earlier search/.test(searchNoteLine("[search] Co searched.", new Date(), D.localToday())));
 
 // Wiring
-check("event facts carry the status", /const note = dateNote\(readDates\(itemDays\(match\), localToday\(\), asked\)\);/.test(src("harness/replyGrounding.ts")));
-check("an unprompted offer is checked when it's about to go out", /const when = offerable\(readDates\(itemDays\(p\.match\), localToday\(\)\)\);\s*if \(!when\.ok\) return skip/.test(src("harness/proactiveRegistry.ts")));
+check("event facts carry the status", /const note = dateNote\(readDates\(itemDays\(match, zone\), localToday\(zone\), asked\)\);/.test(src("harness/replyGrounding.ts")));
+check("an unprompted offer is checked when it's about to go out", /const when = offerable\(readDates\(itemDays\(p\.match, person\.timezone\), localToday\(person\.timezone\)\)\);\s*if \(!when\.ok\) return skip/.test(src("harness/proactiveRegistry.ts")));
 check("sent finds record their own dates", /when: d\.start, whenEnd: d\.end/.test(src("services/recommendation.ts")));
 check("the claim check holds offers and follow-ups to the status", /an offer needs a FACT showing it's still ahead or today/.test(src("harness/replyGrounding.ts")) && /- followup: asking how something went/.test(src("harness/replyGrounding.ts")));
 

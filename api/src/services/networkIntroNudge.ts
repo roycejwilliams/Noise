@@ -448,7 +448,12 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
   // Opt-out and local hours at send time, queued for the next allowed hour
   // if it's night for them (code review, 2026-09-17) — triggered by the
   // ASKER's reply, not anything this candidate just did. sendExempt writes
-  // the text_exchange memory itself once actually delivered.
+  // the text_exchange memory itself once actually delivered. Their open
+  // question about the asker is stashed only once the ask reaches them
+  // (afterDirectAskSent, now or at their 9am from services/deferredSends.ts):
+  // stashed while queued, a text of theirs before the morning would bind to an
+  // ask they never saw.
+  const after = { candidateId: candidate.user_id, askerId: asker.user_id, askerFirstName: asker.first_name, askerPhone: asker.phone_number, askerEmail: asker.email, matchReason, askId };
   const result = await sendExemptWhenAllowed({
     userId: candidate.user_id,
     phoneNumber: candidate.phone_number,
@@ -456,24 +461,27 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
     targetKey: `network_direct_ask:${[candidate.user_id, asker.user_id].sort().join(":")}`,
     messages: [message],
     timezone: await timezoneFor(candidate.user_id),
+    after: { kind: "network_intro_ask", payload: after },
   });
   if (!result.sent && !result.queued) {
     console.error(`askCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
-    return;
   }
+}
+
+export async function afterDirectAskSent(p: { candidateId: string; askerId: string; askerFirstName: string; askerPhone: string; askerEmail: string; matchReason: string; askId: string | null }): Promise<void> {
   await stashIntroOfferPending(
-    candidate.user_id,
+    p.candidateId,
     {
       edge_id: "",
-      candidate_id: asker.user_id,
-      first_name: asker.first_name,
-      phone_number: asker.phone_number,
-      email: asker.email,
+      candidate_id: p.askerId,
+      first_name: p.askerFirstName,
+      phone_number: p.askerPhone,
+      email: p.askerEmail,
       match_score: 0,
-      match_reason: matchReason,
+      match_reason: p.matchReason,
       share_safe: true,
     },
-    askId,
+    p.askId,
   );
 }
 

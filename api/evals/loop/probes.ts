@@ -20,7 +20,7 @@ let nextId = 100;
 const handle = async (sql: string, args: any[] = []): Promise<{ rows: Row[] }> => {
   log.push(sql.replace(/\s+/g, " ").slice(0, 80));
   if (/SELECT DISTINCT user_id/.test(sql)) return { rows: [{ user_id: "u" }] };
-  if (/FROM co_tasks WHERE user_id = \$1 AND status = 'open' AND kind = 'work'/.test(sql)) { if (failTasks) throw new Error("connection reset"); return { rows: tasks.filter((t) => t.status === "open") }; }
+  if (/FROM co_tasks WHERE user_id = \$1 AND status = 'open' AND kind (?:= 'work'|IN \('work', 'research_brief'\))/.test(sql)) { if (failTasks) throw new Error("connection reset"); return { rows: tasks.filter((t) => t.status === "open") }; }
   if (/SELECT status FROM co_tasks/.test(sql)) return { rows: tasks.filter((t) => t.id === args[1]) };
   if (/FROM search_briefs|FROM ask_checkins|FROM proactive_candidates/.test(sql)) return { rows: [] };
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };

@@ -18,6 +18,7 @@ import { CO_VOICE } from "./coVoice.js";
 import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import type { EnqueueInput } from "../harness/proactive.js";
 import type { CoTask } from "./coTasks.js";
+import { localStamp, memberZone } from "./memberTime.js";
 
 export const FOLLOWUP_LIMITS = { minHours: 2, maxHours: 7 * 24, maxWakes: 5, maxDays: 14, quietAfterClosedDays: 14 };
 
@@ -91,39 +92,74 @@ export type FollowUpDeps = {
   recent: string;
   recentSends: string;
   now: () => Date;
+  zone?: string | null; // their zone (services/memberTime.ts): "Now:" is shown in it, named
   checkInNow: () => Promise<boolean>;
   later: (hours: number, why: string) => Promise<void>;
   skip: (why: string) => Promise<void>;
+  // How long it has been due, in words ("3h ago"), so the decider knows it's due.
+  dueSince?: string | null;
 };
 
-export function followUpPrompt(o: { task: CoTask; firstName: string; recent: string; recentSends: string; now: string }): string {
+// Pure: how long ago, in words that need no time zone ("40 min ago", "5h ago", "3d ago").
+export function ago(at: Date | string, now: Date): string {
+  const m = Math.max(0, Math.round((now.getTime() - new Date(at).getTime()) / 60_000));
+  if (m < 2) return "just now";
+  if (m < 90) return `${m} min ago`;
+  if (m < 36 * 60) return `${Math.round(m / 60)}h ago`;
+  return `${Math.round(m / 1440)}d ago`;
+}
+
+// Pure: what the follow-up is about, from its payload (the summary alone often dropped the ask or the event's date).
+export function aboutLines(payload: any): string[] {
+  const p = payload ?? {};
+  const s = (x: unknown, n = 200) => String(x ?? "").replace(/\s+/g, " ").trim().slice(0, n);
+  const out: string[] = [];
+  if (p.askText) out.push(`What they asked for: "${s(p.askText)}"`);
+  if (p.eventName) out.push(`The event: ${s(p.eventName, 120)}${p.eventDate ? ` (${s(p.eventDate, 40)})` : ""}`);
+  if (p.advice) out.push(`What you told them: "${s(p.advice)}"`);
+  if (p.item && typeof p.item === "string") out.push(`About: ${s(p.item)}`);
+  if (p.label) out.push(`About: ${s(p.label)}${Array.isArray(p.dates) && p.dates.length ? ` (${p.dates.slice(0, 3).map((d: unknown) => s(d, 30)).join(", ")})` : ""}`);
+  if (p.name && p.startAt) out.push(`The event: ${s(p.name, 120)}, starting ${s(p.startAt, 40)}`);
+  return out;
+}
+
+// Why so few went out (2026-10-07, dev, 14 days: 90 held, 65 "later", 10 skip, 4 "now"): the decider saw its texts with no
+// times, so any last exchange read as "you just talked"; it saw a UTC clock and put things off as "too late at night" at
+// midday their time; it held off for "you've texted them a lot" and for the hour, both of which the send path already enforces;
+// and nothing said it was due. Now the thread carries how long ago each line was, the limits are named as code's job, the
+// payload says what it's about, and the last look is a real choice (now or skip), not another "later".
+export function followUpPrompt(o: { task: CoTask; firstName: string; recent: string; recentSends: string; now: string; dueSince?: string | null; zone?: string | null }): string {
   const f = o.task.followup ?? {};
+  const lastLook = o.task.wakes >= FOLLOWUP_LIMITS.maxWakes;
+  const about = aboutLines(f.payload);
   return `${CO_VOICE}
 
-You were going to check in with ${o.firstName}: ${f.summary ?? o.task.goal} (${f.type ?? "follow-up"}). It's your call whether that would mean something now, later, or not at all, the way a friend who knows them would decide. Now: ${o.now}. This is look ${o.task.wakes} of at most ${FOLLOWUP_LIMITS.maxWakes}.
+You were going to check in with ${o.firstName}: ${f.summary ?? o.task.goal} (${f.type ?? "follow-up"}).${about.length ? `\n${about.join("\n")}` : ""}
+It came due ${o.dueSince ?? "now"}: it was set for this point because whatever it's about has had time to happen. It's your call whether it would mean something now, later, or not at all, the way a friend who knows them would decide. Now: ${o.now}. This is look ${o.task.wakes} of at most ${FOLLOWUP_LIMITS.maxWakes}.
 
-Your recent texts with them (oldest first):
+Your recent texts with them (oldest first, each with how long ago):
 ${o.recent || "(none)"}
 
 What you've texted them first lately:
 ${o.recentSends || "(nothing)"}
 
-${o.task.followup?.payload?.until ? `It has to go out by ${o.task.followup.payload.until} (an hour before the event starts). Pick the best moment before then.\n` : ""}Decide with one tool:
-- checkInNow: it would land well now.
-- later: the timing is off (you just talked, they're in the middle of something, the date it's about hasn't happened yet, you've texted them first a lot lately). Pick when, in hours (${FOLLOWUP_LIMITS.minHours} to ${FOLLOWUP_LIMITS.maxHours}).
-- skip: it no longer makes sense (they already told you how it went, they asked for space, it's gone stale, or it would just be noise).
-Say why in one plain line.`;
+What isn't yours to weigh: their hours, how many texts they've had, and the pause after texts they haven't answered are all enforced when it sends. "Now" goes out at the next good moment inside their hours with every limit applied, never at night, so don't put it off for the time of day or because you've texted them before.
+
+${o.task.followup?.payload?.until ? `It has to go out by ${localStamp(o.task.followup.payload.until, o.zone ?? null)} (an hour before the event starts). Pick the best moment before then.\n` : ""}Decide with one tool:
+- checkInNow: the thread doesn't already answer it and it still matters to them. For a follow-up that's due, that's usually the case.
+${lastLook ? "" : `- later: only for a reason you can point to in the thread: you're mid-conversation with them right now (their last text is minutes old), or the date it's about is still ahead. Pick when, in hours (${FOLLOWUP_LIMITS.minHours} to ${FOLLOWUP_LIMITS.maxHours}).\n`}- skip: the thread already answers it or it no longer makes sense: they already told you how it went (even if there is more you could ask, this follow-up is answered), they sorted it themselves, they asked for space, or it was cancelled or is long past mattering.
+${lastLook ? "This is the last look: check in now or skip.\n" : ""}Say why in one plain line.`;
 }
 
 // Co decides; code carries it out. With no decision, it looks again in a day.
 export async function runFollowUpTurnWith(task: CoTask, deps: FollowUpDeps): Promise<{ action: "now" | "later" | "skip" | "defaulted"; why: string }> {
   let action: "now" | "later" | "skip" | null = null;
   let why = "";
-  const tools = {
-    checkInNow: tool({ description: "Check in now.", inputSchema: z.object({ why: z.string() }), execute: async (i) => { action = "now"; why = i.why; return { ok: await deps.checkInNow() }; } }),
-    later: tool({ description: "Check in later.", inputSchema: z.object({ inHours: z.number(), why: z.string() }), execute: async (i) => { action = "later"; why = i.why; await deps.later(i.inHours, i.why); return { ok: true }; } }),
-    skip: tool({ description: "Don't check in about this.", inputSchema: z.object({ why: z.string() }), execute: async (i) => { action = "skip"; why = i.why; await deps.skip(i.why); return { ok: true }; } }),
-  };
+  const checkInNow = tool({ description: "Check in now.", inputSchema: z.object({ why: z.string() }), execute: async (i) => { action = "now"; why = i.why; return { ok: await deps.checkInNow() }; } });
+  const later = tool({ description: "Check in later.", inputSchema: z.object({ inHours: z.number(), why: z.string() }), execute: async (i) => { action = "later"; why = i.why; await deps.later(i.inHours, i.why); return { ok: true }; } });
+  const skip = tool({ description: "Don't check in about this.", inputSchema: z.object({ why: z.string() }), execute: async (i) => { action = "skip"; why = i.why; await deps.skip(i.why); return { ok: true }; } });
+  // The last look decides: there's no "later" to put it off past the end (it used to expire as "never found the right moment").
+  const tools: Record<string, typeof checkInNow | typeof later> = task.wakes >= FOLLOWUP_LIMITS.maxWakes ? { checkInNow, skip } : { checkInNow, later, skip };
   try {
     await generateText({
       model: anthropic(MODELS.sonnet),
@@ -132,7 +168,7 @@ export async function runFollowUpTurnWith(task: CoTask, deps: FollowUpDeps): Pro
       experimental_telemetry: { isEnabled: true, functionId: "followUp.decide" },
       tools,
       stopWhen: [stepCountIs(3), () => action !== null],
-      prompt: followUpPrompt({ task, firstName: deps.firstName, recent: deps.recent, recentSends: deps.recentSends, now: deps.now().toISOString().slice(0, 16) }),
+      prompt: followUpPrompt({ task, firstName: deps.firstName, recent: deps.recent, recentSends: deps.recentSends, now: localStamp(deps.now(), deps.zone ?? null), dueSince: deps.dueSince ?? null, zone: deps.zone ?? null }),
     });
   } catch (err: any) {
     console.error("followUp decide failed (non-fatal):", err?.message ?? err);
@@ -144,6 +180,30 @@ export async function runFollowUpTurnWith(task: CoTask, deps: FollowUpDeps): Pro
   return { action, why };
 }
 
+// What the decider reads, as of a moment (now, or a past one for a replay): the thread with how long ago each line was, Co's
+// first texts lately the same way, and how long the follow-up has been due. Another member's details are stripped, as in the
+// reply (memberSafeMemories.ts).
+export async function loadFollowUpContext(userId: string, task: Pick<CoTask, "createdAt" | "nextCheckAt">, asOf: Date = new Date()): Promise<{ user: { first_name: string | null; sms_opted_out: boolean; archived_at: Date | null } | null; recent: string; recentSends: string; dueSince: string }> {
+  const [{ rows: u }, { rows: convo }, { rows: sends }] = await Promise.all([
+    pool.query(`SELECT first_name, sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]),
+    pool.query(`SELECT content, memory_type, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} AND created_at <= $2 ORDER BY created_at DESC LIMIT 14`, [userId, asOf]),
+    pool.query(`SELECT type, sent_at FROM proactive_sends WHERE user_id = $1 AND sent_at <= $2 AND sent_at > $2::timestamptz - INTERVAL '7 days' ORDER BY sent_at DESC LIMIT 6`, [userId, asOf]),
+  ]);
+  const M = await import("./memberSafeMemories.js");
+  const names = [...new Set([...(await M.linkedMemberNames(userId).catch(() => [] as string[])), ...M.namesInRecords(convo)])];
+  const lines: string[] = [];
+  for (const row of [...convo].reverse()) {
+    const safe = withoutTeammateLines((await M.memberSafe(userId, [row], names)).join("\n")).trim();
+    if (safe) lines.push(safe.split("\n").map((l) => `[${ago(row.created_at, asOf)}] ${l}`).join("\n"));
+  }
+  return {
+    user: u[0] ?? null,
+    recent: lines.join("\n").slice(-3000),
+    recentSends: sends.map((s: any) => `- ${ago(s.sent_at, asOf)}: ${s.type}`).join("\n"),
+    dueSince: ago(task.createdAt, asOf),
+  };
+}
+
 export async function runFollowUpTurn(task: CoTask): Promise<void> {
   const userId = task.userId;
   const { closeTask, scheduleTask, noteOnTask } = await import("./coTasks.js");
@@ -153,16 +213,14 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
     await recordDecision({ layer: 7, decision: "task.followup", userId, outcome: "skip", action: "expired", proposal: { taskId: task.id, type: task.followup?.type } }).catch(() => {});
     return;
   }
-  const [{ rows: u }, { rows: convo }, { rows: sends }] = await Promise.all([
-    pool.query(`SELECT first_name, sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]),
-    pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 14`, [userId]),
-    pool.query(`SELECT type, sent_at FROM proactive_sends WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '7 days' ORDER BY sent_at DESC LIMIT 6`, [userId]),
-  ]);
+  const ctx = await loadFollowUpContext(userId, task);
+  const u = ctx.user ? [ctx.user] : [];
   if (!u[0] || u[0].sms_opted_out || u[0].archived_at) {
     await closeTask(userId, task.id, "dropped", "Member opted out or archived.");
     return;
   }
   const f = task.followup as Stored;
+  const zone = await memberZone(userId);
   const until: string | null = f?.payload?.until ?? null;
   const checkIn = async () => {
     const { enqueueCandidate } = await import("../harness/proactive.js");
@@ -179,9 +237,10 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
   }
   const r = await runFollowUpTurnWith(task, {
     firstName: u[0].first_name || "them",
-    // Another member's details stripped, as in the reply (memberSafeMemories.ts).
-    recent: withoutTeammateLines((await import("./memberSafeMemories.js").then((m) => m.memberSafe(userId, convo))).reverse().join("\n")).slice(-2500),
-    recentSends: sends.map((s: any) => `- ${new Date(s.sent_at).toISOString().slice(0, 16)} ${s.type}`).join("\n"),
+    recent: ctx.recent,
+    recentSends: ctx.recentSends,
+    dueSince: ctx.dueSince,
+    zone,
     now: () => new Date(),
     checkInNow: checkIn,
     later: async (hours, why) => {

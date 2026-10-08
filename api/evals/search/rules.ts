@@ -44,8 +44,8 @@ c(
   "a same-evening event isn't rejected as already happened when checked in the person's own zone",
 );
 c(
-  !checkTiming(sameEveningEvent, { ...baseFacts, now: evening, zone: null }).pass,
-  "sanity: without a zone, UTC 'today' (the 17th) does reject the 16th (shows the bug this replaces)",
+  checkTiming(sameEveningEvent, { ...baseFacts, now: evening, zone: null }).pass,
+  "without a zone, today is the fallback zone's (Pacific, the 16th), not UTC's (the 17th): the same-evening event isn't rejected (2026-10-07)",
 );
 
 // askedUntil in the person's zone too.
@@ -193,7 +193,7 @@ const z1 = searchZone(null);
 c(z1.zone === "America/Los_Angeles" && z1.defaulted === true, "no timezone on file falls back to Co's home zone, not server/UTC, and records the default");
 const z2 = searchZone("America/New_York");
 c(z2.zone === "America/New_York" && z2.defaulted === false, "a real timezone is used as-is, not defaulted");
-c(localToday(evening, null) === "2026-09-17", "localToday with no zone falls back to the UTC date");
+c(localToday(evening, null) === "2026-09-16", "localToday with no zone falls back to the Pacific date, never the server's UTC one (2026-10-07)");
 c(localToday(evening, "America/Los_Angeles") === "2026-09-16", "localToday in a real zone is that zone's calendar date");
 
 // ---------------------------------------------------------------------------

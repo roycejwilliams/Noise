@@ -13,6 +13,8 @@
 // The model proposes a claim and its kind; CODE decides the lifetime from the kind, checks the quote is theirs (else the claim is
 // downgraded to co_inferred), and resolves a relative day against when it was said.
 import { DateTime } from "luxon";
+// Days are the member's: callers pass their zone (services/memberTime.ts); the default is only the fallback.
+import { FALLBACK_ZONE } from "./localHours.js";
 
 export type Provenance = "user_said" | "co_inferred";
 export type Lifetime = "enduring" | "ephemeral";
@@ -62,7 +64,7 @@ const MONTHS = ["january", "february", "march", "april", "may", "june", "july", 
 
 // The date a claim is about, if its words name one, resolved against the day it was said ("Friday", said on a Tuesday, is the
 // coming Friday; "Oct 9"; "2026-10-09"; "tomorrow"). Null when it names none.
-export function resolveDate(words: string, saidOn: string, zone = "America/Los_Angeles"): string | null {
+export function resolveDate(words: string, saidOn: string, zone = FALLBACK_ZONE): string | null {
   const said = DateTime.fromISO(saidOn, { zone }).startOf("day");
   if (!said.isValid) return null;
   const t = words.toLowerCase();
@@ -94,7 +96,7 @@ export function resolveDate(words: string, saidOn: string, zone = "America/Los_A
 
 // When a claim ends. Enduring: never. A dated claim ends the day after its date. An undated ephemeral claim ends its kind's ttl
 // after it was last said, and what Co only inferred ends sooner. Saying it again moves the clock.
-export function expiresOn(c: { kind: Kind; provenance: Provenance; text: string; quote: string | null; saidOn: string; confirmedOn: string }, zone = "America/Los_Angeles"): string | null {
+export function expiresOn(c: { kind: Kind; provenance: Provenance; text: string; quote: string | null; saidOn: string; confirmedOn: string }, zone = FALLBACK_ZONE): string | null {
   const k = KINDS[c.kind];
   if (k.lifetime === "enduring") return null;
   const dated = resolveDate(`${c.text} ${c.quote ?? ""}`, c.saidOn, zone);
@@ -103,7 +105,7 @@ export function expiresOn(c: { kind: Kind; provenance: Provenance; text: string;
   return DateTime.fromISO(c.confirmedOn, { zone }).plus({ days: ttl }).toISODate();
 }
 
-export function isLive(c: { expiresOn: string | null }, now: Date, zone = "America/Los_Angeles"): boolean {
+export function isLive(c: { expiresOn: string | null }, now: Date, zone = FALLBACK_ZONE): boolean {
   if (!c.expiresOn) return true;
   return DateTime.fromJSDate(now).setZone(zone).startOf("day") < DateTime.fromISO(c.expiresOn, { zone }).startOf("day");
 }
@@ -119,7 +121,7 @@ export function sameClaim(a: { kind: Kind; text: string }, b: { kind: Kind; text
 }
 
 // What a recap or a draft is allowed to hold: only live claims, labelled. Expired ones are gone, not carried.
-export function renderLive(claims: (Claim & { id?: string })[], now: Date, zone = "America/Los_Angeles"): { theySaid: string[]; coInferred: string[]; enduring: string[] } {
+export function renderLive(claims: (Claim & { id?: string })[], now: Date, zone = FALLBACK_ZONE): { theySaid: string[]; coInferred: string[]; enduring: string[] } {
   const live = claims.filter((c) => isLive(c, now, zone));
   const fmt = (c: Claim) => {
     const day = DateTime.fromISO(c.saidOn, { zone }).toFormat("LLL d");
@@ -152,7 +154,7 @@ const dayOf = (x: string | Date | null | undefined, zone: string): DateTime | nu
 export type StampRead = { label: string; ageDays: number | null; stale: boolean; drop: boolean; datePassed: boolean };
 
 // Pure: how old a row is and what may be said about it, from its own dates.
-export function stampOf(s: Stampable, now: Date, zone = "America/Los_Angeles"): StampRead {
+export function stampOf(s: Stampable, now: Date, zone = FALLBACK_ZONE): StampRead {
   const today = DateTime.fromJSDate(now).setZone(zone).startOf("day");
   const said = dayOf(s.saidOn, zone);
   const confirmed = dayOf(s.confirmedOn, zone) ?? said;
@@ -172,4 +174,4 @@ export function stampOf(s: Stampable, now: Date, zone = "America/Los_Angeles"): 
 }
 
 // A row's text with its stamp.
-export const stampedLine = (text: string, s: Stampable, now: Date, zone = "America/Los_Angeles") => `${text} (${stampOf(s, now, zone).label})`;
+export const stampedLine = (text: string, s: Stampable, now: Date, zone = FALLBACK_ZONE) => `${text} (${stampOf(s, now, zone).label})`;

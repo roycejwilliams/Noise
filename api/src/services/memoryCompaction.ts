@@ -34,7 +34,7 @@ export async function buildRecap(userId: string): Promise<void> {
     // expires on its own unless they say it again. A claim that has gone is simply not in the next recap.
     const { refreshClaims, renderRecap } = await import("./claims.js");
     const live = await refreshClaims(userId);
-    const recap = renderRecap(live, new Date()) || EMPTY_RECAP;
+    const recap = renderRecap(live, new Date(), await (await import("./memberTime.js")).memberZone(userId)) || EMPTY_RECAP;
     if (recap !== lastRecap?.content) await writeMemory(userId, "recap", recap);
     // Upsert, not update: a member with no profile row yet still gets their
     // recap recorded (storeProfile and captureIntent both upsert this row too).
@@ -63,7 +63,7 @@ export async function expireRecaps(now = new Date(), deps: { refresh?: (userId: 
       const { rows: st } = await pool.query(`SELECT 1 FROM member_claims_state WHERE user_id = $1`, [r.user_id]);
       // Never refreshed (first run after this shipped): read what they said once, so their recap is rebuilt from it instead of wiped.
       const claims = st[0] ? await heldClaimsStrict(r.user_id) : await (deps.refresh ?? ((id, n) => refreshClaims(id, n)))(r.user_id, now);
-      const recap = renderRecap(claims, now) || EMPTY_RECAP;
+      const recap = renderRecap(claims, now, await (await import("./memberTime.js")).memberZone(r.user_id)) || EMPTY_RECAP;
       const { rows: last } = await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'recap' ORDER BY created_at DESC LIMIT 1`, [r.user_id]);
       if (recap !== last[0]?.content) { await writeMemory(r.user_id, "recap", recap); changed++; }
     } catch (err: any) {

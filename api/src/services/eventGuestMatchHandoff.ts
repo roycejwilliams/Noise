@@ -189,9 +189,13 @@ async function maybeAskCandidateDirectly(
   const O = await import("./inRoomOffers.js");
   // Already asked (or already answered) about this person, from either path.
   if ((await hasPendingOrAnsweredNudge(eventId, candidate.user_id, asker.user_id)) || (await O.offeredAbout(eventId, candidate.user_id, asker.user_id))) return;
+  // An ask held for their morning (services/deferredSends.ts) opens its offer only once it reaches them, so a held ask
+  // counts here too: the same one is already asked, and any other is their open question.
+  const D = await import("./deferredSends.js");
+  if (await D.isQueued(candidate.user_id, directAskKey(eventId, candidate.user_id, asker.user_id))) return;
   // One yes-or-no about a person at a time: while they have another question open, this one waits and goes out once
   // they've answered (sendNextQueued), so their "yes" can only ever mean one person.
-  if (await O.hasOpenOffer(candidate.user_id)) {
+  if ((await O.hasOpenOffer(candidate.user_id)) || (await D.hasQueuedWithPrefix(candidate.user_id, "direct_ask:"))) {
     await O.queueOffer({ eventId, eventName, personId: candidate.user_id, candidateId: asker.user_id, askerId: asker.user_id });
     return;
   }
@@ -234,24 +238,32 @@ async function maybeAskCandidateDirectly(
   // used to send a raw sendblue message unconditionally, triggered by the
   // ASKER's reply, not anything this recipient just did. sendExempt (inside
   // sendExemptWhenAllowed) writes the text_exchange memory itself once
-  // actually delivered, so there's no separate write needed here.
+  // actually delivered, so there's no separate write needed here. The open
+  // offer is written once the ask actually reaches them (afterDirectAskSent,
+  // now or at their 9am): opened while it was only queued, a "yes" they
+  // texted about something else before the morning bound to the asker.
   const result = await sendExemptWhenAllowed({
     userId: candidate.user_id,
     phoneNumber: candidate.phone_number,
     type: "direct_ask",
-    targetKey: `direct_ask:${eventId}:${candidate.user_id}:${asker.user_id}`,
+    targetKey: directAskKey(eventId, candidate.user_id, asker.user_id),
     messages: [message],
     timezone: await timezoneFor(candidate.user_id),
+    after: { kind: "event_direct_ask", payload: { eventId, eventName, candidateId: candidate.user_id, askerId: asker.user_id } },
   });
   if (!result.sent && !result.queued) {
     console.error(`maybeAskCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
-    return;
   }
+}
 
-  // Their open question is now this one, about the asker, as its own pair (services/inRoomOffers.ts). Their nudge row
-  // about someone else is left as it was: it used to be overwritten here, so a reply meant for that person bound to
-  // the asker instead.
-  await O.openOffer({ eventId, eventName, personId: candidate.user_id, kind: "direct_ask", candidateId: asker.user_id, askerId: asker.user_id }).catch((err: any) =>
+const directAskKey = (eventId: string, candidateId: string, askerId: string) => `direct_ask:${eventId}:${candidateId}:${askerId}`;
+
+// Their open question is now this one, about the asker, as its own pair (services/inRoomOffers.ts). Their nudge row
+// about someone else is left as it was: it used to be overwritten here, so a reply meant for that person bound to
+// the asker instead.
+export async function afterDirectAskSent(p: { eventId: string; eventName: string; candidateId: string; askerId: string }): Promise<void> {
+  const O = await import("./inRoomOffers.js");
+  await O.openOffer({ eventId: p.eventId, eventName: p.eventName, personId: p.candidateId, kind: "direct_ask", candidateId: p.askerId, askerId: p.askerId }).catch((err: any) =>
     console.error("maybeAskCandidateDirectly: opening the offer failed (non-fatal):", err?.message ?? err),
   );
 }

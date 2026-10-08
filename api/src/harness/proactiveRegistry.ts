@@ -19,7 +19,7 @@ import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/re
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
 import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
+import { memberZone } from "../services/memberTime.js";
 import { prepareReveal } from "../services/networkIntroNudge.js";
 
 function skip(reason: string): DraftResult {
@@ -84,8 +84,7 @@ async function whatCoSent(userId: string, followupIds: string[]): Promise<SentRe
 
 async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResult> {
   const p = c.payload as DebriefPayload;
-  const { rows: prof } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [c.userId]).catch(() => ({ rows: [] as any[] }));
-  const tz = prof[0]?.city ? await getTimezoneForCity(prof[0].city).catch(() => null) : null;
+  const tz = await memberZone(c.userId);
   // Never before the day it's about. Older payloads carry no date, so it's
   // read from their follow-up rows.
   let date = p.eventDate ?? null;
@@ -147,7 +146,7 @@ export const proactiveRegistry: ProactiveRegistry = {
       if (!(await askStillOpen(p.askId))) return skip("their ask has since closed");
       // Still ahead today, checked when it's about to go out, not only when
       // it was queued (services/dateGuard.ts).
-      const when = offerable(readDates(itemDays(p.match), localToday()));
+      const when = offerable(readDates(itemDays(p.match, person.timezone), localToday(person.timezone)));
       if (!when.ok) return skip(`not offered: ${when.why}`);
       // How this ties to the rest of what they've said (services/connectDots.ts).
       const { gatherDots, findDots, whyContext } = await import("../services/connectDots.js");
@@ -699,8 +698,7 @@ export const proactiveRegistry: ProactiveRegistry = {
   membership_lapse: {
     async draft(c, person) {
       const final = Boolean(c.payload.final);
-      const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [c.userId]);
-      const zone = rows[0]?.city ? await getTimezoneForCity(rows[0].city).catch(() => null) : null;
+      const zone = await memberZone(c.userId);
       const close = await lapseCloseDate(c.userId, final, zone);
       if (!close) return skip("the lapse clock stopped");
       const message = lapseText(person.firstName, close.label, final);

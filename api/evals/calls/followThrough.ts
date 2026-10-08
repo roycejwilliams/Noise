@@ -87,8 +87,7 @@ function harness(o: { nowIso: string; zone?: string | null; drafts?: (string | n
   const events: Ev[] = [];
   const drafts = [...(o.drafts ?? [GOOD])];
   const prompts: any[] = [];
-  let laterFn: (() => Promise<any>) | null = null;
-  let laterAt: Date | null = null;
+  let queued: any = null;
   let held: { ids: number[]; until: Date } | null = null;
   const decisions: any[] = [];
   const deps: any = {
@@ -101,10 +100,10 @@ function harness(o: { nowIso: string; zone?: string | null; drafts?: (string | n
     // The task's own turn: it does the work and its own text goes out when it finishes (taskTurn.ts tellThem -> sendExempt).
     runTask: async (_u: string, c: any) => { events.push({ at: clock, what: `run:${c.taskId}` }); clock += 60_000; events.push({ at: clock, what: "deliver", text: o.deliverable ?? "Here's the plan: ..." }); return { ran: true, action: "scheduled" }; },
     hold: async (_u: string, ids: number[], until: Date) => { held = { ids, until }; },
-    later: (at: Date, fn: () => Promise<any>) => { laterAt = at; laterFn = fn; },
+    queue: async (x: any) => { queued = x; events.push({ at: clock, what: "queue", text: x.text }); return { queued: true }; },
     record: async (d: any) => { decisions.push(d); },
   };
-  return { deps, events, prompts, decisions, get laterFn() { return laterFn; }, get laterAt() { return laterAt; }, get held() { return held; }, setClock: (iso: string) => { clock = new Date(iso).getTime(); } };
+  return { deps, events, prompts, decisions, get queued() { return queued; }, get held() { return held; }, setClock: (iso: string) => { clock = new Date(iso).getTime(); } };
 }
 
 const TRANSCRIPT = `assistant: What do you want the November event to leave behind?
@@ -118,14 +117,14 @@ user: Perfect, thank you.`;
   const h = harness({ nowIso: ended.toISOString() });
   const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT, startedAt: new Date(ended.getTime() - 600_000), endedAt: ended }, h.deps);
   const sendEv = h.events.find((e) => e.what === "send");
-  check("call end: the confirmation is sent in the same call-end flow, not queued", r.action === "sent" && !!sendEv && h.laterFn === null && h.held === null);
+  check("call end: the confirmation is sent in the same call-end flow, not queued", r.action === "sent" && !!sendEv && h.queued === null && h.held === null);
   check(`call end: confirmation lands well inside 60s on the stubbed clock (${r.confirmMs}ms)`, typeof r.confirmMs === "number" && r.confirmMs < 60_000);
   check("call end: the confirmation is the drafted shape", sendEv?.text === GOOD);
   check("call end: commitments said on the direct path are opened first", h.events[0]?.what === "track");
   const work = await r.work!;
   const order = h.events.map((e) => e.what);
   check(`the deliverable runs right after the confirmation, as its own completion event (${order.join(" > ")})`, work.length === 1 && work[0].ran && order.indexOf("send") < order.indexOf("run:111") && order.indexOf("run:111") < order.indexOf("deliver"));
-  check("the deliverable needs no sweep: it was started by the call end itself, with no hold and no timer", h.held === null && h.laterFn === null);
+  check("the deliverable needs no sweep: it was started by the call end itself, with no hold and no queue", h.held === null && h.queued === null);
   check("the decision log has the confirmation and its latency", h.decisions.some((d) => d.decision === "call.followthrough" && d.action === "confirm_sent" && typeof d.proposal.confirmMs === "number"));
   const facts = h.prompts[0]?.facts ?? {};
   check("the draft is given what Co said, their words, and when", /presence after the November event/.test(facts.co_commitment_on_call) && /thinking about Co a week later/.test(facts.their_words_on_the_call) && facts.delivery_window === "tonight");
@@ -143,14 +142,18 @@ user: Perfect, thank you.`;
   const h = harness({ nowIso: "2026-10-08T06:30:00Z" });
   const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT }, h.deps);
   check("night: nothing sent now", r.action === "held" && !h.events.some((e) => e.what === "send" || e.what.startsWith("run:")));
-  check(`night: held to 9am their time (${r.heldUntil})`, r.heldUntil === "2026-10-08T16:00:00.000Z" && h.laterAt?.toISOString() === "2026-10-08T16:00:00.000Z");
+  check(`night: held to 9am their time, as a durable queued row, not a timer (${r.heldUntil})`, r.heldUntil === "2026-10-08T16:00:00.000Z" && h.queued?.at?.toISOString() === "2026-10-08T16:00:00.000Z" && h.queued?.text === GOOD && h.queued?.key?.startsWith("call_confirm:"));
+  check("night: the queued row carries the tasks to run once it sends", h.queued?.tasks?.map((t: any) => t.taskId).join() === "111");
   check("night: the task's own check is set just after the morning send, as the backstop", !!h.held && h.held.ids.join() === "111" && h.held.until.toISOString() === "2026-10-08T16:10:00.000Z");
+  check("night: the draft's 'when' is read from their 9am (this morning)", h.prompts[0]?.facts?.delivery_window === "this morning");
+  // Morning: the deferred-send cron sent it (services/deferredSends.ts) and runs the after-send step.
   h.setClock("2026-10-08T16:00:00Z");
-  const m = await h.laterFn!();
+  const m = await F.afterConfirmSent({ userId: "u1", tasks: h.queued.tasks }, "sent", h.deps);
   await m.work;
-  const order = h.events.map((e) => e.what);
-  check("morning: the confirmation goes, then the deliverable", m.action === "sent" && order.indexOf("send") >= 0 && order.indexOf("send") < order.indexOf("deliver"));
-  check("morning: the draft's 'when' is this morning", h.prompts[0]?.facts?.delivery_window === "this morning");
+  check("morning: once the held confirmation sends, the deliverable runs", h.events.some((e) => e.what === "run:111") && h.events.some((e) => e.what === "deliver") && h.decisions.some((d) => d.action === "confirm_sent" && d.proposal?.held === true));
+  const before = h.events.length;
+  const skipped = await F.afterConfirmSent({ userId: "u1", tasks: h.queued.tasks }, "skipped", h.deps);
+  check("morning: a held confirmation that didn't send (STOP) runs nothing; the backstop owns the task", skipped.work === null && h.events.length === before);
 }
 {
   // Unknown zone: the US-safe window (after 16:00 UTC) still applies.

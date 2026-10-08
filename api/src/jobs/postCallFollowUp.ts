@@ -66,9 +66,8 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
     )
     .catch(() => ({ rows: [] as any[] }));
   // What Co holds about them that is still inside its lifetime (services/claims.ts), apart by label: what THEY said, and Co's read.
-  const { liveClaims } = await import("../services/claims.js");
-  const { renderLive } = await import("../services/factLabels.js");
-  const labelled = renderLive(await liveClaims(userId).catch(() => []), new Date());
+  const { liveClaimsRendered } = await import("../services/claims.js");
+  const labelled = await liveClaimsRendered(userId, new Date()).catch(() => ({ theySaid: [] as string[], coInferred: [] as string[], enduring: [] as string[] }));
   // The confirmation already sent the moment they hung up (services/callFollowThrough.ts): this text never says it again.
   const { confirmationSentFor } = await import("../services/callFollowThrough.js");
   const confirmed = await confirmationSentFor(userId, transcript).catch(() => null);

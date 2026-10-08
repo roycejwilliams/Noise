@@ -15,8 +15,8 @@
 // which works but records "inferred".
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
-import { REASONABLE_HOUR_END, REASONABLE_HOUR_START } from "../services/localHours.js";
+import { isReasonableLocalHour } from "../services/localHours.js";
+import { memberZone } from "../services/memberTime.js";
 import type { GateCheck } from "./core.js";
 
 export type CallAuthKind = "router_decision" | "scheduled_call" | "user_initiated" | "checkin_cadence" | "auto_intake";
@@ -134,7 +134,7 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
     pass: !hoursBlock,
     reason: hoursBlock
       ? state.timezoneKnown === false
-        ? `no timezone on file, so only between ${UNKNOWN_TZ_WINDOW_UTC.start}:00 and ${UNKNOWN_TZ_WINDOW_UTC.end}:00 UTC`
+        ? "outside 9am-8pm Pacific (no timezone on file, so Pacific, where the club is)"
         : "outside 9am-8pm their time"
       : undefined,
   });
@@ -159,22 +159,13 @@ export function decideCall(state: CallState, requested: CallAuthorization | null
   return { allowed, authorization: kind, inferred, checks, error };
 }
 
-// ---- local hours when we don't know their timezone ----------------------------
+// ---- local hours ---------------------------------------------------------------
 
-// Fixed 2026-09-17: isReasonableLocalHour(null) returns true, so anyone with
-// no city on file (or a city geo-tz can't place) could get a call Co started
-// itself at 3am. With no timezone, only call inside the hours that are
-// daytime across the continental US all year: 17:00-24:00 UTC is 1pm-8pm
-// Eastern in summer (noon-7pm in winter) and 10am-5pm Pacific in summer
-// (9am-4pm in winter). A later end (e.g. 02:00 UTC) would land at 10pm
-// Eastern.
-export const UNKNOWN_TZ_WINDOW_UTC = { start: 17, end: 24 };
-
+// One rule for texts and calls (Royce, 2026-10-07): 9am-8pm their time, and with no zone on file, 9am-8pm in the fallback zone
+// (Pacific, where the club is, DST-correct; services/localHours.ts). Calls used to get a fixed 17:00-24:00 UTC window for an
+// unknown zone and texts 16:00-24:00 UTC: Pacific in summer only.
 export function callHourOk(timezone: string | null, now: Date): boolean {
-  const local = timezone ? DateTime.fromJSDate(now).setZone(timezone) : null;
-  if (local && local.isValid) return local.hour >= REASONABLE_HOUR_START && local.hour < REASONABLE_HOUR_END;
-  const h = now.getUTCHours();
-  return h >= UNKNOWN_TZ_WINDOW_UTC.start && h < UNKNOWN_TZ_WINDOW_UTC.end;
+  return isReasonableLocalHour(timezone, now);
 }
 
 // The start of the next hour a Co-started call is allowed (now, if it already
@@ -281,7 +272,7 @@ export async function gatherCallState(
       .catch(() => ({ rows: [{ n: AUTO_INTAKE_MAX_ATTEMPTS, at: null }] })),
   ]);
   const x = extra.rows[0] ?? {};
-  const timezone = x.city ? await getTimezoneForCity(x.city).catch(() => null) : null;
+  const timezone = await memberZone(userId);
   const now = new Date();
   const intake = decideAutoIntake(
     {
@@ -407,6 +398,14 @@ export async function hadContactSince(userId: string, since: Date): Promise<bool
 // ---- missed calls ------------------------------------------------------------
 
 export const MISSED_CALL_FOLLOWUP_WINDOW_HOURS = 24;
+
+// The text after a call nobody picked up (jobs/index.ts, pending_call_followups). Nothing schedules a second call after a miss,
+// so it never says Co will try again (2026-10-07: it promised "I'll try again soon" and no retry ever came). It's an open
+// invitation instead: they can reply, or text "call me", which places a call through the ordinary call-me path. Pure.
+export function missedCallText(firstName: string | null | undefined): string {
+  const name = String(firstName ?? "").trim();
+  return `${name ? `${name}, I` : "I"} tried calling but must have missed you. Reply here whenever suits, or text "call me" when you're free to talk.`;
+}
 
 export type MissedCallState = {
   // This exact call already got a follow-up (voicemail text, or a queued row).

@@ -6,7 +6,7 @@ import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
 import { getTimezoneForCity } from "../services/geocoding.js";
-import { isReasonableLocalHour } from "../services/localHours.js";
+import { hoursZone, isReasonableLocalHour } from "../services/localHours.js";
 import { sweepAllOpenAsks } from "../services/relevance.js";
 import { attemptEventSurfacing, PROFILE_ASK_ID } from "../services/eventSurfacingSweep.js";
 import { attemptNetworkSurfacing } from "../services/networkIntroNudge.js";
@@ -36,6 +36,7 @@ import { companionPayloadFor } from "../harness/memberThreads.js";
 import { queueHeavyCheckins } from "../services/heavyMoment.js";
 import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGaps } from "../services/understanding.js";
 import { recordDecision } from "../harness/core.js";
+import { missedCallText } from "../harness/callGate.js";
 import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
 import { runMembershipLapse } from "../services/membershipLapse.js";
 import { extensionJobs } from "../services/extensions.js";
@@ -196,6 +197,18 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Texts held for the member's hours (services/deferredSends.ts: relays, reminders, heads-ups, intro asks, the after-call
+  // confirmation at night), sent once due through sendExempt (STOP, pause, hours checked again). Every minute; rows are
+  // claimed, so overlapping runs or instances never send one twice.
+  cron.schedule("* * * * *", async () => {
+    try {
+      const { runDueDeferredSends } = await import("../services/deferredSends.js");
+      await runDueDeferredSends();
+    } catch (err: any) {
+      console.error("deferred send cron error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // What Co said on a call it would send (services/callCommitments.ts): once it has had time to fall due, was a text actually sent?
   cron.schedule("*/10 * * * *", async () => {
     try {
@@ -285,7 +298,8 @@ export function registerJobs(io: Server) {
         const timezone = row.city ? await getTimezoneForCity(row.city) : null;
         if (!isReasonableLocalHour(timezone)) continue;
 
-        const missedCallText = `${row.first_name}, I tried calling but must have missed you. I'll try again soon, or reply here whenever works.`;
+        // No retry is scheduled after a miss, so the text invites rather than promises (harness/callGate.ts missedCallText).
+        const text = missedCallText(row.first_name);
         try {
           // Transactional: one per missed call through the proactive ledger
           // (sendExempt logs text_exchange), outside the daily pick.
@@ -294,7 +308,7 @@ export function registerJobs(io: Server) {
             phoneNumber: row.phone_number,
             type: "missed_call",
             targetKey: `missed_call:${row.id}`,
-            messages: [missedCallText],
+            messages: [text],
           });
         } catch (smsErr: any) {
           console.error(`Delayed missed-call follow-up failed for ${row.user_id}:`, smsErr?.message ?? smsErr);
@@ -493,8 +507,8 @@ export function registerJobs(io: Server) {
         const timezone = userRows[0].city ? await getTimezoneForCity(userRows[0].city) : null;
         if (!isReasonableLocalHour(timezone)) return; // wrong hour for this user — nothing touched, retried next hourly tick
 
-        const localToday = (timezone ? DateTime.now().setZone(timezone) : DateTime.now()).toISODate();
-        const localDayOf = (d: Date | null) => (d ? DateTime.fromJSDate(d).setZone(timezone ?? "utc").toISODate() : null);
+        const localToday = DateTime.now().setZone(hoursZone(timezone)).toISODate(); // their day, or Pacific's (never the server's UTC day)
+        const localDayOf = (d: Date | null) => (d ? DateTime.fromJSDate(d).setZone(hoursZone(timezone)).toISODate() : null);
         // At most this many of one person's asks get a full search per day
         // (2026-09-18: one tester's ten overlapping asks each ran a full
         // three-tier search every morning and kept finding the same events).

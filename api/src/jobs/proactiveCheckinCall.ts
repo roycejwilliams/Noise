@@ -1,5 +1,5 @@
 import pool from "../db/db.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
+import { memberZone } from "../services/memberTime.js";
 import { callHourOk, nextAllowedCallTime } from "../harness/callGate.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 
@@ -53,7 +53,7 @@ export async function placeDueProactiveCalls(io: import("socket.io").Server | nu
       // Only correct the stamp for a pure hours block — anything else
       // (opted out mid-flight, subscription lapsed, a live/recent call)
       // still waits out the normal cadence, same as before this fix.
-      const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+      const timezone = await memberZone(row.user_id);
       const now = new Date();
       if (!callHourOk(timezone, now)) {
         const retryAt = nextAllowedCallTime(timezone, now);

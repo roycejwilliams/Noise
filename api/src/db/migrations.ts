@@ -652,6 +652,13 @@ export async function runMigrations(): Promise<void> {
     .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS trajectory_embedding vector(1536)`)
     .catch((err: Error) => console.error("co_profiles.trajectory_embedding migration failed:", err));
 
+  // Member time zone (Royce, 2026-10-07: "Co is time-aware at all times"). Additive: the zone is derived from the city and
+  // stored with the city it came from (timezone_city), so a later city change re-derives it on the next read
+  // (services/memberTime.ts memberZone). Backfill: src/scripts/backfillMemberZones.ts (dry run by default); reads also fill it.
+  await pool
+    .query(`ALTER TABLE co_profiles ADD COLUMN IF NOT EXISTS timezone TEXT, ADD COLUMN IF NOT EXISTS timezone_city TEXT`)
+    .catch((err: Error) => console.error("co_profiles.timezone migration failed:", err));
+
   // Co Loop Stage 3 — an HNSW index on goal_embeddings. Every existing caller
   // of goal_embeddings (findBestCircleWithScore) only ever compares it in JS
   // across a handful of already-city/chapter-filtered candidates, so no index
@@ -2474,6 +2481,42 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("member_reminders table init failed:", err));
+  // Durable sends (2026-10-07, services/deferredSends.ts): sent_at/status are written only when a text actually went out.
+  // queued_at claims a due reminder for sending (it may wait in deferred_sends for their morning); a relay's sent_at is
+  // when it reached them, not when it was asked for.
+  await pool
+    .query(`ALTER TABLE member_reminders ADD COLUMN IF NOT EXISTS queued_at TIMESTAMPTZ`)
+    .then(() => pool.query(`ALTER TABLE member_relays ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ`))
+    .catch((err: Error) => console.error("member_reminders/member_relays durable-send columns failed:", err));
+  // A text held for the member's hours (harness/proactive.ts sendExemptWhenAllowed, callFollowThrough's night hold). It used
+  // to wait in an in-process timer that a restart or deploy lost. A minute cron sends due rows through sendExempt (STOP,
+  // pause and hours checked again at send time); a row is claimed by bumping attempts, so two instances never both send it,
+  // and (user_id, target_key) is the same idempotency key proactive_sends uses. after_kind/after_payload is what gets
+  // recorded once it actually sends (a relay's status, a reminder's sent_at, an intro ask's pending offer).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS deferred_sends (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        phone_number TEXT NOT NULL,
+        type TEXT NOT NULL,
+        target_key TEXT NOT NULL,
+        messages JSONB NOT NULL,
+        timezone TEXT,
+        after_kind TEXT,
+        after_payload JSONB,
+        due_at TIMESTAMPTZ NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sending','sent','skipped','failed')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        claimed_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, target_key)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS deferred_sends_due ON deferred_sends (due_at) WHERE status IN ('queued','sending')`))
+    .catch((err: Error) => console.error("deferred_sends table init failed:", err));
 
   // Google Calendar and Gmail, read-only (services/googleAuth.ts, 2026-09-28).
   // One connection per member; tokens AES-256-GCM encrypted; one-time connect

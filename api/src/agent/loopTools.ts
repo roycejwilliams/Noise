@@ -454,8 +454,7 @@ export function loopTools(
         const byText = asked === "text" || asked === "both" || (asked === "email" && !email);
         const noEmailFallback = (asked === "email" || asked === "both") && !email;
         const downgraded = (input.sendBy === "email" || input.sendBy === "both") && !askedForEmail;
-        const city = ctx.turn?.profile?.city ?? null;
-        const zone = (city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null) ?? "America/Los_Angeles";
+        const zone = await (await import("../services/memberTime.js")).memberZoneOrFallback(ctx.userId);
         const recordFor = (link: string): EventRecord | null => {
           const f = loop.found.get(link);
           if (!f) return null;
@@ -610,8 +609,7 @@ export function loopTools(
           return { ok: true, note: "Test run: nothing was sent." };
         }
         const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
-        const city = ctx.turn?.profile?.city ?? null;
-        const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+        const zone = await (await import("../services/memberTime.js")).memberZone(ctx.userId);
         const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone };
         // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
         // working artifact (venue brief, partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.

@@ -22,6 +22,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { stateOf, type LoopState } from "./loopLifecycle.js";
 import { closeAsk } from "./askKind.js";
+import { localDay, localStamp, memberZone } from "./memberTime.js";
 
 export type AskRow = {
   id: string;
@@ -58,8 +59,8 @@ export type Closure = { askId: string; ask: string; how: "answered" | "delivered
 const norm = (s: string) => String(s).toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 export type Msg = { at: Date | string; side: "member" | "co"; text: string };
 
-export function judgePrompt(asks: { n: string; text: string; kind: string | null; since: string }[], convo: Msg[]): string {
-  const lines = convo.map((m) => `[${new Date(m.at).toISOString().slice(0, 16)}] ${m.side === "co" ? "Co" : "Member"}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n").slice(-14000);
+export function judgePrompt(asks: { n: string; text: string; kind: string | null; since: string }[], convo: Msg[], zone: string | null = null): string {
+  const lines = convo.map((m) => `[${localStamp(new Date(m.at), zone)}] ${m.side === "co" ? "Co" : "Member"}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n").slice(-14000);
   return `A member asked Co for things. For each ask below, decide from the conversation AFTER it whether it is finished, and say how, with a QUOTE.
 
 Asks:
@@ -102,6 +103,7 @@ export type AskDeps = {
   judge: (prompt: string) => Promise<{ ask?: unknown; how?: unknown; quote?: unknown }[]>;
   close: (userId: string, askId: string, how: Closure["how"], evidence: string) => Promise<void>;
   markChecked: (userId: string, ids: string[]) => Promise<void>;
+  zone?: (userId: string) => Promise<string | null>; // their zone (services/memberTime.ts): the judge sees their times, named
 };
 
 // What would close, without closing anything (the dead-ask list, and the first half of closeAnswered).
@@ -121,7 +123,8 @@ export async function proposeClosures(userId: string, deps: AskDeps = realDeps, 
     const convo = await deps.conversation(userId, since);
     if (convo.length) {
       const numbered = rest.map((a, i) => ({ n: `A${i + 1}`, row: a }));
-      const raw = await deps.judge(judgePrompt(numbered.map((x) => ({ n: x.n, text: x.row.ask_text, kind: x.row.kind, since: new Date(x.row.created_at).toISOString().slice(0, 10) })), convo));
+      const zone = deps.zone ? await deps.zone(userId) : null;
+      const raw = await deps.judge(judgePrompt(numbered.map((x) => ({ n: x.n, text: x.row.ask_text, kind: x.row.kind, since: localDay(new Date(x.row.created_at), zone) })), convo, zone));
       out.push(...verifyClosures(raw, numbered, convo));
     }
   }
@@ -163,6 +166,7 @@ export async function askIsOpenRef(userId: string, ref: string | null | undefine
 let realDeps: AskDeps = defaultDeps();
 export function setAskDepsForTests(d: AskDeps | null): void { realDeps = d ?? defaultDeps(); }
 export function defaultDeps(): AskDeps { return {
+  zone: (userId) => memberZone(userId),
   openAsks: async (userId) => (await pool.query(`SELECT id, user_id, ask_id, ask_text, kind, created_at, last_mentioned_at, resolved_at, expired_at, closed_reason, awaiting_response_since FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at`, [userId])).rows,
   conversation: async (userId, since) => {
     const { rows } = await pool.query(

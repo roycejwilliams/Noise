@@ -23,7 +23,7 @@ import { markTopicAsked as persistTopicAsked, RAPPORT_TOPICS } from "../services
 import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { resolveNamedEventGuest, requestIntroToNamedGuest } from "../services/eventGuestMatchHandoff.js";
 import { askEntries } from "../harness/profileWrite.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
+import { localStamp, memberZone, memberZoneOrFallback } from "../services/memberTime.js";
 import { DateTime } from "luxon";
 import { googleTools } from "../services/googleTools.js";
 import { loopTools, newLoopState } from "./loopTools.js";
@@ -34,11 +34,7 @@ import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
 // the next day). Null for a missing or unreadable date rather than
 // "Invalid Date".
 async function memberDate(userId: string): Promise<(iso: string | Date | null | undefined) => string | null> {
-  const city = await pool
-    .query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId])
-    .then((r) => r.rows[0]?.city as string | undefined)
-    .catch(() => undefined);
-  const zone = (city ? await getTimezoneForCity(city).catch(() => null) : null) ?? "America/Los_Angeles";
+  const zone = await memberZoneOrFallback(userId);
   return (iso) => {
     if (!iso) return null;
     const d = iso instanceof Date ? DateTime.fromJSDate(iso) : DateTime.fromISO(String(iso));
@@ -378,8 +374,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         // A deadline they gave, checked against their words and their time zone.
         let dl: { deadline: string; finalCheckAt: string } | null = null;
-        const city = ctx.turn?.profile?.city ?? null;
-        const zone = city ? await import("../services/geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+        const zone = await memberZone(ctx.userId);
         // Co left off a deadline they gave: code finds it in their words.
         const given = deadline ? { date: deadline.date, theirWords: deadline.theirWords } : (() => { const f = T.deadlineFromWords(ctx.resolvedContent, zone, new Date()); return f ? { date: f.date, theirWords: f.words } : null; })();
         if (given) {
@@ -388,7 +383,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           else notDone(`The deadline wasn't kept on the task: ${d.why}.`);
         }
         if (ctx.dryRun) {
-          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${dl.finalCheckAt.slice(0, 16).replace("T", " ")} UTC.` : ""}`);
+          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${localStamp(dl.finalCheckAt, zone)}.` : ""}`);
           return { ok: true, deadline: dl };
         }
         const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl });
@@ -396,7 +391,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };
         }
-        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt?.slice(0, 16).replace("T", " ")} UTC: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Co's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt?.slice(0, 16).replace("T", " ")} UTC.` : ""}`);
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt ? localStamp(r.task.nextCheckAt, zone) : "soon"}: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Co's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt ? localStamp(r.task.finalCheckAt, zone) : "the day before"}.` : ""}`);
         return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt };
       },
     }),
@@ -1179,8 +1174,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             ctx.facts?.add("did_this_turn", `Set a reminder for them: "${message.slice(0, 160)}"${when ? ` at ${when}` : ""}.`);
             return { ok: true };
           }
-          const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
-          const zone = rows[0]?.city ? await getTimezoneForCity(rows[0].city).catch(() => null) : null;
+          const zone = await memberZone(ctx.userId);
           const r = await relay.addReminder(ctx.userId, message, when ?? "", zone);
           if (!r.ok) {
             notDone("No reminder was set.");
@@ -1206,8 +1200,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(r.reason === "not_reachable" ? "No message was passed along: Co can't reach that person." : `No message was passed along (${r.reason}).`);
           return { ok: false, error: r.error };
         }
-        ctx.facts?.add("did_this_turn", `Passed their words to ${r.to}: "${message.slice(0, 200)}". ${r.note}`);
-        return { ok: true, note: `${r.note} Say it went through; don't promise ${r.to} will reply.` };
+        ctx.facts?.add("did_this_turn", r.queued ? `Queued their words for ${r.to}: "${message.slice(0, 200)}". ${r.note}` : `Passed their words to ${r.to}: "${message.slice(0, 200)}". ${r.note}`);
+        return { ok: true, note: r.queued ? `${r.note} Say it will reach ${r.to} in their morning, not that it went through; don't promise ${r.to} will reply.` : `${r.note} Say it went through; don't promise ${r.to} will reply.` };
       },
     }),
   };

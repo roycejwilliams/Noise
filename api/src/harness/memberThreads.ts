@@ -26,7 +26,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { parseAskWindow } from "../services/askWindow.js";
-import { getTimezoneForCity } from "../services/geocoding.js";
+import { localStamp, memberZone, wordsZone } from "../services/memberTime.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { enqueueCandidate, nextLocalHour } from "./proactive.js";
 import type { WindowFollowUpPayload } from "../agent/windowFollowUp.js";
@@ -178,7 +178,7 @@ export function gateThreadChanges(
     let dueLabel: string | null = null;
     const when = typeof o.when === "string" ? o.when.trim() : "";
     if (when && squash(o.quote).includes(squash(when))) {
-      const saidAt = DateTime.fromISO(hit.at, { zone: "utc" }).setZone(zone ?? "utc");
+      const saidAt = DateTime.fromISO(hit.at, { zone: "utc" }).setZone(wordsZone(zone));
       const w = parseAskWindow(spokenDayToDigits(when), saidAt);
       if (w) {
         dueDate = w.end.toISODate();
@@ -191,14 +191,14 @@ export function gateThreadChanges(
   return { opened, closed, checks };
 }
 
-export function threadsPrompt(firstName: string, onFile: MemberThread[], lines: OwnLine[]): string {
+export function threadsPrompt(firstName: string, onFile: MemberThread[], lines: OwnLine[], zone: string | null = null): string {
   return `You keep the list of things ${firstName} is in the middle of: what they're working toward, deciding, waiting on, or looking forward to. Only their own life, never anything about Co.
 
 Open now:
 ${onFile.map((t) => `- [${t.id}] ${t.text}${t.dueDate ? ` (date: ${t.dueDate})` : ""}`).join("\n") || "(none)"}
 
 What ${firstName} said recently, oldest first (their exact words):
-${lines.map((l) => `- [${l.at}] ${l.text}`).join("\n")}
+${lines.map((l) => `- [${localStamp(`${l.at}:00Z`, zone)}] ${l.text}`).join("\n")}
 
 1. Close a thread only when their words say how it landed or that it changed ("the pitch went great", "we moved it to November"). "quote" must be copied exactly from their words above, at least a few words. Being quiet about it is not a close.
 2. Open a thread for each thing that matters to them right now and isn't on the list yet (usually one to four): something coming up with an outcome, a decision they're weighing, something they're working toward or worried about. Name it in their own terms (a short line, plain words, "they" for them, and the date if they gave one). "quote" is copied exactly from their words. If the quote names when ("Friday", "October 10th", "next week"), copy that phrase exactly as "when". Mark "commitment": true only when they said they themselves will do something by then ("I'll send the deck Friday").
@@ -264,15 +264,13 @@ async function feelingAt(userId: string, at: string): Promise<string | null> {
   return rows[0] ? `${rows[0].emotion} (${rows[0].intensity})` : null;
 }
 
-async function zoneFor(userId: string): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-  return rows[0]?.city ? await getTimezoneForCity(rows[0].city).catch(() => null) : null;
-}
+// Their stored zone (services/memberTime.ts); null reads in the fallback zone.
+const zoneFor = (userId: string): Promise<string | null> => memberZone(userId);
 
 // A date they gave for something they said they'd do → a follow-up the
 // morning after, through the same follow-up type as a searched time frame.
 export async function queueCommitmentFollowUp(userId: string, threadId: string, text: string, dueDate: string, label: string, zone: string | null): Promise<boolean> {
-  const endOfDay = DateTime.fromISO(dueDate, { zone: zone ?? "utc" }).endOf("day");
+  const endOfDay = DateTime.fromISO(dueDate, { zone: wordsZone(zone) }).endOf("day");
   if (!endOfDay.isValid || endOfDay < DateTime.now().minus({ days: 1 })) return false;
   const dueAt = nextLocalHour(endOfDay.toJSDate(), zone, 11);
   const payload: WindowFollowUpPayload = {
@@ -310,7 +308,7 @@ export async function updateMemberThreads(userId: string): Promise<void> {
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
       experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update" },
-      prompt: threadsPrompt(firstName, onFile, lines.slice(-80)),
+      prompt: threadsPrompt(firstName, onFile, lines.slice(-80), await memberZone(userId)),
     });
     await applyThreadProposal(userId, parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text), onFile, lines);
   } catch (err: any) {
@@ -404,9 +402,9 @@ export function pickThreadForCheckin(threads: MemberThread[], today: string): Me
 
 // Every reader of a thread gets it stamped with when they said it and whether it can still be stated as current
 // (services/factLabels.ts stampOf): the recap, a draft, the reflection, the call briefing.
-export function renderThreads(threads: MemberThread[], now: Date = new Date()): string {
+export function renderThreads(threads: MemberThread[], now: Date = new Date(), zone: string | null = null): string {
   return threads
-    .map((t) => `- ${t.text} (${t.status}, ${stampOf({ saidOn: t.openedAt, confirmedOn: t.lastTouchedAt, dueOn: t.dueDate }, now).label}${t.feeling ? `, felt ${t.feeling}` : ""}; they said: "${t.openedQuote.slice(0, 160)}")`)
+    .map((t) => `- ${t.text} (${t.status}, ${stampOf({ saidOn: t.openedAt, confirmedOn: t.lastTouchedAt, dueOn: t.dueDate }, now, wordsZone(zone)).label}${t.feeling ? `, felt ${t.feeling}` : ""}; they said: "${t.openedQuote.slice(0, 160)}")`)
     .join("\n");
 }
 
@@ -431,7 +429,7 @@ export type CompanionPayloadParts = {
 export async function companionPayloadFor(userId: string): Promise<CompanionPayloadParts> {
   const checks: GateCheck[] = [];
   const zone = await zoneFor(userId);
-  const today = DateTime.now().setZone(zone ?? "utc").toISODate()!;
+  const today = DateTime.now().setZone(wordsZone(zone)).toISODate()!;
   const thread = pickThreadForCheckin(await listThreads(userId), today);
   if (!thread) return { threadId: null, thread: null, item: null, checks: [{ name: "open_thread", pass: false, reason: "no open thread due" }] };
   checks.push({ name: "open_thread", pass: true, reason: thread.text.slice(0, 80) });

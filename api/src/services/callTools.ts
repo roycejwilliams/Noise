@@ -65,7 +65,7 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
       .query(`SELECT * FROM open_loops WHERE user_id = $1 AND closed_at IS NULL AND status NOT IN ('done','dropped') ORDER BY changed_at DESC LIMIT 8`, [userId])
       .then(async (r) => {
         const O = await import("./openLoops.js");
-        return O.describeLoops(r.rows.map((x: any) => ({ id: Number(x.id), title: x.title, status: x.status, detail: x.detail, dueDate: x.due_date ? String(x.due_date instanceof Date ? x.due_date.toISOString() : x.due_date).slice(0, 10) : null, source: x.source, lastConfirmedAt: x.last_confirmed_at ? new Date(x.last_confirmed_at) : null, closedAt: null, closedReason: null, decayAskedAt: x.decay_asked_at ? new Date(x.decay_asked_at) : null })), { withIds: true });
+        return O.describeLoops(r.rows.map((x: any) => ({ id: Number(x.id), title: x.title, status: x.status, detail: x.detail, dueDate: x.due_date ? String(x.due_date instanceof Date ? x.due_date.toISOString() : x.due_date).slice(0, 10) : null, source: x.source, lastConfirmedAt: x.last_confirmed_at ? new Date(x.last_confirmed_at) : null, closedAt: null, closedReason: null, decayAskedAt: x.decay_asked_at ? new Date(x.decay_asked_at) : null })), { withIds: true, zone: await (await import("./memberTime.js")).memberZone(userId) });
       })
       .catch(() => null),
   ]);

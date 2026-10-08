@@ -156,7 +156,11 @@ function parseAskWindowUncapped(text: string, now: DateTime): AskWindow | null {
   const dayOfMonth = dayOfMonthDate(t, now);
   if (dayOfMonth) return dayOfMonth;
 
+  // After midnight and before 5am their time, "tonight" is the night already under way (until 5am) and "tomorrow" is the day
+  // about to start, as in services/memberTime.ts windowFromWords (Royce, 2026-10-07: "Co is time-aware at all times").
+  const lateNight = now.hour < 5;
   if (/\b(tonight|this evening)\b/.test(t)) {
+    if (lateNight) return mk(now, now.set({ hour: 5, minute: 0, second: 0, millisecond: 0 }), "tonight");
     const d = day(now);
     return mk(now, d.end, "tonight");
   }
@@ -165,8 +169,8 @@ function parseAskWindowUncapped(text: string, now: DateTime): AskWindow | null {
     return mk(now, d.end, "today");
   }
   if (/\btomorrow\b/.test(t)) {
-    const d = day(now.plus({ days: 1 }));
-    return mk(d.start, d.end, "tomorrow");
+    const d = day(lateNight ? now : now.plus({ days: 1 }));
+    return mk(lateNight ? now : d.start, d.end, "tomorrow");
   }
   if (/\bnext weekend\b/.test(t)) {
     const sat = nextWeekday(now.plus({ days: 7 }), 6, true);

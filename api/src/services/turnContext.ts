@@ -10,7 +10,8 @@
 // anyone else can enter a member's turn through it.
 import type { DocOfferContext } from "./documentOffer.js";
 import { stampOf } from "./factLabels.js";
-import { openTasks, taskFactLines } from "./coTasks.js";
+import { memberZone, wordsZone } from "./memberTime.js";
+import { briefFactLines, openTasks, recentBriefs, taskFactLines } from "./coTasks.js";
 import { adviceLines, loadAdvice } from "./advice.js";
 import { loadMilestones, storyLines } from "./milestones.js";
 import pool from "../db/db.js";
@@ -67,6 +68,8 @@ export type TurnContext = {
   advice?: string[];
   // Co's open tasks for them (services/coTasks.ts), as scheduled facts.
   tasks?: string[];
+  // Their research briefs: running, held for their hours, or finished lately (services/coTasks.ts briefFactLines).
+  briefs?: string[];
   // Whether Co may offer to write something up as a document, and any offer still waiting on an answer (services/documentOffer.ts).
   docOffer?: DocOfferContext | null;
   // The Co event they're registered for today, if any (services/eventPresence.ts).
@@ -231,6 +234,8 @@ export async function assembleContext(
     ledgerContext?: string;
   } = {},
 ): Promise<TurnContext> {
+  // Their zone (services/memberTime.ts), read once: stamps, the ledger's days, task times and Google facts are all in it.
+  const zone = await memberZone(userId);
   const [profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger] = await Promise.all([
     pool.query(`SELECT * FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     getPersonSnapshot(userId).catch(() => null),
@@ -245,7 +250,7 @@ export async function assembleContext(
     pool
       .query(`SELECT text, feeling, opened_at, last_touched_at, due_date FROM member_threads WHERE user_id = $1 AND status IN ('open', 'waiting') ORDER BY last_touched_at DESC NULLS LAST LIMIT 8`, [userId])
       .then((r) => r.rows.flatMap((x: any) => {
-        const st = stampOf({ saidOn: x.opened_at, confirmedOn: x.last_touched_at, dueOn: x.due_date instanceof Date ? x.due_date.toISOString().slice(0, 10) : x.due_date }, new Date());
+        const st = stampOf({ saidOn: x.opened_at, confirmedOn: x.last_touched_at, dueOn: x.due_date instanceof Date ? x.due_date.toISOString().slice(0, 10) : x.due_date }, new Date(), wordsZone(zone));
         return st.drop ? [] : [{ text: String(x.text), feeling: x.feeling ?? null, line: `${String(x.text)} (${st.label})` }];
       }))
       .catch(() => [] as { text: string; feeling: string | null; line: string }[]),
@@ -259,27 +264,27 @@ export async function assembleContext(
       .then((r) => r.rows.map((x: any) => String(x.content)))
       .catch(() => [] as string[]),
     Promise.resolve(opts.inlineTarget ?? null).catch(() => null),
-    ledgerFacts(userId, `${message}\n${opts.ledgerContext ?? ""}`).catch(() => ({ lines: [] as string[], named: [] as string[] })),
+    ledgerFacts(userId, `${message}\n${opts.ledgerContext ?? ""}`, zone).catch(() => ({ lines: [] as string[], named: [] as string[] })),
   ]);
   // Their Google, read from the cache in their own time zone (never fetched while they wait).
-  const google = await loadGoogleFacts(userId, profile?.city ?? null).catch(() => [] as string[]);
-  const [kit, story, advice, tasks, todayEvent, docOffer] = await Promise.all([
+  const google = await loadGoogleFacts(userId, zone).catch(() => [] as string[]);
+  const [kit, story, advice, tasks, briefs, todayEvent, docOffer] = await Promise.all([
     loadKit(userId).catch(() => ({}) as Kit),
     loadMilestones(userId).then((m) => storyLines(m, 4)).catch(() => [] as string[]),
     loadAdvice(userId).then((a) => adviceLines(a)).catch(() => [] as string[]),
     // In their local time (services/memberTime.ts), with each commitment's window.
-    openTasks(userId).then(async (t) => taskFactLines(t, undefined, profile?.city ? await import("./geocoding.js").then((g) => g.getTimezoneForCity(profile.city!)).catch(() => null) : null)).catch(() => [] as string[]),
+    openTasks(userId).then((t) => taskFactLines(t, undefined, zone)).catch(() => [] as string[]),
+    // Research briefs aren't work tasks (openTasks leaves them out) but are theirs to see: running, held, or sent lately.
+    recentBriefs(userId).then((b) => briefFactLines(b, zone)).catch(() => [] as string[]),
     import("./eventPresence.js").then((e) => e.todayEventFor(userId)).catch(() => null),
     import("./documentOffer.js").then((m) => m.loadDocOfferContext(userId)).catch(() => null),
   ]);
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, todayEvent, docOffer };
+  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer };
 }
 
-async function loadGoogleFacts(userId: string, city: string | null): Promise<string[]> {
+async function loadGoogleFacts(userId: string, zone: string | null): Promise<string[]> {
   const { isConnected } = await import("./googleAuth.js");
   if (!(await isConnected(userId)).connected) return [];
   const { googleFactsFor } = await import("./googleData.js");
-  const { getTimezoneForCity } = await import("./geocoding.js");
-  const zone = city ? await getTimezoneForCity(city).catch(() => null) : null;
   return googleFactsFor(userId, zone);
 }

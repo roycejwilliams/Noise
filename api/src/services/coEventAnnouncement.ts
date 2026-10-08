@@ -13,7 +13,8 @@
 //   record  tier1.announce per person: sent, waiting_for_hours, not_nearby
 import pool from "../db/db.js";
 import { listCalendarEvents, getEventDetails, resolveCoEventCity, type LumaEvent } from "./luma.js";
-import { withinRadius, getTimezoneForCity } from "./geocoding.js";
+import { withinRadius } from "./geocoding.js";
+import { memberZone } from "./memberTime.js";
 import { fetchLumaEventDetails, renderEventDetails } from "./eventDetails.js";
 import { draftProactive, checkDraft, localHourOk, sendExempt } from "../harness/proactive.js";
 import { gate, recordDecision } from "../harness/core.js";
@@ -168,7 +169,7 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
       await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.user_id, outcome: "skip", action: r.opted_out ? "gave_up_opted_out" : "gave_up_event_past", proposal: { eventId: r.event_api_id } }).catch(() => {});
       continue;
     }
-    const timezone = r.city ? await getTimezoneForCity(r.city).catch(() => null) : null;
+    const timezone = await memberZone(r.user_id);
     if (!localHourOk(new Date(), timezone)) {
       await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.user_id, outcome: "skip", action: "waiting_for_hours", proposal: { eventId: r.event_api_id, timezone } }).catch(() => {});
       continue;

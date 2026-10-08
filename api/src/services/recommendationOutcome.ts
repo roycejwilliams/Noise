@@ -3,7 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import type { TierMatch } from "./tieredRecommendation.js";
-import { getTimezoneForCity } from "./geocoding.js";
+import { memberZone } from "./memberTime.js";
 import { enqueueCandidate, nextLocalHour } from "../harness/proactive.js";
 
 // Outcome-learning loop (Royce, 2026-09-02: "Co follows up" + the shared
@@ -227,7 +227,7 @@ export async function enqueueDueOutcomeFollowUps(): Promise<void> {
       await pool.query(`UPDATE recommendation_outcome_followups SET harness_status = 'dropped' WHERE id = $1`, [row.id]);
       continue;
     }
-    const timezone = row.city ? await getTimezoneForCity(row.city).catch(() => null) : null;
+    const timezone = await memberZone(row.user_id);
     // Only mark 'queued' on an actual queue (code review, 2026-09-17) — see
     // enqueueDebrief's comment.
     const result = await enqueueDebrief({

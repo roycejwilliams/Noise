@@ -1,0 +1,301 @@
+// Durable held sends (services/deferredSends.ts, 2026-10-07). A text due outside the member's hours used to wait in an
+// in-process setTimeout that a restart or deploy lost, after the caller had already recorded it as sent. Layer 1: an
+// in-memory fake of the tables involved, sendblue stubbed, zero tokens.   npx tsx evals/proactive/durableSends.ts
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+process.env.CO_RELAY = "on";
+delete process.env.PROACTIVE_PAUSED;
+import fs from "node:fs";
+const { default: pool } = await import("../../src/db/db.js");
+const { default: sendblue } = await import("../../src/services/sendblue.js");
+const P = await import("../../src/harness/proactive.js");
+const D = await import("../../src/services/deferredSends.js");
+const R = await import("../../src/services/relay.js");
+
+let total = 0, failed = 0;
+const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
+const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+
+// ---------------------------------------------------------------- the fake store
+type Row = Record<string, any>;
+type Db = {
+  users: Map<string, { phone_number: string; sms_opted_out: boolean; archived_at: Date | null; first_name: string; city: string | null }>;
+  deferred: Row[];
+  proactive: Set<string>;
+  memories: { user_id: string; type: string; content: string }[];
+  facts: { owner: string; relation: string; label: string }[];
+  reminders: Row[];
+  relays: Row[];
+  zones: Map<string, string>;
+};
+const fresh = (): Db => ({ users: new Map(), deferred: [], proactive: new Set(), memories: [], facts: [], reminders: [], relays: [], zones: new Map() });
+let db = fresh();
+let seq = 1;
+const now = () => new Date(clockMs());
+let fixedClock: number | null = null;
+const clockMs = () => fixedClock ?? Date.now();
+const copy = <T,>(r: T): T => ({ ...(r as any) });
+
+async function handle(rawSql: string, args: any[] = []): Promise<{ rows: any[] }> {
+  const sql = rawSql.replace(/\s+/g, " ").trim();
+  // Let other async work interleave, like a real round trip (the double-run test depends on it).
+  await new Promise((r) => setImmediate(r));
+  if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
+  if (/^SELECT COALESCE\(sms_opted_out, false\) AS opted_out FROM users/.test(sql)) return { rows: [{ opted_out: db.users.get(args[0])?.sms_opted_out === true }] };
+  if (/^INSERT INTO proactive_sends/.test(sql)) {
+    const k = `${args[0]}|${args[2]}`;
+    if (db.proactive.has(k)) return { rows: [] };
+    db.proactive.add(k);
+    return { rows: [{ id: seq++ }] };
+  }
+  if (/^INSERT INTO co_memories/.test(sql)) { db.memories.push({ user_id: args[0], type: args[1], content: args[2] }); return { rows: [{ id: seq++ }] }; }
+  if (/^INSERT INTO co_facts/.test(sql)) { db.facts.push({ owner: args[0], relation: args[2], label: args[3] }); return { rows: [] }; }
+  if (/FROM geocode_cache/.test(sql)) { const z = db.zones.get(args[0]); return { rows: z ? [{ lat: 0, lng: 0, timezone: z }] : [] }; }
+  // deferred_sends
+  if (/^INSERT INTO deferred_sends/.test(sql)) {
+    if (db.deferred.some((d) => d.user_id === args[0] && d.target_key === args[3])) return { rows: [] };
+    const row = { id: seq++, user_id: args[0], phone_number: args[1], type: args[2], target_key: args[3], messages: JSON.parse(args[4]), timezone: args[5], after_kind: args[6], after_payload: args[7] ? JSON.parse(args[7]) : null, due_at: new Date(args[8]), status: "queued", attempts: 0, claimed_at: null, sent_at: null, error: null };
+    db.deferred.push(row);
+    return { rows: [{ id: row.id }] };
+  }
+  if (/^SELECT id, status FROM deferred_sends/.test(sql)) return { rows: db.deferred.filter((d) => d.user_id === args[0] && d.target_key === args[1]).map(copy) };
+  if (/FROM deferred_sends d JOIN users u/.test(sql)) {
+    const [at, stale] = [new Date(args[0]).getTime(), new Date(args[1]).getTime()];
+    return {
+      rows: db.deferred
+        .filter((d) => (d.status === "queued" && d.due_at.getTime() <= at) || (d.status === "sending" && d.claimed_at && d.claimed_at.getTime() < stale))
+        .sort((a, b) => a.due_at - b.due_at)
+        .map((d) => ({ ...d, phone_number: db.users.get(d.user_id)?.phone_number ?? d.phone_number, archived: !!db.users.get(d.user_id)?.archived_at })),
+    };
+  }
+  if (/^UPDATE deferred_sends SET status = 'sending'/.test(sql)) {
+    const d = db.deferred.find((x) => x.id === args[0] && x.attempts === args[1] && ["queued", "sending"].includes(x.status));
+    if (!d) return { rows: [] };
+    Object.assign(d, { status: "sending", claimed_at: new Date(args[2]), attempts: d.attempts + 1 });
+    return { rows: [{ id: d.id }] };
+  }
+  if (/^UPDATE deferred_sends SET status = \$2, error = \$3, sent_at = \$4/.test(sql)) {
+    const d = db.deferred.find((x) => x.id === args[0] && x.attempts === args[4]);
+    if (d) Object.assign(d, { status: args[1], error: args[2], sent_at: args[3] });
+    return { rows: [] };
+  }
+  if (/^UPDATE deferred_sends SET status = 'queued', due_at = \$2/.test(sql)) {
+    const d = db.deferred.find((x) => x.id === args[0] && x.attempts === args[3]);
+    if (d) Object.assign(d, { status: "queued", due_at: new Date(args[1]), error: args[2] });
+    return { rows: [] };
+  }
+  if (/^SELECT 1 FROM deferred_sends WHERE user_id = \$1 AND target_key = \$2/.test(sql)) return { rows: db.deferred.filter((d) => d.user_id === args[0] && d.target_key === args[1] && ["queued", "sending"].includes(d.status)) };
+  // member_reminders
+  if (/FROM member_reminders r JOIN users u/.test(sql)) {
+    return { rows: db.reminders.filter((r) => !r.sent_at && !r.queued_at && r.due_at.getTime() <= Date.now()).map((r) => ({ id: r.id, user_id: r.user_id, what: r.what, phone_number: db.users.get(r.user_id)?.phone_number, city: db.users.get(r.user_id)?.city })) };
+  }
+  if (/^UPDATE member_reminders SET queued_at = NOW\(\)/.test(sql)) {
+    const r = db.reminders.find((x) => x.id === args[0] && !x.sent_at && !x.queued_at);
+    if (!r) return { rows: [] };
+    r.queued_at = now();
+    return { rows: [{ id: r.id }] };
+  }
+  if (/^UPDATE member_reminders SET sent_at = COALESCE/.test(sql)) { const r = db.reminders.find((x) => x.id === args[0]); if (r) r.sent_at ??= now(); return { rows: [] }; }
+  if (/FROM member_reminders r JOIN deferred_sends d/.test(sql)) {
+    return { rows: db.reminders.filter((r) => r.user_id === args[0] && !r.sent_at && r.queued_at && db.deferred.some((d) => d.user_id === r.user_id && d.target_key === `reminder:${r.id}` && ["queued", "sending"].includes(d.status))) };
+  }
+  // member_relays and what relayMessage reads
+  if (/^SELECT content FROM co_memories/.test(sql)) return { rows: [] };
+  if (/^WITH mine AS/.test(sql)) return { rows: [...db.users.entries()].filter(([id]) => id !== args[0]).map(([id, u]) => ({ id, first_name: u.first_name, source: "introduced" })) };
+  if (/^SELECT count\(\*\)::int AS n FROM member_relays/.test(sql)) return { rows: [{ n: db.relays.filter((r) => r.from_user === args[0] && r.to_user === args[1] && ["sent", "queued"].includes(r.status)).length }] };
+  if (/^SELECT u.phone_number, cp.city FROM users u/.test(sql)) { const u = db.users.get(args[0]); return { rows: u ? [{ phone_number: u.phone_number, city: u.city }] : [] }; }
+  if (/^INSERT INTO member_relays/.test(sql)) { const r = { id: seq++, from_user: args[0], to_user: args[1], message: args[2], status: "pending", created_at: now(), sent_at: null }; db.relays.push(r); return { rows: [{ id: r.id }] }; }
+  if (/^UPDATE member_relays SET status = 'queued'/.test(sql)) { const r = db.relays.find((x) => x.id === args[0] && x.status === "pending"); if (r) r.status = "queued"; return { rows: [] }; }
+  if (/^UPDATE member_relays SET status = 'sent'/.test(sql)) { const r = db.relays.find((x) => x.id === args[0]); if (r) { r.status = "sent"; r.sent_at ??= now(); } return { rows: [] }; }
+  if (/^UPDATE member_relays SET status = \$2/.test(sql)) { const r = db.relays.find((x) => x.id === args[0] && ["pending", "queued"].includes(x.status)); if (r) r.status = args[1]; return { rows: [] }; }
+  if (/FROM member_relays r JOIN users uf/.test(sql)) {
+    return {
+      rows: db.relays
+        .filter((r) => (r.from_user === args[0] || r.to_user === args[0]) && ["sent", "queued"].includes(r.status))
+        .map((r) => ({ ...r, created_at: r.sent_at ?? r.created_at, from_name: db.users.get(r.from_user)?.first_name, to_name: db.users.get(r.to_user)?.first_name })),
+    };
+  }
+  return { rows: [] }; // harness_decisions, outbound_messages, embeddings: not under test
+}
+(pool as any).query = handle;
+(pool as any).connect = async () => ({ query: handle, release: () => {} });
+
+// Every text that would leave: captured, never sent.
+const outbox: { to: string; content: string }[] = [];
+(sendblue as any).messages.send = async (b: any) => { outbox.push({ to: b.number, content: b.content }); return { message_handle: `t-${outbox.length}` }; };
+
+// Long timers are the old behavior: any setTimeout longer than a minute during a send is a held send in memory.
+const longTimers: number[] = [];
+const realSetTimeout = globalThis.setTimeout;
+(globalThis as any).setTimeout = (fn: any, ms?: number, ...rest: any[]) => { if ((ms ?? 0) > 60_000) longTimers.push(ms!); return realSetTimeout(fn, ms, ...rest); };
+
+// A zone whose local hour right now is `hour` (relay and reminder paths read the real clock).
+function zoneAtHour(hour: number): string {
+  const utc = new Date().getUTCHours();
+  let off = (hour - utc + 24) % 24;
+  if (off > 14) off -= 24;
+  return off === 0 ? "Etc/GMT" : `Etc/GMT${off > 0 ? "-" : "+"}${Math.abs(off)}`;
+}
+const PHONE_A = "+14155550150";
+const PHONE_B = "+14155550151";
+function seed() {
+  db = fresh();
+  outbox.length = 0;
+  longTimers.length = 0;
+  db.users.set("ua", { phone_number: PHONE_A, sms_opted_out: false, archived_at: null, first_name: "Jordan", city: "Nightville" });
+  db.users.set("ub", { phone_number: PHONE_B, sms_opted_out: false, archived_at: null, first_name: "Ellis", city: "Nightville" });
+  db.zones.set("Nightville", zoneAtHour(2));
+}
+const memLines = (u: string) => db.memories.filter((m) => m.user_id === u && m.type === "text_exchange").map((m) => m.content);
+
+// ---------------------------------------------------------------- 1. a night-time send is enqueued, not timed out
+{
+  seed();
+  const tz = "America/Los_Angeles";
+  const night = new Date("2026-10-08T06:30:00Z"); // 11:30pm in LA
+  const r = await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "event_change", targetKey: "stale:x:sold_out", messages: ["Heads up on the gallery night: it's sold out now."], timezone: tz, now: night });
+  check("night: nothing goes out now", outbox.length === 0 && !r.sent);
+  check("night: it is queued as a row due at their 9am", r.queued && db.deferred.length === 1 && db.deferred[0].status === "queued" && db.deferred[0].due_at.toISOString() === "2026-10-08T16:00:00.000Z");
+  check("night: no in-process timer holds it", longTimers.length === 0);
+  check("night: no 'Co replied' line or 'texted' fact while it's only queued", memLines("ua").length === 0 && db.facts.length === 0);
+  const again = await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "event_change", targetKey: "stale:x:sold_out", messages: ["Heads up on the gallery night: it's sold out now."], timezone: tz, now: night });
+  check("queueing the same thing twice keeps one row", again.queued && db.deferred.length === 1);
+  check("the setTimeout hold is gone from the source", !/setTimeout\(/.test(src("harness/proactive.ts").slice(src("harness/proactive.ts").indexOf("export async function sendExemptWhenAllowed"), src("harness/proactive.ts").indexOf("// Layer 6 in-room nudges"))) && !/setTimeout/.test(src("services/callFollowThrough.ts")));
+
+  // ---------------------------------------------------------------- 2. survives a restart, sends once at 9am
+  // A restart: the process's memory is gone; only the rows survive (round-tripped, as a database would hand them back).
+  const persisted = JSON.parse(JSON.stringify(db.deferred));
+  const survivors = { ...fresh(), users: db.users, zones: db.zones, deferred: persisted.map((d: any) => ({ ...d, due_at: new Date(d.due_at), claimed_at: d.claimed_at ? new Date(d.claimed_at) : null })) };
+  db = survivors;
+  const D2 = await import(`../../src/services/deferredSends.ts?restart=${Date.now()}`);
+  const early = await D2.runDueDeferredSends(new Date("2026-10-08T15:59:00Z"));
+  check("after the restart: 8:59am, nothing yet", early.claimed === 0 && outbox.length === 0);
+  const nine = await D2.runDueDeferredSends(new Date("2026-10-08T16:00:00Z"));
+  check("after the restart: at 9am it sends, once", nine.sent === 1 && outbox.length === 1 && outbox[0].content.startsWith("Heads up on the gallery night"));
+  check("sent: the row is marked sent with its time", db.deferred[0].status === "sent" && new Date(db.deferred[0].sent_at).toISOString() === "2026-10-08T16:00:00.000Z");
+  check("sent: the 'Co replied' line and the 'texted' fact are written now, on delivery", memLines("ua").length === 1 && db.facts.some((f) => f.owner === "ua" && f.relation === "texted"));
+  const later = await D2.runDueDeferredSends(new Date("2026-10-08T16:05:00Z"));
+  check("a later run sends nothing more", later.claimed === 0 && outbox.length === 1);
+}
+
+// ---------------------------------------------------------------- 3. a reminder isn't recorded as sent until it sends
+{
+  seed();
+  db.reminders.push({ id: 900, user_id: "ua", what: "call Sam about the lease", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null });
+  const n = await R.sendDueReminders();
+  const rem = db.reminders[0];
+  check("reminder due at 2am their time: queued, nothing sent", n === 1 && outbox.length === 0 && db.deferred.length === 1 && db.deferred[0].target_key === "reminder:900");
+  check("reminder: sent_at stays empty while queued (only queued_at is claimed)", rem.sent_at === null && rem.queued_at instanceof Date);
+  check("reminder: no 'Co replied: Reminder…' line while queued", !memLines("ua").some((l) => /Reminder you asked for/.test(l)));
+  const facts = await R.reminderFacts("ua");
+  check("reminder: the reply reads it as queued, not sent", facts.length === 1 && /queued for their morning and has NOT been sent/.test(facts[0]));
+  const second = await R.sendDueReminders();
+  check("reminder: the 5-minute cron doesn't pick a claimed reminder up again", second === 0 && db.deferred.length === 1);
+  const due = db.deferred[0].due_at as Date;
+  await D.runDueDeferredSends(due);
+  check("reminder at their 9am: sent once, and only now is sent_at set", outbox.length === 1 && /Reminder you asked for: call Sam/.test(outbox[0].content) && rem.sent_at instanceof Date);
+  check("reminder: the 'Co replied' line is written once, on delivery", memLines("ua").filter((l) => /Reminder you asked for/.test(l)).length === 1);
+  check("reminder: no longer reads as queued", (await R.reminderFacts("ua")).length === 0);
+}
+
+// ---------------------------------------------------------------- 4. a queued relay shows as queued
+{
+  seed();
+  const r = await R.relayMessage({ fromUserId: "ua", fromFirstName: "Jordan", to: "Ellis", message: "running ten minutes late tomorrow", currentText: "tell Ellis running ten minutes late tomorrow" });
+  const relay = db.relays[0];
+  check("relay at night: queued, nothing sent", r.ok && (r as any).queued === true && outbox.length === 0 && relay?.status === "queued" && /hasn't reached them yet/.test((r as any).note));
+  check("relay: the recipient has no 'Co replied' line yet", memLines("ub").length === 0);
+  const senderFacts = await R.relayFacts("ua");
+  check("relayFacts (sender): queued, NOT reached them", senderFacts.length === 1 && /queued their message to Ellis/.test(senderFacts[0]) && /NOT reached Ellis/.test(senderFacts[0]) && !/Co passed their message/.test(senderFacts[0]));
+  check("relayFacts (recipient): nothing until it reaches them", (await R.relayFacts("ub")).length === 0);
+  const again = await R.relayMessage({ fromUserId: "ua", fromFirstName: "Jordan", to: "Ellis", message: "running ten minutes late tomorrow", currentText: "tell Ellis running ten minutes late tomorrow" });
+  check("relay: a queued one still counts toward one per pair per day", !again.ok && (again as any).reason === "rate_limited");
+  await D.runDueDeferredSends(db.deferred[0].due_at);
+  check("relay at their 9am: sent once, status sent, sent_at set", outbox.length === 1 && relay.status === "sent" && relay.sent_at instanceof Date && /Jordan asked me to pass this along/.test(outbox[0].content));
+  check("relay: the recipient's 'Co replied' line is written once, on delivery", memLines("ub").length === 1);
+  check("relayFacts after delivery: passed, for both sides", /Co passed their message to Ellis/.test((await R.relayFacts("ua"))[0] ?? "") && /Jordan asked Co to pass this along/.test((await R.relayFacts("ub"))[0] ?? ""));
+}
+{
+  // Inside their hours: sent now, recorded once (the old code wrote the recipient's line twice: once itself, once in sendExempt).
+  seed();
+  db.zones.set("Nightville", zoneAtHour(12));
+  const r = await R.relayMessage({ fromUserId: "ua", fromFirstName: "Jordan", to: "Ellis", message: "running ten minutes late tomorrow", currentText: "tell Ellis running ten minutes late tomorrow" });
+  check("relay by day: sent now, status sent, one 'Co replied' line", r.ok && !(r as any).queued && outbox.length === 1 && db.relays[0].status === "sent" && memLines("ub").length === 1 && db.deferred.length === 0);
+}
+
+// ---------------------------------------------------------------- 5. double cron runs don't double-send
+{
+  seed();
+  for (let i = 0; i < 3; i++) {
+    await P.sendExemptWhenAllowed({ userId: i % 2 ? "ub" : "ua", phoneNumber: i % 2 ? PHONE_B : PHONE_A, type: "direct_ask", targetKey: `k${i}`, messages: [`message ${i} for the morning`], timezone: "America/Los_Angeles", now: new Date("2026-10-08T06:30:00Z") });
+  }
+  const at = new Date("2026-10-08T16:00:00Z");
+  const [a, b] = await Promise.all([D.runDueDeferredSends(at), D.runDueDeferredSends(at)]);
+  check(`two overlapping runs: each row claimed once (${a.claimed}+${b.claimed})`, a.claimed + b.claimed === 3);
+  check("two overlapping runs: three rows, three texts", outbox.length === 3 && new Set(outbox.map((o) => o.content)).size === 3 && db.deferred.every((d) => d.status === "sent"));
+  // The process died mid-send: the row was left 'sending' after its text went out. Re-claimed later, it's "already sent".
+  seed();
+  await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "direct_ask", targetKey: "crash", messages: ["the crash case"], timezone: "America/Los_Angeles", now: new Date("2026-10-08T06:30:00Z") });
+  Object.assign(db.deferred[0], { status: "sending", claimed_at: new Date("2026-10-08T16:00:00Z"), attempts: 1 });
+  db.proactive.add("ua|crash"); // its send had committed before the crash
+  const notStale = await D.runDueDeferredSends(new Date("2026-10-08T16:05:00Z"));
+  check("a row mid-send is left alone while its claim is fresh", notStale.claimed === 0);
+  const re = await D.runDueDeferredSends(new Date("2026-10-08T16:15:00Z"));
+  check("after a crash mid-send: re-claimed, recorded as sent, no second text", re.claimed === 1 && re.sent === 1 && outbox.length === 0 && db.deferred[0].status === "sent");
+}
+
+// ---------------------------------------------------------------- 6. opt-out at send time cancels the send
+{
+  seed();
+  db.reminders.push({ id: 901, user_id: "ua", what: "book the table", due_at: new Date(Date.now() - 60_000), sent_at: null, queued_at: null });
+  await R.sendDueReminders();
+  db.users.get("ua")!.sms_opted_out = true; // STOP overnight
+  const r = await D.runDueDeferredSends(db.deferred[0].due_at);
+  check("opted out overnight: nothing sent in the morning", outbox.length === 0 && r.skipped === 1);
+  check("opted out: the row is skipped (not retried), with why", db.deferred[0].status === "skipped" && /opted out/.test(db.deferred[0].error ?? ""));
+  check("opted out: the reminder never reads as sent", db.reminders[0].sent_at === null && memLines("ua").length === 0);
+  const again = await D.runDueDeferredSends(new Date(db.deferred[0].due_at.getTime() + 3_600_000));
+  check("opted out: a later run doesn't try again", again.claimed === 0 && outbox.length === 0);
+}
+{
+  // The hours rule is the same at send time: a row due at night (e.g. queued by an older build) waits for 9am.
+  seed();
+  db.deferred.push({ id: 5000, user_id: "ua", phone_number: PHONE_A, type: "direct_ask", target_key: "late", messages: ["late one"], timezone: "America/Los_Angeles", after_kind: null, after_payload: null, due_at: new Date("2026-10-08T05:00:00Z"), status: "queued", attempts: 0, claimed_at: null, sent_at: null, error: null });
+  const r = await D.runDueDeferredSends(new Date("2026-10-08T05:00:00Z")); // 10pm in LA
+  check("send-time hours check: a due row at 10pm their time is put back to 9am, not sent", r.requeued === 1 && outbox.length === 0 && db.deferred[0].status === "queued" && db.deferred[0].due_at.toISOString() === "2026-10-08T16:00:00.000Z");
+}
+{
+  // Paused: the row waits; nothing is lost.
+  seed();
+  await P.sendExemptWhenAllowed({ userId: "ua", phoneNumber: PHONE_A, type: "direct_ask", targetKey: "paused", messages: ["while paused"], timezone: "America/Los_Angeles", now: new Date("2026-10-08T06:30:00Z") });
+  process.env.PROACTIVE_PAUSED = "true";
+  const r = await D.runDueDeferredSends(new Date("2026-10-08T16:00:00Z"));
+  delete process.env.PROACTIVE_PAUSED;
+  check("paused: nothing sent, the row waits", r.requeued === 1 && outbox.length === 0 && db.deferred[0].status === "queued");
+  await D.runDueDeferredSends(new Date("2026-10-08T16:06:00Z"));
+  check("unpaused: it sends", outbox.length === 1);
+}
+
+// ---------------------------------------------------------------- wiring
+{
+  const jobs = src("jobs/index.ts");
+  check("a minute cron runs the queue", /cron\.schedule\("\* \* \* \* \*"[\s\S]{0,200}runDueDeferredSends\(\)/.test(jobs));
+  const mig = src("db/migrations.ts");
+  check("migration: deferred_sends with its idempotency key, and the durable-send columns", /CREATE TABLE IF NOT EXISTS deferred_sends/.test(mig) && /UNIQUE \(user_id, target_key\)/.test(mig) && /member_reminders ADD COLUMN IF NOT EXISTS queued_at/.test(mig) && /member_relays ADD COLUMN IF NOT EXISTS sent_at/.test(mig));
+  const relay = src("services/relay.ts");
+  check("relay/reminder: no 'Co replied' line written by the caller (sendExempt writes it on delivery)", !/writeMemory/.test(relay));
+  check("intro asks open their pending question only once sent", /kind: "network_intro_ask"/.test(src("services/networkIntroNudge.ts")) && /kind: "event_direct_ask"/.test(src("services/eventGuestMatchHandoff.ts")));
+  check("the hours rule is unchanged (9am to 8pm)", P.RULES.startHour === 9 && P.RULES.endHour === 20);
+}
+
+// ---- batch 3 additions: an intro ask held past the event is dropped; the asker's side records it without a reason
+{
+  const D2 = await import("../../src/services/deferredSends.js");
+  check("'event over' is a skip, never a retry", D2.outcomeOf({ sent: false, reason: "event over" }, true) === "skipped");
+  const srcD = fs.readFileSync(new URL("../../src/services/deferredSends.ts", import.meta.url), "utf8");
+  check("an event intro ask checks the event is still on before sending", /row\.after_kind === "event_direct_ask" && \(await eventIsOver\(/.test(srcD));
+  check("an unsent intro ask is noted for the asker, never with a reason", /noteIntroAskNotSent\(p\)/.test(srcD) && /without any reason/.test(srcD) && !/opted out/.test(srcD.slice(srcD.indexOf("export async function noteIntroAskNotSent"), srcD.indexOf("export async function runAfter"))));
+}
+console.log(`\n${total - failed}/${total} passed`);
+(globalThis as any).setTimeout = realSetTimeout;
+process.exit(failed ? 1 : 0);
