@@ -175,5 +175,27 @@ check("no stock line survives anywhere in the built call prompt", stockLine(prom
   check("a prompt without the sections is left alone", guardrailsLast("hello").guardrails === "");
 }
 
+// ---- what the speech recognizer is told to expect (2026-10-06 call: "Co" heard as "you", "Boardy" as "Bumble")
+{
+  const { CALL_KEYWORDS, CALL_KEYWORDS_MAX, callKeywords } = await import("../../src/services/elevenLabsCalls.js");
+  const cfg: any = buildAgentConfig({ name: "t", prompt: read("prompts/co-system-prompt.md"), voiceId: "v", apiUrl: "https://x.test" });
+  const kw: string[] = cfg.conversation_config.asr.keywords;
+  check("the agent's recognizer is boosted for Co and Boardy", kw.includes("Co") && kw.includes("Boardy") && kw.includes("CoPatible"));
+  check("each call may add its own words (the agent allows the asr.keywords override)", cfg.platform_settings.overrides.conversation_config_override.asr?.keywords === true && cfg.platform_settings.overrides.conversation_config_override.agent.first_message === true);
+  const finds = "Candidates, not picks: mention only the one or two that fit.\nLooking for: founder and investor events\n- Netic Dance Workshop with Kyle Hanagami, BlackPink Choreographer | A free dance workshop Saturday | link on file\n- The Oakland Join-Up: Fall Activity Fair | Sunday 10 to 2 | link on file\n- Haunted Agent Night at Heavybit | starts tomorrow at 6:30 PM | link on file";
+  const per = callKeywords({ firstName: "Royce", findsNow: finds });
+  check("a call's words: the standing list first, then their first name", CALL_KEYWORDS.every((w, i) => per[i] === w) && per.includes("Royce"));
+  check("names in the titles of what Co found are added (people, venues, event names)", ["Netic Dance Workshop", "Kyle Hanagami", "BlackPink Choreographer", "The Oakland Join-Up", "Fall Activity Fair", "Haunted Agent Night"].every((w) => per.includes(w)), per);
+  check("descriptions and instruction lines are not mined ('Candidates', 'Saturday', 'Looking')", !per.some((w) => /Candidates|Saturday|Looking|Sunday/.test(w)), per);
+  check("deduped without regard to case (Heavybit is already standing)", per.filter((w) => w.toLowerCase() === "heavybit").length === 1);
+  check("nothing found: just the standing list and their name", callKeywords({ firstName: "Royce", findsNow: "Nothing to offer right now. Don't offer an event." }).join() === [...CALL_KEYWORDS, "Royce"].join());
+  const many = Array.from({ length: 80 }, (_, i) => `- Event Number${i} Gathering | x`).join("\n");
+  check(`capped at ${CALL_KEYWORDS_MAX}, the standing words kept`, callKeywords({ firstName: "Royce", findsNow: many }).length === CALL_KEYWORDS_MAX && callKeywords({ firstName: "Royce", findsNow: many }).includes("Boardy"));
+  const src = read("src/services/elevenLabsCalls.ts");
+  check("registration sends the call's words as the asr override, alongside the opening line", /conversationConfigOverride: \{\s*asr: \{ keywords: callKeywords\(\{ firstName: o\.firstName, findsNow: o\.findsNow \}\) \},\s*\.\.\.\(o\.opening \? \{ agent: \{ firstMessage: o\.opening \} \} : \{\}\),/.test(src));
+  const built: string = cfg.conversation_config.agent.prompt.prompt;
+  check("the call brain is told how Co and Boardy get misheard, and not to say the misheard word back", /Co, often arrives as "you"/.test(built) && /Boardy arrives as "Bumble"/.test(built) && /never say the misheard word back/.test(built));
+}
+
 console.log(`call opening rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

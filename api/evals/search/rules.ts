@@ -207,6 +207,8 @@ c(looksOfficial("https://www.sf.gov/departments", "SF Community Challenge Grants
 c(looksOfficial("https://millercenterglobal.org/accelerator/", "Miller Center Accelerator"), "a distinctive name word in the domain counts");
 c(!looksOfficial("https://techcrunch.com/2026/09/techstars", "Techstars Anywhere"), "a news story about a program isn't its page");
 c(!looksOfficial("not a url", "Anything"), "a bad url is never official");
+c(looksOfficial("https://www.leossf.com/", "Leo's Oyster Bar") && looksOfficial("https://narisf.com/", "Nari"), "a place's domain with its city added (leossf.com) is its own page");
+c(!looksOfficial("https://www.bestsf.com/leos", "Leo's Oyster Bar") && !looksOfficial("https://www.eatsf.com/", "Nari"), "a city-suffixed guide whose rest isn't the name's start isn't official");
 const longPage = "Intro. ".repeat(200) + "Past grantees. ".repeat(600) + "Want a $1000 grant? Our microgrants of $1,000 are given monthly.";
 const ex = pageExcerpt(longPage, { name: "Awesome Foundation SF", reason: "No-strings $1,000 microgrants every month.", deadline: null });
 c(ex.includes("$1000 grant") && ex.length <= 2500, "the drafting excerpt keeps the amount from deep in a long page, and stays short");

@@ -38,6 +38,21 @@ check("a missing field stays missing", v.find((f) => f.key === "minimum")?.value
 check("no date asked: no availability field at all", !Q.schemaFields("venue", {}, at).some((f) => f.key === "open"));
 check("a hedge the page didn't make is unknown", Q.schemaFields("venue", { rate: { value: "probably around $200 an hour", evidence: "$200" } }, at)[0].value === null);
 check("a hedge in the page's own words stands", Q.schemaFields("venue", { rate: { value: "might cost under $2,000", evidence: "a 49-person two hour daytime rental might cost under $2,000" } }, at)[0].value === "might cost under $2,000");
+{
+  const cap = (value: string) => Q.schemaFields("venue", { capacity: { value, evidence: value } }, at).find((f) => f.key === "capacity")?.value ?? null;
+  check("a group minimum isn't a capacity: it goes as unknown", ["16 people or more", "minimum 20 guests", "at least 10", "15+ guests", "Min. 12"].every((v) => cap(v) === null), ["16 people or more", "15+ guests"].map(cap));
+  check("a real capacity stands, ranges and maximums included", cap("Maximum seated: 40, maximum standing: 70") === "Maximum seated: 40, maximum standing: 70" && cap("8 to 150 guests seated") !== null && cap("up to 250 guests for a standing reception") !== null && cap("Mastro's Terrace: 80 seated or 200 standing") !== null);
+}
+// ---- the find (services/researchBrief.ts findVenueOptions): more than one angle, one option per place, factless own pages
+{
+  const rb = src("services/researchBrief.ts");
+  const find = rb.slice(rb.indexOf("export async function findVenueOptions"), rb.indexOf("type BriefParams"));
+  check("the find runs up to three passes, each later one naming what's already found", /const angles = \[/.test(find) && (find.match(/angles = \[([^\]]*)\]/)?.[1].split('", "').length ?? 0) === 3 && /already found/.test(find) && /\$\{seen \? ` \$\{seen\}\.` : ""\}/.test(find));
+  check("the find stops early only once it has a full brief's worth of distinct places", /if \(i > 0 && ownPlaces\(\)\.length >= BRIEF_LIMITS\.maxOptions\) break;/.test(find));
+  check("one option per place: a second page on the same site isn't another option", /placeKey\(x\) === placeKey\(k\)/.test(find) && /findIndex\(\(x\) => placeKey\(x\) === placeKey\(k\)\) === i/.test(find));
+  check("the find reads each own page itself, so a name-checked own page with no search details still counts", /readsPageItself: true/.test(find) && /ownPage: "private events or private dining page"/.test(find));
+  check("a brief heading is the place's core name, not a room the search named", /coreName\(k\.name\)\]/.test(find));
+}
 check("an estimate with no evidence is unknown", Q.schemaFields("event", { price: { value: "typically $30" } }, at).find((f) => f.key === "price")?.value === null);
 check("a long prose answer is replaced by the page's own short words", Q.schemaFields("venue", { capacity: { value: "x".repeat(200), evidence: "Up to 75 guests" } }, at).find((f) => f.key === "capacity")?.value === "Up to 75 guests");
 check("a long answer with no short quote is unknown", Q.schemaFields("venue", { capacity: { value: "x".repeat(200), evidence: "y".repeat(200) } }, at).find((f) => f.key === "capacity")?.value === null);

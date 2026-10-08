@@ -259,21 +259,23 @@ export function loopTools(
       execute: async ({ query, whileLooking }) => {
         if (ctx.stubSearch) return { ...STUB, posts: [] };
         if (outOfTime()) return OUT_OF_TIME;
-        const q = query.trim().slice(0, 120);
+        const q = query.trim().slice(0, 200);
         // The same daily X budget as the sweep, from the share kept for live asks.
         const { reserveXSearch } = await import("../services/tieredRecommendation.js");
         const budget = await reserveXSearch(ctx.userId, "request", q);
         if (!budget.ok) return { ok: false, error: `X search isn't available right now (${budget.reason ?? "daily budget"}); use webSearch instead.` };
         await hold(whileLooking);
-        const { searchRecentPosts } = await import("../services/xSearch.js");
-        const posts = await searchRecentPosts(q, 10).catch(() => null);
+        const { searchRecentPosts, X_SEARCH_RESULTS } = await import("../services/xSearch.js");
+        const posts = await searchRecentPosts(q, X_SEARCH_RESULTS).catch(() => null);
         await remember({ tried: [`x: ${q}`] });
         if (!posts) return { ok: false, error: "X search failed this time; use webSearch instead." };
         for (const p of posts) {
           const match = { tier: 3, kind: "opportunity", source: "x", name: p.text.slice(0, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
           loop.found.set(p.url, { name: p.text.slice(0, 80), url: p.url, facts: p.text, match, blocked: null });
+          // What the post links to (expanded from t.co), with the post as what's known about it, as readPage does for a page.
+          for (const l of p.links) if (!loop.found.has(l)) loop.found.set(l, { name: p.text.slice(0, 80), url: l, facts: p.text, match: null, blocked: null });
         }
-        return { ok: true, posts: posts.map((p) => ({ link: p.url, text: p.text.slice(0, 500) })), note: posts.length ? "Posts from the last week, as written. Judge them yourself; share only one whose own text backs what you'd say." : "No recent posts for that. Try other keywords or webSearch." };
+        return { ok: true, posts: posts.map((p) => ({ link: p.url, by: p.author ? `@${p.author}` : undefined, text: p.text.slice(0, 600), links: p.links.length ? p.links : undefined })), note: posts.length ? "Posts from the last week, as written. Judge them yourself; share only one whose own text backs what you'd say." : "No recent posts for that. Try other keywords or webSearch." };
       },
     }),
 

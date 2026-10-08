@@ -108,5 +108,29 @@ check("an offer to call, book or contact anyone is caught", ["Want me to call an
   check("a task text with links goes out link-then-caption, never links trailing a paragraph", /const messages = assembleMessages\(good, closing\)/.test(tt3) && /await deps\.send\(\[text\]\)/.test(tt3) && !/deps\.send\(\[text, \.\.\.known\]\)/.test(tt3));
 }
 
+// 5. Names with the search model's qualifiers (2026-10-07 live brief: "Beretta Mission (Private Dining Room)" dropped)
+{
+  check("the core name drops a parenthetical and anything after a spaced dash, slash, bar or colon", W.coreName("Beretta Mission (Private Dining Room)") === "Beretta Mission" && W.coreName("Copra - The Greenhouse / Mezzanine") === "Copra" && W.coreName("Perbacco — Barbaresco Room") === "Perbacco" && W.coreName("Nari: Suda Room") === "Nari" && W.coreName("Four Seasons San Francisco – MKT (Vista)") === "Four Seasons San Francisco");
+  check("a hyphenated or plain name is left whole", W.coreName("Mastro's Steakhouse") === "Mastro's Steakhouse" && W.coreName("Saint-Germain Room") === "Saint-Germain Room" && W.coreName("(Private)") === "(Private)");
+  const beretta = "Valencia | Beretta | Italian Restaurant in CA. Beretta Mission, 1199 Valencia Street. Group events for up to 40 guests seated.";
+  const bRaw = { name: "Beretta Mission (Private Dining Room)", url: "https://www.berettasf.com/valencia-2/", details: [{ label: "capacity", value: "up to 40 guests seated" }], date: null, deadline: null };
+  const bOwn = W.verifyResult(bRaw, beretta, { now, official: true });
+  check("a qualified name passes on its core name, and goes on as the core name", bOwn.kept?.name === "Beretta Mission" && bOwn.kept.facts.includes("capacity: up to 40 guests seated"), bOwn);
+  check("the full name stays when every word of it is on the page", W.verifyResult({ ...bRaw, name: "Beretta (Valencia)" }, beretta, { now, official: true }).kept?.name === "Beretta (Valencia)");
+  check("a core name that isn't on the page is still dropped", !W.verifyResult({ ...bRaw, name: "Delfina (Private Room)" }, beretta, { now, official: true }).kept);
+  const half = "Top 10 private dining rooms: Beretta Valencia seats 40, and more.";
+  check("on a page that isn't the place's own, every core word must be there", !W.verifyResult({ ...bRaw, name: "Beretta Mission (Private Dining Room)", url: "https://bestvenues-blog.com/top-10" }, half, { now, official: false }).kept && W.verifyResult({ ...bRaw, name: "Beretta Valencia (Private Dining Room)", url: "https://bestvenues-blog.com/top-10", details: [] }, half, { now, official: false }).kept?.name === "Beretta Valencia");
+  check("a qualifier's generic words never carry a name the page doesn't have", !W.verifyResult({ ...bRaw, name: "Delfina Mission (Private Dining Room)", url: "https://bestvenues-blog.com/top-10" }, `${half} Mission district.`, { now, official: false }).kept);
+  check("nameAllOnPage needs every word", W.nameAllOnPage("Leo's Oyster Bar", "Leo’s Oyster Bar - San Francisco") && !W.nameAllOnPage("Leo's Oyster Bar Private Events", "Leo’s Oyster Bar - San Francisco"));
+  let asked = "";
+  await W.pickPage({ ...bRaw, url: "https://www.7x7.com/best-private-dining-rooms-sf" }, { read: async () => "page", official: async (n) => { asked = n; return null; } });
+  check("a listicle result is looked up by its core name", asked === "Beretta Mission", asked);
+  const many = JSON.stringify({ items: Array.from({ length: 6 }, (_, i) => ({ name: `Place ${i}`, url: `https://p${i}.com/`, details: [] })) });
+  check("a search keeps as many results as it asked for (up to 6), three by default", W.parseRawResults(many).length === 3 && W.parseRawResults(many, 6).length === 6 && W.parseRawResults(many, 10).length === 6);
+  const factless = [{ name: "Copra", url: "https://www.coprarestaurant.com/private-events", official: true, facts: [], date: null, deadline: null }, { name: "Del Popolo", url: "https://www.7x7.com/x", official: false, facts: [], date: null, deadline: null }];
+  check("a name with no verified facts is dropped by default", W.withVerifiedFacts(factless).kept.length === 0);
+  check("a caller that reads the page itself keeps a factless OWN page, never a factless listicle", W.withVerifiedFacts(factless, { ownPageReadAfter: true }).kept.map((k) => k.name).join() === "Copra");
+}
+
 console.log(`task web rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

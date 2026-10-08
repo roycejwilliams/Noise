@@ -93,7 +93,7 @@ export const FIND_SCHEMAS: Record<FindType, SchemaField[]> = {
   venue: [
     { key: "rate", label: "Rate", ask: "the rental rate, price or minimum spend as stated (with its unit, like an hour or the night)", freshKey: "price" },
     { key: "minimum", label: "Minimum", ask: "the minimum booking length", freshKey: "terms" },
-    { key: "capacity", label: "Capacity", ask: "the largest group it can host, as stated", freshKey: "capacity" },
+    { key: "capacity", label: "Capacity", ask: "the largest group it can host, as stated (a minimum group size is not this)", freshKey: "capacity" },
     { key: "open", label: "Open", ask: "whether it is open on the date and time asked", freshKey: "availability" },
     { key: "inquire", label: "How to book", ask: "how to book or inquire: the form's page, or the email or phone given for events", freshKey: "terms" },
   ],
@@ -109,6 +109,8 @@ export const FIND_SCHEMAS: Record<FindType, SchemaField[]> = {
 // A value that guesses rather than reports. Allowed only when the page itself said it that way (it's in the quoted evidence).
 export const HEDGE = /\b(probably|likely|approximately|approx\.?|roughly|estimated|presumably|typically|usually|generally|seems?|appears? to|should be|may be|might be|could be|around|about)\b|~/i;
 export const MAX_VALUE_CHARS = 140;
+// A number stated as a floor ("16 people or more", "minimum 20", "at least 10", "15+ guests").
+export const LOWER_BOUND = /\b(or more|or above|or larger|and up|minimum|at least|min\.?)(?=\W|$)|\d\s*\+(?!\s*\d)/i;
 
 export type FieldValue = { value: string | null; evidence?: string | null };
 export type FindField = { key: string; label: string; value: string | null; checkedAt: string };
@@ -125,6 +127,9 @@ export function schemaFields(type: FindType, read: Record<string, FieldValue | u
       if (v) v = v.replace(new RegExp(`^(${f.label}|${f.key.replace(/_/g, " ")})\\s*:\\s*`, "i"), "").trim() || null;
       const ev = r?.evidence?.trim() || null;
       if (v && HEDGE.test(v) && !(ev && HEDGE.test(ev))) v = null;
+      // A capacity is the most a place holds; a floor isn't one (2026-10-07 live brief: Corzetti's "16 people or more", its
+      // group-booking minimum, went out as its capacity).
+      if (v && f.key === "capacity" && LOWER_BOUND.test(v)) v = null;
       if (v && v.length > MAX_VALUE_CHARS) v = ev && ev.length <= MAX_VALUE_CHARS ? ev : null;
       return { key: f.key, label: f.key === "open" && opts.slotLabel ? `Open ${opts.slotLabel}` : f.label, value: v, checkedAt };
     });

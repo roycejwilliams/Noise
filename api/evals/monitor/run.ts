@@ -44,6 +44,8 @@ const WRITTEN_DECISIONS = [
   "proactive.windowFollowUp", "proactive.exemptSend", "tier1.announce", "call.gate",
   // Written by the companion cron (jobs/index.ts, services/understanding.ts).
   "understanding.check",
+  // Written by the daily sweep's finding (services/sweepFind.ts).
+  "sweep.find",
   // Every tool Co chooses writes tool.<name> (agent/toolGuard.ts, 2026-09-25).
   "tool.%", ...ABILITIES.filter((a) => a.tool).map((a) => `tool.${a.tool}`),
   // Extensions' tools write the same, per team turn (services/extensions.ts).
