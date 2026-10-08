@@ -62,7 +62,7 @@ check("it must use their name", why("It's Co. Last we talked you were finding sp
 check("a name or place that isn't in what Co knows is refused", /not in what Co knows: Berkeley/.test(why("Hey Royce, it's Co. How did Berkeley go?") ?? "") && /not in what Co knows: 14/.test(why("Hey Royce, it's Co. Did the 14 sponsors reply?") ?? ""));
 check("a possessive of a name that is in what Co knows is accepted", openingProblems("Hey Royce, it's Co. Did the Civic Joy Fund's sponsor come through?", "Civic Joy Fund fell through. " + "pad ".repeat(100), "Royce") === null);
 check("a possessive of a name that isn't there is still refused", /not in what Co knows: Berkeley/.test(openingProblems("Hey Royce, it's Co. Did Berkeley's host reply?", "Civic Joy Fund fell through. " + "pad ".repeat(100), "Royce") ?? ""));
-check("Haiku (inbound) is not sent an effort setting it rejects; Sonnet (outbound) is", /\.\.\.\(o\.direction === "outbound" \? \{ providerOptions: \{ anthropic: \{ effort: "low" as const \} \} \} : \{\}\)/.test(read("src/services/callOpening.ts")));
+check("inbound Haiku 5.x is asked directly with thinking off (ai-sdk drops it); outbound Sonnet 4.6 gets no effort option", /thinking: \{ type: "disabled" \}/.test(read("src/services/callOpening.ts")) && /\^claude-sonnet-4\/\.test\(model\) \? \{\}/.test(read("src/services/callOpening.ts")) && OPENING_WRITER.outboundModel === "claude-sonnet-4-6");
 check("Co and I aren't treated as names; sentence starts aren't either", ok("Hey Royce, it's Co. Did the sponsor search move?") && ok("Royce, hi. I wanted to hear about the sponsors."));
 check("never names or guesses a feeling", why("Hey Royce, it's Co. You sound stressed about the sponsors.") === "names a feeling" && why("Hey Royce, I'm hearing frustration about the sponsors.") === "names a feeling");
 check("no cue, bracket, dash or placeholder", why("[warmly] Hey Royce, it's Co.") === "brackets or a cue" && why("Hey Royce, it's Co {{x}}") === "brackets or a cue" && why("Hey Royce — it's Co.") === "a dash" && why("Hey Royce, it's Co -- sponsors?") === "a dash");
@@ -101,7 +101,9 @@ const shared = read("prompts/co-system-prompt.md");
 const forCall = promptForElevenLabs(shared);
 // "It should never say the scripted things" (Royce, 2026-10-04; 2026-10-08 call review: "Got it... So the October date is off...
 // What's the piece that feels most unsettled?"). The voice layer quotes no ready-made acknowledgement, reflection or question.
-check("the voice layer quotes no example lines for Co to copy (only the 'sounds good' notes and the 'hello?' cue)", shared.split("\n").every((l) => !/"[^"]*\s[^"]*\s[^"]*[.?!]"/.test(l)));
+// What the member might say ("is that possible?", "what should I do") may be quoted; a line for Co to say may not.
+const THEIR_WORDS = /^(?:is that possible\?|what should I do,?|can you point me somewhere,?|what do you think|I just don't know what to do|hello\?)$/i;
+check("the voice layer quotes no example lines for Co to copy (only things the member might say)", [...shared.matchAll(/"([^"]*\s[^"]*\s[^"]*[.?!])"/g)].every((m) => THEIR_WORDS.test(m[1].trim())), [...shared.matchAll(/"([^"]*\s[^"]*\s[^"]*[.?!])"/g)].map((m) => m[1]));
 check("the call prompt quotes no ready-made acknowledgement, reflection or question for Co to repeat", !/changed a lot of things|takes courage to sit with|finding your footing|a lot happening at once|a lot is changing at once|real shift|tell me what you're working toward now|what matters most to you right now|get one of these right|Does that cover what you needed|piece that feels most unsettled/i.test(forCall));
 check("a first call (empty context) is still pointed somewhere real", /If that's empty, this is your first real conversation/.test(forCall));
 check("the opening note: already said, don't repeat, carry on from it, never fall back to a general question", /already been said/.test(OPENING_NOTE) && /Don't greet them again or repeat it/.test(OPENING_NOTE) && /Carry on from it/.test(OPENING_NOTE) && /general/.test(OPENING_NOTE) && !/first real question/.test(OPENING_NOTE));
@@ -152,7 +154,7 @@ check("a relative time not in the context is refused", bad("Hey Royce, it's Co. 
 check("a plain feeling word is refused", bad("Hey Royce, it's Co. Still stressed about the sponsors?"));
 check("a short first name does not match inside another word", bad("Hey there, it's Co. Any luck with the Fund?") && openingProblems("Hey Roy, it's Co. Any luck with the Fund?", CTX, "Roy") === null);
 check("a grounded line still passes", openingProblems("Hey Royce, it's Co. Last we talked the Civic Joy Fund fell through, any luck finding another sponsor?", CTX, "Royce") === null);
-check("inbound waits at most 700ms for the writer", OPENING_WRITER.inboundBudgetMs <= 700);
+check("inbound waits at most 1.2s for the writer (it writes in ~0.7-1s)", OPENING_WRITER.inboundBudgetMs <= 1200);
 check("the writer reads as much context as a call gets", OPENING_WRITER.maxContext >= CALL_CONTEXT_MAX);
 check("a first call writes no opening", (await (await import("../../src/services/callOpening.js")).writeOpening({ firstName: "Sam", direction: "outbound", summary: "short" })).line === null);
 {

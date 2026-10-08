@@ -32,9 +32,11 @@ export const OPENING_WRITER = {
   maxChars: 220,
   maxWords: 40,
   // Outbound: written while it rings. Inbound: a short wait, then the pool.
-  outboundModel: MODELS.sonnet,
+  // Hume's brain (claude-sonnet-4-6, 2026-10-08 Royce: "put what the Hume prompt and model had into ElevenLabs"): no default thinking.
+  outboundModel: "claude-sonnet-4-6",
   inboundModel: MODELS.haiku,
-  inboundBudgetMs: 700,
+  // Haiku 5.5 with thinking off writes in ~0.7-1s; 0.7s was always missed (inbound always fell back to the pool).
+  inboundBudgetMs: 1200,
   takeBudgetMs: 800,
   ttlMs: 5 * 60 * 1000,
 };
@@ -51,14 +53,17 @@ export function openingContext(summary: string): string {
     .join("\n\n");
 }
 
-export function openingPrompt(o: { firstName: string; direction: "inbound" | "outbound"; summary: string }): string {
+export function openingPrompt(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; recent?: string[] }): string {
   return `You're writing the first thing Co says when a phone call connects. Co is a calm, warm companion who already knows ${o.firstName || "this person"} and has talked with them before. ${o.direction === "outbound" ? `Co is calling them, so Co says who it is ("it's Co").` : "They called Co."}
 
 What Co knows about them (this is all you may use):
 ${o.summary.slice(0, OPENING_WRITER.maxContext)}
 
-Write ONE spoken line, two short sentences at most and under 28 words: greet ${o.firstName || "them"} by name, then pick up from ONE specific, real thing in what Co knows, as a light question or as "last we talked ...". Pick up from the most recent real thread: what's under "Where things stand now" and the newest of "Your last calls" come first, especially something Co owes them or is working on for them. Never pick up something they've already told Co is off, changed or done, and never repeat back news from the last call as if it were new. Never say Co did, drafted, sent or found something unless what Co knows says it was done: something Co still owes them is still owed.
-
+Write ONE spoken line, two short sentences at most and under 28 words, greeting ${o.firstName || "them"} by name.${o.direction === "inbound" ? ` They called Co, so they likely have something on their mind: greet them warmly and let them lead. A light touch of one real thing is fine; never open with Co's own agenda.` : ` Then pick up from ONE specific, real thing in what Co knows, as a light question or as "last we talked ...". It can be the newest thread, something Co owes them, or something about them and their week: whatever a friend who knows them would naturally bring up.`}
+Never pick up something they've already told Co is off, changed or done, and never repeat back news from the last call as if it were new. Never say Co did, drafted, sent or found something unless what Co knows says it was done: something Co still owes them is still owed.
+${o.recent?.length ? `How you opened your last calls with them (never reuse their words, and don't lead with the same thing again):
+${o.recent.map((l) => `- ${l}`).join("\n")}
+` : ""}
 Rules:
 - Only use facts that are in what Co knows. No times, places, names or numbers that aren't there.
 - Never name or guess how they feel or sound.
@@ -129,21 +134,49 @@ export function openingVerdict(raw: string, summary: string, firstName: string):
   return why ? { ok: false, why } : { ok: true, line: raw.trim().replace(/^["“']|["”']$/g, "").trim() };
 }
 
-export async function writeOpening(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number }): Promise<{ line: string | null; why?: string }> {
+// How Co opened its last calls with them (written or pool), newest first: the writer avoids their words and their angle
+// (2026-10-08: openings repeated call after call).
+export async function recentOpenings(userId: string, n = 4): Promise<string[]> {
+  const { default: pool } = await import("../db/db.js");
+  const { rows } = await pool.query(
+    `SELECT COALESCE(proposal->>'line', proposal->>'text') AS line FROM harness_decisions
+     WHERE user_id = $1 AND decision = 'call.opening' AND COALESCE(proposal->>'line', proposal->>'text') IS NOT NULL
+     ORDER BY created_at DESC LIMIT $2`,
+    [userId, n],
+  );
+  return rows.map((r: any) => String(r.line)).filter(Boolean);
+}
+
+export async function writeOpening(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number; userId?: string }): Promise<{ line: string | null; why?: string }> {
   if (o.summary.trim().length < OPENING_WRITER.minContext) return { line: null, why: "no context yet (a first call)" };
   // Written from, and checked against, the same trimmed context.
   const summary = openingContext(o.summary);
   try {
-    const { text } = await generateText({
-      model: anthropic(o.direction === "outbound" ? OPENING_WRITER.outboundModel : OPENING_WRITER.inboundModel),
-      maxOutputTokens: 120,
-      // A one-line writing job: low effort so thinking can't eat the cap (evals/guards).
-      // Haiku takes no effort setting (and needs none).
-      ...(o.direction === "outbound" ? { providerOptions: { anthropic: { effort: "low" as const } } } : {}),
-      abortSignal: AbortSignal.timeout(o.timeoutMs ?? 20_000),
-      experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening" },
-      prompt: openingPrompt({ ...o, summary }),
-    });
+    const model = o.direction === "outbound" ? OPENING_WRITER.outboundModel : OPENING_WRITER.inboundModel;
+    const recent = o.userId ? await recentOpenings(o.userId).catch(() => [] as string[]) : [];
+    const prompt = openingPrompt({ ...o, summary, recent });
+    const signal = AbortSignal.timeout(o.timeoutMs ?? 20_000);
+    // Haiku 5.x thinks by default and ai-sdk drops a "disabled" thinking option: on the inbound budget it used the whole cap and
+    // wrote nothing, every call (2026-10-08: 4 of 4 empty, 1.2-1.5s against a 0.7s budget), so inbound calls always fell back to
+    // the pool. Asked directly, with thinking off, as the call brain's proxy does.
+    const text = /^claude-haiku-5/.test(model)
+      ? await (async () => {
+          const Anthropic = (await import("@anthropic-ai/sdk")).default;
+          const r: any = await new Anthropic().messages.create({ model, max_tokens: 120, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal });
+          return (r.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
+        })()
+      : (
+          await generateText({
+            model: anthropic(model),
+            maxOutputTokens: 120,
+            // A one-line writing job: low effort so thinking can't eat the cap (evals/guards). Sonnet 4.x neither thinks by default
+            // nor takes an effort option.
+            ...(/^claude-sonnet-4/.test(model) ? {} : { providerOptions: { anthropic: { effort: "low" as const } } }),
+            abortSignal: signal,
+            experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening" },
+            prompt,
+          })
+        ).text;
     const v = openingVerdict(text, summary, o.firstName);
     return v.ok ? { line: v.line } : { line: null, why: v.why };
   } catch (err: any) {
@@ -155,7 +188,7 @@ export async function writeOpening(o: { firstName: string; direction: "inbound" 
 const pending = new Map<string, { at: number; line: Promise<{ line: string | null; why?: string }> }>();
 
 export function prebuildOpening(userId: string, firstName: string, direction: "inbound" | "outbound", summary: Promise<string>, now = Date.now()): void {
-  pending.set(userId, { at: now, line: summary.then((s) => writeOpening({ firstName, direction, summary: s })).catch(() => ({ line: null, why: "failed" })) });
+  pending.set(userId, { at: now, line: summary.then((s) => writeOpening({ firstName, direction, summary: s, userId })).catch(() => ({ line: null, why: "failed" })) });
 }
 
 export async function takeOpening(userId: string, waitMs = OPENING_WRITER.takeBudgetMs, now = Date.now()): Promise<{ line: string | null; why?: string }> {

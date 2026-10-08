@@ -23,7 +23,8 @@ const NOW = new Date("2026-10-06T20:00:00Z");
 // The call no longer runs a goals-and-asks interview (2026-10-08: the scripted Hume-era guide is gone; Co decides
 // from what it knows, as in texts). Goals and asks still come out of the call afterwards (captureIntent below).
 const callPrompt = E.promptForElevenLabs(prompt);
-check("the call prompt runs no goals-and-asks interview or Rapport list", !/GOALS AND ASKS|what are you moving toward these next few months|here's what I'm carrying for you|Rapport/.test(callPrompt));
+// 2026-10-08: the call prompt is Hume's again (Royce), Rapport and all; what stays out is the repo-only goals-and-asks interview.
+check("the call prompt runs no goals-and-asks interview", !/GOALS AND ASKS|what are you moving toward these next few months|here's what I'm carrying for you/.test(callPrompt));
 const ex = X.captureIntentPrompt("user: I'm moving toward getting Co in front of users\nassistant: here's what I'm carrying for you...\nuser: no, the first thing is pre-seed", "whole_transcript");
 check("the extraction takes direction as entries too, and treats the corrected playback as the final list", /DIRECTION they said they are moving toward over the next few months/.test(ex) && /the CORRECTED version is the final list/.test(ex) && X.normalizeCapturedAsks({ asks: Array.from({ length: 12 }, (_, i) => ({ text: `entry ${i}`, type: "seeking" as const })) } as any, "whole_transcript").length === 8);
 

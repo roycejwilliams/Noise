@@ -9,7 +9,7 @@
 // Rollback: CALL_LLM_PROXY off (the agent config goes back to ElevenLabs' own Haiku; push the agent) or CALL_LLM_CLEAN=off here
 // (the stream passes through untouched, no push needed).
 import { SpeakableStream } from "./speakable.js";
-import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, UNSURE_NAME, UNSURE_NUMBER, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
+import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
 import { DRAINED_MAX_SENTENCES, DRAINED_NOTE, memberStateSignal } from "./memberState.js";
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
@@ -36,7 +36,9 @@ export type CallToolset = {
   afterTurn?: (t: { spoken: string[]; ran: string[] }) => Promise<unknown> | void;
 };
 
-export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-haiku-5-5";
+// Hume's brain (2026-10-08, Royce chose it over Haiku 5.5 for depth: ~1.4s to first words vs ~0.7s): Sonnet 4.6, temperature from the
+// agent (1, as Hume ran it), no default thinking.
+export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-sonnet-4-6";
 const DEFAULT_MAX_TOKENS = 500;
 
 type OaiContent = string | { type?: string; text?: string }[] | null | undefined;
@@ -199,6 +201,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const coBefore = [...b.messages.slice(0, lastAt)].reverse().find((m) => m.role === "assistant" && textOf(m.content ?? "").trim());
   const saidGoodbye = !!coBefore && textOf(coBefore.content ?? "").split(/(?<=[.!?])\s+/).slice(-2).some((x) => GOODBYE.test(x.trim()));
   let repeatGoodbye = false;
+  const heldWhy: string[] = [];
   const unsureSaid = new Set<string>();
   let heldEvent = false;
   const say = (s: string): string | null => {
@@ -220,18 +223,13 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         const why = p.kind === "promise" ? `promises later work nobody asked for: ${p.missing.join(", ")}` : `names what nothing backs: ${p.missing.join(", ")}`;
         // "I'm not sure" only answers a question they asked for that name or number; said unprompted it's a non sequitur
         // (2026-10-08 live call: a dropped line came out as "...on your side. I'm not sure of the name.").
-        const unsure = !askedForSpecific ? null : p.kind === "name" ? UNSURE_NAME : p.kind === "number" ? UNSURE_NUMBER : null;
-        if (unsure && !unsureSaid.has(unsure)) {
-          unsureSaid.add(unsure);
-          deps.onDropped?.(sentence, `${why}; said "${unsure}" instead`);
-          line = unsure;
-          out = `${unsure} `;
-        } else {
-          deps.onDropped?.(sentence, why);
-          if (p.kind === "event") heldEvent = true;
-          blanked = true;
-          return null;
-        }
+        // Never a line written for Co (2026-10-08, Royce: "the model controls the response, no scripted lines"): the sentence is
+        // dropped, and if nothing else is said this turn Co says it again in its own words without it (below).
+        deps.onDropped?.(sentence, why);
+        heldWhy.push(why);
+        if (p.kind === "event") heldEvent = true;
+        blanked = true;
+        return null;
       }
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
@@ -337,6 +335,31 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     yield chunk({}, "tool_calls");
     return;
   }
+  // Held back and the turn is left without an answer (nothing said, or they asked for a name or number and that was what was held):
+  // Co answers again, once, in its own words, without what it couldn't back. Never a line written for it.
+  const heldAnswer = askedForSpecific && heldWhy.some((w) => /^names what nothing backs/.test(w));
+  if (blanked && finish !== "tool_calls" && heldWhy.length && (!spokeAny || heldAnswer)) {
+    const already = spokenLines.length ? ` You already said: "${spokenLines.join(" ")}". Carry on from it; don't repeat it.` : "";
+    const note = `What you were about to say included something you can't back here (${[...new Set(heldWhy)].slice(0, 3).join("; ")}). Answer them again, in your own words, without it.${askedForSpecific ? " If they asked for a name, place or number you don't have, say plainly that you don't know it." : ""} Don't promise anything they didn't ask for.${already}`;
+    const retry: ARequest = { ...req, system: [...req.system, { type: "text", text: note } as any], ...(req.tools?.length ? { tool_choice: { type: "none" as const } } : {}) } as ARequest;
+    let rs: SpeakableStream | null = null;
+    try {
+      for await (const ev of deps.stream(retry)) {
+        if (ev.type === "content_block_start" && ev.content_block?.type === "text") rs = mk();
+        else if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && typeof ev.delta.text === "string") {
+          if (!rs) rs = mk();
+          if (!clean) { const out = say(ev.delta.text); if (out) yield chunk({ content: out }); continue; }
+          for (const x of rs.push(ev.delta.text)) { const out = say(x); if (out) yield chunk({ content: out }); }
+        } else if (ev.type === "content_block_stop" && rs) {
+          if (clean) for (const x of rs.end()) { const out = say(x); if (out) yield chunk({ content: out }); }
+          rs = null;
+        }
+      }
+    } catch (err: any) {
+      console.error("call: the held-turn retry failed (non-fatal):", err?.message ?? err);
+    }
+  }
+  // Last resort only (the retry was held back too, or failed): one plain line, never silence.
   if (blanked && !spokeAny && finish !== "tool_calls") {
     const line = heldEvent ? SAFE_LINE : HELD_LINE;
     spokenLines.push(line);

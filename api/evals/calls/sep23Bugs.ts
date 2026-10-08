@@ -108,8 +108,8 @@ user: Yes please`;
 // ---------------------------------------------------------------- #3 and #5 the call's end and its summary
 {
   const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-  check("#3 'sounds good' / 'thank you' are not goodbyes", /"Sounds good", "thanks" and "okay" are answers, not goodbyes/.test(prompt));
-  check("#3 the close ends with a spoken goodbye, said once, only at the real end, then end_call (2026-10-08: a goodbye after an ordinary tool turn, and \"Still there?\" after a goodbye)", /say goodbye once, warmly, using their name, and end the call with end_call/.test(prompt) && /only at the real end of the call/.test(prompt) && /Never sign off at the end of an ordinary turn/.test(prompt) && /never ask whether they're still there/.test(prompt));
+  check("#3 'sounds good' / 'thank you' are not goodbyes", /"Sounds good," "thank you," and "okay" are them answering what you just said, not a goodbye/.test(prompt));
+  check("#3 the close ends with a spoken goodbye, said once, only at the real end, then end_call (2026-10-08: a goodbye after an ordinary tool turn, and \"Still there?\" after a goodbye)", /Say that goodbye once/.test(prompt) && /end the call with end_call and say nothing more/.test(prompt) && /only at the real end of the call/.test(prompt) && /never sign off at the end of an ordinary turn/.test(prompt) && /never asking whether they're still there/.test(prompt));
   check("#3 every name placeholder is one Hume fills in", !/(?<!\{)\{first_name\}(?!\})/.test(prompt));
   const { callSummaryPrompt } = await import("../../src/services/callContext.js");
   const sp = callSummaryPrompt("user: hi");
@@ -132,7 +132,7 @@ user: Yes please`;
   const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
   check("speech: no dashes anywhere in the call prompt (Co copies its style; a spoken dash is a run-on)", !/[—–]/.test(prompt));
   check("speech: short spoken sentences, never a dash", /Short sentences, one thought each/.test(prompt) && /Never put a dash in what you say/.test(prompt));
-  check("speech: one question per turn, never re-asked in other words", /One question at a time\./.test(prompt) && /Never follow it with the same question in other words/.test(prompt));
+  check("speech: one question per turn, never re-asked in other words", /Ask one question per turn\./.test(prompt) && /never follow it with the same question in other words/.test(prompt));
   check("speech: 'hello?' mid-call means the line seemed to drop, not a new call", /say you're still here and pick up where you were, never greet them like a new call/.test(prompt));
 }
 
