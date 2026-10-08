@@ -126,8 +126,8 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("last night's words are the signal", M.memberStateSignal("Um, I've just been kinda stressed, uh, lately, and I'm just trying to figure out what's next."));
   sys = ""; spoken.length = 0;
   for await (const _ of P.runCallLlm(baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: "Can you send the PDF on Sequent AI?" }] }), { stream: spy(text(long)), onSpoken: (s) => spoken.push(s) })) { /* drain */ }
-  // 2026-10-08: one question per turn is a hard rule in code: the turn ends at its first question ("Want the links?").
-  check("any other turn: no note, and the turn ends at its first question", !/they told you how they are/.test(sys) && /\?$/.test(spoken[spoken.length - 1] ?? "") && spoken.filter((x) => /\?$/.test(x)).length === 1, spoken);
+  // 2026-10-08: one question per turn is a hard rule in code: a second question is dropped; statements after the first stay.
+  check("any other turn: no note, and at most one question", !/they told you how they are/.test(sys) && spoken.filter((x) => /\?$/.test(x)).length <= 1, spoken);
   // the tool round after the same drained message keeps the note
   sys = ""; spoken.length = 0;
   const afterTool = baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: yes[0] }, { role: "assistant", content: "", tool_calls: [{ id: "t1", type: "function", function: { name: "assess_conversation_coverage", arguments: "{}" } }] }, { role: "tool", tool_call_id: "t1", content: "{}" }] });

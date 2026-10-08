@@ -31,6 +31,16 @@ const day = () => "Oct 8";
   check("...and appears once, as something they have, with when", r.theyHaveIt.length === 1 && /Co Presence Plan/.test(r.theyHaveIt[0]) && /sent Oct 8/.test(r.theyHaveIt[0]), r.theyHaveIt);
   check("an open, different item stays where things stand", r.open.length === 1 && /caterer/.test(r.open[0].text));
   check("a recap or thread sentence about what they have is covered (dropped from the context)", r.covered("Royce discussed the finished post-event presence doc, which will be sent to Royce's texts the next morning.") && !r.covered("Royce is stressed about what's next after building Co."));
+  // Review of #110: never drop what Co still owes, or the member's own life.
+  const owed = CC.collapseCarried([
+    { text: "Oct 5: Promised on the call: send the restaurant shortlist. Sent.", from: "promise" as const, sent: true },
+    { text: "Oct 5: Promised on the call: draft the investor update email outline. Not sent yet.", from: "promise" as const, sent: false },
+  ], [], day);
+  check("a different deliverable promised the same day stays open (the same-call rule is only for rewordings)", owed.open.some((l) => /investor update/.test(l.text)), owed.open);
+  const place = CC.collapseCarried([{ text: "find a pitch coach in San Francisco: research started", from: "loop" as const }], [{ title: "San Francisco dinner options for Friday", at: new Date() }], day);
+  check("a shared place name never matches two different things", place.open.length === 1);
+  const own = CC.collapseCarried([], [{ title: "Investor meeting prep brief", at: new Date() }, { title: "SF dinner options", at: new Date() }], day);
+  check("the member's own deck and plans are never removed from threads or recap", !own.covered("Their pitch deck for the investor meeting on Thursday is nearly done.") && !own.covered("putting together a plan for their mom's birthday dinner in San Francisco Friday."));
   const dup = CC.collapseCarried([
     { text: "Oct 9: Promised on the call: send three private dining options near Hayes Valley. Not sent yet.", from: "promise" as const, sent: false },
     { text: "Keep your word: send three private dining options near Hayes Valley for the 20th: searching, 1 option verified", from: "loop" as const },
@@ -60,11 +70,18 @@ const day = () => "Oct 8";
   };
   const dashed = await run("[softly] Losing someone who believed in you early on — that's its own kind of grief. Take your time.");
   check(`voice-only: an em dash never reaches the voice ("${dashed}")`, !/[—–]/.test(dashed) && /early on\. That's its own kind of grief\./.test(dashed));
-  const two = await run("A month in, new city, new job. What's the work like day to day? I'm curious what drew you to climate.");
-  check(`voice-only: a turn ends at its first question ("${two}")`, /day to day\?$/.test(two) && !/curious/.test(two));
+  // Review of #110: only a second QUESTION is dropped; statements after the question stay (answers aren't cut).
+  const two = await run("A month in, new city, new job. What's the work like day to day? I'm curious what drew you to climate. What made you pick it?");
+  check(`voice-only: a second question is dropped, the statement after the first stays ("${two}")`, /day to day\?/.test(two) && /curious what drew you to climate\./.test(two) && !/pick it/.test(two));
+  const echo = await run("The dinner? It's Friday at seven, at Nopa.");
+  check(`voice-only: an echo question never cuts the answer ("${echo}")`, /Friday at seven/.test(echo));
+  const rhet = await run("Honestly? I think you should go. What's holding you back?");
+  check(`voice-only: a one-word rhetorical question isn't the turn's question ("${rhet}")`, /What's holding you back\?/.test(rhet));
   const twoQ = await run("What kind of messages are you getting? Like, people wanting to come, or something else?");
   check("voice-only: never two questions in one turn", (twoQ.match(/\?/g) ?? []).length === 1);
   const safety = await run("Are you safe right now? If you're not, call or text 988, any time. I'm staying right here with you.");
+  const lifeline = await run("Are you safe right now? If not, please reach out to the crisis lifeline by calling nine eight eight. Is someone with you tonight?");
+  check(`voice-only: a safety turn has no question limit and keeps every help line ("${lifeline}")`, /nine eight eight/.test(lifeline) && /someone with you tonight\?/.test(lifeline));
   check(`voice-only: a safety line after the question is never cut ("${safety}")`, /988/.test(safety) && /Are you safe right now\?/.test(safety));
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));

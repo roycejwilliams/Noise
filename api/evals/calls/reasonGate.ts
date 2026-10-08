@@ -225,5 +225,12 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
   check("a no-reason skip keeps the stamp (next cadence slot re-checks), an hours block still retries", /blockedForNoReason\(result\.error\) && !\/8am-9pm\/\.test\(result\.error\)\) \{[\s\S]*?continue;/.test(job));
 }
 
+// Review of #110: homework in disguise is never a reason.
+{
+  const R2 = await import("../../src/services/callReason.js");
+  check("'waiting on the dinner plan Co is putting together' is Co's work, not a reason", R2.coWorkWhy("waiting on the dinner plan Co is putting together", []) !== null);
+  check("'excited to get the research on coworking spaces' is Co's work, not a reason", R2.coWorkWhy("excited to get the research on coworking spaces", []) !== null);
+  check("their own news still is a reason ('nervous about the Thursday pitch')", R2.coWorkWhy("nervous about the Thursday pitch", []) === null);
+}
 console.log(`call reason gate: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

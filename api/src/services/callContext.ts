@@ -203,8 +203,22 @@ export function promiseFacts(rows: { at: Date | string; content: string }[]): { 
 // mentioned only if it changed since they last heard about it, or they ask. Pure.
 export type CarriedLine = { text: string; from: "promise" | "loop" | "thread" | "recap"; sent?: boolean };
 export type Delivered = { title: string; at: Date | string };
-const stem = (w: string) => w.replace(/(?:ing|ed)$/, "").replace(/(?:ment)$/, "");
-const stems = (s: string) => new Set([...meaningWords(s)].map(stem));
+const stem = (w: string) => {
+  if (/^document/.test(w)) return "doc";
+  const base = w.replace(/(?:ing|ed)$/, "");
+  // "planning" -> "plan", "dropped" -> "drop".
+  return base !== w ? base.replace(/([b-df-hj-np-tv-z])\1$/, "$1") : w;
+};
+// Places and days are not what a thing IS (review of #110: "San Francisco" matched a pitch-coach search to dinner options).
+const NOT_WHAT = new Set(["san", "francisco", "sf", "bay", "area", "oakland", "berkeley", "nyc", "york", "soma", "mission", "hayes", "valley", "marina", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "tonight", "tomorrow", "today", "week", "weekend", "january", "february", "march", "april", "june", "july", "august", "september", "october", "november", "december", "send", "text", "draft", "put", "together", "find", "get"]);
+const stems = (s: string) => new Set([...meaningWords(s)].map(stem).filter((w) => !NOT_WHAT.has(w)));
+// A line about Co's own work (what Co owes, said it would send, or sent), not the member's own life: only these are ever removed
+// as "they have it" (review of #110: "their pitch deck for Thursday" and "a plan for their mom's birthday" were removed).
+const ABOUT_CO_WORK = /\b(?:co|the assistant)\b[^.]{0,40}\b(?:said|says|sent|send|will|would|'ll|is putting|was putting|promised|drafted|drafting|finished|ready)\b|\b(?:promised on the call|keep your word|will be (?:sent|delivered|texted)|to be sent|sent to (?:their|his|her|royce's|the member's) texts?|doc(?:ument)? is ready|once ready)\b/i;
+// A promise that names no thing of its own ("text the drafted planning document", "plan will be delivered once ready"): another
+// wording of the call's deliverable. One that names something ("draft the investor update outline") is its own item.
+const GENERIC_DELIVERABLE_WORDS = new Set(["plan", "doc", "document", "pdf", "brief", "draft", "outline", "memo", "deck", "sheet", "write", "writeup", "one", "pager", "deliver", "delivere", "ready", "once", "promis", "call", "will", "the", "and", "that", "this", "your", "you", "them", "it"]);
+const genericPromise = (text: string) => [...stems(text.replace(/^-?\s*[A-Z][a-z]{2} \d{1,2}:\s*/, "").replace(/Promised on the call:\s*/i, "").replace(/\.\s*(?:Not sent yet|Sent)\.?$/i, ""))].filter((w) => !GENERIC_DELIVERABLE_WORDS.has(w)).length === 0;
 const sameThing = (a: string, b: string) => {
   const A = stems(a), B = stems(b);
   const small = Math.min(A.size, B.size);
@@ -224,7 +238,7 @@ export function collapseCarried(lines: CarriedLine[], delivered: Delivered[], zo
   const sameDeliverable = (text: string, title: string) => { const A = stems(text), B = stems(title); return shared(A, B) >= 2 || sameThing(text, title); };
   const byTitle = (text: string) => DELIVERABLE.test(text) && handled.some((h) => sameDeliverable(text, h.title));
   const sentDays = new Set(lines.filter((l) => l.from === "promise" && DELIVERABLE.test(l.text) && (l.sent || byTitle(l.text))).map((l) => dayOf(l.text)).filter(Boolean));
-  const isHandled = (text: string) => DELIVERABLE.test(text) && (byTitle(text) || (!!dayOf(text) && sentDays.has(dayOf(text))));
+  const isHandled = (text: string) => DELIVERABLE.test(text) && (byTitle(text) || (!!dayOf(text) && sentDays.has(dayOf(text)) && genericPromise(text)));
   const open: CarriedLine[] = [];
   for (const l of lines) {
     if ((l.from === "promise" && l.sent) || isHandled(l.text)) continue;
@@ -243,7 +257,8 @@ export function collapseCarried(lines: CarriedLine[], delivered: Delivered[], zo
     seen.push(h.title);
     theyHaveIt.push(`- "${h.title.slice(0, 120)}"${h.at ? ` (sent ${zoneDay(h.at)})` : ""}`);
   }
-  return { open, theyHaveIt, covered: (text: string) => isHandled(text) || open.some((o) => o.from !== "recap" && sameThing(o.text, text) && DELIVERABLE.test(text)) };
+  // Threads, recap and last-call lines: only a line about Co's own work is ever dropped, never the member's own plans or decks.
+  return { open, theyHaveIt, covered: (text: string) => ABOUT_CO_WORK.test(text) && (isHandled(text) || open.some((o) => o.from !== "recap" && sameThing(o.text, text) && DELIVERABLE.test(text))) };
 }
 
 export const CONTEXT_MAX = 4500;

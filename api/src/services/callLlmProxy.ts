@@ -43,8 +43,10 @@ const DEFAULT_MAX_TOKENS = 500;
 
 type OaiContent = string | { type?: string; text?: string }[] | null | undefined;
 // A sentence that is a goodbye: a sign-off, not a thank-you or an answer.
-// A line that carries safety help: never cut by the one-question rule.
-export const SAFETY_LINE = /\b(?:988|911)\b|\bcrisis (?:line|text line)\b|\bemergency\b|\bsuicide\b/i;
+// A line that carries safety help: never cut by the one-question rule. And a turn that checks on their safety, or answers a member
+// whose words raise it, has no question limit at all (review of #110: "please reach out to the lifeline" was cut).
+export const SAFETY_LINE = /\b(?:988|911|741741)\b|\bnine[- ]eight[- ]eight\b|\b(?:crisis|life|hot|help) ?line\b|\bemergency\b|\bsuicid\w*|\bsomeone you trust\b|\bare you safe\b|\bstay(?:ing)? (?:right )?(?:here|with you)\b/i;
+const SAFETY_TURN = /\b(?:safe|hurt (?:yourself|myself)|harm|kill (?:myself|yourself)|end it|disappear|not (?:wake|be here)|better off without)\b/i;
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
@@ -174,6 +176,12 @@ export type ProxyDeps = {
   now?: () => number;
 };
 
+// What the member last said, for the safety check on the question rule.
+function theirLastForSafety(b: OaiRequest): string {
+  const m = [...b.messages].reverse().find((x) => x.role === "user");
+  return m ? textOf(m.content) : "";
+}
+
 // The stream of OpenAI chunks ElevenLabs reads. Text is cleaned and guarded sentence by sentence; a tool call passes through whole.
 export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerator<OaiChunk> {
   const now = deps.now ?? Date.now;
@@ -213,12 +221,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let heldEvent = false;
   // One question per turn, a hard rule in code (2026-10-08 call eval: 5 of 10 calls asked two in one turn): once a question is
   // said, the turn ends there ("Once you've asked it, stop", the call prompt).
+  // After the turn's question, only further QUESTIONS are dropped (review of #110: dropping every later sentence cut real answers,
+  // "The dinner? It's Friday at seven." came out as "The dinner?"). A one- or two-word rhetorical "Honestly?" isn't the question.
+  // No limit on a turn about their safety.
   let asked = false;
+  let safetyTurn = SAFETY_TURN.test(theirLastForSafety(b));
   const say = (s: string): string | null => {
     const sentence = s.trim();
-    // Never a safety line, though (988, 911, a crisis line): "Are you safe right now? If you're not, call or text 988." goes whole.
-    if (clean && asked && !SAFETY_LINE.test(sentence)) {
-      deps.onDropped?.(sentence, "after the turn's question");
+    const isQuestion = /\?["')\]]*\s*$/.test(sentence);
+    if (clean && asked && isQuestion && !safetyTurn && !SAFETY_LINE.test(sentence)) {
+      deps.onDropped?.(sentence, "a second question in the turn");
       return null;
     }
     // Goodbye once (2026-10-08 live call: "Take care tonight." then, after "you too", "Take care, Royce."). Once Co has said
@@ -248,7 +260,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       }
     }
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
-    if (/\?["')\]]*\s*$/.test(sentence)) asked = true;
+    // Co checking on their safety makes the whole turn a safety turn: no question limit after it.
+    if (SAFETY_LINE.test(sentence) || (isQuestion && SAFETY_TURN.test(sentence))) safetyTurn = true;
+    if (isQuestion && sentence.replace(/\[[a-z ]+\]\s*/gi, "").split(/\s+/).filter(Boolean).length > 2) asked = true;
     spokeAny = true;
     spokenLines.push(line);
     deps.onSpoken?.(line);

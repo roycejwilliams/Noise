@@ -88,12 +88,18 @@ export function leadsWithCoHomework(line: string, known = ""): boolean {
 
 // Pure: why a candidate reason is Co's own work, or null. `theirsByConstruction`: a commitment they made in their own words
 // ("I'll send them the deck Friday", member_threads kind commitment) is theirs; the ask guards would read its "I'll send" as Co's.
+const CO_SUBJECT = /\bco(?:'s)?\s+(?:is|was|will|'ll|has|had|would|said|promised|putting|drafting|making|finding|sending|researching)\b|\bfrom co\b|\bco's\s+(?:plan|doc|document|research|brief|draft|list|options|shortlist|notes)\b/i;
+const WAITING_ON_CO_WORK = /\b(?:waiting (?:on|for)|excited (?:to get|for)|looking forward to (?:getting|the))\b[^.]{0,60}\b(?:plan|doc(?:ument)?|pdf|research|brief|draft|options|shortlist|list|write-?up|outline|notes)\b/i;
 export function coWorkWhy(text: string, coWork: string[], theirsByConstruction = false): string | null {
   const t = String(text ?? "").trim();
   if (!t) return "empty";
   if (!theirsByConstruction && isCoCommitment(t)) return "Co's own commitment (askKind isCoCommitment)";
   if (!theirsByConstruction && isCoTaskGoal(t)) return "Co's own task (goalEdges isCoTaskGoal)";
   if (leadsWithCoHomework(t)) return "reads as Co's homework (a deliverable sent, owed or in progress)";
+  // Co as the subject, or waiting on something Co makes (review of #110: "waiting on the dinner plan Co is putting together" and
+  // "excited to get the research on coworking spaces" were reasons to call).
+  if (CO_SUBJECT.test(t)) return "about Co's own work (Co is the subject)";
+  if (WAITING_ON_CO_WORK.test(t)) return "waiting on something Co makes (a plan, research, a doc)";
   // The same thing as a doc Co delivered or a task Co carries: Co's work, even when worded as theirs.
   const words = t.split(/\s+/).filter((w) => w.length > 3).length;
   if (words >= 2) {
