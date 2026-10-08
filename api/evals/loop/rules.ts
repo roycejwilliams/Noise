@@ -41,7 +41,7 @@ check("an email address must have been seen (page, their texts, notes)", /that a
 check("shareFinds only sends links the loop found or the notes hold", /not something you found this turn or have in your notes/.test(lt));
 check("sold out, over or already sent can't be shared (the gate's own reasons)", /if \(f\.blocked\)/.test(lt) && /gateMatches\(raw, \{ userId: opts\.userId \?\? null, searchCity: city, checkRepeat: true/.test(src("services/tieredRecommendation.ts")));
 check("event search covers Co's events, the public feed, and openings the daily search already found", /alreadyFoundOpenings\(ctx\.userId\)/.test(lt) && /openingsFoundEarlier: openings/.test(lt) && /cachedCalendarEvents\(\)/.test(src("services/tieredRecommendation.ts").split("for Co's own loop")[1] ?? ""));
-check("Tier 3 in the loop: X posts through the shared daily X budget, plus the web", /reserveXSearch\(ctx\.userId, "request", q\)/.test(lt) && /searchRecentPosts\(q, 10\)/.test(lt) && C.toolUse("searchPosts").includes("shared daily budget"));
+check("Tier 3 in the loop: X posts through the shared daily X budget, plus the web", /reserveXSearch\(ctx\.userId, "request", q\)/.test(lt) && /searchRecentPosts\(q, X_SEARCH_RESULTS\)/.test(lt) && C.toolUse("searchPosts").includes("shared daily budget"));
 check("a sold-out event can't be shared (its own page says so)", /details\?\.soldOut === true \? "sold out" : null/.test(lt));
 check("a spent web search budget is said plainly, never as 'nothing found'", /Web search is used up for today\. Tell them plainly/.test(lt));
 check("no model gate between the feed and Co", !/isGenuinelyRelevant|explainFit|relevanceGate/.test(src("services/tieredRecommendation.ts").split("for Co's own loop")[1] ?? "x"));
@@ -68,7 +68,7 @@ check("the reply gets the guide when they want something found, and the working 
   check("the sweep finds with Co's own loop, not the old search brief and tiers", /await sweepFind\(/.test(sw) && !/getTieredRecommendation|buildSearchBrief/.test(sw));
   check("the sweep queues Co's own judgment, with no second fit read", /if \(!item\.match\.whyItFits\) \{/.test(sw) && /const match = await enrichMatch\(item\.match\);/.test(sw));
   check("the sweep's tools: events, web (checked by the second reader), X posts, pages, keep", ["searchEvents: tool(", "webSearch: tool(", "searchPosts: tool(", "readPage: tool(", "keep: tool("].every((t) => sf.includes(t)) && /checkVerified\(/.test(sf));
-  check("the sweep uses the sweep's share of the web and X budgets", /source: "sweep"/.test(sf) && /reserveXSearch\(c\.userId, "sweep", query\)/.test(sf));
+  check("the sweep uses the sweep's share of the web and X budgets", /source: "sweep"/.test(sf) && /reserveXSearch\(c\.userId, "sweep", q\)/.test(sf));
   check("what the sweep keeps still goes through the fact gate", /gateMatches\(kept, \{ userId: c\.userId/.test(sf));
   const SF = await import("../../src/services/sweepFind.js");
   const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "AI founder dinners", city: "San Francisco" }, { today: "2026-10-01", picture: "", feeling: "stressed", shown: ["Rooftop evening"] });

@@ -38,6 +38,7 @@
     "evals/voice/run.ts",
     "evals/details/run.ts",
     "evals/monitor/run.ts",
+    "evals/tier3/x.ts",
     "evals/issues/run.ts",
     "evals/review/rules.ts",
     "evals/review/email.ts",

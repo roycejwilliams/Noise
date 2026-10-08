@@ -27,6 +27,11 @@ export type Signal = {
   total: string;
   floor: number; // minimum recent rate worth alerting on
   minCount: number;
+  // A slow outage rather than a spike (2026-10-07): read `recent` over this
+  // window instead of 6 hours, alert on the level alone (a week of nothing
+  // looks "steady" against its own baseline), and repeat at most every
+  // repeatHours instead of 12.
+  steady?: { window: string; repeatHours: number };
 };
 
 export const SIGNALS: Signal[] = [
@@ -68,11 +73,13 @@ export const SIGNALS: Signal[] = [
   // change that reintroduces either one shows up here instead of needing
   // another live test session to catch.
   { key: "tier2_relevance_overreject", label: "Real Tier 2 candidates existed but the relevance judge rejected all of them", bad: `decision = 'recommendation.search' AND outcome = 'skip' AND jsonb_array_length(COALESCE(proposal->'scope'->'relevanceRejected', '[]'::jsonb)) > 0 AND COALESCE((proposal->'scope'->>'tier2Nearby')::int, 0) > 0`, total: `decision = 'recommendation.search' AND COALESCE((proposal->'scope'->>'tier2Nearby')::int, 0) > 0`, floor: 0.4, minCount: 3 },
-  // Tier 3 genuinely finds nothing often (X's recent-search is only 7 days,
-  // and the bar for "real, concrete, not hype" is deliberately strict) —
-  // floor set high on purpose so this only fires on a real jump, not on
-  // Tier 3's normal baseline scarcity.
-  { key: "tier3_searched_found_nothing", label: "Tier 3 (X) was searched but nothing ended up offered", bad: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL AND (outcome = 'skip' OR NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(proposal->'matches', '[]'::jsonb)) e WHERE e->>'tier' = '3'))`, total: `decision = 'recommendation.search' AND proposal->'scope'->>'xQuery' IS NOT NULL`, floor: 0.6, minCount: 3 },
+  // Tier 3 from X. Since Co's own loop (2026-10-01) X is searched inside the
+  // daily sweep, logged on sweep.find ("x: <query>" in did, xKept). The old
+  // signal read recommendation.search's scope.xQuery, which nothing writes any
+  // more, so a week of nothing kept from X went unseen (2026-10-07). One X
+  // search often finds nothing, so this watches the level over a week: every
+  // sweep that searched X in 7 days (at least 8 of them) kept nothing from it.
+  { key: "tier3_x_nothing_kept", label: "A week of sweeps searched X and kept nothing from it", bad: `decision = 'sweep.find' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(proposal->'did', '[]'::jsonb)) d WHERE d LIKE 'x: %') AND COALESCE((proposal->>'xKept')::int, 0) = 0`, total: `decision = 'sweep.find' AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(proposal->'did', '[]'::jsonb)) d WHERE d LIKE 'x: %')`, floor: 1, minCount: 8, steady: { window: "7 days", repeatHours: 72 } },
   // Drift in Co's own choices (2026-09-25, toolGuard.ts): how often a tool
   // it chose didn't actually happen, and how often it hit a hard limit.
   { key: "tool_not_done", label: "Tools Co (or an extension) chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
@@ -106,19 +113,26 @@ export type SignalReading = { signal: Signal; recentBad: number; recentTotal: nu
 export function shouldAlert(r: SignalReading): boolean {
   if (r.recentBad < r.signal.minCount || r.recentTotal === 0) return false;
   if (r.recentRate < r.signal.floor) return false;
+  if (r.signal.steady) return true;
   return r.baselineRate === 0 || r.recentRate >= 2 * r.baselineRate;
+}
+
+// The recent window a signal is read over; the query reads it plus a week of baseline.
+export function signalWindow(signal: Signal): { recent: string } {
+  return { recent: signal.steady?.window ?? "6 hours" };
 }
 
 export async function readSignals(): Promise<SignalReading[]> {
   const out: SignalReading[] = [];
   for (const signal of SIGNALS) {
+    const w = signalWindow(signal);
     const { rows } = await pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '6 hours' AND (${signal.bad}))::int AS recent_bad,
-         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '6 hours' AND (${signal.total}))::int AS recent_total,
-         COUNT(*) FILTER (WHERE created_at <= NOW() - INTERVAL '6 hours' AND (${signal.bad}))::int AS base_bad,
-         COUNT(*) FILTER (WHERE created_at <= NOW() - INTERVAL '6 hours' AND (${signal.total}))::int AS base_total
-       FROM harness_decisions WHERE created_at > NOW() - INTERVAL '7 days 6 hours'`,
+         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '${w.recent}' AND (${signal.bad}))::int AS recent_bad,
+         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '${w.recent}' AND (${signal.total}))::int AS recent_total,
+         COUNT(*) FILTER (WHERE created_at <= NOW() - INTERVAL '${w.recent}' AND (${signal.bad}))::int AS base_bad,
+         COUNT(*) FILTER (WHERE created_at <= NOW() - INTERVAL '${w.recent}' AND (${signal.total}))::int AS base_total
+       FROM harness_decisions WHERE created_at > NOW() - INTERVAL '7 days' - INTERVAL '${w.recent}'`,
     );
     const r = rows[0];
     out.push({
@@ -143,13 +157,15 @@ export async function runMonitor(): Promise<void> {
     for (const r of readings.filter(shouldAlert)) {
       const claimed = await pool.query(
         `INSERT INTO harness_alerts (signal_key, sent_at) VALUES ($1, NOW())
-         ON CONFLICT (signal_key) DO UPDATE SET sent_at = NOW() WHERE harness_alerts.sent_at < NOW() - INTERVAL '12 hours'
+         ON CONFLICT (signal_key) DO UPDATE SET sent_at = NOW() WHERE harness_alerts.sent_at < NOW() - make_interval(hours => $2::int)
          RETURNING signal_key`,
-        [r.signal.key],
+        [r.signal.key, r.signal.steady?.repeatHours ?? 12],
       );
       if (!claimed.rows[0]) continue;
       const pct = (x: number) => `${Math.round(x * 100)}%`;
-      const detail = `${r.signal.label}: ${pct(r.recentRate)} in the last 6 hours (${r.recentBad} of ${r.recentTotal}), vs ${pct(r.baselineRate)} over the past week.`;
+      const detail = r.signal.steady
+        ? `${r.signal.label}: ${pct(r.recentRate)} over the last ${r.signal.steady.window} (${r.recentBad} of ${r.recentTotal}).`
+        : `${r.signal.label}: ${pct(r.recentRate)} in the last 6 hours (${r.recentBad} of ${r.recentTotal}), vs ${pct(r.baselineRate)} over the past week.`;
       await sendTeamEmail(`Co alert: ${r.signal.label}`, `<p>${detail}</p><p>Look in harness_decisions for the details.</p>`).catch((err: any) =>
         console.error("monitor: alert email failed (non-fatal):", err?.message ?? err),
       );
