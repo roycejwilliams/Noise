@@ -103,6 +103,22 @@ const day = () => "Oct 8";
   check(`voice: a sentence that goes on to say something specific is kept whole ("${stockSpecific}")`, /I hear you, and the part about Sam/.test(stockSpecific));
   const stockOnly = await run("I hear you.");
   check(`voice: a reply that's only a stock phrase is still said, never silence ("${stockOnly}")`, /I hear you\./.test(stockOnly));
+  const stockQ = await run("Ugh. What's actually going on with you?");
+  check(`voice: a stock-phrased question is never dropped, it may be the turn's only one ("${stockQ}")`, /going on with you\?/.test(stockQ));
+  const stockNo = await run("I hear you, but no. That one I'd skip.");
+  check(`voice: a stock phrase with anything else in the sentence is kept ("${stockNo}")`, /I hear you, but no\./.test(stockNo));
+  {
+    // "I hear you." then end_call: said before the hang-up, never silence (review of #112).
+    const evs = text("I hear you.").filter((e: any) => e.type !== "message_delta" && e.type !== "message_stop");
+    evs.push({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t1", name: "end_call" } }, { type: "content_block_stop", index: 1 }, { type: "message_delta", delta: { stop_reason: "tool_use" } }, { type: "message_stop" });
+    const order: string[] = [];
+    for await (const c of P.runCallLlm(body, { stream: spy(evs), voiceOnly: true })) {
+      const d: any = c.choices[0].delta;
+      if (d.content) order.push(`say:${d.content.trim()}`);
+      if (d.tool_calls?.[0]?.function?.name) order.push(`tool:${d.tool_calls[0].function.name}`);
+    }
+    check(`voice: a stock-only reply before end_call is said first, not a silent hang-up (${order.join(" | ")})`, order[0] === "say:I hear you." && order.includes("tool:end_call"));
+  }
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));
   check("voice-only: no tools and no turn notes are added to the request", (seenReq?.tools ?? []).every((t: any) => t.name === "end_call") && !/This turn: they told you how they are/.test(JSON.stringify(seenReq?.system ?? "")));

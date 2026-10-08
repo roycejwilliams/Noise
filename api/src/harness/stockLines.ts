@@ -48,15 +48,18 @@ export function repeatedOpeners(lines: string[]): string[] {
   return [...n].filter(([, c]) => c >= 3).map(([o]) => o);
 }
 
-// Pure: a sentence that is nothing but a stock phrase ("And I hear you.", "I hear that."), the kind the voice can drop without losing
+// Pure: a sentence that is nothing but a stock phrase ("And I hear you.", "I hear that."), not a question, the kind the voice can drop without losing
 // anything said (2026-10-08 call eval, safety_hint: "And I hear you." mid-reply). A sentence that goes on to say something
 // specific is kept: the model's words, not the check's, decide what the member hears.
 export function stockSentence(sentence: string): boolean {
   const t = norm(sentence).replace(/\[[a-z ]+\]\s*/gi, "").trim();
+  // A question is never dropped: it may be the turn's only one (review of #112: "What's actually going on with you?").
+  if (/\?["')\]]*$/.test(t)) return false;
   const phrase = stockLine(t);
   if (!phrase) return false;
-  const rest = t.toLowerCase().replace(phrase, " ").replace(/\b(?:and|but|yeah|okay|ok|so|honestly|really|jordan)\b/g, " ").replace(/[^a-z']+/g, " ").trim();
-  return rest.split(/\s+/).filter(Boolean).length <= 1;
+  // Nothing may be left but a leading "and"/"but"/"yeah": "I hear you, but no." keeps its "no".
+  const rest = t.toLowerCase().replace(phrase, " ").replace(/^[^a-z']*(?:(?:and|but|yeah|okay|ok|so)\b[^a-z']*)*/, "").replace(/[^a-z']+/g, " ").trim();
+  return rest === "";
 }
 
 export function stockReport(lines: string[]): { stock: { line: string; phrase: string }[]; repeated: string[] } {
