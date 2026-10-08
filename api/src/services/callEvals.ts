@@ -129,7 +129,7 @@ export const CONTEXT_CRITERIA = ["no_invented_specifics", "no_unsaid_attribution
 
 export function contextJudgePrompt(transcript: string, given: string, records = "", flagged: string[] = []): string {
   const crit = CALL_CRITERIA.filter((c) => (CONTEXT_CRITERIA as readonly string[]).includes(c.id));
-  return `Grade a phone call by Co against these criteria, using what Co was given going into the call. Something Co says that is in what it was given, in the member's texts or records below, or in what the member said on the call is correct recall, not invented and not misattributed. Anything else Co states as fact, or credits to the member, that none of those back is a failure, however plausible it sounds.
+  return `Grade a phone call by Co against these criteria, using what Co was given going into the call. Something Co says that is in what it was given, in the member's texts or records below, or in what the member said on the call is correct recall, not invented and not misattributed. Anything else Co states as fact, or credits to the member, that none of those back is a failure, however plausible it sounds. Before you fail a name, place, time or number, look for it in what Co was given, including the reason Co called and any words quoted there: if it's there, Co knew it, even if the member hadn't said it yet on this call. A time word (yesterday, today, this week) is judged against the clock and the dates given.
 
 Criteria:
 ${crit.map((c) => `- ${c.id}: ${c.conversation_goal_prompt}`).join("\n")}

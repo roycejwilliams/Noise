@@ -237,6 +237,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
 
   // Their state outranks the agenda: the member's last words, not Co's, and only on the first request of a turn (a tool round passes through).
   const lastAt = b.messages.map((m) => m.role).lastIndexOf("user");
+  // An inbound call's first reply (Co has said only its greeting): they lead, so the turn ends at Co's question to them
+  // ("what's on your mind?"), never followed by Co's own topic (2026-10-08 call eval, casual_hello, twice).
+  const inboundFirst = /This call is inbound\b/i.test(b.messages.filter((m) => m.role === "system").map((m) => textOf(m.content ?? "")).join("\n")) && b.messages.filter((m) => m.role === "assistant" && textOf(m.content ?? "").trim()).length <= 1;
   const sameTurn = lastAt >= 0 && b.messages.slice(lastAt + 1).every((m) => m.role === "tool" || (m.role === "assistant" && !textOf(m.content).trim()));
   const drained = clean && !voiceOnly && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
   if (drained) deps.onState?.();
@@ -283,6 +286,10 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const say = (s: string): string | null => {
     const sentence = s.trim();
     const isQuestion = /\?["')\]]*\s*$/.test(sentence);
+    if (clean && asked && inboundFirst && !safetyTurn && !SAFETY_LINE.test(sentence)) {
+      deps.onDropped?.(sentence, "after the question on an inbound call's first reply: they lead");
+      return null;
+    }
     if (clean && asked && isQuestion && !safetyTurn && !SAFETY_LINE.test(sentence)) {
       deps.onDropped?.(sentence, "a second question in the turn");
       return null;

@@ -47,7 +47,7 @@ const day = () => "Oct 8";
   ], [], day);
   check("an open promise and its loop collapse into one line (the more specific)", dup.open.length === 1 && /1 option verified/.test(dup.open[0].text), dup.open);
   const summary = CC.assembleCallSummary({ haveIt: r.theyHaveIt.join("\n"), now: "- Find a caterer: searching", lastCalls: null, settled: null, lessons: [], sentLines: [], threads: [], base: "Who they are:\nruns a studio" });
-  check("'they have it' sits after what's current, marked never a reason to call or an opener", summary.indexOf("Where things stand now") < summary.indexOf("They already have these") && /never a reason to call or an opener/.test(summary) && /changed since they last heard about it, or they ask/.test(summary), summary);
+  check("'they have it' sits after what's current, marked never a reason to call or an opener; raised only if changed, asked, or it answers what they just said (#114)", summary.indexOf("Where things stand now") < summary.indexOf("They already have these") && /never a reason to call or an opener/.test(summary) && /changed since they last heard about it, they ask, or it directly answers what they just said/.test(summary), summary);
   check("the call prompt says the same", /never why you called and never how you open/.test(E.CALL_GUIDE));
   check("the builder uses it: receipts and sent promises collapse; threads, recap and last calls drop what's covered", /collapseCarried\(/.test(src("services/callContext.ts")) && /!carried\.covered\(t\.text\)/.test(src("services/callContext.ts")) && /!carried\.covered\(s\)/.test(src("services/callContext.ts")) && /filter\(\(x\) => !carried\.covered\(x\)\)/.test(src("services/callContext.ts")));
 }
@@ -165,6 +165,17 @@ const day = () => "Oct 8";
     const opens = ["I'll go with the first one.", "I need to go to Paris next week for work.", "better go with the cheaper one", "Let you go ahead and book it.", "Thanks for calling. And for listening.", "I'm off work tomorrow so I could do lunch.", "Later this week works.", "I'm good with the second option, what do you think about the photographer though?", "Thanks.", "No, that's not what I meant."];
     check(`their closings are heard: missed ${closes.filter((x) => !memberClosed(x)).join(" | ") || "none"}`, closes.every((x) => memberClosed(x)));
     check(`mid-thought words never lift the hold: ${opens.filter((x) => memberClosed(x)).join(" | ") || "none"}`, opens.every((x) => !memberClosed(x)));
+  }
+  {
+    // An inbound call's first reply ends at its question to them: they lead (2026-10-08 call eval, casual_hello).
+    const inb = { ...body, messages: [{ role: "system", content: "You are Co. This call is inbound." }, { role: "assistant", content: "Hey Jordan, it's Co." }, { role: "user", content: "hey Co, what's up" }] };
+    let said = "";
+    for await (const c of P.runCallLlm(inb, { stream: spy(text("Good, glad you called. What's on your mind? You've got the open house coming up in a few weeks.")), voiceOnly: true })) said += (c.choices[0].delta as any).content ?? "";
+    check(`inbound first reply: nothing after its question to them ("${said.trim()}")`, /What's on your mind\?$/.test(said.trim()) && !/open house/.test(said));
+    let later = "";
+    const inb2 = { ...inb, messages: [...inb.messages, { role: "assistant", content: "What's on your mind?" }, { role: "user", content: "the caterer" }] };
+    for await (const c of P.runCallLlm(inb2, { stream: spy(text("Which one? The Nopa folks were good.")), voiceOnly: true })) later += (c.choices[0].delta as any).content ?? "";
+    check(`later turns keep statements after a question ("${later.trim()}")`, /Nopa folks/.test(later));
   }
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));
