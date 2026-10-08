@@ -68,13 +68,17 @@ const MIN_LEAD_WORDS = 6;
 // A question is split only at a complete boundary (", and" / ", but" between whole clauses, or a comma after a full clause), never
 // at an opening clause or a preposition: "So when you think about the forty people. What's the split...?" (2026-10-08 call eval)
 // left a fragment. With no complete boundary it stays whole.
-const QWORD = new Set(["what", "whats", "how", "hows", "who", "whos", "why", "which", "where", "wheres"]);
+const QWORD = new Set(["what", "whats", "how", "hows", "who", "whos", "why", "where", "wheres"]);
 const AUX = new Set(["do", "does", "did", "are", "is", "was", "were", "can", "could", "would", "will", "have", "has", "should"]);
 const SUBJ = new Set(["you", "they", "we", "i", "it", "she", "he"]);
 // Pure: the words so far read as a question (opens as one, or a clause after a comma does), before its "?" has arrived.
 export function readsAsQuestion(ws: string[]): boolean {
-  const first = bare(ws.find((w) => !TAG_ONLY.test(w)));
-  if (QSTART.has(first)) return true;
+  const i0 = ws.findIndex((w) => !TAG_ONLY.test(w));
+  const first = bare(ws[i0]);
+  // A wh-word opens a question; "When"/"Where" can open a statement's clause, and an auxiliary only with a subject after it
+  // ("Have you", not "Have a look") (review of #113: statements held whole for no reason).
+  if (QWORD.has(first) && first !== "where") return true;
+  if (AUX.has(first) && SUBJ.has(bare(ws[i0 + 1]))) return true;
   for (let k = 1; k < ws.length; k++) {
     if (!/,$/.test(ws[k - 1])) continue;
     const w = bare(ws[k]);
@@ -208,7 +212,11 @@ export class SpeakableStream {
         // "Leave it whole" (only a little over the limit) means wait for more, not a cut at the limit: a forced cut there split
         // "that's where I'd | start rather than..." mid-clause (2026-10-08 call eval). Past the slack (a few more words), chooseBreak
         // always returns a break, natural if there is one, else at a preposition or the limit.
-        const br = chooseBreak(ws.slice(0, -1), this.maxS, readsAsQuestion(ws));
+        // Streaming can't see the sentence's end: until it runs past twice the limit, only a natural break is taken (a question
+        // read as one never takes another), so a question whose "?" hasn't arrived is never cut mid-clause (review of #113:
+        // "...or the main floor. | With the open bar?").
+        const question = readsAsQuestion(ws);
+        const br = chooseBreak(ws.slice(0, -1), this.maxS, question || countWords(ws) <= 2 * this.maxS);
         if (!br) return;
         let left = closeLeft(ws.slice(0, br.k), QSTART.has(bare(ws.find((w) => !TAG_ONLY.test(w)))) && bare(ws[br.k]) === "or");
         if (this.capNext) left = capitalize(left);

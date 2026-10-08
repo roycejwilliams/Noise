@@ -27,5 +27,11 @@ check("a planted invented fact (a Brooklyn office on the 14th, eight hires) stil
 const misattributed = await judgeWithContext(call("You told me last week you're thinking of closing the studio and moving back to New York. Is that still on your mind?"), given);
 check("a planted misattribution (\"you told me you're closing the studio\") still fails no_unsaid_attribution", verdict(misattributed, "no_unsaid_attribution") === "failure", misattributed);
 
+// A long call with the invented detail early: the judge reads the whole call and the first grader's flag, and still fails it.
+const filler = Array.from({ length: 40 }, (_, i) => `user: Yeah, and the other thing on my mind is the lighting for the studio, option ${i + 1}, you know?\nassistant: That makes sense. Warm light suits the room.`).join("\n");
+const long = `assistant: Hey Jordan, it's Co.\nuser: Things are slow.\nassistant: Slow even with the Brooklyn office opening on the 14th?\n${filler}\nuser: Ok, bye.`;
+const longV = await judgeWithContext(long, given, "", undefined, ["no_invented_specifics: Co said 'the Brooklyn office opening on the 14th', which the member never mentioned."]);
+check(`a long call's early invented detail (${long.length} chars) still fails with the first grader's flag`, verdict(longV, "no_invented_specifics") === "failure", longV);
+
 console.log(`grader with context (live): ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

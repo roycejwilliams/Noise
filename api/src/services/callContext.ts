@@ -556,12 +556,13 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const haveIt = (await strip(carried.theyHaveIt)).join("\n");
   // What Co says it will do on the call has to open something after it (#113: promises stay, but they get wired). At the cap
   // nothing new can open, so Co is told before it says it.
+  // Each goal goes through the same member-safety strip as every other line here (review of #113).
   const capacity = await import("./coTasks.js")
     .then(async (T) => {
       const open = await T.openTasks(userId);
-      return open.length >= T.TASK_LIMITS.maxOpen
-        ? `You're already working on ${open.length} things for them, the most you carry at once (${open.map((t) => t.goal.replace(/^Keep [^:]{0,40}: /, "")).slice(0, 5).join("; ")}). On this call, don't promise new work or say you'll keep an eye out for something new: nothing new can open. If they want something new, offer to drop one of these for it.`
-        : null;
+      if (open.length < T.TASK_LIMITS.maxOpen) return null;
+      const goals = await strip(open.map((t) => t.goal.replace(/^Keep [^:]{0,40}: /, "")).slice(0, 5));
+      return `You're already working on ${open.length} things for them, the most you carry at once${goals.length ? ` (${goals.join("; ")})` : ""}. On this call, don't promise new work or say you'll keep an eye out for something new: nothing new can open. If they want something new, offer to drop one of these for it.`;
     })
     .catch(() => null);
   const loops = [

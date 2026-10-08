@@ -127,7 +127,8 @@ for (const s of SCENARIOS.filter((x) => !ONLY || x.id === ONLY)) {
       if (sourceFails.length) {
         const full = turns.filter((t) => typeof t.message === "string" && t.message.trim()).map((t) => `${t.role === "agent" ? "assistant" : "user"}: ${t.message}`).join("\n");
         const given = [NOW, s.context ?? CONTEXT, s.direction === "outbound" ? s.reason ?? "" : "", NO_FINDS].filter(Boolean).join("\n\n");
-        const verdicts = await judgeWithContext(full, given).catch(() => []);
+        const flagged = sourceFails.map((k) => `${k}: ${String((analysis?.evaluation_criteria_results?.[k] as any)?.rationale ?? "")}`);
+        const verdicts = await judgeWithContext(full, given, "", undefined, flagged).catch(() => []);
         for (const k of sourceFails) {
           const v = verdicts.find((x) => x.id === k);
           if (v?.result === "success") {

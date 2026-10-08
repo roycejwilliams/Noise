@@ -243,6 +243,16 @@ export type AuditPlan = {
 
 // Pure: what the audit's claims become. Same-call promises that are one commitment (the same words of theirs, or the same
 // thing said again) are one promise; a promise an open task from this call already carries is that task's, not a new search.
+// Pure: within one call, two promises about the same subject: they share two words that say what it is (caterer, photographer),
+// not the words every promise on the call shares (look, text, options, the event's name and month). One plan said three ways
+// came back as a task, an ask and a thread when the wording drifted (2026-10-08, #113).
+const GENERIC = new Set(["look", "find", "search", "text", "send", "option", "thing", "worth", "turn", "come", "keep", "eye", "watch", "open", "hous", "event", "week", "day", "next", "few", "good", "qualiti", "price", "range", "feel", "jordan", "real", "someth", "anyth", "over", "dinner", "parti", "night", "januari", "februari", "march", "april", "may", "june", "juli", "august", "septemb", "octob", "novemb", "decemb"]);
+export function sameSubject(a: string, b: string): boolean {
+  const A = significant(a).filter((w) => !GENERIC.has(w) && w.length > 3);
+  const B = new Set(significant(b).filter((w) => !GENERIC.has(w) && w.length > 3));
+  return A.filter((w) => B.has(w)).length >= 2;
+}
+
 export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { knownBefore: string; records: string; tasks: OpenCallTask[] }): AuditPlan {
   const reg = auditRegistry();
   const corrections: CallClaim[] = [];
@@ -261,14 +271,14 @@ export function planCallAudit(claims: CallClaim[], transcript: string, ctx: { kn
     const asked = askedQuoteFor(c, transcript);
     // One call, so the looser same-call bar (followThrough.ts sameCallCommitment): one plan said three ways is one promise
     // (2026-10-08, #113: the caterer/photographer commitment came back as a task, an ask and a second thread).
-    const g = groups.find((x) => (asked && x.asked && sameCommitment({ theirWords: asked }, { theirWords: x.asked })) || sameCallCommitment({ goal: c.what }, { goal: x.what }) || overlap(`${c.what} ${c.quote}`, `${x.what} ${x.quotes.join(" ")}`) >= 0.5);
+    const g = groups.find((x) => (asked && x.asked && sameCommitment({ theirWords: asked }, { theirWords: x.asked })) || sameCallCommitment({ goal: c.what }, { goal: x.what }) || sameSubject(c.what, x.what) || overlap(`${c.what} ${c.quote}`, `${x.what} ${x.quotes.join(" ")}`) >= 0.5);
     if (g) {
       g.quotes.push(c.quote);
       g.asked = g.asked ?? asked;
     } else groups.push({ what: c.what, quotes: [c.quote], asked });
   }
   const promises = groups.map((g) => {
-    const t = ctx.tasks.find((t) => sameCallCommitment({ goal: g.what, theirWords: g.asked }, t) || g.quotes.some((q) => sameCommitment({ goal: q }, t)));
+    const t = ctx.tasks.find((t) => sameCallCommitment({ goal: g.what, theirWords: g.asked }, t) || sameSubject(g.what, t.goal) || g.quotes.some((q) => sameCommitment({ goal: q }, t)));
     return { ...g, coveredBy: t ? t.id : null };
   });
   return { corrections, refused, promises };
@@ -284,15 +294,30 @@ async function recentOpenTasks(userId: string): Promise<OpenCallTask[]> {
 // Pure: the task a promise Co made on its own becomes. Its words are Co's, so the task says so; their last line rides along.
 // Its own prefix: "Keep your word from the call: " is a send due right after the call (callCommitments.ts), checked within the hour.
 export const PROMISE_THREAD_PREFIX = "Keep an eye out, as promised on a call: ";
-export function promiseThreadTask(p: Pick<PlannedPromise, "what" | "quotes">, theirLast: string) {
+export function promiseThreadTask(p: Pick<PlannedPromise, "what" | "quotes">, theirBefore: string) {
   return {
     goal: `${PROMISE_THREAD_PREFIX}${p.what.trim().replace(/\.$/, "")}`.slice(0, 200),
-    theirWords: theirLast.trim() ? theirLast.trim().slice(0, 400) : "(Co offered it on a call)",
+    theirWords: theirBefore.trim() ? theirBefore.trim().slice(0, 400) : "(said on a call)",
     steps: [{ text: "Look for it the way you'd look for their own ask, and text only when something real turns up" }],
     firstPlan: `You said on a call: "${p.quotes[0]?.slice(0, 160) ?? p.what}". Keep it: look now, and keep looking over the next days. Text only when you have something real.`,
     inHours: 6,
-    source: "promise" as const,
+    source: "lookout" as const,
   };
+}
+
+// Pure: a look-out that names another member of Co (by the names linked to this member) is never opened.
+export function namesAMember(what: string, names: string[]): boolean {
+  return names.some((n) => n && new RegExp(`\\b${n.split(/[^\w]+/).filter(Boolean).join("[-\\s]?")}\\b`, "i").test(what));
+}
+
+// Pure: what the member said just before Co made the promise (the "user" line before the first "assistant" line that carries
+// its words), never their last line of the call, which is usually a goodbye (review of #113).
+export function theirLineBefore(transcript: string, quote: string): string {
+  const lines = transcript.split("\n");
+  const probe = quote.trim().slice(0, 50).toLowerCase();
+  const at = probe ? lines.findIndex((l) => /^\s*(?:assistant|agent)\s*:/i.test(l) && l.toLowerCase().includes(probe)) : -1;
+  for (let i = (at < 0 ? lines.length : at) - 1; i >= 0; i--) if (/^\s*user\s*:/i.test(lines[i])) return lines[i].replace(/^\s*user\s*:\s*/i, "");
+  return "";
 }
 
 // Pure: what a planned promise opens after the call. Every keepable promise opens something; "none" only at the cap, where the
@@ -301,10 +326,13 @@ export function promiseOpens(p: Pick<PlannedPromise, "coveredBy" | "asked">): "t
   return p.coveredBy ? "task_from_call" : p.asked ? "their_ask" : "promise_thread";
 }
 
-async function openPromiseThread(userId: string, p: PlannedPromise, transcript: string): Promise<boolean> {
+async function openPromiseThread(userId: string, p: PlannedPromise, transcript: string): Promise<"opened" | "blocked" | "failed"> {
   const { startTask } = await import("../services/coTasks.js");
-  const theirs = userLinesOf(transcript);
-  const t = promiseThreadTask(p, theirs[theirs.length - 1] ?? "");
+  // Never a look-out that names another member (the same guard as a text reply's promise, services/promises.ts trackPromise).
+  const { linkedMemberNames } = await import("../services/memberSafeMemories.js");
+  const names = await linkedMemberNames(userId).catch(() => [] as string[]);
+  if (namesAMember(p.what, names)) return "blocked";
+  const t = promiseThreadTask(p, theirLineBefore(transcript, p.quotes[0] ?? ""));
   const r = await startTask({ userId, ...t });
   const result = r.ok
     ? `Co said on the call it would keep an eye out for "${p.what}". It's open as task #${r.task.id}: Co keeps looking and texts when something real turns up.`
@@ -315,7 +343,7 @@ async function openPromiseThread(userId: string, p: PlannedPromise, transcript: 
       .query(`INSERT INTO call_promise_results (user_id, call_key, content) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [userId, callKey(transcript), result])
       .catch(() => null);
   }
-  return r.ok;
+  return r.ok ? "opened" : "failed";
 }
 
 // dryRun: reads only (the member's texts, records and open tasks) and returns the plan; nothing is written or searched.
@@ -371,8 +399,8 @@ export async function auditCall(
         ).catch(() => null);
         // A real thread, not one search (#113: "you'll hear from me" has to open something that keeps going): a promise task Co
         // owns, woken daily, texting only when it has something real. If none can open (at the cap), the one search still runs.
-        const opened = await openPromiseThread(userId, p, transcript).catch(() => false);
-        if (!opened) {
+        const opened = await openPromiseThread(userId, p, transcript).catch(() => "failed" as const);
+        if (opened === "failed") {
           // And actually look (2026-09-23: "I'll dig into those communities
           // and text you" was only ever written down, so nothing searched).
           await keepCallPromise(userId, c.what, transcript).catch((err: any) =>

@@ -144,6 +144,15 @@ const day = () => "Oct 8";
     check("after their goodbye, end_call goes through", theirBye.ended);
     const afterCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Take care, Jordan." }, { role: "user", content: "you too" }], "");
     check("their reply to Co's goodbye lets the call end", afterCo.ended);
+    const looseCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Enjoy tonight, bye!" }, { role: "user", content: "you too" }], "Night.");
+    check("a goodbye in Co's own words (\"Enjoy tonight, bye!\") then their reply ends the call, never dead air", looseCo.ended);
+    const silent = await ends([sys, { role: "user", content: "ok" }], "");
+    check("a turn that is only end_call is never held (holding it would be silence until the timeout)", silent.ended);
+    const { memberClosed } = P as any;
+    const closes = ["Later!", "I'm off, thanks Co", "gotta jet", "Night!", "Peace.", "Cheers, Co.", "ttyl", "That's it for now.", "ok bye"];
+    const opens = ["I'll go with the first one.", "I need to go to Paris next week for work.", "better go with the cheaper one", "Let you go ahead and book it.", "Thanks for calling. And for listening.", "I'm off work tomorrow so I could do lunch.", "Later this week works."];
+    check(`their closings are heard: missed ${closes.filter((x) => !memberClosed(x)).join(" | ") || "none"}`, closes.every((x) => memberClosed(x)));
+    check(`mid-thought words never lift the hold: ${opens.filter((x) => memberClosed(x)).join(" | ") || "none"}`, opens.every((x) => !memberClosed(x)));
   }
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));

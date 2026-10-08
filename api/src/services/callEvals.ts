@@ -127,7 +127,7 @@ export function recheckSourceFailure(f: { id: string; rationale: string }, call:
 // Hayes Valley", straight from the context, failed as invented. Run only on a failure, so it costs nothing on a clean call.
 export const CONTEXT_CRITERIA = ["no_invented_specifics", "no_unsaid_attribution"] as const;
 
-export function contextJudgePrompt(transcript: string, given: string, records = ""): string {
+export function contextJudgePrompt(transcript: string, given: string, records = "", flagged: string[] = []): string {
   const crit = CALL_CRITERIA.filter((c) => (CONTEXT_CRITERIA as readonly string[]).includes(c.id));
   return `Grade a phone call by Co against these criteria, using what Co was given going into the call. Something Co says that is in what it was given, in the member's texts or records below, or in what the member said on the call is correct recall, not invented and not misattributed. Anything else Co states as fact, or credits to the member, that none of those back is a failure, however plausible it sounds.
 
@@ -137,15 +137,15 @@ ${crit.map((c) => `- ${c.id}: ${c.conversation_goal_prompt}`).join("\n")}
 What Co was given going into the call:
 ${given.slice(0, 8000) || "(nothing)"}
 ${records.trim() ? `\nThe member's own texts and Co's records:\n${records.slice(0, 6000)}\n` : ""}
-The call ("assistant" or "agent" is Co, "user" is the member):
-${transcript.slice(-12000)}
+${flagged.length ? `A first grader, who saw only the call, flagged these. Check each one against what Co was given; if one is still unbacked, that criterion fails:\n${flagged.map((f) => `- ${f.slice(0, 400)}`).join("\n")}\n\n` : ""}The call ("assistant" or "agent" is Co, "user" is the member), whole:
+${transcript.slice(-40000)}
 
 Return ONLY JSON: {"results": [{"id": "criterion id", "result": "success" | "failure", "rationale": "one sentence; on a failure, quote Co's exact words and say what nothing backs"}]}`;
 }
 
 export type ContextVerdict = { id: string; result: "success" | "failure"; rationale: string };
-export async function judgeWithContext(transcript: string, given: string, records = "", read: (prompt: string) => Promise<string> = defaultRead): Promise<ContextVerdict[]> {
-  const out = parseModelJson<{ results?: ContextVerdict[] }>(await read(contextJudgePrompt(transcript, given, records))).results ?? [];
+export async function judgeWithContext(transcript: string, given: string, records = "", read: (prompt: string) => Promise<string> = defaultRead, flagged: string[] = []): Promise<ContextVerdict[]> {
+  const out = parseModelJson<{ results?: ContextVerdict[] }>(await read(contextJudgePrompt(transcript, given, records, flagged))).results ?? [];
   return out.filter((r) => r && (CONTEXT_CRITERIA as readonly string[]).includes(r.id) && (r.result === "success" || r.result === "failure"));
 }
 async function defaultRead(prompt: string): Promise<string> {
@@ -183,7 +183,7 @@ export async function recordCallEvaluation(userId: string, conversationId: strin
     const left = graded.filter((f) => (CONTEXT_CRITERIA as readonly string[]).includes(f.id) && !overturned.some((o) => o.id === f.id));
     if (ctx.transcript && left.length) {
       const records = await (ctx.records ?? (() => memberRecordText(userId)))().catch(() => "");
-      const verdicts = await (ctx.judge ?? judgeWithContext)(ctx.transcript, ctx.given ?? "", records).catch(() => [] as ContextVerdict[]);
+      const verdicts = await (ctx.judge ?? judgeWithContext)(ctx.transcript, ctx.given ?? "", records, undefined, left.map((f) => `${f.id}: ${f.rationale}`)).catch(() => [] as ContextVerdict[]);
       for (const f of left) if (verdicts.find((v) => v.id === f.id)?.result === "success") overturned.push({ id: f.id, onRecord: ["the call context"] });
     }
     const failed = graded.filter((f) => !overturned.some((o) => o.id === f.id));

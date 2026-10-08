@@ -37,7 +37,7 @@ for (const [id, transcript] of Object.entries(calls)) {
   if (id === "help_over_days") check("help_over_days: the caterer/photographer commitment, said several ways, is the one task, never a second thread", plan.promises.filter((p) => /cater|photograph/i.test(p.what)).every((p) => G.promiseOpens(p) === "task_from_call"), opens);
   for (const p of plan.promises.filter((x) => G.promiseOpens(x) === "promise_thread")) {
     const t = G.promiseThreadTask(p, "");
-    check(`${id}: "${p.what.slice(0, 60)}" opens a look-out thread, never mistaken for a send due after the call`, t.goal.startsWith(G.PROMISE_THREAD_PREFIX) && !t.goal.startsWith(COMMIT_PREFIX) && t.source === "promise");
+    check(`${id}: "${p.what.slice(0, 60)}" opens a look-out thread, never mistaken for a send due after the call`, t.goal.startsWith(G.PROMISE_THREAD_PREFIX) && !t.goal.startsWith(COMMIT_PREFIX) && t.source === "lookout");
   }
 }
 const playful = await G.auditCall("eval-user", calls.playful, known, { dryRun: true, tasks: [] });
