@@ -43,6 +43,8 @@ const DEFAULT_MAX_TOKENS = 500;
 
 type OaiContent = string | { type?: string; text?: string }[] | null | undefined;
 // A sentence that is a goodbye: a sign-off, not a thank-you or an answer.
+// A line that carries safety help: never cut by the one-question rule.
+export const SAFETY_LINE = /\b(?:988|911)\b|\bcrisis (?:line|text line)\b|\bemergency\b|\bsuicide\b/i;
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
@@ -214,7 +216,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   let asked = false;
   const say = (s: string): string | null => {
     const sentence = s.trim();
-    if (clean && asked) {
+    // Never a safety line, though (988, 911, a crisis line): "Are you safe right now? If you're not, call or text 988." goes whole.
+    if (clean && asked && !SAFETY_LINE.test(sentence)) {
       deps.onDropped?.(sentence, "after the turn's question");
       return null;
     }

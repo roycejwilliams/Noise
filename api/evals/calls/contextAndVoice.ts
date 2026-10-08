@@ -64,6 +64,8 @@ const day = () => "Oct 8";
   check(`voice-only: a turn ends at its first question ("${two}")`, /day to day\?$/.test(two) && !/curious/.test(two));
   const twoQ = await run("What kind of messages are you getting? Like, people wanting to come, or something else?");
   check("voice-only: never two questions in one turn", (twoQ.match(/\?/g) ?? []).length === 1);
+  const safety = await run("Are you safe right now? If you're not, call or text 988, any time. I'm staying right here with you.");
+  check(`voice-only: a safety line after the question is never cut ("${safety}")`, /988/.test(safety) && /Are you safe right now\?/.test(safety));
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));
   check("voice-only: no tools and no turn notes are added to the request", (seenReq?.tools ?? []).every((t: any) => t.name === "end_call") && !/This turn: they told you how they are/.test(JSON.stringify(seenReq?.system ?? "")));
