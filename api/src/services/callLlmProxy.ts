@@ -70,7 +70,7 @@ export const SAFETY_TURN = new RegExp([
 // first (Royce, 2026-10-08): ElevenLabs' end_call passes only after this, or after Co's goodbye has had their reply.
 export const MEMBER_CLOSING = /\b(?:bye|goodbye|good ?night|talk (?:to you )?(?:soon|later|tomorrow)|take care|see (?:you|ya)|catch you later|speak soon|ttyl|signing off|(?:gotta|got to|have to|need to|should(?: probably)?|better|i'?m gonna) (?:go|run|jump|hop off|head out|get going|bounce|jet)(?! (?:with|to|ahead|for|and|over|through|back)\b)|i'?ll let you go|i'?m off(?! (?:work|today|tomorrow|on|for|this|next|until|till)\b)|heading out|hang up|end the call|that'?s (?:it|all) (?:for now|from me|i (?:had|needed)))\b/i;
 // A short closing on its own ("Later!", "Night.", "Cheers, Co.", "Peace."): only as the whole of their last sentence.
-const SHORT_CLOSING = /^(?:ok(?:ay)?[,.]?\s+|alright[,.]?\s+|thanks[,.]?\s+|anyway[,.]?\s+)*(?:later|night|peace|cheers|ciao|ttyl|that'?s it)\b[\s\w,'!.]{0,12}$/i;
+const SHORT_CLOSING = /^(?:(?:ok(?:ay)?|alright|thanks|anyway|no|nope|nah|all good|i'?m good)[,.!]?\s+)*(?:later|night|peace|cheers|ciao|ttyl|that'?s it|that'?s all|all good|i'?m good)\b[\s\w,'!.]{0,16}$/i;
 // Pure: their last words close the call. Only the last sentence or two counts, so "I'll go with the first one" mid-thought never
 // lifts the hold (review of #113).
 export function memberClosed(theirLast: string): boolean {

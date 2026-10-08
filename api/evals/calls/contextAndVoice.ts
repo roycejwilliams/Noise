@@ -161,8 +161,8 @@ const day = () => "Oct 8";
       check(`a bare end_call before their goodbye is held, and Co answers instead ("${said.trim()}")`, !ended && /which caterer/.test(said) && calls.length === 2 && /haven't said goodbye/.test(JSON.stringify(calls[1].system)));
     }
     const { memberClosed } = P as any;
-    const closes = ["Later!", "I'm off, thanks Co", "gotta jet", "Night!", "Peace.", "Cheers, Co.", "ttyl", "That's it for now.", "ok bye"];
-    const opens = ["I'll go with the first one.", "I need to go to Paris next week for work.", "better go with the cheaper one", "Let you go ahead and book it.", "Thanks for calling. And for listening.", "I'm off work tomorrow so I could do lunch.", "Later this week works."];
+    const closes = ["Later!", "I'm off, thanks Co", "gotta jet", "Night!", "Peace.", "Cheers, Co.", "ttyl", "That's it for now.", "ok bye", "Nope, later!", "No that's all, thanks", "Nah I'm good, night", "All good, cheers"];
+    const opens = ["I'll go with the first one.", "I need to go to Paris next week for work.", "better go with the cheaper one", "Let you go ahead and book it.", "Thanks for calling. And for listening.", "I'm off work tomorrow so I could do lunch.", "Later this week works.", "I'm good with the second option, what do you think about the photographer though?", "Thanks.", "No, that's not what I meant."];
     check(`their closings are heard: missed ${closes.filter((x) => !memberClosed(x)).join(" | ") || "none"}`, closes.every((x) => memberClosed(x)));
     check(`mid-thought words never lift the hold: ${opens.filter((x) => memberClosed(x)).join(" | ") || "none"}`, opens.every((x) => !memberClosed(x)));
   }
