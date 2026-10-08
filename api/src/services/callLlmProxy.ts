@@ -52,8 +52,10 @@ export const SAFETY_TURN = new RegExp([
   // Broad words count only in a first-person crisis frame: "drive safe", "cutting the guest list", "my feet are killing me" and
   // "did you miss me?" must not lift the limit (review of #111), or the one-question rule is off most of the time.
   String.raw`\bunsafe\b`,
-  String.raw`\b(?:I|you|we)(?:'m| am| are|'re)? (?:\w+n't |not |never )?(?:feel(?:ing)? |felt )?safe\b`,
-  String.raw`\bare you (?:\w+ )?safe\b|\bsomewhere safe\b|\bsafe (?:place|right now)\b`,
+  String.raw`(?:\bnot|n't|\bnever) (?:\w+ )?(?:feel(?:ing)?|felt) safe\b|\b(?:I|you) (?:\w+ )?(?:feel(?:ing)?|felt) (?:\w+ )?safe\b`,
+  String.raw`\b(?:I'?m|I am|you'?re|you are) (?:not )?safe\b(?! to\b| on\b| bet\b)|\bare you (?:\w+ )?safe\b|\bsomewhere safe\b|\bsafe right now\b|\bsafe place to (?:go|stay|sleep)\b`,
+  String.raw`\b(?:I|you)(?:'ll| will|'d| would)? (?:[\w']+ ){0,3}?(?:keep (?:myself|yourself|you|me) |stay |be )safe\b`,
+  String.raw`\bwant to (?:end it|disappear)\b|\brather not be here\b|\bmake it through the night\b|\bgoodbye (?:note|letter)\b|\bsleep forever\b|\b(?:do|did) to myself\b|\b(?:bought|got) a gun\b`,
   String.raw`\b(?:hurt(?:ing)?|harm(?:ing)?|kill(?:ing)?) (?:yourself|myself)\b|\bharm (?:someone|others|people|me|the kids|my kids)\b`,
   String.raw`\b(?:he|she|they|partner|husband|wife|boyfriend|girlfriend)(?:'ll| will| might| would)? (?:hit|hits|hurt|hurts|harm|harms) (?:me|the kids|my kids)\b`,
   String.raw`\bself[- ]harm|\bI(?:'ve| have)? been cutting\b|\b(?:took|swallowed|taking) (?:a bunch of|too many|all (?:my|the|of my)) pills\b|\boverdos`,
@@ -193,9 +195,13 @@ export type ProxyDeps = {
 };
 
 // What the member last said, for the safety check on the question rule.
-function theirLastForSafety(b: OaiRequest): string {
-  const m = [...b.messages].reverse().find((x) => x.role === "user");
-  return m ? textOf(m.content) : "";
+// Once the call has touched their safety (anything they said, or Co's own safety line or question), it stays a safety call: no
+// question limit for the rest of it, so a crisis phrasing the pattern misses later can't cut Co's follow-up (review of #111).
+export function safetyCall(b: OaiRequest): boolean {
+  return b.messages.some((m) => {
+    const t = textOf(m.content ?? "");
+    return m.role === "user" ? SAFETY_TURN.test(t) : m.role === "assistant" && (SAFETY_LINE.test(t) || SAFETY_TURN.test(t));
+  });
 }
 
 // The stream of OpenAI chunks ElevenLabs reads. Text is cleaned and guarded sentence by sentence; a tool call passes through whole.
@@ -239,9 +245,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // said, the turn ends there ("Once you've asked it, stop", the call prompt).
   // After the turn's question, only further QUESTIONS are dropped (review of #110: dropping every later sentence cut real answers,
   // "The dinner? It's Friday at seven." came out as "The dinner?"). A one- or two-word rhetorical "Honestly?" isn't the question.
-  // No limit on a turn about their safety.
+  // No limit once the call has touched their safety (safetyCall).
   let asked = false;
-  let safetyTurn = SAFETY_TURN.test(theirLastForSafety(b));
+  let safetyTurn = safetyCall(b);
   const say = (s: string): string | null => {
     const sentence = s.trim();
     const isQuestion = /\?["')\]]*\s*$/.test(sentence);
