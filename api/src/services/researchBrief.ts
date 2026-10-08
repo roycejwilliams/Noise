@@ -177,6 +177,15 @@ export async function findVenueOptions(userId: string, query: string, ask: Venue
 // Pure: after trying to send a brief's closing line, what happens to the task. "told": it went (or already had, same target key),
 // close as planned. "hold": it's outside their hours, so keep the task open and say it when their hours start (bounded by the
 // task's wake-ups, so a line that never fits can't loop). "untold": paused, opted out or failed: close as dropped and say so.
+// A brief whose document won't send: tried again this many times (DOC_RETRY_MINUTES apart), then the options go as a plain text.
+export const DOC_RETRIES = 2;
+export const DOC_RETRY_MINUTES = 30;
+// Pure: the options as a short text when the document itself won't go: what it is, then each option with its link. Never a status.
+export function briefOptionsText(title: string, options: { name: string; url: string }[]): string {
+  const lines = options.slice(0, BRIEF_LIMITS.maxOptions).map((o, i) => `${i + 1}. ${o.name}: ${o.url}`);
+  return `The ${title.replace(/^Venue options:\s*/i, "venue options for ").trim()} wouldn't come through as a PDF, so here they are:\n${lines.join("\n")}`;
+}
+
 export const BRIEF_HOLD_MAX_WAKES = 6;
 export function briefLineOutcome(r: { sent: boolean; reason?: string }, wakes: number): "told" | "hold" | "untold" {
   if (r.sent || r.reason === "already sent") return "told";
@@ -222,6 +231,24 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const held = (task.followup as any)?.held as { text: string; status: "done" | "dropped"; outcome: string } | undefined;
   if (held?.text) {
     await tellThenClose(held.text, held.status, held.outcome);
+    return;
+  }
+  // A finished brief whose document didn't go out last time: send that same document again (no new find). After DOC_RETRIES it
+  // goes as a short text with the options, so it always reaches them.
+  const pendingDoc = (task.followup as any)?.pendingDoc as { doc: any; options: { name: string; url: string }[]; tries: number; title: string; list: string } | undefined;
+  if (pendingDoc?.doc) {
+    const { deliverDocument } = await import("./documentDelivery.js");
+    const to = { userId: task.userId, firstName: String(person.first_name ?? ""), phone: person.phone_number, zone };
+    const r = await deliverDocument(pendingDoc.doc, to, "pdf_text").catch(() => ({ ok: false as const, why: "error" }));
+    if (r.ok) {
+      await closeTask(task.userId, task.id, "done", `sent the brief "${pendingDoc.title}" on retry ${pendingDoc.tries + 1}: ${pendingDoc.list}`);
+      return;
+    }
+    if (pendingDoc.tries + 1 < DOC_RETRIES) {
+      const { holdBriefDoc } = await import("./coTasks.js");
+      if (await holdBriefDoc(task.userId, task.id, { ...pendingDoc, tries: pendingDoc.tries + 1 }, new Date(Date.now() + DOC_RETRY_MINUTES * 60_000))) return;
+    }
+    await tellThenClose(briefOptionsText(pendingDoc.title, pendingDoc.options), "done", `the PDF wouldn't send; sent the options as a text: ${pendingDoc.list}`);
     return;
   }
 
@@ -279,5 +306,13 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: sent ? "act" : "skip", action: doc.title, proposal: { taskId: task.id, options: shown.length, again: !!p.again, rechecked, readers: [...new Set(shown.map((f) => f.reader))] } }).catch(() => {});
   // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched.
   const list = shown.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
-  await closeTask(task.userId, task.id, sent ? "done" : "dropped", sent ? `sent the brief "${doc.title}": ${list}` : "the brief couldn't be sent");
+  if (!sent) {
+    // The brief is done but its document didn't go: keep it and send it again shortly, never close silently.
+    const { holdBriefDoc } = await import("./coTasks.js");
+    const options = shown.map((f) => ({ name: f.name, url: f.url }));
+    if (await holdBriefDoc(task.userId, task.id, { doc, options, tries: 0, title: doc.title, list }, new Date(Date.now() + DOC_RETRY_MINUTES * 60_000))) return;
+    await tellThenClose(briefOptionsText(doc.title, options), "done", `the PDF wouldn't send; sent the options as a text: ${list}`);
+    return;
+  }
+  await closeTask(task.userId, task.id, "done", `sent the brief "${doc.title}": ${list}`);
 }

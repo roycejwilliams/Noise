@@ -147,7 +147,8 @@ What isn't yours to weigh: their hours, how many texts they've had, and the paus
 
 ${o.task.followup?.payload?.until ? `It has to go out by ${localStamp(o.task.followup.payload.until, o.zone ?? null)} (an hour before the event starts). Pick the best moment before then.\n` : ""}Decide with one tool:
 - checkInNow: the thread doesn't already answer it and it still matters to them. For a follow-up that's due, that's usually the case.
-${lastLook ? "" : `- later: only for a reason you can point to in the thread: you're mid-conversation with them right now (their last text is minutes old), or the date it's about is still ahead. Pick when, in hours (${FOLLOWUP_LIMITS.minHours} to ${FOLLOWUP_LIMITS.maxHours}).\n`}- skip: the thread already answers it or it no longer makes sense: they already told you how it went (even if there is more you could ask, this follow-up is answered), they sorted it themselves, they asked for space, or it was cancelled or is long past mattering.
+${lastLook ? "" : `- later: only for a reason you can point to in the thread: you're mid-conversation with them right now (their last text is minutes old), or the date it's about is still ahead. Pick when, in hours (${FOLLOWUP_LIMITS.minHours} to ${FOLLOWUP_LIMITS.maxHours}). Never "later" because they asked for space: that is skip.\n`}- If they asked for space, a break, a pause, or to hear less from you ("give me some space", "I need a break", "not right now", "too many texts"), that is skip, never later: respecting it means not coming back to this one.
+- skip: the thread already answers it or it no longer makes sense: they already told you how it went (even if there is more you could ask, this follow-up is answered), they sorted it themselves, they asked for space, or it was cancelled or is long past mattering.
 ${lastLook ? "This is the last look: check in now or skip.\n" : ""}Say why in one plain line.`;
 }
 
