@@ -33,8 +33,9 @@ export function describeAsk(askText: string, fromProfile: boolean): string {
     : `They asked you for this: "${askText}". This is you doing what they asked: you found it for them.`;
 }
 
-// A goal find said as if they'd asked for it (Royce, 2026-10-09: goal finds frame as "Co noticed this for you").
-export const CLAIMS_THEY_ASKED = { pattern: /\byou(?:'d| had| were| have been)? (?:asked|wanted me|were (?:looking|after|hoping)|mentioned (?:wanting|looking))\b|\b(?:like|as) you (?:asked|requested|wanted)\b|\bper your (?:ask|request)\b|\bthe (?:\w+ )?you asked (?:me )?(?:about|for)\b/i, reason: "says they asked for it, and they didn't: Co noticed it for them" };
+// A goal find said as if they'd asked for it (Royce, 2026-10-09: goal finds frame as "Co noticed this for you"). Only a claim that
+// they asked or were looking: "you mentioned wanting X" ties it to their goal truthfully and passes (review of #128).
+export const CLAIMS_THEY_ASKED = { pattern: /\byou(?:'d| had)? asked\b|\byou (?:wanted|asked) me to\b|\b(?:like|as) you (?:asked|requested|wanted)\b|\bper your (?:ask|request)\b|\byou(?:'re| are|'ve been| have been| were) (?:looking|searching|hunting) for\b|\byou were looking\b|\bthe (?:\w+ )?you asked (?:me )?(?:about|for)\b/i, reason: "says they asked for it or were looking for it, and they didn't: Co noticed it for them" };
 
 function kindLabel(match: TierMatch): string {
   return match.kind === "co_event" ? "a Co event" : match.kind === "public_event" ? "a public event" : "a real opportunity";

@@ -212,7 +212,8 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
   const answer = readEdgeAnswer(raw);
   const readCount = live.length ? new Set(answer.arr.map((x) => Number(x?.n)).filter((n) => n >= 1 && n <= live.length)).size : 0;
   // Every goal came back, only the list's closing bracket didn't: that's a whole read.
-  const read: EdgeRead | null = !live.length ? null : answer.read === "cut_off" && readCount === live.length ? "full" : answer.read;
+  // A closed list that leaves goals out didn't read them all either (review of #128): that's a cut-off read, flagged.
+  const read: EdgeRead | null = !live.length ? null : readCount === live.length && answer.read !== "failed" ? "full" : answer.read === "full" && readCount < live.length ? "cut_off" : answer.read;
   const dir = o.direction ? live.indexOf(o.direction.trim()) : -1;
   const derived = parseEdges(live, raw, o.firstName, { today, direction: dir >= 0 ? dir : null });
   const corrections = await deps.corrections(userId).catch(() => [] as Correction[]);
