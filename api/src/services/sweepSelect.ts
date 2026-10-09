@@ -59,7 +59,7 @@ export type SelectContext = {
 };
 
 export type Verdict =
-  | { id: string; verdict: "send"; whyMember: string; cites: string[]; whyNow: string; wow: boolean }
+  | { id: string; verdict: "send"; whyMember: string; cites: string[]; whyNow: string; wow: boolean; lastDay: string | null }
   | { id: string; verdict: "hold"; why: string; until: string | null }
   | { id: string; verdict: "reject"; reason: RejectReason; why: string };
 
@@ -72,7 +72,7 @@ export const SELECT_SYSTEM = `You're Co. You know this member well. A search alr
 The bar is: they'd reply "wow". Not "seems relevant", not "fits a keyword in their ask". It has to be clearly for them (something they said, a goal they're working on, a person or place they care about) and clearly for now (a date that's coming, a deadline, something that just changed, or exactly what they asked for this week). If you can't say both, it doesn't go today.
 
 For every candidate, give one verdict:
-- "send": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Co sent before, O# how they reacted), why now, and "wow": true only if you'd genuinely expect that reaction.
+- "send": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Co sent before, O# how they reacted), why now, and "wow": true only if you'd genuinely expect that reaction. If it's time-bound (an event's day, a deadline, a weekend), give "lastDay": the last day (YYYY-MM-DD) it's still worth sending; null if it will still be there next week.
 - "hold": good for them, but not today (too early, a better moment is coming, it would crowd a stronger send). Say when it would be right, as a date (YYYY-MM-DD) if you can.
 - "reject": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate does the same job better; name it), already_known (they mentioned it, are going, or said no), other. Add one line why.
 
@@ -83,7 +83,7 @@ Some candidates come with only a name and a date. Judge what the name tells you;
 Things they asked for and things you'd bring up yourself clear the same bar. Send at most ${SELECT_LIMITS.maxSends}, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.
 
 Return ONLY JSON:
-{"verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."}]}`;
+{"verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."}]}`;
 
 // What the thing is, not a rank: tier numbers read as a quality score (the
 // 2026-10-02 replay rejected things for being "tier 3").
@@ -171,7 +171,7 @@ export function parseVerdicts(text: string): Verdict[] | null {
   for (const v of j.verdicts) {
     const id = String(v?.id ?? "");
     if (!id) continue;
-    if (v.verdict === "send") out.push({ id, verdict: "send", whyMember: String(v.whyMember ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [], whyNow: String(v.whyNow ?? "").trim(), wow: v.wow === true });
+    if (v.verdict === "send") out.push({ id, verdict: "send", whyMember: String(v.whyMember ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [], whyNow: String(v.whyNow ?? "").trim(), wow: v.wow === true , lastDay: /^\d{4}-\d{2}-\d{2}$/.test(String(v.lastDay ?? "")) ? String(v.lastDay) : null });
     else if (v.verdict === "hold") out.push({ id, verdict: "hold", why: String(v.why ?? "").trim(), until: /^\d{4}-\d{2}-\d{2}$/.test(String(v.until ?? "")) ? String(v.until) : null });
     else if (v.verdict === "reject") out.push({ id, verdict: "reject", reason: (REJECT_REASONS as readonly string[]).includes(v.reason) ? v.reason : "other", why: String(v.why ?? "").trim() });
   }
@@ -179,7 +179,7 @@ export function parseVerdicts(text: string): Verdict[] | null {
 }
 
 // One row per candidate: what was decided and why, including what code changed.
-export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string };
+export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null };
 
 // Pure: facts only. A send must cite records that exist (at least one of
 // theirs: an ask, a text, an outcome), say why-member and why-now, mean wow,
@@ -200,10 +200,12 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
     if (v.verdict === "send") {
       const bad = !v.whyMember || !v.whyNow ? "no why-member or why-now" : !v.wow ? "not a wow" : v.cites.some((x) => !known.has(x)) ? `cites a record that isn't there (${v.cites.filter((x) => !known.has(x)).join(", ")})` : !v.cites.some((x) => theirs.has(x)) ? "cites nothing they said or asked" : p.date && p.date < c.today ? "already past" : null;
       if (bad) out.push({ ...base, verdict: "reject", reason: "guard", why: v.whyMember || v.whyNow, cites: v.cites, whyNow: v.whyNow, guard: bad });
+      // Time-bound and already past its last useful day: too late, and it doesn't take a send slot (2026-10-09).
+      else if (v.lastDay && v.lastDay < c.today) out.push({ ...base, verdict: "reject", reason: "too_late", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, guard: `its last day (${v.lastDay}) has passed` });
       else if (sends >= SELECT_LIMITS.maxSends) out.push({ ...base, verdict: "hold", reason: "over_send_limit", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, until: null, guard: `over ${SELECT_LIMITS.maxSends} sends` });
       else {
         sends++;
-        out.push({ ...base, verdict: "send", reason: "clears_bar", why: v.whyMember, cites: v.cites, whyNow: v.whyNow });
+        out.push({ ...base, verdict: "send", reason: "clears_bar", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, lastDay: v.lastDay });
       }
     } else if (v.verdict === "hold") out.push({ ...base, verdict: "hold", reason: "not_today", why: v.why, until: v.until });
     else out.push({ ...base, verdict: "reject", reason: v.reason, why: v.why });

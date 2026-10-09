@@ -1,3 +1,4 @@
+import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { endOfLocalDay, localDay, memberZone } from "./memberTime.js";
 import type { TierMatch } from "./tieredRecommendation.js";
@@ -508,6 +509,10 @@ async function dropStaleFront(userId: string, items: BacklogItem[], zone: string
 }
 
 export type EventOfferPayload = {
+  // Chosen by Co's daily pick (services/sweepShadow.ts): sent together with the other picks waiting.
+  picked?: boolean;
+  // The last day it's worth sending (the pick's own read): its expiry and its rank among finds.
+  lastDay?: string;
   askId: string;
   askText: string;
   fromProfile: boolean;
@@ -687,23 +692,37 @@ export async function pickerDecides(userId: string): Promise<boolean> {
 // send step bundles it by tier with whatever else is waiting (one per tier), checks it's still fresh, and holds it to the
 // lane's one find a day, the pause after an unanswered text, and 8am-9pm. The picker's reason is the reason it fits.
 // Returns false when it's already sent or decided (the queue keeps one row per thing).
-export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string }): Promise<boolean> {
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null }): Promise<boolean> {
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   if (await alreadyDecided(userId, item)) return false;
   if (isPastEvent(o.match, zone)) return false;
   const match = await enrichMatch({ ...o.match, whyItFits: o.why || o.match.whyItFits });
-  const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
+  // picked: the daily pick chose it, so the send step bundles it with the other picks waiting (any tier). lastDay: the last day
+  // it's worth sending (Royce, 2026-10-09: "Fleet Week should never lose its slot to something that will still exist next week").
+  const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
+  const timeBound = pickPriority(o.lastDay ?? null, zone);
   const { queued } = await enqueueCandidate({
     userId,
     type: "event_offer",
     targetKey: offerTargetKey(item),
     summary: `${o.reminder ? "Reminder, already shown to them: " : ""}${o.match.kind === "opportunity" ? "An opportunity" : "An event"} Co's daily pick chose for them: ${o.match.name}`,
     payload,
-    expiresAt: offerExpiresAt(match, zone),
-    priority: isShortNotice(o.match, zone) ? 95 : undefined,
+    // Whichever comes first: an event still expires at its start (the 2026-10-07 rule), a pick at the end of its last day.
+    expiresAt: o.lastDay ? new Date(Math.min(endOfLocalDay(o.lastDay, zone).getTime(), offerExpiresAt(match, zone).getTime())) : offerExpiresAt(match, zone),
+    // The higher of the two: short notice stays 95 even when the pick's last day is a few days out (review of #127).
+    priority: Math.max(timeBound ?? 0, isShortNotice(o.match, zone) ? 95 : 0) || undefined,
   });
   return queued;
+}
+
+// Pure: a pick's rank from its last useful day, in their zone: today or tomorrow outranks everything (95), within three days 85,
+// and anything with no end or further out keeps the default (undefined). Evergreen never takes a time-bound pick's slot.
+export function pickPriority(lastDay: string | null, zone: string | null, now = new Date()): number | undefined {
+  if (!lastDay) return undefined;
+  const z = zone ?? "America/Los_Angeles";
+  const days = DateTime.fromISO(lastDay, { zone: z }).startOf("day").diff(DateTime.fromJSDate(now).setZone(z).startOf("day"), "days").days;
+  return days <= 1 ? 95 : days <= 3 ? 85 : undefined;
 }
 
 export { isShortNotice };

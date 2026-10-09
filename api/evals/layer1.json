@@ -136,6 +136,7 @@
     "evals/calls/contextAndVoice.ts",
     "evals/calls/promiseWiring.ts",
     "evals/proactive/pickerLive.ts",
+    "evals/proactive/pickBundle.ts",
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",
     "evals/member/textKnowledge.ts",
