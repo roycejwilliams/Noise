@@ -39,14 +39,15 @@ export async function loadMemberContext(q: Q, userId: string, now: Date): Promis
   const sent = (await q(`SELECT sent_at, type, message FROM proactive_sends WHERE user_id = $1 AND sent_at < $2 AND sent_at >= $2::timestamptz - INTERVAL '30 days' ORDER BY sent_at`, [userId, now])).map((s: any, i: number) => {
     const t = new Date(s.sent_at).getTime();
     const replied = inbound.some((x: number) => x > t && x - t < 24 * 3_600_000 && x < now.getTime());
-    return { id: `S${i + 1}`, at: DateTime.fromJSDate(new Date(s.sent_at)).setZone(ZONE).toFormat("LLL d"), what: `${s.type}: ${String(s.message ?? "").replace(/\s+/g, " ")}`, reaction: replied ? "they replied within a day" : null };
+    // A match nudge's text names the other member: stripped like the texts (review of #118).
+    return { id: `S${i + 1}`, at: DateTime.fromJSDate(new Date(s.sent_at)).setZone(ZONE).toFormat("LLL d"), what: `${s.type}: ${(safe ? safe(String(s.message ?? "")) ?? "" : "").replace(/\s+/g, " ")}`, reaction: replied ? "they replied within a day" : null };
   });
   const outcomes = (await q(`SELECT created_at, item_name, result, note FROM suggestion_outcomes WHERE user_id = $1 AND created_at < $2 ORDER BY created_at`, [userId, now])).map((o: any, i: number) => ({
     id: `O${i + 1}`,
     at: DateTime.fromJSDate(new Date(o.created_at)).setZone(ZONE).toFormat("LLL d"),
-    item: String(o.item_name),
+    item: safe ? safe(String(o.item_name)) ?? "another member" : "",
     result: String(o.result),
-    note: o.note ? String(o.note) : null,
+    note: o.note && safe ? safe(String(o.note)) : null,
   }));
   const feel = await q(`SELECT emotion, intensity, about FROM emotion_signals WHERE user_id = $1 AND created_at < $2 AND created_at >= $2::timestamptz - INTERVAL '3 days' AND COALESCE(target, 'life') = 'life' ORDER BY created_at DESC LIMIT 4`, [userId, now]).catch(() => [] as any[]);
   // Where they are headed: the lens every candidate is judged against alongside their asks (services/goalJourney.ts).

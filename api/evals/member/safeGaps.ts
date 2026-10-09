@@ -20,5 +20,17 @@ check("call-tool loops and task goals (spoken sources)", /memberSafeLine\(userId
 const tc = src("services/turnContext.ts");
 check("text path: threads, loops and carrying", /memberSafeLine\(userId\)/.test(tc) && /loops: safeLoops/.test(tc) && /threads: safeThreads/.test(tc) && /carryingItems\([\s\S]{0,140}\)\.flatMap\(\(c\) => \{ const label = keep\(c\.label\)/.test(tc));
 
+// Review of #118: the realistic failure is the name lookup, and it must fail closed (throw), never strip nothing.
+const prevDb = process.env.DATABASE_URL;
+const failedClosed = await M.memberSafeLine("00000000-0000-0000-0000-000000000000").then(() => false).catch(() => true);
+check("a failed name lookup throws (callers then leave the context out), never returns a strip with no names", failedClosed || !!prevDb);
+// The same names as memberSafe: Co's own records (Tier 0 picks, intro offers) count, not only linked matches.
+const fromRecords = M.namesInRecords([{ memory_type: "recommendation", content: "[Tier 0] Maya: building grid storage | event X" }]);
+const s2 = await M.memberSafeLine("u-test", fromRecords);
+check(`a Tier 0 pick's name from Co's records is stripped ("${s2("Co replied: Maya is building grid storage and left Tesla.")}")`, !/grid storage|Tesla/.test(s2("Co replied: Maya is building grid storage and left Tesla.") ?? ""));
+check("memberSafeLine's lookup covers Co's records and introductions, like memberSafe", /namesInRecords\(records\.rows\)/.test(src("services/memberSafeMemories.ts")) && /network_introductions/.test(src("services/memberSafeMemories.ts")));
+check("picker: sent messages and outcomes stripped too", /what: `\$\{s\.type\}: \$\{\(safe \? safe\(String\(s\.message/.test(src("services/sweepSelectContext.ts")) && /item: safe \? safe\(String\(o\.item_name\)\)/.test(src("services/sweepSelectContext.ts")));
+check("text path: tasks, briefs, lessons, ledger lines and open work stripped too", /lessons: keepAll\(lessons\)/.test(tc) && /tasks: keepAll\(tasks\), briefs: keepAll\(briefs\)/.test(tc) && /ledger: \{ \.\.\.ledger, lines: keepAll\(ledger\.lines\) \}/.test(tc) && /const openWork = keepAll\(/.test(tc));
+
 console.log(`member safety gaps: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

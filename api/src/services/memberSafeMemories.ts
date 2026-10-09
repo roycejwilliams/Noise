@@ -134,11 +134,38 @@ export function namesInRecords(rows: { content: string; memory_type?: string | n
 }
 
 // One line at a time, keeping positions: a strip function for structured context (threads, loops, carrying, transcripts) that
-// isn't a co_memories row. The same rule as memberSafe: another member's details never reach this member's prompt (Royce:
-// top priority). Their own words ("User said: ...") are theirs and kept.
+// isn't a co_memories row. The same rule and the same names as memberSafe (review of #118): the members linked by matches,
+// nudges and offers, plus the names Co's own records give (Tier 0 picks, intro offers) and anyone introduced to them. The
+// member's own words ("User said: ...") are theirs and kept. A failed name lookup throws, so callers that catch it leave the
+// context out instead of sending it unstripped.
 export async function memberSafeLine(userId: string, linked?: string[]): Promise<(s: string) => string | null> {
-  const names = linked ?? (await linkedMemberNames(userId));
+  const names = linked ?? (await memberNamesStrict(userId));
   return (s: string) => safeMemory("context", String(s ?? ""), names);
+}
+
+async function memberNamesStrict(userId: string): Promise<string[]> {
+  const [linked, records, intros] = await Promise.all([
+    pool.query(
+      `SELECT DISTINCT u.first_name FROM users u
+       WHERE u.id <> $1 AND u.first_name IS NOT NULL AND u.id IN (
+         SELECT candidate_id FROM event_guest_match_nudges WHERE person_id = $1
+         UNION SELECT person_id FROM event_guest_match_nudges WHERE candidate_id = $1
+         UNION SELECT candidate_id FROM event_guest_match_opt_ins WHERE person_id = $1
+         UNION SELECT person_id FROM event_guest_match_opt_ins WHERE candidate_id = $1
+         UNION SELECT candidate_id FROM event_match_offers WHERE person_id = $1 AND candidate_id IS NOT NULL
+         UNION SELECT unnest(candidate_ids) FROM event_match_offers WHERE person_id = $1
+         UNION SELECT person_id FROM event_match_offers WHERE candidate_id = $1 OR $1 = ANY(candidate_ids)
+       )`,
+      [userId],
+    ),
+    pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('network_offer_pending', 'network_intro_offer_pending', 'recommendation')`, [userId]),
+    pool.query(
+      `SELECT DISTINCT u.first_name FROM network_introductions n JOIN users u ON u.id = CASE WHEN n.person_a_id = $1 THEN n.person_b_id ELSE n.person_a_id END
+       WHERE (n.person_a_id = $1 OR n.person_b_id = $1) AND u.first_name IS NOT NULL`,
+      [userId],
+    ),
+  ]);
+  return [...new Set([...linked.rows.map((r: any) => String(r.first_name)), ...namesInRecords(records.rows), ...intros.rows.map((r: any) => String(r.first_name))])];
 }
 
 // Memories as the reply may read them.
