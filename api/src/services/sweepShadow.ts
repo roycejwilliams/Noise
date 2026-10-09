@@ -146,6 +146,8 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     return { day: today, signature, skipped: true, judgments: r.judgments, pool: ctx.pool, error: r.error };
   }
   const count = (v: string) => r.judgments.filter((j) => j.verdict === v).length;
+  // The picks go in before the run is recorded: the record is what marks today done (review of #116).
+  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today).catch((err: any) => console.error("picker: applying the picks failed (non-fatal):", err?.message ?? err));
   if (!opts.dryRun) await recordDecision({
     layer: 5,
     decision: "sweep.select.shadow",
@@ -163,35 +165,62 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
       raw: r.raw.slice(0, 20_000),
     },
   });
-  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, queued, today);
   return { day: today, signature, skipped: false, judgments: r.judgments, pool: ctx.pool };
 }
 
 type Waiting = { askId: string; askText: string; fromProfile: boolean; match: any; reminder?: boolean; again?: boolean };
 
-// Pure: what the picker's verdicts do to the queue. Each "send" queues its thing (from an ask's backlog first, else a goal
-// find); anything already waiting that wasn't chosen to send comes out, so the picker is the only way a find reaches them.
-export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: (Waiting & { why: string })[]; drop: { id: string; why: string }[] } {
-  const verdictOf = new Map(judgments.map((j) => [j.key, j]));
-  const queue: (Waiting & { why: string })[] = [];
-  for (const j of judgments.filter((x) => x.verdict === "send")) {
-    const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => Number(a.fromProfile) - Number(b.fromProfile))[0];
-    if (from) queue.push({ ...from, why: [j.why, j.whyNow].filter(Boolean).join(" ") });
-  }
-  const drop = waitingKeys
-    .filter((w) => verdictOf.get(w.key)?.verdict !== "send")
-    .map((w) => ({ id: w.id, why: `Co's daily pick: ${verdictOf.get(w.key)?.verdict ?? "not in today's pick"}${verdictOf.get(w.key)?.why ? `, ${String(verdictOf.get(w.key)!.why).slice(0, 160)}` : ""}` }));
-  return { queue, drop };
+// Pure: the picker's reason, as a member may read it. Its judgments cite records by internal id (A17, T3, S2, O1, C9), which
+// must never reach a text (review of #116).
+export function memberSafeWhy(why: string): string {
+  return why
+    .replace(/\s*[([]\s*(?:[ATSOC]\d+\s*(?:[,/\-\u2013]|and)?\s*)+[)\]]/g, "")
+    .replace(/\b[ATSOC]\d+\s*[-\u2013]\s*[ATSOC]\d+\b/g, "")
+    .replace(/\b(?:asks?|texts?|outcomes?|sends?)\s+[ATSOC]\d+(?:\s*(?:,|and|\/)\s*[ATSOC]\d+)*\b/gi, (m) => m.replace(/\s+[ATSOC]\d+.*$/i, ""))
+    .replace(/\b[ATSOC]\d+(?:\s*(?:,|\/|and)\s*[ATSOC]\d+)*(?:'s)?\b/g, "")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim();
 }
 
-async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], _queued: any[], today: string): Promise<void> {
+// Pure: what the picker's verdicts do to the queue (review of #116).
+//   - each "send" queues its thing: a reminder or month-later resurface first (its original pitch is already sent), then an
+//     ask's copy, then a goal find;
+//   - a waiting find the picker rejected comes out for good;
+//   - a waiting find the picker held (its own hold, or over the day's send limit) goes back to waiting in the backlog only,
+//     so a later "send" can queue it again; it never sends while held.
+//   - a waiting find the picker never saw is left alone.
+export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: (Waiting & { why: string })[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
+  const verdictOf = new Map(judgments.map((j) => [j.key, j]));
+  const queue: (Waiting & { why: string })[] = [];
+  const rank = (b: Waiting) => (b.reminder || b.again ? 0 : 1) * 2 + Number(b.fromProfile);
+  for (const j of judgments.filter((x) => x.verdict === "send")) {
+    const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => rank(a) - rank(b))[0];
+    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" ")) });
+  }
+  const why = (j: { verdict: string; why?: string } | undefined) => `Co's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
+  const reject = waitingKeys.filter((w) => verdictOf.get(w.key)?.verdict === "reject").map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
+  const unqueue = waitingKeys.filter((w) => verdictOf.get(w.key)?.verdict === "hold").map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
+  return { queue, reject, unqueue };
+}
+
+async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string): Promise<void> {
   if (!pickerLive() || !(await pickerUserIds()).includes(userId)) return;
-  const { queuePickedOffer } = await import("./eventSurfacingSweep.js");
+  const { queuePickedOffer, onEventOfferDropped } = await import("./eventSurfacingSweep.js");
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
     (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ askId: String(b.ask_id), askText: String(it?.askText ?? ""), fromProfile: b.ask_id === "profile", match: it?.match, reminder: !!it?.reminder, again: !!it?.again })),
   );
-  const waiting = (await pool.query(`SELECT id, payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])).rows.map((r: any) => ({ id: String(r.id), key: shadowKey(String(r.payload?.match?.name ?? ""), dateOf(r.payload?.match)) }));
+  const rows = (await pool.query(`SELECT id, payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])).rows;
+  const waiting = rows.map((r: any) => ({ id: String(r.id), key: shadowKey(String(r.payload?.match?.name ?? ""), dateOf(r.payload?.match)) }));
   const plan = planPicks(judgments, backlog, waiting);
+  // Out first, so a held row doesn't block its own re-queue later.
+  for (const d of plan.reject) {
+    await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [d.id, d.why.slice(0, 300)]);
+    const p = rows.find((r: any) => String(r.id) === d.id)?.payload;
+    if (p) await onEventOfferDropped(userId, p).catch(() => null);
+  }
+  // Held: the row goes (it would send), the thing stays in the backlog for the picker to judge again.
+  for (const d of plan.unqueue) await pool.query(`DELETE FROM proactive_candidates WHERE id = $1 AND status = 'pending'`, [d.id]);
   const queuedNames: string[] = [];
   for (const q of plan.queue) {
     const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why }).catch((err: any) => {
@@ -200,10 +229,7 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
     });
     if (ok) queuedNames.push(String(q.match?.name ?? ""));
   }
-  for (const d of plan.drop) {
-    await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [d.id, d.why.slice(0, 300)]);
-  }
-  await recordDecision({ layer: 5, decision: "sweep.select.queue", userId, outcome: queuedNames.length ? "act" : "skip", action: `queued ${queuedNames.length}, took out ${plan.drop.length}`, proposal: { day: today, queued: queuedNames, chosen: judgments.filter((j) => j.verdict === "send").map((j) => j.name), dropped: plan.drop } });
+  await recordDecision({ layer: 5, decision: "sweep.select.queue", userId, outcome: queuedNames.length ? "act" : "skip", action: `queued ${queuedNames.length}, rejected ${plan.reject.length}, held back ${plan.unqueue.length}`, proposal: { day: today, queued: queuedNames, chosen: judgments.filter((j) => j.verdict === "send").map((j) => j.name), rejected: plan.reject, heldBack: plan.unqueue } });
 }
 
 export async function runSweepShadowAll(now = new Date()): Promise<void> {
