@@ -80,7 +80,7 @@ An ask isn't finished after one send: someone looking for events this week usual
 
 Some candidates come with only a name and a date. Judge what the name tells you; thin isn't the same as weak.
 
-Things they asked for and things you'd bring up yourself clear the same bar. Send at most ${SELECT_LIMITS.maxSends}, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.
+Things they asked for and things you'd bring up yourself clear the same bar. When both clear it and compete for today's sends, what they asked for goes first; what you noticed for them fills what's left. Send at most ${SELECT_LIMITS.maxSends}, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.
 
 Return ONLY JSON:
 {"verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."}]}`;
@@ -181,17 +181,24 @@ export function parseVerdicts(text: string): Verdict[] | null {
 // One row per candidate: what was decided and why, including what code changed.
 export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null };
 
+// Pure: which sends get the day's slots first: answers to their asks, then goal finds, each in the model's order.
+export function slotOrder(clearing: { at: number; kind: PoolItem["kind"] }[]): number[] {
+  return [...clearing.filter((x) => x.kind === "answer"), ...clearing.filter((x) => x.kind !== "answer")].map((x) => x.at);
+}
+
 // Pure: facts only. A send must cite records that exist (at least one of
 // theirs: an ask, a text, an outcome), say why-member and why-now, mean wow,
-// and not be in the past. Over the send limit, the rest are held, in the
-// model's order. Anything left without a verdict is logged as such.
+// and not be in the past. Over the send limit, the rest are held. Asks win
+// contested slots (Royce, 2026-10-09: "asks are orders"): what they asked for
+// takes the day's sends first, in the model's order, and goal finds fill what's
+// left, in the model's order. Anything left without a verdict is logged as such.
 export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[] {
   const known = new Set([...c.asks.map((a) => a.id), ...c.texts.map((t) => t.id), ...c.sent.map((s) => s.id), ...c.outcomes.map((o) => o.id)]);
   const theirs = new Set([...c.asks.map((a) => a.id), ...c.texts.filter((t) => t.from === "member").map((t) => t.id), ...c.outcomes.map((o) => o.id)]);
   const byId = new Map(c.pool.map((p) => [p.id, p]));
   const seen = new Set<string>();
   const out: Judgment[] = [];
-  let sends = 0;
+  const clearing: { at: number; kind: PoolItem["kind"] }[] = [];
   for (const v of verdicts) {
     const p = byId.get(v.id);
     if (!p || seen.has(v.id)) continue;
@@ -202,13 +209,19 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
       if (bad) out.push({ ...base, verdict: "reject", reason: "guard", why: v.whyMember || v.whyNow, cites: v.cites, whyNow: v.whyNow, guard: bad });
       // Time-bound and already past its last useful day: too late, and it doesn't take a send slot (2026-10-09).
       else if (v.lastDay && v.lastDay < c.today) out.push({ ...base, verdict: "reject", reason: "too_late", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, guard: `its last day (${v.lastDay}) has passed` });
-      else if (sends >= SELECT_LIMITS.maxSends) out.push({ ...base, verdict: "hold", reason: "over_send_limit", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, until: null, guard: `over ${SELECT_LIMITS.maxSends} sends` });
       else {
-        sends++;
+        // Its slot is decided below, once every send is known.
+        clearing.push({ at: out.length, kind: p.kind });
         out.push({ ...base, verdict: "send", reason: "clears_bar", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, lastDay: v.lastDay });
       }
     } else if (v.verdict === "hold") out.push({ ...base, verdict: "hold", reason: "not_today", why: v.why, until: v.until });
     else out.push({ ...base, verdict: "reject", reason: v.reason, why: v.why });
+  }
+  const slotted = new Set(slotOrder(clearing).slice(0, SELECT_LIMITS.maxSends));
+  for (const x of clearing) {
+    if (slotted.has(x.at)) continue;
+    const j = out[x.at];
+    out[x.at] = { id: j.id, key: j.key, name: j.name, kind: j.kind, verdict: "hold", reason: "over_send_limit", why: j.why, cites: j.cites, whyNow: j.whyNow, until: null, guard: `over ${SELECT_LIMITS.maxSends} sends${x.kind === "discovery" && clearing.some((y) => y.kind === "answer" && slotted.has(y.at)) ? "; what they asked for went first" : ""}` };
   }
   for (const p of c.pool) if (!seen.has(p.id)) out.push({ id: p.id, key: p.key, name: p.name, kind: p.kind, verdict: "no_verdict", reason: "no_verdict", why: "" });
   return out;

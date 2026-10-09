@@ -25,11 +25,17 @@ export type EventDiscoverySurfacingPerson = {
 
 // No stated ask means askText was built from their profile; the draft must
 // not claim they said it.
+// Asks are orders, goals are direction (Royce, 2026-10-09): a find for something they asked for is Co doing what they said; a find
+// from where they're headed is something Co noticed for them, never framed as their request.
 export function describeAsk(askText: string, fromProfile: boolean): string {
   return fromProfile
-    ? `They haven't asked for anything specific. From what they've shared with you over time: ${askText}`
-    : `What they told you they're looking for: "${askText}"`;
+    ? `They didn't ask for this. You noticed it for them, from where they're headed (what they've shared with you over time: ${askText}). Bring it up as something you noticed for them; never say or imply they asked for it or were looking for it.`
+    : `They asked you for this: "${askText}". This is you doing what they asked: you found it for them.`;
 }
+
+// A goal find said as if they'd asked for it (Royce, 2026-10-09: goal finds frame as "Co noticed this for you"). Only a claim that
+// they asked or were looking: "you mentioned wanting X" ties it to their goal truthfully and passes (review of #128).
+export const CLAIMS_THEY_ASKED = { pattern: /\byou(?:'d| had)? asked\b|\byou (?:wanted|asked) me to\b|\b(?:like|as) you (?:asked|requested|wanted)\b|\bper your (?:ask|request)\b|\byou(?:'re| are|'ve been| have been| were) (?:looking|searching|hunting) for\b|\byou were looking\b|\bthe (?:\w+ )?you asked (?:me )?(?:about|for)\b/i, reason: "says they asked for it or were looking for it, and they didn't: Co noticed it for them" };
 
 function kindLabel(match: TierMatch): string {
   return match.kind === "co_event" ? "a Co event" : match.kind === "public_event" ? "a public event" : "a real opportunity";
@@ -150,7 +156,7 @@ export async function draftEventReveal(
       maxSentences: 2,
       maxChars: REVEAL_MAX_CHARS,
       mustIncludeAny: tokens.length ? tokens : [match.name],
-      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY],
+      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY, ...(fromProfile ? [CLAIMS_THEY_ASKED] : [])],
       ...whoItIsFor(match),
     },
   };

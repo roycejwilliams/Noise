@@ -129,6 +129,7 @@
     "evals/delivery/fixes1008.ts",
     "evals/reply-flow/fixes1008.ts",
     "evals/goals/lifecycle.ts",
+    "evals/goals/readCutOff.ts",
     "evals/sweepFind/queries.ts",
     "evals/coldstart/rules.ts",
     "evals/proactive/memberState.ts",

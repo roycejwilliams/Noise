@@ -103,7 +103,7 @@ const sweep = read("src/services/sweepFind.ts");
 check("the keep tool takes the audience and stores it on the match", /audience: z\.string\(\)\.optional\(\)/.test(sweep) && /audience: audience\.trim\(\)\.slice\(0, 60\)/.test(sweep));
 check("Co is told never to hold something back for who it assumes they are", /Never hold something back for who you assume they are/.test(sweep) && /never from a name or a voice/.test(sweep));
 check("Co is told to prefer an open event when two fit about equally", /Prefer an open event when two fit about equally/.test(sweep));
-check("the reveal's task carries all three rules", /\$\{IDENTITY_RULE\} \$\{AUDIENCE_RULE\} \$\{OFFER_HONESTY\}/.test(read("src/agent/eventDiscoverySurfacing.ts")) && /forbidden: \[OFFER_FORBIDDEN, IMPLIES_IDENTITY\]/.test(read("src/agent/eventDiscoverySurfacing.ts")) && /\.\.\.whoItIsFor\(match\),/.test(read("src/agent/eventDiscoverySurfacing.ts")));
+check("the reveal's task carries all three rules", /\$\{IDENTITY_RULE\} \$\{AUDIENCE_RULE\} \$\{OFFER_HONESTY\}/.test(read("src/agent/eventDiscoverySurfacing.ts")) && /forbidden: \[OFFER_FORBIDDEN, IMPLIES_IDENTITY[\],]/.test(read("src/agent/eventDiscoverySurfacing.ts")) && /\.\.\.whoItIsFor\(match\),/.test(read("src/agent/eventDiscoverySurfacing.ts")));
 
 console.log(`event audience rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
