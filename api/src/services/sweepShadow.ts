@@ -216,8 +216,9 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
   // Out first, so a held row doesn't block its own re-queue later.
   for (const d of plan.reject) {
     await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [d.id, d.why.slice(0, 300)]);
-    const p = rows.find((r: any) => String(r.id) === d.id)?.payload;
-    if (p) await onEventOfferDropped(userId, p).catch(() => null);
+    // Out of every ask's backlog that holds the same thing, not only the one that queued it (re-review of #116).
+    const k = waiting.find((w) => w.id === d.id)?.key;
+    for (const b of backlog.filter((x) => k && shadowKey(String(x.match?.name ?? ""), dateOf(x.match)) === k)) await onEventOfferDropped(userId, { askId: b.askId, match: b.match } as any).catch(() => null);
   }
   // Held: the row goes (it would send), the thing stays in the backlog for the picker to judge again.
   for (const d of plan.unqueue) await pool.query(`DELETE FROM proactive_candidates WHERE id = $1 AND status = 'pending'`, [d.id]);
