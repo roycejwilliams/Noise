@@ -103,7 +103,7 @@ export type CarryItem = {
 export type Lesson = { text: string };
 export type Correction = { field: string; was: string; now: string | null };
 export type Preference = { text: string; source: "taste" };
-export type HeldClaim = { text: string; provenance: Provenance; kind: ClaimKind; quote: string | null; expiresOn: string | null };
+export type HeldClaim = { text: string; provenance: Provenance; kind: ClaimKind; quote: string | null; expiresOn: string | null; saidOn: string };
 
 export type Restraint = {
   // proactive_user_state.hold_until / space_until, when still ahead.
@@ -498,7 +498,7 @@ export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> |
 // ---------------------------------------------------------------- the strip (every string, inside)
 
 // Keys whose values are structure, not prose: never rewritten (a kind, a state, an id, a time, a URL, the zone, their own name).
-const STRUCTURAL = new Set(["userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
+const STRUCTURAL = new Set(["userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
 // Their own words: a claim's quote. (Their exchange lines are kept by the walk below, by from === "member".)
 const OWN_WORDS = new Set(["quote"]);
 
@@ -579,7 +579,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("lessons")) k.lessons = lessons.filter((l) => l.text.trim()).map((l) => ({ text: l.text.trim(), verifiedAt: l.at.toISOString() }));
   if (on("corrections")) k.corrections = corrections.map((c) => ({ field: String(c.field), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), verifiedAt: latest(c.corrected_at) }));
   if (on("preferences") && taste) k.preferences = [{ text: taste.text, source: "taste", verifiedAt: taste.at.toISOString() }];
-  if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, verifiedAt: latest(c.confirmedOn, c.saidOn) }));
+  if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, saidOn: String(c.saidOn).slice(0, 10), verifiedAt: latest(c.confirmedOn, c.saidOn) }));
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
   if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
