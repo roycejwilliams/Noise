@@ -325,6 +325,13 @@ export const ABILITIES: Ability[] = [
     use: "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or for a vaguer interest (a scene they'd like to be in, something they'd enjoy). Explicit watch language right now (\"let me know when...\", \"keep an eye out for X\", or a yes to your offer to watch) is a look-out instead: startTask with lookout: true, not saveAsk. Also when they tell you, in passing or answering you, about a scene they'd like to be in, a kind of event, people they'd want to meet or something they're exploring that Co could find for them: save it in their words so the search starts from it, and just carry on the conversation.",
   },
   {
+    id: "room_taste",
+    can: "Co remembers what kind of room they've said they want, or don't, and ranks what it picks for them by it.",
+    tool: "noteRoomTaste",
+    limits: { perTurn: 1, perDay: 3 },
+    use: "When they tell you what kind of room, gathering or crowd they want or are tired of (\"everything feels performative\", \"a room where I can drop my guard\", \"smaller, no pitching\"), note it in their words: what they want and what they don't. It changes what Co picks for them from now on. About rooms in general, not one thing Co sent (that's noteReaction); and never passing it to the team instead of noting it.",
+  },
+  {
     id: "reactions",
     can: "Co remembers how the things it sent landed (interested, went, loved it, not for them) and leans that way next time.",
     tool: "noteReaction",
@@ -441,7 +448,7 @@ export const ABILITIES: Ability[] = [
     can: "When they give feedback about how Co works, or ask Co to pass something to the team, Co can save it for the team.",
     tool: "saveFeedbackForTeam",
     limits: { perTurn: 3 },
-    use: "Save feedback for the team when they tell you how Co should work differently in general (how it searches, what it sends, how it texts), or ask you to pass something along. The team reads these to change Co, so each one is a sentence they can act on, one call per distinct piece. When they correct or push back on something you said in this conversation (a fact, a person, an opinion, how you described yourself), that's a conversation, not a report: get it right in your reply, because filing it would make an ordinary correction feel like a complaint. Only say it's been passed along after saving; don't promise if or when it changes.",
+    use: "Save feedback for the team when they tell you how Co should work differently in general (how it searches, what it sends, how it texts), or ask you to pass something along. The team reads these to change Co, so each one is a sentence they can act on, one call per distinct piece. When they correct or push back on something you said in this conversation (a fact, a person, an opinion, how you described yourself), that's a conversation, not a report: get it right in your reply, because filing it would make an ordinary correction feel like a complaint. Only say it's been passed along after saving; don't promise if or when it changes. What kind of room they want for themselves (\"everything feels performative\") isn't feedback for the team: note it with noteRoomTaste so it changes what Co picks for them.",
   },
   {
     id: "safety",

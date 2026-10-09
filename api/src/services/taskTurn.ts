@@ -133,7 +133,7 @@ export function taskKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying" 
     k.asks.length ? `What they've asked you to find or help with, still open (context only: each is its own work, never worked or reported on here):\n${k.asks.slice(0, 6).map((a) => `- ${a.text}`).join("\n")}` : null,
     k.corrections.length ? `What they corrected (only the corrected version exists; never bring back the old one):\n${k.corrections.slice(0, 5).map((c) => `- ${c.field}: was "${c.was}", now ${c.now == null ? "(removed)" : `"${c.now}"`}`).join("\n")}` : null,
     k.lessons.length ? `What you've learned working with them:\n${k.lessons.slice(0, 5).map((l) => `- ${l.text}`).join("\n")}` : null,
-    k.preferences.length ? `Their taste (from how your suggestions landed):\n${k.preferences.map((p) => `- ${p.text}`).join("\n")}` : null,
+    k.preferences.length ? `Their taste (what kind of room they've said they want, then how your suggestions landed):\n${k.preferences.map((p) => `- ${p.text}`).join("\n")}` : null,
     k.claims.length ? `What they've told you that still holds:\n${k.claims.slice(0, 6).map((c) => `- ${c.text}${c.expiresOn ? ` (until ${c.expiresOn})` : ""}`).join("\n")}` : null,
   ]
     .filter(Boolean)

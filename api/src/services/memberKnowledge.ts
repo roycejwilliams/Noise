@@ -102,7 +102,8 @@ export type CarryItem = {
 
 export type Lesson = { text: string };
 export type Correction = { field: string; was: string; now: string | null };
-export type Preference = { text: string; source: "taste" };
+// "stated": what kind of room they told Co they want (services/roomTaste.ts), first; "taste": how what Co sent landed.
+export type Preference = { text: string; source: "taste" | "stated" };
 export type HeldClaim = { text: string; provenance: Provenance; kind: ClaimKind; quote: string | null; expiresOn: string | null; saidOn: string };
 
 export type Restraint = {
@@ -191,6 +192,7 @@ export type KnowledgeDeps = {
   lessons: (userId: string) => Promise<{ text: string; at: Date }[]>;
   corrections: (userId: string) => Promise<CorrectionRow[]>;
   taste: (userId: string) => Promise<{ text: string; at: Date } | null>;
+  roomTaste: (userId: string) => Promise<{ text: string; at: Date }[]>;
   claims: (userId: string, now: Date, zone: string | null) => Promise<Claim[]>;
   restraint: (userId: string, now: Date) => Promise<RawRestraint>;
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
@@ -248,6 +250,10 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     (await rows(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesson' ORDER BY created_at DESC LIMIT 6`, [userId])).map((r) => ({ text: String(r.content), at: new Date(r.created_at) })),
   corrections: async (userId) =>
     (await rows(`SELECT field, old_value, new_value, corrected_at FROM profile_corrections WHERE user_id = $1 AND corrected_at > NOW() - INTERVAL '90 days' ORDER BY corrected_at DESC LIMIT 8`, [userId])) as CorrectionRow[],
+  roomTaste: async (userId) => {
+    const R = await import("./roomTaste.js");
+    return (await R.loadRoomTaste(userId)).map((r) => ({ text: R.roomTasteLine(r.taste), at: r.at }));
+  },
   taste: async (userId) => {
     const text = await (await import("./outcomes.js")).tasteSummary(userId);
     if (!text) return null;
@@ -580,7 +586,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
-  const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, claims, restraint, exchanges, person] = await Promise.all([
+  const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
     skip("asks", "asks", () => d.asks(userId), [] as RawAsk[]),
@@ -594,6 +600,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     skip("lessons", "lessons", () => d.lessons(userId), [] as { text: string; at: Date }[]),
     skip("corrections", "corrections", () => d.corrections(userId), [] as CorrectionRow[]),
     skip("preferences", "taste", () => d.taste(userId), null),
+    skip("preferences", "room taste", () => d.roomTaste(userId), [] as { text: string; at: Date }[]),
     skip("claims", "claims", () => d.claims(userId, now, zone), [] as Claim[]),
     skip("restraint", "restraint", () => d.restraint(userId, now), null as RawRestraint | null),
     skip("exchanges", "exchanges", () => d.exchanges(userId, { limit: Math.max(1, opts.exchanges ?? EXCHANGE_DEFAULTS.limit), days: Math.max(1, opts.exchangeDays ?? EXCHANGE_DEFAULTS.days) }), [] as { content: string; at: Date }[]),
@@ -606,7 +613,10 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, receipts, ledger, loops, promises, now, zone });
   if (on("lessons")) k.lessons = lessons.filter((l) => l.text.trim()).map((l) => ({ text: l.text.trim(), verifiedAt: l.at.toISOString() }));
   if (on("corrections")) k.corrections = settleGoalCorrections(corrections.map((c) => ({ field: String(c.field), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), verifiedAt: latest(c.corrected_at) })), goalsOf(profile, states));
-  if (on("preferences") && taste) k.preferences = [{ text: taste.text, source: "taste", verifiedAt: taste.at.toISOString() }];
+  if (on("preferences")) k.preferences = [
+    ...stated.map((s) => ({ text: s.text, source: "stated" as const, verifiedAt: s.at.toISOString() })),
+    ...(taste ? [{ text: taste.text, source: "taste" as const, verifiedAt: taste.at.toISOString() }] : []),
+  ];
   if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, saidOn: String(c.saidOn).slice(0, 10), verifiedAt: latest(c.confirmedOn, c.saidOn) }));
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
   if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));

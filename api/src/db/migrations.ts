@@ -459,6 +459,8 @@ export async function runMigrations(): Promise<void> {
       // What a web search kept, with its link, so "send it" works on a later turn
       // (services/researchFinds.ts, 2026-10-03).
       "research_find",
+      // What kind of room they've said they want (services/roomTaste.ts, 2026-10-09).
+      "room_taste",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
