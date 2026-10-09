@@ -328,7 +328,7 @@ export const ABILITIES: Ability[] = [
     id: "room_taste",
     can: "Co remembers what kind of room they've said they want, or don't, and ranks what it picks for them by it.",
     tool: "noteRoomTaste",
-    limits: { perTurn: 1 },
+    limits: { perTurn: 1, perDay: 3 },
     use: "When they tell you what kind of room, gathering or crowd they want or are tired of (\"everything feels performative\", \"a room where I can drop my guard\", \"smaller, no pitching\"), note it in their words: what they want and what they don't. It changes what Co picks for them from now on. About rooms in general, not one thing Co sent (that's noteReaction); and never passing it to the team instead of noting it.",
   },
   {

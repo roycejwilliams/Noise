@@ -234,7 +234,7 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
   for (const x of clearing) {
     if (slotted.has(x.at)) continue;
     const j = out[x.at];
-    out[x.at] = { id: j.id, key: j.key, name: j.name, kind: j.kind, verdict: "hold", reason: "over_send_limit", why: j.why, cites: j.cites, whyNow: j.whyNow, until: null, taste: j.taste, guard: `over ${SELECT_LIMITS.maxSends} sends${x.kind === "discovery" && clearing.some((y) => y.kind === "answer" && slotted.has(y.at)) ? "; what they asked for went first" : ""}${x.taste === "clashes" ? "; it clashes with the room they said they want" : ""}` };
+    out[x.at] = { id: j.id, key: j.key, name: j.name, kind: j.kind, verdict: "hold", reason: "over_send_limit", why: j.why, cites: j.cites, whyNow: j.whyNow, until: null, taste: j.taste, guard: `over ${SELECT_LIMITS.maxSends} sends${x.kind === "discovery" && clearing.some((y) => y.kind === "answer" && slotted.has(y.at)) ? "; what they asked for went first" : ""}${x.taste === "clashes" ? "; it clashes with the room they said they want" : x.taste === "neutral" && clearing.some((y) => y.kind === x.kind && y.taste === "matches" && slotted.has(y.at)) ? "; a better fit for the room they said they want went first" : ""}` };
   }
   for (const p of c.pool) if (!seen.has(p.id)) out.push({ id: p.id, key: p.key, name: p.name, kind: p.kind, verdict: "no_verdict", reason: "no_verdict", why: "" });
   return out;

@@ -940,6 +940,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("Their taste wasn't noted: the quote isn't in their words.");
           return { ok: false, error: "The quote must be copied exactly from what they wrote." };
         }
+        // What drives ranking (wants, avoids) has to rest on what they said: each shares a word with their quote (review of #132:
+        // "I'm tired" could carry an invented "avoids: loud parties").
+        const off = (await import("../services/roomTaste.js")).tasteUnbacked({ wants, avoids, quote });
+        if (off) {
+          notDone("Their taste wasn't noted: it says more than their words do.");
+          return { ok: false, error: off };
+        }
         const taste = { wants: wants?.trim() || null, avoids: avoids?.trim() || null, quote: quote.trim().slice(0, 200) };
         if (ctx.dryRun) return { ok: true };
         await (await import("../services/roomTaste.js")).recordRoomTaste(ctx.userId, taste);

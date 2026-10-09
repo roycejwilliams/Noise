@@ -773,8 +773,10 @@ export function codePick(eligible: Candidate[]): Candidate | null {
 // final day). A find whose useful life ends before the next realistic send slot goes ahead of a companion message that can wait;
 // one with days left never jumps the queue. What can't wait isn't jumped: a post-call text (they just hung up) or anything that
 // itself expires sooner.
-const FIND_TYPES = new Set(["event_offer", "event_match_nudge", "deadline_nudge", "search_result", "co_event"]);
-const CANT_WAIT = new Set(["post_call", "call_confirm", "task_window", "pre_arrival", "event_brief"]);
+const FIND_TYPES = new Set(["event_offer", "event_match_nudge", "deadline_nudge"]);
+// Real candidates that can't wait for tomorrow either: a post-call text (they just hung up), what goes before an event (the note, the
+// brief, the brief's name ask, a guest's ask before it), and a lapse notice. A find never jumps these (review of #132).
+const CANT_WAIT = new Set(["post_call", "pre_arrival", "event_brief", "brief_name_ask", "ask_solicitation", "membership_lapse"]);
 
 // Pure: when a find's useful life ends: its own expiry, or the end of the last day the picker gave it, whichever is first.
 export function findEndsAt(c: Pick<Candidate, "expiresAt" | "payload">, zone: string | null): Date | null {
@@ -784,31 +786,44 @@ export function findEndsAt(c: Pick<Candidate, "expiresAt" | "payload">, zone: st
   return ends.length ? new Date(Math.min(...ends.map((d) => d.getTime()))) : null;
 }
 
-// Pure: the next moment another text could realistically go if one goes now: spacing from now, inside their hours, and tomorrow
-// when this send uses up today's slot for a counted text (answers aren't capped, so they only wait on spacing and hours).
-export function nextSendSlot(o: { now: Date; zone: string | null; countedToday: number; answering: boolean }): Date {
+// Pure: when the find could next go if something else goes now. Spacing from now, inside their hours (8am to 9pm their time); and
+// tomorrow when the find's own lane has used today's counted slot, counting the other send only when it's counted and in that lane
+// (review of #132: an answer isn't counted, and an event offer is in the room lane, so a debrief at 2:45 left Fleet Week a 5:45 slot).
+export function nextSendSlot(o: { now: Date; zone: string | null; findLane: Lane; findCounted: boolean; countedToday: Record<Lane, number>; other: { lane: Lane; counted: boolean } | null }): Date {
   const z = hoursZone(o.zone);
+  const local = DateTime.fromJSDate(o.now).setZone(z);
+  const tomorrow = local.plus({ days: 1 }).set({ hour: RULES.startHour, minute: 0, second: 0, millisecond: 0 });
   let t = DateTime.fromJSDate(new Date(o.now.getTime() + RULES.minHoursBetweenTexts * HOUR)).setZone(z);
-  const capped = !o.answering && o.countedToday + 1 >= RULES.maxPerLocalDay;
-  const sameDay = t.hasSame(DateTime.fromJSDate(o.now).setZone(z), "day");
-  if (capped || !sameDay || t.hour >= RULES.endHour) t = DateTime.fromJSDate(o.now).setZone(z).plus({ days: 1 }).set({ hour: RULES.startHour, minute: 0, second: 0, millisecond: 0 });
+  const used = o.countedToday[o.findLane] + (o.other && o.other.counted && o.other.lane === o.findLane ? 1 : 0);
+  const capped = o.findCounted && used >= LANE_CAPS[o.findLane].perDay;
+  if (capped || !t.hasSame(local, "day") || t.hour >= RULES.endHour) t = tomorrow;
   else if (t.hour < RULES.startHour) t = t.set({ hour: RULES.startHour, minute: 0, second: 0, millisecond: 0 });
   return t.toJSDate();
 }
 
-// Pure: the find that has to go now or not at all, if any, and why. Only when what else is ready can wait (a debrief, a check-in,
-// a follow-up); soonest-ending first.
-export function expiringFind(eligible: Candidate[], o: { now: Date; zone: string | null; countedToday: number }): { pick: Candidate; endsAt: Date; nextSlot: Date } | null {
+// Pure: the find that has to go now or not at all, if any. Only a find the daily picker chose (payload.picked: it already weighed
+// their stated taste), only when what would go instead can wait (no can't-wait type, nothing else ending before the find does), and
+// only when its end comes before the next slot it could realistically get. Soonest-ending first.
+export function expiringFind(eligible: Candidate[], o: { now: Date; zone: string | null; sends: SendRecord[] }): { pick: Candidate; endsAt: Date; nextSlot: Date } | null {
   if (eligible.some((c) => CANT_WAIT.has(c.type))) return null;
+  const others = eligible.filter((c) => !FIND_TYPES.has(c.type));
+  if (!others.length) return null;
+  const dayStart = startOfLocalDay(o.now, o.zone);
+  const countedToday: Record<Lane, number> = { room: 0, other: 0 };
+  for (const s of o.sends) if (!s.exempt && s.sentAt >= dayStart && s.sentAt <= o.now) countedToday[laneOf(s.type)]++;
+  // What would go instead: the companion-first code pick among the rest.
+  const other = codePick(others);
+  const otherInfo = other ? { lane: laneOf(other.type), counted: !isAnswering(other) } : null;
   const finds = eligible
-    .filter((c) => FIND_TYPES.has(c.type))
+    .filter((c) => FIND_TYPES.has(c.type) && (c.payload as { picked?: boolean } | null)?.picked === true)
     .map((c) => ({ c, endsAt: findEndsAt(c, o.zone) }))
     .filter((x): x is { c: Candidate; endsAt: Date } => !!x.endsAt && x.endsAt.getTime() > o.now.getTime())
     .sort((a, b) => a.endsAt.getTime() - b.endsAt.getTime());
   for (const f of finds) {
-    // The slot after the OTHER thing goes now: if that's past the find's end, the find goes first.
-    const nextSlot = nextSendSlot({ now: o.now, zone: o.zone, countedToday: o.countedToday, answering: false });
-    if (f.endsAt.getTime() <= nextSlot.getTime() && eligible.some((c) => c.id !== f.c.id && !FIND_TYPES.has(c.type))) return { pick: f.c, endsAt: f.endsAt, nextSlot };
+    // Something else ending first can't wait either.
+    if (others.some((c) => c.expiresAt && c.expiresAt.getTime() <= f.endsAt.getTime())) continue;
+    const nextSlot = nextSendSlot({ now: o.now, zone: o.zone, findLane: laneOf(f.c.type), findCounted: !isAnswering(f.c), countedToday, other: otherInfo });
+    if (f.endsAt.getTime() <= nextSlot.getTime()) return { pick: f.c, endsAt: f.endsAt, nextSlot };
   }
   return null;
 }
@@ -1291,7 +1306,7 @@ export function readPick(text: string): { id: string; why: string } | null {
 // Only runs when there's a real choice, so most days cost nothing.
 export async function choosePick(
   eligible: Candidate[],
-  about: { recentConversation: string; feeling: string; taste?: string | null; person?: string | null },
+  about: { recentConversation: string; feeling: string; taste?: string | null; statedTaste?: string | null; person?: string | null },
 ): Promise<{ pick: Candidate | null; reason: string; source: "code" | "co" }> {
   if (eligible.length < 2) return proposePick(eligible);
   try {
@@ -1308,6 +1323,7 @@ You're about to text this member first. Several things are ready to go; pick the
 
 How they've been: ${about.feeling || "(nothing notable)"}
 What's landed with them before: ${about.taste || "(nothing recorded yet)"}
+${about.statedTaste ? `What kind of room they've said they want (their words): ${about.statedTaste}\n` : ""}
 ${about.person ? `What you know about them:\n${about.person.slice(0, 2500)}\n` : ""}Their recent texts with you (oldest first):
 ${about.recentConversation.slice(-2500) || "(none)"}
 
@@ -1819,15 +1835,15 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // As stored, for the code that parses the thread (repeat question, payload first); stamped in their zone for the model reads.
   const recent = known ? exchangeTranscript(known) : "";
   const recentStamped = known ? exchangeTranscript(known, { stamped: true }) : "";
-  // Stated room taste first (services/roomTaste.ts), then how what Co sent landed: the daily pick reads both.
-  const taste = known?.preferences.length ? known.preferences.map((p) => p.text).join(" ") : null;
+  // How what Co sent landed, and, apart from it, the kind of room they've said they want (services/roomTaste.ts).
+  const taste = known?.preferences.filter((p) => p.source !== "stated").map((p) => p.text).join(" ") || null;
+  const statedTaste = known?.preferences.filter((p) => p.source === "stated").map((p) => p.text).join(" ") || null;
   const drafting = <T,>(type: ProactiveType, fn: () => Promise<T>): Promise<T> => (OWN_MEMBER_CONTEXT.has(type) ? draftWithKnowledge(null, null, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)) : draftWithKnowledge(known, rules, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)));
   // A find on its last chance goes before what can wait (expiringFind); otherwise Co picks.
-  const countedToday = state.sends.filter((s) => !s.exempt && laneOf(s.type) === "other" && s.sentAt >= startOfLocalDay(state.now, person.timezone) && s.sentAt <= state.now).length;
-  const urgent = expiringFind(ev.eligible, { now: state.now, zone: person.timezone, countedToday });
+  const urgent = expiringFind(ev.eligible, { now: state.now, zone: person.timezone, sends: state.sends });
   const picked = urgent
     ? { pick: urgent.pick, reason: `expires before the next send slot (ends ${localStamp(urgent.endsAt, person.timezone)}, next slot ${localStamp(urgent.nextSlot, person.timezone)}): it goes ahead of what can wait`, source: "code" as const }
-    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: renderEmotionalContext(emotional), taste, person: known?.person?.text ?? null });
+    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: renderEmotionalContext(emotional), taste, statedTaste, person: known?.person?.text ?? null });
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)

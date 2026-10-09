@@ -297,9 +297,11 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
 }
 
 // They just said what kind of room they want: the picker re-ranks today, not tomorrow at 10 (Royce, 2026-10-09). Same gates as the
-// daily run (reviewEnabled, and applyPicks only for picker members); the once-a-day guard lets it through because the taste is newer.
+// daily run (reviewEnabled, the members it serves, and applyPicks only for picker members); the once-a-day guard lets it through
+// because the taste is newer. noteRoomTaste's own limit (capabilities.ts, 3 a day) bounds how often.
 export async function rerunPickerForTaste(userId: string): Promise<void> {
-  if (!reviewEnabled()) return;
+  // Only for members the daily picker serves (review of #132: anyone saving a taste got a paid picker run).
+  if (!reviewEnabled() || !(await shadowUserIds()).includes(userId)) return;
   await runSweepShadow(userId).catch((err: any) => console.error(`picker rerun after taste failed for ${userId} (non-fatal):`, err?.message ?? err));
 }
 
