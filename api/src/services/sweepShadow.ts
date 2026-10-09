@@ -206,13 +206,13 @@ export function memberSafeWhy(why: string): string {
 //   - a waiting find the picker held (its own hold, or over the day's send limit) goes back to waiting in the backlog only,
 //     so a later "send" can queue it again; it never sends while held.
 //   - a waiting find the picker never saw is left alone.
-export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: (Waiting & { why: string })[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
+export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: (Waiting & { why: string; lastDay?: string | null })[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
   const verdictOf = new Map(judgments.map((j) => [j.key, j]));
-  const queue: (Waiting & { why: string })[] = [];
+  const queue: (Waiting & { why: string; lastDay?: string | null })[] = [];
   const rank = (b: Waiting) => (b.reminder || b.again ? 0 : 1) * 2 + Number(b.fromProfile);
   for (const j of judgments.filter((x) => x.verdict === "send")) {
     const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => rank(a) - rank(b))[0];
-    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" ")) });
+    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" ")), lastDay: j.lastDay ?? null });
   }
   const why = (j: { verdict: string; why?: string } | undefined) => `Co's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
   const reject = waitingKeys.filter((w) => verdictOf.get(w.key)?.verdict === "reject").map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
@@ -240,7 +240,7 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
   for (const d of plan.unqueue) await pool.query(`DELETE FROM proactive_candidates WHERE id = $1 AND status = 'pending'`, [d.id]);
   const queuedNames: string[] = [];
   for (const q of plan.queue) {
-    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why }).catch((err: any) => {
+    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null }).catch((err: any) => {
       console.error("picker: queueing a pick failed (non-fatal):", err?.message ?? err);
       return false;
     });

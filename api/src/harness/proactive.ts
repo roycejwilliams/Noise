@@ -600,6 +600,18 @@ export function sendIsExempt(primary: Candidate, extras: Candidate[], ignorePaci
 // Every tier that has something goes out together (2026-09-21): the picked
 // offer plus the best other waiting offer from each tier not yet in the group.
 // Reminders (a deadline heads-up) ride alone.
+// How many of the daily pick's choices go in one message (its own send limit).
+export const MAX_PICKED_TOGETHER = 3;
+const isPicked = (c: Candidate) => c.type === "event_offer" && Boolean((c.payload as { picked?: boolean })?.picked) && !(c.payload as { reminder?: boolean })?.reminder;
+// Most time-bound first: priority (a pick's last day sets it), then whichever expires soonest, then oldest.
+const byUrgency = (a: Candidate, b: Candidate) => b.priority - a.priority || (a.expiresAt?.getTime() ?? Infinity) - (b.expiresAt?.getTime() ?? Infinity) || a.dueAt.getTime() - b.dueAt.getTime();
+// Pure: when the pick is one of the daily pick's choices, the bundle leads with the most time-bound of them (Royce, 2026-10-09:
+// Fleet Week first), whichever of them was picked.
+export function leadPick(primary: Candidate, eligible: Candidate[]): Candidate {
+  if (!isPicked(primary)) return primary;
+  return [primary, ...eligible.filter((c) => c.id !== primary.id && isPicked(c))].sort(byUrgency)[0];
+}
+
 export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Candidate[] {
   const tierOf = (c: Candidate) => Number((c.payload as { match?: { tier?: number } })?.match?.tier ?? 0);
   const isReminder = (c: Candidate) => Boolean((c.payload as { reminder?: boolean })?.reminder);
@@ -608,7 +620,10 @@ export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Ca
   const out: Candidate[] = [];
   const ranked = [...eligible]
     .filter((c) => c.type === "event_offer" && c.id !== primary.id && !isReminder(c))
-    .sort((a, b) => b.priority - a.priority || (a.expiresAt?.getTime() ?? Infinity) - (b.expiresAt?.getTime() ?? Infinity) || a.dueAt.getTime() - b.dueAt.getTime());
+    .sort(byUrgency);
+  // The daily pick's choices go together, whatever their tier (Royce, 2026-10-09: "One message replaces the drip"): each with its
+  // link and caption, one question after the last. Still the one find-send a day.
+  if (isPicked(primary)) return ranked.filter(isPicked).slice(0, MAX_PICKED_TOGETHER - 1);
   for (const c of ranked) {
     const t = tierOf(c);
     if (seen.has(t)) continue;
@@ -1579,7 +1594,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", proposal, checks: ev.userChecks, reason: `pick: none (${picked.reason})` });
     return;
   }
-  const c = picked.pick;
+  const c = leadPick(picked.pick, ev.eligible);
   const pickChecks = ev.perCandidate.find((p) => p.candidate.id === c.id)?.checks ?? [];
 
   if (needsRelevanceCheck(c, state.now)) {
