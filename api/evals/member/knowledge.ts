@@ -241,7 +241,7 @@ check("restraint: care, muted kinds and the unanswered count", k.restraint?.need
 for (const n of [1, 2, 3, 4, 5]) {
   const last = new Date(NOW.getTime() - H);
   const r = restraintOf({ holdUntil: null, spaceUntil: null, safetyHold: false, emotional: null, suppressed: [], trial: [], lastInboundAt: null, unansweredSends: Array.from({ length: n }, () => last) }, NOW);
-  check(`restraint: the unanswered pause after ${n} matches harness/proactive.ts`, r.unanswered.pausedUntil === new Date(last.getTime() + unansweredPauseFor(n) * H).toISOString());
+  check(`restraint: the unanswered count after ${n}, no pause date (the gate's, per lane)`, r.unanswered.count === n && !("pausedUntil" in r.unanswered));
 }
 
 // ---------------------------------------------------------------- include narrows the loads
@@ -289,8 +289,9 @@ check("rules: no restraint read, no restraint rule", memberRules({ ...k, restrai
   check("a member's voice memo is their exchange", MK.exchangeOf({ content: "User sent a voice memo: running late, sorry", at: new Date() })?.from === "member");
   check("Co's own 'Co is looking:' line is Co's exchange", MK.exchangeOf({ content: "Co is looking: a caterer for the open house", at: new Date() })?.from === "co");
   // The restraint rule states the count, never an invented pause date.
-  const rr = MK.restraintRule({ holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 4, lastInboundAt: null, lastSentAt: new Date().toISOString(), pausedUntil: new Date(Date.now() + 9e8).toISOString() }, verifiedAt: new Date().toISOString() } as any, "America/Los_Angeles");
+  const rr = MK.restraintRule({ holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 4, lastInboundAt: null, lastSentAt: new Date().toISOString() }, verifiedAt: new Date().toISOString() } as any, "America/Los_Angeles");
   check(`the restraint rule gives the unanswered count, no pause date ("${rr.slice(0, 120)}")`, /4 of Co's own texts/.test(rr) && !/pause runs to/.test(rr));
 }
+check("a failed-send note is not an exchange", MK.exchangeOf({ content: "Co message failed to deliver: 30001 — Unknown", at: new Date() }) === null);
 console.log(`member knowledge: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
