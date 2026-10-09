@@ -48,10 +48,22 @@ check("asks, corrections (the corrected version), lessons, taste, held claims, a
 check("an empty knowledge read is no block", TT.taskKnowledge({ delivered: [], carrying: [], asks: [], corrections: [], lessons: [], preferences: [], claims: [], restraint: null }, { taskId: 1, zone: null }) === "");
 
 // The rules: the shared constants themselves, plus restraint and quiet hours from their state.
-const empty: any = { userId: "u", asOf: now.toISOString(), identity: { firstName: "Sam", city: null, zone: NY, timeZone: NY, verifiedAt: now.toISOString() }, goals: [], asks: [], delivered: [], carrying: [], lessons: [], corrections: [], preferences: [], claims: [], exchanges: [], person: null, restraint: { holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: ["event_offer"], trialKinds: [], unanswered: { count: 0, lastInboundAt: null, lastSentAt: null, pausedUntil: null }, verifiedAt: now.toISOString() } };
-const rules = TT.taskRules(MK.memberRules(empty));
+const empty: any = { userId: "u", asOf: now.toISOString(), identity: { firstName: "Sam", city: null, zone: NY, timeZone: NY, verifiedAt: now.toISOString() }, goals: [], asks: [], delivered: [], carrying: [], lessons: [], corrections: [], preferences: [], claims: [], exchanges: [], person: null, restraint: { holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: ["event_offer"], trialKinds: [], unanswered: { count: 0, lastInboundAt: null, lastSentAt: null }, verifiedAt: now.toISOString() } };
+const rules = TT.taskRules(MK.memberRules(empty), empty);
 const R = MK.memberRules(empty);
 check("the task reads every member-level rule, word for word", [R.grounding, R.memberSafety, R.discretion, R.deliveryShape, R.restraint, R.quietHours].every((r) => r && rules.includes(r)));
+// Space after a handoff, the pick's hold and the unanswered count are Co's own lanes, set when work goes TO a task: a task told
+// "nothing new until X" would hold the result it owes. What's about them stays.
+{
+  const later = new Date(now.getTime() + 6 * 3_600_000);
+  const held: any = { ...empty, restraint: { ...empty.restraint, holdUntil: later.toISOString(), spaceUntil: later.toISOString(), safetyHold: true, needsCare: true, unanswered: { count: 3, lastInboundAt: null, lastSentAt: null } } };
+  const whole = MK.memberRules(held).restraint;
+  const forTask = TT.taskRules(MK.memberRules(held), held);
+  check("(fixture) the layer's own restraint rule names the space, hold and unanswered count", /giving them space/.test(whole) && /starts nothing on its own until/.test(whole) && /no reply yet/.test(whole), whole);
+  check("the task's restraint leaves out space, hold and the unanswered count", !/giving them space/.test(forTask) && !/starts nothing on its own until/.test(forTask) && !/no reply yet/.test(forTask), forTask);
+  check("...and keeps safety hold, a hard time and muted kinds", /safety hold is on/.test(forTask) && /hard time lately/.test(forTask) && /event_offer/.test(forTask), forTask);
+}
+check("open asks are context only, like what Co carries", /still open \(context only: each is its own work, never worked or reported on here\)/.test(kt));
 check("the restraint state reaches the turn (a muted kind)", /Restraint:.*event_offer/.test(rules) && /Quiet hours:/.test(rules));
 const prompt = TT.taskTurnPrompt({ task: { id: 12, userId: "u", goal: "Find a DJ", theirWords: "need a DJ", steps: [], notes: [], wakes: 1, source: "user", createdAt: now.toISOString() } as any, firstName: "Sam", now: "Thu Oct 9, 4pm EDT", zone: NY, recent: stamped, knowledge: kt, rules });
 check("the task prompt carries the knowledge, the rules and the stamped thread", prompt.includes(kt) && prompt.includes(rules) && prompt.includes(stamped) && /each stamped with its time/.test(prompt));

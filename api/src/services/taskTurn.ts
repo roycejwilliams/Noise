@@ -20,7 +20,7 @@ import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
-import { memberKnowledge, memberRules, type MemberKnowledge, type MemberRules } from "./memberKnowledge.js";
+import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type MemberRules, type Restraint } from "./memberKnowledge.js";
 import { exchangeText } from "./followUps.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
@@ -125,7 +125,7 @@ export function taskKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying" 
     r?.feeling ? `How they are lately (from their own words): ${r.feeling}.` : null,
     k.delivered.length ? `What they already have from you (newest first; never send one again as new, and a promise isn't kept by an old send):\n${k.delivered.slice(0, 10).map((d) => `- ${d.what} (${d.kind}, ${when(d.at)})${d.url ? ` ${d.url}` : ""}${d.reaction ? ` — they reacted: ${d.reaction}` : ""}`).join("\n")}` : null,
     carrying.length ? `What else you're carrying for them (each has its own turn; context only, never worked or reported on here):\n${carrying.map((c) => `- ${c.what} (${c.kind}, ${c.state}${c.told ? ", they know" : ""})`).join("\n")}` : null,
-    k.asks.length ? `What they've asked you to find or help with, still open:\n${k.asks.slice(0, 6).map((a) => `- ${a.text}`).join("\n")}` : null,
+    k.asks.length ? `What they've asked you to find or help with, still open (context only: each is its own work, never worked or reported on here):\n${k.asks.slice(0, 6).map((a) => `- ${a.text}`).join("\n")}` : null,
     k.corrections.length ? `What they corrected (only the corrected version exists; never bring back the old one):\n${k.corrections.slice(0, 5).map((c) => `- ${c.field}: was "${c.was}", now ${c.now == null ? "(removed)" : `"${c.now}"`}`).join("\n")}` : null,
     k.lessons.length ? `What you've learned working with them:\n${k.lessons.slice(0, 5).map((l) => `- ${l.text}`).join("\n")}` : null,
     k.preferences.length ? `Their taste (from how your suggestions landed):\n${k.preferences.map((p) => `- ${p.text}`).join("\n")}` : null,
@@ -138,8 +138,16 @@ export function taskKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying" 
 // Pure: the member-level rules a task turn reads with (services/memberKnowledge.ts memberRules: the shared constants, plus
 // restraint and quiet hours read from their state). Task texts go through sendExempt, which doesn't apply kind restraint: the
 // turn knows the state here; the send gating is unchanged.
-export function taskRules(r: MemberRules): string {
-  return [r.grounding, r.memberSafety, r.discretion, r.deliveryShape, r.restraint, r.quietHours].filter(Boolean).join("\n\n");
+// The restraint a task reads leaves out what belongs to Co's own unprompted sends, not to them: space_until is set exactly when
+// Co hands work to a task (harness/proactive.ts payload first), hold_until only when the daily pick picks nothing, and the
+// unanswered count is the proactive lanes' pause. Read here, any of them would tell the task to hold the very result it owes.
+// What's about them stays: a safety hold, a hard time, frustration with Co, the kinds they let pass.
+export function taskRestraint(r: Restraint | null): Restraint | null {
+  return r ? { ...r, holdUntil: null, spaceUntil: null, unanswered: { ...r.unanswered, count: 0 } } : null;
+}
+export function taskRules(r: MemberRules, k?: Pick<MemberKnowledge, "restraint" | "identity">): string {
+  const restraint = k ? restraintRule(taskRestraint(k.restraint), k.identity.zone) : r.restraint;
+  return [r.grounding, r.memberSafety, r.discretion, r.deliveryShape, restraint, r.quietHours].filter(Boolean).join("\n\n");
 }
 
 export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string; onFile?: OnFile[]; knowledge?: string; rules?: string }): string {
@@ -713,7 +721,7 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     recent: k ? exchangeText(k.exchanges, (at) => localStamp(at, zone)).slice(-3000) : "",
     personModel: k?.person?.text || undefined,
     knowledge: (k && taskKnowledge(k, { taskId: task.id, zone })) || undefined,
-    rules: k ? taskRules(memberRules(k)) : undefined,
+    rules: k ? taskRules(memberRules(k), k) : undefined,
     note: async (text, stepDone) => void (await noteOnTask(userId, task.id, text, stepDone)),
     schedule: async (h, plan) => (await scheduleTask(userId, task.id, h, plan))?.nextCheckAt ?? null,
     scheduleAt: async (at, plan) => (await scheduleTaskAt(userId, task.id, at, plan))?.nextCheckAt ?? null,

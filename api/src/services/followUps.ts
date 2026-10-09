@@ -227,7 +227,9 @@ export function exchangesAsOf(asOf: Date): KnowledgeDeps["exchanges"] {
         `SELECT content, created_at FROM co_memories
          WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} AND created_at <= $4 AND created_at > $4::timestamptz - make_interval(days => $2)
          ORDER BY created_at DESC LIMIT $3`,
-        [userId, o.days, o.limit, asOf],
+        // Twice the window, like the layer's own read: lines that aren't exchanges are dropped after, and the layer trims to the
+        // limit then (memberKnowledge.ts), so they never use up the member's slots.
+        [userId, o.days, o.limit * 2, asOf],
       )
     ).rows.map((r: any) => ({ content: String(r.content ?? ""), at: new Date(r.created_at) }));
 }
