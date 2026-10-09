@@ -138,6 +138,7 @@
     "evals/proactive/pickerLive.ts",
     "evals/proactive/pickBundle.ts",
     "evals/proactive/restraint126.ts",
+    "evals/tasks/heldReplay.ts",
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",
     "evals/member/textKnowledge.ts",

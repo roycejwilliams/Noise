@@ -315,6 +315,11 @@ export async function scheduleTaskAt(userId: string, id: number, at: Date, plan:
   return rows[0] ? rowTo(rows[0]) : null;
 }
 
+// A wake that could only be held for pacing doesn't count toward maxWakes (review of #129): a long hold must not run the task out.
+export async function unspendWake(userId: string, id: number): Promise<void> {
+  await pool.query(`UPDATE co_tasks SET wakes = GREATEST(wakes - 1, 0), updated_at = NOW() WHERE user_id = $1 AND id = $2`, [userId, id]);
+}
+
 // Tasks due to wake, each claimed so two runs never work the same one.
 export async function claimDueTasks(limit = 20): Promise<CoTask[]> {
   const { rows } = await pool.query(

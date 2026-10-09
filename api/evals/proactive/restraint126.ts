@@ -34,14 +34,21 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("a kind they haven't backed off from isn't", P.coInitiatedChecks({ ...clear, suppressedKinds: ["goal_nudge"] }, "find").every((c) => c.pass));
   check("the daily and weekly caps aren't applied (a task text was never in the offer quota)", P.coInitiatedChecks(state, null).every((c) => c.name !== "daily_cap" && c.name !== "weekly_cap"));
   check("the retry is at least an hour out, even with nothing to space from", P.coInitiatedRetryAt({ now: at("12:00"), sends: [] }).getTime() === at("13:00").getTime());
+  // Review of #129: the retry follows the gate that held it, so a paused member isn't woken hourly.
+  check("held on the unanswered pause: next look a day out, not an hour", P.coInitiatedRetryAt({ now: at("12:00"), sends: [] }, ["unanswered_pause"]).getTime() === at("12:00").getTime() + 24 * 3_600_000);
+  check("held on kind backoff: a week out", P.coInitiatedRetryAt({ now: at("12:00"), sends: [] }, ["kind_restraint"]).getTime() === at("12:00").getTime() + 7 * 24 * 3_600_000);
+  check("held on spacing and pause: the later of the two", P.coInitiatedRetryAt(state, ["spacing", "unanswered_pause"]).getTime() === at("11:30").getTime() + 24 * 3_600_000);
+  // Review of #129: task texts space later texts too (a find 15 minutes after a task update was the 11:30 incident reversed).
+  check("a task update spaces the next text Co starts", !P.spacingCheck({ now: at("11:45"), sends: [rec("task_update", "11:30", true)] }).pass);
+  check("an event-change notice still doesn't", P.spacingCheck({ now: at("11:45"), sends: [rec("event_change", "11:30", true)] }).pass);
   const px = src("harness/proactive.ts");
   check("sendExempt reads the gates inside the lock and holds a Co-initiated text with its reason, logged", /if \(opts\.coInitiated\) \{[\s\S]{0,900}loadSends\(client, opts\.userId\)[\s\S]{0,900}record\("skip", "held_co_initiated", reason\)/.test(px));
-  check("a backoff it can't read holds the text (fails closed)", /couldn't read their backoff/.test(px));
+  check("a backoff it can't read holds a text with a kind (fails closed), not one without", /couldn't read their backoff/.test(px) && /suppressed \|\| !opts\.coInitiated\.kind/.test(px));
   check("the kind goes on the ledger so restraint learns from task texts", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, \$5\)/.test(px));
   const tt = src("services/taskTurn.ts");
-  check("task updates pass owed; anything else goes as Co-initiated", /const coInitiated = o\?\.owed \? undefined : \{ kind: task\.source === "lookout"/.test(tt));
-  check("the window warning is Co-initiated", /type: "task_window"[^\n]*coInitiated: \{ kind: null \}/.test(tt));
-  check("a held send reschedules the task's next look", /if \(!r\.sent && r\.retryAt\) await scheduleTaskAt\(userId, task\.id, r\.retryAt/.test(tt));
+  check("task updates pass owed; anything else goes as Co-initiated (no restraint kind until Royce decides lookouts)", /const coInitiated = o\?\.owed \? undefined : \{ kind: null \}/.test(tt));
+  check("the window warning is owed: held, it would land after the time it's about (review of #129)", /type: "task_window"(?![^\n]*coInitiated)/.test(tt));
+  check("a promise stays owed until it's kept, and links for an ask are its delivery (review of #129)", /const owed = task\.source === "promise" \|\| owedText\(asOfNow, deps\.now\(\)\);/.test(tt) && /deps\.send\(messages, \{ owed: owed \|\| task\.source !== "lookout" \}\)/.test(tt));
   check("the turn is told it was held and when it's next", /Held, not sent: \$\{r\.reason \?\? "pacing"\}/.test(tt));
 }
 
@@ -68,8 +75,9 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("ordinary wording isn't chase wording", ["Following the run club's schedule, Saturday works", "Back to you with the venue tonight"].every((t) => !T.CHASE.test(t)));
   check("awaitingThem: no text yet means nothing pending", !T.awaitingThem({ lastTextedAt: null, theirReplyAt: null }));
   const tt = src("services/taskTurn.ts");
-  check("tell refuses a chase in its intent and in its draft", /if \(CHASE\.test\(what\)\)/.test(tt) && /const chase = chases\(text, asOfNow\);/.test(tt));
-  check("a delivery's closing question is dropped when it would re-ask (the links still go)", /if \(closing && !owed && chases\(closing, asOfNow\)\) closing = null;/.test(tt));
+  check("tell refuses a chase in its draft (not its intent: review of #129)", !/if \(CHASE\.test\(what\)\)/.test(tt) && /const chase = chases\(text, asOfNow, \{ final \}\);/.test(tt));
+  check("a delivery's closing question is dropped when it would re-ask (the links still go)", /if \(closing && chases\(closing, asOfNow, \{ final \}\)\) closing = null;/.test(tt));
+  check("the last check before their deadline may ask what they want next", T.chases("Still want me to keep looking?", waiting, { final: true }) === null && T.chases("Circling back: still want me to look?", waiting, { final: true }) !== null);
 }
 
 // 3. Debriefs ask whether they went.
@@ -80,9 +88,13 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("their words naming it with going: confirmed", R.attendanceConfirmed(p, ["User: I'm going to the Claude Founder Salon tonight"]));
   check("an RSVP in their words: confirmed", R.attendanceConfirmed(p, ["User: rsvp'd for the founder salon"]));
   check("going to something else: not confirmed", !R.attendanceConfirmed(p, ["User: I'm going to the gym"]));
+  // Review of #129: negations and near-miss words read as going.
+  for (const l of ["User: I'm not going to the Claude Founder Salon", "User: I never made it to the founder salon", "User: not going to make the founder salon sorry", "User: can't make the Claude salon, going to skip it"]) check(`their "not going" isn't going: ${l}`, !R.attendanceConfirmed(p, [l]));
+  check("another event sharing a word stem isn't this one", !R.attendanceConfirmed(p, ["User: going to a Claude meetup for founders next month"]));
+  check("a curly apostrophe still reads", R.attendanceConfirmed(p, ["User: I\u2019ll be there, Claude Founder Salon tonight"]));
   check("a check-in at the door: confirmed", R.attendanceConfirmed({ ...p, checkinFollowupIds: ["c1"] }, []));
   check("a walk-in: confirmed", R.attendanceConfirmed({ ...p, walkinCheckinIds: ["w1"] }, []));
-  const presumes = ["How was the Claude Founder Salon?", "Anyone stood out?", "Who did you meet there?", "Did you have fun at the salon?"];
+  const presumes = ["How was the Claude Founder Salon?", "Anyone stood out?", "Who did you meet there?", "Did you have fun at the salon?", "How'd the salon go?", "How\u2019d it go?", "Meet anyone interesting?"];
   const asks = ["Did you end up making it to the Claude Founder Salon?", "Were you able to get to the founder salon last night?"];
   check("lines that take for granted they went are caught", presumes.every((t) => R.PRESUMES_THEY_WENT.test(t)), presumes.filter((t) => !R.PRESUMES_THEY_WENT.test(t)));
   check("asking whether they made it passes", asks.every((t) => !R.PRESUMES_THEY_WENT.test(t)), asks.filter((t) => R.PRESUMES_THEY_WENT.test(t)));

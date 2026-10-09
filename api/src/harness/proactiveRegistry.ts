@@ -114,15 +114,22 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
 // Pure: whether the record says they went (or meant to): checked in at the door, a walk-in, or their own words naming it with
 // going, RSVP or having been there. Co recommending it is never that.
 const GOING = /\b(?:i'?m going|i'?ll (?:go|be there)|going to|gonna go|rsvp'?d|registered|signed up|got (?:a )?tickets?|i went|we went|was there|made it|heading to|see you at)\b/i;
+// Their own "not going" (review of #129: "I'm not going to the salon" and "I never made it" read as going).
+const NOT_GOING = /\b(?:not|never|didn'?t|don'?t|can'?t|cannot|couldn'?t|won'?t|wasn'?t|isn'?t|skip(?:ping|ped)?|pass(?:ing)?|missed|bail(?:ed|ing)?|no longer)\b/i;
 export function attendanceConfirmed(p: Pick<DebriefPayload, "eventName" | "checkinFollowupIds" | "walkinCheckinIds">, theirLines: string[]): boolean {
   if ((p.checkinFollowupIds ?? []).length || (p.walkinCheckinIds ?? []).length) return true;
   const words = p.eventName.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 3 && !["event", "with", "night", "party", "2026"].includes(w));
   const key = words.slice(0, 3);
   if (!key.length) return false;
-  return theirLines.some((l) => { const t = l.toLowerCase(); return key.filter((w) => t.includes(w)).length >= Math.min(2, key.length) && GOING.test(l); });
+  // Whole words only ("founder" never matches "founders" of another event).
+  const has = (t: string, w: string) => new RegExp(`\\b${w}\\b`).test(t);
+  return theirLines.some((l) => {
+    const t = l.toLowerCase().replace(/[‘’]/g, "'");
+    return key.filter((w) => has(t, w)).length >= Math.min(2, key.length) && GOING.test(t) && !NOT_GOING.test(t);
+  });
 }
 // A line that takes for granted they went ("How was…", "anyone stood out", "who did you meet").
-export const PRESUMES_THEY_WENT = /\bhow (?:was|did|'d)\b|\b(?:anyone|anything|who) stood out\b|\bwho did you (?:meet|talk|end up)\b|\bdid you (?:meet|enjoy|have fun)\b|\bwhat did you think of\b/i;
+export const PRESUMES_THEY_WENT = /\bhow (?:was|did|'d|’d)\b|\bhow['’]d\b|\b(?:anyone|anything|who) stood out\b|\bwho did you (?:meet|talk|end up)\b|\bdid you (?:meet|enjoy|have fun)\b|\bmeet anyone\b|\bwhat did you think of\b/i;
 
 export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null, went = true): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;

@@ -18,6 +18,7 @@ import { recordDecision } from "../harness/core.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
 import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
+import { unspendWake } from "./coTasks.js";
 import { closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
 import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type MemberRules, type Restraint } from "./memberKnowledge.js";
@@ -68,6 +69,8 @@ export type TaskTurnDeps = {
   warn?: (text: string, key: string) => Promise<{ sent: boolean; reason?: string }>;
   setWindow?: (w: CommitWindow) => Promise<void>;
   scheduleAt?: (at: Date, plan: string) => Promise<string | null>;
+  // A wake whose only send was held for pacing gives its wake back (coTasks.ts unspendWake).
+  unspendWake?: () => Promise<void>;
   draftWarning?: (facts: Record<string, string>, redo?: { draft: string; failed: string }) => Promise<string | null>;
   // What's already on file and verified for them (the sweep's finds, this task's earlier results): sendable like this turn's
   // own results (Royce, 2026-10-09: the run link was on file and the task said "the link wasn't working").
@@ -227,6 +230,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   let decided: "scheduled" | "finished" | null = null;
   // When the next check lands (Co's scheduleNext, or the default): the window check reads it after the turn.
   let nextAt: Date | null = null;
+  // A send held for pacing (harness/proactive.ts coInitiated): the next look is no sooner than the hold, and the wake isn't spent.
+  let heldUntil: Date | null = null;
   const linkOk = (l: string) => verified.some((v) => v.url === l) || events.some((e) => e.url === l);
   // Co's daily pick rejected these for them: a task never sends them either (Royce, 2026-10-09: Claude for Games came back as
   // "confirmed" after the pick rejected it as not his interest).
@@ -267,12 +272,18 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (inventedFailure(what)) return { ok: false, error: "Not sent: it says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
         if (namesRejected(what)) return { ok: false, error: "Not sent: it names something Co's daily pick rejected for them. Leave it off." };
         const asOfNow = texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task;
-        const allowed = mayText(asOfNow, await deps.textsToday(), deps.now());
+        // A promise's delivery (its links) is the thing they're owed: the per-task gap after an unanswered question doesn't hold it
+        // (review of #129). Anything else still waits on mayText.
+        const delivering = task.source === "promise" && (links ?? []).some(linkOk);
+        const allowed = delivering ? { ok: true, why: null } : mayText(asOfNow, await deps.textsToday(), deps.now());
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
-        if (CHASE.test(what)) return { ok: false, error: "Not sent: that chases them for an answer. Wait for them; their reply wakes this task." };
-        const owed = owedText(asOfNow, deps.now());
-        const held = (r: { reason?: string; retryAt?: Date }) =>
-          `Held, not sent: ${r.reason ?? "pacing"}. This is Co starting a text, so it waits like every other one.${r.retryAt ? ` Your next look is set for ${r.retryAt.toISOString()}.` : ""} Note it; send the same thing then if it still holds.`;
+        // Owed (review of #129): the thing they asked for or were promised, whenever it lands, not only as the first text. A
+        // promise stays owed until it's kept (promiseCloseCheck above stops it after); links for an ask are its delivery.
+        const owed = task.source === "promise" || owedText(asOfNow, deps.now());
+        const held = (r: { reason?: string; retryAt?: Date }) => {
+          if (r.retryAt && (!heldUntil || r.retryAt > heldUntil)) heldUntil = r.retryAt;
+          return `Held, not sent: ${r.reason ?? "pacing"}. This is Co starting a text, so it waits like every other one.${r.retryAt ? ` Your next look is set for ${r.retryAt.toISOString()}.` : ""} Note it; send the same thing then if it still holds.`;
+        };
         const known = (links ?? []).filter(linkOk);
         // Only verified fields: web results that proved themselves, events from Co's
         // own gated search, and fields the page reader verified. Never raw page text.
@@ -307,7 +318,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           }
           if (!good.length) return { ok: false, error: `No caption held up (${droppedCaptions.join("; ")}). Note it and schedule the next look.` };
           let closing = drafted.closing;
-          if (closing && !owed && chases(closing, asOfNow)) closing = null;
+          if (closing && chases(closing, asOfNow, { final })) closing = null;
           if (closing) {
             const allFacts = Object.values(facts).join(" ");
             const bad = checkDraft(closing, { maxSentences: 2, maxChars: 280 }).some((c) => !c.pass) || !numbersBacked(closing, allFacts).ok || !placesBacked(closing, allFacts).ok || OFFERS_WHAT_CO_CANT.test(closing);
@@ -316,7 +327,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           const messages = assembleMessages(good, closing);
           const whole = await wholeDelivery(messages);
           if (whole) return { ok: false, error: whole };
-          const sent = await deps.send(messages, { owed });
+          const sent = await deps.send(messages, { owed: owed || task.source !== "lookout" });
           if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
           await deps.markTexted();
           await deps.note(`Texted them ${good.length} thing(s): ${good.map((g) => items.find((i) => i.url === g.url)?.name).join(", ")}${closing ? `, then: ${closing.slice(0, 120)}` : ""}${droppedCaptions.length ? ` (left out: ${droppedCaptions.join("; ")})` : ""}`, null);
@@ -362,7 +373,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           if (named.length) return { ok: false, error: `Not sent: it hands over ${named.slice(0, 2).join(", ")} without the links. A delivery is one message with its links: send it with tellThem and the links.` };
         }
         if (!final && progressReport(text, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
-        const chase = chases(text, asOfNow);
+        const chase = chases(text, asOfNow, { final });
         if (chase) return { ok: false, error: `Not sent: ${chase}. Wait for them; their reply wakes this task.` };
         const sent = await deps.send([text], { owed });
         if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
@@ -522,6 +533,17 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     const at = await deps.schedule(24, task.planNext ?? "Pick up where I left off.");
     nextAt = at ? new Date(at) : new Date(deps.now().getTime() + 24 * 3_600_000);
   }
+  // Held: whatever the turn scheduled, the next look waits for the hold (review of #129: an hourly retry under a 24h pause ran a
+  // task out of wakes undelivered), and a wake that could only be held doesn't count against the task.
+  const hold = heldUntil as Date | null; // set inside tell(), which TypeScript doesn't follow
+  if (hold && !texts.length && decided !== "finished") {
+    if (!nextAt || nextAt < hold) {
+      if (deps.scheduleAt) await deps.scheduleAt(hold, task.planNext ?? "A text was held for pacing: send it now if it still holds.");
+      nextAt = hold;
+    }
+    await deps.unspendWake?.();
+    did.push(`held for pacing; next look ${hold.toISOString()}`);
+  }
   // The window (services/memberTime.ts): a turn that ends without the deliverable, whose next check would land past the last
   // moment Co can still tell them, tells them now, in one plain line with the new time. Event-driven: the end of this turn is the
   // trigger, never a poll.
@@ -577,9 +599,10 @@ export function awaitingThem(t: Pick<CoTask, "lastTextedAt" | "theirReplyAt">): 
 export const CHASE = /\b(?:circling back|circle back|bumping (?:this|it|that)|just (?:following|checking) (?:up|back|in)|following up (?:again|on (?:my|this|that|the) (?:last|earlier|previous|text|message|question))|checking (?:back )?in again|in case you missed|did you (?:get|see) my (?:last|earlier|previous)|any (?:thoughts|word|update) on (?:my|the) (?:last|earlier|previous))\b/i;
 // Pure: why a task text would chase them, or null. A question while their answer to the last one is still pending re-asks it:
 // their reply wakes the task, so the task waits for it instead.
-export function chases(text: string, t: Pick<CoTask, "lastTextedAt" | "theirReplyAt">): string | null {
+export function chases(text: string, t: Pick<CoTask, "lastTextedAt" | "theirReplyAt">, o: { final?: boolean } = {}): string | null {
   if (CHASE.test(text)) return "it chases them for an answer";
-  if (awaitingThem(t) && /\?/.test(text)) return "it asks again while your last text to them has no reply";
+  // The last check before their deadline may ask what they want next; that's where it stands, not a re-ask.
+  if (!o.final && awaitingThem(t) && /\?/.test(text)) return "it asks again while your last text to them has no reply";
   return null;
 }
 
@@ -769,8 +792,8 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     // The miss warning: the existing send path, with quiet hours and the opt-out re-read (harness/proactive.ts sendExempt), its own
     // type so it never counts as the promised thing (services/followThrough.ts sendsSince) or uses up the task's text budget.
     warn: async (text, key) => {
-      // Co-initiated (issue #126): the warning waits on pacing like any text Co starts.
-      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock(), coInitiated: { kind: null } });
+      // Owed (review of #129): the new time for something Co committed to. Held, it would land after the time it's about.
+      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock() });
       return { sent: r.sent, reason: r.reason };
     },
     writeDocument: async (input, { read }) => {
@@ -781,16 +804,16 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     },
     textsToday: () => taskTextsToday(userId),
     send: async (messages, o) => {
-      // Only a text they're owed goes exempt; a lookout's finds count as finds for their backoff (services/kindRestraint.ts).
-      const coInitiated = o?.owed ? undefined : { kind: task.source === "lookout" ? ("find" as const) : null };
+      // Only a text they're owed goes exempt. No restraint kind yet: whether a lookout's finds count as finds for their backoff
+      // is Royce's call (review of #129: a lookout is something they agreed to, which kind restraint never suppresses).
+      const coInitiated = o?.owed ? undefined : { kind: null };
       const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated });
-      // Held: the task's next look moves to when it can go, whatever the turn then schedules sooner gets held again.
-      if (!r.sent && r.retryAt) await scheduleTaskAt(userId, task.id, r.retryAt, "A text was held for pacing: send it now if it still holds.").catch(() => {});
       const urls = messages.filter((m) => /^https?:\/\//.test(m));
       if (r.sent && urls.length) await recordSentItems(userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
       return { sent: r.sent, reason: r.reason, retryAt: r.retryAt };
     },
     markTexted: () => markTexted(userId, task.id),
+    unspendWake: () => unspendWake(userId, task.id),
     markFinalTold: () => markFinalTold(userId, task.id),
     // The same raw candidates Co's reply loop gets (agent/loopTools.ts), judged
     // by the task's own model, not the old pipeline's gates (2026-10-01).
