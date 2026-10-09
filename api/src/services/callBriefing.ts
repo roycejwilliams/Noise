@@ -6,7 +6,6 @@
 import { DateTime } from "luxon";
 import { timelineFor } from "./timeline.js";
 import { voiceFinds, type VoiceFinds } from "./voiceFinds.js";
-import pool from "../db/db.js";
 
 // One page. Written from services/capabilities.ts; every line is something Co does today or something it must not promise.
 export const CAPABILITY_SHEET = `# What Co can do today (this is the whole list; never refuse what is on it, never promise what is not)
@@ -42,8 +41,9 @@ export type CallBriefing = { rightNow: string; findsNow: string };
 
 // Built while the phone rings (outbound) or alongside the context (inbound). Each part fails to a safe line, never to a guess.
 export async function buildCallBriefing(userId: string, now: Date = new Date()): Promise<CallBriefing> {
-  const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-  const city: string | null = rows[0]?.city ?? null;
+  // Their city from the one member-knowledge layer (services/memberKnowledge.ts): identity only, no sections loaded.
+  const k = await import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { now, include: [] })).catch(() => null);
+  const city: string | null = k?.identity.city ?? null;
   const [clock, finds] = await Promise.all([
     timelineFor(userId, city, now).catch(() => null),
     voiceFinds(userId, now).catch((): VoiceFinds => ({ available: false, reason: "the lookup didn't load" })),

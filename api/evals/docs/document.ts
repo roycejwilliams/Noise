@@ -207,7 +207,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("the call's speech recognition is told to expect Sequin and Sequin AI", E.CALL_KEYWORDS.includes("Sequin") && E.CALL_KEYWORDS.includes("Sequin AI"), E.CALL_KEYWORDS);
   const cfg: any = E.buildAgentConfig({ name: "t", prompt: "p", voiceId: "v", apiUrl: "https://x.test" });
   check("and the agent config carries them", cfg.conversation_config.asr.keywords.includes("Sequin AI"));
-  check("the name correction reaches the call: a call reads corrections, newest first, the corrected version winning", /Things they've corrected \(the corrected version wins/.test(src("services/callContext.ts")) && /FROM profile_corrections/.test(src("services/callContext.ts")));
+  check("the name correction reaches the call: a call reads corrections, newest first, the corrected version winning", /Things they've corrected \(the corrected version wins/.test(src("services/callContext.ts")) && /corrections: correctionRows\(k\)/.test(src("services/callContext.ts")) && /FROM profile_corrections[^`]*ORDER BY corrected_at DESC/.test(src("services/memberKnowledge.ts")));
 }
 
 // ---------------------------------------------------------------- 4. grounding: the member's own words only
