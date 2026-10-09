@@ -64,7 +64,7 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
   check("all work with no findable side: no search at all, and the pass is logged with the reason", np.searchText === null && none.logs[0].action === "passed" && /no active goal with a findable side/.test(none.logs[0].reason) && np.passed.length === 3);
   const down = harness(() => { throw new Error("model down"); });
   const dp = await plan(down, ROYCE);
-  check("the model can't be read: no search (never the raw goals as a fallback), logged", dp.searchText === null && down.logs[0].action === "passed" && /couldn't be read/.test(down.logs[0].reason));
+  check("the model can't be read: no search (never the raw goals as a fallback), logged as a failure (2026-10-09: never \"passed\")", dp.searchText === null && down.logs[0].action === "read_failed" && down.logs[0].failed === true && /couldn't be read/.test(down.logs[0].reason));
   // The real sweep: the plan's text is what's searched; a passed plan surfaces nothing.
   const member = { user_id: "u1", first_name: "Royce", phone_number: "+14155550100", city: "San Francisco", goals: ROYCE, activity_preferences: [], long_term_direction: "", intent: [], last_attempted_at: null, cooldown_cleared: true };
   const surfaced: string[] = [];

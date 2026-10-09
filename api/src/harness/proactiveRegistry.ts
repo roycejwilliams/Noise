@@ -183,7 +183,7 @@ export const proactiveRegistry: ProactiveRegistry = {
       // How this ties to the rest of what they've said (services/connectDots.ts).
       const { gatherDots, findDots, whyContext } = await import("../services/connectDots.js");
       const known = await gatherDots(c.userId);
-      const dots = p.reminder ? [] : await findDots({ ...known, now: `Co is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (it came up for their ask: "${p.askText}")` });
+      const dots = p.reminder ? [] : await findDots({ ...known, now: `Co is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (${p.fromProfile ? `Co noticed it for them from where they're headed, not an ask: ${p.askText}` : `it came up for their ask: "${p.askText}"`})` });
       const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again, dots: dots.map((d) => d.link), why: whyContext(known) });
       return r ?? skip("model chose SKIP");
     },

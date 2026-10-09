@@ -14,6 +14,7 @@ import { FALLBACK_ZONE } from "./memberTime.js";
 import type { PersonModelParts } from "./personModel.js";
 import type { SentItem } from "./turnContext.js";
 import type { Exchange, Fact, KnowledgeDeps, KnowledgeSection, MemberKnowledge, MemberRules } from "./memberKnowledge.js";
+import { plainCorrected } from "./memberKnowledge.js";
 import { DateTime } from "luxon";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
@@ -392,7 +393,7 @@ export function retiredBy(text: string, corrections: CorrectionRow[], lastSaid?:
   const said = lastSaid ? new Date(lastSaid).getTime() : null;
   for (const c of corrections) {
     if (!says(item, c.old_value)) continue;
-    if (says(item, c.new_value)) continue;
+    if (says(item, plainCorrected(c.new_value).text)) continue;
     if (said !== null && Number.isFinite(said) && said > new Date(c.corrected_at).getTime()) continue;
     return c;
   }
@@ -402,7 +403,8 @@ export function retiredBy(text: string, corrections: CorrectionRow[], lastSaid?:
 function superseded(c: CorrectionRow, all: CorrectionRow[]): boolean {
   if (!c.new_value) return false;
   const at = new Date(c.corrected_at).getTime();
-  return all.some((d) => d !== c && new Date(d.corrected_at).getTime() > at && d.field === c.field && (d.old_value === c.new_value || says(meaningWords(d.old_value), c.new_value)));
+  const now = plainCorrected(c.new_value).text;
+  return all.some((d) => d !== c && new Date(d.corrected_at).getTime() > at && d.field === c.field && (d.old_value === now || says(meaningWords(d.old_value), now)));
 }
 const LABELS: Record<string, string> = { city: "where they live", life_chapters: "life chapter", goals: "goal", blockers: "what's in their way", activity_preferences: "what they like doing", long_term_direction: "long-term direction", availability_pattern: "when they're free" };
 // Today and yesterday say so, in their zone: "Oct 8" on October 8 read as yesterday on a call ("Yesterday, October 8th", 2026-10-08 eval).
@@ -426,8 +428,9 @@ export function renderSettled(rows: CorrectionRow[], zone = ZONE): string {
 // Pure: a corrected name written the right way ("Sequent AI" heard on a call, corrected to "Sequin AI").
 export function withCorrectedNames(text: string, corrections: CorrectionRow[]): string {
   let out = text;
-  for (const c of corrections) {
-    if (!c.new_value) continue;
+  for (const raw of corrections) {
+    if (!raw.new_value) continue;
+    const c = { ...raw, new_value: plainCorrected(raw.new_value).text };
     const words = (s: string) => s.trim().split(/\s+/).length;
     if (words(c.old_value) > 4 || words(c.new_value) > 4 || !/^[A-Z]/.test(c.old_value.trim())) continue;
     out = out.replace(new RegExp(`\\b${c.old_value.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), c.new_value.trim());
