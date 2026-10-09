@@ -85,6 +85,31 @@ check("the first attempt (the 8:47 text as it was) never went out", !log.sent.so
   check("a text naming the rejected item (\"Claude for Games Build Day\") is refused", !log2.flat().some((x) => /claude for games/i.test(x)), log2);
 }
 
+// Review of #117: an honest plain line or a question still goes before the delivery (a task never gets stuck).
+for (const [label, what, reply] of [
+  ["an honest \"there's no run this Saturday\"", "There's no founder run this Saturday", "There's no founder run this Saturday, the next one is the 17th."],
+  ["a clarifying question", "Ask which neighborhood they'd start from", "Starting from the Marina or closer to downtown?"],
+] as const) {
+  const sent: string[][] = [];
+  script.push({ tool: "tellThem", input: { what } }, { text: reply });
+  await TT.runTaskTurnWith({ ...task, notes: [] }, { ...deps, onFile: async () => [], send: async (m: string[]) => { sent.push(m); return { sent: true }; } });
+  script.length = 0;
+  check(`${label} still goes (no stuck promise)`, sent.length === 1, sent);
+}
+// Rejects never block a whole city or series.
+{
+  const sent: string[][] = [];
+  script.push({ tool: "tellThem", input: { what: "The hardware happy hour in San Francisco on Monday", links: [LONG.url] } }, { text: JSON.stringify({ captions: [{ n: 1, caption: "A hardware happy hour at TechCrunch Disrupt, Monday 6pm in San Francisco." }], closing: null }) });
+  await TT.runTaskTurnWith({ ...task, goal: "Keep your word from the call: \"I'll text you the hardware happy hour.\"", notes: [] }, { ...deps, send: async (m: string[]) => { sent.push(m); return { sent: true }; } });
+  script.length = 0;
+  check("rejecting \"San Francisco | Claude for Games\" doesn't block things in San Francisco", sent.flat().includes(LONG.url), sent);
+}
+// Ordinary lines aren't failure claims or narration.
+const fine = ["The site is live now.", "Registration form is live.", "It is live from 7pm.", "it wasn't loading for you?", "You couldn't get tickets last time, so here's an early one.", "You can't get a better rooftop.", "The link is working fine."];
+check(`ordinary lines aren't failure claims: ${fine.filter((t) => SP.inventedFailure(t)).join(" | ") || "none"}`, fine.every((t) => !SP.inventedFailure(t)));
+const plain = ["Let's pick up where we left off.", "Five confirmed guests so far for the dinner.", "3 verified founders are coming.", "The host couldn't confirm the venue yet.", "As promised, here's the plan."];
+check(`ordinary lines aren't narration: ${plain.filter((t) => SP.narratesInternalState(t)).join(" | ") || "none"}`, plain.every((t) => !SP.narratesInternalState(t)));
+
 // Pure pieces
 check("narration rules catch the 8:47 opener and the left-off line", !!SP.narratesInternalState("From the call: two confirmed for Tech Week.") && !!SP.narratesInternalState("Left the run club off since the link wasn't working."));
 check("invented failures are caught; plain facts aren't", SP.inventedFailure("Left the run club off since the link wasn't working.") && SP.inventedFailure("I couldn't confirm the run.") && !SP.inventedFailure("The run is Saturday at 9am.") && !SP.inventedFailure("Registration opens Monday."));

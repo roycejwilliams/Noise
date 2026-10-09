@@ -57,7 +57,8 @@ const VAGUE_SEND = /\b(?:send|text|share|drop|forward|shoot)\s+(?:you\s+)?(?:tha
 export function commitmentGoalAbout(sentence: string, coBefore?: string): string {
   const base = commitmentGoal(sentence);
   const about = (coBefore ?? "").replace(/\s+/g, " ").trim();
-  return VAGUE_SEND.test(sentence) && about ? `${base} (about: ${about.slice(-220)})`.slice(0, 200) : base;
+  // The goal is capped at 200: the base gives up room so the subject survives (review of #117).
+  return VAGUE_SEND.test(sentence) && about ? `${base.slice(0, 70)} (about: ${about.slice(0, 120)})` : base;
 }
 export const commitmentGoal = (sentence: string) => COMMIT_PREFIX + promiseGoal(sentence).replace(/^Keep your promise: /, "");
 
