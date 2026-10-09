@@ -1562,9 +1562,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
+  // Another member's details stripped before the pick, relevance and payload reads see it (2026-10-09 audit: this one wasn't).
+  const safe = await import("../services/memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null);
   const recent = await pool
     .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 12`, [userId])
-    .then((r) => r.rows.map((x: any) => String(x.content)).reverse().join("\n"))
+    .then((r) => (safe ? r.rows.map((x: any) => safe(String(x.content))).filter((x): x is string => !!x) : []).reverse().join("\n"))
     .catch(() => "");
   const taste = await import("../services/outcomes.js").then((m) => m.tasteSummary(userId)).catch(() => null);
   const picked = await choosePick(ev.eligible, { recentConversation: recent, feeling: renderEmotionalContext(emotional), taste });

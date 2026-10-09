@@ -135,6 +135,7 @@
     "evals/calls/promiseWiring.ts",
     "evals/proactive/pickerLive.ts",
     "evals/tasks/deliveryReplay.ts",
+    "evals/member/safeGaps.ts",
     "evals/calls/reasonGate.ts"
   ]
 }
