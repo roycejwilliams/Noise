@@ -149,7 +149,6 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
     new Map([["task #4", { words: "tonight", deadline: "2026-10-10T05:00:00.000Z", zone: ZONE }]]),
   )[0];
   check("carrying: a promise keeps its window's words and the zone it was said in", /^your promise, task #4: text you the guest list \(tonight, by .*10pm/.test(promise.label), promise.label);
-  check("cold start reads its own asks when member knowledge is missing (never an undercount)", /loadColdStart\(userId, \{ profile, asks: knowledge \? asks : undefined \}\)/.test(src("services/turnContext.ts")));
 }
 
 // ---------------------------------------------------------------- the path reads the layer, once, and its duplicate loaders are gone
@@ -165,5 +164,9 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   check("the text-channel rules stay in the reply prompt", /Reply in one or two sentences/.test(src("agent/conversationReply.ts")));
 }
 
+{
+  const tc = (await import("node:fs")).readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8");
+  check("no member knowledge: no cold-start steer (it would read their asks unstripped)", /const coldStartP = knowledge \? import\("\.\/coldStart\.js"\)[\s\S]{0,120}: Promise\.resolve\(null\);/.test(tc));
+}
 console.log(`text reply on member knowledge: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
