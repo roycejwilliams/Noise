@@ -708,8 +708,10 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
     targetKey: offerTargetKey(item),
     summary: `${o.reminder ? "Reminder, already shown to them: " : ""}${o.match.kind === "opportunity" ? "An opportunity" : "An event"} Co's daily pick chose for them: ${o.match.name}`,
     payload,
-    expiresAt: o.lastDay ? endOfLocalDay(o.lastDay, zone) : offerExpiresAt(match, zone),
-    priority: timeBound ?? (isShortNotice(o.match, zone) ? 95 : undefined),
+    // Whichever comes first: an event still expires at its start (the 2026-10-07 rule), a pick at the end of its last day.
+    expiresAt: o.lastDay ? new Date(Math.min(endOfLocalDay(o.lastDay, zone).getTime(), offerExpiresAt(match, zone).getTime())) : offerExpiresAt(match, zone),
+    // The higher of the two: short notice stays 95 even when the pick's last day is a few days out (review of #127).
+    priority: Math.max(timeBound ?? 0, isShortNotice(o.match, zone) ? 95 : 0) || undefined,
   });
   return queued;
 }
