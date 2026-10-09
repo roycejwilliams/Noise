@@ -27,6 +27,9 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
 };
 const read = (f: string) => readFileSync(new URL(`../../${f}`, import.meta.url), "utf8");
 
+// A document_deliveries row as the receipt store reads it (services/deliveryReceipts.ts): Co's delivered work, read through
+// memberKnowledge.
+const docRow = (title: string) => ({ id: 1, user_id: "u", doc_key: title.toLowerCase().replace(/[^a-z0-9]+/g, "-"), version: 1, title, kind: null, content: null, content_hash: "h", channel: "pdf_text", status: "delivered", line: null, link: null, task_id: null, source: "task", delivered_at: new Date("2026-10-05T17:00:00Z") });
 // Every DB call is answered here, by table.
 let tables: Record<string, any[]> = {};
 const sql: string[] = [];
@@ -190,19 +193,19 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
 {
   tables = {
     "FROM member_threads WHERE": [{ id: "t-db", text: "the demo day pitch", opened_quote: "I pitch at demo day Thursday", opened_at: pt("2026-10-03T10:00:00"), status: "open", feeling: "nervous", due_date: "2026-10-08", next_step: "check_in", kind: "thread", closed_quote: null, last_touched_at: pt("2026-10-03T10:00:00") }],
-    "FROM document_deliveries": [{ title: "Demo day pitch notes" }],
+    "FROM document_deliveries": [docRow("Demo day pitch notes")],
     "FROM co_tasks": [],
   };
   const s = await R.loadCallReasonState("u-db", "checkin_cadence", NOW);
   check("the loader reads their threads and Co's own work", s.threads.length === 1 && s.coWork.includes("Demo day pitch notes"), s);
   const r = R.callReasonFor(s);
   check("a thread of theirs that matches a doc Co delivered is Co's work, not a reason", r.reason === null && /deliverable/.test(r.considered[0]?.why ?? ""), r);
-  tables["FROM document_deliveries"] = [{ title: "Sponsor outreach email" }];
+  tables["FROM document_deliveries"] = [docRow("Sponsor outreach email")];
   const r2 = R.callReasonFor(await R.loadCallReasonState("u-db", "checkin_cadence", NOW));
   check("the same thread is a reason when Co's work is something else", r2.reason?.kind === "coming_up" && r2.reason.feeling === "nervous", r2);
 
   // gatherCallState fills the reason (and holds it) for a check-in call
-  tables = { "checkin_call_cadence_days": [{ sms_opted_out: false, identity_captured: true, city: null, checkin_call_cadence_days: 7, has_real_profile: true, had_real_call: true }], "FROM document_deliveries": [{ title: PDF_TITLE }] };
+  tables = { "checkin_call_cadence_days": [{ sms_opted_out: false, identity_captured: true, city: null, checkin_call_cadence_days: 7, has_real_profile: true, had_real_call: true }], "FROM document_deliveries": [docRow(PDF_TITLE)] };
   const cs = await G.gatherCallState("u-gather", { call_status: null, call_status_updated_at: null, subscription_status: "active" }, { kind: "checkin_cadence" });
   check("the gate's gather reads the reason for a check-in call", !!cs.evidence.callReason && cs.evidence.callReason.reason === null, cs.evidence);
   check("and holds it for the call", R.heldCallReason("u-gather")?.kind === "checkin_cadence");
@@ -232,5 +235,52 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
   check("'excited to get the research on coworking spaces' is Co's work, not a reason", R2.coWorkWhy("excited to get the research on coworking spaces", []) !== null);
   check("their own news still is a reason ('nervous about the Thursday pitch')", R2.coWorkWhy("nervous about the Thursday pitch", []) === null);
 }
+// The call path on the member-knowledge layer: when the member-name read fails, memberKnowledge rejects, and every call reader goes
+// without member context, never with unstripped data.
+{
+  const CC = await import("../../src/services/callContext.js");
+  const CT = await import("../../src/services/callTools.js");
+  const B = await import("../../src/services/callBriefing.js");
+  const secret = "Dana's divorce lawyer said Friday";
+  tables = {
+    "FROM users WHERE id": [{ phone_number: "+15555550100", first_name: "Jordan" }],
+    "FROM document_deliveries": [docRow(secret)],
+    "FROM ask_checkins": [{ ask_id: "a1", ask_text: secret, kind: "find", created_at: NOW, last_mentioned_at: NOW }],
+    "memory_type = 'text_exchange'": [{ content: `Co replied: ${secret}`, created_at: NOW }],
+  };
+  const real = (pool as any).query;
+  (pool as any).query = async (text: string, args?: unknown[]) => {
+    if (/event_guest_match_nudges|network_introductions/.test(text)) throw new Error("names read failed");
+    return real(text, args);
+  };
+  const held = await R.callReasonForCall("u-closed", "checkin_cadence", NOW);
+  check("names unreadable: no reason for a Co-started call (fails closed)", held.reason === null && held.considered[0]?.key === "read_failed", held);
+  const knowledge = await CC.buildCallKnowledge("u-closed").then(() => "resolved", () => "rejected");
+  const summary = await CC.buildCallContextSummary("u-closed");
+  check("names unreadable: the call context rejects, and the call opens with no member facts (nothing unstripped)", knowledge === "rejected" && summary === CC.CALL_NOTES_UNAVAILABLE && !summary.includes(secret), summary);
+  // Review of #122: "" reads as "your first real conversation" in the agent's prompt, so an existing member calling in got intake.
+  const E = await import("../../src/services/elevenLabsCalls.js");
+  check("...and never as a first conversation: the summary isn't empty and says not to run intake", summary.trim().length > 0 && /If that's empty, this is your first real conversation/.test(E.CALL_CONTEXT_BLOCK) && /not a first conversation/.test(summary) && /don't introduce yourself or run intake/.test(summary));
+  const plain = await CC.buildContextSummary("u-closed");
+  check("names unreadable: the text reply's summary is empty too", plain === "");
+  const member = await CT.loadMemberOnCall("u-closed");
+  check("names unreadable: the call tools get the member but no tasks or loops", member.firstName === "Jordan" && member.tasks.length === 0 && member.loops === null && member.city === null);
+  const briefing = await B.buildCallBriefing("u-closed", NOW).catch(() => null);
+  check("names unreadable: the briefing still builds (no city)", !!briefing && !briefing.rightNow.includes(secret));
+  (pool as any).query = real;
+  // One read per call setup: the briefing takes their city from the call context's read when it's under way.
+  tables = { "LEFT JOIN co_profiles": [{ first_name: "Jordan", city: "Oakland", goals: null, intent: null, updated_at: NOW }] };
+  const seen: string[] = [];
+  (pool as any).query = async (text: string, args?: unknown[]) => { seen.push(text.replace(/\s+/g, " ")); return real(text, args); };
+  const built = CC.buildCallKnowledge("u-share").catch(() => null);
+  const shared = CC.callKnowledgeInFlight("u-share");
+  const brief = await B.buildCallBriefing("u-share", NOW).catch(() => null);
+  await built;
+  const profileReads = seen.filter((t) => /FROM users u LEFT JOIN co_profiles/.test(t)).length;
+  check("the briefing reuses the call context's member-knowledge read (one layer read per setup)", !!shared && profileReads === 1 && !!brief, { profileReads, shared: !!shared });
+  (pool as any).query = real;
+  tables = {};
+}
+
 console.log(`call reason gate: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

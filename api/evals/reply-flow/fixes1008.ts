@@ -121,14 +121,22 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   const task = (o: any) => ({ id: 1, userId: "u", goal: "find a rooftop for Friday", theirWords: "rooftop", steps: [], planNext: null, nextCheckAt: new Date(NOW.getTime() + 6 * 3_600_000).toISOString(), status: "open", wakes: 0, notes: [], textsSent: 0, lastTextedAt: null, createdAt: daysAgo(1).toISOString(), deadline: null, finalCheckAt: null, finalTold: false, awaitingReply: false, theirReplyAt: null, kind: "work", source: "ask", window: null, ...o });
   const doc = DS.resolveDocument({ title: "Friday Dinner Plan", sections: [{ heading: "Budget", bullets: ["Dinner for 12 at Rich Table, about $1,400 before tip"] }, { heading: "Timeline", bullets: ["7pm drinks", "8pm dinner"] }] });
   const receipt = (o: any) => ({ id: 12, userId: "u", docKey: "friday-dinner-plan", version: 1, title: "Friday Dinner Plan", kind: "plan", doc, contentHash: "h", channel: "pdf_text", status: "delivered", line: null, link: null, taskId: null, source: "reply", changeNote: null, error: null, attempts: 0, nextRetryAt: null, deliveredAt: hoursAgo(5), ...o });
-  const items = TC.carryingItems({
-    tasks: [task({ id: 3, goal: "find a caterer" }), task({ id: 4, goal: 'Keep your promise: "I\'ll text you the guest list tonight."', source: "promise", window: { words: "tonight", deadline: new Date(NOW.getTime() + 8 * 3_600_000).toISOString(), warnBy: NOW.toISOString(), zone: "America/Los_Angeles", stated: true } })],
-    briefs: [{ id: 7, goal: "venue brief", theirWords: "rooftop", status: "open", createdAt: hoursAgo(2).toISOString(), closedAt: null, outcome: null, held: { text: "Three rooms", at: "" } }],
-    receipts: [receipt({}), receipt({ id: 9, version: 0, deliveredAt: daysAgo(2) })] as any,
-    loops: [{ title: "Pick a date with Sam", status: "decision_needed", dueDate: null, source: "notes", detail: null }, { title: "find a caterer", status: "open", dueDate: null, source: "task", detail: null }],
-    now: NOW,
-    zone: "America/Los_Angeles",
-  });
+  // The text reply's items come from the one carrying builder (services/memberKnowledge.ts carryingOf), as one-line labels.
+  const MK = await import("../../src/services/memberKnowledge.js");
+  const loop = (o: any) => ({ id: 1, changedAt: hoursAgo(3), lastConfirmedAt: null, ...o });
+  const items = TC.carryFromKnowledge(
+    MK.carryingOf({
+      tasks: [task({ id: 3, goal: "find a caterer" }), task({ id: 4, goal: 'Keep your promise: "I\'ll text you the guest list tonight."', source: "promise", window: { words: "tonight", deadline: new Date(NOW.getTime() + 8 * 3_600_000).toISOString(), warnBy: NOW.toISOString(), zone: "America/Los_Angeles", stated: true } })] as any,
+      briefs: [{ id: 7, goal: "venue brief", theirWords: "rooftop", status: "open", createdAt: hoursAgo(2).toISOString(), closedAt: null, outcome: null, held: { text: "Three rooms", at: "" } }] as any,
+      receipts: [receipt({}), receipt({ id: 9, version: 0, deliveredAt: daysAgo(2) })] as any,
+      ledger: [],
+      loops: [loop({ id: 5, title: "Pick a date with Sam", status: "decision_needed", dueDate: null, source: "notes", detail: null }), loop({ id: 6, title: "find a caterer", status: "open", dueDate: null, source: "task", detail: null })],
+      promises: [],
+      now: NOW,
+      zone: "America/Los_Angeles",
+    }),
+    "America/Los_Angeles",
+  );
   const order = items.map((i) => `${i.state}:${i.kind}`);
   check("B6: due first (the held brief, the promise due tonight), then outstanding, then done", order.indexOf("due:brief") >= 0 && order.indexOf("due:promise") >= 0 && Math.max(order.indexOf("due:brief"), order.indexOf("due:promise")) < order.indexOf("outstanding:task") && order.indexOf("outstanding:task") < order.indexOf("done:document"), order);
   check("B6: each artifact once (newest version), task loops not doubled", items.filter((i) => i.kind === "document").length === 1 && items.filter((i) => /find a caterer/.test(i.label)).length === 1, items);
@@ -226,7 +234,7 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   check("A5: the rule Co reads leaves the decision read to Co, one line at most", /Only if they settled a decision or a plan in their own words/.test(O.RECAP_OFFER_RULE) && /one short line/.test(O.RECAP_OFFER_RULE));
   check("A5: the record notices a recap offer in the sent text", O.madeArtifactOffer("Want me to put what you decided on a one-page recap?", "recap") && !O.madeArtifactOffer("Good luck with Sam on Friday.", "recap"));
   const pc = src("jobs/postCallFollowUp.ts");
-  check("A5: the post-call draft gets the permission only when code allows it, and never beside the confirmation", /may_offer_a_one_page_recap: recapOffer && !confirmationSent \? RECAP_OFFER_RULE : null/.test(pc) && /recapOfferFor\(userId, followUpId, \{ callAt, confirmed: !!confirmed, coCommitted: promised\.length > 0 \}\)/.test(pc));
+  check("A5: the post-call draft gets the permission only when code allows it, and never beside the confirmation", /may_offer_a_one_page_recap: recapOffer && !confirmationSent \? RECAP_OFFER_RULE : null/.test(pc) && /recapOfferFor\(userId, followUpId, \{ callAt, confirmed: !!confirmed, coCommitted: promised\.length > 0 \}(?:, k)?\)/.test(pc));
   check("A5: the post-call onSent records the offer", /recordRecapOffer\(c\.userId, c\.payload\.followUpId, messages \?\? \[\]\)/.test(src("harness/proactiveRegistry.ts")));
 }
 

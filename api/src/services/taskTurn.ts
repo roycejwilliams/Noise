@@ -20,13 +20,13 @@ import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
-import { getTimezoneForCity } from "./geocoding.js";
-import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
+import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type MemberRules, type Restraint } from "./memberKnowledge.js";
+import { exchangeText } from "./followUps.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
 import { assembleMessages, captionOk, draftTaskMessages, orderByTier, type SendItem } from "./taskMessages.js";
 import { promiseKeptBy, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
-import { localStamp, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
+import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
 import { WRITE_DOCUMENT_INPUT, type WriteDocumentInput } from "./documentSheet.js";
 import type { GateCheck } from "../harness/core.js";
@@ -37,9 +37,14 @@ export const TASK_MODEL = MODELS.sonnet;
 // texts; a dry turn (evals) keeps everything in memory and sends nothing.
 export type TaskTurnDeps = {
   person: { first_name: string | null; phone_number: string; city: string | null };
+  // Their thread, oldest first, each line stamped in their time (services/memberKnowledge.ts exchanges).
   recent: string;
-  // The one model of them (services/personModel.ts).
+  // The one model of them (services/personModel.ts, read through memberKnowledge).
   personModel?: string;
+  // What else Co knows that the work should respect (taskKnowledge: what they already have, what else Co carries, their asks,
+  // corrections, lessons, taste, what they've said that still holds, how they are), and the member-level rules (taskRules).
+  knowledge?: string;
+  rules?: string;
   zone: string | null;
   note: (text: string, stepDone: string | null) => Promise<void>;
   schedule: (inHours: number, plan: string) => Promise<string | null>;
@@ -110,7 +115,42 @@ export function documentPromiseLine(t: Pick<CoTask, "source" | "goal" | "theirWo
   return `\nWHAT YOU PROMISED IS A DOCUMENT. Send it with writeDocument (it arrives as a PDF), never as a text or a run of texts. Their points (the sections) only in their own words: what they want, their event, their constraints. Your plan, ideas and recommendations go in suggestions: that's most of a planning doc, and it's fine. Don't name a place, person, number or date they never said or you never read. Once it's sent, finish the task as done.`;
 }
 
-export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string; onFile?: OnFile[] }): string {
+// Pure: what else Co knows about them, for a task turn (services/memberKnowledge.ts, already stripped of other members). This
+// task's own entry is left out of what Co carries (it's the task itself). Each section left out when empty; every list capped.
+export function taskKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying" | "asks" | "corrections" | "lessons" | "preferences" | "claims" | "restraint">, o: { taskId: number; zone: string | null }): string {
+  const when = (at: string) => localStamp(at, o.zone);
+  const r = k.restraint;
+  const carrying = k.carrying.filter((c) => c.ref !== `task #${o.taskId}` && c.state !== "done").slice(0, 6);
+  return [
+    r?.feeling ? `How they are lately (from their own words): ${r.feeling}.` : null,
+    k.delivered.length ? `What they already have from you (newest first; never send one again as new, and a promise isn't kept by an old send):\n${k.delivered.slice(0, 10).map((d) => `- ${d.what} (${d.kind}, ${when(d.at)})${d.url ? ` ${d.url}` : ""}${d.reaction ? ` — they reacted: ${d.reaction}` : ""}`).join("\n")}` : null,
+    carrying.length ? `What else you're carrying for them (each has its own turn; context only, never worked or reported on here):\n${carrying.map((c) => `- ${c.what} (${c.kind}, ${c.state}${c.told ? ", they know" : ""})`).join("\n")}` : null,
+    k.asks.length ? `What they've asked you to find or help with, still open (context only: each is its own work, never worked or reported on here):\n${k.asks.slice(0, 6).map((a) => `- ${a.text}`).join("\n")}` : null,
+    k.corrections.length ? `What they corrected (only the corrected version exists; never bring back the old one):\n${k.corrections.slice(0, 5).map((c) => `- ${c.field}: was "${c.was}", now ${c.now == null ? "(removed)" : `"${c.now}"`}`).join("\n")}` : null,
+    k.lessons.length ? `What you've learned working with them:\n${k.lessons.slice(0, 5).map((l) => `- ${l.text}`).join("\n")}` : null,
+    k.preferences.length ? `Their taste (from how your suggestions landed):\n${k.preferences.map((p) => `- ${p.text}`).join("\n")}` : null,
+    k.claims.length ? `What they've told you that still holds:\n${k.claims.slice(0, 6).map((c) => `- ${c.text}${c.expiresOn ? ` (until ${c.expiresOn})` : ""}`).join("\n")}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+// Pure: the member-level rules a task turn reads with (services/memberKnowledge.ts memberRules: the shared constants, plus
+// restraint and quiet hours read from their state). Task texts go through sendExempt, which doesn't apply kind restraint: the
+// turn knows the state here; the send gating is unchanged.
+// The restraint a task reads leaves out what belongs to Co's own unprompted sends, not to them: space_until is set exactly when
+// Co hands work to a task (harness/proactive.ts payload first), hold_until only when the daily pick picks nothing, and the
+// unanswered count is the proactive lanes' pause. Read here, any of them would tell the task to hold the very result it owes.
+// What's about them stays: a safety hold, a hard time, frustration with Co, the kinds they let pass.
+export function taskRestraint(r: Restraint | null): Restraint | null {
+  return r ? { ...r, holdUntil: null, spaceUntil: null, unanswered: { ...r.unanswered, count: 0 } } : null;
+}
+export function taskRules(r: MemberRules, k?: Pick<MemberKnowledge, "restraint" | "identity">): string {
+  const restraint = k ? restraintRule(taskRestraint(k.restraint), k.identity.zone) : r.restraint;
+  return [r.grounding, r.memberSafety, r.discretion, r.deliveryShape, restraint, r.quietHours].filter(Boolean).join("\n\n");
+}
+
+export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string; onFile?: OnFile[]; knowledge?: string; rules?: string }): string {
   const t = o.task;
   const deadlineLine = `${t.deadline ? `\nTheir deadline: ${t.deadline}.` : ""}${t.window && !t.window.closedAt ? `\nYour window: ${windowLine(t.window)} An empty search is a result, and they hear it inside the window: if it won't be ready in time, don't text about that yourself, just schedule your next look; when it lands past the window they're told once, in one plain line, with the new time.` : ""}${documentPromiseLine(t)}`;
   const finalLine = o.final
@@ -125,7 +165,7 @@ Your notes so far (oldest first):
 ${t.notes.map((n) => `- [${localStamp(n.at, o.zone)}] ${n.text}`).join("\n") || "- (none)"}
 This is wake-up ${t.wakes} of at most ${TASK_LIMITS.maxWakes}. Now, their time: ${o.now}${o.zone ? ` (their time zone: ${o.zone})` : ""}.
 
-${o.person ? `What you know about them (who they are, what's going on, what you've done, everything you're carrying for them):\n${o.person}\n\n` : ""}Your recent texts with them (oldest first; read their newest messages first, they may have answered you or changed their mind):
+${o.person ? `What you know about them (who they are, what's going on, what you've done, everything you're carrying for them):\n${o.person}\n\n` : ""}${o.knowledge ? `${o.knowledge}\n\n` : ""}${o.rules ? `Rules for them:\n${o.rules}\n\n` : ""}Your recent texts with them (oldest first, each stamped with its time, theirs; read their newest messages first, they may have answered you or changed their mind):
 ${o.recent || "(none)"}
 
 Do the next real step with your tools (search for events and opportunities, webSearch for anything else such as venues, vendors, people or prices, readPage, writeDocument for a document you promised), and write down what you learned with note. When you finish a step, call note with stepDone set to that step's exact text. Only mark a step done when you actually did it; closing a task doesn't finish its steps.
@@ -139,9 +179,9 @@ You must end with scheduleNext or finish. Never make up results: only what your 
 
 type Found = { name: string; url: string | null; facts: string[]; tier: number; onFile?: boolean };
 
-// Their newest lines in the thread ("User said: …"), oldest first.
+// Their newest lines in the thread ("User said: …", or "[Thu Oct 9, 3pm PDT] User said: …" stamped), oldest first.
 export function newestMemberLines(recent: string, n = 3): string[] {
-  return recent.split("\n").map((l) => l.match(/^\s*User said:\s*(.+)$/i)?.[1]?.trim() ?? "").filter(Boolean).slice(-n);
+  return recent.split("\n").map((l) => l.match(/^\s*(?:\[[^\]]*\]\s*)?User said:\s*(.+)$/i)?.[1]?.trim() ?? "").filter(Boolean).slice(-n);
 }
 
 // Did they say this goal is done (booked it, found it themselves, no longer
@@ -445,7 +485,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       experimental_telemetry: { isEnabled: true, functionId: "taskTurn.run" },
       tools,
       stopWhen: [stepCountIs(12), () => decided !== null],
-      prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: localStamp(deps.now(), deps.zone), zone: deps.zone, recent: deps.recent, final, person: deps.personModel, onFile: events.filter((e) => e.onFile && e.url) as OnFile[] }),
+      prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: localStamp(deps.now(), deps.zone), zone: deps.zone, recent: deps.recent, final, person: deps.personModel, knowledge: deps.knowledge, rules: deps.rules, onFile: events.filter((e) => e.onFile && e.url) as OnFile[] }),
     });
   } catch (err: any) {
     console.error("taskTurn failed (non-fatal):", err?.message ?? err);
@@ -659,22 +699,29 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     await recordDecision({ layer: 7, decision: "task.wake", userId, outcome: "skip", action: "expired", proposal: { taskId: task.id } }).catch(() => {});
     return { action: "expired" };
   }
-  const [{ rows: u }, { rows: convo }] = await Promise.all([
-    pool.query(`SELECT u.first_name, u.phone_number, u.sms_opted_out, u.archived_at, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]),
-    pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 14`, [userId]),
-  ]);
+  const { rows: u } = await pool.query(`SELECT u.first_name, u.phone_number, u.sms_opted_out, u.archived_at, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]);
   const person = u[0];
   if (!person || person.sms_opted_out || person.archived_at) {
     await closeTask(userId, task.id, "dropped", "Member opted out or archived.");
     return { action: "dropped" };
   }
-  const zone = person.city ? await getTimezoneForCity(person.city).catch(() => null) : null;
+  // What Co knows about them, one read (services/memberKnowledge.ts): their zone, the stamped thread, the person model, what they
+  // already have, what else Co carries, asks, corrections, lessons, taste, claims, restraint. Another member's details are
+  // stripped inside it, and it fails closed (no names read, no knowledge). Goals aren't read here: the task is the goal.
+  // A rejection (the member-name read failed) means no member context this turn, never an unstripped fallback: the turn runs on
+  // the task alone, its zone read on its own (services/memberTime.ts memberZone, the same source identity uses).
+  const k = await memberKnowledge(userId, { now: clock(), exchanges: 14, exchangeDays: 30, include: ["exchanges", "person", "delivered", "carrying", "asks", "lessons", "corrections", "preferences", "claims", "restraint"] }).catch((err: any) => {
+    console.error("taskTurn: member knowledge unavailable, going without member context (non-fatal):", err?.message ?? err);
+    return null;
+  });
+  const zone = k ? k.identity.zone : await memberZone(userId).catch(() => null);
   const deps: TaskTurnDeps = {
     person,
     zone,
-    // Another member's details stripped, as in the reply (memberSafeMemories.ts).
-    recent: withoutTeammateLines((await import("./memberSafeMemories.js").then((m) => m.memberSafe(userId, convo))).reverse().join("\n")).slice(-3000),
-    personModel: await import("./personModel.js").then((m) => m.personModel(userId, { maxDid: 6 })).catch(() => undefined),
+    recent: k ? exchangeText(k.exchanges, (at) => localStamp(at, zone)).slice(-3000) : "",
+    personModel: k?.person?.text || undefined,
+    knowledge: (k && taskKnowledge(k, { taskId: task.id, zone })) || undefined,
+    rules: k ? taskRules(memberRules(k), k) : undefined,
     note: async (text, stepDone) => void (await noteOnTask(userId, task.id, text, stepDone)),
     schedule: async (h, plan) => (await scheduleTask(userId, task.id, h, plan))?.nextCheckAt ?? null,
     scheduleAt: async (at, plan) => (await scheduleTaskAt(userId, task.id, at, plan))?.nextCheckAt ?? null,

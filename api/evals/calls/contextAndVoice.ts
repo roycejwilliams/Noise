@@ -52,6 +52,59 @@ const day = () => "Oct 8";
   check("the builder uses it: receipts and sent promises collapse; threads, recap and last calls drop what's covered", /collapseCarried\(/.test(src("services/callContext.ts")) && /!carried\.covered\(t\.text\)/.test(src("services/callContext.ts")) && /!carried\.covered\(s\)/.test(src("services/callContext.ts")) && /filter\(\(x\) => !carried\.covered\(x\)\)/.test(src("services/callContext.ts")));
 }
 
+// ---- 1b. the call reads the one member-knowledge layer (services/memberKnowledge.ts, PR 4)
+{
+  const MK = await import("../../src/services/memberKnowledge.js");
+  const asOf = "2026-10-09T18:00:00.000Z";
+  const hoursAgo = (h: number) => new Date(Date.parse(asOf) - h * 3_600_000).toISOString();
+  const k: any = {
+    userId: "u", asOf, identity: { firstName: "Jordan", city: "SF", zone: "America/Los_Angeles", timeZone: "America/Los_Angeles", verifiedAt: asOf },
+    goals: [
+      { text: "raise a seed round", state: "active", reason: null, told: true, verifiedAt: asOf },
+      { text: "land the first paying customer", state: "done", reason: "they closed it", told: true, verifiedAt: asOf },
+      { text: "move to Austin", state: "stale", reason: null, told: true, verifiedAt: asOf },
+    ],
+    asks: [1, 2, 3, 4, 5].map((i) => ({ id: String(i), text: `ask ${i}`, kind: "find", verifiedAt: asOf })),
+    corrections: [{ field: "goals", was: "first paying customer", now: "Series A", verifiedAt: hoursAgo(30) }],
+    exchanges: [
+      { from: "member", text: "old news from last week", call: false, verifiedAt: hoursAgo(120) },
+      { from: "co", text: "Here's the plan", call: false, verifiedAt: hoursAgo(10) },
+      { from: "co", text: "Jordan talked about Series A", call: true, verifiedAt: hoursAgo(5) },
+      { from: "member", text: "we closed the Series A", call: false, verifiedAt: hoursAgo(2) },
+    ],
+    delivered: [{ what: "Co Presence Plan: After the Sequin AI November Event", kind: "document", at: "2026-10-08T16:00:00.000Z", via: ["receipt"], url: null, reaction: null, verifiedAt: "2026-10-08T16:00:00.000Z" }, { what: "Oakland Join-Up", kind: "event", at: asOf, via: ["offer"], url: null, reaction: null, verifiedAt: asOf }],
+    carrying: [
+      { what: "draft and text a plan on Co's post-event presence", kind: "promise", state: "done", told: true, theyHaveIt: true, dueAt: null, ref: null, status: null, detail: null, verifiedAt: "2026-10-07T20:00:00.000Z" },
+      { what: "send the restaurant shortlist", kind: "promise", state: "done", told: true, theyHaveIt: true, dueAt: null, ref: null, status: null, detail: null, verifiedAt: "2026-10-06T20:00:00.000Z" },
+      { what: "find a pitch coach", kind: "promise", state: "outstanding", told: true, theyHaveIt: false, dueAt: null, ref: null, status: null, detail: null, verifiedAt: "2026-10-08T20:00:00.000Z" },
+      { what: "Plan the partner event", kind: "task", state: "outstanding", told: true, theyHaveIt: false, dueAt: null, ref: "task #7", status: null, detail: null, verifiedAt: asOf },
+    ],
+    lessons: [], preferences: [], claims: [], person: null, restraint: null,
+  };
+  const parts = CC.partsFromKnowledge(k);
+  check("calls read goals with state: a done or stale goal is never direction (the known gap)", parts.goals.length === 1 && parts.goals[0] === "raise a seed round", parts.goals);
+  check("their own words are the last 48 hours (their lines and call summaries), oldest first; older lines aren't", parts.ownWords.length === 2 && /^\[Call\]/.test(parts.ownWords[0]) && parts.ownWords[1] === "- we closed the Series A", parts.ownWords);
+  check("recent texts newest first, in the stored shapes; open asks at most four", parts.recentTexts[0] === "User said: we closed the Series A" && parts.recentTexts.includes("Co replied: Here's the plan") && parts.openAsks.length === 4);
+  check("corrections become the rows the settled/retired rules read", parts.corrections[0].old_value === "first paying customer" && parts.corrections[0].new_value === "Series A" && !!CC.retiredBy("figuring out the first paying customer", parts.corrections));
+  const day = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
+  const { promises, delivered } = CC.callCarriedInputs(k, day);
+  check("only documents are what they have (an event Co offered isn't)", delivered.length === 1 && /Co Presence Plan/.test(delivered[0].title));
+  const covered = promises.find((p) => /post-event presence/.test(p.text));
+  const sent = promises.find((p) => /restaurant shortlist/.test(p.text));
+  const open = promises.find((p) => /pitch coach/.test(p.text));
+  check("a handled promise a delivery covers stays unsent (the delivery is what they have, said once); one that went is 'Sent.'; an open one isn't", covered?.sent === false && sent?.sent === true && /Sent\.$/.test(sent.text) && open?.sent === false && /Not sent yet\.$/.test(open.text), promises);
+  const carried = CC.collapseCarried(promises, delivered, day);
+  check("...and collapse as before: only the open promise is where things stand; the delivered plan once, as theirs", carried.open.length === 1 && /pitch coach/.test(carried.open[0].text) && carried.theyHaveIt.filter((l) => /Presence Plan/.test(l)).length === 1, carried);
+  check("a task Co carries is never one of the call's promises", !promises.some((p) => /partner event/.test(p.text)));
+  const late = { ...k, asOf: "2026-10-10T06:30:00.000Z", restraint: MK.restraintOf({ holdUntil: null, spaceUntil: null, safetyHold: false, emotional: null, suppressed: ["event_offer"] as any, trial: [], lastInboundAt: null, unansweredSends: [] }, new Date("2026-10-10T06:30:00.000Z")) };
+  const block = CC.callRulesBlock(MK.memberRules(late)) ?? "";
+  check("the member rules ride on the call: quiet hours in their zone (inside them now) and restraint, from memberRules(k)", /Quiet hours/.test(block) && /inside their quiet hours/.test(block) && /event_offer/.test(block) && block.includes(MK.memberRules(late).restraint), block);
+  const prompt = E.promptForElevenLabs("You are Co.");
+  const rules = MK.memberRules(k);
+  check("the agent's prompt carries the same shared rules memberRules returns (discretion, grounding, member safety), not copies", prompt.includes(rules.discretion) && prompt.includes(rules.grounding) && prompt.includes(rules.memberSafety));
+  check("the builder reads the layer once and keeps the call-only parts (last calls, threads, capacity, finds)", /loadContextParts\(userId, CALL_KNOWLEDGE, \{\}, knowledge\)/.test(src("services/callContext.ts")) && /offers: \(\) => sentItems/.test(src("services/callContext.ts")) && !/assembleContext\(/.test(src("services/callContext.ts")) && !/FROM document_deliveries|pgReceipts|memory_type = 'promise_result'/.test(src("services/callContext.ts")) && /k\.carrying\.filter\(\(c\) => c\.ref\?\.startsWith\("task #"\)\)/.test(src("services/callContext.ts")));
+}
+
 // ---- 2. the voice-only endpoint
 {
   const text = (s: string) => {

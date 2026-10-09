@@ -168,6 +168,68 @@ user: Thanks.`;
   check("so the plan files it as their ask, never 'Co's own initiative'", plan.promises[0].asked !== null);
 }
 
+// ---------------------------------------------------------------- after-call steps read the shared member-knowledge layer (PR 7)
+{
+  const PC = await import("../../src/jobs/postCallFollowUp.js");
+  const MK = await import("../../src/services/memberKnowledge.js");
+  const at = "2026-10-08T19:00:00.000Z";
+  const identity = { firstName: "Jordan", city: null, zone: "America/Los_Angeles", timeZone: "America/Los_Angeles", verifiedAt: at };
+  const k: any = {
+    userId: "u1", asOf: at, identity,
+    goals: [{ text: "Launch the brand at the Lumen event", state: "active", reason: null, told: false, verifiedAt: at }, { text: "Hire a designer", state: "done", reason: "hired", told: true, verifiedAt: at }],
+    asks: [{ id: "a1", text: "venues for a launch dinner", kind: "find", verifiedAt: at }],
+    delivered: [{ what: "Post-event presence plan", kind: "document", at, via: ["receipt"], url: "https://example.com/plan", reaction: null, verifiedAt: at }],
+    carrying: [{ what: "Find venues for the launch dinner", kind: "task", state: "outstanding", told: true, theyHaveIt: false, dueAt: null, ref: "task #3", status: null, detail: null, verifiedAt: at }],
+    lessons: [{ text: "Lead with the answer, not a question.", verifiedAt: at }],
+    corrections: [{ field: "city", was: "Oakland", now: "San Francisco", verifiedAt: at }],
+    preferences: [],
+    claims: [
+      { text: "Jordan is building a design studio.", provenance: "user_said", kind: "building", quote: "building a design studio", expiresOn: null, saidOn: "2026-10-05", verifiedAt: at },
+      { text: "Jordan seems stretched thin.", provenance: "co_inferred", kind: "mood", quote: null, expiresOn: "2026-10-10", saidOn: "2026-10-07", verifiedAt: at },
+    ],
+    restraint: null,
+    exchanges: [{ from: "member", text: "can you find venues", call: false, verifiedAt: at }, { from: "co", text: "summary of the call", call: true, verifiedAt: at }],
+    person: null,
+  };
+  const kb = G.knownBeforeFrom(k, { facts: `Details on file for "Atrium mixer", which Co sent them.\nThey've asked Co for (their words): "venues for a launch dinner"`, impressions: "Who they are: a founder." });
+  check("the audit's facts carry the layer's asks once, its delivered items and the picture's sent details", (kb.facts.match(/venues for a launch dinner/g) ?? []).length === 1 && /Post-event presence plan/.test(kb.facts) && /Atrium mixer/.test(kb.facts), kb.facts);
+  check("a correction is on record only in its corrected version (the old value Co might say is still caught)", /San Francisco/.test(kb.facts) && !/Oakland/.test(kb.facts + kb.impressions));
+  check("what they said is a fact; Co's read and goals (with state) are impressions only", /design studio/.test(kb.facts) && !/stretched thin/.test(kb.facts) && /stretched thin/.test(kb.impressions) && /Hire a designer \(done\)/.test(kb.impressions) && !/Hire a designer/.test(kb.facts));
+  check("without the layer the audit reads the call picture as before", JSON.stringify(G.knownBeforeFrom(null, { facts: "f", impressions: "i" })) === JSON.stringify({ facts: "f", impressions: "i" }));
+  const labelled = PC.labelClaims(k);
+  check("the post-call claims keep their labels: what they said apart from Co's read", labelled.enduring.length === 1 && /they said/.test(labelled.enduring[0]) && labelled.coInferred.length === 1 && /Co's read/.test(labelled.coInferred[0]) && labelled.theySaid.length === 0);
+  // Review of #121: the label is the day it was SAID, as their local date (2026-10-05 stays Oct 5 in Pacific, never Oct 4).
+  check("claim labels are the day said, never shifted a day early through UTC", /they said, Oct 5\)/.test(labelled.enduring[0]) && /Co's read, Oct 7, until Oct 9\)/.test(labelled.coInferred[0]) && /They said \(Oct 5\): Jordan is building/.test(kb.facts), { labelled, facts: kb.facts });
+  // Review probe: a Denver -> Austin correction and an enduring "Lives in Denver" claim gave both as facts.
+  {
+    const probe: any = { ...k, corrections: [{ field: "city", was: "Denver", now: "Austin", verifiedAt: at }], claims: [{ text: "Jordan lives in Denver.", provenance: "user_said", kind: "city", quote: "I live in denver", expiresOn: null, saidOn: "2026-09-01", verifiedAt: at }, ...k.claims] };
+    const pkb = G.knownBeforeFrom(probe, { facts: "", impressions: "" });
+    check("probe: a claim holding a corrected-away value is no fact for the audit (only the correction is)", !/Denver/i.test(pkb.facts + pkb.impressions) && /Austin/.test(pkb.facts) && /design studio/.test(pkb.facts), pkb);
+    const pl = PC.labelClaims(probe);
+    const sf = G.uncorrectedClaims([{ text: "Is transferring teams" }, { text: "Lives in SF." }, { text: "Moved from Denver (CO)." }], [{ was: "SF" }, { was: "Denver (CO)" }]);
+    check("probe: an 'SF' correction never drops 'Is transferring teams' (whole words only), but drops 'Lives in SF', and regex characters are literal", sf.length === 1 && sf[0].text === "Is transferring teams", sf);
+    check("probe: and the post-call text never gets it as something they said", ![...pl.enduring, ...pl.theySaid, ...pl.coInferred].some((l) => /Denver/i.test(l)) && pl.enduring.length === 1, pl);
+  }
+  const sec = PC.postCallKnowledgeSection(k);
+  const rules = MK.memberRules(k);
+  check("the post-call text gets the member rules from memberRules(k), word for word", [rules.discretion, rules.memberSafety, rules.grounding, rules.deliveryShape, rules.restraint, rules.quietHours].every((r) => !r || sec.includes(r)));
+  check("what they have is never restated, and what Co carries is never in this text (#115)", /THEY ALREADY HAVE THESE \(never restate[^\n]*\n- "Post-event presence plan"/.test(sec) && /WORK CO IS CARRYING FOR THEM \(never in this text[^\n]*\n- Find venues/.test(sec) && !/task #3/.test(sec));
+  check("recent texts carry when, and the call's own summary isn't one of them", /RECENT TEXTS, WITH WHEN[^\n]*\n- \w{3} Oct 8[^\n]*They: can you find venues/.test(sec) && !/summary of the call/.test(sec));
+  check("restraint and quiet hours shape the text, never a reason to SKIP (code decides whether it goes)", /never a reason to SKIP/.test(sec));
+  // Nothing from the layer goes into CONFIRMED_FACTS, so it can't back a day or a commitment in the draft.
+  const P = await import("../../src/harness/proactive.js");
+  let prompt = "";
+  P.setProactiveModelForTests(async (p) => { prompt = p; return "SKIP"; });
+  await PC.draftPostCallText("Jordan", "assistant: hi\nuser: The dinner is the hard part.", "", [], { theySaid: [], coInferred: [] }, null, false, k);
+  P.setProactiveModelForTests(null);
+  const factsBlock = prompt.slice(prompt.indexOf("CONFIRMED_FACTS"), prompt.indexOf("TASK"));
+  check("the layer reaches the draft's task, never its facts", /WORK CO IS CARRYING/.test(prompt) && !/Find venues|Post-event presence plan|can you find venues/.test(factsBlock) && /what_co_said_it_would_look_into/.test(src("jobs/postCallFollowUp.ts")));
+  const pc = src("jobs/postCallFollowUp.ts");
+  check("the recap gate reads zone, care and deliveries from the layer (no second zone or receipts read)", /k\.restraint \? k\.restraint\.needsCare/.test(pc) && /d\.via\.includes\("receipt"\)/.test(pc) && !/pgReceipts\.forUser/.test(pc) && !/memberZone\(userId\)/.test(pc));
+  check("a rejected layer read is caught and never replaced by un-stripped claims", /memberKnowledge\(userId, \{ include: POST_CALL_SECTIONS[^)]*\}\)\.catch\(\(\) => null\)/.test(pc) && !/liveClaimsRendered/.test(pc));
+  check("the call's audit is handed the layer's knowledge with the call picture", /memberKnowledge\(user_id, \{ include: AUDIT_SECTIONS \}\)/.test(src("routes/co.ts")) && /knownBeforeFrom\(auditKnowledge, callPicture\)/.test(src("routes/co.ts")));
+}
+
 check("a call confirmation never counts as the promise kept (2026-10-08, with services/callFollowThrough.ts)", /ps\.type IN \('call_confirm', 'task_window'\) AND ps\.message = om\.content/.test(src("services/followThrough.ts")));
 console.log(`post-call rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

@@ -1,5 +1,4 @@
 import { arcLine } from "./goalJourney.js";
-import { notToTeammate } from "./teamLines.js";
 import * as memberSafeModule from "./memberSafeMemories.js";
 import { renderCorrections } from "../harness/profileWrite.js";
 import { generateText } from "ai";
@@ -8,11 +7,13 @@ import pool from "../db/db.js";
 import { writeMemory } from "./memory.js";
 import { MODELS } from "../models.js";
 import { getEmotionalContext, renderEmotionalContext } from "../harness/emotion.js";
-import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
-import { latestAskEntry, goalEntries } from "../harness/profileWrite.js";
+import { renderSnapshot } from "../harness/personSnapshot.js";
+import { latestAskEntry } from "../harness/profileWrite.js";
 import { stampOf } from "./factLabels.js";
-import { FALLBACK_ZONE, memberZone, wordsZone } from "./memberTime.js";
+import { FALLBACK_ZONE } from "./memberTime.js";
 import type { PersonModelParts } from "./personModel.js";
+import type { SentItem } from "./turnContext.js";
+import type { Exchange, Fact, KnowledgeDeps, KnowledgeSection, MemberKnowledge, MemberRules } from "./memberKnowledge.js";
 import { DateTime } from "luxon";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
@@ -46,9 +47,18 @@ const SUMMARY_MODEL = MODELS.haiku;
 // specifics the recap's own cadence hasn't folded in yet.
 // What both a text reply's summary and a call's context are read from: one
 // load, so the two channels see the same rows (2026-10-08).
+//
+// Member facts come from the one member-knowledge layer (services/memberKnowledge.ts, PR 4 of the migration): their goals with
+// state, open asks, corrections, lessons, their own recent words and the recent exchanges, what Co carries and delivered, and
+// restraint, each stamped and member-stripped inside the layer. One memberKnowledge call per build. What the layer doesn't hold
+// stays here: the profile's own fields (life chapters, blockers, wants, the arc), the recap, the last suggestion, the emotional
+// read in full, and the person model's structure (threads, loops, who).
 type ContextParts = {
+  k: MemberKnowledge;
   profile: any | null;
   corrections: CorrectionRow[];
+  // Where they are headed: only goals still active (a done or stale goal is history, never direction).
+  goals: string[];
   picture: string;
   model: PersonModelParts | null;
   ownWords: string[];
@@ -60,17 +70,41 @@ type ContextParts = {
   names: string[];
 };
 
-async function loadContextParts(userId: string): Promise<ContextParts> {
-  const [profileResult, recentTextResult, recapResult, recentRecommendationResult, emotional, ownWordsResult, openAsksResult, snapshot, correctionsResult] = await Promise.all([
+// The sections each build reads. A text reply's summary needs only the profile-side facts; a call reads what Co carries and
+// delivered, the lessons, and restraint (for the member rules) too.
+export const SUMMARY_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "corrections", "exchanges"];
+export const CALL_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "corrections", "exchanges", "lessons", "delivered", "carrying", "restraint"];
+// The recent texts (20) and their own words of the last 48 hours (25) both come from one exchange read.
+export const CONTEXT_EXCHANGES = { exchanges: 45, exchangeDays: 30 } as const;
+const RECENT_TEXTS = 20;
+const OWN_WORDS = { max: 25, hours: 48 };
+
+// Pure: a stored exchange line as the context shows it ("User said: ...", "Co replied: ...", "[Call] ...").
+const exchangeLine = (x: Fact<Exchange>) => (x.from === "member" ? `User said: ${x.text}` : x.call ? `[Call] ${x.text}` : `Co replied: ${x.text}`);
+// Pure: the layer's corrections as the rows this file's correction rules read.
+export const correctionRows = (k: Pick<MemberKnowledge, "corrections">): CorrectionRow[] => k.corrections.map((c) => ({ field: c.field, old_value: c.was, new_value: c.now, corrected_at: c.verifiedAt }));
+// Pure: the parts the layer covers. Their own words lately: their lines and Co's call summaries in the last 48 hours, oldest
+// first; recent texts newest first.
+export function partsFromKnowledge(k: MemberKnowledge): Pick<ContextParts, "corrections" | "goals" | "ownWords" | "openAsks" | "recentTexts"> {
+  const since = new Date(k.asOf).getTime() - OWN_WORDS.hours * 3_600_000;
+  const own = k.exchanges.filter((x) => (x.from === "member" || x.call) && new Date(x.verifiedAt).getTime() > since).slice(-OWN_WORDS.max);
+  return {
+    corrections: correctionRows(k),
+    goals: k.goals.filter((g) => g.state === "active").map((g) => g.text),
+    ownWords: own.map((x) => (x.from === "member" ? `- ${x.text}` : `[Call] ${x.text}`)),
+    openAsks: k.asks.slice(0, 4).map((a) => `- ${a.text}`),
+    recentTexts: k.exchanges.slice(-RECENT_TEXTS).reverse().map(exchangeLine),
+  };
+}
+
+async function loadContextParts(userId: string, include: readonly KnowledgeSection[] = SUMMARY_KNOWLEDGE, deps: Partial<KnowledgeDeps> = {}, knowledge?: Promise<MemberKnowledge>): Promise<ContextParts> {
+  const { memberKnowledge } = await import("./memberKnowledge.js");
+  const [k, profileResult, recapResult, recentRecommendationResult, emotional, snapshot] = await Promise.all([
+    knowledge ?? memberKnowledge(userId, { include, ...CONTEXT_EXCHANGES }, deps),
+    // The profile fields the layer doesn't carry (city and goals come from it).
     pool.query(
-      `SELECT life_chapters, goals, blockers, availability_pattern, city, emotional_state, intent
+      `SELECT life_chapters, blockers, availability_pattern, emotional_state, intent
        FROM co_profiles WHERE user_id = $1`,
-      [userId],
-    ),
-    pool.query(
-      `SELECT content, memory_type FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange'
-       ORDER BY created_at DESC LIMIT 20`,
       [userId],
     ),
     pool.query(
@@ -94,58 +128,33 @@ async function loadContextParts(userId: string): Promise<ContextParts> {
     // Emotion loop: the same read of how they've been feeling that texts
     // use, so a call opens knowing what the texts showed and vice versa.
     getEmotionalContext(userId),
-    // What they've told Co themselves in the last 48 hours, first: newer
-    // facts beat an older recap or profile (2026-09-15 call opened as if he
-    // were still pre-seed, after he'd texted he's Series A with a $35M deal).
-    pool.query(
-      `SELECT content, memory_type FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE '[Call]%') AND ${notToTeammate()}
-         AND created_at > NOW() - INTERVAL '48 hours'
-       ORDER BY created_at DESC LIMIT 25`,
-      [userId],
-    ),
-    pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 4`, [userId]),
     // The one model of them (services/personModel.ts); Co's action record
     // is added separately on calls (buildCallKnowledge), so it's left out here.
     import("./personModel.js").then((m) => m.personModelParts(userId)).catch(() => null),
-    // Their dated corrections (harness/profileWrite.ts), newest first.
-    pool
-      .query(
-        `SELECT field, old_value, new_value, corrected_at FROM profile_corrections
-         WHERE user_id = $1 AND corrected_at > NOW() - INTERVAL '90 days'
-         ORDER BY corrected_at DESC LIMIT 8`,
-        [userId],
-      )
-      .catch(() => ({ rows: [] as any[] })),
   ]);
   const emotionalLine = renderEmotionalContext(emotional);
 
   // Another member's details never reach this summary; intro history stays
-  // (services/memberSafeMemories.ts).
+  // (services/memberSafeMemories.ts). The layer's parts are stripped inside it; these are the parts read here.
   const { memberSafe, linkedMemberNames, namesInRecords } = memberSafeModule;
   const linked = await linkedMemberNames(userId);
   // A Tier 0 pick names someone their recap or texts may describe too.
   const names = [...linked, ...namesInRecords(recentRecommendationResult.rows)];
-  // Their call summaries ([Call] lines, which Co writes) too; their own
-  // "User said:" lines pass through unchanged.
-  const [safeRecap, safeRecommendation, safeTexts, safeOwnWords] = await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names), memberSafe(userId, recentTextResult.rows, names), memberSafe(userId, ownWordsResult.rows, names)]);
-  const ownWords = safeOwnWords.map((c) => String(c).replace(/^User said: /, "- ")).reverse();
-  const openAsks = openAsksResult.rows.map((r: any) => `- ${r.ask_text}`);
+  const [safeRecap, safeRecommendation] = await Promise.all([memberSafe(userId, recapResult.rows, names), memberSafe(userId, recentRecommendationResult.rows, names)]);
   // The person model is model-written (snapshot, threads, loops): it gets the
   // same strip, so another member's details never reach a call or reply.
   const rawPicture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
   const picture = rawPicture ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : rawPicture;
   const recapAt = recapResult.rows[0]?.created_at ? new Date(recapResult.rows[0].created_at) : null;
+  const profile = profileResult.rows[0] ?? null;
   return {
-    profile: profileResult.rows[0] ?? null,
-    corrections: correctionsResult.rows as CorrectionRow[],
+    k,
+    profile: profile || k.identity.city ? { ...(profile ?? {}), city: k.identity.city } : null,
+    ...partsFromKnowledge(k),
     picture,
     model: snapshot,
-    ownWords,
-    openAsks,
     recap: safeRecap[0] ? { text: String(safeRecap[0]), at: recapAt } : null,
     recommendation: safeRecommendation[0] ? String(safeRecommendation[0]) : null,
-    recentTexts: safeTexts.map(String),
     emotionalLine,
     names,
   };
@@ -161,8 +170,9 @@ function profileLines(p: ContextParts, keep: (text: string) => boolean = () => t
   // was hiding the real ask from the call prompt).
   const latestAsk = latestAskEntry(profile?.intent);
   const latestIntent = Array.isArray(profile?.intent) && profile.intent.length ? profile.intent[profile.intent.length - 1] : null;
-  // Direction, not errands: profile goals plus the goal-typed entries (never an ask).
-  const goals = [...(profile?.goals ?? []), ...goalEntries(profile?.intent).map((g) => String(g.text))].filter((g) => keep(String(g)));
+  // Direction, not errands: their goals still active (memberKnowledge: profile goals and goal entries joined with goal_states; a
+  // goal they closed or let go stale is history, never direction), never an ask.
+  const goals = p.goals.filter((g) => keep(String(g)));
   const wants = (latestIntent?.wants ?? []).filter((w: unknown) => keep(String(w)));
   const statedAsk = latestAsk?.text && keep(String(latestAsk.text)) ? latestAsk.text : null;
   return [
@@ -281,6 +291,16 @@ export function trimToLines(text: string, cap: number): string {
 
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
+    return await contextSummary(userId);
+  } catch (err: any) {
+    console.error("callContext: buildContextSummary failed (non-fatal, calling with no prior context):", err?.message ?? err);
+    return "";
+  }
+}
+
+// The plain summary; throws when it can't be read (buildContextSummary turns that into "", a call into CALL_NOTES_UNAVAILABLE).
+async function contextSummary(userId: string): Promise<string> {
+  {
     const p = await loadContextParts(userId);
     const corrections = renderCorrections(p.corrections);
     // Each part gets its own share, trimmed at a line, so a long part can't crowd out the rest (2026-10-08: the loop below used to
@@ -305,9 +325,6 @@ export async function buildContextSummary(userId: string): Promise<string> {
       summary = next;
     }
     return summary;
-  } catch (err: any) {
-    console.error("callContext: buildContextSummary failed (non-fatal, calling with no prior context):", err?.message ?? err);
-    return "";
   }
 }
 
@@ -505,72 +522,117 @@ export function assembleCallSummary(o: { haveIt?: string | null; now?: string | 
 // A call can't wait on slow page reads: whatever details are on file by then are used.
 const CALL_CONTEXT_WAIT_MS = 3000;
 
+// Pure: the member-level rules a call carries, from memberRules(k) (services/memberKnowledge.ts). Discretion, grounding, member
+// safety are already in the agent's prompt as those same shared constants (services/elevenLabsCalls.ts promptForElevenLabs); the
+// two read from this member's state ride in here, per call: their quiet hours (in their zone, with where now sits) and restraint
+// (holds, the unanswered pause, muted kinds, how they've been). The delivery-shape rule is for a delivery's text, not a call.
+export function callRulesBlock(rules: Pick<MemberRules, "quietHours" | "restraint">): string | null {
+  const lines = [rules.quietHours, rules.restraint].map((l) => l.trim()).filter(Boolean);
+  return lines.length ? `What Co won't start on its own for them right now (what you say you'll send after the call lands inside these; what they ask for still goes):\n${lines.map((l) => `- ${l}`).join("\n")}` : null;
+}
+
+// Pure: what Co carries and has delivered (the layer's one carrying builder and delivered merge), as the lines collapseCarried
+// reads. Promises are the after-call promise records (promise_result, the newest three); a handled one is "Sent." unless a
+// delivery already covers it (then the delivery is what they have, said once). Deliveries are the documents they have.
+export function callCarriedInputs(k: Pick<MemberKnowledge, "carrying" | "delivered">, zoneDay: (d: Date | string) => string): { promises: CarriedLine[]; delivered: Delivered[] } {
+  const delivered: Delivered[] = k.delivered.filter((d) => d.kind === "document").slice(0, 12).map((d) => ({ title: d.what, at: d.at }));
+  const promises = k.carrying
+    .filter((c) => c.kind === "promise" && c.ref === null)
+    .sort((a, b) => b.verifiedAt.localeCompare(a.verifiedAt))
+    .slice(0, 3)
+    .map((c): CarriedLine => {
+      const text = `${zoneDay(c.verifiedAt)}: Promised on the call: ${c.what}.`;
+      if (c.state !== "done") return { text: `${text} Not sent yet.`, from: "promise", sent: false };
+      const byDelivery = !collapseCarried([{ text: `${text} Not sent yet.`, from: "promise", sent: false }], delivered, zoneDay).open.length;
+      return byDelivery ? { text: `${text} Not sent yet.`, from: "promise", sent: false } : { text: `${text} Sent.`, from: "promise", sent: true };
+    });
+  return { promises, delivered };
+}
+
+// A call's member-knowledge read, shared for a minute with the rest of the call's setup (the briefing reads their city from it
+// rather than reading the layer again). A rejection is shared too: every reader catches it.
+const KNOWLEDGE_SHARE_MS = 60_000;
+const callKnowledgeReads = new Map<string, { at: number; k: Promise<MemberKnowledge> }>();
+export function callKnowledgeInFlight(userId: string, now = Date.now()): Promise<MemberKnowledge> | null {
+  for (const [u, v] of callKnowledgeReads) if (now - v.at > KNOWLEDGE_SHARE_MS) callKnowledgeReads.delete(u);
+  return callKnowledgeReads.get(userId)?.k ?? null;
+}
+// A read the call won't wait past: it rejects at the wait, and the layer gives that section empty (never a made-up "no hold").
+const withinWait = <T,>(p: Promise<T>, what: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${what} took longer than the call's wait`)), CALL_CONTEXT_WAIT_MS);
+    t.unref?.();
+    p.then(resolve, reject).finally(() => clearTimeout(t));
+  });
+
 export async function buildCallKnowledge(userId: string): Promise<CallKnowledge> {
-  const { assembleContext, loadSentItems, sentDetailLines } = await import("./turnContext.js");
-  const [p, turn, callRows] = await Promise.all([
-    loadContextParts(userId),
+  // Both reads start before the first await, so the briefing (started right after this, services/callTrigger.ts) finds the
+  // member-knowledge read already registered.
+  // What was sent, with whatever details are on file by the wait (slow page reads never hold the call). One read: the layer's
+  // delivered merge takes the same list (its offers loader is loadSentItems over the same 45 days).
+  const sentItems = import("./turnContext.js").then((T) => T.loadSentItems(userId)).catch(() => [] as SentItem[]);
+  // One member-knowledge read for the whole build (services/memberKnowledge.ts): stamped, member-stripped inside. Restraint (new on
+  // this path) is held to the call's wait like every other slow read.
+  const knowledge = import("./memberKnowledge.js").then((M) => M.memberKnowledge(userId, { include: CALL_KNOWLEDGE, ...CONTEXT_EXCHANGES }, { offers: () => sentItems, restraint: (u, at) => withinWait(M.realKnowledgeDeps.restraint(u, at), "the restraint read") }));
+  callKnowledgeReads.set(userId, { at: Date.now(), k: knowledge });
+  knowledge.catch(() => {});
+  const { fillDetails, sentDetailLines } = await import("./turnContext.js");
+  const [p, sent, callRows] = await Promise.all([
+    loadContextParts(userId, CALL_KNOWLEDGE, {}, knowledge),
     Promise.race([
-      assembleContext(userId, "").catch(() => null),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), CALL_CONTEXT_WAIT_MS)),
+      sentItems.then(async (items) => {
+        await fillDetails(items).catch(() => {});
+        return items;
+      }),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), CALL_CONTEXT_WAIT_MS)).then(() => sentItems),
     ]),
+    // The last calls (transcripts and Co's [Call] summaries): call-only, not in the layer.
     pool
       .query(
         `SELECT created_at, memory_type, content FROM co_memories
          WHERE user_id = $1 AND created_at > NOW() - make_interval(days => $2)
-           AND ((memory_type = 'call_transcript' AND length(content) > 300) OR (memory_type = 'text_exchange' AND content LIKE '[Call]%')
-                OR (memory_type = 'promise_result' AND created_at > NOW() - INTERVAL '3 days'))
+           AND ((memory_type = 'call_transcript' AND length(content) > 300) OR (memory_type = 'text_exchange' AND content LIKE '[Call]%'))
          ORDER BY created_at DESC LIMIT 16`,
         [userId, LAST_CALLS_DAYS],
       )
       .then((r) => r.rows as { created_at: Date; memory_type: string; content: string }[])
       .catch(() => []),
   ]);
-  // Slow page reads: the sent list with whatever details were saved with it.
-  const sent = turn?.sent ?? (await loadSentItems(userId).catch(() => []));
+  const k = p.k;
+  // Their zone (services/memberTime.ts, through the layer), or Pacific: every day and stamp in the briefing is theirs.
+  const zone = k.identity.timeZone;
+  // Co's own record of what it did (co_facts), for the after-call audit: the layer carries what Co sent, not this ledger.
+  // Held to the call's wait: it only feeds the after-call audit.
+  const ledgerLines = withinWait(import("./coFacts.js").then((F) => F.ledgerFacts(userId, "\n", k.identity.zone)), "the ledger read").then((l) => l.lines).catch(() => [] as string[]);
   // Another member's details stripped from every call-only part too
-  // (memberSafeMemories.ts; 2026-10-01 call review: these bypassed it).
+  // (memberSafeMemories.ts; 2026-10-01 call review: these bypassed it). The layer's parts are stripped inside it already; they go
+  // through this strip again with the call's own name set (linked members and the names in their last suggestion).
   const { memberSafe } = memberSafeModule;
   const strip = async (xs: string[]) => (xs.length ? memberSafe(userId, xs.map((content) => ({ content, memory_type: "call_context" })), p.names) : []);
   const stripOne = async (x: string) => (await strip([x]))[0] ?? "";
   const corrections = p.corrections;
   const keep = (text: string, at?: Date | string | null) => !retiredBy(text, corrections, at);
-  const now = new Date();
-  // Their zone (services/memberTime.ts), or Pacific: every day and stamp in the briefing is theirs.
-  const zone = wordsZone(await memberZone(userId));
+  const now = new Date(k.asOf);
 
   // 1. What Co is carrying for them (open loops, the same as a text reply reads), each item once; what they already have apart.
-  // What Co said on a call it would do, and what came of it (harness/callGrounding.ts).
-  const promisedFacts = promiseFacts(callRows.filter((r) => r.memory_type === "promise_result").map((r) => ({ at: r.created_at, content: String(r.content) }))).slice(0, 3);
+  // What Co said on a call it would do, and what came of it (harness/callGrounding.ts), and what they have (delivery receipts and
+  // Co's record of documents it sent), from the layer.
+  const zoneDay = (d: Date | string) => dayLabel(d, zone);
+  const { promises, delivered } = callCarriedInputs(k, zoneDay);
   const loopItems = p.model?.loops ? p.model.loops.replace(/^What you're carrying for them right now, and where each stands \([^)]*\): /, "").replace(/\.$/, "").split("; ") : [];
-  // What they have: delivery receipts, and Co's record of documents it sent (co_facts, which predates receipts).
-  const [receipts, sentDocs] = await Promise.all([
-    import("./deliveryReceipts.js").then(async (R) => (await R.pgReceipts.forUser(userId, 10)).map((r) => ({ title: r.title, at: r.deliveredAt }))).catch(() => [] as Delivered[]),
-    pool
-      .query(`SELECT object_label, happened_at FROM co_facts WHERE owner_user_id = $1 AND relation = 'sent' AND object_label LIKE 'a document%' AND happened_at > NOW() - INTERVAL '30 days' ORDER BY happened_at DESC LIMIT 10`, [userId])
-      .then((r) => r.rows.map((x: any) => ({ title: String(x.object_label).replace(/^a document(?: \([^)]*\))?:\s*/i, ""), at: x.happened_at as Date })))
-      .catch(() => [] as Delivered[]),
-  ]);
-  const delivered: Delivered[] = [...receipts, ...sentDocs];
-  const carried = collapseCarried(
-    [
-      ...promisedFacts.map((f) => ({ text: `${dayLabel(f.at, zone)}: ${f.text}`, from: "promise" as const, sent: /\bSent\.$/.test(f.text) })),
-      ...loopItems.map((l) => ({ text: l, from: "loop" as const })),
-    ],
-    delivered,
-    (d) => dayLabel(d, zone),
-  );
+  const carried = collapseCarried([...promises, ...loopItems.map((l) => ({ text: l, from: "loop" as const }))], delivered, zoneDay);
   const promised = await strip(carried.open.filter((l) => l.from === "promise").map((l) => `- ${l.text}`));
   const loopLines = await strip(carried.open.filter((l) => l.from === "loop").map((l) => `- ${l.text.length > 240 ? `${l.text.slice(0, 240).replace(/[ ,;(]+[^ ,;(]*$/, "")}...` : l.text}`));
   const haveIt = (await strip(carried.theyHaveIt)).join("\n");
   // What Co says it will do on the call has to open something after it (#113: promises stay, but they get wired). At the cap
-  // nothing new can open, so Co is told before it says it.
+  // nothing new can open, so Co is told before it says it. The open tasks are the layer's (carrying: each with its task ref).
   // Each goal goes through the same member-safety strip as every other line here (review of #113).
+  const openTasks = k.carrying.filter((c) => c.ref?.startsWith("task #"));
   const capacity = await import("./coTasks.js")
     .then(async (T) => {
-      const open = await T.openTasks(userId);
-      if (open.length < T.TASK_LIMITS.maxOpen) return null;
-      const goals = await strip(open.map((t) => t.goal.replace(/^Keep [^:]{0,40}: /, "")).slice(0, 5));
-      return `You're already working on ${open.length} things for them, the most you carry at once${goals.length ? ` (${goals.join("; ")})` : ""}. On this call, don't promise new work or say you'll keep an eye out for something new: nothing new can open. If they want something new, offer to drop one of these for it.`;
+      if (openTasks.length < T.TASK_LIMITS.maxOpen) return null;
+      const goals = await strip(openTasks.map((t) => t.what.replace(/^Keep [^:]{0,40}: /, "")).slice(0, 5));
+      return `You're already working on ${openTasks.length} things for them, the most you carry at once${goals.length ? ` (${goals.join("; ")})` : ""}. On this call, don't promise new work or say you'll keep an eye out for something new: nothing new can open. If they want something new, offer to drop one of these for it.`;
     })
     .catch(() => null);
   const loops = [
@@ -593,9 +655,11 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const threads = (await strip(stamped)).map((text) => ({ text, line: text }));
   // 4. Settled.
   const settled = renderSettled(corrections, zone);
-  // 5. Lessons.
-  const lessons = await strip(turn?.lessons ?? []);
-  // 6. The rest, with corrected goals, wants and recap sentences left out.
+  // 5. Lessons (the layer's: times they corrected Co's manner).
+  const lessons = await strip(k.lessons.map((l) => l.text));
+  // 6. The rest, with corrected goals, wants and recap sentences left out. The member rules lead it: short, and read every call.
+  const { memberRules } = await import("./memberKnowledge.js");
+  const rules = callRulesBlock(memberRules(k));
   const recap = p.recap ? withCorrectedNames(p.recap.text.split(/(?<=[.!?])\s+/).filter((s) => keep(s, p.recap!.at) && !carried.covered(s)).join(" "), corrections) : "";
   const who = p.model?.who ? await stripOne(p.model.who) : "";
   // Their own words lately, newest kept first within a bound (a pasted screenshot can run long), one paragraph.
@@ -608,6 +672,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     wordsUsed += flat.length + 1;
   }
   const base = [
+    rules,
     who ? `Who they are:\n${who}` : null,
     theirWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${theirWords.join("\n")}` : null,
     p.openAsks.length ? `What they're looking for right now:\n${p.openAsks.join("\n")}` : null,
@@ -621,12 +686,11 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const sentLines = await strip(sentDetailLines({ sent }, 7));
   const summary = assembleCallSummary({ haveIt: haveIt || null, now: loops || null, lastCalls: lastCalls || null, settled: settled || null, lessons, sentLines, threads, base });
 
-  const asks = turn?.asks ?? [];
-  const ledger = turn?.ledger.lines ?? [];
+  const ledger = await strip(await ledgerLines);
   const facts = [
     ...sentLines,
     ...ledger,
-    ...asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
+    ...k.asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
   ].join("\n");
   // Impressions: what Co's models wrote about them (never proof of a specific fact).
   const impressions = [who, lastCalls, recap, threads.map((t) => t.text).join("\n"), p.emotionalLine ?? ""].filter(Boolean).join("\n\n");
@@ -634,12 +698,23 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
 }
 
 // The summary a call opens with.
+// When nothing about them could be read (the member-knowledge layer rejects when the names to strip can't be read, and the plain
+// summary fails the same way), a call still knows it isn't a first conversation: an empty summary reads as "your first real
+// conversation" in the agent's prompt (services/elevenLabsCalls.ts CALL_CONTEXT_BLOCK), and an existing member got intake (review
+// of #122). No facts in it, so nothing to strip.
+export const CALL_NOTES_UNAVAILABLE = "Your notes on them didn't load for this call. This is not a first conversation: don't introduce yourself or run intake; ask what's on their mind and follow them.";
+
 export async function buildCallContextSummary(userId: string): Promise<string> {
   try {
     return (await buildCallKnowledge(userId)).summary;
   } catch (err: any) {
     console.error("callContext: buildCallContextSummary failed (non-fatal, using the plain summary):", err?.message ?? err);
-    return buildContextSummary(userId);
+    try {
+      return await contextSummary(userId);
+    } catch (err2: any) {
+      console.error("callContext: the plain summary failed too (calling with no notes, not as a first conversation):", err2?.message ?? err2);
+      return CALL_NOTES_UNAVAILABLE;
+    }
   }
 }
 
