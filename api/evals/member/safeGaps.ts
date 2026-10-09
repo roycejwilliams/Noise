@@ -18,7 +18,16 @@ check("proactive dispatch transcript", /memberSafeLine\(userId\)[\s\S]{0,400}saf
 check("sweep picker texts", /memberSafeLine\(userId\)[\s\S]{0,600}text: safe \? \(safe\(String\(t\.content\)\)/.test(src("services/sweepSelectContext.ts")));
 check("call-tool loops and task goals (spoken sources)", /memberSafeLine\(userId\)[\s\S]{0,300}goal: safe \? safe\(String\(x\.goal/.test(src("services/callTools.ts")) && /const loops = l && safe \?/.test(src("services/callTools.ts")));
 const tc = src("services/turnContext.ts");
-check("text path: threads, loops and carrying", /memberSafeLine\(userId\)/.test(tc) && /loops: safeLoops/.test(tc) && /threads: safeThreads/.test(tc) && /carryingItems\([\s\S]{0,140}\)\.flatMap\(\(c\) => \{ const label = keep\(c\.label\)/.test(tc));
+// Loops and carrying come from member knowledge (stripped inside, fails closed: a failed read leaves it all out), and the labels go
+// through the text path's own strip again.
+check(
+  "text path: threads, loops and carrying",
+  /memberSafeLine\(userId\)/.test(tc) &&
+    /threads: safeThreads/.test(tc) &&
+    /memberKnowledge\(userId, \{ include: TEXT_KNOWLEDGE \}[\s\S]{0,40}\)\.catch\([\s\S]{0,200}return null;/.test(tc) &&
+    !/FROM open_loops/.test(tc) &&
+    /carryFromKnowledge\(knowledge\?\.carrying \?\? \[\], zone, windows\)\.flatMap\(\(c\) => \{ const label = keep\(c\.label\)/.test(tc),
+);
 
 // Review of #118: the realistic failure is the name lookup, and it must fail closed (throw), never strip nothing.
 const prevDb = process.env.DATABASE_URL;
