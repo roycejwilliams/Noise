@@ -214,6 +214,7 @@ user: Thanks.`;
   check("the layer reaches the draft's task, never its facts", /WORK CO IS CARRYING/.test(prompt) && !/Find venues|Post-event presence plan|can you find venues/.test(factsBlock) && /what_co_said_it_would_look_into/.test(src("jobs/postCallFollowUp.ts")));
   const pc = src("jobs/postCallFollowUp.ts");
   check("the recap gate reads zone, care and deliveries from the layer (no second zone or receipts read)", /k\.restraint \? k\.restraint\.needsCare/.test(pc) && /d\.via\.includes\("receipt"\)/.test(pc) && !/pgReceipts\.forUser/.test(pc) && !/memberZone\(userId\)/.test(pc));
+  check("a rejected layer read is caught and never replaced by un-stripped claims", /memberKnowledge\(userId, \{ include: POST_CALL_SECTIONS[^)]*\}\)\.catch\(\(\) => null\)/.test(pc) && !/liveClaimsRendered/.test(pc));
   check("the call's audit is handed the layer's knowledge with the call picture", /memberKnowledge\(user_id, \{ include: AUDIT_SECTIONS \}\)/.test(src("routes/co.ts")) && /knownBeforeFrom\(auditKnowledge, callPicture\)/.test(src("routes/co.ts")));
 }
 

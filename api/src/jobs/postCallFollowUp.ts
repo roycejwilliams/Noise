@@ -62,7 +62,7 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   const callAt = rows[0]?.created_at ? new Date(rows[0].created_at) : new Date();
   // What Co knows about them, from the shared layer (services/memberKnowledge.ts): what they already have, what Co is carrying,
   // lessons, corrections, claims, restraint and their recent texts with when, stripped of other members inside. It fails closed (a
-  // failed name read throws): then the text is drafted the way it was before the layer, from the summary and the claims alone.
+  // failed name read rejects): then the text is drafted from the call and the (separately stripped) summary alone, with no claims.
   const [contextSummary, k] = await Promise.all([
     buildContextSummary(userId).catch(() => ""),
     memberKnowledge(userId, { include: POST_CALL_SECTIONS, exchanges: 10, exchangeDays: 7 }).catch(() => null),
@@ -78,10 +78,8 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
     )
     .catch(() => ({ rows: [] as any[] }));
   // What Co holds about them that is still inside its lifetime (services/claims.ts), apart by label: what THEY said, and Co's read.
-  // From the layer (stripped); only without it, the claims read directly.
-  const labelled = k
-    ? labelClaims(k)
-    : await import("../services/claims.js").then((m) => m.liveClaimsRendered(userId, new Date())).catch(() => ({ theySaid: [] as string[], coInferred: [] as string[], enduring: [] as string[] }));
+  // From the layer (stripped). When the layer rejected (fails closed), none: never the un-stripped claims read in its place.
+  const labelled = k ? labelClaims(k) : { theySaid: [] as string[], coInferred: [] as string[], enduring: [] as string[] };
   // The confirmation already sent the moment they hung up (services/callFollowThrough.ts): this text never says it again.
   const { confirmationSentFor } = await import("../services/callFollowThrough.js");
   const confirmed = await confirmationSentFor(userId, transcript).catch(() => null);
