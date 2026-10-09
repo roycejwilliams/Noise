@@ -12,7 +12,8 @@ import { latestAskEntry } from "../harness/profileWrite.js";
 import { stampOf } from "./factLabels.js";
 import { FALLBACK_ZONE } from "./memberTime.js";
 import type { PersonModelParts } from "./personModel.js";
-import type { Exchange, Fact, KnowledgeSection, MemberKnowledge, MemberRules } from "./memberKnowledge.js";
+import type { SentItem } from "./turnContext.js";
+import type { Exchange, Fact, KnowledgeDeps, KnowledgeSection, MemberKnowledge, MemberRules } from "./memberKnowledge.js";
 import { DateTime } from "luxon";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
@@ -96,10 +97,10 @@ export function partsFromKnowledge(k: MemberKnowledge): Pick<ContextParts, "corr
   };
 }
 
-async function loadContextParts(userId: string, include: readonly KnowledgeSection[] = SUMMARY_KNOWLEDGE): Promise<ContextParts> {
+async function loadContextParts(userId: string, include: readonly KnowledgeSection[] = SUMMARY_KNOWLEDGE, deps: Partial<KnowledgeDeps> = {}, knowledge?: Promise<MemberKnowledge>): Promise<ContextParts> {
   const { memberKnowledge } = await import("./memberKnowledge.js");
   const [k, profileResult, recapResult, recentRecommendationResult, emotional, snapshot] = await Promise.all([
-    memberKnowledge(userId, { include, ...CONTEXT_EXCHANGES }),
+    knowledge ?? memberKnowledge(userId, { include, ...CONTEXT_EXCHANGES }, deps),
     // The profile fields the layer doesn't carry (city and goals come from it).
     pool.query(
       `SELECT life_chapters, blockers, availability_pattern, emotional_state, intent
@@ -290,6 +291,16 @@ export function trimToLines(text: string, cap: number): string {
 
 export async function buildContextSummary(userId: string): Promise<string> {
   try {
+    return await contextSummary(userId);
+  } catch (err: any) {
+    console.error("callContext: buildContextSummary failed (non-fatal, calling with no prior context):", err?.message ?? err);
+    return "";
+  }
+}
+
+// The plain summary; throws when it can't be read (buildContextSummary turns that into "", a call into CALL_NOTES_UNAVAILABLE).
+async function contextSummary(userId: string): Promise<string> {
+  {
     const p = await loadContextParts(userId);
     const corrections = renderCorrections(p.corrections);
     // Each part gets its own share, trimmed at a line, so a long part can't crowd out the rest (2026-10-08: the loop below used to
@@ -314,9 +325,6 @@ export async function buildContextSummary(userId: string): Promise<string> {
       summary = next;
     }
     return summary;
-  } catch (err: any) {
-    console.error("callContext: buildContextSummary failed (non-fatal, calling with no prior context):", err?.message ?? err);
-    return "";
   }
 }
 
@@ -541,13 +549,36 @@ export function callCarriedInputs(k: Pick<MemberKnowledge, "carrying" | "deliver
   return { promises, delivered };
 }
 
+// A call's member-knowledge read, shared for a minute with the rest of the call's setup (the briefing reads their city from it
+// rather than reading the layer again). A rejection is shared too: every reader catches it.
+const KNOWLEDGE_SHARE_MS = 60_000;
+const callKnowledgeReads = new Map<string, { at: number; k: Promise<MemberKnowledge> }>();
+export function callKnowledgeInFlight(userId: string, now = Date.now()): Promise<MemberKnowledge> | null {
+  for (const [u, v] of callKnowledgeReads) if (now - v.at > KNOWLEDGE_SHARE_MS) callKnowledgeReads.delete(u);
+  return callKnowledgeReads.get(userId)?.k ?? null;
+}
+// A read the call won't wait past: it rejects at the wait, and the layer gives that section empty (never a made-up "no hold").
+const withinWait = <T,>(p: Promise<T>, what: string): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${what} took longer than the call's wait`)), CALL_CONTEXT_WAIT_MS);
+    t.unref?.();
+    p.then(resolve, reject).finally(() => clearTimeout(t));
+  });
+
 export async function buildCallKnowledge(userId: string): Promise<CallKnowledge> {
-  const { loadSentItems, fillDetails, sentDetailLines } = await import("./turnContext.js");
-  // What was sent, with whatever details are on file by the wait (slow page reads never hold the call).
-  const sentItems = loadSentItems(userId).catch(() => [] as Awaited<ReturnType<typeof loadSentItems>>);
+  // Both reads start before the first await, so the briefing (started right after this, services/callTrigger.ts) finds the
+  // member-knowledge read already registered.
+  // What was sent, with whatever details are on file by the wait (slow page reads never hold the call). One read: the layer's
+  // delivered merge takes the same list (its offers loader is loadSentItems over the same 45 days).
+  const sentItems = import("./turnContext.js").then((T) => T.loadSentItems(userId)).catch(() => [] as SentItem[]);
+  // One member-knowledge read for the whole build (services/memberKnowledge.ts): stamped, member-stripped inside. Restraint (new on
+  // this path) is held to the call's wait like every other slow read.
+  const knowledge = import("./memberKnowledge.js").then((M) => M.memberKnowledge(userId, { include: CALL_KNOWLEDGE, ...CONTEXT_EXCHANGES }, { offers: () => sentItems, restraint: (u, at) => withinWait(M.realKnowledgeDeps.restraint(u, at), "the restraint read") }));
+  callKnowledgeReads.set(userId, { at: Date.now(), k: knowledge });
+  knowledge.catch(() => {});
+  const { fillDetails, sentDetailLines } = await import("./turnContext.js");
   const [p, sent, callRows] = await Promise.all([
-    // One member-knowledge read for the whole build (services/memberKnowledge.ts): stamped, member-stripped inside.
-    loadContextParts(userId, CALL_KNOWLEDGE),
+    loadContextParts(userId, CALL_KNOWLEDGE, {}, knowledge),
     Promise.race([
       sentItems.then(async (items) => {
         await fillDetails(items).catch(() => {});
@@ -571,7 +602,8 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // Their zone (services/memberTime.ts, through the layer), or Pacific: every day and stamp in the briefing is theirs.
   const zone = k.identity.timeZone;
   // Co's own record of what it did (co_facts), for the after-call audit: the layer carries what Co sent, not this ledger.
-  const ledgerLines = import("./coFacts.js").then((F) => F.ledgerFacts(userId, "\n", k.identity.zone)).then((l) => l.lines).catch(() => [] as string[]);
+  // Held to the call's wait: it only feeds the after-call audit.
+  const ledgerLines = withinWait(import("./coFacts.js").then((F) => F.ledgerFacts(userId, "\n", k.identity.zone)), "the ledger read").then((l) => l.lines).catch(() => [] as string[]);
   // Another member's details stripped from every call-only part too
   // (memberSafeMemories.ts; 2026-10-01 call review: these bypassed it). The layer's parts are stripped inside it already; they go
   // through this strip again with the call's own name set (linked members and the names in their last suggestion).
@@ -666,12 +698,23 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
 }
 
 // The summary a call opens with.
+// When nothing about them could be read (the member-knowledge layer rejects when the names to strip can't be read, and the plain
+// summary fails the same way), a call still knows it isn't a first conversation: an empty summary reads as "your first real
+// conversation" in the agent's prompt (services/elevenLabsCalls.ts CALL_CONTEXT_BLOCK), and an existing member got intake (review
+// of #122). No facts in it, so nothing to strip.
+export const CALL_NOTES_UNAVAILABLE = "Your notes on them didn't load for this call. This is not a first conversation: don't introduce yourself or run intake; ask what's on their mind and follow them.";
+
 export async function buildCallContextSummary(userId: string): Promise<string> {
   try {
     return (await buildCallKnowledge(userId)).summary;
   } catch (err: any) {
     console.error("callContext: buildCallContextSummary failed (non-fatal, using the plain summary):", err?.message ?? err);
-    return buildContextSummary(userId);
+    try {
+      return await contextSummary(userId);
+    } catch (err2: any) {
+      console.error("callContext: the plain summary failed too (calling with no notes, not as a first conversation):", err2?.message ?? err2);
+      return CALL_NOTES_UNAVAILABLE;
+    }
   }
 }
 

@@ -38,11 +38,18 @@ export function renderFinds(f: VoiceFinds): string {
 }
 
 export type CallBriefing = { rightNow: string; findsNow: string };
+// How long the briefing waits on the call context's shared read before reading their city itself.
+const SHARED_WAIT_MS = 1000;
 
 // Built while the phone rings (outbound) or alongside the context (inbound). Each part fails to a safe line, never to a guess.
 export async function buildCallBriefing(userId: string, now: Date = new Date()): Promise<CallBriefing> {
-  // Their city from the one member-knowledge layer (services/memberKnowledge.ts): identity only, no sections loaded.
-  const k = await import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { now, include: [] })).catch(() => null);
+  // Their city from the one member-knowledge layer (services/memberKnowledge.ts): the call context's read when it's already under
+  // way (services/callContext.ts, shared for the call's setup) and back within a second, else an identity-only read of its own.
+  const own = () => import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { now, include: [] }));
+  // Wrapped, so awaiting the import doesn't also await the read.
+  const shared = await import("./callContext.js").then((c) => ({ read: c.callKnowledgeInFlight(userId, now.getTime()) })).catch(() => ({ read: null }));
+  const slow = new Promise<"slow">((r) => setTimeout(() => r("slow"), SHARED_WAIT_MS).unref?.());
+  const k = await (shared.read ? Promise.race([shared.read, slow]).then((x) => (x === "slow" ? own() : x)) : own()).catch(() => null);
   const city: string | null = k?.identity.city ?? null;
   const [clock, finds] = await Promise.all([
     timelineFor(userId, city, now).catch(() => null),

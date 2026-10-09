@@ -257,13 +257,27 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
   check("names unreadable: no reason for a Co-started call (fails closed)", held.reason === null && held.considered[0]?.key === "read_failed", held);
   const knowledge = await CC.buildCallKnowledge("u-closed").then(() => "resolved", () => "rejected");
   const summary = await CC.buildCallContextSummary("u-closed");
-  check("names unreadable: the call context rejects, and the summary a call opens with is empty (no member context, nothing unstripped)", knowledge === "rejected" && summary === "" && !summary.includes(secret), summary);
+  check("names unreadable: the call context rejects, and the call opens with no member facts (nothing unstripped)", knowledge === "rejected" && summary === CC.CALL_NOTES_UNAVAILABLE && !summary.includes(secret), summary);
+  // Review of #122: "" reads as "your first real conversation" in the agent's prompt, so an existing member calling in got intake.
+  const E = await import("../../src/services/elevenLabsCalls.js");
+  check("...and never as a first conversation: the summary isn't empty and says not to run intake", summary.trim().length > 0 && /If that's empty, this is your first real conversation/.test(E.CALL_CONTEXT_BLOCK) && /not a first conversation/.test(summary) && /don't introduce yourself or run intake/.test(summary));
   const plain = await CC.buildContextSummary("u-closed");
   check("names unreadable: the text reply's summary is empty too", plain === "");
   const member = await CT.loadMemberOnCall("u-closed");
   check("names unreadable: the call tools get the member but no tasks or loops", member.firstName === "Jordan" && member.tasks.length === 0 && member.loops === null && member.city === null);
   const briefing = await B.buildCallBriefing("u-closed", NOW).catch(() => null);
   check("names unreadable: the briefing still builds (no city)", !!briefing && !briefing.rightNow.includes(secret));
+  (pool as any).query = real;
+  // One read per call setup: the briefing takes their city from the call context's read when it's under way.
+  tables = { "LEFT JOIN co_profiles": [{ first_name: "Jordan", city: "Oakland", goals: null, intent: null, updated_at: NOW }] };
+  const seen: string[] = [];
+  (pool as any).query = async (text: string, args?: unknown[]) => { seen.push(text.replace(/\s+/g, " ")); return real(text, args); };
+  const built = CC.buildCallKnowledge("u-share").catch(() => null);
+  const shared = CC.callKnowledgeInFlight("u-share");
+  const brief = await B.buildCallBriefing("u-share", NOW).catch(() => null);
+  await built;
+  const profileReads = seen.filter((t) => /FROM users u LEFT JOIN co_profiles/.test(t)).length;
+  check("the briefing reuses the call context's member-knowledge read (one layer read per setup)", !!shared && profileReads === 1 && !!brief, { profileReads, shared: !!shared });
   (pool as any).query = real;
   tables = {};
 }

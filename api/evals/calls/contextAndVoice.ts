@@ -102,7 +102,7 @@ const day = () => "Oct 8";
   const prompt = E.promptForElevenLabs("You are Co.");
   const rules = MK.memberRules(k);
   check("the agent's prompt carries the same shared rules memberRules returns (discretion, grounding, member safety), not copies", prompt.includes(rules.discretion) && prompt.includes(rules.grounding) && prompt.includes(rules.memberSafety));
-  check("the builder reads the layer once and keeps the call-only parts (last calls, threads, capacity, finds)", /loadContextParts\(userId, CALL_KNOWLEDGE\)/.test(src("services/callContext.ts")) && !/assembleContext\(/.test(src("services/callContext.ts")) && !/FROM document_deliveries|pgReceipts|memory_type = 'promise_result'/.test(src("services/callContext.ts")) && /k\.carrying\.filter\(\(c\) => c\.ref\?\.startsWith\("task #"\)\)/.test(src("services/callContext.ts")));
+  check("the builder reads the layer once and keeps the call-only parts (last calls, threads, capacity, finds)", /loadContextParts\(userId, CALL_KNOWLEDGE, \{\}, knowledge\)/.test(src("services/callContext.ts")) && /offers: \(\) => sentItems/.test(src("services/callContext.ts")) && !/assembleContext\(/.test(src("services/callContext.ts")) && !/FROM document_deliveries|pgReceipts|memory_type = 'promise_result'/.test(src("services/callContext.ts")) && /k\.carrying\.filter\(\(c\) => c\.ref\?\.startsWith\("task #"\)\)/.test(src("services/callContext.ts")));
 }
 
 // ---- 2. the voice-only endpoint
