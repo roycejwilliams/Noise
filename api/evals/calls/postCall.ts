@@ -127,7 +127,10 @@ user: Thanks.`;
   const again = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you what I put together for the post-event plan.", theirLine: ASK, now: new Date("2026-10-08T00:29:30Z") }, cdeps);
   check("the same commitment said again on the call opens no second task", !again.ok && started.length === 0 && cnotes[0]?.id === 111, { again, cnotes });
   const fresh = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you those venue links right after we hang up.", theirLine: "can you send the venue links", now: new Date("2026-10-08T00:29:30Z") }, cdeps);
-  check("a different commitment on the same call still opens its own", fresh.ok && started.length === 1);
+  // Royce, 2026-10-08 (his real call: two sends opened two tasks and two "nothing yet" texts): one call's sends are one delivery.
+  check("a different send on the same call rides the same task, noted to go in the same message", !fresh.ok && started.length === 0 && cnotes.some((n) => n.id === 111 && /Also said on the call: "I'll text you those venue links/.test(n.t) && /same message/.test(n.t)), { fresh, cnotes });
+  const nextDay = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you those venue links right after we hang up.", theirLine: "can you send the venue links", now: new Date("2026-10-09T09:00:00Z") }, cdeps);
+  check("a send on a later call still opens its own task", nextDay.ok && started.length === 1, nextDay);
   // the audit's promises: five ways of saying one thing become one, carried by the live task
   const claims: any[] = [
     { quote: "Yes, I can take that on. When we hang up, I'll set up a task to draft a planning doc.", type: "promise_keepable", what: "draft a post-event branding/presence planning doc" },

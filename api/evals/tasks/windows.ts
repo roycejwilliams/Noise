@@ -147,44 +147,41 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   const t = baseTask();
   const r = await TT.runTaskTurnWith(t, deps);
   check("the turn ran as scripted: searched, found nothing, scheduled 3h out", r.did.some((d) => d.startsWith("search:")) && log.scheduled[0] === 3, r.did);
-  check("an empty result is a result: the early warning went out, once", log.warns.length === 1, log.warns);
-  check("...before the window passed (now is before the warn-by and the deadline)", log.warns[0] && log.warns[0].at.getTime() <= new Date(t.window.warnBy).getTime() && log.warns[0].at.getTime() < new Date(t.window.deadline).getTime());
-  check("...inside their hours (7:30pm SF)", local(log.warns[0]?.at ?? new Date(0)) === "10/07, 19:30");
-  check("...saying what's missing and the new time in their words", /private dining rooms/.test(log.warns[0]?.text ?? "") && /in the morning/.test(log.warns[0]?.text ?? ""), log.warns[0]?.text);
-  check("...keyed to this window (once per missed window)", log.warns[0]?.key === `task:501:window:${t.window.deadline}`);
+  // Royce, 2026-10-08 evening: progress reports are forbidden, the window warning included. Silence until there's something real.
+  check("an empty result sends nothing: no \"not yet\" warning", log.warns.length === 0 && log.texts.length === 0, log.warns);
   const nw = log.windows[0];
-  check("the window moves to the new time (by noon tomorrow, their time) and remembers it was warned", nw && local(nw.deadline) === "10/08, 12:00" && nw.words === "in the morning" && nw.warnedFor.includes(t.window.deadline), nw);
+  check("the window moves quietly to the new time (by noon tomorrow, their time)", nw && local(nw.deadline) === "10/08, 12:00" && nw.words === "in the morning", nw);
   check("the next check moves to 8am their time, when the deliverable can go out", log.at.length === 1 && local(log.at[0]) === "10/08, 08:00", log.at.map((d) => local(d)));
-  check("the turn returns the warning it sent", r.warning === log.warns[0]?.text);
+  check("the turn returns no warning", !r.warning);
   check("no other text went out", log.texts.length === 0);
 
   // The same window again (a second wake for it): never warned twice.
   script.push({ text: "Nothing yet." });
   const h2 = harness(new Date(NOW.getTime() + 5 * 60_000));
   await TT.runTaskTurnWith(baseTask({ window: { ...t.window, warnedFor: [t.window.deadline] } }), h2.deps);
-  check("only once: a window already warned for isn't warned again", h2.log.warns.length === 0);
+  check("a second wake sends nothing either", h2.log.warns.length === 0 && h2.log.texts.length === 0);
   // They replied at 9pm, so the task woke before its new morning window: held to the morning, not a second warning.
   script.push({ text: "Nothing yet." });
   const h3 = harness(new Date("2026-10-08T04:00:00Z"));
   await TT.runTaskTurnWith(baseTask({ window: nw }), h3.deps);
-  check("a wake before the new window opens is held to its start (8am), no second warning", h3.log.warns.length === 0 && h3.log.at.length === 1 && local(h3.log.at[0]) === "10/08, 08:00", h3.log);
+  check("a wake before the new window opens sends nothing", h3.log.warns.length === 0 && h3.log.texts.length === 0, h3.log);
   // The warn-by passed with the process down: past 9pm nothing is sent; the check moves to their morning, which warns then.
   script.push({ text: "Nothing yet." });
   const h4 = harness(new Date("2026-10-08T04:30:00Z")); // 9:30pm SF
   await TT.runTaskTurnWith(baseTask(), h4.deps);
-  check("past 9pm with the window missed: nothing sent at night, the next check moves to 8am", h4.log.warns.length === 0 && h4.log.at.length === 1 && local(h4.log.at[0]) === "10/08, 08:00", h4.log);
+  check("past 9pm with the window missed: nothing sent, the next check moves to 8am", h4.log.warns.length === 0 && h4.log.texts.length === 0 && h4.log.at.length === 1 && local(h4.log.at[0]) === "10/08, 08:00", h4.log);
   // A bad draft twice: the plain fallback still goes, rather than silence.
   script.push({ text: "Nothing yet." });
   const h5 = harness(NOW, { draft: async () => "Still digging on this, have a few leads. Working on it!" });
   await TT.runTaskTurnWith(baseTask(), h5.deps);
-  check("two drafts that narrate: the plain fallback goes instead, never silence", h5.log.warns.length === 1 && h5.log.warns[0].text === "No luck on the options yet, I'll have them for you in the morning.", h5.log.warns);
+  check("no warning draft is ever sent, however it reads", h5.log.warns.length === 0 && h5.log.texts.length === 0, h5.log.warns);
   // Co told them itself this turn (tellThem), and its next look is past the window: no second line, the window moves, marked told.
   script.length = 0;
   script.push({ tool: "tellThem", input: { what: "Nothing verified on the rooms yet; they'll have them in the morning" } }, { text: "No luck on the rooms yet, you'll have them in the morning." }, { tool: "scheduleNext", input: { inHours: 13, plan: "Search again" } });
   const h7 = harness(NOW);
   await TT.runTaskTurnWith(baseTask(), h7.deps);
   script.length = 0;
-  check("Co's own text this turn counts as telling them: no second warning, and the window moves, marked told", h7.log.texts.length === 1 && h7.log.warns.length === 0 && h7.log.windows.length === 1 && h7.log.windows[0].warnedFor.length === 1, { texts: h7.log.texts, windows: h7.log.windows });
+  check("Co's own \"no luck yet\" text is refused too: a progress report never goes", h7.log.texts.length === 0 && h7.log.warns.length === 0, { texts: h7.log.texts, windows: h7.log.windows });
   // A next check inside the window: no warning.
   script.push({ tool: "scheduleNext", input: { inHours: 1, plan: "Check again" } });
   const h6 = harness(new Date("2026-10-07T20:00:00Z")); // 1pm SF, window tonight
@@ -193,6 +190,26 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   check("the prompt shows Co the time in their zone and its window, not UTC", (() => { const p = JSON.stringify(seen[0] ?? {}); return /Now, their time: Wed Oct 7, 7:30pm PDT/.test(p) && /Co told them they'd have it tonight/.test(p); })());
   check("the warning is its own exempt type, through sendExempt with quiet hours", /type: "task_window", targetKey: key, messages: \[text\], timezone: zone, respectHours: true/.test(src("services/taskTurn.ts")));
   check("a warning never counts as the promise kept", /ps\.type IN \('call_confirm', 'task_window'\)/.test(src("services/followThrough.ts")) && /ps\.type IN \('call_confirm', 'task_window'\)/.test(src("services/callCommitments.ts")));
+}
+
+// ======================================================================= 3b. the delivery is never held back by the update cap
+{
+  // Royce's call, 2026-10-08: the run link was found and ready, and "already sent them two task updates today" held it back. A
+  // promise's first text is the delivery, not an update.
+  const RUN = { name: "Builders who Run, Golden Gate Bridge 4M", url: "https://lu.ma/run-test", date: "2026-10-10", details: ["time: 9:00 AM", "address: Golden Gate Bridge"], tier: 2 };
+  script.length = 0;
+  script.push(
+    { tool: "search", input: { what: "founder run club", when: "this weekend" } },
+    { tool: "tellThem", input: { what: "Here's the founder run this Saturday at the Golden Gate Bridge" } },
+    { text: "Here's the founder run, Builders who Run, this Saturday at the Golden Gate Bridge." },
+    { tool: "finish", input: { status: "done", outcome: "sent the run" } },
+  );
+  const h = harness(NOW);
+  h.deps.textsToday = async () => 2;
+  h.deps.search = async () => [RUN];
+  const r = await TT.runTaskTurnWith(baseTask({ goal: "Keep your word from the call: \"I'll send that over now.\"", theirWords: "Yeah, that would be perfect." }), h.deps);
+  script.length = 0;
+  check(`the promised delivery goes out with two task updates already sent today (${JSON.stringify(h.log.texts)})`, h.log.texts.length === 1 && /Builders who Run/.test(h.log.texts[0]) && !h.log.warns.length, { did: r.did, texts: h.log.texts });
 }
 
 // ======================================================================= 4. completion closes the loop

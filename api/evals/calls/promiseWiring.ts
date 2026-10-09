@@ -28,5 +28,13 @@ const task = "Find and compare caterer and photographer options for the November
 check("the same subject in other words is the one commitment (caterer + photographer)", G.sameSubject("Look for a caterer who serves a meal rather than a spread, and a photographer who blends in", task));
 check("a different look-out on the same call stays its own (press before the open house)", !G.sameSubject("Keep an eye out for press or people worth pointing out before the November open house", task));
 
+const TT = await import("../../src/services/taskTurn.js");
+const nothingYet = ["No luck yet on what I promised for this afternoon, I'll have it for you tomorrow morning.", "Nothing solid for this weekend yet. I'll have it for you tomorrow morning.", "Still digging on this, will have it later."];
+const real = ["Here's the founder run this Saturday at 9am at the Golden Gate Bridge: lu.ma/x", "Two caterers that fit, both in Nopa."];
+check("the two texts from Royce's call (and their kind) are progress reports, refused as task texts", nothingYet.every((t) => TT.NOTHING_YET.test(t)));
+check("a real delivery isn't mistaken for one", real.every((t) => !TT.NOTHING_YET.test(t)));
+const CO = await import("../../src/services/coTasks.js");
+check("a promise's first text is its delivery, past the daily cap on updates", CO.mayText({ lastTextedAt: null, source: "promise" } as any, 2, new Date()).ok && !CO.mayText({ lastTextedAt: null, source: "ask" } as any, 2, new Date()).ok);
+
 console.log(`promise wiring: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

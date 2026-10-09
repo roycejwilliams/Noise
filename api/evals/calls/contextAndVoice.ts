@@ -192,6 +192,24 @@ const day = () => "Oct 8";
       check(`a same-day promise the receipt covers collapses with a "${label}" label`, r.open.length === 0, r);
     }
   }
+  {
+    // Royce's call, 2026-10-08: "Done, I'll send that over now." and nothing went out. Nothing is sent on a call.
+    const done = await run("Done, I'll send that over now. That one feels right for where you're at.");
+    check(`a leading "Done," is taken off; the promise stays ("${done}")`, /^I'll send that over now\./.test(done) && !/\bDone\b/.test(done));
+    const sent = await run("I just sent it to you. It's the run on Saturday.");
+    check(`a sentence claiming a send is dropped ("${sent}")`, !/sent it/.test(sent) && /run on Saturday/.test(sent));
+    const truth = await run("I'll text it to you right after we hang up.");
+    check("the truth (after we hang up) stays", /right after we hang up/.test(truth));
+    const { countsAsQuestion, insistsAfterPushback } = P as any;
+    check("a short real question counts as the turn's one; an interjection or echo doesn't", countsAsQuestion("What changed?") && countsAsQuestion("Why not?") && countsAsQuestion("Did you?") && !countsAsQuestion("Honestly?") && !countsAsQuestion("Right?") && !countsAsQuestion("The dinner?"));
+    const twoShort = await run("That's a big send. What changed? Did something just feel different or did you figure out a move?");
+    check(`"What changed?" then another question: the second is dropped ("${twoShort}")`, /What changed\?$/.test(twoShort));
+    check("after they say they didn't say it, Co never insists they did", insistsAfterPushback("Um, actually I don't think I mentioned the dinner party thing", "You did actually say that, back when we talked through the open house plan.") && !insistsAfterPushback("yeah that's right", "You did actually say that."));
+    const pushed = { ...body, messages: [{ role: "system", content: "You are Co." }, { role: "user", content: "I don't think I mentioned the dinner party thing, but yeah." }] };
+    let said = "";
+    for await (const c of P.runCallLlm(pushed, { stream: spy(text("You did actually say that, back when we talked. Intimate it is, then.")), voiceOnly: true })) said += (c.choices[0].delta as any).content ?? "";
+    check(`the insisting sentence is dropped, the rest is said ("${said.trim()}")`, !/You did/.test(said) && /Intimate it is/.test(said));
+  }
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));
   check("voice-only: no tools and no turn notes are added to the request", (seenReq?.tools ?? []).every((t: any) => t.name === "end_call") && !/This turn: they told you how they are/.test(JSON.stringify(seenReq?.system ?? "")));

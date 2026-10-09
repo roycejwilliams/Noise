@@ -53,7 +53,7 @@ export type CallTaskDeps = {
   alreadyDone: (userId: string, key: string) => Promise<boolean>;
   record: (userId: string, key: string, content: string) => Promise<void>;
   // Open tasks from this call already (a promise Co made live opens one the moment it's said), and a note on one.
-  existing?: (userId: string) => Promise<{ id: number; goal: string; theirWords: string }[]>;
+  existing?: (userId: string) => Promise<{ id: number; goal: string; theirWords: string; notes?: { text: string }[] }[]>;
   note?: (userId: string, taskId: number, text: string) => Promise<unknown>;
 };
 
@@ -91,7 +91,10 @@ export async function tasksFromCall(userId: string, transcript: string, deps: Ca
     for (const a of asks) {
       // The same commitment as a task already open from this call (Co promised it live, in answer to these words): that task
       // carries it, with their ask written on it, instead of a second task for the same thing (2026-10-08: tasks 111 and 114).
-      const same = open.find((t) => sameCallCommitment({ goal: a.goal, theirWords: a.quote }, t));
+      // Or a send from this call that already answers these same words of theirs (noted on it when Co said it): one delivery
+      // (Royce's call, 2026-10-08: "whatever you could really find, just send it my way" was a send Co had already promised).
+      const quoteKey = a.quote.trim().toLowerCase().slice(0, 60);
+      const same = open.find((t) => sameCallCommitment({ goal: a.goal, theirWords: a.quote }, t) || (quoteKey.length >= 20 && [t.theirWords, ...(t.notes ?? []).map((n) => n.text)].some((x) => String(x ?? "").toLowerCase().includes(quoteKey))));
       if (same) {
         await deps.note?.(userId, same.id, `They asked for this on the call: "${a.goal}" (their words: "${a.quote.slice(0, 160)}"). This task carries it.`)?.catch(() => null);
         started.push(a.goal);

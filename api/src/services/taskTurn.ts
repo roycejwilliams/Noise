@@ -168,6 +168,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (docsSent.length) return { ok: false, error: "The document already went out with its one line. Don't text about it: finish the task, or note anything else for later." };
         // Outside their hours nothing is held in memory to send later: Co waits for their morning.
         if (!localHourOk(deps.now(), deps.zone)) return { ok: false, error: "It's outside their hours (8am to 9pm their time). Note what you'd tell them and schedule your next look for their morning." };
+        // A "nothing yet" text is a progress report, and progress reports never go (Royce, 2026-10-08): silence until there's
+        // something real. Only the last check before their own deadline may say plainly that nothing turned up.
+        if (!final && NOTHING_YET.test(what)) return { ok: false, error: "Not sent: that's a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
         const allowed = mayText(task, await deps.textsToday(), deps.now());
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
         const known = (links ?? []).filter(linkOk);
@@ -247,6 +250,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!places.ok) return { ok: false, error: `The draft named places no verified fact backs (${places.missing.join(", ")}). Tell them only verified facts.` };
         const offer = text.match(OFFERS_WHAT_CO_CANT);
         if (offer) return { ok: false, error: `The draft offered something Co can't do ("${offer[0]}"): Co can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
+        if (!final && NOTHING_YET.test(text)) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
         const sent = await deps.send([text]);
         if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await deps.markTexted();
@@ -416,13 +420,20 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     await deps.setWindow?.(re.window);
     did.push(`window: told in the turn's own text; moved to ${re.when}`);
   }
-  if (decided !== "finished" && !texts.length && !docsSent.length && task.window && !task.window.closedAt) {
-    const w = await warnIfWindowMissed(task, task.window, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps);
-    if (w.sent) warning = w.text ?? null;
-    if (w.what) did.push(w.what);
+  // No "not yet" text when the window will be missed (Royce, 2026-10-08: progress reports are forbidden; silence until there's
+  // something real, then one message). The window moves quietly to the next check, and the delivery, when it lands, says what
+  // they asked for and when (services/speakable.ts deliveryLine).
+  if (decided !== "finished" && !texts.length && !docsSent.length && task.window && !task.window.closedAt && missesWindow(task.window, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now())) {
+    const re = rescheduledWindow(nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now(), deps.zone, task.window);
+    await deps.setWindow?.(re.window);
+    if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `You told them ${task.window.words}; it moves to ${re.when}. Do the work and send it then: one message with the thing itself.`);
+    did.push(`window: moved quietly to ${re.when}, no "not yet" text`);
   }
   return { action: decided ?? "defaulted_24h", did, texts, final, warning };
 }
+
+// A text that only says the thing isn't there yet (2026-10-08, Royce's call: "No luck yet...", "Nothing solid for this weekend yet").
+export const NOTHING_YET = /\b(?:no luck|nothing (?:yet|solid|real|verified|good|worth)|not (?:yet|ready|there yet|done yet)|no (?:details|results|news|update) yet|still (?:looking|working|digging|searching|on it)|haven'?t (?:found|got|heard) (?:anything|it|them) yet|(?:i'?ll|you'?ll) have (?:it|them) (?:for you )?(?:by )?(?:tomorrow|in the morning|tonight|later))\b/i;
 
 // ---------------------------------------------------------------- the miss warning
 

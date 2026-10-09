@@ -167,9 +167,13 @@ export function isFinalCheck(t: Partial<Pick<CoTask, "finalCheckAt" | "finalTold
 }
 
 // May a task text go out now? One per task per 20 hours, two task texts per member a day.
-export function mayText(t: Pick<CoTask, "lastTextedAt"> & Partial<Pick<CoTask, "theirReplyAt" | "finalCheckAt" | "finalTold">>, memberTaskTextsToday: number, now: Date): { ok: boolean; why: string | null } {
+export function mayText(t: Pick<CoTask, "lastTextedAt"> & Partial<Pick<CoTask, "theirReplyAt" | "finalCheckAt" | "finalTold" | "source">>, memberTaskTextsToday: number, now: Date): { ok: boolean; why: string | null } {
   // The last check before their deadline always gets to tell them where it stands.
   if (isFinalCheck(t, now)) return { ok: true, why: null };
+  // The first text of a promise is the thing Co said it would send: the delivery, not an update, so the daily cap on updates
+  // never holds it back (2026-10-08, Royce's call: the run link and shortlist were ready and blocked by "two task updates today",
+  // and a "nothing yet" warning went out instead).
+  if (t.source === "promise" && !t.lastTextedAt) return { ok: true, why: null };
   // They answered the last task text: it's a conversation, the 20-hour gap doesn't apply.
   const theyReplied = !!t.theirReplyAt && (!t.lastTextedAt || new Date(t.theirReplyAt).getTime() > new Date(t.lastTextedAt).getTime());
   if (!theyReplied && t.lastTextedAt && now.getTime() - new Date(t.lastTextedAt).getTime() < TASK_LIMITS.textGapHours * HOUR) return { ok: false, why: "already texted them about this task in the last 20 hours" };
