@@ -460,6 +460,10 @@ export function deliveryLine(o: { title: string; kind?: string | null; askedAt?:
   return `Here's the ${what} you asked for ${askedWhenWords(o.askedAt, o.sendAt, o.zone)}.`;
 }
 
+// The two rules above as the words a prompt carries (2026-10-09, services/memberKnowledge.ts memberRules): one text, read by every
+// path that delivers, so a change here changes all of them. ACK_FRESH_MS is the same number the code checks against.
+export const DELIVERY_SHAPE_RULE = `Delivering something: an acknowledgment opener ("Got it", "On it") only while the ask is under ${Math.round(ACK_FRESH_MS / 60_000)} minutes old. Anything delivered later leads with the thing and when they asked for it ("Here's the plan you asked for last night"). One delivery, one line: a document is the attachment plus one sentence, and nothing else says the same thing again.`;
+
 // Pure: what breaks the delivery shape in a text sent at sendAt for an ask made at askedAt.
 export function deliveryShapeProblems(text: string, o: { askedAt: Date; sendAt: Date }): string[] {
   const out: string[] = [];

@@ -26,6 +26,7 @@
     "evals/llmUsage/rules.ts",
     "evals/silence/rules.ts",
     "evals/corrections/rules.ts",
+    "evals/member/knowledge.ts",
     "evals/presence/rules.ts",
     "evals/outsideEvents/rules.ts",
     "evals/texting/rules.ts",
