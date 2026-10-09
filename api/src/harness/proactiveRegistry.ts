@@ -102,10 +102,29 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   const onlyAboutASend = !p.eventApiId && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
   if (onlyAboutASend && !sent) return skip("no record of Co sending it to them");
   const people = await peopleCoPointedTo(c.userId, p.eventApiId);
-  return draftDebriefText(firstName, p, people, sent, date);
+  // Did they go? Only a check-in, a walk-in, or their own words say so (Royce, 2026-10-09: "How was the Claude Founder Salon?"
+  // went to someone Co had only recommended it to; "I never confirmed I was going to those").
+  const theirs = await pool
+    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User%' AND created_at > NOW() - INTERVAL '30 days' ORDER BY created_at DESC LIMIT 200`, [c.userId])
+    .then((r) => r.rows.map((x: any) => String(x.content)))
+    .catch(() => [] as string[]);
+  return draftDebriefText(firstName, p, people, sent, date, attendanceConfirmed(p, theirs));
 }
 
-export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null): Promise<DraftResult> {
+// Pure: whether the record says they went (or meant to): checked in at the door, a walk-in, or their own words naming it with
+// going, RSVP or having been there. Co recommending it is never that.
+const GOING = /\b(?:i'?m going|i'?ll (?:go|be there)|going to|gonna go|rsvp'?d|registered|signed up|got (?:a )?tickets?|i went|we went|was there|made it|heading to|see you at)\b/i;
+export function attendanceConfirmed(p: Pick<DebriefPayload, "eventName" | "checkinFollowupIds" | "walkinCheckinIds">, theirLines: string[]): boolean {
+  if ((p.checkinFollowupIds ?? []).length || (p.walkinCheckinIds ?? []).length) return true;
+  const words = p.eventName.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length > 3 && !["event", "with", "night", "party", "2026"].includes(w));
+  const key = words.slice(0, 3);
+  if (!key.length) return false;
+  return theirLines.some((l) => { const t = l.toLowerCase(); return key.filter((w) => t.includes(w)).length >= Math.min(2, key.length) && GOING.test(l); });
+}
+// A line that takes for granted they went ("How was…", "anyone stood out", "who did you meet").
+export const PRESUMES_THEY_WENT = /\bhow (?:was|did|'d)\b|\b(?:anyone|anything|who) stood out\b|\bwho did you (?:meet|talk|end up)\b|\bdid you (?:meet|enjoy|have fun)\b|\bwhat did you think of\b/i;
+
+export async function draftDebriefText(firstName: string, p: DebriefPayload, people: string[], sent: SentRecord | null = null, date: string | null = null, went = true): Promise<DraftResult> {
   const walkin = (p.walkinCheckinIds ?? []).length > 0;
   // A Tier 3 opportunity (accelerator, investor, mentor — see
   // tieredRecommendation.ts's category) has no eventApiId (it's not a real
@@ -127,11 +146,15 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
       what_they_were_looking_for: p.askText,
       they_checked_in_at_the_door: walkin ? "yes, and Co doesn't know them well yet" : null,
     },
-    task: isOpportunity
+    task: !went && !isOpportunity
+      ? `Co only suggested "${p.eventName}" to them; nothing says they went. Ask, lightly, whether they ended up making it, naming it. Never assume they went: no "how was it", no "who did you meet". One easy question, no pressure either way.`
+      : isOpportunity
       ? `Ask if they got a chance to look into or apply to "${p.eventName}" (a real opportunity Co pointed them to on the date above, not an event) — did anything come of it. If what Co said about it shows it's still ahead of today, SKIP. One text, not a survey.`
       : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Co pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
   });
   if (!text) return skip("model chose SKIP");
+  // Code backstop: an unconfirmed debrief never takes for granted that they went.
+  if (!went && !isOpportunity && PRESUMES_THEY_WENT.test(text)) return skip("it assumes they went, and nothing says they did");
   return {
     messages: [text],
     text,

@@ -467,6 +467,22 @@ export function spacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck
   };
 }
 
+// The gates a Co-initiated exempt text waits on (sendExempt coInitiated, issue #126): spacing from any text Co sent first,
+// the engagement pace, the unanswered pause, and the backoff for its kind. Not the daily/weekly caps: those are the offer
+// lanes' quota, and a task text was never counted in them. Quiet hours are checked by the caller (respectHours).
+const CO_INITIATED_GATES = new Set(["spacing", "engagement_pace", "unanswered_pause"]);
+export function coInitiatedChecks(state: Omit<PickState, "candidates">, kind: ProactiveKind | null): GateCheck[] {
+  const checks = userLevelChecks(state, { lane: "other", skipHours: true }).filter((c) => CO_INITIATED_GATES.has(c.name));
+  if (kind) checks.push({ name: "kind_restraint", pass: !state.suppressedKinds?.includes(kind), reason: `they keep letting ${kind} texts pass` });
+  return checks;
+}
+// When a held Co-initiated text is worth another look: once spacing from the last text clears, at least an hour out.
+export function coInitiatedRetryAt(state: Pick<PickState, "now" | "sends">): Date {
+  const last = state.sends.filter((s) => spaces(s) && s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  const spaced = last ? last.sentAt.getTime() + RULES.minHoursBetweenTexts * HOUR : 0;
+  return new Date(Math.max(spaced, state.now.getTime() + HOUR));
+}
+
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
 export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds">, opts: { answering?: boolean } = {}): GateCheck[] {
@@ -1384,7 +1400,11 @@ export async function sendExempt(opts: {
   replyTo?: string | null;
   // The moment the hours check reads (a turn run on a pinned clock passes its own); the real time otherwise.
   now?: Date;
-}): Promise<{ sent: boolean; reason?: string; delivered?: string[] }> {
+  // A text Co starts itself (a task update, a window warning), not one the member is owed: it waits on the same spacing, pace,
+  // unanswered pause and kind backoff as every other text Co sends first (issue #126; Royce, 2026-10-09: an 11:30 task update
+  // went out 15 minutes after another text). `kind` is the restraint kind it counts as, when it has one.
+  coInitiated?: { kind: ProactiveKind | null };
+}): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date }> {
   if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
@@ -1412,11 +1432,29 @@ export async function sendExempt(opts: {
       await record("skip", "blocked_opted_out", "opted out");
       return { sent: false, reason: "opted out" };
     }
+    if (opts.coInitiated) {
+      const now = opts.now ?? new Date();
+      // Read inside the lock, like sendWithLedger: a text that just went is seen. A restraint read that fails holds the text
+      // (retried at retryAt) rather than sending past a backoff it couldn't read.
+      const sends = await loadSends(client, opts.userId);
+      const lastInboundAt = await loadLastInbound(client, opts.userId);
+      const suppressed = await loadKindRestraint(client, opts.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => null);
+      const failed = suppressed
+        ? coInitiatedChecks({ now, timezone: opts.timezone ?? null, optedOut: false, sends, lastInboundAt, suppressedKinds: suppressed }, opts.coInitiated.kind).filter((c) => !c.pass)
+        : [{ name: "kind_restraint", pass: false, reason: "couldn't read their backoff" }];
+      if (failed.length) {
+        await client.query("ROLLBACK");
+        const reason = failed.map((c) => c.reason ?? c.name).join("; ");
+        await record("skip", "held_co_initiated", reason);
+        return { sent: false, reason: `held: ${reason}`, retryAt: coInitiatedRetryAt({ now, sends }) };
+      }
+    }
+    // The kind goes on the ledger for a Co-initiated text too, so restraint learns from it (services/kindRestraint.ts).
     const ins = await client.query(
-      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt)
-       VALUES ($1, $2, $3, $3, $4, true)
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind)
+       VALUES ($1, $2, $3, $3, $4, true, $5)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [opts.userId, opts.type, opts.targetKey, opts.messages.join("\n\n")],
+      [opts.userId, opts.type, opts.targetKey, opts.messages.join("\n\n"), opts.coInitiated?.kind ?? null],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");

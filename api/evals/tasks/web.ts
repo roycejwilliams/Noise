@@ -105,7 +105,7 @@ check("an offer to call, book or contact anyone is caught", ["Want me to call an
   check("one thing: its link, then its caption, no heads-up", JSON.stringify(M.assembleMessages([{ url: "https://x.example", caption: "It fits." }], null)) === JSON.stringify(["https://x.example", "It fits."]));
   check("a caption can only use its own item's verified facts", !M.captionOk("Seats 80 in SoMa, from $900.", "The Loft capacity: seated 60 price: from $1,200").ok && M.captionOk("Seats 60, from $1,200.", "The Loft capacity: seated 60 price: from $1,200").ok);
   const tt3 = (await import("node:fs")).readFileSync(new URL("../../src/services/taskTurn.ts", import.meta.url), "utf8");
-  check("a task text with links goes out link-then-caption, never links trailing a paragraph", /const messages = assembleMessages\(good, closing\)/.test(tt3) && /await deps\.send\(\[text\]\)/.test(tt3) && !/deps\.send\(\[text, \.\.\.known\]\)/.test(tt3));
+  check("a task text with links goes out link-then-caption, never links trailing a paragraph", /const messages = assembleMessages\(good, closing\)/.test(tt3) && /await deps\.send\(\[text\](?:, \{ owed \})?\)/.test(tt3) && !/deps\.send\(\[text, \.\.\.known\]\)/.test(tt3));
 }
 
 // 5. Names with the search model's qualifiers (2026-10-07 live brief: "Beretta Mission (Private Dining Room)" dropped)

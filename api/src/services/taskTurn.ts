@@ -50,7 +50,9 @@ export type TaskTurnDeps = {
   schedule: (inHours: number, plan: string) => Promise<string | null>;
   close: (status: "done" | "dropped" | "expired", outcome: string) => Promise<void>;
   textsToday: () => Promise<number>;
-  send: (messages: string[]) => Promise<{ sent: boolean; reason?: string }>;
+  // owed: a text the member is owed (owedText) goes out exempt; any other waits on the pacing every Co-started text does, and a
+  // held one says when it's worth another look (retryAt).
+  send: (messages: string[], o?: { owed: boolean }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date }>;
   markTexted: () => Promise<void>;
   markFinalTold: () => Promise<void>;
   search: (what: string, when?: string | null) => Promise<{ name: string; url: string | null; date: string | null; tier?: number; details?: string[] }[]>;
@@ -136,8 +138,8 @@ export function taskKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying" 
 }
 
 // Pure: the member-level rules a task turn reads with (services/memberKnowledge.ts memberRules: the shared constants, plus
-// restraint and quiet hours read from their state). Task texts go through sendExempt, which doesn't apply kind restraint: the
-// turn knows the state here; the send gating is unchanged.
+// restraint and quiet hours read from their state). The send gating is sendExempt's: a text they're owed goes exempt, any other
+// waits on spacing, pace and kind backoff (owedText, issue #126).
 // The restraint a task reads leaves out what belongs to Co's own unprompted sends, not to them: space_until is set exactly when
 // Co hands work to a task (harness/proactive.ts payload first), hold_until only when the daily pick picks nothing, and the
 // unanswered count is the proactive lanes' pause. Read here, any of them would tell the task to hold the very result it owes.
@@ -264,8 +266,13 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         // Never a failure nobody checked (Royce, 2026-10-09: "the link wasn't working" was invented): leave it off and say nothing.
         if (inventedFailure(what)) return { ok: false, error: "Not sent: it says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
         if (namesRejected(what)) return { ok: false, error: "Not sent: it names something Co's daily pick rejected for them. Leave it off." };
-        const allowed = mayText(texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task, await deps.textsToday(), deps.now());
+        const asOfNow = texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task;
+        const allowed = mayText(asOfNow, await deps.textsToday(), deps.now());
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
+        if (CHASE.test(what)) return { ok: false, error: "Not sent: that chases them for an answer. Wait for them; their reply wakes this task." };
+        const owed = owedText(asOfNow, deps.now());
+        const held = (r: { reason?: string; retryAt?: Date }) =>
+          `Held, not sent: ${r.reason ?? "pacing"}. This is Co starting a text, so it waits like every other one.${r.retryAt ? ` Your next look is set for ${r.retryAt.toISOString()}.` : ""} Note it; send the same thing then if it still holds.`;
         const known = (links ?? []).filter(linkOk);
         // Only verified fields: web results that proved themselves, events from Co's
         // own gated search, and fields the page reader verified. Never raw page text.
@@ -300,6 +307,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           }
           if (!good.length) return { ok: false, error: `No caption held up (${droppedCaptions.join("; ")}). Note it and schedule the next look.` };
           let closing = drafted.closing;
+          if (closing && !owed && chases(closing, asOfNow)) closing = null;
           if (closing) {
             const allFacts = Object.values(facts).join(" ");
             const bad = checkDraft(closing, { maxSentences: 2, maxChars: 280 }).some((c) => !c.pass) || !numbersBacked(closing, allFacts).ok || !placesBacked(closing, allFacts).ok || OFFERS_WHAT_CO_CANT.test(closing);
@@ -308,8 +316,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           const messages = assembleMessages(good, closing);
           const whole = await wholeDelivery(messages);
           if (whole) return { ok: false, error: whole };
-          const sent = await deps.send(messages);
-          if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
+          const sent = await deps.send(messages, { owed });
+          if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
           await deps.markTexted();
           await deps.note(`Texted them ${good.length} thing(s): ${good.map((g) => items.find((i) => i.url === g.url)?.name).join(", ")}${closing ? `, then: ${closing.slice(0, 120)}` : ""}${droppedCaptions.length ? ` (left out: ${droppedCaptions.join("; ")})` : ""}`, null);
           texts.push(...messages);
@@ -354,8 +362,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           if (named.length) return { ok: false, error: `Not sent: it hands over ${named.slice(0, 2).join(", ")} without the links. A delivery is one message with its links: send it with tellThem and the links.` };
         }
         if (!final && progressReport(text, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
-        const sent = await deps.send([text]);
-        if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
+        const chase = chases(text, asOfNow);
+        if (chase) return { ok: false, error: `Not sent: ${chase}. Wait for them; their reply wakes this task.` };
+        const sent = await deps.send([text], { owed });
+        if (!sent.sent) return { ok: false, error: sent.reason?.startsWith("held:") ? held(sent) : `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await deps.markTexted();
         await deps.note(`Texted them: ${text.slice(0, 200)}`, null);
         texts.push(text);
@@ -549,6 +559,30 @@ export function progressReport(text: string, found: string[] = []): boolean {
 }
 
 const nameKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+// Pure: is this task text one the member is owed? The first result of something they asked for or Co promised them, the last
+// check before their own deadline, or an answer to them. Everything else a task sends (updates, follow-ups, anything from a
+// lookout Co started itself) is Co-initiated, and waits on spacing, pace and backoff like every text Co sends first
+// (issue #126; Royce, 2026-10-09: "only an owed delivery stays exempt").
+export function owedText(t: Pick<CoTask, "lastTextedAt" | "theirReplyAt" | "source"> & Partial<Pick<CoTask, "finalCheckAt" | "finalTold">>, now: Date): boolean {
+  if (t.source !== "lookout" && !t.lastTextedAt) return true;
+  if (isFinalCheck(t, now)) return true;
+  return awaitingThem(t) === false && !!t.theirReplyAt;
+}
+// Pure: Co's last task text has no reply from them yet.
+export function awaitingThem(t: Pick<CoTask, "lastTextedAt" | "theirReplyAt">): boolean {
+  if (!t.lastTextedAt) return false;
+  return !t.theirReplyAt || new Date(t.theirReplyAt).getTime() <= new Date(t.lastTextedAt).getTime();
+}
+// Chasing (Royce, 2026-10-09: "no chasing"): bumping an unanswered text. Never sent, whatever else it says.
+export const CHASE = /\b(?:circling back|circle back|bumping (?:this|it|that)|just (?:following|checking) (?:up|back|in)|following up (?:again|on (?:my|this|that|the) (?:last|earlier|previous|text|message|question))|checking (?:back )?in again|in case you missed|did you (?:get|see) my (?:last|earlier|previous)|any (?:thoughts|word|update) on (?:my|the) (?:last|earlier|previous))\b/i;
+// Pure: why a task text would chase them, or null. A question while their answer to the last one is still pending re-asks it:
+// their reply wakes the task, so the task waits for it instead.
+export function chases(text: string, t: Pick<CoTask, "lastTextedAt" | "theirReplyAt">): string | null {
+  if (CHASE.test(text)) return "it chases them for an answer";
+  if (awaitingThem(t) && /\?/.test(text)) return "it asks again while your last text to them has no reply";
+  return null;
+}
+
 export { FAILURE_CLAIM, inventedFailure } from "./speakable.js";
 import { inventedFailure } from "./speakable.js";
 
@@ -735,7 +769,8 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     // The miss warning: the existing send path, with quiet hours and the opt-out re-read (harness/proactive.ts sendExempt), its own
     // type so it never counts as the promised thing (services/followThrough.ts sendsSince) or uses up the task's text budget.
     warn: async (text, key) => {
-      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock() });
+      // Co-initiated (issue #126): the warning waits on pacing like any text Co starts.
+      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_window", targetKey: key, messages: [text], timezone: zone, respectHours: true, now: clock(), coInitiated: { kind: null } });
       return { sent: r.sent, reason: r.reason };
     },
     writeDocument: async (input, { read }) => {
@@ -745,11 +780,15 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
       return r;
     },
     textsToday: () => taskTextsToday(userId),
-    send: async (messages) => {
-      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock() });
+    send: async (messages, o) => {
+      // Only a text they're owed goes exempt; a lookout's finds count as finds for their backoff (services/kindRestraint.ts).
+      const coInitiated = o?.owed ? undefined : { kind: task.source === "lookout" ? ("find" as const) : null };
+      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated });
+      // Held: the task's next look moves to when it can go, whatever the turn then schedules sooner gets held again.
+      if (!r.sent && r.retryAt) await scheduleTaskAt(userId, task.id, r.retryAt, "A text was held for pacing: send it now if it still holds.").catch(() => {});
       const urls = messages.filter((m) => /^https?:\/\//.test(m));
       if (r.sent && urls.length) await recordSentItems(userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
-      return { sent: r.sent, reason: r.reason };
+      return { sent: r.sent, reason: r.reason, retryAt: r.retryAt };
     },
     markTexted: () => markTexted(userId, task.id),
     markFinalTold: () => markFinalTold(userId, task.id),
