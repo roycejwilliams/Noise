@@ -100,6 +100,7 @@ const cand = (id: string, type: any, o: { lastDay?: string; expiresAt?: string; 
   check("Co's own drafts see it as what they want, not as what landed", /What kind of room they've said they want \(their words\)/.test(block) && /What has landed with them before/.test(block));
   check("the daily pick reads stated taste too", /const taste = known\?\.preferences\.length \? known\.preferences\.map\(\(p\) => p\.text\)\.join\(" "\) : null;/.test(src("harness/proactive.ts")));
   // Capture: their words, through a tool, not the team log.
+  check("room_taste is an allowed memory type (co_memories_memory_type_check), so the write can land", /"room_taste",\s*\];/.test(src("db/migrations.ts")) && RT.ROOM_TASTE_MEMORY === "room_taste");
   check("a stored taste reads back; a malformed one is ignored", RT.parseRoomTaste(JSON.stringify({ wants: "small rooms", avoids: null, quote: "smaller, no pitching" }))?.wants === "small rooms" && RT.parseRoomTaste("not json") === null && RT.parseRoomTaste(JSON.stringify({ quote: "x" })) === null);
   const cap = src("services/capabilities.ts");
   check("noteRoomTaste is a capability Co chooses, and team feedback points room taste to it", /tool: "noteRoomTaste"/.test(cap) && /isn't feedback for the team: note it with noteRoomTaste/.test(cap));
