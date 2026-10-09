@@ -276,5 +276,21 @@ check("rules: no restraint read, no restraint rule", memberRules({ ...k, restrai
   const rejected = await MK.memberKnowledge("u-fail", {}, { linkedNames: async () => { throw new Error("db down"); } } as any).then(() => false).catch(() => true);
   check("a failed name read rejects memberKnowledge instead of returning unstripped facts", rejected);
 }
+// Review of #119.
+{
+  // An unsent call promise isn't dropped because another promise naming a deliverable was sent (no "Oct 8:" prefix before).
+  const items = MK.carryingOf({ tasks: [], briefs: [], receipts: [], loops: [], ledger: [], zone: "America/Los_Angeles", now: new Date("2026-10-09T18:00:00Z"),
+    promises: [
+      { at: new Date("2026-10-08T23:00:00Z"), content: 'Co said on the call it would send "the dinner spot document for Friday" and sent it.' },
+      { at: new Date("2026-10-08T23:01:00Z"), content: 'Looked into "the investor update outline document" after the call, as Co said it would, and found nothing good enough to send yet.' },
+    ] } as any);
+  check(`an unsent call promise stays outstanding next to a sent one (${items.map((i: any) => `${i.state}: ${i.what}`).join(" | ")})`, items.some((i: any) => /investor update outline/.test(i.what) && i.state === "outstanding"));
+  // Their voice memos and Co's hold texts are exchanges too.
+  check("a member's voice memo is their exchange", MK.exchangeOf({ content: "User sent a voice memo: running late, sorry", at: new Date() })?.from === "member");
+  check("Co's own 'Co is looking:' line is Co's exchange", MK.exchangeOf({ content: "Co is looking: a caterer for the open house", at: new Date() })?.from === "co");
+  // The restraint rule states the count, never an invented pause date.
+  const rr = MK.restraintRule({ holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 4, lastInboundAt: null, lastSentAt: new Date().toISOString(), pausedUntil: new Date(Date.now() + 9e8).toISOString() }, verifiedAt: new Date().toISOString() } as any, "America/Los_Angeles");
+  check(`the restraint rule gives the unanswered count, no pause date ("${rr.slice(0, 120)}")`, /4 of Co's own texts/.test(rr) && !/pause runs to/.test(rr));
+}
 console.log(`member knowledge: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

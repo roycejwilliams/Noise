@@ -17,7 +17,9 @@
 //     opts.include       the sections to load (default: all of KNOWLEDGE_SECTIONS). A section left out comes back empty ([] or
 //                        null) and its loaders never run, so a cheap path (a quiet-hours check) pays only for what it reads.
 //     deps               the loaders, injectable for tests (KnowledgeDeps); anything not passed uses the real one (realKnowledgeDeps).
-//   Never throws: a loader that fails gives an empty section (logged), the way every context read in Co does.
+//   A section loader that fails gives an empty section (logged), the way every context read in Co does. The one exception: the
+//   other members' names. If they can't be read, memberKnowledge REJECTS (fails closed, PR #118): callers must catch it and go
+//   without member context rather than use anything unstripped.
 //
 //   memberRules(k): MemberRules   the member-level rules as the shared constants (DISCRETION_GUIDE, CO_GROUNDING, CO_MEMBER_SAFETY,
 //                                 DELIVERY_SHAPE_RULE) plus the two read from this member's state (restraint, quiet hours in their
@@ -282,7 +284,8 @@ export const realKnowledgeDeps: KnowledgeDeps = {
         `SELECT content, created_at FROM co_memories
          WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} AND created_at > NOW() - make_interval(days => $2)
          ORDER BY created_at DESC LIMIT $3`,
-        [userId, o.days, o.limit],
+        // Twice the window: notes that aren't exchanges are dropped after, and mustn't use up the member's slots (review of #119).
+        [userId, o.days, o.limit * 2],
       )
     ).map((r) => ({ content: String(r.content ?? ""), at: new Date(r.created_at) })),
   person: async (userId) => {
@@ -431,10 +434,12 @@ export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: 
   // a promise that went, or that names a document they have, is theirs ("they have it"); the rest is outstanding, and told (they
   // heard it on the call). A promise that is also a task above shows once, as the task.
   const delivered = [...docs.map((r) => ({ title: r.title, at: r.deliveredAt })), ...ledgerDocs.map((r) => ({ title: docTitle(r.label), at: r.at }))];
-  const zoneDay = (d: Date | string) => localDay(d instanceof Date ? d : new Date(d), o.zone);
+  // The same "Oct 8: " day prefix callContext gives each line: collapseCarried reads the day from it and strips "Promised on the
+  // call:" after it; without it every promise naming a deliverable matched any sent one and dropped (review of #119).
+  const zoneDay = (d: Date | string) => DateTime.fromJSDate(d instanceof Date ? d : new Date(d)).setZone(wordsZone(o.zone)).toFormat("LLL d");
   const facts = promiseFacts(o.promises.map((p) => ({ at: p.at, content: p.content })));
   const lines: (CarriedLine & { at: Date | string; what: string })[] = facts.map((f) => ({
-    text: f.text,
+    text: `${zoneDay(f.at)}: ${f.text}`,
     from: "promise" as const,
     sent: /\bSent\.$/.test(f.text),
     at: f.at,
@@ -483,11 +488,13 @@ export function restraintOf(r: RawRestraint, now: Date): Fact<Restraint> {
 export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> | null {
   const c = row.content;
   const at = row.at.toISOString();
-  const member = c.match(/^\s*User(?: said)?:\s*([\s\S]*)$/i);
+  // Any "User ...:" line is theirs ("User said:", "User sent a voice memo:"), any "Co ...:" line Co's ("Co replied:", "Co is
+  // looking:") (review of #119: voice memos were dropped).
+  const member = c.match(/^\s*User\b[^:\n]{0,40}:\s*([\s\S]*)$/i);
   if (member) return { from: "member", text: member[1].trim(), call: false, verifiedAt: at };
   const call = c.match(/^\s*\[Call\]\s*([\s\S]*)$/);
   if (call) return { from: "co", text: call[1].trim(), call: true, verifiedAt: at };
-  const co = c.match(/^\s*Co replied:\s*([\s\S]*)$/i);
+  const co = c.match(/^\s*Co\b[^:\n]{0,40}:\s*([\s\S]*)$/i);
   if (co) return { from: "co", text: co[1].trim(), call: false, verifiedAt: at };
   return null;
 }
@@ -535,7 +542,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const now = opts.now ?? new Date();
   const want = new Set<KnowledgeSection>(opts.include ?? KNOWLEDGE_SECTIONS);
   const on = (s: KnowledgeSection) => want.has(s);
-  // Never throws: a failed read is an empty section (and said so in the log), never a broken turn.
+  // A failed section read is an empty section (logged); a failed name read rejects (see the header).
   const safe = <T,>(what: string, p: () => Promise<T>, fallback: T): Promise<T> =>
     Promise.resolve()
       .then(p)
@@ -578,7 +585,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("preferences") && taste) k.preferences = [{ text: taste.text, source: "taste", verifiedAt: taste.at.toISOString() }];
   if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, verifiedAt: latest(c.confirmedOn, c.saidOn) }));
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
-  if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt));
+  if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
 
   // The strip, last, over everything (see the header): nothing un-stripped leaves.
@@ -606,7 +613,9 @@ export function restraintRule(r: Restraint | null, zone: string | null): string 
     r.safetyHold ? "A safety hold is on: no offers, finds or nudges; only care." : null,
     r.holdUntil ? `Co starts nothing on its own until ${when(r.holdUntil)}.` : null,
     r.spaceUntil ? `Co is giving them space after handing work to a task: nothing new on its own until ${when(r.spaceUntil)}.` : null,
-    r.unanswered.pausedUntil ? `${r.unanswered.count} of Co's texts since they last wrote ${r.unanswered.count === 1 ? "is" : "are"} unanswered; the unanswered pause runs to ${when(r.unanswered.pausedUntil)}.` : null,
+    // The count only: the real pause is decided per lane by the send gate (harness/proactive.ts userLevelChecks), so no date is
+    // stated as fact here (review of #119).
+    r.unanswered.count ? `${r.unanswered.count} of Co's own texts since they last wrote ${r.unanswered.count === 1 ? "has" : "have"} no reply yet: go lighter, and let them lead.` : null,
     r.suppressedKinds.length
       ? `Kinds of message they keep letting pass, which Co doesn't start (off ${RESTRAINT.offDays} days, then one trial): ${r.suppressedKinds.join(", ")}${r.trialKinds.length ? ` (a trial may go now: ${r.trialKinds.join(", ")})` : ""}. Answers to their own asks still go.`
       : null,
