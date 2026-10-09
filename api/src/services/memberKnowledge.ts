@@ -51,7 +51,7 @@ import type { BriefView, CoTask } from "./coTasks.js";
 import type { Receipt } from "./deliveryReceipts.js";
 import type { Claim, Kind as ClaimKind, Provenance } from "./factLabels.js";
 import type { GoalState, GoalStateRow } from "./goalEdges.js";
-import { goalHash } from "./goalEdges.js";
+import { goalHash, restates } from "./goalEdges.js";
 import { RESTRAINT, type ProactiveKind } from "./kindRestraint.js";
 import { REASONABLE_HOUR_END, REASONABLE_HOUR_START } from "./localHours.js";
 import { memberNamesStrict, safeMemory } from "./memberSafeMemories.js";
@@ -354,6 +354,23 @@ export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fac
   return [...out.values()].sort((a, b) => rank[a.state] - rank[b.state]);
 }
 
+// Pure: a goal correction whose corrected value is a goal that's since done or set aside says so (Royce, 2026-10-09: "partnering
+// with Sequin AI for a November launch party" kept reading as their current goal in calls and nudges after it was done; the
+// stale-goal steering bug in a correction's clothes). The old value stays wrong either way, so the correction stays. Only a clear
+// match: an active goal with the same words, or one that restates it, leaves it alone.
+// The marker leads the value, so a reader that caps the line (nudges cut it at 80 characters) still carries it.
+export const SETTLED_GOAL = { done: "since done, history only:", stale: "since set aside, history only:" } as const;
+export function settleGoalCorrections<C extends Correction>(corrections: C[], goals: Pick<Goal, "text" | "state">[]): C[] {
+  const same = (a: string, b: string) => goalHash(a) === goalHash(b) || (restates(a, b) && restates(b, a));
+  return corrections.map((c) => {
+    if (!/\bgoals?\b/i.test(c.field) || !c.now?.trim()) return c;
+    const now = c.now;
+    if (goals.some((g) => g.state === "active" && same(now, g.text))) return c;
+    const closed = goals.find((g) => g.state !== "active" && same(now, g.text));
+    return closed ? { ...c, now: `(${SETTLED_GOAL[closed.state === "done" ? "done" : "stale"]}) ${now}` } : c;
+  });
+}
+
 // Pure: everything Co sent them, one entry per thing (a URL or a name), from all three records. at is the newest send of it.
 export function mergeDelivered(o: { receipts: Receipt[]; ledger: RawSent[]; offers: SentItem[] }): Fact<Delivered>[] {
   const items: Fact<Delivered>[] = [];
@@ -554,7 +571,8 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const k = empty(userId, now, identity);
 
   const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, claims, restraint, exchanges, person] = await Promise.all([
-    skip("goals", "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
+    // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
+    skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
     skip("asks", "asks", () => d.asks(userId), [] as RawAsk[]),
     skip(["delivered", "carrying"], "receipts", () => d.receipts(userId), [] as Receipt[]),
     skip(["delivered", "carrying"], "ledger", () => d.ledgerSent(userId), [] as RawSent[]),
@@ -577,7 +595,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("delivered")) k.delivered = mergeDelivered({ receipts, ledger, offers });
   if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, receipts, ledger, loops, promises, now, zone });
   if (on("lessons")) k.lessons = lessons.filter((l) => l.text.trim()).map((l) => ({ text: l.text.trim(), verifiedAt: l.at.toISOString() }));
-  if (on("corrections")) k.corrections = corrections.map((c) => ({ field: String(c.field), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), verifiedAt: latest(c.corrected_at) }));
+  if (on("corrections")) k.corrections = settleGoalCorrections(corrections.map((c) => ({ field: String(c.field), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), verifiedAt: latest(c.corrected_at) })), goalsOf(profile, states));
   if (on("preferences") && taste) k.preferences = [{ text: taste.text, source: "taste", verifiedAt: taste.at.toISOString() }];
   if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, saidOn: String(c.saidOn).slice(0, 10), verifiedAt: latest(c.confirmedOn, c.saidOn) }));
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
