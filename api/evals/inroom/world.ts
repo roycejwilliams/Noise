@@ -318,7 +318,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     if (!W.proactiveSends.some((s) => s.user_id === p[0] && s.target_key === p[1])) W.proactiveSends.push({ user_id: p[0], type: "in_room", target_key: p[1], message: p[2] });
     return R([]);
   }
-  if (has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt) VALUES ($1, $2, $3, $3, $4, true)")) {
+  if (has("INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind) VALUES ($1, $2, $3, $3, $4, true, $5)")) {
     if (W.proactiveSends.some((s) => s.user_id === p[0] && s.target_key === p[2])) return R([]);
     W.proactiveSends.push({ user_id: p[0], type: p[1], target_key: p[2], message: p[3], id: W.proactiveSends.length + 1 });
     return R([{ id: W.proactiveSends.length }]);
