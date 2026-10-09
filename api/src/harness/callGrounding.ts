@@ -151,7 +151,7 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
   if (!p?.phone_number) return "nothing";
   const { attemptEventSurfacing, PROMISE_ASK_PREFIX } = await import("../services/eventSurfacingSweep.js");
   const key = what.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
-  const { queued } = await attemptEventSurfacing({
+  const { queued, fed } = await attemptEventSurfacing({
     askId: `${PROMISE_ASK_PREFIX}${key}`,
     userId,
     firstName: p.first_name,
@@ -163,8 +163,8 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
     activityPreferences: p.activity_preferences ?? null,
     cooldownCleared: true,
   });
-  const result = queued
-    ? `Looked into "${what}" after the call, as Co said it would, and found something; it's queued to send.`
+  const result = queued || fed
+    ? `Looked into "${what}" after the call, as Co said it would, and found something; ${fed ? "Co's daily pick decides whether it goes out" : "it's queued to send"}.`
     : `Looked into "${what}" after the call, as Co said it would, and found nothing good enough to send yet.`;
   await writeMemory(userId, "promise_result", result).catch(() => null);
   // Tied to this call, so this call's after-call text is the one that
@@ -176,7 +176,7 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
     // Only the after-call text reads these, within two days: older rows go.
     pool.query(`DELETE FROM call_promise_results WHERE created_at < NOW() - INTERVAL '14 days'`).catch(() => {});
   }
-  return queued ? "queued" : "nothing";
+  return queued || fed ? "queued" : "nothing";
 }
 
 // ---- what the audit's verdicts are held to before anything is saved (2026-10-08 call review)
