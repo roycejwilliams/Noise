@@ -133,6 +133,14 @@ export function namesInRecords(rows: { content: string; memory_type?: string | n
   return out;
 }
 
+// One line at a time, keeping positions: a strip function for structured context (threads, loops, carrying, transcripts) that
+// isn't a co_memories row. The same rule as memberSafe: another member's details never reach this member's prompt (Royce:
+// top priority). Their own words ("User said: ...") are theirs and kept.
+export async function memberSafeLine(userId: string, linked?: string[]): Promise<(s: string) => string | null> {
+  const names = linked ?? (await linkedMemberNames(userId));
+  return (s: string) => safeMemory("context", String(s ?? ""), names);
+}
+
 // Memories as the reply may read them.
 // linked: the names from linkedMemberNames, when the caller already has them.
 export async function memberSafe(userId: string, rows: { content: string; memory_type?: string | null }[], linked?: string[]): Promise<string[]> {

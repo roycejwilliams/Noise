@@ -27,12 +27,14 @@ export async function loadAsks(q: Q, userId: string, now: Date, alsoIds: string[
 // how they reacted to suggestions, recent feelings, discovery left this week.
 export async function loadMemberContext(q: Q, userId: string, now: Date): Promise<Omit<SelectContext, "asks" | "pool" | "today" | "weekday">> {
   const [me] = await q(`SELECT u.first_name, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]);
+  // Another member's details stripped (2026-10-09 audit: the picker read raw texts). Fails closed: no strip, no texts.
+  const safe = await import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null);
   const texts = (await q(`SELECT created_at, content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND created_at < $2 AND created_at >= $2::timestamptz - INTERVAL '14 days' ORDER BY created_at`, [userId, now])).map((t: any, i: number) => ({
     id: `T${i + 1}`,
     at: DateTime.fromJSDate(new Date(t.created_at)).setZone(ZONE).toFormat("LLL d HH:mm"),
     from: /^User/i.test(t.content) ? ("member" as const) : ("co" as const),
-    text: String(t.content).replace(/^(User said|Co replied|User|Co):\s*/i, ""),
-  }));
+    text: safe ? (safe(String(t.content)) ?? "").replace(/^(User said|Co replied|User|Co):\s*/i, "") : "",
+  })).filter((t: any) => t.text).map((t: any, i: number) => ({ ...t, id: `T${i + 1}` }));
   const inbound = (await q(`SELECT created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User %' AND created_at < $2 AND created_at >= $2::timestamptz - INTERVAL '31 days'`, [userId, now])).map((r: any) => new Date(r.created_at).getTime());
   const sent = (await q(`SELECT sent_at, type, message FROM proactive_sends WHERE user_id = $1 AND sent_at < $2 AND sent_at >= $2::timestamptz - INTERVAL '30 days' ORDER BY sent_at`, [userId, now])).map((s: any, i: number) => {
     const t = new Date(s.sent_at).getTime();

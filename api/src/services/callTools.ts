@@ -70,7 +70,12 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
       .catch(() => null),
   ]);
   if (!u) throw new Error("no such member");
-  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: p?.city ?? null, tasks: t.map((x: any) => ({ id: x.id, goal: x.goal })), loops: l };
+  // Another member's details stripped before they become spoken sources (2026-10-09 audit: the call path's own context strips
+  // these loops; the tools' copy didn't). Fails closed: no strip, no loops or task goals.
+  const safe = await import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null);
+  const tasks = t.map((x: any) => ({ id: x.id, goal: safe ? safe(String(x.goal ?? "")) : null })).filter((x: any): x is { id: number; goal: string } => !!x.goal);
+  const loops = l && safe ? l.split("\n").map((line: string) => safe(line)).filter((x: string | null): x is string => !!x).join("\n") || null : null;
+  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: p?.city ?? null, tasks, loops };
 }
 
 export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {
