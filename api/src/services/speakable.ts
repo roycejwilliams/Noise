@@ -285,6 +285,9 @@ export function speechStats(text: string): { words: number; dashes: number; semi
 // Pure. The same rule reads Co's spoken lines (the after-call audit, routes/co.ts) and every text Co drafts (harness/proactive.ts
 // checkDraft), so calls and texts are held to one standard. A question to them ("Working on anything fun?") is not narration.
 export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
+  // Co's pipeline, not the thing (Royce, 2026-10-09: "From the call: two confirmed for Tech Week... Left the run club off").
+  { pattern: /^(?:from (?:the|our|that) call|per (?:the|our) call)\s*:/i, why: "opens on where it came from, not the thing" },
+  { pattern: /\b(?:one|two|three|four|five|\d+) (?:are |is )?(?:confirmed|verified) (?:for|on|so far)\b|\b(?:i |i've |i have )?left (?:the |it |them |that )?(?:\w+ ){0,3}off (?:since|because|as)\b|\bi (?:couldn'?t|could not) (?:confirm|verify)\b/i, why: "talks about Co's checking, not the thing" },
   // A sentence that opens on Co's own activity: "Starting the plan", "Working on it now", "Digging into it".
   { pattern: /^(?:(?:ok(?:ay)?|got it|on it|sure|great|perfect|alright)[,.!]?\s+)?(?:now\s+|already\s+|still\s+)?(?:starting|started|working on|beginning|kicking off|getting started on|digging into|looking into|in the middle of)\b/i, why: "opens on Co's own activity (task-tracker language)" },
   // First person, in progress: "I'm starting", "I've started on it", "I'm still working on the draft", "I started the plan".
@@ -471,3 +474,8 @@ export function dropStaleAck(text: string, o: { askedAt: Date; sendAt: Date }): 
   if (!rest) return text;
   return rest[0].toUpperCase() + rest.slice(1);
 }
+
+// A claim that something failed or is broken (Royce, 2026-10-09: never one a check in the record doesn't back).
+export const FAILURE_CLAIM = /\b(?:link|page|site|url|form|it)\s+(?:isn'?t|wasn'?t|is not|was not)\s+(?:working|loading|opening|up)\b|\b(?:link|page|site|url|form)\s+(?:is|was)\s+(?:broken|down|dead)\b|\bbroken link\b|\b(?:i|we)\s+(?:couldn'?t|could not|can'?t|cannot|wasn'?t able to|was unable to)\s+(?:load|open|reach|confirm|verify|send)\b|\b(?:link|page|site)\s+(?:didn'?t|did not|doesn'?t|does not)\s+(?:work|load|open)\b|\b(?:my |the )?(?:send|text|delivery)\s+failed\b|\bfailed to (?:send|load|deliver)\b/i;
+// Per sentence, and a question asks rather than claims ("it wasn't loading for you?").
+export const inventedFailure = (t: string) => t.split(/(?<=[.!?])\s+/).some((x) => !/\?\s*["')\]]*$/.test(x.trim()) && FAILURE_CLAIM.test(x));

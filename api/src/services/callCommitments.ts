@@ -51,6 +51,15 @@ export function commitmentsIn(coLines: string[]): string[] {
   return out;
 }
 
+// "I'll send that over now" says nothing about what: the line Co said just before it does (Royce's call, 2026-10-08: the task
+// for "Done, I'll send that over now" didn't know it was the Builders who Run link, so it closed on other things).
+const VAGUE_SEND = /\b(?:send|text|share|drop|forward|shoot)\s+(?:you\s+)?(?:that|it|this|those|them|the link)\b/i;
+export function commitmentGoalAbout(sentence: string, coBefore?: string): string {
+  const base = commitmentGoal(sentence);
+  const about = (coBefore ?? "").replace(/\s+/g, " ").trim();
+  // The goal is capped at 200: the base gives up room so the subject survives (review of #117).
+  return VAGUE_SEND.test(sentence) && about ? `${base.slice(0, 70)} (about: ${about.slice(0, 120)})` : base;
+}
 export const commitmentGoal = (sentence: string) => COMMIT_PREFIX + promiseGoal(sentence).replace(/^Keep your promise: /, "");
 
 export type CommitDeps = {
@@ -70,7 +79,7 @@ const realCommitDeps: CommitDeps = {
 };
 
 // Opens the task for one spoken commitment. Never throws (a call must not suffer for it). Capped like any promise.
-export async function trackCallCommitment(o: { userId: string; sentence: string; theirLine?: string; now?: Date }, deps: CommitDeps = realCommitDeps): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+export async function trackCallCommitment(o: { userId: string; sentence: string; theirLine?: string; coBefore?: string; now?: Date }, deps: CommitDeps = realCommitDeps): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   try {
     const why = commitmentProblem(o.sentence);
     if (why) return { ok: false, why };
@@ -78,7 +87,7 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
     // The same commitment said again on this call (or answering the same words of theirs) is the task already open for it,
     // noted there, never a second task (2026-10-08: one plan, said three ways, asked for once).
     const now = (o.now ?? new Date()).getTime();
-    const candidate = { goal: commitmentGoal(o.sentence), theirWords: theirWordsFor(o.theirLine ?? "(said on a call)") };
+    const candidate = { goal: commitmentGoalAbout(o.sentence, o.coBefore), theirWords: theirWordsFor(o.theirLine ?? "(said on a call)") };
     const recent = (t: (typeof open)[number]) => typeof t.id === "number" && (!t.createdAt || now - new Date(t.createdAt).getTime() < SAME_CALL_HOURS * 3_600_000);
     const same = open.find((t) => recent(t) && sameCommitment(candidate, t));
     if (same) {
@@ -104,7 +113,7 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
     const doc = wantsDocument(candidate.goal, candidate.theirWords);
     const r = await deps.start({
       userId: o.userId,
-      goal: commitmentGoal(o.sentence),
+      goal: candidate.goal,
       theirWords: theirWordsFor(o.theirLine ?? "(said on a call)"),
       steps: [{ text: doc ? "Write the document with writeDocument and send it (a PDF), never as a long text" : "Send what you said you would, in a text, with the links or the document itself" }],
       firstPlan: doc

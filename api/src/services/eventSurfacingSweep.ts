@@ -418,7 +418,7 @@ function sameMatch(a: TierMatch, b: TierMatch): boolean {
 // that's since closed (a stale "chess this weekend", a fund that fell
 // through) stop coming back (Royce, 2026-09-26: "get my ask back on track so
 // I have the right events coming through"). Profile-based finds have no ask.
-const ASK_STILL_OPEN = (col: string) =>
+export const ASK_STILL_OPEN = (col: string) =>
   `(${col} = '${PROFILE_ASK_ID}' OR ${col} IS NULL OR EXISTS (SELECT 1 FROM ask_checkins ac WHERE ac.id::text = ${col} AND ac.resolved_at IS NULL))`;
 
 export async function askStillOpen(askId: string | null | undefined): Promise<boolean> {

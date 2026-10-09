@@ -62,7 +62,15 @@ export type TaskTurnDeps = {
   setWindow?: (w: CommitWindow) => Promise<void>;
   scheduleAt?: (at: Date, plan: string) => Promise<string | null>;
   draftWarning?: (facts: Record<string, string>, redo?: { draft: string; failed: string }) => Promise<string | null>;
+  // What's already on file and verified for them (the sweep's finds, this task's earlier results): sendable like this turn's
+  // own results (Royce, 2026-10-09: the run link was on file and the task said "the link wasn't working").
+  onFile?: () => Promise<OnFile[]>;
+  // Names Co's daily pick rejected for them (services/sweepShadow.ts): never sent by a task either.
+  rejected?: () => Promise<string[]>;
+  // This turn's verified results, kept on the task for its next turn.
+  saveFound?: (items: OnFile[]) => Promise<void>;
 };
+export type OnFile = { name: string; url: string; tier: number; facts: string[] };
 
 // A promise is kept only by something sent AFTER it was made (2026-10-08: task 111 closed itself as done on a document sent the
 // day before, on a different focus, and nothing went out after the call). Texts sent in this wake-up count; earlier sends never do.
@@ -102,7 +110,7 @@ export function documentPromiseLine(t: Pick<CoTask, "source" | "goal" | "theirWo
   return `\nWHAT YOU PROMISED IS A DOCUMENT. Send it with writeDocument (it arrives as a PDF), never as a text or a run of texts. Their points (the sections) only in their own words: what they want, their event, their constraints. Your plan, ideas and recommendations go in suggestions: that's most of a planning doc, and it's fine. Don't name a place, person, number or date they never said or you never read. Once it's sent, finish the task as done.`;
 }
 
-export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string }): string {
+export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string; zone: string | null; recent: string; final?: boolean; person?: string; onFile?: OnFile[] }): string {
   const t = o.task;
   const deadlineLine = `${t.deadline ? `\nTheir deadline: ${t.deadline}.` : ""}${t.window && !t.window.closedAt ? `\nYour window: ${windowLine(t.window)} An empty search is a result, and they hear it inside the window: if it won't be ready in time, don't text about that yourself, just schedule your next look; when it lands past the window they're told once, in one plain line, with the new time.` : ""}${documentPromiseLine(t)}`;
   const finalLine = o.final
@@ -112,7 +120,7 @@ export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string
 
 ${t.source === "lookout" ? `Right now you're keeping an eye out for ${o.firstName}, as you told them on a call you would. Nobody is waiting on a message: look, and text only when something real turns up, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat you said you'd look out for: "${t.goal.replace(/^Keep an eye out, as promised on a call:\s*/i, "")}"\nWhat they had said just before: "${t.theirWords}"` : t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. They're expecting it: do what you said and send it when it's done. If it isn't done yet, keep working and say nothing: no progress reports, no "no details yet", no "a few leads". Text before it's done only when you need something from them (ask for exactly that), or when it truly can't be done (say plainly what you couldn't find and what you'd do instead). Never hold their own thing back because you judge it not good enough yet.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
 Steps: ${t.steps.length ? t.steps.map((s) => `${s.done ? "[done]" : "[ ]"} ${s.text}`).join("; ") : "(none written)"}
-What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}
+What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}${o.onFile?.length ? `\nAlready on file and verified for them (send any of these with tellThem, by their link; no need to find them again):\n${o.onFile.slice(0, 12).map((f) => `- ${f.name} (${f.url})${f.facts.length ? `: ${f.facts.slice(0, 3).join("; ")}` : ""}`).join("\n")}` : ""}
 Your notes so far (oldest first):
 ${t.notes.map((n) => `- [${localStamp(n.at, o.zone)}] ${n.text}`).join("\n") || "- (none)"}
 This is wake-up ${t.wakes} of at most ${TASK_LIMITS.maxWakes}. Now, their time: ${o.now}${o.zone ? ` (their time zone: ${o.zone})` : ""}.
@@ -129,7 +137,7 @@ Then decide:
 You must end with scheduleNext or finish. Never make up results: only what your tools returned.`;
 }
 
-type Found = { name: string; url: string | null; facts: string[]; tier: number };
+type Found = { name: string; url: string | null; facts: string[]; tier: number; onFile?: boolean };
 
 // Their newest lines in the thread ("User said: …"), oldest first.
 export function newestMemberLines(recent: string, n = 3): string[] {
@@ -178,7 +186,28 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   // When the next check lands (Co's scheduleNext, or the default): the window check reads it after the turn.
   let nextAt: Date | null = null;
   const linkOk = (l: string) => verified.some((v) => v.url === l) || events.some((e) => e.url === l);
+  // Co's daily pick rejected these for them: a task never sends them either (Royce, 2026-10-09: Claude for Games came back as
+  // "confirmed" after the pick rejected it as not his interest).
+  const rejected = new Set(((await deps.rejected?.().catch(() => [] as string[])) ?? []).map((n) => n.toLowerCase().replace(/[^a-z0-9|:\u2014\u2013]+/g, " ").trim()).filter(Boolean));
+  // The name's own words, without a city or venue prefix ("San Francisco | Claude for Games" -> "claude for games").
+  // Only the item's own title: the full name, or what follows a "San Francisco |" style prefix, and only when it is 3+ words, so
+  // a city, a series ("Tech Week") or a generic ("Run Club") never blocks everything that mentions it (review of #117).
+  const rejectedCores = [...rejected].flatMap((r) => [r, r.split(/\s*[|:\u2014\u2013]\s*/).pop() ?? ""]).map((x) => nameKey(x)).filter((x) => x.split(" ").length >= 3);
+  const namesRejected = (t: string) => { const k = nameKey(t); return rejectedCores.some((c) => k.includes(c)); };
+  const isRejected = (name: string | null | undefined) => !!name && (rejected.has(nameKey(name)) || namesRejected(name));
+  // On file and verified already: sendable this turn without being found again.
+  for (const f of (await deps.onFile?.().catch(() => [] as OnFile[])) ?? []) {
+    if (!f.url || isRejected(f.name) || events.some((e) => e.url === f.url)) continue;
+    events.push({ name: f.name, url: f.url, facts: f.facts.slice(0, 5), tier: f.tier, onFile: true });
+  }
 
+  // A promise goes in one message with everything it promised (Royce, 2026-10-09, "close on the promise, not the attempt"):
+  // a send that would leave part of it out waits until the missing piece is in hand.
+  const wholeDelivery = async (messages: string[]): Promise<string | null> => {
+    if (task.source !== "promise" || final) return null;
+    const v = await promiseCloseCheck(task, messages, deps, docsSent).catch(() => ({ ok: true, why: "" }));
+    return v.ok ? null : `Not sent: this is the one delivery for the promise, and it would leave part out (${v.why}). Get the missing piece (a link on file counts), then send it all together in one message.`;
+  };
   const tell = async (what: string, links?: string[]) => {
         // One delivery, one line (services/speakable.ts): the document went with its own sentence. Nothing texts about it again.
         if (docsSent.length) return { ok: false, error: "The document already went out with its one line. Don't text about it: finish the task, or note anything else for later." };
@@ -189,6 +218,12 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!final && progressReport(what, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: that's a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
         // The task row was read at the start of the turn: a text already sent in this turn counts as texted (review of #115: four
         // tellThem calls in one promise turn all went out past the cap).
+        // One delivery, one message (Royce, 2026-10-09): a promise is delivered once. After it, nothing else goes for it.
+        // Delivered means kept: a question or an honest "can't" before then still goes (review of #117: tasks got stuck).
+        if (task.source === "promise" && (await promiseCloseCheck(task, texts, deps, docsSent).catch(() => ({ ok: false }))).ok) return { ok: false, error: "Not sent: this promise was already delivered in one message. Nothing more goes for it; finish the task." };
+        // Never a failure nobody checked (Royce, 2026-10-09: "the link wasn't working" was invented): leave it off and say nothing.
+        if (inventedFailure(what)) return { ok: false, error: "Not sent: it says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
+        if (namesRejected(what)) return { ok: false, error: "Not sent: it names something Co's daily pick rejected for them. Leave it off." };
         const allowed = mayText(texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task, await deps.textsToday(), deps.now());
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
         const known = (links ?? []).filter(linkOk);
@@ -231,6 +266,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
             if (bad) closing = null;
           }
           const messages = assembleMessages(good, closing);
+          const whole = await wholeDelivery(messages);
+          if (whole) return { ok: false, error: whole };
           const sent = await deps.send(messages);
           if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
           await deps.markTexted();
@@ -243,7 +280,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           functionId: "taskTurn.tell",
           firstName: deps.person.first_name || "them",
           facts,
-          task: `Tell them where this stands, in your own voice. What to get across (a guide to your intent, not a source: state only what's in CONFIRMED_FACTS): ${what}. Don't put links in the text; they go right after it. Never offer to call, book, reserve or contact anyone for them: you can't. No sign-off.`,
+          task: `${task.source === "promise" ? "Hand them what you promised, the way a friend would: the thing itself, never how you got it (no \"from the call\", nothing confirmed, verified or left off)." : "Tell them where this stands, in your own voice."} What to get across (a guide to your intent, not a source: state only what's in CONFIRMED_FACTS): ${what}. Don't put links in the text; they go right after it. Never offer to call, book, reserve or contact anyone for them: you can't. No sign-off.`,
           maxSentences: 4,
         }).catch(() => null);
         if (!text) return { ok: false, error: "Nothing worth sending came out of the verified facts. Note it and schedule the next look." };
@@ -268,6 +305,14 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!places.ok) return { ok: false, error: `The draft named places no verified fact backs (${places.missing.join(", ")}). Tell them only verified facts.` };
         const offer = text.match(OFFERS_WHAT_CO_CANT);
         if (offer) return { ok: false, error: `The draft offered something Co can't do ("${offer[0]}"): Co can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
+        if (inventedFailure(text)) return { ok: false, error: "Not sent: the draft says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
+        if (namesRejected(text)) return { ok: false, error: "Not sent: the draft names something Co's daily pick rejected for them. Leave it off." };
+        // A plain text carries no links, so it isn't the delivery: a question, or saying plainly what can't be done, may go. One
+        // that hands over found things without their links is a partial delivery, and waits for the one message with the links.
+        if (task.source === "promise" && !final && !/\?\s*["')\]]*$/.test(text.trim())) {
+          const named = [...events, ...verified].map((x: any) => String(x.name ?? "")).filter((n) => n.length >= 6 && nameKey(text).includes(nameKey(n).split(" ").slice(0, 3).join(" ")));
+          if (named.length) return { ok: false, error: `Not sent: it hands over ${named.slice(0, 2).join(", ")} without the links. A delivery is one message with its links: send it with tellThem and the links.` };
+        }
         if (!final && progressReport(text, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
         const sent = await deps.send([text]);
         if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
@@ -286,7 +331,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       execute: async ({ what, when }) => {
         did.push(`search: ${what}${when ? `, ${when}` : ""}`);
         const items = await deps.search(what, when ?? null).catch(() => []);
-        for (const i of items) if (!events.some((e) => e.name === i.name)) events.push({ name: i.name, url: i.url, facts: [...(i.date ? [`date: ${i.date}`] : []), ...(i.details ?? []).slice(0, 4)], tier: i.tier ?? 2 });
+        for (const i of items) if (!isRejected(i.name) && !events.some((e) => e.name === i.name)) events.push({ name: i.name, url: i.url, facts: [...(i.date ? [`date: ${i.date}`] : []), ...(i.details ?? []).slice(0, 4)], tier: i.tier ?? 2 });
         return items.length ? { found: items } : { found: [], note: "Nothing real came up." };
       },
     }),
@@ -297,7 +342,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (did.filter((d) => d.startsWith("web:")).length >= 3) return { found: [], note: "That's the web searches for this wake-up. Work with what you have, note it, and schedule the next look." };
         did.push(`web: ${what}`);
         const r = await deps.web(what);
-        for (const k of r.kept) if (!verified.some((v) => v.url === k.url)) verified.push(k);
+        for (const k of r.kept) if (!isRejected(k.name) && !verified.some((v) => v.url === k.url)) verified.push(k);
         return { found: r.kept.map((k) => ({ name: k.name, url: k.url, official: k.official, verifiedFacts: k.facts, date: k.date, deadline: k.deadline })), droppedBecause: r.dropped.map((d) => `${d.name}: ${d.why}`), note: r.note };
       },
     }),
@@ -331,7 +376,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     }),
     tellThem: tool({
       description: "Text them what you found or ask what only they can answer. Say what it should get across; it's written in your voice from verified results only.",
-      inputSchema: z.object({ what: z.string().describe("What the text should get across, plainly."), links: z.array(z.string()).max(2).optional().describe("Links from verified results to send with it.") }),
+      inputSchema: z.object({ what: z.string().describe("What the text should get across, plainly."), links: z.array(z.string()).max(4).optional().describe("Links from verified results or on file to send with it. A promise goes in one message, so put every link it needs in this one call.") }),
       execute: async ({ what, links }) => tell(what, links),
     }),
     scheduleNext: tool({
@@ -400,7 +445,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       experimental_telemetry: { isEnabled: true, functionId: "taskTurn.run" },
       tools,
       stopWhen: [stepCountIs(12), () => decided !== null],
-      prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: localStamp(deps.now(), deps.zone), zone: deps.zone, recent: deps.recent, final, person: deps.personModel }),
+      prompt: taskTurnPrompt({ task, firstName: deps.person.first_name || "them", now: localStamp(deps.now(), deps.zone), zone: deps.zone, recent: deps.recent, final, person: deps.personModel, onFile: events.filter((e) => e.onFile && e.url) as OnFile[] }),
     });
   } catch (err: any) {
     console.error("taskTurn failed (non-fatal):", err?.message ?? err);
@@ -447,6 +492,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `You told them ${task.window.words}; it moves to ${re.when}. Do the work and send it then: one message with the thing itself.`);
     did.push(`window: moved quietly to ${re.when}, no "not yet" text`);
   }
+  const found: OnFile[] = [...events.filter((e) => e.url && !e.onFile).map((e) => ({ name: e.name, url: e.url!, tier: e.tier ?? 2, facts: e.facts })), ...verified.map((v) => ({ name: v.name, url: v.url, tier: 3, facts: v.facts }))];
+  if (found.length) await deps.saveFound?.(found).catch(() => {});
   return { action: decided ?? "defaulted_24h", did, texts, final, warning };
 }
 
@@ -460,6 +507,10 @@ export function progressReport(text: string, found: string[] = []): boolean {
   const lower = text.toLowerCase();
   return !found.some((n) => n && n.length >= 4 && lower.includes(n.toLowerCase().slice(0, 24)));
 }
+
+const nameKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+export { FAILURE_CLAIM, inventedFailure } from "./speakable.js";
+import { inventedFailure } from "./speakable.js";
 
 // ---------------------------------------------------------------- the miss warning
 
@@ -558,6 +609,48 @@ function defaultDraftWarning(firstName: string): NonNullable<TaskTurnDeps["draft
 // A real wake-up: the database, the web budget, and texts to their phone.
 // opts.now: a pinned clock for a live check (evals/tasks/windowsLive.ts); the real time otherwise. It drives the turn's own
 // sense of now, the window math and the hours checks of its sends.
+// What's on file and verified for them: this task's own earlier results, then the sweep's finds (event backlogs, which passed
+// its gate and page checks). Newest task results first; one entry per link.
+async function onFileFor(userId: string, task: CoTask): Promise<OnFile[]> {
+  // Only finds for asks still open (or goal finds), and never anything already past in their day (review of #117).
+  const { ASK_STILL_OPEN, isPastEvent } = await import("./eventSurfacingSweep.js");
+  const zone = await import("./memberTime.js").then((m) => m.memberZone(userId)).catch(() => null);
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: zone ?? "America/Los_Angeles" });
+  const pastFact = (f: OnFile) => f.facts.some((x) => { const d = x.match(/^date: (\d{4}-\d{2}-\d{2})/)?.[1]; return !!d && d < today; });
+  const own: OnFile[] = (Array.isArray((task as any).followup?.found) ? (task as any).followup.found : []).filter((f: OnFile) => f?.url && !pastFact(f));
+  const { rows } = await pool.query(`SELECT items FROM event_backlogs b WHERE b.user_id = $1 AND ${ASK_STILL_OPEN("b.ask_id")}`, [userId]).catch(() => ({ rows: [] as any[] }));
+  const swept: OnFile[] = rows
+    .flatMap((r: any) => (Array.isArray(r.items) ? r.items : []))
+    .map((it: any) => it?.match)
+    .filter((m: any) => m?.url && m?.name && !isPastEvent(m, zone))
+    .map((m: any) => ({
+      name: String(m.name),
+      url: String(m.url),
+      tier: Number(m.tier ?? 2),
+      facts: [m.event_date ? `date: ${String(m.event_date).slice(0, 10)}` : null, m.details?.startAt ? `starts ${String(m.details.startAt).replace("T", " ").slice(0, 16)}` : null, m.details?.venue ?? m.city ?? null].filter(Boolean) as string[],
+    }));
+  const out: OnFile[] = [];
+  for (const f of [...own, ...swept]) if (f?.url && !out.some((x) => x.url === f.url)) out.push(f);
+  return out.slice(0, 20);
+}
+
+// Names Co's latest daily pick rejected for them (services/sweepShadow.ts; empty for anyone the picker doesn't run for).
+async function pickerRejected(userId: string): Promise<string[]> {
+  const { rows } = await pool.query(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]).catch(() => ({ rows: [] as any[] }));
+  const js = (rows[0]?.proposal?.judgments ?? []) as { name?: string; verdict?: string }[];
+  return js.filter((j) => j.verdict === "reject" && j.name).map((j) => String(j.name));
+}
+
+// This turn's verified results, kept on a work task for its next turn (followup.found; a follow-up task's followup is its own).
+async function saveTaskFound(userId: string, taskId: number, items: OnFile[]): Promise<void> {
+  // Newest first, one per link, at most 15 (review of #117: the list grew without bound and lost its order).
+  const { rows } = await pool.query(`SELECT followup->'found' AS found FROM co_tasks WHERE user_id = $1 AND id = $2 AND kind = 'work'`, [userId, taskId]);
+  if (!rows.length) return;
+  const merged: OnFile[] = [];
+  for (const f of [...items, ...(Array.isArray(rows[0].found) ? rows[0].found : [])]) if (f?.url && !merged.some((x) => x.url === f.url)) merged.push(f);
+  await pool.query(`UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{found}', $3::jsonb, true), updated_at = NOW() WHERE user_id = $1 AND id = $2 AND kind = 'work'`, [userId, taskId, JSON.stringify(merged.slice(0, 15))]);
+}
+
 export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; override?: Partial<TaskTurnDeps> } = {}): Promise<{ action: string; did?: string[]; warning?: string | null }> {
   const userId = task.userId;
   const clock = opts.now ?? (() => new Date());
@@ -633,6 +726,9 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     },
     now: clock,
     sentSince: (since) => sendsSince(userId, since),
+    onFile: () => onFileFor(userId, task),
+    rejected: () => pickerRejected(userId),
+    saveFound: (items) => saveTaskFound(userId, task.id, items),
     ...opts.override,
   };
   const r = await runTaskTurnWith(task, deps);

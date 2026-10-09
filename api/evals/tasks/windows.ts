@@ -200,8 +200,8 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   script.length = 0;
   script.push(
     { tool: "search", input: { what: "founder run club", when: "this weekend" } },
-    { tool: "tellThem", input: { what: "Here's the founder run this Saturday at the Golden Gate Bridge" } },
-    { text: "Here's the founder run, Builders who Run, this Saturday at the Golden Gate Bridge." },
+    { tool: "tellThem", input: { what: "Here's the founder run this Saturday at the Golden Gate Bridge", links: [RUN.url] } },
+    { text: JSON.stringify({ captions: [{ n: 1, caption: "Builders who Run, a founder run across the Golden Gate Bridge on Saturday." }], closing: null }) },
     { tool: "finish", input: { status: "done", outcome: "sent the run" } },
   );
   const h = harness(NOW);
@@ -213,9 +213,9 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   script.length = 0;
   script.push(
     { tool: "search", input: { what: "founder run club", when: "this weekend" } },
-    { tool: "tellThem", input: { what: "Here's the founder run this Saturday at the Golden Gate Bridge" } },
-    { text: "Here's the founder run, Builders who Run, this Saturday at the Golden Gate Bridge." },
-    { tool: "tellThem", input: { what: "Builders who Run again, a second note about the run" } },
+    { tool: "tellThem", input: { what: "Here's the founder run this Saturday at the Golden Gate Bridge", links: [RUN.url] } },
+    { text: JSON.stringify({ captions: [{ n: 1, caption: "Builders who Run, a founder run across the Golden Gate Bridge on Saturday." }], closing: null }) },
+    { tool: "tellThem", input: { what: "Builders who Run again, a second note about the run", links: [RUN.url] } },
     { text: "Builders who Run starts at the Golden Gate Bridge on Saturday." },
     { tool: "tellThem", input: { what: "Builders who Run, a third note" } },
     { text: "Builders who Run is free, Saturday at the Golden Gate Bridge." },
@@ -225,8 +225,8 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   hf.deps.search = async () => [RUN];
   await TT.runTaskTurnWith(baseTask({ goal: "Keep your word from the call: \"I'll send that over now.\"", theirWords: "Yeah, that would be perfect." }), hf.deps);
   script.length = 0;
-  check(`one promise turn past the cap sends its delivery once, never a run of texts (${hf.log.texts.length})`, hf.log.texts.length === 1, hf.log.texts);
-  check(`the promised delivery goes out with two task updates already sent today (${JSON.stringify(h.log.texts)})`, h.log.texts.length === 1 && /Builders who Run/.test(h.log.texts[0]) && !h.log.warns.length, { did: r.did, texts: h.log.texts });
+  check(`one promise turn past the cap sends its delivery once, never a run of texts (${hf.log.texts.length})`, hf.log.texts.filter((t) => t === RUN.url).length === 1, hf.log.texts);
+  check(`the promised delivery goes out with two task updates already sent today (${JSON.stringify(h.log.texts)})`, h.log.texts.includes(RUN.url) && h.log.texts.some((t) => /Builders who Run/.test(t)) && !h.log.warns.length, { did: r.did, texts: h.log.texts });
 }
 
 // ======================================================================= 4. completion closes the loop
