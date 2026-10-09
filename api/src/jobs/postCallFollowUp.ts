@@ -7,6 +7,7 @@ import { DateTime } from "luxon";
 import { KINDS } from "../services/factLabels.js";
 import { memberKnowledge, memberRules, type MemberKnowledge } from "../services/memberKnowledge.js";
 import { localStamp } from "../services/memberTime.js";
+import { saidDay, uncorrectedClaims } from "../harness/callGrounding.js";
 
 // Relationship text after a call: one real thought from what they said.
 //
@@ -91,19 +92,20 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
 export const POST_CALL_SECTIONS = ["delivered", "carrying", "lessons", "corrections", "claims", "restraint", "exchanges"] as const;
 
 // Pure: the layer's live claims in the labels the draft reads (the same split as factLabels.ts renderLive: what they said, enduring
-// or not, apart from Co's read), each with the day it was last confirmed and, for an ephemeral one, the last day it holds.
-export function labelClaims(k: Pick<MemberKnowledge, "claims" | "identity">): { theySaid: string[]; coInferred: string[]; enduring: string[] } {
-  const tz = k.identity.timeZone;
+// or not, apart from Co's read), each with the day it was said (their local date, as renderLive labels it) and, for an ephemeral one,
+// the last day it holds. A claim holding a value they corrected away is dropped (harness/callGrounding.ts uncorrectedClaims).
+export function labelClaims(k: Pick<MemberKnowledge, "claims" | "corrections">): { theySaid: string[]; coInferred: string[]; enduring: string[] } {
+  const claims = uncorrectedClaims(k.claims, k.corrections);
   const fmt = (c: MemberKnowledge["claims"][number]) => {
-    const day = DateTime.fromISO(c.verifiedAt).setZone(tz).toFormat("LLL d");
-    const until = c.expiresOn ? `, until ${DateTime.fromISO(c.expiresOn, { zone: tz }).minus({ days: 1 }).toFormat("LLL d")}` : "";
+    const day = saidDay(c.saidOn);
+    const until = c.expiresOn ? `, until ${DateTime.fromISO(c.expiresOn.slice(0, 10), { zone: "utc" }).minus({ days: 1 }).toFormat("LLL d")}` : "";
     return `${c.text} (${c.provenance === "user_said" ? `they said, ${day}` : `Co's read, ${day}`}${until})`;
   };
   const enduring = (c: MemberKnowledge["claims"][number]) => KINDS[c.kind]?.lifetime === "enduring";
   return {
-    enduring: k.claims.filter((c) => c.provenance === "user_said" && enduring(c)).map(fmt),
-    theySaid: k.claims.filter((c) => c.provenance === "user_said" && !enduring(c)).map(fmt),
-    coInferred: k.claims.filter((c) => c.provenance === "co_inferred").map(fmt),
+    enduring: claims.filter((c) => c.provenance === "user_said" && enduring(c)).map(fmt),
+    theySaid: claims.filter((c) => c.provenance === "user_said" && !enduring(c)).map(fmt),
+    coInferred: claims.filter((c) => c.provenance === "co_inferred").map(fmt),
   };
 }
 

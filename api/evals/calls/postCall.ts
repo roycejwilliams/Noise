@@ -184,8 +184,8 @@ user: Thanks.`;
     corrections: [{ field: "city", was: "Oakland", now: "San Francisco", verifiedAt: at }],
     preferences: [],
     claims: [
-      { text: "Jordan is building a design studio.", provenance: "user_said", kind: "building", quote: "building a design studio", expiresOn: null, verifiedAt: at },
-      { text: "Jordan seems stretched thin.", provenance: "co_inferred", kind: "mood", quote: null, expiresOn: "2026-10-10", verifiedAt: at },
+      { text: "Jordan is building a design studio.", provenance: "user_said", kind: "building", quote: "building a design studio", expiresOn: null, saidOn: "2026-10-05", verifiedAt: at },
+      { text: "Jordan seems stretched thin.", provenance: "co_inferred", kind: "mood", quote: null, expiresOn: "2026-10-10", saidOn: "2026-10-07", verifiedAt: at },
     ],
     restraint: null,
     exchanges: [{ from: "member", text: "can you find venues", call: false, verifiedAt: at }, { from: "co", text: "summary of the call", call: true, verifiedAt: at }],
@@ -198,6 +198,16 @@ user: Thanks.`;
   check("without the layer the audit reads the call picture as before", JSON.stringify(G.knownBeforeFrom(null, { facts: "f", impressions: "i" })) === JSON.stringify({ facts: "f", impressions: "i" }));
   const labelled = PC.labelClaims(k);
   check("the post-call claims keep their labels: what they said apart from Co's read", labelled.enduring.length === 1 && /they said/.test(labelled.enduring[0]) && labelled.coInferred.length === 1 && /Co's read/.test(labelled.coInferred[0]) && labelled.theySaid.length === 0);
+  // Review of #121: the label is the day it was SAID, as their local date (2026-10-05 stays Oct 5 in Pacific, never Oct 4).
+  check("claim labels are the day said, never shifted a day early through UTC", /they said, Oct 5\)/.test(labelled.enduring[0]) && /Co's read, Oct 7, until Oct 9\)/.test(labelled.coInferred[0]) && /They said \(Oct 5\): Jordan is building/.test(kb.facts), { labelled, facts: kb.facts });
+  // Review probe: a Denver -> Austin correction and an enduring "Lives in Denver" claim gave both as facts.
+  {
+    const probe: any = { ...k, corrections: [{ field: "city", was: "Denver", now: "Austin", verifiedAt: at }], claims: [{ text: "Jordan lives in Denver.", provenance: "user_said", kind: "city", quote: "I live in denver", expiresOn: null, saidOn: "2026-09-01", verifiedAt: at }, ...k.claims] };
+    const pkb = G.knownBeforeFrom(probe, { facts: "", impressions: "" });
+    check("probe: a claim holding a corrected-away value is no fact for the audit (only the correction is)", !/Denver/i.test(pkb.facts + pkb.impressions) && /Austin/.test(pkb.facts) && /design studio/.test(pkb.facts), pkb);
+    const pl = PC.labelClaims(probe);
+    check("probe: and the post-call text never gets it as something they said", ![...pl.enduring, ...pl.theySaid, ...pl.coInferred].some((l) => /Denver/i.test(l)) && pl.enduring.length === 1, pl);
+  }
   const sec = PC.postCallKnowledgeSection(k);
   const rules = MK.memberRules(k);
   check("the post-call text gets the member rules from memberRules(k), word for word", [rules.discretion, rules.memberSafety, rules.grounding, rules.deliveryShape, rules.restraint, rules.quietHours].every((r) => !r || sec.includes(r)));
