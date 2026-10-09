@@ -49,6 +49,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
 import { kindOf, loadKindRestraint, loadStoredPrefs, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
+import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
 export const GOAL_SEASON_DAYS = 56;
@@ -69,6 +70,17 @@ export function draftAgain<T>(first: { draft: string; failed: string }, fn: () =
 // Draft with how they've been feeling in view, the way the daily pick does.
 export function draftWithFeeling<T>(feeling: string, fn: () => Promise<T>): Promise<T> {
   return feelingForDraft.run(feeling, fn);
+}
+
+// What Co knows about the member (services/memberKnowledge.ts), read ONCE per dispatch and handed to every draft inside it the same
+// way as the feeling: the block draftProactive adds (memberDraftBlock), and the knowledge itself for a type that needs to read it
+// (draftKnowledge). Outside a dispatch there is none and drafts are exactly as before.
+const memberForDraft = new AsyncLocalStorage<{ k: MemberKnowledge; block: string } | null>();
+export function draftWithKnowledge<T>(k: MemberKnowledge | null, rules: MemberRules | null, fn: () => Promise<T>): Promise<T> {
+  return memberForDraft.run(k && rules ? { k, block: memberDraftBlock(k, rules) } : null, fn);
+}
+export function draftKnowledge(): MemberKnowledge | null {
+  return memberForDraft.getStore()?.k ?? null;
 }
 
 // Judgment with side effects (which text goes to a person, and its words)
@@ -661,6 +673,54 @@ export function renderFacts(facts: Facts): string {
   return lines.length ? lines.join("\n") : "- (nothing beyond what's described below)";
 }
 
+// ---------- what Co knows about them (services/memberKnowledge.ts)
+
+// The sections a dispatch reads, in its one memberKnowledge call. Claims stay out: a draft states only CONFIRMED_FACTS.
+export const DISPATCH_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "restraint", "exchanges", "person"];
+// The transcript the pick, the relevance check, the repeat-question check and payload first read: the last 12 exchanges, as far
+// back as they go (the same window the dispatch always read).
+export const DISPATCH_EXCHANGES = { exchanges: 12, exchangeDays: 365 } as const;
+
+// Pure: the exchanges as the thread is stored ("User said: ..." / "Co replied: ..." / "[Call] ..."), oldest first, for the code
+// that parses it (harness/repeatAsk.ts turnsFromConversation, harness/payloadFirst.ts theirText). With stamps, each line opens
+// with when it was said in their zone, for the model reads (the pick, the relevance check).
+export function exchangeTranscript(k: Pick<MemberKnowledge, "exchanges" | "identity">, o: { stamped?: boolean } = {}): string {
+  return k.exchanges
+    .map((e) => {
+      const line = e.from === "member" ? `User said: ${e.text}` : e.call ? `[Call] ${e.text}` : `Co replied: ${e.text}`;
+      return o.stamped ? `[${localStamp(e.verifiedAt, k.identity.zone)}] ${line}` : line;
+    })
+    .join("\n");
+}
+
+// Pure: what a proactive draft is told about the member, and the member-level rules (memberRules: discretion, member safety,
+// grounding, delivery shape, restraint, quiet hours) as they are, never restated. Background only: CONFIRMED_FACTS stays the one
+// source of what the text states, and the date guard (proactiveSpecifics.ts) reads only those. The gates already ran in code, so
+// none of this is a reason to SKIP a text that is cleared to go.
+export function memberDraftBlock(k: MemberKnowledge, rules: MemberRules): string {
+  const day = (iso: string) => localStamp(iso, k.identity.zone).replace(/,.*$/, "");
+  const cap = (t: string, n = 160) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+  const lines: string[] = [];
+  const active = k.goals.filter((g) => g.state === "active").slice(0, 4);
+  const past = k.goals.filter((g) => g.state !== "active").slice(0, 3);
+  if (active.length) lines.push(`- Where they say they're headed (the lens: never recite it): ${active.map((g) => cap(g.text, 120)).join("; ")}`);
+  if (past.length) lines.push(`- Goals that are done or set aside (history, never current direction): ${past.map((g) => `${cap(g.text, 100)} (${g.state})`).join("; ")}`);
+  if (k.asks.length) lines.push(`- What they've asked Co for that's still open: ${k.asks.slice(0, 5).map((a) => cap(a.text, 120)).join("; ")}`);
+  const sent = k.delivered.slice(0, 10);
+  if (sent.length) lines.push(`- Already sent them (they have these: never offer or pitch one as new): ${sent.map((d) => `${cap(d.what, 80)} (${d.kind}, ${day(d.at)}${d.reaction ? `, they reacted: ${cap(d.reaction, 40)}` : ""})`).join("; ")}`);
+  const carrying = k.carrying.filter((c) => c.state !== "done").slice(0, 6);
+  if (carrying.length) lines.push(`- What Co is carrying for them: ${carrying.map((c) => `${cap(c.what, 100)} (${c.kind}, ${c.state}${c.told ? ", they know" : ""})`).join("; ")}`);
+  if (k.corrections.length) lines.push(`- They corrected (only the corrected version exists): ${k.corrections.slice(0, 4).map((c) => `${c.field}: ${c.now ? cap(c.now, 80) : "(removed)"}, not ${cap(c.was, 60)}`).join("; ")}`);
+  if (k.preferences.length) lines.push(`- What has landed with them before: ${k.preferences.map((p) => cap(p.text, 300)).join("; ")}`);
+  if (k.lessons.length) lines.push(`- What Co has learned about texting them: ${k.lessons.slice(0, 4).map((l) => cap(l.text, 160)).join("; ")}`);
+  const memberRules = [rules.discretion, rules.memberSafety, rules.grounding, rules.deliveryShape, rules.restraint, rules.quietHours].filter((r) => r && r.trim()).join("\n\n");
+  return `WHAT YOU KNOW ABOUT THEM (background: it shapes what you say and what you leave out; it is never a source for a date, an event or a commitment, and never something to state that CONFIRMED_FACTS doesn't have)
+${lines.length ? lines.join("\n") : "- (nothing more on file)"}
+
+MEMBER RULES (they hold for this member everywhere; code already cleared this text to go, so none of them is a reason to SKIP it)
+${memberRules}`;
+}
+
 // A test seam: a fake model for draftProactive, so the guard below can be exercised with zero tokens.
 let testModel: ((prompt: string) => Promise<string>) | null = null;
 export function setProactiveModelForTests(fn: typeof testModel): void {
@@ -682,6 +742,7 @@ export async function draftProactive(opts: {
   freshKeys?: string[];
 }): Promise<string | null> {
   const feeling = feelingForDraft.getStore();
+  const member = memberForDraft.getStore()?.block ?? null;
   const redo = redraftFor.getStore();
   const build = (own: string | null) => `${CO_VOICE}
 
@@ -691,7 +752,7 @@ ${opts.maxSentences && opts.maxSentences !== 2 ? PROACTIVE_RULES.replace("Max 2 
 
 CONFIRMED_FACTS (the only facts you may state)
 ${renderFacts(opts.facts)}
-${feeling ? `\nHOW THEY'VE BEEN FEELING (let it shape how you say this, never whether you say it: it's not a reason to SKIP. If they've been struggling, be gentler and lower-pressure, and acknowledge it briefly and warmly in your own words before the rest. Never name the feeling)\n${feeling}\n` : ""}
+${member ? `\n${member}\n` : ""}${feeling ?`\nHOW THEY'VE BEEN FEELING (let it shape how you say this, never whether you say it: it's not a reason to SKIP. If they've been struggling, be gentler and lower-pressure, and acknowledge it briefly and warmly in your own words before the rest. Never name the feeling)\n${feeling}\n` : ""}
 
 TASK
 ${opts.task}
@@ -1061,7 +1122,7 @@ export function readPick(text: string): { id: string; why: string } | null {
 // Only runs when there's a real choice, so most days cost nothing.
 export async function choosePick(
   eligible: Candidate[],
-  about: { recentConversation: string; feeling: string; taste?: string | null },
+  about: { recentConversation: string; feeling: string; taste?: string | null; person?: string | null },
 ): Promise<{ pick: Candidate | null; reason: string; source: "code" | "co" }> {
   if (eligible.length < 2) return proposePick(eligible);
   try {
@@ -1078,7 +1139,7 @@ You're about to text this member first. Several things are ready to go; pick the
 
 How they've been: ${about.feeling || "(nothing notable)"}
 What's landed with them before: ${about.taste || "(nothing recorded yet)"}
-Their recent texts with you (oldest first):
+${about.person ? `What you know about them:\n${about.person.slice(0, 2500)}\n` : ""}Their recent texts with you (oldest first):
 ${about.recentConversation.slice(-2500) || "(none)"}
 
 Ready to send:
@@ -1562,14 +1623,21 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  // Another member's details stripped before the pick, relevance and payload reads see it (2026-10-09 audit: this one wasn't).
-  const safe = await import("../services/memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null);
-  const recent = await pool
-    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 12`, [userId])
-    .then((r) => (safe ? r.rows.map((x: any) => safe(String(x.content))).filter((x): x is string => !!x) : []).reverse().join("\n"))
-    .catch(() => "");
-  const taste = await import("../services/outcomes.js").then((m) => m.tasteSummary(userId)).catch(() => null);
-  const picked = await choosePick(ev.eligible, { recentConversation: recent, feeling: renderEmotionalContext(emotional), taste });
+  // What Co knows about them, read once for this dispatch (services/memberKnowledge.ts), with another member's details already
+  // stripped inside it. The gates above keep their own reads, exactly as they were. A read that fails (a failed name lookup fails
+  // closed) leaves the transcript empty and the drafts as they were, never unstripped.
+  const MK = await import("../services/memberKnowledge.js");
+  const known = await MK.memberKnowledge(userId, { now: state.now, include: DISPATCH_KNOWLEDGE, ...DISPATCH_EXCHANGES }).catch((err: any) => {
+    console.error("proactive: member knowledge read failed (non-fatal, drafting without it):", err?.message ?? err);
+    return null;
+  });
+  const rules = known ? MK.memberRules(known) : null;
+  // As stored, for the code that parses the thread (repeat question, payload first); stamped in their zone for the model reads.
+  const recent = known ? exchangeTranscript(known) : "";
+  const recentStamped = known ? exchangeTranscript(known, { stamped: true }) : "";
+  const taste = known?.preferences[0]?.text ?? null;
+  const drafting = <T,>(fn: () => Promise<T>): Promise<T> => draftWithKnowledge(known, rules, () => feelingForDraft.run(renderEmotionalContext(emotional), fn));
+  const picked = await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: renderEmotionalContext(emotional), taste, person: known?.person?.text ?? null });
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
@@ -1583,7 +1651,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const pickChecks = ev.perCandidate.find((p) => p.candidate.id === c.id)?.checks ?? [];
 
   if (needsRelevanceCheck(c, state.now)) {
-    const r = await stillRelevant(c, { recentConversation: recent, now: state.now, timezone: person.timezone });
+    const r = await stillRelevant(c, { recentConversation: recentStamped, now: state.now, timezone: person.timezone });
     if (!opts.dryRun) await settleRelevance(c, r);
     if (!r) {
       await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `relevance check unanswered; held ${RELEVANCE_RETRY_HOURS}h` });
@@ -1598,7 +1666,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   let draft: DraftResult;
   try {
-    draft = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry[c.type].draft(c, person));
+    draft = await drafting(() => registry[c.type].draft(c, person));
   } catch (err: any) {
     await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
     if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft error: ${err?.message ?? err}`);
@@ -1634,8 +1702,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
     const first = { draft: draft.text, failed: describeFailed(dg.failed) };
-    const second = await feelingForDraft
-      .run(renderEmotionalContext(emotional), () => draftAgain(first, () => registry[c.type].draft(c, person)))
+    const second = await drafting(() => draftAgain(first, () => registry[c.type].draft(c, person)))
       .catch(() => null);
     if (second && "messages" in second) {
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
@@ -1692,7 +1759,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     for (const sib of pickSiblingOffers(c, ev.eligible)) {
       try {
         if (needsRelevanceCheck(sib, state.now)) {
-          const r = await stillRelevant(sib, { recentConversation: recent, now: state.now, timezone: person.timezone });
+          const r = await stillRelevant(sib, { recentConversation: recentStamped, now: state.now, timezone: person.timezone });
           if (!opts.dryRun) await settleRelevance(sib, r);
           if (!r) continue;
           if (!r.relevant) {
@@ -1700,7 +1767,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
             continue;
           }
         }
-        const d = await feelingForDraft.run(renderEmotionalContext(emotional), () => registry.event_offer.draft(sib, person));
+        const d = await drafting(() => registry.event_offer.draft(sib, person));
         if ("skip" in d || "defer" in d) continue;
         const msgs = d.messages.map(capitalizeSentences);
         const sibGate = gate(checkDraft(capitalizeSentences(d.text), d.rules));

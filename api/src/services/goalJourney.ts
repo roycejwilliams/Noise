@@ -135,6 +135,14 @@ export async function runGoalCheckins(now = new Date()): Promise<number> {
   return n;
 }
 
+// Pure: the goal check-in's context from what Co knows about them (services/memberKnowledge.ts, goals with state, read once by the
+// dispatch): this goal's state there, or null when it isn't on file there (then the profile entry alone decides, as before). A goal
+// whose state is done (closed at their word, services/goalEdges.ts) is history and never asked about as current direction.
+export function goalCheckinState(goals: readonly { text: string; state: "active" | "done" | "stale" }[], text: string): "active" | "done" | "stale" | null {
+  const key = text.trim().toLowerCase();
+  return goals.find((g) => g.text.trim().toLowerCase() === key)?.state ?? null;
+}
+
 // Sending a seasonal check-in resets that goal's clock, so the next one is a season away.
 export async function markGoalCheckedIn(userId: string, goalId: string): Promise<void> {
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]);

@@ -130,6 +130,7 @@
     "evals/sweepFind/queries.ts",
     "evals/coldstart/rules.ts",
     "evals/proactive/memberState.ts",
+    "evals/proactive/knowledge.ts",
     "evals/deploy/coTestDeps.ts",
     "evals/calls/contextAndVoice.ts",
     "evals/calls/promiseWiring.ts",
