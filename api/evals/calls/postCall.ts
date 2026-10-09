@@ -206,6 +206,8 @@ user: Thanks.`;
     const pkb = G.knownBeforeFrom(probe, { facts: "", impressions: "" });
     check("probe: a claim holding a corrected-away value is no fact for the audit (only the correction is)", !/Denver/i.test(pkb.facts + pkb.impressions) && /Austin/.test(pkb.facts) && /design studio/.test(pkb.facts), pkb);
     const pl = PC.labelClaims(probe);
+    const sf = G.uncorrectedClaims([{ text: "Is transferring teams" }, { text: "Lives in SF." }, { text: "Moved from Denver (CO)." }], [{ was: "SF" }, { was: "Denver (CO)" }]);
+    check("probe: an 'SF' correction never drops 'Is transferring teams' (whole words only), but drops 'Lives in SF', and regex characters are literal", sf.length === 1 && sf[0].text === "Is transferring teams", sf);
     check("probe: and the post-call text never gets it as something they said", ![...pl.enduring, ...pl.theySaid, ...pl.coInferred].some((l) => /Denver/i.test(l)) && pl.enduring.length === 1, pl);
   }
   const sec = PC.postCallKnowledgeSection(k);

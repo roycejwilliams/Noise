@@ -72,11 +72,15 @@ export const AUDIT_SECTIONS = ["goals", "asks", "delivered", "corrections", "cla
 // Pure: claims a correction hasn't overturned. Enduring claims never expire, so "Lives in Denver" outlives a Denver -> Austin
 // correction unless it's dropped here: any claim holding a corrected-away value (case-insensitive) is gone.
 export function uncorrectedClaims<C extends { text: string; quote?: string | null }>(claims: C[], corrections: { was: string }[]): C[] {
-  const was = corrections.map((c) => c.was.trim().toLowerCase()).filter((w) => w.length >= 2);
+  // Whole words or phrases only: an "SF" correction must never drop "Is transferring teams".
+  const was = corrections
+    .map((c) => c.was.trim())
+    .filter((w) => w.length >= 2)
+    .map((w) => new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")}(?![\\p{L}\\p{N}])`, "iu"));
   if (!was.length) return claims;
   return claims.filter((c) => {
-    const t = `${c.text} ${c.quote ?? ""}`.toLowerCase();
-    return !was.some((w) => t.includes(w));
+    const t = `${c.text} ${c.quote ?? ""}`;
+    return !was.some((w) => w.test(t));
   });
 }
 
