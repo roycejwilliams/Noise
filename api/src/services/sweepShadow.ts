@@ -15,7 +15,8 @@ import { DateTime } from "luxon";
 import { recordDecision } from "../harness/core.js";
 import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
 import { holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
-import { dayOf, loadAsks, loadMemberContext, type Q } from "./sweepSelectContext.js";
+import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
+import { memberZone } from "./memberTime.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -95,7 +96,9 @@ export type ShadowRun = { day: string; signature: string; skipped: boolean; judg
 // dryRun: decide and return, but write nothing (a local check).
 export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
-  const { today, weekday } = dayOf(now);
+  // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
+  const zone = await memberZone(userId);
+  const { today, weekday } = dayOf(now, zone);
   // Once a day.
   const done = await q(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 AND action IS DISTINCT FROM 'error' LIMIT 1`, [userId, today]);
   if (done.length && !opts.dryRun) return null;
@@ -122,11 +125,18 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     }),
   ];
   const askIds = [...new Set(raw.map((r) => r.askId).filter((x): x is string => !!x))];
-  const { asks, idFor } = await loadAsks(q, userId, now, askIds);
+  const { asks, idFor } = await loadAsks(q, userId, now, askIds, zone);
+  // What they know about: the shared member layer (services/memberKnowledge.ts), read once for this run. null = it failed closed.
+  const knowledge = await loadKnowledge(userId, now);
+  // Never re-pick what they already have: the offers Co sent, plus everything the layer has as delivered (receipts, Co's ledger,
+  // sent offers). A reminder or a month-later resurface still stays (buildShadowPool).
   const sentNames = new Set(
-    (await q(`SELECT payload->'match'->>'name' AS name FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent'`, [userId])).map((r: any) => norm(String(r.name ?? ""))).filter(Boolean),
+    [
+      ...(await q(`SELECT payload->'match'->>'name' AS name FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent'`, [userId])).map((r: any) => String(r.name ?? "")),
+      ...(knowledge?.delivered ?? []).map((d) => d.what),
+    ].map(norm).filter(Boolean),
   );
-  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now)), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames) };
+  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames) };
 
   // Skip unchanged days: same signature as the last run (holds that came due count as a change).
   const [last] = await q(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]);

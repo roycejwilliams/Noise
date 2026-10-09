@@ -117,5 +117,49 @@ check("a quiet day where they'd have wanted something fails that part of the bar
   check("a failed selection is logged as an error, never as the run tomorrow compares against", /if \(r\.error\) \{\s*if \(!opts\.dryRun\) await recordDecision\(\{[^}]*outcome: "skip", action: "error"/.test(sh) && /outcome = 'act' ORDER BY created_at DESC LIMIT 1/.test(sh) && /action IS DISTINCT FROM 'error'/.test(sh));
 }
 
+// The picker reads member facts from the shared layer (services/memberKnowledge.ts), live runs (PR 5 of the migration).
+{
+  const { factsFromKnowledge } = await import("../../src/services/sweepSelectContext.js");
+  const at = (d: string) => `${d}T17:30:00.000Z`;
+  const k: any = {
+    userId: "u1",
+    asOf: at("2026-10-02"),
+    identity: { firstName: "Jordan", city: "New York", zone: "America/New_York", timeZone: "America/New_York", verifiedAt: at("2026-10-01") },
+    goals: [
+      { text: "Raise a pre-seed round", state: "active", reason: null, told: true, verifiedAt: at("2026-09-01") },
+      { text: "Find a cofounder", state: "done", reason: "they closed it", told: true, verifiedAt: at("2026-09-20") },
+      { text: "Learn pottery", state: "stale", reason: "marked set_aside", told: true, verifiedAt: at("2026-09-10") },
+    ],
+    asks: [],
+    delivered: [{ what: "Founders Dinner", kind: "event", at: at("2026-09-28"), via: ["offer"], url: null, reaction: "said yes", verifiedAt: at("2026-09-28") }],
+    carrying: [
+      { what: "Shortlist of seed funds", kind: "task", state: "outstanding", told: true, theyHaveIt: false, dueAt: null, ref: "task #3", status: null, detail: null, verifiedAt: at("2026-10-01") },
+      { what: "Pitch deck notes", kind: "document", state: "done", told: true, theyHaveIt: true, dueAt: null, ref: "doc #1", status: null, detail: null, verifiedAt: at("2026-09-30") },
+    ],
+    lessons: [{ text: "Prefers small rooms", verifiedAt: at("2026-09-15") }],
+    corrections: [{ field: "city", was: "Oakland", now: "New York", verifiedAt: at("2026-09-12") }],
+    preferences: [{ text: "Likes founder dinners", source: "taste", verifiedAt: at("2026-09-29") }],
+    claims: [],
+    restraint: { holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: "tired about fundraising (mild, from a text)", suppressedKinds: ["goal_checkin"], trialKinds: [], unanswered: { count: 0, lastInboundAt: null, lastSentAt: null, pausedUntil: null }, verifiedAt: at("2026-10-02") },
+    exchanges: [
+      { from: "member", text: "Any founder dinners this week?", call: false, verifiedAt: "2026-10-01T23:05:00.000Z" },
+      { from: "co", text: "Looking now.", call: false, verifiedAt: "2026-10-01T23:06:00.000Z" },
+    ],
+    person: { text: "Who they are:\nA first-time founder.", verifiedAt: at("2026-10-02") },
+  };
+  const f = factsFromKnowledge(k);
+  check("live: the zone is theirs (not a hard-coded Pacific), and text stamps are in it", f.zone === "America/New_York" && f.texts[0].at === "Oct 1 19:05" && f.texts[0].id === "T1" && f.texts[0].from === "member" && f.texts[1].id === "T2");
+  check("live: only active goals are the lens; done and set-aside goals are history", f.goals!.join("|") === "Raise a pre-seed round" && f.goalsPast!.length === 2 && f.goalsPast!.some((g) => /Find a cofounder \(done\)/.test(g)) && f.goalsPast!.some((g) => /Learn pottery \(set aside\)/.test(g)));
+  check("live: what they already have, what Co is carrying (not what they have), and what Co learned", f.delivered![0].what === "Founders Dinner" && f.carrying!.length === 1 && /Shortlist of seed funds \(task\)/.test(f.carrying![0]) && f.learned!.some((l) => /Corrected city: New York/.test(l)) && !f.learned!.some((l) => /Oakland/.test(l)) && f.learned!.some((l) => /Prefers small rooms/.test(l)) && f.learned!.some((l) => /Likes founder dinners/.test(l)));
+  check("live: the feeling and the member rules (grounding, other members, restraint) come from the layer", f.feeling === "tired about fundraising (mild, from a text)" && f.rules!.length === 3 && f.rules!.some((r) => /^Restraint: .*goal_checkin/.test(r)) && f.rules!.some((r) => /^Other members:/.test(r)));
+  const p = selectPrompt({ ...ctx, ...f, sent: ctx.sent, outcomes: ctx.outcomes, discoveryLeft: 4, asks: [...ctx.asks, { id: "A2", text: "a chess club", since: "2026-09-01", closed: true }] });
+  check("the prompt carries the new sections, ids stable", /Today: Friday 2026-10-02 \(their time, America\/New_York\)/.test(p) && /T1 Oct 1 19:05 They: Any founder dinners/.test(p) && /S1 Sep 29/.test(p) && /A2 \(since 2026-09-01, closed since\)/.test(p) && /NOT the lens[\s\S]*Find a cofounder \(done\)/.test(p) && /What they already have from Co[^\n]*\n- Founders Dinner \(event, Sep 28\) → said yes/.test(p) && /already working on for them[^\n]*\n- Shortlist of seed funds/.test(p) && /Member rules[\s\S]*Restraint:/.test(p) && /Co's read of them:\nWho they are:/.test(p));
+  check("the lens line still lists only active goals", /the LENS[^\n]*\n- Raise a pre-seed round\n\n/.test(p) && !/the LENS[^\n]*\n[^\n]*Find a cofounder/.test(p));
+  const sh = readFileSync(new URL("../../src/services/sweepShadow.ts", import.meta.url), "utf8");
+  check("the shadow run reads the layer once and never re-picks what they already have", /const knowledge = await loadKnowledge\(userId, now\)/.test(sh) && /\(knowledge\?\.delivered \?\? \[\]\)\.map\(\(d\) => d\.what\)/.test(sh) && /loadMemberContext\(q, userId, now, \{ knowledge \}\)/.test(sh) && /dayOf\(now, zone\)/.test(sh));
+  check("a rejected member-knowledge read (name lookup failed) is caught and the picker goes without member facts, never unstripped ones", /memberKnowledge\(userId, \{ now, \.\.\.PICKER_KNOWLEDGE \}\)\.catch\([\s\S]{0,200}return null;/.test(readFileSync(new URL("../../src/services/sweepSelectContext.ts", import.meta.url), "utf8")));
+  check("no hard-coded Pacific zone left in the picker's context", !/America\/Los_Angeles/.test(readFileSync(new URL("../../src/services/sweepSelectContext.ts", import.meta.url), "utf8")));
+}
+
 console.log(`sweep select rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

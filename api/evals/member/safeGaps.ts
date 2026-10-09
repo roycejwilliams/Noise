@@ -15,7 +15,11 @@ check("lines without a linked member pass through", safe("Find a caterer for the
 
 // Each of the four paths runs its context through the strip, and fails closed (no strip, nothing).
 check("proactive dispatch transcript", /memberSafeLine\(userId\)[\s\S]{0,400}safe \? r\.rows\.map\(\(x: any\) => safe\(String\(x\.content\)\)\)/.test(src("harness/proactive.ts")));
-check("sweep picker texts", /memberSafeLine\(userId\)[\s\S]{0,600}text: safe \? \(safe\(String\(t\.content\)\)/.test(src("services/sweepSelectContext.ts")));
+{
+  // Live: the texts come from the shared member layer (stripped inside it, fails closed: no layer, no texts). Replay: stripped here.
+  const sc = src("services/sweepSelectContext.ts");
+  check("sweep picker texts", /opts\.knowledge \? factsFromKnowledge\(opts\.knowledge\) : \{ firstName: "them", city: null, zone, goals: \[\], texts: \[\]/.test(sc) && /texts: k\.exchanges/.test(sc) && /memberSafeLine\(userId\)/.test(sc) && /async function factsAsOf\([\s\S]{0,800}text: safe \? \(safe\(String\(t\.content\)\)/.test(sc));
+}
 check("call-tool loops and task goals (spoken sources)", /memberSafeLine\(userId\)[\s\S]{0,300}goal: safe \? safe\(String\(x\.goal/.test(src("services/callTools.ts")) && /const loops = l && safe \?/.test(src("services/callTools.ts")));
 const tc = src("services/turnContext.ts");
 check("text path: threads, loops and carrying", /memberSafeLine\(userId\)/.test(tc) && /loops: safeLoops/.test(tc) && /threads: safeThreads/.test(tc) && /carryingItems\([\s\S]{0,140}\)\.flatMap\(\(c\) => \{ const label = keep\(c\.label\)/.test(tc));

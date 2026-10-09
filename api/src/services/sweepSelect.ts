@@ -39,12 +39,21 @@ export type SelectContext = {
   city: string | null;
   today: string; // YYYY-MM-DD local
   weekday: string;
-  goals?: string[]; // where they are headed: the lens, judged against alongside the asks, never recited
-  asks: { id: string; text: string; since: string }[]; // A#
+  zone?: string; // their zone (every stamp below is in it)
+  goals?: string[]; // where they are headed (active goals only): the lens, judged against alongside the asks, never recited
+  goalsPast?: string[]; // goals done or set aside: history, never the lens
+  asks: { id: string; text: string; since: string; closed?: boolean }[]; // A#
   texts: { id: string; at: string; from: "member" | "co"; text: string }[]; // T#
   sent: { id: string; at: string; what: string; reaction: string | null }[]; // S#
   outcomes: { id: string; at: string; item: string; result: string; note: string | null }[]; // O#
   feeling: string | null;
+  // From the shared member layer (services/memberKnowledge.ts), live runs only: what Co already gave them, what it is carrying,
+  // what it has learned (corrections, lessons, taste), its read of them, and the member-level rules (memberRules).
+  delivered?: { what: string; kind: string; at: string; reaction: string | null }[];
+  carrying?: string[];
+  learned?: string[];
+  person?: string | null;
+  rules?: string[];
   discoveryLeft: number; // discovery sends left this week
   pool: PoolItem[];
 };
@@ -85,12 +94,17 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 // Pure: the member part of the prompt.
 export function selectPrompt(c: SelectContext): string {
   const lines: string[] = [];
-  lines.push(`Member: ${c.firstName}${c.city ? `, ${c.city}` : ""}. Today: ${c.weekday} ${c.today}.`);
+  lines.push(`Member: ${c.firstName}${c.city ? `, ${c.city}` : ""}. Today: ${c.weekday} ${c.today}${c.zone ? ` (their time, ${c.zone})` : ""}.`);
   lines.push(`Discovery texts left this week: ${c.discoveryLeft} (things they asked for don't use these).`);
   if (c.feeling) lines.push(`How they've been: ${c.feeling}`);
   lines.push(`\nWhat they've asked Co for (open):`);
-  lines.push(c.asks.length ? c.asks.map((a) => `${a.id} (since ${a.since}): ${clip(a.text, 220)}`).join("\n") : "(none)");
+  lines.push(c.asks.length ? c.asks.map((a) => `${a.id} (since ${a.since}${a.closed ? ", closed since" : ""}): ${clip(a.text, 220)}`).join("\n") : "(none)");
   if (c.goals?.length) lines.push("", "Where they say they are headed (the LENS: judge every candidate against this as well as the asks; never cite it as the reason, the reason is an ask, a text, or what they did):", c.goals.map((g) => `- ${clip(g, 200)}`).join("\n"));
+  if (c.goalsPast?.length) lines.push("", "Goals they've finished or set aside (history, NOT the lens: never pick something for one of these):", c.goalsPast.map((g) => `- ${clip(g, 200)}`).join("\n"));
+  if (c.person) lines.push("", "Co's read of them:", clip(c.person, 1500));
+  if (c.learned?.length) lines.push("", "What Co has learned about them (a correction replaces what it corrects):", c.learned.map((l) => `- ${clip(l, 200)}`).join("\n"));
+  if (c.delivered?.length) lines.push("", "What they already have from Co (never pick the same thing again as news; a reminder of something they're going to is different):", c.delivered.map((d) => `- ${clip(d.what, 120)} (${d.kind}, ${d.at})${d.reaction ? ` → ${d.reaction}` : ""}`).join("\n"));
+  if (c.carrying?.length) lines.push("", "What Co is already working on for them (a candidate that only repeats one of these isn't new):", c.carrying.map((x) => `- ${clip(x, 160)}`).join("\n"));
   lines.push(`\nTheir recent texts with Co (oldest first):`);
   lines.push(c.texts.length ? c.texts.slice(-SELECT_LIMITS.texts).map((t) => `${t.id} ${t.at} ${t.from === "member" ? "They" : "Co"}: ${clip(t.text, 280)}`).join("\n") : "(none)");
   lines.push(`\nWhat Co sent them first, last 30 days, and what happened:`);
@@ -99,6 +113,7 @@ export function selectPrompt(c: SelectContext): string {
     lines.push(`\nHow they've reacted to things Co suggested:`);
     lines.push(c.outcomes.map((o) => `${o.id} ${o.at}: ${clip(o.item, 100)} → ${o.result}${o.note ? ` ("${clip(o.note, 120)}")` : ""}`).join("\n"));
   }
+  if (c.rules?.length) lines.push("", "Member rules (for judging what goes; the send step still holds timing and caps):", c.rules.join("\n"));
   lines.push(`\nThe pool (${c.pool.length}):`);
   lines.push(
     c.pool
