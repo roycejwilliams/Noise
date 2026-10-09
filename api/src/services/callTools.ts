@@ -55,12 +55,23 @@ export function _resetCallMemoryForTest(): void { callMemory.clear(); }
 
 export type MemberOnCall = { phone: string; firstName: string | null; city: string | null; tasks: { id: number; goal: string }[]; loops: string | null };
 
-// The member's details the tools need, from the database, by the verified user id only.
+// Pure: the open tasks (with their ids, for updateTask and closeTask) from the layer's one carrying builder: each open co_task is
+// there once, with its "task #N" ref.
+export function tasksFromCarrying(carrying: { ref: string | null; what: string }[]): { id: number; goal: string }[] {
+  return carrying.flatMap((c) => {
+    const id = Number(c.ref?.match(/^task #(\d+)$/)?.[1]);
+    return Number.isFinite(id) && id > 0 ? [{ id, goal: c.what }] : [];
+  });
+}
+
+// The member's details the tools need, by the verified user id only. Their city and open tasks come from the one member-knowledge
+// layer (services/memberKnowledge.ts, member-stripped inside); their phone and the loop list (describeLoops, with the
+// "not confirmed lately" read the layer doesn't keep, and the [loop N] ids updateLoop takes) are read here.
 export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
-  const [u, p, t, l] = await Promise.all([
+  const [u, k, l] = await Promise.all([
     pool.query(`SELECT phone_number, first_name FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0] ?? null),
-    pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
-    import("./coTasks.js").then((m) => m.openTasks(userId)).catch(() => []),
+    // Fails closed: a layer that can't be read (it throws when the names to strip can't be read) gives no tasks, never unstripped ones.
+    import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { include: ["carrying"] })).catch(() => null),
     pool
       .query(`SELECT * FROM open_loops WHERE user_id = $1 AND closed_at IS NULL AND status NOT IN ('done','dropped') ORDER BY changed_at DESC LIMIT 8`, [userId])
       .then(async (r) => {
@@ -73,9 +84,10 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
   // Another member's details stripped before they become spoken sources (2026-10-09 audit: the call path's own context strips
   // these loops; the tools' copy didn't). Fails closed: no strip, no loops or task goals.
   const safe = await import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null);
+  const t = k ? tasksFromCarrying(k.carrying) : [];
   const tasks = t.map((x: any) => ({ id: x.id, goal: safe ? safe(String(x.goal ?? "")) : null })).filter((x: any): x is { id: number; goal: string } => !!x.goal);
   const loops = l && safe ? l.split("\n").map((line: string) => safe(line)).filter((x: string | null): x is string => !!x).join("\n") || null : null;
-  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: p?.city ?? null, tasks, loops };
+  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops };
 }
 
 export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {

@@ -6,7 +6,6 @@
 import { DateTime } from "luxon";
 import { timelineFor } from "./timeline.js";
 import { voiceFinds, type VoiceFinds } from "./voiceFinds.js";
-import pool from "../db/db.js";
 
 // One page. Written from services/capabilities.ts; every line is something Co does today or something it must not promise.
 export const CAPABILITY_SHEET = `# What Co can do today (this is the whole list; never refuse what is on it, never promise what is not)
@@ -39,11 +38,19 @@ export function renderFinds(f: VoiceFinds): string {
 }
 
 export type CallBriefing = { rightNow: string; findsNow: string };
+// How long the briefing waits on the call context's shared read before reading their city itself.
+const SHARED_WAIT_MS = 1000;
 
 // Built while the phone rings (outbound) or alongside the context (inbound). Each part fails to a safe line, never to a guess.
 export async function buildCallBriefing(userId: string, now: Date = new Date()): Promise<CallBriefing> {
-  const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-  const city: string | null = rows[0]?.city ?? null;
+  // Their city from the one member-knowledge layer (services/memberKnowledge.ts): the call context's read when it's already under
+  // way (services/callContext.ts, shared for the call's setup) and back within a second, else an identity-only read of its own.
+  const own = () => import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { now, include: [] }));
+  // Wrapped, so awaiting the import doesn't also await the read.
+  const shared = await import("./callContext.js").then((c) => ({ read: c.callKnowledgeInFlight(userId, now.getTime()) })).catch(() => ({ read: null }));
+  const slow = new Promise<"slow">((r) => setTimeout(() => r("slow"), SHARED_WAIT_MS).unref?.());
+  const k = await (shared.read ? Promise.race([shared.read, slow]).then((x) => (x === "slow" ? own() : x)) : own()).catch(() => null);
+  const city: string | null = k?.identity.city ?? null;
   const [clock, finds] = await Promise.all([
     timelineFor(userId, city, now).catch(() => null),
     voiceFinds(userId, now).catch((): VoiceFinds => ({ available: false, reason: "the lookup didn't load" })),
