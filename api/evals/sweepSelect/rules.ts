@@ -61,7 +61,8 @@ check("a send citing only what Co said is rejected: it has to rest on them", one
 check("a send without why-now, or without wow, doesn't go", one(send("C1", { whyNow: "" })).verdict === "reject" && one(send("C1", { wow: false })).guard === "not a wow");
 check("a past event never sends", one(send("C2")).guard === "already past");
 const many = guardVerdicts({ ...ctx, pool: [...ctx.pool, { id: "C5", key: "c5|", name: "C5", date: null, tier: 1, kind: "answer", asks: ["A1"] }] }, [send("C1"), send("C3"), send("C4"), send("C5")]);
-check("over the send limit, the rest are held in Co's order", many.filter((j) => j.verdict === "send").map((j) => j.id).join() === "C1,C3,C4" && many.find((j) => j.id === "C5")!.reason === "over_send_limit");
+// Asks win contested slots (Royce, 2026-10-09): answers C1 and C5 take theirs first, then goal finds in Co's order (C3); C4 is held.
+check("over the send limit, asks take their slots first and goal finds fill the rest, in Co's order", many.filter((j) => j.verdict === "send").map((j) => j.id).join() === "C1,C3,C5" && many.find((j) => j.id === "C4")!.reason === "over_send_limit");
 
 const sig = selectSignature(ctx);
 check("same pool, asks and last text: same signature (skipped)", sig === selectSignature({ ...ctx, texts: [...ctx.texts, { id: "T3", at: "Oct 1", from: "co" as const, text: "Co again" }].slice(0, 2) }));

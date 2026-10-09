@@ -30,7 +30,9 @@ export type GoalEdge = { goal: string; kind: GoalKind; edges: string[]; why: str
 export type GoalStateRow = { goalHash: string; goal: string; state: GoalState; reason: string; source: "context" | "member" | "co"; changedAt: Date; toldAt: Date | null; hints: number };
 export type Correction = { field: string; old_value: string | null; new_value: string | null; corrected_at: string | Date };
 
-export const EDGE_LIMITS = { perGoal: 2, chars: 140, timeoutMs: 8000 } as const;
+// maxTokens: room for every goal's answer (2026-10-09: 17 goals ran past 900 tokens, the answer was cut off mid-list, and every goal
+// read as "couldn't be read this time"); about 150 tokens a goal, so 4000 holds 25. The timeout grows with it.
+export const EDGE_LIMITS = { perGoal: 2, chars: 140, timeoutMs: 30000, maxTokens: 4000 } as const;
 // A goal set aside from context is offered to the reply until it's raised (review of #107: a cap let it go silent for good). The count
 // is kept for the record; a hint is a suggestion the reply takes only when it fits.
 export const TELL_MAX_HINTS = Infinity;
@@ -75,15 +77,57 @@ const ISO = /^\d{4}-\d{2}-\d{2}$/;
 // be a real date; a goal can only be superseded by a later goal in the list.
 // today: a stated window already over before the goal could matter is a model slip unless the goal names a month or date (review of #107).
 // direction: the index of their long-term direction in the list (appended last), which never supersedes a goal.
-export function parseEdges(goals: string[], raw: string, firstName?: string | null, o: { today?: string; direction?: number | null } = {}): GoalEdge[] {
-  let arr: any[] = [];
-  try {
-    const m = raw.match(/\[[\s\S]*\]/);
-    arr = m ? JSON.parse(m[0]) : [];
-  } catch {
-    arr = [];
+// How the model's answer read: "full" (one whole JSON list), "cut_off" (the list never closed or didn't parse, so only the
+// complete goal objects in it were kept), "failed" (nothing usable: no answer, a timeout, no complete goal).
+export type EdgeRead = "full" | "cut_off" | "failed";
+
+// Pure: the goal objects in the model's answer. A whole list parses as is; a list cut off mid-answer keeps every goal object that
+// closed (2026-10-09: one cut-off goal used to throw away all 17).
+export function readEdgeAnswer(raw: string): { arr: any[]; read: EdgeRead } {
+  const start = raw.indexOf("[");
+  if (start < 0) return { arr: [], read: "failed" };
+  const whole = raw.slice(start).match(/^\[[\s\S]*\]/);
+  if (whole) {
+    try {
+      const arr = JSON.parse(whole[0]);
+      if (Array.isArray(arr)) return { arr, read: "full" };
+    } catch {
+      // falls through to the salvage
+    }
   }
-  const rows = goals.map((_, i) => arr.find((x) => Number(x?.n) === i + 1) ?? {});
+  const arr: any[] = [];
+  let depth = 0, from = -1, inString = false, escaped = false;
+  for (let i = start + 1; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") {
+      if (depth === 0) from = i;
+      depth++;
+    } else if (ch === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && from >= 0) {
+        try {
+          arr.push(JSON.parse(raw.slice(from, i + 1)));
+        } catch {
+          // a malformed object is skipped; the goals after it still count
+        }
+        from = -1;
+      }
+    }
+  }
+  return { arr, read: arr.length ? "cut_off" : "failed" };
+}
+
+export function parseEdges(goals: string[], raw: string, firstName?: string | null, o: { today?: string; direction?: number | null } = {}): GoalEdge[] {
+  const { arr } = readEdgeAnswer(raw);
+  const found = goals.map((_, i) => arr.find((x) => Number(x?.n) === i + 1));
+  const rows = found.map((r) => r ?? {});
   // The member never goes into a search (services/sweepQuery.ts): an edge naming them, their company or partners is dropped. Their
   // own work is in the goals that aren't findable; a name in a findable goal (a neighborhood, a program) is the thing being found.
   const terms = memberTerms({ firstName, goals: goals.filter((g, i) => isCoTaskGoal(g) || String(rows[i].kind ?? "") !== "findable") });
@@ -101,7 +145,8 @@ export function parseEdges(goals: string[], raw: string, firstName?: string | nu
     if (until && o.today && until < o.today && !named) until = null;
     const by = Number(r.superseded_by);
     const supersededBy = Number.isInteger(by) && by > i + 1 && by <= goals.length && by - 1 !== o.direction ? goals[by - 1] : null;
-    const why = String(r.why ?? "").trim().slice(0, 200) || (edges.length ? "" : arr.length ? "no findable side" : "couldn't be read this time");
+    // A goal the answer never reached (a cut-off read) is unread, not "no findable side".
+    const why = !found[i] && !isCoTaskGoal(goal) ? "couldn't be read this time" : String(r.why ?? "").trim().slice(0, 200) || (edges.length ? "" : "no findable side");
     return { goal, kind, edges, why, until, supersededBy, explicit };
   });
 }
@@ -135,7 +180,7 @@ export function edgeSearchText(edges: GoalEdge[], extra: { enjoys?: string[] | n
 
 // ---------- the run
 
-export type GoalPlan = { searchText: string | null; active: GoalEdge[]; passed: { goal: string; why: string }[]; setAside: { goal: string; state: GoalState; reason: string }[]; retiredAsks: number };
+export type GoalPlan = { searchText: string | null; active: GoalEdge[]; passed: { goal: string; why: string }[]; setAside: { goal: string; state: GoalState; reason: string }[]; retiredAsks: number; read?: EdgeRead | null };
 
 export type GoalDeps = {
   model: (prompt: string) => Promise<string>;
@@ -145,7 +190,8 @@ export type GoalDeps = {
   retired: (goal: string, c: Correction[], lastSaid?: Date | string | null) => Correction | null;
   findAsks: (userId: string) => Promise<{ id: number; text: string }[]>;
   helpAsk: (userId: string, id: number) => Promise<void>;
-  log: (d: { userId: string; action: string; proposal: Record<string, unknown>; reason?: string | null }) => Promise<void>;
+  // failed: the read didn't come back whole (logged as a skip, never as a success).
+  log: (d: { userId: string; action: string; proposal: Record<string, unknown>; reason?: string | null; failed?: boolean }) => Promise<void>;
 };
 
 // One member's goals for this sweep: read fresh, derived fresh, the lifecycle applied, set-asides recorded, goal-derived find
@@ -163,6 +209,10 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
     return !s || s.state === "active";
   });
   const raw = live.length ? await deps.model(edgePrompt(live, { city: o.city, today })).catch(() => "") : "";
+  const answer = readEdgeAnswer(raw);
+  const readCount = live.length ? new Set(answer.arr.map((x) => Number(x?.n)).filter((n) => n >= 1 && n <= live.length)).size : 0;
+  // Every goal came back, only the list's closing bracket didn't: that's a whole read.
+  const read: EdgeRead | null = !live.length ? null : answer.read === "cut_off" && readCount === live.length ? "full" : answer.read;
   const dir = o.direction ? live.indexOf(o.direction.trim()) : -1;
   const derived = parseEdges(live, raw, o.firstName, { today, direction: dir >= 0 ? dir : null });
   const corrections = await deps.corrections(userId).catch(() => [] as Correction[]);
@@ -189,15 +239,23 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
     }
   }
   const searchText = edgeSearchText(active, { enjoys: o.enjoys, specifics: o.specifics });
+  // A read that didn't come back whole logs as a failure, whatever it still searches (Royce, 2026-10-09: "no silent success"). A
+  // cut-off read still searches the goals it did read; a failed one searches only what they enjoy, if anything.
+  const readFailed = read === "failed" || read === "cut_off";
   await deps
     .log({
       userId,
-      action: searchText ? "searching_edges" : "passed",
-      reason: searchText ? null : live.length && !raw ? "the goals couldn't be read this time" : passed.length || setAside.length ? "no active goal with a findable side" : "no active goals",
-      proposal: { edges: active.map((e) => ({ goal: e.goal, kind: e.kind, edges: e.edges })), passed, setAside, retiredAsks, ...(o.seedSig ? { seedSig: o.seedSig } : {}) },
+      action: read === "failed" ? "read_failed" : read === "cut_off" ? "read_cut_off" : searchText ? "searching_edges" : "passed",
+      reason: read === "failed"
+        ? "the goals couldn't be read this time"
+        : read === "cut_off"
+          ? `the answer was cut off: ${readCount} of ${live.length} goals read`
+          : searchText ? null : passed.length || setAside.length ? "no active goal with a findable side" : "no active goals",
+      proposal: { read, goalsRead: readCount, goalsLive: live.length, searching: !!searchText, edges: active.map((e) => ({ goal: e.goal, kind: e.kind, edges: e.edges })), passed, setAside, retiredAsks, ...(o.seedSig ? { seedSig: o.seedSig } : {}) },
+      ...(readFailed ? { failed: true } : {}),
     })
     .catch(() => {});
-  return { searchText, active, passed, setAside, retiredAsks };
+  return { searchText, active, passed, setAside, retiredAsks, read };
 }
 
 // ---------- real deps
@@ -250,7 +308,7 @@ export const realGoalDeps: GoalDeps = {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), EDGE_LIMITS.timeoutMs);
     try {
-      const r: any = await new Anthropic().messages.create({ model: MODELS.haiku, max_tokens: 900, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal: ctl.signal });
+      const r: any = await new Anthropic().messages.create({ model: MODELS.haiku, max_tokens: EDGE_LIMITS.maxTokens, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal: ctl.signal });
       return (r.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
     } finally {
       clearTimeout(t);
@@ -267,6 +325,6 @@ export const realGoalDeps: GoalDeps = {
   },
   log: async (d) => {
     const { recordDecision } = await import("../harness/core.js");
-    await recordDecision({ layer: 7, decision: "goal_sweep.plan", userId: d.userId, outcome: d.action === "passed" ? "skip" : "act", action: d.action, reason: d.reason ?? null, proposal: d.proposal });
+    await recordDecision({ layer: 7, decision: "goal_sweep.plan", userId: d.userId, outcome: d.action === "passed" || d.failed ? "skip" : "act", action: d.action, reason: d.reason ?? null, proposal: d.proposal });
   },
 };

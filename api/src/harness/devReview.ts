@@ -84,11 +84,15 @@ export type FlagType =
   | "member_called_out_miss"
   | "questionable_tool_choice"
   | "held_back"
-  | "cold_start_miss";
+  | "cold_start_miss"
+  | "goal_read_failed"
+  | "goals_starved";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
   cold_start_miss: "New member's sweep found nothing for them",
+  goal_read_failed: "Goal sweep couldn't read their goals (whole or in part)",
+  goals_starved: "Goal finds starved while asks took every slot",
   search_sent_nothing: "Search sent nothing",
   found_but_turned_away: "Search found real ones but turned all away",
   stretch_send: "Sent a near-miss with a caveat",
@@ -202,6 +206,10 @@ export function logFlags(data: ReviewData): ReviewFlag[] {
     const p = d.proposal ?? {};
     // A new member's empty sweep is a product miss, not a quiet day (services/coldStart.ts, 2026-10-08).
     if (d.decision === "sweep.cold_start_miss") add(d, "cold_start_miss", "high", `day ${p.daysSinceJoined ?? "?"}: ${p.sweep ?? "sweep"} for "${p.searched || (p.seeds ?? []).map((x: any) => x.text).join("; ") || "?"}" found nothing (tried: ${(p.tried ?? []).slice(0, 3).join(" | ") || "nothing logged"})`, d.reason ?? "no reason logged", !!d.reason);
+    // The goal sweep's read of their goals didn't come back whole (services/goalEdges.ts, 2026-10-09: a cut-off read used to log as "searching").
+    if (d.decision === "goal_sweep.plan" && (d.action === "read_failed" || d.action === "read_cut_off"))
+      add(d, "goal_read_failed", d.action === "read_failed" ? "high" : "medium", `${d.action === "read_failed" ? "no goals read" : `${p.goalsRead ?? "?"} of ${p.goalsLive ?? "?"} goals read`}${p.searching ? "; searched the rest of what it had" : "; nothing searched from their goals"}`, d.reason ?? "no reason logged", !!d.reason);
+    if (d.decision === "sweep.goals_starved") add(d, "goals_starved", "medium", `${p.days ?? "?"} days with no goal find, ${p.askSends ?? "?"} ask finds sent, ${p.activeGoals ?? "?"} active goals`, d.reason ?? "no reason logged", !!d.reason);
     if (d.decision === "turn.latency" && Array.isArray(d.checks) && d.checks.some((c: any) => c.pass === false)) {
       const secs = Math.round((p.ms ?? 0) / 1000);
       const slowest = Object.entries({ router: p.routerMs, search: p.searchMs, prep: p.prepMs, reply: p.replyMs, grounding: p.groundingMs })

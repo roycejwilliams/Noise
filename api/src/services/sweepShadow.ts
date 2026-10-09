@@ -94,6 +94,46 @@ export function describeMatch(m: any): string | null {
 export type ShadowRun = { day: string; signature: string; skipped: boolean; judgments: Judgment[]; pool: PoolItem[]; error?: string };
 
 // dryRun: decide and return, but write nothing (a local check).
+// Goal finds that haven't produced anything for this long, while their asks keep getting sends, are logged for review.
+export const GOAL_STARVE_DAYS = 7;
+const DAY_MS = 86_400_000;
+
+// Pure: are their goals being starved? They have active goals, what they asked for got sends in the window, and no goal find has
+// gone out in GOAL_STARVE_DAYS (or ever, for someone with goals on file that long).
+export function goalsStarved(o: { now: Date; activeGoals: number; askSends: number; lastGoalSend: Date | null; goalsSince: Date | null }): { starved: boolean; days: number | null } {
+  const since = o.lastGoalSend ?? o.goalsSince;
+  const days = since ? Math.floor((o.now.getTime() - since.getTime()) / DAY_MS) : null;
+  if (!o.activeGoals || !o.askSends || days === null) return { starved: false, days };
+  return { starved: days >= GOAL_STARVE_DAYS, days };
+}
+
+async function noteGoalStarvation(q: Q, userId: string, now: Date, today: string): Promise<void> {
+  const [prof] = await q(`SELECT goals, intent FROM co_profiles WHERE user_id = $1`, [userId]);
+  const { goalSweepGoals } = await import("./goalSweep.js");
+  const goals = prof ? goalSweepGoals(prof) ?? [] : [];
+  const { goalHash } = await import("./goalEdges.js");
+  const closed = new Set((await q(`SELECT goal_hash FROM goal_states WHERE user_id = $1 AND state <> 'active'`, [userId])).map((r: any) => String(r.goal_hash)));
+  const activeGoals = goals.filter((g) => !closed.has(goalHash(g))).length;
+  const sent = await q(
+    `SELECT COALESCE(payload->>'fromProfile', 'false') = 'true' AS goal, COUNT(*) FILTER (WHERE COALESCE(decided_at, updated_at) >= $2::timestamptz - make_interval(days => $3))::int AS recent, MAX(COALESCE(decided_at, updated_at)) AS last
+     FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' GROUP BY 1`,
+    [userId, now, GOAL_STARVE_DAYS],
+  );
+  const goalRow = sent.find((r: any) => r.goal === true);
+  const askRow = sent.find((r: any) => r.goal === false);
+  // How long their goals have been on file for the sweep: its first plan for them.
+  const [first] = await q(`SELECT MIN(created_at) AS at FROM harness_decisions WHERE user_id = $1 AND decision = 'goal_sweep.plan'`, [userId]);
+  const v = goalsStarved({ now, activeGoals, askSends: Number(askRow?.recent ?? 0), lastGoalSend: goalRow?.last ? new Date(goalRow.last) : null, goalsSince: first?.at ? new Date(first.at) : null });
+  if (!v.starved) return;
+  const [already] = await q(`SELECT 1 FROM harness_decisions WHERE user_id = $1 AND decision = 'sweep.goals_starved' AND proposal->>'day' = $2 LIMIT 1`, [userId, today]);
+  if (already) return;
+  await recordDecision({
+    layer: 5, decision: "sweep.goals_starved", userId, outcome: "skip", action: "flag",
+    reason: `no goal find sent in ${v.days} days while ${askRow?.recent ?? 0} ask find(s) went out in the last ${GOAL_STARVE_DAYS}`,
+    proposal: { day: today, days: v.days, activeGoals, askSends: Number(askRow?.recent ?? 0), lastGoalSend: goalRow?.last ?? null },
+  });
+}
+
 export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
@@ -102,6 +142,8 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   // Once a day.
   const done = await q(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 AND action IS DISTINCT FROM 'error' LIMIT 1`, [userId, today]);
   if (done.length && !opts.dryRun) return null;
+  // Asks win contested slots, and goals must not starve for it (Royce, 2026-10-09): logged for review, once a day, nothing held.
+  if (!opts.dryRun) await noteGoalStarvation(q, userId, now, today).catch((err: any) => console.error("picker: goal starvation check failed (non-fatal):", err?.message ?? err));
 
   const backlogs = await q(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId]);
   const queued = await q(`SELECT payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId]);
