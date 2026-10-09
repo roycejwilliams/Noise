@@ -117,8 +117,10 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   const last = FU.followUpPrompt({ task: task(FU.FOLLOWUP_LIMITS.maxWakes), firstName: "Sam", recent: "", recentSends: "", now: "2026-10-07T20:00" });
   check("the last look offers no later", !/- later:/.test(last) && /This is the last look: check in now or skip/.test(last));
   const fu = src("services/followUps.ts");
-  check("the thread and the sends carry how long ago (not bare UTC stamps)", /`\[\$\{ago\(row\.created_at, asOf\)\}\] \$\{l\}`/.test(fu) && /`- \$\{ago\(s\.sent_at, asOf\)\}: \$\{s\.type\}`/.test(fu));
-  check("another member's lines are still stripped, per row", /withoutTeammateLines\(\(await M\.memberSafe\(userId, \[row\], names\)\)\.join\("\\n"\)\)/.test(fu));
+  check("the thread and the sends carry how long ago (not bare UTC stamps)", /recent: k \? exchangeText\(k\.exchanges, \(at\) => ago\(at, asOf\)\)/.test(fu) && /`\[\$\{stamp\(x\.verifiedAt\)\}\] \$\{l\}`/.test(fu) && /`- \$\{ago\(s\.sent_at, asOf\)\}: \$\{s\.type\}`/.test(fu) && /\[3h ago\] User said: hi/.test(FU.exchangeText([{ from: "member", text: "hi", call: false, verifiedAt: new Date(now.getTime() - 3 * 3_600_000).toISOString() }], (at) => FU.ago(at, now))));
+  // Another member's details: stripped inside the layer (services/memberKnowledge.ts, every string; evals/member/knowledge.ts),
+  // and a teammate's lines dropped per line.
+  check("another member's lines are still stripped, per row", /memberKnowledge\(userId, \{ now: asOf,/.test(fu) && /return stripDeep\(k, strip\);/.test(src("services/memberKnowledge.ts")) && /withoutTeammateLines\(`\$\{head\}\$\{x\.text\}`\)/.test(fu) && !/pool\.query\(`SELECT content[^`]*text_exchange/.test(fu.replace(/export function exchangesAsOf[\s\S]*?\n}\n/, "")));
   check("'now' still goes through the same queue and daily pick (every limit applies)", /enqueueCandidate\(\{ userId, type: f\.type as any, [^}]*fromCo: true \}\)/.test(fu));
 
   // The tools actually offered, through the real decider with the model scripted.
