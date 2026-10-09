@@ -124,7 +124,8 @@ export function attendanceConfirmed(p: Pick<DebriefPayload, "eventName" | "check
   // Whole words only ("founder" never matches "founders" of another event).
   const has = (t: string, w: string) => new RegExp(`\\b${w}\\b`).test(t);
   return theirLines.some((l) => {
-    const t = l.toLowerCase().replace(/[‘’]/g, "'");
+    // "can't wait" is eager, not a no.
+    const t = l.toLowerCase().replace(/[‘’]/g, "'").replace(/\b(?:can'?t|cannot) wait\b/g, "eager");
     return key.filter((w) => has(t, w)).length >= Math.min(2, key.length) && GOING.test(t) && !NOT_GOING.test(t);
   });
 }

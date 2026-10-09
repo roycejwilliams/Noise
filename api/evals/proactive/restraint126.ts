@@ -91,6 +91,7 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   // Review of #129: negations and near-miss words read as going.
   for (const l of ["User: I'm not going to the Claude Founder Salon", "User: I never made it to the founder salon", "User: not going to make the founder salon sorry", "User: can't make the Claude salon, going to skip it"]) check(`their "not going" isn't going: ${l}`, !R.attendanceConfirmed(p, [l]));
   check("another event sharing a word stem isn't this one", !R.attendanceConfirmed(p, ["User: going to a Claude meetup for founders next month"]));
+  check("\"can't wait\" isn't a no", R.attendanceConfirmed(p, ["User: going to the Claude Founder Salon, can't wait"]));
   check("a curly apostrophe still reads", R.attendanceConfirmed(p, ["User: I\u2019ll be there, Claude Founder Salon tonight"]));
   check("a check-in at the door: confirmed", R.attendanceConfirmed({ ...p, checkinFollowupIds: ["c1"] }, []));
   check("a walk-in: confirmed", R.attendanceConfirmed({ ...p, walkinCheckinIds: ["w1"] }, []));

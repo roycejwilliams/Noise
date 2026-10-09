@@ -82,7 +82,7 @@ check("a task turn reads member facts once, from memberKnowledge, zone from iden
 check("a follow-up reads member facts from memberKnowledge as of its moment, zone from identity", /memberKnowledge\(userId, \{ now: asOf,[^)]*\{ exchanges: exchangesAsOf\(asOf\) \}\)/.test(fu) && /const zone = ctx\.zone;/.test(fu) && !/memberSafe\(/.test(fu));
 check("a rejected knowledge read (names unreadable) means no member context, never an unstripped fallback", /\]\s*\}\)\.catch\(\(err: any\) => \{[\s\S]{0,200}return null;/.test(tt) && /recent: k \? exchangeText\(/.test(tt) && /\.catch\(\(err: any\) => \{[\s\S]{0,200}return null;/.test(fu) && /recent: k \? exchangeText\(/.test(fu) && !/memberSafe\(|co_memories/.test(tt) && !/memberSafe\(/.test(fu));
 check("the delivery guards are all still in the task turn", ["wholeDelivery(messages)", "inventedFailure(what)", "inventedFailure(text)", "namesRejected(what)", "progressReport(what", "progressReport(text", "const asOfNow = texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task;", "mayText(asOfNow, await deps.textsToday()", "const known = (links ?? []).filter(linkOk)", "if (docsSent.length) return { ok: false"].every((s) => tt.includes(s)));
-check("task texts still go through sendExempt (gating unchanged in this PR)", /type: "task_update", targetKey: `task:\$\{task\.id\}:\$\{Date\.now\(\)\}`, messages, timezone: zone, respectHours: true/.test(tt));
+check("task texts still go through sendExempt", /type: "task_update", targetKey: `task:\$\{task\.id\}:\$\{Date\.now\(\)\}`, messages, timezone: zone, respectHours: true/.test(tt));
 
 console.log(`task/follow-up member knowledge: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

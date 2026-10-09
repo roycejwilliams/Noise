@@ -18,7 +18,7 @@ import { recordDecision } from "../harness/core.js";
 import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from "../harness/proactive.js";
 import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
-import { unspendWake } from "./coTasks.js";
+import { capToFinal, unspendWake } from "./coTasks.js";
 import { closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
 import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type MemberRules, type Restraint } from "./memberKnowledge.js";
@@ -535,7 +535,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   }
   // Held: whatever the turn scheduled, the next look waits for the hold (review of #129: an hourly retry under a 24h pause ran a
   // task out of wakes undelivered), and a wake that could only be held doesn't count against the task.
-  const hold = heldUntil as Date | null; // set inside tell(), which TypeScript doesn't follow
+  // set inside tell(), which TypeScript doesn't follow; never past the last check before their deadline (re-review of #129)
+  const hold = heldUntil ? capToFinal(heldUntil as Date, task).at : null;
   if (hold && !texts.length && decided !== "finished") {
     if (!nextAt || nextAt < hold) {
       if (deps.scheduleAt) await deps.scheduleAt(hold, task.planNext ?? "A text was held for pacing: send it now if it still holds.");
