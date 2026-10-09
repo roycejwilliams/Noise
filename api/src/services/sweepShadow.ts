@@ -139,8 +139,13 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
   const zone = await memberZone(userId);
   const { today, weekday } = dayOf(now, zone);
-  // Once a day.
-  const done = await q(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 AND action IS DISTINCT FROM 'error' LIMIT 1`, [userId, today]);
+  // Once a day, unless they told Co what kind of room they want since today's run: that re-runs it (Royce, 2026-10-09).
+  const done = await q(
+    `SELECT 1 FROM harness_decisions d WHERE d.decision = 'sweep.select.shadow' AND d.user_id = $1 AND d.proposal->>'day' = $2 AND d.action IS DISTINCT FROM 'error'
+       AND NOT EXISTS (SELECT 1 FROM co_memories m WHERE m.user_id = $1 AND m.memory_type = 'room_taste' AND m.created_at > d.created_at)
+     LIMIT 1`,
+    [userId, today],
+  );
   if (done.length && !opts.dryRun) return null;
   // Asks win contested slots, and goals must not starve for it (Royce, 2026-10-09): logged for review, once a day, nothing held.
   if (!opts.dryRun) await noteGoalStarvation(q, userId, now, today).catch((err: any) => console.error("picker: goal starvation check failed (non-fatal):", err?.message ?? err));
@@ -289,6 +294,13 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
     if (ok) queuedNames.push(String(q.match?.name ?? ""));
   }
   await recordDecision({ layer: 5, decision: "sweep.select.queue", userId, outcome: queuedNames.length ? "act" : "skip", action: `queued ${queuedNames.length}, rejected ${plan.reject.length}, held back ${plan.unqueue.length}`, proposal: { day: today, queued: queuedNames, chosen: judgments.filter((j) => j.verdict === "send").map((j) => j.name), rejected: plan.reject, heldBack: plan.unqueue } });
+}
+
+// They just said what kind of room they want: the picker re-ranks today, not tomorrow at 10 (Royce, 2026-10-09). Same gates as the
+// daily run (reviewEnabled, and applyPicks only for picker members); the once-a-day guard lets it through because the taste is newer.
+export async function rerunPickerForTaste(userId: string): Promise<void> {
+  if (!reviewEnabled()) return;
+  await runSweepShadow(userId).catch((err: any) => console.error(`picker rerun after taste failed for ${userId} (non-fatal):`, err?.message ?? err));
 }
 
 export async function runSweepShadowAll(now = new Date()): Promise<void> {

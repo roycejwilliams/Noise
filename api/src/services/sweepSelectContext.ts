@@ -53,7 +53,7 @@ export async function loadAsks(q: Q, userId: string, now: Date, alsoIds: string[
 }
 
 type MemberPart = Omit<SelectContext, "asks" | "pool" | "today" | "weekday">;
-type Facts = Pick<MemberPart, "firstName" | "city" | "zone" | "goals" | "goalsPast" | "texts" | "feeling" | "delivered" | "carrying" | "learned" | "person" | "rules">;
+type Facts = Pick<MemberPart, "firstName" | "city" | "zone" | "goals" | "goalsPast" | "texts" | "feeling" | "delivered" | "carrying" | "learned" | "person" | "rules" | "roomTaste">;
 
 // Pure: the member's facts for the picker, from the shared layer. Only active goals are the lens; done and stale ones are
 // history. Exchange stamps are in their zone. Nothing here strips: the layer already did.
@@ -65,7 +65,7 @@ export function factsFromKnowledge(k: MemberKnowledge): Facts {
     // Only the corrected version exists (CO_GROUNDING): the old value isn't shown.
     ...k.corrections.map((c) => `Corrected ${c.field}: ${c.now ?? "(removed)"}`),
     ...k.lessons.map((l) => `Lesson: ${l.text}`),
-    ...k.preferences.map((p) => `Taste: ${p.text}`),
+    ...k.preferences.filter((p) => p.source !== "stated").map((p) => `Taste: ${p.text}`),
   ].slice(0, LIMITS.learned);
   return {
     firstName: k.identity.firstName ?? "them",
@@ -80,6 +80,8 @@ export function factsFromKnowledge(k: MemberKnowledge): Facts {
     delivered: k.delivered.slice(0, LIMITS.delivered).map((d) => ({ what: d.what, kind: d.kind, at: stamp(d.at, "LLL d"), reaction: d.reaction })),
     carrying: k.carrying.filter((c) => c.state !== "done" && !c.theyHaveIt).slice(0, LIMITS.carrying).map((c) => `${c.what} (${c.kind}${c.state === "due" ? ", due" : ""})`),
     learned,
+    // What kind of room they've said they want (services/roomTaste.ts): its own section, ranked by, never buried in "learned".
+    roomTaste: k.preferences.filter((p) => p.source === "stated").map((p) => p.text),
     person: k.person?.text ? k.person.text.slice(0, LIMITS.person) : null,
     // The member-level rules a picker acts on: grounding, other members' details, and this member's restraint.
     rules: [rules.grounding, rules.memberSafety, rules.restraint].filter(Boolean),

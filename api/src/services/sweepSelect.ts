@@ -54,12 +54,16 @@ export type SelectContext = {
   learned?: string[];
   person?: string | null;
   rules?: string[];
+  // What kind of room they've told Co they want or don't (services/roomTaste.ts), newest first: candidates are ranked by it.
+  roomTaste?: string[];
   discoveryLeft: number; // discovery sends left this week
   pool: PoolItem[];
 };
 
+// How a candidate fits the room they've said they want: ranks sends within their kind (slotOrder). "neutral" when nothing was said.
+export type TasteFit = "matches" | "neutral" | "clashes";
 export type Verdict =
-  | { id: string; verdict: "send"; whyMember: string; cites: string[]; whyNow: string; wow: boolean; lastDay: string | null }
+  | { id: string; verdict: "send"; whyMember: string; cites: string[]; whyNow: string; wow: boolean; lastDay: string | null; taste?: TasteFit }
   | { id: string; verdict: "hold"; why: string; until: string | null }
   | { id: string; verdict: "reject"; reason: RejectReason; why: string };
 
@@ -83,7 +87,7 @@ Some candidates come with only a name and a date. Judge what the name tells you;
 Things they asked for and things you'd bring up yourself clear the same bar. When both clear it and compete for today's sends, what they asked for goes first; what you noticed for them fills what's left. Send at most ${SELECT_LIMITS.maxSends}, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.
 
 Return ONLY JSON:
-{"verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."}]}`;
+{"verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08","taste":"matches"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."}]}`;
 
 // What the thing is, not a rank: tier numbers read as a quality score (the
 // 2026-10-02 replay rejected things for being "tier 3").
@@ -114,6 +118,7 @@ export function selectPrompt(c: SelectContext): string {
     lines.push(c.outcomes.map((o) => `${o.id} ${o.at}: ${clip(o.item, 100)} → ${o.result}${o.note ? ` ("${clip(o.note, 120)}")` : ""}`).join("\n"));
   }
   if (c.rules?.length) lines.push("", "Member rules (for judging what goes; the send step still holds timing and caps):", c.rules.join("\n"));
+  if (c.roomTaste?.length) lines.push("", "WHAT KIND OF ROOM THEY'VE TOLD CO THEY WANT (their own words, newest first; the strongest signal you have about fit). Rank by it: give every candidate a taste of \"matches\", \"neutral\" or \"clashes\". One that matches goes up; one that clashes goes down and needs a strong reason to send at all:", c.roomTaste.map((t) => `- ${clip(t, 300)}`).join("\n"));
   lines.push(`\nThe pool (${c.pool.length}):`);
   lines.push(
     c.pool
@@ -151,6 +156,9 @@ export function jsonBlocks(text: string): string[] {
 // Pure: the model's verdicts: the first block that parses and has a verdicts
 // list, so a note before or after it (even one with braces) can't lose the
 // day (review of #57: a greedy match did).
+export function tasteFitOf(x: unknown): TasteFit {
+  return x === "matches" || x === "clashes" ? x : "neutral";
+}
 export function parseVerdicts(text: string): Verdict[] | null {
   // From each opening brace in turn, so a stray "{" before the JSON (which
   // never closes) can't hide it.
@@ -171,7 +179,7 @@ export function parseVerdicts(text: string): Verdict[] | null {
   for (const v of j.verdicts) {
     const id = String(v?.id ?? "");
     if (!id) continue;
-    if (v.verdict === "send") out.push({ id, verdict: "send", whyMember: String(v.whyMember ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [], whyNow: String(v.whyNow ?? "").trim(), wow: v.wow === true , lastDay: /^\d{4}-\d{2}-\d{2}$/.test(String(v.lastDay ?? "")) ? String(v.lastDay) : null });
+    if (v.verdict === "send") out.push({ id, verdict: "send", whyMember: String(v.whyMember ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [], whyNow: String(v.whyNow ?? "").trim(), wow: v.wow === true , lastDay: /^\d{4}-\d{2}-\d{2}$/.test(String(v.lastDay ?? "")) ? String(v.lastDay) : null, taste: tasteFitOf(v.taste) });
     else if (v.verdict === "hold") out.push({ id, verdict: "hold", why: String(v.why ?? "").trim(), until: /^\d{4}-\d{2}-\d{2}$/.test(String(v.until ?? "")) ? String(v.until) : null });
     else if (v.verdict === "reject") out.push({ id, verdict: "reject", reason: (REJECT_REASONS as readonly string[]).includes(v.reason) ? v.reason : "other", why: String(v.why ?? "").trim() });
   }
@@ -179,11 +187,15 @@ export function parseVerdicts(text: string): Verdict[] | null {
 }
 
 // One row per candidate: what was decided and why, including what code changed.
-export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null };
+export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null ; taste?: TasteFit };
 
 // Pure: which sends get the day's slots first: answers to their asks, then goal finds, each in the model's order.
-export function slotOrder(clearing: { at: number; kind: PoolItem["kind"] }[]): number[] {
-  return [...clearing.filter((x) => x.kind === "answer"), ...clearing.filter((x) => x.kind !== "answer")].map((x) => x.at);
+// Within each kind, what fits the room they've said they want goes first and what clashes with it last (Royce, 2026-10-09: "a member
+// telling Co what kind of room they want is the highest-quality signal the picker will ever get").
+const TASTE_RANK: Record<TasteFit, number> = { matches: 0, neutral: 1, clashes: 2 };
+export function slotOrder(clearing: { at: number; kind: PoolItem["kind"]; taste?: TasteFit }[]): number[] {
+  const byTaste = (xs: typeof clearing) => [...xs].sort((a, b) => TASTE_RANK[a.taste ?? "neutral"] - TASTE_RANK[b.taste ?? "neutral"]);
+  return [...byTaste(clearing.filter((x) => x.kind === "answer")), ...byTaste(clearing.filter((x) => x.kind !== "answer"))].map((x) => x.at);
 }
 
 // Pure: facts only. A send must cite records that exist (at least one of
@@ -198,7 +210,7 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
   const byId = new Map(c.pool.map((p) => [p.id, p]));
   const seen = new Set<string>();
   const out: Judgment[] = [];
-  const clearing: { at: number; kind: PoolItem["kind"] }[] = [];
+  const clearing: { at: number; kind: PoolItem["kind"]; taste?: TasteFit }[] = [];
   for (const v of verdicts) {
     const p = byId.get(v.id);
     if (!p || seen.has(v.id)) continue;
@@ -211,8 +223,9 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
       else if (v.lastDay && v.lastDay < c.today) out.push({ ...base, verdict: "reject", reason: "too_late", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, guard: `its last day (${v.lastDay}) has passed` });
       else {
         // Its slot is decided below, once every send is known.
-        clearing.push({ at: out.length, kind: p.kind });
-        out.push({ ...base, verdict: "send", reason: "clears_bar", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, lastDay: v.lastDay });
+        const taste = c.roomTaste?.length ? v.taste ?? "neutral" : "neutral";
+        clearing.push({ at: out.length, kind: p.kind, taste });
+        out.push({ ...base, verdict: "send", reason: "clears_bar", why: v.whyMember, cites: v.cites, whyNow: v.whyNow, lastDay: v.lastDay, taste });
       }
     } else if (v.verdict === "hold") out.push({ ...base, verdict: "hold", reason: "not_today", why: v.why, until: v.until });
     else out.push({ ...base, verdict: "reject", reason: v.reason, why: v.why });
@@ -221,7 +234,7 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
   for (const x of clearing) {
     if (slotted.has(x.at)) continue;
     const j = out[x.at];
-    out[x.at] = { id: j.id, key: j.key, name: j.name, kind: j.kind, verdict: "hold", reason: "over_send_limit", why: j.why, cites: j.cites, whyNow: j.whyNow, until: null, guard: `over ${SELECT_LIMITS.maxSends} sends${x.kind === "discovery" && clearing.some((y) => y.kind === "answer" && slotted.has(y.at)) ? "; what they asked for went first" : ""}` };
+    out[x.at] = { id: j.id, key: j.key, name: j.name, kind: j.kind, verdict: "hold", reason: "over_send_limit", why: j.why, cites: j.cites, whyNow: j.whyNow, until: null, taste: j.taste, guard: `over ${SELECT_LIMITS.maxSends} sends${x.kind === "discovery" && clearing.some((y) => y.kind === "answer" && slotted.has(y.at)) ? "; what they asked for went first" : ""}${x.taste === "clashes" ? "; it clashes with the room they said they want" : ""}` };
   }
   for (const p of c.pool) if (!seen.has(p.id)) out.push({ id: p.id, key: p.key, name: p.name, kind: p.kind, verdict: "no_verdict", reason: "no_verdict", why: "" });
   return out;
@@ -245,7 +258,7 @@ export function selectSignature(c: SelectContext, holdsUntil: (string | null)[] 
   const soon = c.pool.filter((p) => p.date && daysBetween(c.today, p.date) <= 3).map((p) => `soon:${p.key}`);
   const due = holdsUntil.filter((d): d is string => !!d && d <= c.today).map((d) => `due:${d}`);
   const lastFromThem = c.texts.filter((t) => t.from === "member").slice(-1)[0]?.at ?? "";
-  const parts = [...c.pool.map((p) => p.key).sort(), "|", ...c.asks.map((a) => a.id).sort(), "|", lastFromThem, "|", String(c.discoveryLeft), "|", ...soon.sort(), ...due.sort()];
+  const parts = [...c.pool.map((p) => p.key).sort(), "|", ...c.asks.map((a) => a.id).sort(), "|", lastFromThem, "|", String(c.discoveryLeft), "|", ...soon.sort(), ...due.sort(), "|", ...(c.roomTaste ?? [])];
   return createHash("sha1").update(parts.join("\n")).digest("hex");
 }
 

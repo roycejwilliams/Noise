@@ -919,6 +919,37 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // it when they react to an event or opportunity it sent: interested,
     // going, went and liked it, went and didn't, or not for them. Searches
     // and Co's own choices lean on these (services/outcomes.ts tasteSummary).
+    // What kind of room they want (services/roomTaste.ts): ranks what Co picks for them (Royce, 2026-10-09).
+    noteRoomTaste: tool({
+      description: toolUse("noteRoomTaste"),
+      inputSchema: z.object({
+        wants: z.string().optional().describe("The kind of room they want, a few words (\"small rooms where people drop their guard\")."),
+        avoids: z.string().optional().describe("The kind they don't (\"performative networking\")."),
+        quote: z.string().describe("Their own words saying it, copied exactly from what they wrote."),
+      }),
+      execute: async ({ wants, avoids, quote }) => {
+        if (!wants?.trim() && !avoids?.trim()) return { ok: false, error: "Say what kind of room they want, or don't." };
+        const T = await import("../services/coTasks.js");
+        const recent = ctx.dryRun
+          ? ""
+          : await pool
+              .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 6`, [ctx.userId])
+              .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
+              .catch(() => "");
+        if (!T.wordsAreTheirs(quote, `${ctx.resolvedContent}\n${recent}`)) {
+          notDone("Their taste wasn't noted: the quote isn't in their words.");
+          return { ok: false, error: "The quote must be copied exactly from what they wrote." };
+        }
+        const taste = { wants: wants?.trim() || null, avoids: avoids?.trim() || null, quote: quote.trim().slice(0, 200) };
+        if (ctx.dryRun) return { ok: true };
+        await (await import("../services/roomTaste.js")).recordRoomTaste(ctx.userId, taste);
+        // Re-rank today (services/sweepShadow.ts), in the background: the reply never waits on it.
+        void import("../services/sweepShadow.js").then((m) => m.rerunPickerForTaste(ctx.userId)).catch(() => {});
+        ctx.facts?.add("did_this_turn", "Noted the kind of room they want, so what Co picks for them leans that way.");
+        return { ok: true };
+      },
+    }),
+
     noteReaction: tool({
       description: toolUse("noteReaction"),
       inputSchema: z.object({

@@ -769,6 +769,50 @@ export function codePick(eligible: Candidate[]): Candidate | null {
   return sorted[0] ?? null;
 }
 
+// Urgency beats relationship maintenance (Royce, 2026-10-09: at 2:45 the pick sent a debrief while Fleet Week waited on its
+// final day). A find whose useful life ends before the next realistic send slot goes ahead of a companion message that can wait;
+// one with days left never jumps the queue. What can't wait isn't jumped: a post-call text (they just hung up) or anything that
+// itself expires sooner.
+const FIND_TYPES = new Set(["event_offer", "event_match_nudge", "deadline_nudge", "search_result", "co_event"]);
+const CANT_WAIT = new Set(["post_call", "call_confirm", "task_window", "pre_arrival", "event_brief"]);
+
+// Pure: when a find's useful life ends: its own expiry, or the end of the last day the picker gave it, whichever is first.
+export function findEndsAt(c: Pick<Candidate, "expiresAt" | "payload">, zone: string | null): Date | null {
+  const lastDay = (c.payload as { lastDay?: string } | null)?.lastDay;
+  const dayEnd = lastDay ? DateTime.fromISO(lastDay, { zone: hoursZone(zone) }).endOf("day").toJSDate() : null;
+  const ends = [c.expiresAt, dayEnd].filter((d): d is Date => !!d && !Number.isNaN(d.getTime()));
+  return ends.length ? new Date(Math.min(...ends.map((d) => d.getTime()))) : null;
+}
+
+// Pure: the next moment another text could realistically go if one goes now: spacing from now, inside their hours, and tomorrow
+// when this send uses up today's slot for a counted text (answers aren't capped, so they only wait on spacing and hours).
+export function nextSendSlot(o: { now: Date; zone: string | null; countedToday: number; answering: boolean }): Date {
+  const z = hoursZone(o.zone);
+  let t = DateTime.fromJSDate(new Date(o.now.getTime() + RULES.minHoursBetweenTexts * HOUR)).setZone(z);
+  const capped = !o.answering && o.countedToday + 1 >= RULES.maxPerLocalDay;
+  const sameDay = t.hasSame(DateTime.fromJSDate(o.now).setZone(z), "day");
+  if (capped || !sameDay || t.hour >= RULES.endHour) t = DateTime.fromJSDate(o.now).setZone(z).plus({ days: 1 }).set({ hour: RULES.startHour, minute: 0, second: 0, millisecond: 0 });
+  else if (t.hour < RULES.startHour) t = t.set({ hour: RULES.startHour, minute: 0, second: 0, millisecond: 0 });
+  return t.toJSDate();
+}
+
+// Pure: the find that has to go now or not at all, if any, and why. Only when what else is ready can wait (a debrief, a check-in,
+// a follow-up); soonest-ending first.
+export function expiringFind(eligible: Candidate[], o: { now: Date; zone: string | null; countedToday: number }): { pick: Candidate; endsAt: Date; nextSlot: Date } | null {
+  if (eligible.some((c) => CANT_WAIT.has(c.type))) return null;
+  const finds = eligible
+    .filter((c) => FIND_TYPES.has(c.type))
+    .map((c) => ({ c, endsAt: findEndsAt(c, o.zone) }))
+    .filter((x): x is { c: Candidate; endsAt: Date } => !!x.endsAt && x.endsAt.getTime() > o.now.getTime())
+    .sort((a, b) => a.endsAt.getTime() - b.endsAt.getTime());
+  for (const f of finds) {
+    // The slot after the OTHER thing goes now: if that's past the find's end, the find goes first.
+    const nextSlot = nextSendSlot({ now: o.now, zone: o.zone, countedToday: o.countedToday, answering: false });
+    if (f.endsAt.getTime() <= nextSlot.getTime() && eligible.some((c) => c.id !== f.c.id && !FIND_TYPES.has(c.type))) return { pick: f.c, endsAt: f.endsAt, nextSlot };
+  }
+  return null;
+}
+
 // ---------- drafting
 
 // Principles, not scripts (Royce, 2026-09-28: "I don't want the language to be
@@ -833,7 +877,10 @@ export function memberDraftBlock(k: MemberKnowledge, rules: MemberRules): string
   const carrying = k.carrying.filter((c) => c.state !== "done").slice(0, 6);
   if (carrying.length) lines.push(`- What Co is carrying for them: ${carrying.map((c) => `${cap(c.what, 100)} (${c.kind}, ${c.state}${c.told ? ", they know" : ""})`).join("; ")}`);
   if (k.corrections.length) lines.push(`- They corrected (only the corrected version exists): ${k.corrections.slice(0, 4).map((c) => `${c.field}: ${c.now ? cap(c.now, 80) : "(removed)"}, not ${cap(c.was, 60)}`).join("; ")}`);
-  if (k.preferences.length) lines.push(`- What has landed with them before: ${k.preferences.map((p) => cap(p.text, 300)).join("; ")}`);
+  const stated = k.preferences.filter((p) => p.source === "stated");
+  const landed = k.preferences.filter((p) => p.source !== "stated");
+  if (stated.length) lines.push(`- What kind of room they've said they want (their words): ${stated.map((p) => cap(p.text, 300)).join("; ")}`);
+  if (landed.length) lines.push(`- What has landed with them before: ${landed.map((p) => cap(p.text, 300)).join("; ")}`);
   if (k.lessons.length) lines.push(`- What Co has learned about texting them: ${k.lessons.slice(0, 4).map((l) => cap(l.text, 160)).join("; ")}`);
   const memberRules = [rules.discretion, rules.memberSafety, rules.grounding, rules.deliveryShape, rules.restraint, rules.quietHours].filter((r) => r && r.trim()).join("\n\n");
   return `WHAT YOU KNOW ABOUT THEM (background: it shapes what you say and what you leave out; it is never a source for a date, an event or a commitment, and never something to state that CONFIRMED_FACTS doesn't have)
@@ -1772,9 +1819,15 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // As stored, for the code that parses the thread (repeat question, payload first); stamped in their zone for the model reads.
   const recent = known ? exchangeTranscript(known) : "";
   const recentStamped = known ? exchangeTranscript(known, { stamped: true }) : "";
-  const taste = known?.preferences[0]?.text ?? null;
+  // Stated room taste first (services/roomTaste.ts), then how what Co sent landed: the daily pick reads both.
+  const taste = known?.preferences.length ? known.preferences.map((p) => p.text).join(" ") : null;
   const drafting = <T,>(type: ProactiveType, fn: () => Promise<T>): Promise<T> => (OWN_MEMBER_CONTEXT.has(type) ? draftWithKnowledge(null, null, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)) : draftWithKnowledge(known, rules, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)));
-  const picked = await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: renderEmotionalContext(emotional), taste, person: known?.person?.text ?? null });
+  // A find on its last chance goes before what can wait (expiringFind); otherwise Co picks.
+  const countedToday = state.sends.filter((s) => !s.exempt && laneOf(s.type) === "other" && s.sentAt >= startOfLocalDay(state.now, person.timezone) && s.sentAt <= state.now).length;
+  const urgent = expiringFind(ev.eligible, { now: state.now, zone: person.timezone, countedToday });
+  const picked = urgent
+    ? { pick: urgent.pick, reason: `expires before the next send slot (ends ${localStamp(urgent.endsAt, person.timezone)}, next slot ${localStamp(urgent.nextSlot, person.timezone)}): it goes ahead of what can wait`, source: "code" as const }
+    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: renderEmotionalContext(emotional), taste, person: known?.person?.text ?? null });
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
