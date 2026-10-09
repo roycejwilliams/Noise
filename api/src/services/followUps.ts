@@ -19,6 +19,7 @@ import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import type { EnqueueInput } from "../harness/proactive.js";
 import type { CoTask } from "./coTasks.js";
 import { localStamp, memberZone } from "./memberTime.js";
+import { memberKnowledge, memberRules, type Exchange, type Fact, type KnowledgeDeps, type MemberKnowledge } from "./memberKnowledge.js";
 
 export const FOLLOWUP_LIMITS = { minHours: 2, maxHours: 7 * 24, maxWakes: 5, maxDays: 14, quietAfterClosedDays: 14 };
 
@@ -98,6 +99,10 @@ export type FollowUpDeps = {
   skip: (why: string) => Promise<void>;
   // How long it has been due, in words ("3h ago"), so the decider knows it's due.
   dueSince?: string | null;
+  // What Co knows about them that bears on the decision (services/memberKnowledge.ts, followUpKnowledge) and the member-level
+  // rules it reads with (memberRules: grounding, other members).
+  knowledge?: string;
+  rules?: string;
 };
 
 // Pure: how long ago, in words that need no time zone ("40 min ago", "5h ago", "3d ago").
@@ -128,7 +133,7 @@ export function aboutLines(payload: any): string[] {
 // midday their time; it held off for "you've texted them a lot" and for the hour, both of which the send path already enforces;
 // and nothing said it was due. Now the thread carries how long ago each line was, the limits are named as code's job, the
 // payload says what it's about, and the last look is a real choice (now or skip), not another "later".
-export function followUpPrompt(o: { task: CoTask; firstName: string; recent: string; recentSends: string; now: string; dueSince?: string | null; zone?: string | null }): string {
+export function followUpPrompt(o: { task: CoTask; firstName: string; recent: string; recentSends: string; now: string; dueSince?: string | null; zone?: string | null; knowledge?: string; rules?: string }): string {
   const f = o.task.followup ?? {};
   const lastLook = o.task.wakes >= FOLLOWUP_LIMITS.maxWakes;
   const about = aboutLines(f.payload);
@@ -136,7 +141,7 @@ export function followUpPrompt(o: { task: CoTask; firstName: string; recent: str
 
 You were going to check in with ${o.firstName}: ${f.summary ?? o.task.goal} (${f.type ?? "follow-up"}).${about.length ? `\n${about.join("\n")}` : ""}
 It came due ${o.dueSince ?? "now"}: it was set for this point because whatever it's about has had time to happen. It's your call whether it would mean something now, later, or not at all, the way a friend who knows them would decide. Now: ${o.now}. This is look ${o.task.wakes} of at most ${FOLLOWUP_LIMITS.maxWakes}.
-
+${o.knowledge ? `\n${o.knowledge}\n` : ""}${o.rules ? `\n${o.rules}\n` : ""}
 Your recent texts with them (oldest first, each with how long ago):
 ${o.recent || "(none)"}
 
@@ -169,7 +174,7 @@ export async function runFollowUpTurnWith(task: CoTask, deps: FollowUpDeps): Pro
       experimental_telemetry: { isEnabled: true, functionId: "followUp.decide" },
       tools,
       stopWhen: [stepCountIs(3), () => action !== null],
-      prompt: followUpPrompt({ task, firstName: deps.firstName, recent: deps.recent, recentSends: deps.recentSends, now: localStamp(deps.now(), deps.zone ?? null), dueSince: deps.dueSince ?? null, zone: deps.zone ?? null }),
+      prompt: followUpPrompt({ task, firstName: deps.firstName, recent: deps.recent, recentSends: deps.recentSends, now: localStamp(deps.now(), deps.zone ?? null), dueSince: deps.dueSince ?? null, zone: deps.zone ?? null, knowledge: deps.knowledge, rules: deps.rules }),
     });
   } catch (err: any) {
     console.error("followUp decide failed (non-fatal):", err?.message ?? err);
@@ -181,27 +186,79 @@ export async function runFollowUpTurnWith(task: CoTask, deps: FollowUpDeps): Pro
   return { action, why };
 }
 
-// What the decider reads, as of a moment (now, or a past one for a replay): the thread with how long ago each line was, Co's
-// first texts lately the same way, and how long the follow-up has been due. Another member's details are stripped, as in the
-// reply (memberSafeMemories.ts).
-export async function loadFollowUpContext(userId: string, task: Pick<CoTask, "createdAt" | "nextCheckAt">, asOf: Date = new Date()): Promise<{ user: { first_name: string | null; sms_opted_out: boolean; archived_at: Date | null } | null; recent: string; recentSends: string; dueSince: string }> {
-  const [{ rows: u }, { rows: convo }, { rows: sends }] = await Promise.all([
-    pool.query(`SELECT first_name, sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]),
-    pool.query(`SELECT content, memory_type, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} AND created_at <= $2 ORDER BY created_at DESC LIMIT 14`, [userId, asOf]),
-    pool.query(`SELECT type, sent_at FROM proactive_sends WHERE user_id = $1 AND sent_at <= $2 AND sent_at > $2::timestamptz - INTERVAL '7 days' ORDER BY sent_at DESC LIMIT 6`, [userId, asOf]),
-  ]);
-  const M = await import("./memberSafeMemories.js");
-  const names = [...new Set([...(await M.linkedMemberNames(userId).catch(() => [] as string[])), ...M.namesInRecords(convo)])];
-  const lines: string[] = [];
-  for (const row of [...convo].reverse()) {
-    const safe = withoutTeammateLines((await M.memberSafe(userId, [row], names)).join("\n")).trim();
-    if (safe) lines.push(safe.split("\n").map((l) => `[${ago(row.created_at, asOf)}] ${l}`).join("\n"));
+// Pure: the thread as one block, oldest first, every line stamped (stamp: "3h ago" here, their local time in a task turn).
+// Lines are written the way they're stored ("User said:", "Co replied:", "[Call]"), so a reader that looks for "User said:"
+// still finds it after the stamp. Lines that belong to a talk with a teammate agent are dropped (teamLines.ts).
+export function exchangeText(exchanges: Fact<Exchange>[], stamp: (at: string) => string): string {
+  const out: string[] = [];
+  for (const x of exchanges) {
+    const head = x.from === "member" ? "User said: " : x.call ? "[Call] " : "Co replied: ";
+    const safe = withoutTeammateLines(`${head}${x.text}`).trim();
+    if (safe) out.push(safe.split("\n").map((l) => `[${stamp(x.verifiedAt)}] ${l}`).join("\n"));
   }
+  return out.join("\n");
+}
+
+// Pure: what a follow-up decider knows besides the thread: how they are right now, what they already have from Co, what they
+// corrected, what Co has learned working with them. Each section left out when empty.
+export function followUpKnowledge(k: Pick<MemberKnowledge, "restraint" | "delivered" | "corrections" | "lessons">, asOf: Date): string {
+  const r = k.restraint;
+  const how = [
+    r?.safetyHold ? "a safety hold is on (only care, no offers or nudges)" : null,
+    r?.needsCare ? "they've been having a hard time lately" : null,
+    r?.frustratedWithCo ? "they've been frustrated with Co lately" : null,
+    r?.feeling ? `their latest feeling: ${r.feeling}` : null,
+  ].filter(Boolean);
+  return [
+    how.length ? `How they are right now: ${how.join("; ")}.` : null,
+    k.delivered.length ? `What they already have from you (newest first):\n${k.delivered.slice(0, 6).map((d) => `- ${d.what} (${d.kind}, ${ago(d.at, asOf)})`).join("\n")}` : null,
+    k.corrections.length ? `What they corrected (only the corrected version exists):\n${k.corrections.slice(0, 4).map((c) => `- ${c.field}: now ${c.now ?? "(removed)"}`).join("\n")}` : null,
+    k.lessons.length ? `What you've learned working with them:\n${k.lessons.slice(0, 4).map((l) => `- ${l.text}`).join("\n")}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+// The thread as of a moment (a replay reads the past): the layer's own exchange read, bounded by asOf.
+export function exchangesAsOf(asOf: Date): KnowledgeDeps["exchanges"] {
+  return async (userId, o) =>
+    (
+      await pool.query(
+        `SELECT content, created_at FROM co_memories
+         WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} AND created_at <= $4 AND created_at > $4::timestamptz - make_interval(days => $2)
+         ORDER BY created_at DESC LIMIT $3`,
+        // Twice the window, like the layer's own read: lines that aren't exchanges are dropped after, and the layer trims to the
+        // limit then (memberKnowledge.ts), so they never use up the member's slots.
+        [userId, o.days, o.limit * 2, asOf],
+      )
+    ).rows.map((r: any) => ({ content: String(r.content ?? ""), at: new Date(r.created_at) }));
+}
+
+// What the decider reads, as of a moment (now, or a past one for a replay): the thread with how long ago each line was, Co's
+// first texts lately the same way, how long the follow-up has been due, and what Co knows about them. Member facts come from the
+// one member-knowledge layer (services/memberKnowledge.ts: another member's details stripped inside, fails closed); the account
+// row (opted out, archived) and Co's send log stay direct reads.
+export async function loadFollowUpContext(userId: string, task: Pick<CoTask, "createdAt" | "nextCheckAt">, asOf: Date = new Date()): Promise<{ user: { first_name: string | null; sms_opted_out: boolean; archived_at: Date | null } | null; recent: string; recentSends: string; dueSince: string; knowledge: string; rules: string; zone: string | null }> {
+  const [{ rows: u }, { rows: sends }, k] = await Promise.all([
+    pool.query(`SELECT first_name, sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]),
+    pool.query(`SELECT type, sent_at FROM proactive_sends WHERE user_id = $1 AND sent_at <= $2 AND sent_at > $2::timestamptz - INTERVAL '7 days' ORDER BY sent_at DESC LIMIT 6`, [userId, asOf]),
+    // A rejection (the member-name read failed) means no member context, never an unstripped fallback.
+    memberKnowledge(userId, { now: asOf, exchanges: 14, exchangeDays: 30, include: ["exchanges", "restraint", "delivered", "corrections", "lessons"] }, { exchanges: exchangesAsOf(asOf) }).catch((err: any) => {
+      console.error("followUp: member knowledge unavailable, going without member context (non-fatal):", err?.message ?? err);
+      return null;
+    }),
+  ]);
+  const rules = k ? memberRules(k) : null;
   return {
     user: u[0] ?? null,
-    recent: lines.join("\n").slice(-3000),
+    recent: k ? exchangeText(k.exchanges, (at) => ago(at, asOf)).slice(-3000) : "",
     recentSends: sends.map((s: any) => `- ${ago(s.sent_at, asOf)}: ${s.type}`).join("\n"),
     dueSince: ago(task.createdAt, asOf),
+    knowledge: k ? followUpKnowledge(k, asOf) : "",
+    // Their hours, caps and the unanswered pause stay the send path's to enforce (the prompt says so, so a "later" is never for
+    // them): only grounding and other members here.
+    rules: rules ? `${rules.grounding}\n${rules.memberSafety}` : "",
+    zone: k ? k.identity.zone : await memberZone(userId).catch(() => null),
   };
 }
 
@@ -221,7 +278,8 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
     return;
   }
   const f = task.followup as Stored;
-  const zone = await memberZone(userId);
+  // Their zone from the same layer read (identity: services/memberTime.ts memberZone, the one source).
+  const zone = ctx.zone;
   const until: string | null = f?.payload?.until ?? null;
   const checkIn = async () => {
     const { enqueueCandidate } = await import("../harness/proactive.js");
@@ -241,6 +299,8 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
     recent: ctx.recent,
     recentSends: ctx.recentSends,
     dueSince: ctx.dueSince,
+    knowledge: ctx.knowledge,
+    rules: ctx.rules,
     zone,
     now: () => new Date(),
     checkInNow: checkIn,

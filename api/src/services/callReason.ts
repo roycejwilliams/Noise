@@ -9,7 +9,7 @@
 //   loadCallReasonState(...)   the reads, reusing what already holds their state: the member-state detectors
 //                              (memberStateNudges.ts: deadlines on things they said yes to, a goal gone quiet, their own
 //                              commitments coming due), their open threads (harness/memberThreads.ts, with the feeling they had),
-//                              what they said lately (member_claims: plans, worries, moods), what they closed or went to
+//                              what they said lately (member_claims: plans, worries, moods, through memberKnowledge), what they closed or went to
 //                              (member_milestones), and plans they mentioned (planned_event_mentions)
 //   holdCallReason / heldCallReason / callReasonVariable
 //                              the chosen reason, held for the call from the gate (harness/callGate.ts) to the opening writer
@@ -29,6 +29,7 @@ import { overlap, type MemberThread } from "../harness/memberThreads.js";
 import type { Claim } from "./factLabels.js";
 import type { NudgeEntry } from "./memberStateNudges.js";
 import type { CallAuthKind } from "../harness/callGate.js";
+import type { MemberKnowledge } from "./memberKnowledge.js";
 
 // ---------------------------------------------------------------- which calls need one
 
@@ -329,22 +330,39 @@ export function callReasonVariable(userId: string, direction: "inbound" | "outbo
 
 // ---------------------------------------------------------------- the reads
 
+// Pure: the layer's held claims as the Claim shape callReasonFor reads. saidOn is the day the claim was last confirmed or said
+// (verifiedAt): the layer keeps the newer of the two, and a reason's day only orders reasons, it's never said.
+export function claimsFromKnowledge(k: Pick<MemberKnowledge, "claims">): Claim[] {
+  return k.claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, saidOn: c.verifiedAt.slice(0, 10), confirmedOn: c.verifiedAt.slice(0, 10), expiresOn: c.expiresOn }));
+}
+
+// Pure: Co's own work to exclude, from the layer: every document Co delivered (receipts and Co's ledger), what it carries for them
+// (open tasks, briefs, look-outs, what it promised on a call), plus the recent task goals read here (closed ones too).
+export function coWorkFromKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying">, recentTaskGoals: string[] = []): string[] {
+  const docs = k.delivered.filter((d) => d.kind === "document").map((d) => d.what);
+  const carried = k.carrying.filter((c) => c.kind !== "loop" && c.kind !== "document").map((c) => c.what);
+  return [...new Set([...docs, ...carried, ...recentTaskGoals].map((x) => String(x ?? "").trim()).filter(Boolean))];
+}
+
 export async function loadCallReasonState(userId: string, kind: CallAuthKind, now = new Date()): Promise<CallReasonState> {
   const { default: pool } = await import("../db/db.js");
-  const { memberZone } = await import("./memberTime.js");
+  const { memberKnowledge } = await import("./memberKnowledge.js");
   const { loadSnapshot, detectAll } = await import("./memberStateNudges.js");
   const { listThreads } = await import("../harness/memberThreads.js");
-  const { liveClaims } = await import("./claims.js");
-  const zone = await memberZone(userId).catch(() => null);
+  // Their claims, zone, and Co's delivered and carried work from the one member-knowledge layer (services/memberKnowledge.ts),
+  // stamped and member-stripped inside. It throws only when the names to strip can't be read: then this throws, and the gate's read
+  // fails closed (no reason, no Co-started call).
+  const k = await memberKnowledge(userId, { now, include: ["claims", "delivered", "carrying"] });
+  const zone = k.identity.zone;
   const today = localDay(now, zone);
   const q = (sql: string, args: unknown[]) => pool.query(sql, args).then((r: any) => r.rows as any[]).catch(() => [] as any[]);
-  const [nudges, threads, claims, milestones, plans, docs, tasks, recent] = await Promise.all([
+  const [nudges, threads, milestones, plans, tasks, recent] = await Promise.all([
     loadSnapshot(userId, now).then(detectAll).catch(() => [] as NudgeEntry[]),
     listThreads(userId).catch(() => [] as MemberThread[]),
-    liveClaims(userId, now, zone).catch(() => [] as Claim[]),
     q(`SELECT key, kind, text, happened_at FROM member_milestones WHERE user_id = $1 AND kind IN ('thread_done', 'went') AND happened_at > $2 ORDER BY happened_at DESC LIMIT 5`, [userId, new Date(now.getTime() - CALL_REASON.celebrateWithinDays * DAY)]),
     q(`SELECT event_name_raw, event_date FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date <= $3::date ORDER BY event_date LIMIT 5`, [userId, today, DateTime.fromISO(today).plus({ days: CALL_REASON.comingUpDays }).toISODate()]),
-    q(`SELECT title FROM document_deliveries WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 days' ORDER BY created_at DESC LIMIT 20`, [userId]),
+    // Co's tasks of the last 60 days, closed ones too (the layer carries only the open ones): a member thread that is one of them is
+    // still Co's work.
     q(`SELECT goal FROM co_tasks WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 days' ORDER BY created_at DESC LIMIT 20`, [userId]),
     q(
       `SELECT proposal->'evidence'->'callReason'->'reason'->>'key' AS key FROM harness_decisions
@@ -359,12 +377,12 @@ export async function loadCallReasonState(userId: string, kind: CallAuthKind, no
     kind,
     nudges,
     threads,
-    claims,
+    claims: claimsFromKnowledge(k),
     milestones: milestones.map((m: any) => ({ key: String(m.key), kind: String(m.kind), text: String(m.text), happenedAt: new Date(m.happened_at).toISOString() })),
     plans: plans
       .filter((p: any) => p.event_date)
       .map((p: any) => ({ name: String(p.event_name_raw), date: p.event_date instanceof Date ? DateTime.fromJSDate(p.event_date, { zone: "utc" }).toISODate()! : String(p.event_date).slice(0, 10) })),
-    coWork: [...docs.map((d: any) => String(d.title ?? "")), ...tasks.map((t: any) => String(t.goal ?? ""))].filter(Boolean),
+    coWork: coWorkFromKnowledge(k, tasks.map((t: any) => String(t.goal ?? ""))),
     recentReasonKeys: recent.map((r: any) => String(r.key ?? "")).filter(Boolean),
   };
 }

@@ -65,7 +65,7 @@ import { describeNotes } from "../agent/loopTools.js";
 import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
-import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { callLine } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
@@ -1677,17 +1677,18 @@ export function sendblueRouter(io: Server): Router {
         // they want something found, and its working notes from earlier texts.
         if (decision.wantsRecommendation && hasText) addInstruction(replyFacts, LOOP_GUIDE);
         if (hasText) {
-          const [notes, loops, timeline, said, lens] = await Promise.all([
+          // What they have told Co that still holds, each with when they said it (claims), and goals as the LENS with their state:
+          // both from member knowledge (services/memberKnowledge.ts, read once in the turn's context). Claims are the only thing that
+          // can answer "what do you mean?" or "I never said that": Co's own earlier texts are not evidence of what they said. Goals
+          // are handed over as an unspoken hint with the rule, never as a fact to recite; only active ones are where they're headed.
+          const said = heldClaimsFrom(turn?.knowledge);
+          const lens = goalLens(turn?.knowledge, turn?.profile?.intent);
+          const [notes, loops, timeline] = await Promise.all([
             loadBrief(user.id).then(describeNotes).catch(() => null),
             // Every open loop and where it stands (services/openLoops.ts).
             import("../services/openLoops.js").then(async (o): Promise<string | null> => o.describeLoops(await o.confirmMentioned(user.id, (await o.syncOpenLoops(user.id)).rows, content), { withIds: true, zone: await (await import("../services/memberTime.js")).memberZone(user.id) })).catch((): string | null => null),
             // Their local time and what's ahead, every turn (services/timeline.ts).
             import("../services/timeline.js").then((t) => t.timelineFor(user.id, profile?.city ?? null)).catch(() => null),
-            // What they have told Co that still holds, each with when they said it (services/claims.ts). It is the only thing that can
-            // answer "what do you mean?" or "I never said that": Co's own earlier texts are not evidence of what they said.
-            import("../services/claims.js").then((c) => c.liveClaimsRendered(user.id, new Date())).catch(() => null),
-            // Goals are the LENS (services/goalJourney.ts): handed over as an unspoken hint with the rule, never as a fact to recite.
-            import("../services/goalJourney.js").then(async (g) => { const r = await pool.query(`SELECT intent, goals FROM co_profiles WHERE user_id = $1`, [user.id]); return { texts: g.goalTexts(r.rows[0]?.intent, r.rows[0]?.goals), arc: g.arcLine(r.rows[0]?.intent), rule: g.LENS_RULE }; }).catch(() => null),
           ]);
           if (lens?.texts.length) {
             addHint(replyFacts, `Where they say they are headed: ${lens.texts.slice(0, 5).join("; ")}.${lens.arc ? ` ${lens.arc}.` : ""}`);

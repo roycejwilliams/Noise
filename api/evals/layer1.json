@@ -80,6 +80,7 @@
     "evals/tasks/web.ts",
     "evals/testmember/rules.ts",
     "evals/tasks/followups.ts",
+    "evals/tasks/memberKnowledge.ts",
     "evals/presence/preArrival.ts",
     "evals/presence/brief.ts",
     "evals/presence/followThrough.ts",
@@ -136,6 +137,7 @@
     "evals/proactive/pickerLive.ts",
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",
+    "evals/member/textKnowledge.ts",
     "evals/calls/reasonGate.ts"
   ]
 }
