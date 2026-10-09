@@ -14,7 +14,9 @@ check("a loop title naming a linked member is stripped", !/wants to cofound/.tes
 check("lines without a linked member pass through", safe("Find a caterer for the open house") === "Find a caterer for the open house");
 
 // Each of the four paths runs its context through the strip, and fails closed (no strip, nothing).
-check("proactive dispatch transcript", /memberSafeLine\(userId\)[\s\S]{0,400}safe \? r\.rows\.map\(\(x: any\) => safe\(String\(x\.content\)\)\)/.test(src("harness/proactive.ts")));
+// Since PR 8 the dispatch transcript comes from memberKnowledge (stripped inside it); a rejected read (failed name lookup) is
+// caught to null and leaves the transcript empty, never a raw read.
+check("proactive dispatch transcript", /MK\.memberKnowledge\(userId,[\s\S]{0,300}\.catch\([\s\S]{0,200}return null;[\s\S]{0,400}const recent = known \? exchangeTranscript\(known\) : "";/.test(src("harness/proactive.ts")) && !/memory_type = 'text_exchange' ORDER BY created_at DESC LIMIT 12/.test(src("harness/proactive.ts")));
 {
   // Live: the texts come from the shared member layer (stripped inside it, fails closed: no layer, no texts). Replay: stripped here.
   const sc = src("services/sweepSelectContext.ts");

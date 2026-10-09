@@ -20,6 +20,7 @@ import { enqueueCandidate } from "./proactive.js";
 import { PROACTIVE_PURPOSE } from "./proactivePurpose.js";
 import { listThreads, renderThreads, type MemberThread } from "./memberThreads.js";
 import { localStamp, memberZone } from "../services/memberTime.js";
+import type { KnowledgeSection, MemberKnowledge } from "../services/memberKnowledge.js";
 
 export type WeekFacts = {
   sends: { type: string; purpose: string; at: string; message: string }[];
@@ -29,7 +30,29 @@ export type WeekFacts = {
   threads: MemberThread[];
   // Their zone (services/memberTime.ts): times are shown in it, with the zone named.
   zone?: string | null;
+  // What Co knows about them (services/memberKnowledge.ts, reflectionKnown) and the restraint on them now (memberRules), or null.
+  known?: string | null;
+  restraint?: string | null;
 };
+
+// The sections the weekly reflection reads, in its one memberKnowledge call per member.
+export const REFLECTION_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "carrying", "corrections", "lessons", "restraint"];
+
+// Pure: the part of what Co knows about them that bears on a companion move (goals with state, what Co is carrying, what they have
+// corrected, what Co has learned), already stripped of anyone else's details inside memberKnowledge. Background for the choice only.
+export function reflectionKnown(k: Pick<MemberKnowledge, "goals" | "carrying" | "corrections" | "lessons">): string | null {
+  const active = k.goals.filter((g) => g.state === "active").slice(0, 4);
+  const past = k.goals.filter((g) => g.state !== "active").slice(0, 3);
+  const carrying = k.carrying.filter((c) => c.state !== "done").slice(0, 6);
+  const lines = [
+    active.length ? `- Where they say they're headed: ${active.map((g) => g.text).join("; ")}` : null,
+    past.length ? `- Goals done or set aside (history, not current): ${past.map((g) => `${g.text} (${g.state})`).join("; ")}` : null,
+    carrying.length ? `- What Co is carrying for them: ${carrying.map((c) => `${c.what.slice(0, 120)} (${c.kind}, ${c.state})`).join("; ")}` : null,
+    k.corrections.length ? `- They corrected (only the corrected version exists): ${k.corrections.slice(0, 4).map((c) => `${c.field}: ${c.now ?? "(removed)"}`).join("; ")}` : null,
+    k.lessons.length ? `- What Co has learned about them: ${k.lessons.slice(0, 4).map((l) => l.text.slice(0, 160)).join("; ")}` : null,
+  ].filter(Boolean);
+  return lines.length ? lines.join("\n") : null;
+}
 
 export type ReflectionMove = { move: "check_in" | "hold"; threadId: string | null; reasoning: string };
 
@@ -62,13 +85,13 @@ Share of Co's texts that were offers (events, people): ${f.offerShare == null ? 
 
 What they're in the middle of:
 ${f.threads.length ? f.threads.map((t) => `[${t.id}] ${renderThreads([t], new Date(), f.zone ?? null).slice(2)}`).join("\n") : "(nothing open)"}
-
+${f.known ? `\nWhat else you know about them (background):\n${f.known}\n` : ""}${f.restraint ? `\n${f.restraint}\n` : ""}
 Choose "check_in" on ONE of their threads when it would mean something to them now (it's been a while, a date passed, or Co has mostly been sending offers), or "hold" when Co should give them space. Say why in one or two plain sentences.
 
 Return ONLY JSON: {"move": "check_in" | "hold", "threadId": "id or null", "reasoning": "..."}`;
 }
 
-async function weekFacts(userId: string): Promise<WeekFacts> {
+async function weekFacts(userId: string, known: MemberKnowledge | null = null, restraint: string | null = null): Promise<WeekFacts> {
   const [sends, replies, threads] = await Promise.all([
     pool.query(
       `SELECT type, sent_at, COALESCE(message, '') AS message FROM proactive_sends WHERE user_id = $1 AND sent_at > NOW() - INTERVAL '7 days' ORDER BY sent_at`,
@@ -93,13 +116,22 @@ async function weekFacts(userId: string): Promise<WeekFacts> {
     lastReplyAt: replies.rows[0]?.last ? new Date(replies.rows[0].last).toISOString().slice(0, 16) : null,
     offerShare: counted.length ? counted.filter((r) => r.purpose === "offer").length / counted.length : null,
     threads,
-    zone: await memberZone(userId),
+    // Their zone as the member knowledge read it (the same memberZone source), else read here.
+    zone: known ? known.identity.zone : await memberZone(userId),
+    known: known ? reflectionKnown(known) : null,
+    restraint,
   };
 }
 
 export async function reflectOnMember(userId: string): Promise<ReflectionMove | null> {
   try {
-    const facts = await weekFacts(userId);
+    // What Co knows about them, one read (services/memberKnowledge.ts). A failed read reflects on the week alone, as before.
+    const MK = await import("../services/memberKnowledge.js");
+    const known = await MK.memberKnowledge(userId, { include: REFLECTION_KNOWLEDGE }).catch((err: any) => {
+      console.error("reflectOnMember: member knowledge read failed (non-fatal, reflecting without it):", err?.message ?? err);
+      return null;
+    });
+    const facts = await weekFacts(userId, known, known ? MK.memberRules(known).restraint || null : null);
     // Nothing to be a companion about yet: the recap path covers them.
     if (!facts.threads.length) {
       await recordDecision({ layer: 7, decision: "proactive.reflection", userId, outcome: "skip", action: "hold", reason: "no open threads", proposal: { facts: { ...facts, threads: [] } } });
