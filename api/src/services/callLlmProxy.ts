@@ -89,6 +89,35 @@ export function asksCo(said: string): boolean {
   if (/\bwhat'?s (?:up|going on|happening|new) (?:with|on|about) (?!you\b)\w/i.test(said)) return true;
   return /\?|\b(?:did you|have you|can you|could you|tell me|any (?:news|luck|update)|when'?s|when is|where'?s|where is|what'?s the|what time|who'?s|how (?:much|many|long)|is it|are we|do we)\b/i.test(rest);
 }
+// Nothing is sent during a call (the work runs after it), so a line that says it's done or sent is never true yet (Royce's call,
+// 2026-10-08: "Done, I'll send that over now", and nothing went out). A leading "Done," is taken off; a sentence that claims the
+// send is dropped. "I'll text it to you right after we hang up" is the truth and stays.
+const DONE_LEAD = /^(\[[a-z ]+\]\s*)?(?:done|all done|sent|there you go|there we go)[,.!]\s+(?=\S)/i;
+const SENT_CLAIM = /\b(?:i(?:'ve| have)? (?:just |already )?(?:sent|texted|shared|dropped|forwarded) (?:it|that|them|those|you|the)\b|(?:just|already) (?:sent|texted) (?:it|that|them|you)\b|it'?s (?:in your (?:texts|inbox|messages)|been sent)\b|it'?s on its way(?=\s*[.!,]|\s*$)|(?:i'?m )?sending (?:it|that|them) (?:over )?(?:now|as we speak)|should be in your (?:texts|inbox|messages)|check your (?:texts|phone|messages) now)/i;
+// A send that happened before the call ("I texted you the link yesterday"), or a question about one, is true or harmless.
+const PAST_SEND = /\b(?:yesterday|earlier|last (?:night|week|time)|this morning|before|the other day|on (?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
+export function stripSendClaim(sentence: string): string | null {
+  if (SENT_CLAIM.test(sentence) && !PAST_SEND.test(sentence) && !/\?\s*$/.test(sentence)) return null;
+  const t = sentence.replace(/^(\[[a-z ]+\]\s*)?(?:done|all done|sent)[.!]?\s*$/i, "");
+  if (!t.trim()) return null;
+  return t.replace(DONE_LEAD, (_m, tag) => tag ?? "").replace(/^(\[[a-z ]+\]\s*)?([a-z])/, (_m, tag, c) => `${tag ?? ""}${c.toUpperCase()}`);
+}
+// Pure: a question that counts as the turn's one. A short one counts too ("What changed?", "Why not?", "Did you?"); only an
+// interjection ("Honestly?", "Right?") or an echo of their words ("The dinner?") doesn't (2026-10-08 eval: "What changed? Did
+// something just feel different...?" slipped through as two).
+export function countsAsQuestion(sentence: string): boolean {
+  const ws = sentence.replace(/\[[a-z ]+\]\s*/gi, "").replace(/[?"')\]]+$/g, "").split(/\s+/).filter(Boolean).map((w) => w.toLowerCase().replace(/[^a-z']/g, ""));
+  if (ws.length > 2) return true;
+  if (/^(?:what|whats|what's|why|how|hows|how's|who|where|when|which)$/.test(ws[0] ?? "")) return true;
+  return /^(?:do|did|are|is|was|were|can|could|would|will|have|has|should)$/.test(ws[0] ?? "") && /^(?:you|they|we|i|it|she|he)$/.test(ws[1] ?? "");
+}
+// They pushed back on something Co said about them ("I don't think I mentioned that"): Co drops it, never insists they did
+// (Royce, #115: never argue with the member about what they said, even when Co is right).
+const PUSHBACK = /\b(?:i (?:don'?t think i|never|didn'?t) (?:said|say|mention(?:ed)?|told|tell)|i don'?t (?:remember|recall) (?:saying|telling|mentioning)|that'?s not what i said|what are you talking about|i didn'?t say that)\b/i;
+const INSISTS = /\b(?:you (?:did|actually) (?:say|said|mention(?:ed)?|tell|told)|you did,? actually|actually,? you did|you (?:said|mentioned|told me) (?:that|it|this) (?:before|back|last|earlier|when)|back when we (?:talked|spoke))\b/i;
+export function insistsAfterPushback(theirLast: string, sentence: string): boolean {
+  return PUSHBACK.test(theirLast) && INSISTS.test(sentence);
+}
 export const GOODBYE = /^(?:\[[a-z ]+\]\s*)?(?:(?:ok(?:ay)?|alright|all right|great|perfect)[,.!]?\s+)?(?:take care|talk (?:to you )?soon|bye|goodbye|good night|goodnight|have a (?:good|great|nice) (?:night|evening|one|day|weekend)|see you|catch you later|speak soon)\b/i;
 export type OaiMessage = { role: string; content?: OaiContent; tool_calls?: { id: string; type?: string; function: { name: string; arguments?: string } }[]; tool_call_id?: string };
 export type OaiRequest = { model?: string; messages: OaiMessage[]; tools?: { type?: string; function: { name: string; description?: string; parameters?: unknown } }[]; stream?: boolean; temperature?: number; max_tokens?: number; max_completion_tokens?: number; elevenlabs_extra_body?: Record<string, any> };
@@ -305,6 +334,22 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       deps.onDropped?.(sentence, "a second question in the turn");
       return null;
     }
+    if (clean && insistsAfterPushback(theirLast, sentence)) {
+      deps.onDropped?.(sentence, "insists they said something they say they didn't");
+      return null;
+    }
+    if (clean) {
+      const kept = stripSendClaim(sentence);
+      if (kept === null) {
+        deps.onDropped?.(sentence, "claims a send that hasn't happened: nothing is sent during a call");
+        return null;
+      }
+      if (kept !== sentence) {
+        deps.onDropped?.(sentence, "a \"Done\" before anything was sent");
+        s = s.replace(sentence, kept);
+        return say(s);
+      }
+    }
     // A sentence that is only a stock phrase ("And I hear you.") isn't said (harness/stockLines.ts stockSentence): the reply goes on
     // without it, the same way a dash is cleaned. Never on a safety call's help line.
     if (clean && stockSentence(sentence) && !SAFETY_LINE.test(sentence)) {
@@ -341,7 +386,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (!firstSentenceAt) { firstSentenceAt = now(); deps.onFirstText?.({ upstreamFirstTokenMs: (firstTokenAt || firstSentenceAt) - t0, firstSentenceMs: firstSentenceAt - t0 }); }
     // Co checking on their safety makes the whole turn a safety turn: no question limit after it.
     if (SAFETY_LINE.test(sentence) || (isQuestion && SAFETY_TURN.test(sentence))) safetyTurn = true;
-    if (isQuestion && sentence.replace(/\[[a-z ]+\]\s*/gi, "").split(/\s+/).filter(Boolean).length > 2) asked = true;
+    if (isQuestion && countsAsQuestion(sentence)) asked = true;
     spokeAny = true;
     spokenLines.push(line);
     deps.onSpoken?.(line);

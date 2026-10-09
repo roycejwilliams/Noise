@@ -272,7 +272,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     check("call tools: ElevenLabs never sees Co's tool call (only text and its own tools)", !r.calls.some((c: any) => c.function?.name === "startTask") && r.finish === "stop", r.calls);
     const second = up.reqs[1];
     check("call tools: the result is fed back as a tool_result after the model's own tool_use", !!second && second.messages.at(-2).content.some((b: any) => b.type === "tool_use" && b.id === "tu1") && second.messages.at(-1).content.some((b: any) => b.type === "tool_result" && b.tool_use_id === "tu1" && /"taskId":41/.test(b.content)), second?.messages.slice(-2));
-    check("call tools: the line before the tool streams first, then the answer after it", /^On it, I'll take that on now\. Done, it's on my list/.test(r.content), r.content);
+    check("call tools: the line before the tool streams first, then the answer after it (its \"Done,\" taken off: nothing is sent on a call)", /^On it, I'll take that on now\. It's on my list/.test(r.content), r.content);
     check("call tools: Co's tools are offered beside ElevenLabs' end_call and voicemail_detection, with the call note in the prompt", ["end_call", "voicemail_detection", "startTask"].every((n) => up.reqs[0].tools.some((t: any) => t.name === n)) && /# Doing things on this call/.test(up.reqs[0].system[0].text));
   }
   // 2. end_call passes through, with Co's tools on, once they've said goodbye (#113: Co never hangs up first; the hold is tested in

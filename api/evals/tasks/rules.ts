@@ -50,7 +50,7 @@ check("a follow-up promise is not cut when Co has an open task", G.unbackedFollo
 // Wiring
 const tt = src("services/taskTurn.ts");
 check("a wake-up must end with Co's decision, or it looks again in a day", /stopWhen: \[stepCountIs\(12\), \(\) => decided !== null\]/.test(tt) && /if \(!decided\) \{\s*const at = await deps\.schedule\(24,/.test(tt));
-check("a task text is drafted only from verified facts, and checked", /draftProactive\(/.test(tt) && /checkDraft\(text/.test(tt) && /mayText\(task, await deps\.textsToday\(\)/.test(tt));
+check("a task text is drafted only from verified facts, and checked", /draftProactive\(/.test(tt) && /checkDraft\(text/.test(tt) && /mayText\(texts\.length \? \{ \.\.\.task, lastTextedAt: deps\.now\(\)\.toISOString\(\) \} : task, await deps\.textsToday\(\)/.test(tt));
 check("a task text only sends links from results that passed", /const known = \(links \?\? \[\]\)\.filter\(linkOk\)/.test(tt));
 check("a task text goes out only inside their hours, never held in memory", /if \(!localHourOk\(deps\.now\(\), deps\.zone\)\) return/.test(tt) && /respectHours: true/.test(tt) && !/sendExemptWhenAllowed\(/.test(tt));
 check("web searches reserve the shared budget and keep only results that prove themselves (evals/tasks/web.ts)", /reserveWebSearch\(userId, opts\.source \?\? "sweep", what\)/.test(src("services/taskWeb.ts")) && /web: \(what\) => taskWebSearch\(/.test(tt));

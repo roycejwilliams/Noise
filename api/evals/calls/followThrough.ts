@@ -116,25 +116,23 @@ user: Perfect, thank you.`;
   const h = harness({ nowIso: ended.toISOString() });
   const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT, startedAt: new Date(ended.getTime() - 600_000), endedAt: ended }, h.deps);
   const sendEv = h.events.find((e) => e.what === "send");
-  check("call end: the confirmation is sent in the same call-end flow, not queued", r.action === "sent" && !!sendEv && h.queued === null && h.held === null);
-  check(`call end: confirmation lands well inside 60s on the stubbed clock (${r.confirmMs}ms)`, typeof r.confirmMs === "number" && r.confirmMs < 60_000);
-  check("call end: the confirmation is the drafted shape", sendEv?.text === GOOD);
+  // Royce, 2026-10-08 evening (his real call: three texts in a minute, two "nothing yet"): no separate confirmation text. Silence
+  // until there's something real, then one message: the delivery.
+  check("call end: no confirmation text goes out; the work starts in the same call-end flow, not queued", r.action === "working" && !sendEv && h.queued === null && h.held === null && h.prompts.length === 0);
+  check(`call end: the work starts well inside 60s on the stubbed clock (${r.confirmMs}ms)`, typeof r.confirmMs === "number" && r.confirmMs < 60_000);
   check("call end: commitments said on the direct path are opened first", h.events[0]?.what === "track");
   const work = await r.work!;
   const order = h.events.map((e) => e.what);
-  check(`the deliverable runs right after the confirmation, as its own completion event (${order.join(" > ")})`, work.length === 1 && work[0].ran && order.indexOf("send") < order.indexOf("run:111") && order.indexOf("run:111") < order.indexOf("deliver"));
+  check(`the deliverable is the one message: its own completion event, nothing before it (${order.join(" > ")})`, work.length === 1 && work[0].ran && !order.includes("send") && order.indexOf("run:111") < order.indexOf("deliver"));
   check("the deliverable needs no sweep: it was started by the call end itself, with no hold and no queue", h.held === null && h.queued === null);
-  check("the decision log has the confirmation and its latency", h.decisions.some((d) => d.decision === "call.followthrough" && d.action === "confirm_sent" && typeof d.proposal.confirmMs === "number"));
-  const facts = h.prompts[0]?.facts ?? {};
-  check("the draft is given what Co said, their words, and when", /presence after the November event/.test(facts.co_commitment_on_call) && /thinking about Co a week later/.test(facts.their_words_on_the_call) && facts.delivery_window === "tonight");
-  check("their words exclude Co's lines", !/What do you want the November event/.test(facts.their_words_on_the_call));
+  check("the decision log has the work starting and its latency", h.decisions.some((d) => d.decision === "call.followthrough" && d.action === "work_started" && typeof d.proposal.confirmMs === "number"));
 }
 {
   // Two commitments: one confirmation, two deliverable turns.
   const h = harness({ nowIso: "2026-10-07T20:00:00Z", commitments: [...COMMIT, { taskId: 112, sentence: "I'll send you the venue links", wakes: 1 }] });
   const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT }, h.deps);
   const work = await r.work!;
-  check("two commitments: one confirmation text, both tasks run", h.events.filter((e) => e.what === "send").length === 1 && work.map((w) => w.taskId).join(",") === "111,112");
+  check("two commitments (an old call's two tasks): no confirmation text, both tasks run", h.events.filter((e) => e.what === "send").length === 0 && work.map((w) => w.taskId).join(",") === "111,112");
 }
 {
   // Quiet hours: 11:30pm in San Francisco. No confirmation at all (2026-10-08, Royce: a "Got it" held to 9am read like Co had only
@@ -166,17 +164,10 @@ user: Perfect, thank you.`;
   check("no commitment on the call: no confirmation", r.action === "none" && !h.events.some((e) => e.what === "send"));
 }
 {
-  // First draft narrates; the redraft is told what broke and is sent.
-  const h = harness({ nowIso: "2026-10-07T20:00:00Z", drafts: [TODAY_BAD, GOOD] });
-  const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT }, h.deps);
-  check("redraft: the narrating draft is never sent, the fixed one is", r.action === "sent" && r.text === GOOD && !h.events.some((e) => e.text === TODAY_BAD));
-  check("redraft: told what broke", /narrat|Co's own activity|judgment/.test(h.prompts[1]?.redo?.failed ?? ""));
-}
-{
-  // Both drafts narrate: Co's own words from the call, not silence.
+  // No confirmation is drafted at all now, so nothing narrating can go out after a call.
   const h = harness({ nowIso: "2026-10-07T20:00:00Z", drafts: [TODAY_BAD, "Working on it now."] });
   const r = await F.followThroughOnCallEnd({ userId: "u1", transcript: TRANSCRIPT }, h.deps);
-  check(`fallback: something still lands, in Co's words from the call ("${r.text}")`, r.action === "sent" && r.fallback === true && /^Got it, I'll text you what I put together/.test(r.text ?? "") && !narratesInternalState(r.text ?? ""));
+  check("no \"working on it\" text after a call, whatever a draft would have said", r.action === "working" && !h.events.some((e) => e.what === "send") && h.prompts.length === 0);
 }
 
 // ---------- wiring (read from the source: the real path)
@@ -195,7 +186,7 @@ user: Perfect, thank you.`;
   const cc = src("services/callCommitments.ts");
   check("a confirmation never counts as the commitment kept (nor a miss warning)", /ps\.type IN \('call_confirm', 'task_window'\)/.test(cc));
   const pc = src("jobs/postCallFollowUp.ts");
-  check("the after-call reflection no longer says 'worth sending' or 'you're on it'", !/worth sending yet/.test(pc) && !/you're on it/.test(pc));
+  check("the after-call reflection no longer says 'worth sending', and never mentions the work at all", !/worth sending yet/.test(pc) && /never mention it here/.test(pc));
   check("the after-call reflection knows the confirmation went out", /confirmation_you_already_sent_after_the_call/.test(pc));
   const tt = src("services/taskTurn.ts");
   check("a promise task sends when done or says what's missing (no 'only if something real')", /send it when it's done/.test(tt) && !/Only text them if you have something real to tell them; if there isn't, say nothing/.test(tt));

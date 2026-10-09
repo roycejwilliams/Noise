@@ -100,7 +100,7 @@ user: Yes please`;
   const pc = src("jobs/postCallFollowUp.ts");
   check("#1 (#6) promise results are tied to their call by its transcript, not a time window", /FROM call_promise_results WHERE user_id = \$1 AND call_key = \$2/.test(pc) && /callKey\(transcript\)/.test(pc) && !/INTERVAL/.test(pc.slice(pc.indexOf("What came of anything"), pc.indexOf("return draftPostCallText"))));
   check("#1 (#6) the search records its result against the same call", /INSERT INTO call_promise_results \(user_id, call_key, content\)/.test(cg) && /CREATE TABLE IF NOT EXISTS call_promise_results/.test(src("db/migrations.ts")));
-  check("#1 the after-call text hears what the promise turned up", /what_co_said_it_would_look_into:/.test(pc) && /without promising to keep looking/.test(pc));
+  check("#1 (superseded 2026-10-08, #115) the after-call text never restates promised work; the delivery says what turned up", /what_co_said_it_would_look_into: null/.test(pc) && /not that nothing turned up/.test(pc));
   const { callKey } = await import("../../src/services/callKey.js");
   check("#1 (#6) two calls get different keys, the same call the same key", callKey("user: hi\nassistant: hey") === callKey("user: hi\nassistant: hey") && callKey("user: hi") !== callKey("user: hi again"));
 }

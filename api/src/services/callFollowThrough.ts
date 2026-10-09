@@ -95,7 +95,7 @@ export type FollowThroughDeps = {
 };
 
 export type FollowThroughResult = {
-  action: "none" | "unreachable" | "sent" | "held" | "send_failed" | "no_text";
+  action: "none" | "unreachable" | "sent" | "held" | "send_failed" | "no_text" | "working";
   text?: string;
   fallback?: boolean;
   heldUntil?: string;
@@ -137,21 +137,13 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
     if (!commitments.length) return { action: "none" };
     const person = await deps.person(o.userId);
     if (!person || !person.reachable) return { action: "unreachable" };
-    const theirLines = o.transcript.split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, "")).join("\n");
-    const key = confirmKey(callKey(o.transcript));
 
     const deliver = async (): Promise<FollowThroughResult> => {
-      const now = deps.now();
-      const w = await writeConfirmation({ firstName: person.firstName, commitments, theirLines, now, zone: person.zone }, deps.draft);
-      let action: FollowThroughResult["action"] = "no_text";
-      let reason: string | undefined;
-      if (w) {
-        const r = await deps.send({ userId: o.userId, phone: person.phone, key, text: w.text, zone: person.zone }).catch((err: any) => ({ sent: false, reason: String(err?.message ?? err) }));
-        action = r.sent || r.reason === "already sent" ? "sent" : "send_failed";
-        reason = r.reason;
-      }
+      // No "got it, I'll have it this afternoon" text (Royce, 2026-10-08 evening, after his real call: three texts in a minute,
+      // two of them "nothing yet"): silence until there's something real, then one message. The delivery says what they asked
+      // for and when (services/speakable.ts deliveryLine), so it is the confirmation too.
       const confirmMs = deps.now().getTime() - (o.endedAt ?? t0).getTime();
-      await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: action === "sent" ? "act" : "skip", action: `confirm_${action}`, proposal: { text: w?.text ?? null, fallback: w?.fallback ?? false, tasks: commitments.map((c) => c.taskId), confirmMs }, reason: reason ?? null }).catch(() => {});
+      await deps.record({ layer: 8, decision: "call.followthrough", userId: o.userId, outcome: "act", action: "work_started", proposal: { tasks: commitments.map((c) => c.taskId), confirmMs }, reason: null }).catch(() => {});
       // The deliverable: each task's own turn, started now, sent when it finishes.
       const work = Promise.all(
         commitments.map((c) =>
@@ -161,7 +153,7 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
           }),
         ),
       );
-      return { action, text: w?.text, fallback: w?.fallback, confirmMs, work };
+      return { action: "working", confirmMs, work };
     };
 
     if (!localHourOk(t0, person.zone)) {

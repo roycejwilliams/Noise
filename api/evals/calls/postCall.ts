@@ -126,8 +126,17 @@ user: Thanks.`;
   const cdeps: any = { open: async () => [{ ...live, source: "promise" }], start: async (i: any) => { started.push(i); return { ok: true, task: { id: 200 } }; }, setDue: async () => {}, note: async (_u: string, id: number, t: string) => { cnotes.push({ id, t }); } };
   const again = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you what I put together for the post-event plan.", theirLine: ASK, now: new Date("2026-10-08T00:29:30Z") }, cdeps);
   check("the same commitment said again on the call opens no second task", !again.ok && started.length === 0 && cnotes[0]?.id === 111, { again, cnotes });
+  // A text send on the same call as a text task rides it (the live task here is a document, so use a text one).
+  const textTask = { id: 112, goal: 'Keep your word from the call: "I\'ll text you the run link."', theirWords: "yes send it", createdAt: "2026-10-08T00:28:49Z", source: "promise" };
+  cdeps.open = async () => [textTask];
   const fresh = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you those venue links right after we hang up.", theirLine: "can you send the venue links", now: new Date("2026-10-08T00:29:30Z") }, cdeps);
-  check("a different commitment on the same call still opens its own", fresh.ok && started.length === 1);
+  // Royce, 2026-10-08 (his real call: two sends opened two tasks and two "nothing yet" texts): one call's sends are one delivery.
+  check("a different send on the same call rides the same task, noted to go in the same message", !fresh.ok && started.length === 0 && cnotes.some((n) => n.id === 112 && /Also said on the call: "I'll text you those venue links/.test(n.t) && /same message/.test(n.t)), { fresh, cnotes });
+  const docCall = await C.trackCallCommitment({ userId: "u1", sentence: "I'll send you a PDF write-up of the plan tonight.", theirLine: "can you write it up", now: new Date("2026-10-08T00:29:30Z") }, { ...cdeps, open: async () => [{ id: 300, goal: 'Keep your word from the call: "I\'ll text you the venue links."', theirWords: "send the links", source: "promise", createdAt: "2026-10-08T00:28:49Z" }] });
+  check("a document and a text from one call stay apart (a PDF goes with its own one line)", docCall.ok, docCall);
+  const startedBefore = started.length;
+  const nextDay = await C.trackCallCommitment({ userId: "u1", sentence: "I'll text you those venue links right after we hang up.", theirLine: "can you send the venue links", now: new Date("2026-10-09T09:00:00Z") }, cdeps);
+  check("a send on a later call still opens its own task", nextDay.ok && started.length === startedBefore + 1, nextDay);
   // the audit's promises: five ways of saying one thing become one, carried by the live task
   const claims: any[] = [
     { quote: "Yes, I can take that on. When we hang up, I'll set up a task to draft a planning doc.", type: "promise_keepable", what: "draft a post-event branding/presence planning doc" },
