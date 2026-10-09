@@ -393,7 +393,7 @@ export async function assembleContext(
   const coldStartP = import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   const coldStart = await coldStartP;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart };
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

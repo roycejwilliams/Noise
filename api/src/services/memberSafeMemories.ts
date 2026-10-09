@@ -158,7 +158,7 @@ async function memberNamesStrict(userId: string): Promise<string[]> {
        )`,
       [userId],
     ),
-    pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('network_offer_pending', 'network_intro_offer_pending', 'recommendation')`, [userId]),
+    pool.query(`SELECT content, memory_type FROM co_memories WHERE user_id = $1 AND memory_type IN ('network_offer_pending', 'network_intro_offer_pending', 'recommendation') ORDER BY created_at DESC LIMIT 200`, [userId]),
     pool.query(
       `SELECT DISTINCT u.first_name FROM network_introductions n JOIN users u ON u.id = CASE WHEN n.person_a_id = $1 THEN n.person_b_id ELSE n.person_a_id END
        WHERE (n.person_a_id = $1 OR n.person_b_id = $1) AND u.first_name IS NOT NULL`,

@@ -30,7 +30,7 @@ const s2 = await M.memberSafeLine("u-test", fromRecords);
 check(`a Tier 0 pick's name from Co's records is stripped ("${s2("Co replied: Maya is building grid storage and left Tesla.")}")`, !/grid storage|Tesla/.test(s2("Co replied: Maya is building grid storage and left Tesla.") ?? ""));
 check("memberSafeLine's lookup covers Co's records and introductions, like memberSafe", /namesInRecords\(records\.rows\)/.test(src("services/memberSafeMemories.ts")) && /network_introductions/.test(src("services/memberSafeMemories.ts")));
 check("picker: sent messages and outcomes stripped too", /what: `\$\{s\.type\}: \$\{\(safe \? safe\(String\(s\.message/.test(src("services/sweepSelectContext.ts")) && /item: safe \? safe\(String\(o\.item_name\)\)/.test(src("services/sweepSelectContext.ts")));
-check("text path: tasks, briefs, lessons, ledger lines and open work stripped too", /lessons: keepAll\(lessons\)/.test(tc) && /tasks: keepAll\(tasks\), briefs: keepAll\(briefs\)/.test(tc) && /ledger: \{ \.\.\.ledger, lines: keepAll\(ledger\.lines\) \}/.test(tc) && /const openWork = keepAll\(/.test(tc));
+check("text path: tasks, briefs, lessons, ledger lines and open work stripped too", /lessons: keepAll\(lessons\)/.test(tc) && /tasks: keepAll\(tasks\), briefs: keepAll\(briefs\)/.test(tc) && /ledger: \{ \.\.\.ledger, lines: keepAll\(ledger\.lines\), named: keepAll\(ledger\.named\) \}/.test(tc) && /const openWork = keepAll\(/.test(tc));
 
 console.log(`member safety gaps: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);
