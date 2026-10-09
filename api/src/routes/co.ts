@@ -39,7 +39,8 @@ import {
 import { MODELS } from "../models.js";
 import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
-import { auditCall } from "../harness/callGrounding.js";
+import { AUDIT_SECTIONS, auditCall, knownBeforeFrom } from "../harness/callGrounding.js";
+import { memberKnowledge } from "../services/memberKnowledge.js";
 import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frustrationScores, recordEmotionSignals, type ScoredLine } from "../harness/emotion.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { narratesInternalState } from "../services/speakable.js";
@@ -823,8 +824,15 @@ async function processEndedCall(o: {
       // crash) used to re-insert this — and duplicate the emotion_signals
       // rows below — every time it reclaimed a 'failed' call_status.
       // What Co had going in, split into facts and Co's own impressions, so
-      // the audit never takes a summary as proof (callContext.ts).
-      const knownBeforeCall0 = await buildCallKnowledge(user_id).catch(() => ({ summary: "", facts: "", impressions: "" }));
+      // the audit never takes a summary as proof (callContext.ts). The member's
+      // goals with state, asks, delivered items, corrections and claims come from
+      // the shared layer (services/memberKnowledge.ts), the same truth every path
+      // reads; the call picture adds sent-page details, ledger lines and impressions.
+      const [callPicture, auditKnowledge] = await Promise.all([
+        buildCallKnowledge(user_id).catch(() => ({ summary: "", facts: "", impressions: "" })),
+        memberKnowledge(user_id, { include: AUDIT_SECTIONS }).catch(() => null),
+      ]);
+      const knownBeforeCall0 = knownBeforeFrom(auditKnowledge, callPicture);
       const knownBeforeCall = o.offered ? { ...knownBeforeCall0, facts: `${knownBeforeCall0.facts}\n\nWhat Co had found for them before the call (anything offered from this list is on file):\n${o.offered}` } : knownBeforeCall0;
       const existingTranscriptMem = await pool.query(
         `SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND content = $2 LIMIT 1`,

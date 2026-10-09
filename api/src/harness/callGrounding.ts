@@ -27,6 +27,8 @@ import { callKey } from "../services/callKey.js";
 import { ABILITIES, LIMITS, isMemberMoAbility } from "../services/capabilities.js";
 import { memberRecordText, overlap, sameCallCommitment, sameCommitment, significant, specificsIn, specificsOnRecord } from "../services/followThrough.js";
 import { wordsAreTheirs } from "../services/coTasks.js";
+import type { MemberKnowledge } from "../services/memberKnowledge.js";
+import { DateTime } from "luxon";
 
 export type CallClaim = {
   quote: string;
@@ -58,6 +60,37 @@ export function auditRegistry(): { abilities: { id: string; can: string }[]; lim
     abilities: ABILITIES.filter((a) => !a.teamOnly && !isMemberMoAbility(a)).map((a) => ({ id: a.id, can: a.can })),
     limits: [...LIMITS, ...CALL_ONLY_LIMITS],
   };
+}
+
+// What Co had going into the call, for the audit, from the shared member-knowledge layer (services/memberKnowledge.ts, PR 7 of the
+// migration): the same goals with state, open asks, delivered items, corrections and claims every other path reads, so a call is
+// fact-checked against the same truth a text is. The call picture (services/callContext.ts buildCallKnowledge) still adds what the
+// layer doesn't carry: the page details on file for what was sent, Co's ledger lines, and its impressions (last calls, recap,
+// threads). Facts back a specific; impressions only help read the call.
+export const AUDIT_SECTIONS = ["goals", "asks", "delivered", "corrections", "claims"] as const;
+const ASK_LINE = /^They've asked Co for \(their words\): /;
+export function knownBeforeFrom(
+  k: Pick<MemberKnowledge, "goals" | "asks" | "delivered" | "corrections" | "claims" | "identity"> | null,
+  picture: { facts: string; impressions: string },
+): { facts: string; impressions: string } {
+  if (!k) return { facts: picture.facts, impressions: picture.impressions };
+  const day = (at: string) => DateTime.fromISO(at).setZone(k.identity.timeZone).toFormat("LLL d");
+  // Asks come from the layer now; the picture's copy of the same rows is dropped so each ask is listed once.
+  const pictureFacts = picture.facts.split("\n").filter((l) => l.trim() && !ASK_LINE.test(l));
+  const facts = [
+    ...pictureFacts,
+    ...k.asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
+    ...k.delivered.slice(0, 12).map((d) => `Co sent them ${d.kind === "document" ? "the document " : ""}"${d.what}"${d.url ? ` (${d.url})` : ""} on ${day(d.at)}.`),
+    // The corrected version only: an old value is never "on record" (it's the one thing that must still be caught if Co said it).
+    ...k.corrections.map((c) => (c.now ? `They corrected their ${c.field}: it's "${c.now}" now.` : `They corrected their ${c.field}; what Co had no longer holds.`)),
+    ...k.claims.filter((c) => c.provenance === "user_said").map((c) => `They said (${day(c.verifiedAt)}): ${c.text}${c.quote ? ` ("${c.quote}")` : ""}`),
+  ];
+  const goals = k.goals.length
+    ? `Their goals in Co's notes (only active ones are where they're headed; done or stale ones are history):\n${k.goals.map((g) => `- ${g.text} (${g.state})`).join("\n")}`
+    : null;
+  const inferred = k.claims.filter((c) => c.provenance === "co_inferred").map((c) => `- ${c.text}`);
+  const impressions = [picture.impressions, goals, inferred.length ? `Co's own read of them (never something they said):\n${inferred.join("\n")}` : null].filter((x): x is string => !!x && !!x.trim());
+  return { facts: facts.join("\n"), impressions: impressions.join("\n\n") };
 }
 
 // impressions (2026-09-28, the facts-vs-hints rule on the text side,
