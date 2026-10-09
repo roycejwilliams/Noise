@@ -182,7 +182,7 @@ const ROYCE = ["partnering with Sequin AI for a November launch party", "have Co
 
 // ---- 7. wiring
 {
-  check("the turn loads the cold-start view for every reply", /loadColdStart\(userId, \{ profile, asks \}\)/.test(src("services/turnContext.ts")) && /coldStart \};/.test(src("services/turnContext.ts")));
+  check("the turn loads the cold-start view for every reply", /loadColdStart\(userId, \{ profile, asks \}\)/.test(src("services/turnContext.ts")) && /coldStart(, [^;]*)? \};/.test(src("services/turnContext.ts")));
   check("the reply grounding adds it, after the set-aside goal and never beside it or a document offer", /addColdStartSteer\(rf, opts\.turn\.coldStart, \{ emotional: opts\.turn\.emotional, otherQuestion: aside \? "a set-aside goal to ask about" : docQuestion \}\)/.test(src("harness/replyGrounding.ts")));
   const cr = src("agent/conversationReply.ts");
   check("a reply that offers a call or meets a safety concern never also steers", /if \(input\.safetyConcern\) withdrawColdStartSteer[\s\S]{0,120}else if \(callOfferEligible\) withdrawColdStartSteer/.test(cr));

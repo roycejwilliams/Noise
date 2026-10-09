@@ -18,6 +18,9 @@
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
 import type { GoalStateRow } from "../services/goalEdges.js";
+import type { MemberKnowledge, MemberRules, Restraint } from "../services/memberKnowledge.js";
+import { renderLive } from "../services/factLabels.js";
+import { arcLine, LENS_RULE } from "../services/goalJourney.js";
 import { steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
 import { docOfferLines, type OfferKind } from "../services/documentOffer.js";
 import { findSection } from "../services/deliveryReceipts.js";
@@ -169,9 +172,14 @@ export async function gatherReplyFacts(
   const t = opts.turn;
   const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent }) : undefined);
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
-  // What's landed with them (services/outcomes.ts tasteSummary).
-  const taste = await tasteSummary(userId).catch(() => null);
-  if (taste) addFact(rf, "known", taste);
+  // What Co knows about them from the one member-knowledge layer, with the member-level rules (addMemberKnowledge): their taste
+  // (what's landed with them), what they corrected, restraint, quiet hours, delivery shape. Without the layer (no turn), taste is read
+  // on its own as before.
+  if (t?.knowledge !== undefined || t?.rules !== undefined) addMemberKnowledge(rf, t?.knowledge, t?.rules);
+  else {
+    const taste = await tasteSummary(userId).catch(() => null);
+    if (taste) addFact(rf, "known", taste);
+  }
   // How they've told Co they like to be texted (services/textingStyle.ts).
   const style = await textingStyleFor(userId).catch(() => [] as string[]);
   if (style.length) addInstruction(rf, `How they've told you they like to be texted, follow it: ${style.join("; ")}.`);
@@ -317,7 +325,7 @@ export async function gatherReplyFacts(
   }
   // A delivered document that no longer matches what's true (services/receiptDrift.ts): a fact, whether or not Co raises it.
   for (const d of opts.turn?.drift ?? []) addFact(rf, "known", driftLine(d));
-  // One ordered view of everything Co is carrying for them (services/turnContext.ts carryingItems), and, when this message shares
+  // One ordered view of everything Co is carrying for them (memberKnowledge.ts carryingOf, labelled by turnContext.ts carryFromKnowledge), and, when this message shares
   // words with a section of a document Co just delivered, a pointer to read it first. Both guidance, never a gate.
   {
     const carrying = carryingBlock(opts.turn?.carrying);
@@ -368,6 +376,47 @@ export async function gatherReplyFacts(
     }
   }
   return rf;
+}
+
+// ---------------------------------------------------------------- member knowledge on a text reply (services/memberKnowledge.ts)
+
+// Pure: the member-level rules and the knowledge a reply reads as facts, from the one layer. Discretion (deduped against the base
+// facts' copy, the same constant), delivery shape, restraint (only when something is on: a hold, a pause, a muted kind, a hard time)
+// and quiet hours in their zone; what they've corrected (only the new version exists); their taste. Grounding and member safety are
+// the same constants in Co's shared core (agent/conversationReply.ts CO_CORE), so they aren't said twice. Text-channel rules (length,
+// mirroring, reactions) stay with the reply prompt.
+export function addMemberKnowledge(rf: ReplyFacts, k: MemberKnowledge | null | undefined, rules: MemberRules | null | undefined): void {
+  if (rules) {
+    addInstruction(rf, rules.discretion);
+    addInstruction(rf, rules.deliveryShape);
+    if (restraintOn(k?.restraint ?? null)) addInstruction(rf, rules.restraint);
+    addInstruction(rf, `${rules.quietHours} A follow-up or a delivery you set up lands outside those hours, never inside them.`);
+  }
+  if (!k) return;
+  for (const p of k.preferences) addFact(rf, "known", p.text);
+  if (k.corrections.length) {
+    addFact(rf, "known", `What they corrected (only the new version is true; never bring back the old one): ${k.corrections.slice(0, 6).map((c) => `${c.field.replace(/_/g, " ")} was "${c.was.slice(0, 80)}", now ${c.now ? `"${c.now.slice(0, 80)}"` : "removed"}`).join("; ")}.`);
+  }
+}
+
+// Pure: whether any restraint is on for them right now (otherwise its rule is only "nothing is on", and left out).
+export function restraintOn(r: Restraint | null): boolean {
+  return !!r && (r.safetyHold || !!r.holdUntil || !!r.spaceUntil || !!r.unanswered.pausedUntil || r.suppressedKinds.length > 0 || r.needsCare || r.frustratedWithCo);
+}
+
+// Pure: where they're headed, from goals WITH their state: only active goals are direction (a goal they closed, or one Co set aside,
+// is history, never current). The arc is the goals they closed, from their goal entries (goalJourney.ts arcLine).
+export function goalLens(k: MemberKnowledge | null | undefined, intent: unknown): { texts: string[]; arc: string | null; rule: string } | null {
+  if (!k) return null;
+  return { texts: k.goals.filter((g) => g.state === "active").map((g) => g.text), arc: arcLine(intent), rule: LENS_RULE };
+}
+
+// Pure: what they've told Co that still holds, rendered the way a reply reads claims (factLabels.ts renderLive), from member knowledge
+// (stripped, their quotes kept). Each claim's day is the last day it was said or confirmed.
+export function heldClaimsFrom(k: MemberKnowledge | null | undefined, now: Date = new Date()): ReturnType<typeof renderLive> | null {
+  if (!k) return null;
+  const zone = k.identity.timeZone;
+  return renderLive(k.claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, saidOn: c.verifiedAt.slice(0, 10), confirmedOn: c.verifiedAt.slice(0, 10), expiresOn: c.expiresOn })), now, zone);
 }
 
 // Pure: today's date in the member's own zone, naming the zone (the fallback zone, said as such, when theirs isn't known).

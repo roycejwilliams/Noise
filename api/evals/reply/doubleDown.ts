@@ -29,7 +29,7 @@ check("an ordinary reply with no attribution is untouched", fails("Sounds like a
 
 // wiring: the reply is handed what they have told Co (with when), and the rule for being asked what Co meant
 const sb = src("routes/sendblue.ts");
-check("the reply is given their live claims, labelled with when", /What they have told Co that still holds \(each with when they said it\)/.test(sb) && /c\.liveClaimsRendered\(user\.id, new Date\(\)\)/.test(sb) && /renderLive\(await liveClaims\(userId, now, zone\), now, zone\)/.test(src("services/claims.ts")));
+check("the reply is given their live claims, labelled with when", /What they have told Co that still holds \(each with when they said it\)/.test(sb) && /heldClaimsFrom\(turn\?\.knowledge\)/.test(sb) && /return renderLive\(k\.claims\.map/.test(src("harness/replyGrounding.ts")));
 check("and told: answer a challenge only from what they said, own the slip, never defend its own earlier text", /Your own earlier texts are never the source of what they said; never defend one/.test(sb) && /say you don't have that from them and own the slip/.test(sb));
 check("the check is in the reply gate's code checks, not only in a prompt", /name: "no_unsourced_attribution"/.test(src("harness/replyGrounding.ts")) && /attributedWithoutSource\(draft/.test(src("harness/replyGrounding.ts")));
 console.log(`reply double-down: ${total - failed}/${total} passed`);
