@@ -119,9 +119,10 @@ export type Restraint = {
   // services/kindRestraint.ts: kinds Co doesn't start for them, and those whose one trial may go.
   suppressedKinds: ProactiveKind[];
   trialKinds: ProactiveKind[];
-  // Co's proactive texts since they last wrote. pausedUntil: when the unanswered pause (harness/proactive.ts unansweredPauseFor) ends,
-  // if it's still on. A read for awareness: the gate itself stays in harness/proactive.ts.
-  unanswered: { count: number; lastInboundAt: string | null; lastSentAt: string | null; pausedUntil: string | null };
+  // Co's proactive texts since they last wrote, for awareness.
+  // No pause date: the unanswered pause is the send gate's, per lane (harness/proactive.ts userLevelChecks), and a single date
+  // here would be wrong (review of #119).
+  unanswered: { count: number; lastInboundAt: string | null; lastSentAt: string | null };
 };
 
 export type Exchange = { from: "member" | "co"; text: string; call: boolean };
@@ -463,13 +464,6 @@ export function restraintOf(r: RawRestraint, now: Date): Fact<Restraint> {
   const cur = r.emotional?.current ?? null;
   const count = r.unansweredSends.length;
   const last = count ? r.unansweredSends[count - 1] : null;
-  let pausedUntil: string | null = null;
-  if (last) {
-    // The same ladder as the gate (harness/proactive.ts RULES / unansweredPauseFor): a day after one, three after two, a week after
-    // three, two weeks after four. Kept in step by the layer-1 test (evals/member/knowledge.ts).
-    const hours = count >= 4 ? 14 * 24 : count >= 3 ? 7 * 24 : count >= 2 ? 72 : 24;
-    pausedUntil = ahead(new Date(last.getTime() + hours * 3_600_000));
-  }
   return {
     holdUntil: ahead(r.holdUntil),
     spaceUntil: ahead(r.spaceUntil),
@@ -479,7 +473,7 @@ export function restraintOf(r: RawRestraint, now: Date): Fact<Restraint> {
     feeling: cur ? `${cur.emotion}${cur.about ? ` about ${cur.about}` : ""} (${cur.intensity}, from a ${cur.source})` : null,
     suppressedKinds: [...r.suppressed],
     trialKinds: [...r.trial],
-    unanswered: { count, lastInboundAt: iso(r.lastInboundAt), lastSentAt: iso(last), pausedUntil },
+    unanswered: { count, lastInboundAt: iso(r.lastInboundAt), lastSentAt: iso(last) },
     verifiedAt: now.toISOString(),
   };
 }
@@ -488,6 +482,8 @@ export function restraintOf(r: RawRestraint, now: Date): Fact<Restraint> {
 export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> | null {
   const c = row.content;
   const at = row.at.toISOString();
+  // A failed-send note is a record, not an exchange (review of #119).
+  if (/\bfailed to deliver\b/i.test(c)) return null;
   // Any "User ...:" line is theirs ("User said:", "User sent a voice memo:"), any "Co ...:" line Co's ("Co replied:", "Co is
   // looking:") (review of #119: voice memos were dropped).
   const member = c.match(/^\s*User\b[^:\n]{0,40}:\s*([\s\S]*)$/i);
@@ -502,7 +498,7 @@ export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> |
 // ---------------------------------------------------------------- the strip (every string, inside)
 
 // Keys whose values are structure, not prose: never rewritten (a kind, a state, an id, a time, a URL, the zone, their own name).
-const STRUCTURAL = new Set(["userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "pausedUntil", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
+const STRUCTURAL = new Set(["userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
 // Their own words: a claim's quote. (Their exchange lines are kept by the walk below, by from === "member".)
 const OWN_WORDS = new Set(["quote"]);
 
