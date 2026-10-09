@@ -47,6 +47,13 @@ export const proxyAuthorized = (header: string | undefined, secret = process.env
   return given.length === want.length && timingSafeEqual(given, want);
 };
 
+// Co's line before their last one: what a vague "I'll send that over" was about.
+const coLineBefore = (b: OaiRequest): string => {
+  const at = b.messages.map((x) => x.role).lastIndexOf("user");
+  const m = [...b.messages.slice(0, Math.max(0, at))].reverse().find((x) => x.role === "assistant" && (typeof x.content === "string" ? x.content.trim() : Array.isArray(x.content)));
+  return typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m!.content.map((p: any) => p?.text ?? "").join("") : "";
+};
+
 const lastUserLine = (b: OaiRequest): string => {
   const m = [...b.messages].reverse().find((x) => x.role === "user");
   return typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m!.content.map((p: any) => p?.text ?? "").join("") : "";
@@ -62,6 +69,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     const extra = body.elevenlabs_extra_body ?? {};
     const userId = verifyCallToken(String(extra.user_id ?? ""), extra.call_token) ? String(extra.user_id) : null;
     const theirLine = lastUserLine(body);
+    const coBefore = coLineBefore(body);
     const t0 = Date.now();
     // The agent's mode (custom_llm request_headers, services/elevenLabsCalls.ts): voice-only keeps the voice speakable and one question
     // to a turn, and does nothing else (no tools, no checks).
@@ -146,7 +154,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       res.write("data: [DONE]\n\n");
       res.end();
     } finally {
-      if (userId && !toolOk) for (const s of commitments) trackCallCommitment({ userId, sentence: s, theirLine }).catch(() => {});
+      if (userId && !toolOk) for (const s of commitments) trackCallCommitment({ userId, sentence: s, theirLine, coBefore }).catch(() => {});
       const t = timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null;
       console.log(`co/el/llm: ${userId ? "call" : "anon"} first_token=${t?.upstreamFirstTokenMs ?? "-"}ms first_sentence=${t?.firstSentenceMs ?? "-"}ms total=${Date.now() - t0}ms spoken=${spoken} dropped=${dropped} tools=${(body.tools ?? []).map((x) => x?.function?.name).filter(Boolean).join(",") || "none"}${tools ? `+co(${tools.defs.length})` : ""} co_tool_runs=${toolRuns}${process.env.CALL_LLM_CLEAN === "off" ? " (clean off)" : ""}`);
     }

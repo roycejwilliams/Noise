@@ -285,6 +285,9 @@ export function speechStats(text: string): { words: number; dashes: number; semi
 // Pure. The same rule reads Co's spoken lines (the after-call audit, routes/co.ts) and every text Co drafts (harness/proactive.ts
 // checkDraft), so calls and texts are held to one standard. A question to them ("Working on anything fun?") is not narration.
 export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
+  // Co's pipeline, not the thing (Royce, 2026-10-09: "From the call: two confirmed for Tech Week... Left the run club off").
+  { pattern: /^(?:from (?:the|our|that) call|per (?:the|our) call|as promised)\s*[:,]/i, why: "opens on where it came from, not the thing" },
+  { pattern: /\b(?:one|two|three|four|five|\d+) (?:are |is )?(?:confirmed|verified)\b|\b(?:left|leaving) (?:\w+ ){0,4}off\b|\bcouldn'?t (?:confirm|verify)\b/i, why: "talks about Co's checking, not the thing" },
   // A sentence that opens on Co's own activity: "Starting the plan", "Working on it now", "Digging into it".
   { pattern: /^(?:(?:ok(?:ay)?|got it|on it|sure|great|perfect|alright)[,.!]?\s+)?(?:now\s+|already\s+|still\s+)?(?:starting|started|working on|beginning|kicking off|getting started on|digging into|looking into|in the middle of)\b/i, why: "opens on Co's own activity (task-tracker language)" },
   // First person, in progress: "I'm starting", "I've started on it", "I'm still working on the draft", "I started the plan".
@@ -471,3 +474,7 @@ export function dropStaleAck(text: string, o: { askedAt: Date; sendAt: Date }): 
   if (!rest) return text;
   return rest[0].toUpperCase() + rest.slice(1);
 }
+
+// A claim that something failed or is broken (Royce, 2026-10-09: never one a check in the record doesn't back).
+export const FAILURE_CLAIM = /\b(?:link|page|site|url|form|it)\s+(?:is|was|isn'?t|wasn'?t)\s+(?:not\s+)?(?:working|broken|down|dead|loading|live)\b|\bbroken link\b|\b(?:couldn'?t|could not|can'?t|cannot|wasn'?t able to|unable to)\s+(?:get|load|open|reach|confirm|verify|send)\b|\b(?:link|page|site)\s+(?:didn'?t|did not|doesn'?t|does not)\s+(?:work|load|open)\b|\b(?:send|text|delivery)\s+failed\b|\bfailed to (?:send|load|deliver)\b/i;
+export const inventedFailure = (t: string) => FAILURE_CLAIM.test(t);

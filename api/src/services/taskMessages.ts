@@ -8,7 +8,6 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { CO_VOICE } from "./coVoice.js";
-import { renderMatchLead } from "./messageFormat.js";
 import { checkDraft } from "../harness/proactive.js";
 import { parseModelJson } from "./modelJson.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked } from "./taskWeb.js";
@@ -22,7 +21,7 @@ export function orderByTier<T extends { tier: number }>(items: T[]): T[] {
 
 export function assembleMessages(items: { url: string; caption: string }[], closing: string | null): string[] {
   const out: string[] = [];
-  if (items.length > 1) out.push(renderMatchLead(items.length));
+  // No "Two that fit, sending both now." lead (Royce, 2026-10-09: no process narration): each thing is its link and caption.
   for (const it of items) out.push(it.url, it.caption);
   if (closing && closing.trim()) out.push(closing.trim());
   return out;

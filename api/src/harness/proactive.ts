@@ -23,6 +23,7 @@
 // still enforces the idempotency key and, where asked, local hours. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
+import { FAILURE_CLAIM } from "../services/speakable.js";
 import { proactivePaused, pausedTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
@@ -769,6 +770,9 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
   // Proactive texts open with a capital letter: Co only mirrors lowercase
   // when replying to someone who texts that way, and here nobody just did.
   checks.push({ name: "draft_capitalized", pass: !/^[a-z]/.test(text.trim()), reason: "starts lowercase" });
+  // Never a failure nobody checked (Royce, 2026-10-09: "the link wasn't working" was invented). A proactive draft has no check
+  // in front of it, so it never says something is broken, down or failed.
+  checks.push({ name: "draft_invented_failure", pass: !FAILURE_CLAIM.test(text), reason: "says something is broken, failed or unavailable with no check behind it; leave it out" });
   // A sanity limit, not a style rule: well past the guidance before it blocks
   // (2026-09-28: exact caps made every text the same shape).
   if (rules.maxSentences !== undefined) {
