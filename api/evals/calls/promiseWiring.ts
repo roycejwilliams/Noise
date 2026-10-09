@@ -40,6 +40,7 @@ check("a promise's first text is its delivery, past the daily cap on updates", C
 
 const notReports = ["If you're not ready to commit, here are two options that hold till Friday.", "Still looking great for Saturday: Builders who Run, 9am.", "Registration is not yet open, but here's the page: https://lu.ma/x", "Still working on the vegan option, but here's the caterer: Nopa Kitchen.", "Found it: Builders who Run on Saturday. Still on it for the Sunday options."];
 check(`real deliveries aren't progress reports: ${notReports.filter((t) => TT.progressReport(t, ["Builders who Run", "Nopa Kitchen"])).join(" | ") || "none"}`, notReports.every((t) => !TT.progressReport(t, ["Builders who Run", "Nopa Kitchen"])));
+check("the bare lines are too, without a \"tomorrow\" to give them away (review of #115)", ["Nothing solid for this weekend yet.", "Nothing good for Saturday yet.", "No luck so far."].every((t) => TT.progressReport(t, ["Builders who Run"])) && !TT.progressReport("Nothing beats the Saturday run: Builders who Run, 9am.", ["Builders who Run"]));
 check("the real \"nothing yet\" texts still are", nothingYet.slice(0, 2).every((t) => TT.progressReport(t, ["Builders who Run"])));
 const P = await import("../../src/services/callLlmProxy.js");
 const kept = ["I texted you the link yesterday, did it come through?", "Check your texts later for the link.", "It's on its way to being a great weekend."];

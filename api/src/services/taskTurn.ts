@@ -451,7 +451,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
 }
 
 // A text that only says the thing isn't there yet (2026-10-08, Royce's call: "No luck yet...", "Nothing solid for this weekend yet").
-export const NOTHING_YET = /\b(?:no luck(?: yet| so far| on)?|nothing (?:solid|real|verified|good|worth \w+)?\s*(?:yet|so far)|no (?:details|results|news|update|word) yet|haven'?t (?:found|got|turned up) (?:anything|it|them|much)(?: yet)?|still digging|(?:i'?ll|you'?ll|will) have (?:it|them|that) (?:for you |to you )?(?:by )?(?:tomorrow|in the morning|tonight|later|soon))\b/i;
+export const NOTHING_YET = /\b(?:no luck(?: yet| so far| on)?|nothing (?:solid|real|verified|good|worth \w+)?(?:\s+[\w']+){0,4}?\s+(?:yet|so far)|no (?:details|results|news|update|word) yet|haven'?t (?:found|got|turned up) (?:anything|it|them|much)(?: yet)?|still digging|(?:i'?ll|you'?ll|will) have (?:it|them|that) (?:for you |to you )?(?:by )?(?:tomorrow|in the morning|tonight|later|soon))\b/i;
 // Pure: a text that delivers nothing and only says it isn't there yet. One that carries a link, or names something Co found, is
 // a delivery even if it also says part of it is still to come (review of #115: "Found it: ... Still on it for Sunday").
 export function progressReport(text: string, found: string[] = []): boolean {
