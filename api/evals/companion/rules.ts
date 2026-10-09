@@ -164,7 +164,7 @@ check("asked what Co has on them, Co answers from the details on file first", /a
 const TLn = await import("../../src/services/teamLines.js");
 check("talk with a teammate agent is dropped from what the learning reads see", TLn.withoutTeammateLines("User said: hi\nUser said: @Mo go [to Mo]\nMo replied: ok\nCo tagged Mo: @Mo\nCo replied: sure\nUser said: I go [to Bob] weekly") === "User said: hi\nCo replied: sure\nUser said: I go [to Bob] weekly");
 check("the SQL filter only matches a trailing [to Name]", /!~ ' \\\[to \[A-Za-z\]\+\\\]\$'/.test(TLn.notToTeammate()) || TLn.notToTeammate("m").startsWith("m.content"));
-check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/callContext.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
+check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/memberKnowledge.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /k\.exchanges\.filter/.test(src("services/callContext.ts")) && !/memory_type = 'text_exchange' AND \(content LIKE 'User said/.test(src("services/callContext.ts")) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
 check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofounder Mo'", /Mo is an AI agent that works alongside Co, not a person in their life/.test(src("harness/personSnapshot.ts")));
 
 // Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly
