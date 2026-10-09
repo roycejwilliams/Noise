@@ -392,7 +392,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         // A look-out's origin, recorded now so the send path never guesses (Royce, 2026-10-09): theirs only when this message asks Co
         // to watch or says yes to Co's offer to (their finds are deliveries); otherwise Co's, and its finds are counted (review of #131).
-        const origin = lookout ? T.lookoutOriginAt({ message: ctx.resolvedContent, quote: theirWords, lastCoMessage: ctx.lastCoMessage }) : null;
+        const offer = lookout ? T.watchOfferIn(String(ctx.lastCoMessage ?? "")) : null;
+        const offerLogged = offer ? await import("../harness/proactive.js").then((P) => P.replyWatchOfferLogged(ctx.userId, String(ctx.lastCoMessage ?? ""))).catch(() => false) : false;
+        const origin = lookout ? T.lookoutOriginAt({ message: ctx.resolvedContent, quote: theirWords, lastCoMessage: ctx.lastCoMessage, offerLogged }) : null;
         const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}) });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);

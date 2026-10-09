@@ -66,7 +66,7 @@ function harness(o: { render?: "ok" | "fail" } = {}) {
   const lines = R.receiptLines(h.receipts.all, SF, at("2026-10-08T19:00:00Z"));
   check("follow-up turns read the receipts: one line per artifact, its doc number, version, channel and when, never to resend", lines.length === 1 && /^Delivered "Co Presence Plan: After the Sequin AI November Event" \(doc #\d+, version 1\) as a PDF in this conversation today at 11:05am\. Already theirs: send it again only when they ask for it again \(the same version goes\), as a new version only when they ask for a change/.test(lines[0]) && /never on your own/.test(lines[0]), lines);
   check("the reply reads them: turn context loads receipts, grounding lists them as Documents you've delivered", /deliveries = await import\("\.\/deliveryReceipts\.js"\)/.test(src("services/turnContext.ts")) && /Documents you've delivered: \$\{line\}/.test(src("harness/replyGrounding.ts")));
-  check("both paths record: the reply's writeDocument and a task's document go through deliverAndRecord", /deliverAndRecord\(doc, to, \{ saveTo: input\.saveTo/.test(src("agent/loopTools.ts")) && /const rd = await deliverAndRecord\(doc, to,/.test(src("services/documentDelivery.ts")));
+  check("both paths record: the reply's writeDocument and a task's document go through deliverAndRecord", /deliverAndRecord\(doc, to, \{ saveTo: input\.saveTo/.test(src("agent/loopTools.ts")) && /\brd = await deliverAndRecord\(doc, to,/.test(src("services/documentDelivery.ts")));
 }
 
 // ---- 2. a follow-up question about a section: answered from the delivered text, quoted

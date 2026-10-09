@@ -32,9 +32,9 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 // 3. Recorded at open.
 {
   check("a look-out Co opens from its own call promise is recorded as Co's", CG.promiseThreadTask({ what: "founder runs", quotes: ["I'll keep an ear out for founder runs"] }, "").lookoutOrigin === "co");
-  check("the reply loop's startTask records the origin it reads from their message", /const origin = lookout \? T\.lookoutOriginAt\(\{ message: ctx\.resolvedContent, quote: theirWords, lastCoMessage: ctx\.lastCoMessage \}\) : null;/.test(src("agent/conversationTools.ts")));
+  check("the reply loop's startTask records the origin it reads from their message", /const origin = lookout \? T\.lookoutOriginAt\(\{ message: ctx\.resolvedContent, quote: theirWords, lastCoMessage: ctx\.lastCoMessage, offerLogged \}\) : null;/.test(src("agent/conversationTools.ts")));
   // Review of #131: theirs only when they asked to be told over time, now.
-  const at = (message: string, quote: string, lastCoMessage: string | null = null) => CT.lookoutOriginAt({ message, quote, lastCoMessage });
+  const at = (message: string, quote: string, lastCoMessage: string | null = null, offerLogged = true) => CT.lookoutOriginAt({ message, quote, lastCoMessage, offerLogged });
   check("\"let me know when the Lisbon run club posts dates\" is theirs", at("let me know when the Lisbon run club posts dates", "let me know when the Lisbon run club posts dates") === "member");
   check("\"keep an eye out for pottery classes in the Mission\" is theirs", at("can you keep an eye out for pottery classes in the Mission?", "keep an eye out for pottery classes") === "member");
   check("a wish, not a request to watch (\"been wanting to try pottery\"), is Co's", at("I've been wanting to try pottery", "been wanting to try pottery") === "co");
@@ -44,6 +44,11 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   check("\"yes\" to an offer that isn't about watching is Co's", at("yes", "yes", "Want me to send you the menu?") === "co");
   check("\"yes\" to a statement (no question) is Co's", at("yes", "yes", "I'll keep an eye out for founder runs.") === "co");
   check("a short yes to a watching offer passes the reply loop's own yes check", CT.isYesToOffer("yeah", "Want me to keep an eye out for founder runs?"));
+  // Re-review of #131: Co pays to open the door, in code.
+  check("a yes to a watching offer that was never logged as a find (a proactive or task text) opens Co's look-out", at("yeah", "yeah", "Want me to let you know when more dates open up?", false) === "co");
+  check("\"tell me if this sounds crazy...\" isn't a watch ask", at("Tell me if this sounds crazy, I want to host a supper club", "Tell me if this sounds crazy") === "co");
+  check("the reply loop looks the offer up on the ledger before calling it theirs", /const offerLogged = offer \? await import\("\.\.\/harness\/proactive\.js"\)\.then\(\(P\) => P\.replyWatchOfferLogged\(ctx\.userId, String\(ctx\.lastCoMessage \?\? ""\)\)\)/.test(src("agent/conversationTools.ts")));
+  check("the logged offer matches Co's last line however its beats were split", P.watchOfferMatches("Want me to keep an eye out for founder runs this month?", "Nice one. Want me to keep an eye out for founder runs this month?") && !P.watchOfferMatches("Want me to keep an eye out for founder runs?", "Want me to send the menu?"));
   check("the origin is kept in the task's followup JSON", JSON.parse(CT.followupJson({ source: "lookout", lookoutOrigin: "member" })!).lookoutOrigin === "member");
   check("a look-out with no origin given is recorded as Co's", JSON.parse(CT.followupJson({ source: "lookout" })!).lookoutOrigin === "co");
   check("a non-look-out records no origin", CT.followupJson({ source: "ask" }) === null);
@@ -137,6 +142,7 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   check("\"should I let you know when the waitlist opens?\" is an offer", CT.watchOfferIn("Should I let you know when the waitlist opens?") !== null);
   check("a statement isn't an offer (no question)", CT.watchOfferIn("I'll keep an eye out for founder runs.") === null);
   check("a question that doesn't offer to watch isn't one", CT.watchOfferIn("Want me to send the menu?") === null);
+  check("a question about someone else isn't Co's offer (\"Did Maya let you know when it starts?\")", CT.watchOfferIn("Did Maya let you know when the party starts?") === null && !CT.isYesToWatchOffer("yes", "Did Maya let you know when the party starts?"));
   check("the reply logs it after it went, never gates it", /const offer = \(await import\("\.\.\/services\/coTasks\.js"\)\)\.watchOfferIn\(state\.sentMessages\.join\("\\n"\)\);[\s\S]{0,200}recordReplyWatchOffer\(input\.userId, offer\)/.test(src("agent/conversationReply.ts")) && /if \(state\.sent && !opts\.dryRun && opts\.record !== false\) \{\s*const offer/.test(src("agent/conversationReply.ts")));
   check("it goes on the ledger as a find (exempt, so it never takes a cap)", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, 'find', \$5\)/.test(src("harness/proactive.ts")) && P.REPLY_WATCH_OFFER_TYPE === "watch_offer");
   const now = new Date("2026-10-20T18:00:00Z");
@@ -150,7 +156,7 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 {
   for (const yes of ["yes", "yeah", "yep", "sure", "yes please"]) {
     check(`"${yes}" to "want me to keep an eye out?" passes the reply loop's yes check`, CT.isYesToOffer(yes, "Want me to keep an eye out for founder runs?"));
-    check(`"${yes}" opens it as theirs`, CT.lookoutOriginAt({ message: yes, quote: yes, lastCoMessage: "Want me to keep an eye out for founder runs?" }) === "member");
+    check(`"${yes}" to a logged offer opens it as theirs`, CT.lookoutOriginAt({ message: yes, quote: yes, lastCoMessage: "Want me to keep an eye out for founder runs?", offerLogged: true }) === "member");
   }
 }
 
@@ -178,6 +184,14 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   const held = await run({ coInitiated: { kind: "find" }, claim: "held" });
   check("a Co look-out's document is held like a find (nothing delivered, a retry time back)", !held.r.ok && held.log.delivered.length === 0 && "nextAt" in held.r && !!held.r.nextAt && /held/.test(held.r.why), held);
   const failed = await run({ coInitiated: { kind: "find" }, delivered: false });
+  // Re-review of #131: a throw before anything went releases too.
+  const thrown = await (async () => {
+    const released: number[] = [];
+    const deps: any = { receipts: { ...RC.memoryReceipts(), latest: async () => { throw new Error("receipts down"); } }, theirWords: async () => THEIRS, blocked: async () => null, now: () => NOW, record: async () => {}, deliver: async () => ({ ok: true, via: "pdf_text" }), claim: async () => ({ ok: true, ledgerId: 88 }), release: async (_u: string, id: number) => { released.push(id); } };
+    const err = await DD.sendDocumentForTask(doc as any, { userId: "u", taskId: 9, firstName: "Jordan", phone: "+14155550100", zone: "America/Los_Angeles", taskTheirWords: THEIRS, read: "", coInitiated: { kind: "find" } }, deps).then(() => null, (e) => e);
+    return { released, threw: !!err };
+  })();
+  check("a claimed document whose send throws before it goes is released", thrown.released.includes(88), thrown);
   check("a claimed document that didn't go out comes off the ledger (never counted as let pass)", !failed.r.ok && failed.log.released.includes(77), failed);
   const member = await run({});
   check("a member look-out's document is owed: no claim, it goes", member.r.ok && member.log.claims.length === 0, member);
@@ -185,7 +199,7 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   check("the task passes a Co look-out's kind to its document send (PDF and Google Doc go through the same send)", /const kind = lookoutKind\(task\);[\s\S]{0,400}\.\.\.\(kind \? \{ coInitiated: \{ kind \} \} : \{\}\)/.test(tt));
   check("a held document holds the task like a held text", /Not sent: held:/.test(tt) && /heldUntil = quietUntil/.test(tt));
   const dd = src("services/documentDelivery.ts");
-  check("one claim covers every target of the send (PDF and Google Doc both go after it)", dd.indexOf("const c = await deps.claim(") < dd.indexOf("const rd = await deliverAndRecord(") && /claimCoInitiatedSend\(\{ userId: c\.userId, type: "task_update"/.test(dd));
+  check("one claim covers every target of the send (PDF and Google Doc both go after it)", dd.indexOf("const c = await deps.claim(") < dd.indexOf("rd = await deliverAndRecord(") && /claimCoInitiatedSend\(\{ userId: c\.userId, type: "task_update"/.test(dd));
   check("a Co document goes on the ledger as a task text, so it spaces the next text Co starts too", !P.spacingCheck({ now: new Date("2026-10-20T18:30:00Z"), sends: [{ type: "task_update", targetKey: "task:9:doc:1", topicKey: null, sentAt: new Date("2026-10-20T18:00:00Z"), exempt: true }] }).pass);
 }
 

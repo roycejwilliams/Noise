@@ -409,10 +409,18 @@ export async function sendDocumentForTask(
     claimed = c.ledgerId;
   }
   const unclaim = async () => { if (claimed !== null) await deps.release?.(o.userId, claimed).catch(() => {}); };
-  // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
-  const line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
-  const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line };
-  const rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
+  // Anything that throws before something went out (a caption, a receipts read) releases the claim too (re-review of #131).
+  let rd: Awaited<ReturnType<typeof deliverAndRecord>>;
+  let line: string;
+  try {
+    // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
+    line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
+    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line };
+    rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
+  } catch (err) {
+    await unclaim();
+    throw err;
+  }
   if (rd.duplicate) { await unclaim(); return { ok: false, duplicate: true, why: `Not sent: ${(rd.results[0] as any).why}.` }; }
   const { results, sentOk } = rd;
   if (!sentOk.length) await unclaim();

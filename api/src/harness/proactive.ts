@@ -555,6 +555,22 @@ export async function recordReplyWatchOffer(userId: string, message: string, now
   );
 }
 
+// Whether the offer in Co's last line is on the ledger as a find (logged by a reply in the last two days). Matched on the words, so a
+// reply's beats split or joined differently still match.
+export async function replyWatchOfferLogged(userId: string, lastCoLine: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT message FROM proactive_sends WHERE user_id = $1 AND type = $2 AND sent_at > NOW() - INTERVAL '48 hours' ORDER BY sent_at DESC LIMIT 10`,
+    [userId, REPLY_WATCH_OFFER_TYPE],
+  );
+  return rows.some((r: any) => watchOfferMatches(String(r.message ?? ""), lastCoLine));
+}
+// Pure: a logged offer is the one in this line of Co's.
+export function watchOfferMatches(logged: string, lastCoLine: string): boolean {
+  const n = (x: string) => x.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
+  const a = n(logged), b = n(lastCoLine);
+  return a.length >= 12 && (b.includes(a) || a.includes(b));
+}
+
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
 export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds">, opts: { answering?: boolean } = {}): GateCheck[] {
