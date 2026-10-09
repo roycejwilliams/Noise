@@ -209,6 +209,23 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   h.deps.search = async () => [RUN];
   const r = await TT.runTaskTurnWith(baseTask({ goal: "Keep your word from the call: \"I'll send that over now.\"", theirWords: "Yeah, that would be perfect." }), h.deps);
   script.length = 0;
+  // Review of #115: the exemption is the delivery only, never every text in the turn.
+  script.length = 0;
+  script.push(
+    { tool: "search", input: { what: "founder run club", when: "this weekend" } },
+    { tool: "tellThem", input: { what: "Here's the founder run this Saturday at the Golden Gate Bridge" } },
+    { text: "Here's the founder run, Builders who Run, this Saturday at the Golden Gate Bridge." },
+    { tool: "tellThem", input: { what: "Builders who Run again, a second note about the run" } },
+    { text: "Builders who Run starts at the Golden Gate Bridge on Saturday." },
+    { tool: "tellThem", input: { what: "Builders who Run, a third note" } },
+    { text: "Builders who Run is free, Saturday at the Golden Gate Bridge." },
+  );
+  const hf = harness(NOW);
+  hf.deps.textsToday = async () => 2;
+  hf.deps.search = async () => [RUN];
+  await TT.runTaskTurnWith(baseTask({ goal: "Keep your word from the call: \"I'll send that over now.\"", theirWords: "Yeah, that would be perfect." }), hf.deps);
+  script.length = 0;
+  check(`one promise turn past the cap sends its delivery once, never a run of texts (${hf.log.texts.length})`, hf.log.texts.length === 1, hf.log.texts);
   check(`the promised delivery goes out with two task updates already sent today (${JSON.stringify(h.log.texts)})`, h.log.texts.length === 1 && /Builders who Run/.test(h.log.texts[0]) && !h.log.warns.length, { did: r.did, texts: h.log.texts });
 }
 

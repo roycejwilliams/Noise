@@ -186,7 +186,7 @@ user: Perfect, thank you.`;
   const cc = src("services/callCommitments.ts");
   check("a confirmation never counts as the commitment kept (nor a miss warning)", /ps\.type IN \('call_confirm', 'task_window'\)/.test(cc));
   const pc = src("jobs/postCallFollowUp.ts");
-  check("the after-call reflection no longer says 'worth sending' or 'you're on it'", !/worth sending yet/.test(pc) && !/you're on it/.test(pc));
+  check("the after-call reflection no longer says 'worth sending', and never mentions the work at all", !/worth sending yet/.test(pc) && /never mention it here/.test(pc));
   check("the after-call reflection knows the confirmation went out", /confirmation_you_already_sent_after_the_call/.test(pc));
   const tt = src("services/taskTurn.ts");
   check("a promise task sends when done or says what's missing (no 'only if something real')", /send it when it's done/.test(tt) && !/Only text them if you have something real to tell them; if there isn't, say nothing/.test(tt));

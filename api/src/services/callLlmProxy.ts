@@ -93,9 +93,11 @@ export function asksCo(said: string): boolean {
 // 2026-10-08: "Done, I'll send that over now", and nothing went out). A leading "Done," is taken off; a sentence that claims the
 // send is dropped. "I'll text it to you right after we hang up" is the truth and stays.
 const DONE_LEAD = /^(\[[a-z ]+\]\s*)?(?:done|all done|sent|there you go|there we go)[,.!]\s+(?=\S)/i;
-const SENT_CLAIM = /\b(?:i(?:'ve| have)? (?:just |already )?(?:sent|texted|shared|dropped|forwarded) (?:it|that|them|those|you|the)\b|(?:just|already) (?:sent|texted) (?:it|that|them|you)\b|it'?s (?:in your (?:texts|inbox|messages)|on its way|been sent)|(?:i'?m )?sending (?:it|that|them) (?:over )?(?:now|as we speak)|should be in your (?:texts|inbox|messages)|check your (?:texts|phone|messages)(?: now)?)\b/i;
+const SENT_CLAIM = /\b(?:i(?:'ve| have)? (?:just |already )?(?:sent|texted|shared|dropped|forwarded) (?:it|that|them|those|you|the)\b|(?:just|already) (?:sent|texted) (?:it|that|them|you)\b|it'?s (?:in your (?:texts|inbox|messages)|been sent)\b|it'?s on its way(?=\s*[.!,]|\s*$)|(?:i'?m )?sending (?:it|that|them) (?:over )?(?:now|as we speak)|should be in your (?:texts|inbox|messages)|check your (?:texts|phone|messages) now)/i;
+// A send that happened before the call ("I texted you the link yesterday"), or a question about one, is true or harmless.
+const PAST_SEND = /\b(?:yesterday|earlier|last (?:night|week|time)|this morning|before|the other day|on (?:mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
 export function stripSendClaim(sentence: string): string | null {
-  if (SENT_CLAIM.test(sentence)) return null;
+  if (SENT_CLAIM.test(sentence) && !PAST_SEND.test(sentence) && !/\?\s*$/.test(sentence)) return null;
   const t = sentence.replace(/^(\[[a-z ]+\]\s*)?(?:done|all done|sent)[.!]?\s*$/i, "");
   if (!t.trim()) return null;
   return t.replace(DONE_LEAD, (_m, tag) => tag ?? "").replace(/^(\[[a-z ]+\]\s*)?([a-z])/, (_m, tag, c) => `${tag ?? ""}${c.toUpperCase()}`);

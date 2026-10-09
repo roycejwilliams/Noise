@@ -3,6 +3,8 @@
 //   npx tsx evals/calls/promiseWiring.ts
 const G = await import("../../src/harness/callGrounding.js");
 const { COMMIT_PREFIX } = await import("../../src/services/callCommitments.js");
+import fs from "node:fs";
+const require_ = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 500)}` : ""}`); } };
 
@@ -35,6 +37,21 @@ check("the two texts from Royce's call (and their kind) are progress reports, re
 check("a real delivery isn't mistaken for one", real.every((t) => !TT.NOTHING_YET.test(t)));
 const CO = await import("../../src/services/coTasks.js");
 check("a promise's first text is its delivery, past the daily cap on updates", CO.mayText({ lastTextedAt: null, source: "promise" } as any, 2, new Date()).ok && !CO.mayText({ lastTextedAt: null, source: "ask" } as any, 2, new Date()).ok);
+
+const notReports = ["If you're not ready to commit, here are two options that hold till Friday.", "Still looking great for Saturday: Builders who Run, 9am.", "Registration is not yet open, but here's the page: https://lu.ma/x", "Still working on the vegan option, but here's the caterer: Nopa Kitchen.", "Found it: Builders who Run on Saturday. Still on it for the Sunday options."];
+check(`real deliveries aren't progress reports: ${notReports.filter((t) => TT.progressReport(t, ["Builders who Run", "Nopa Kitchen"])).join(" | ") || "none"}`, notReports.every((t) => !TT.progressReport(t, ["Builders who Run", "Nopa Kitchen"])));
+check("the real \"nothing yet\" texts still are", nothingYet.slice(0, 2).every((t) => TT.progressReport(t, ["Builders who Run"])));
+const P = await import("../../src/services/callLlmProxy.js");
+const kept = ["I texted you the link yesterday, did it come through?", "Check your texts later for the link.", "It's on its way to being a great weekend."];
+check(`true lines about sends are kept: ${kept.filter((t) => P.stripSendClaim(t) !== t).join(" | ") || "none"}`, kept.every((t) => P.stripSendClaim(t) === t));
+check("a now-claim is still dropped", P.stripSendClaim("I just sent it to you.") === null && P.stripSendClaim("It's on its way.") === null);
+// A grouped call task closes only when every send on it is kept (review of #115).
+const grouped = { goal: 'Keep your word from the call: "I\'ll text you the run link."', theirWords: "yes send it", createdAt: new Date(Date.now() - 3600_000).toISOString(), source: "promise", notes: [{ text: 'Also said on the call: "I\'ll text you the Tech Week list." Send it in the same message as the rest of this task.' }] };
+const onlyFirst = await TT.promiseCloseCheck(grouped as any, ["https://lu.ma/run", "Here's the run for Saturday."], { sentSince: async () => [], now: () => new Date() } as any);
+check(`a grouped task with only its first send done stays open (${onlyFirst.why.slice(0, 80)})`, !onlyFirst.ok);
+const both = await TT.promiseCloseCheck(grouped as any, ["https://lu.ma/run", "Here's the run for Saturday, and the Tech Week list for the weekend.", "https://tech-week.com/sf"], { sentSince: async () => [], now: () => new Date() } as any);
+check("with both sent, it closes", both.ok, both);
+check("the post-call text never mentions promised work (the delivery is its own message)", !/that you'll text it to them/.test(require_("jobs/postCallFollowUp.ts")) && /never mention it here/.test(require_("jobs/postCallFollowUp.ts")));
 
 console.log(`promise wiring: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

@@ -87,7 +87,9 @@ export async function trackCallCommitment(o: { userId: string; sentence: string;
     }
     // Another send from the same call, on anything: one call's sends are one delivery, one message (Royce, 2026-10-08: "Done,
     // I'll send that over now" and "for this weekend, I'll send what I've got" opened two tasks, and two "nothing yet" texts).
-    const callSend = open.find((t) => recent(t) && t.source === "promise" && String(t.goal ?? "").startsWith(COMMIT_PREFIX));
+    // A document and a text don't share a delivery (a PDF goes with its own one line): those stay apart.
+    const isDoc = wantsDocument(candidate.goal, candidate.theirWords);
+    const callSend = open.find((t) => recent(t) && t.source === "promise" && String(t.goal ?? "").startsWith(COMMIT_PREFIX) && wantsDocument(String(t.goal ?? ""), t.theirWords ?? "") === isDoc);
     if (callSend) {
       await deps.note(o.userId, callSend.id!, `Also said on the call: "${o.sentence.slice(0, 200)}"${o.theirLine ? ` (after they said: "${o.theirLine.slice(0, 160)}")` : ""}. Send it in the same message as the rest of this task.`).catch(() => null);
       return { ok: false, why: `sent with task #${callSend.id}, the same call's delivery` };

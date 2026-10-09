@@ -25,7 +25,7 @@ import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 import { recordSentItems } from "./coFacts.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked, taskWebSearch, verifiedFactLines, type TaskWebResult, type VerifiedResult } from "./taskWeb.js";
 import { assembleMessages, captionOk, draftTaskMessages, orderByTier, type SendItem } from "./taskMessages.js";
-import { promiseKeptBy, sendsSince, wantsDocument, type Sent } from "./followThrough.js";
+import { promiseKeptBy, sendsSince, significant, wantsDocument, type Sent } from "./followThrough.js";
 import { localStamp, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
 import { WRITE_DOCUMENT_INPUT, type WriteDocumentInput } from "./documentSheet.js";
@@ -66,7 +66,12 @@ export type TaskTurnDeps = {
 
 // A promise is kept only by something sent AFTER it was made (2026-10-08: task 111 closed itself as done on a document sent the
 // day before, on a different focus, and nothing went out after the call). Texts sent in this wake-up count; earlier sends never do.
-export async function promiseCloseCheck(task: Pick<CoTask, "goal" | "theirWords" | "createdAt" | "source">, sentThisTurn: string[], deps: Pick<TaskTurnDeps, "sentSince" | "now">, docsThisTurn: string[] = []): Promise<{ ok: boolean; why: string }> {
+// Pure: the other sends from the same call that ride a task.
+export function alsoSaid(notes: { text: string }[]): string[] {
+  return notes.map((n) => String(n?.text ?? "").match(/^Also said on the call: "([^"]+)"/)?.[1]).filter((x): x is string => !!x);
+}
+
+export async function promiseCloseCheck(task: Pick<CoTask, "goal" | "theirWords" | "createdAt" | "source"> & { notes?: { text: string }[] }, sentThisTurn: string[], deps: Pick<TaskTurnDeps, "sentSince" | "now">, docsThisTurn: string[] = []): Promise<{ ok: boolean; why: string }> {
   if (task.source !== "promise") return { ok: true, why: "not a promise" };
   const at = new Date(task.createdAt);
   // A few days back too, so the refusal can say plainly that an earlier send doesn't count.
@@ -77,7 +82,18 @@ export async function promiseCloseCheck(task: Pick<CoTask, "goal" | "theirWords"
     ...docsThisTurn.map((title) => ({ at: deps.now(), text: `a document (PDF): ${title}`, kind: "document" as const, forThis: true })),
   ];
   const v = promiseKeptBy({ goal: task.goal, theirWords: task.theirWords, at }, sends);
-  return { ok: v.kept, why: v.why };
+  if (!v.kept) return { ok: v.kept, why: v.why };
+  // A call's other sends that ride this task (callCommitments.ts "Also said on the call"): each one has to be kept too, or the
+  // task stays open (review of #115: the doc went, the links never did, and the task closed itself).
+  for (const extra of alsoSaid((task as any).notes ?? [])) {
+    const e = promiseKeptBy({ goal: `Keep your word from the call: "${extra}"`, theirWords: task.theirWords, at }, sends);
+    // Its own subject has to be in what went out: any link isn't the Tech Week list.
+    const said = sends.filter((x) => x.at.getTime() > at.getTime() && x.kind !== "link").map((x) => x.text).join(" ");
+    const subject = significant(extra.replace(/\b(?:i'?ll|i will|text|send|you|over|now|later|tonight|right|after|hang|share|forward|drop)\b/gi, " "));
+    const onSubject = !subject.length || subject.some((w) => significant(said).includes(w));
+    if (!e.kept || !onSubject) return { ok: false, why: `"${extra}" is part of this task and hasn't been sent${e.kept ? "" : `: ${e.why}`}` };
+  }
+  return { ok: true, why: v.why };
 }
 
 // The promised thing is a document (a doc, PDF, write-up, or a plan Co is writing): it goes through writeDocument, never a text.
@@ -170,8 +186,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!localHourOk(deps.now(), deps.zone)) return { ok: false, error: "It's outside their hours (8am to 9pm their time). Note what you'd tell them and schedule your next look for their morning." };
         // A "nothing yet" text is a progress report, and progress reports never go (Royce, 2026-10-08): silence until there's
         // something real. Only the last check before their own deadline may say plainly that nothing turned up.
-        if (!final && NOTHING_YET.test(what)) return { ok: false, error: "Not sent: that's a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
-        const allowed = mayText(task, await deps.textsToday(), deps.now());
+        if (!final && progressReport(what, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: that's a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
+        // The task row was read at the start of the turn: a text already sent in this turn counts as texted (review of #115: four
+        // tellThem calls in one promise turn all went out past the cap).
+        const allowed = mayText(texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task, await deps.textsToday(), deps.now());
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
         const known = (links ?? []).filter(linkOk);
         // Only verified fields: web results that proved themselves, events from Co's
@@ -250,7 +268,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!places.ok) return { ok: false, error: `The draft named places no verified fact backs (${places.missing.join(", ")}). Tell them only verified facts.` };
         const offer = text.match(OFFERS_WHAT_CO_CANT);
         if (offer) return { ok: false, error: `The draft offered something Co can't do ("${offer[0]}"): Co can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
-        if (!final && NOTHING_YET.test(text)) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
+        if (!final && progressReport(text, [...events.map((e) => e.name), ...verified.map((v: any) => v.name ?? "")])) return { ok: false, error: "Not sent: the draft is a progress report (nothing yet). Say nothing until you have the thing itself; note it and schedule your next look." };
         const sent = await deps.send([text]);
         if (!sent.sent) return { ok: false, error: `Couldn't send: ${sent.reason ?? "unknown"}.` };
         await deps.markTexted();
@@ -433,7 +451,15 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
 }
 
 // A text that only says the thing isn't there yet (2026-10-08, Royce's call: "No luck yet...", "Nothing solid for this weekend yet").
-export const NOTHING_YET = /\b(?:no luck|nothing (?:yet|solid|real|verified|good|worth)|not (?:yet|ready|there yet|done yet)|no (?:details|results|news|update) yet|still (?:looking|working|digging|searching|on it)|haven'?t (?:found|got|heard) (?:anything|it|them) yet|(?:i'?ll|you'?ll) have (?:it|them) (?:for you )?(?:by )?(?:tomorrow|in the morning|tonight|later))\b/i;
+export const NOTHING_YET = /\b(?:no luck(?: yet| so far| on)?|nothing (?:solid|real|verified|good|worth \w+)?\s*(?:yet|so far)|no (?:details|results|news|update|word) yet|haven'?t (?:found|got|turned up) (?:anything|it|them|much)(?: yet)?|still digging|(?:i'?ll|you'?ll|will) have (?:it|them|that) (?:for you |to you )?(?:by )?(?:tomorrow|in the morning|tonight|later|soon))\b/i;
+// Pure: a text that delivers nothing and only says it isn't there yet. One that carries a link, or names something Co found, is
+// a delivery even if it also says part of it is still to come (review of #115: "Found it: ... Still on it for Sunday").
+export function progressReport(text: string, found: string[] = []): boolean {
+  if (!NOTHING_YET.test(text)) return false;
+  if (/https?:\/\/|\b[\w-]+\.(?:com|co|org|net|io|ma|me)\//i.test(text)) return false;
+  const lower = text.toLowerCase();
+  return !found.some((n) => n && n.length >= 4 && lower.includes(n.toLowerCase().slice(0, 24)));
+}
 
 // ---------------------------------------------------------------- the miss warning
 
