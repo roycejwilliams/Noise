@@ -358,8 +358,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
           .object({ date: z.string().describe("YYYY-MM-DD"), theirWords: z.string().describe("Their own words giving it, copied exactly (\"by Friday\").") })
           .optional()
           .describe("Only if they gave a deadline."),
+        lookout: z
+          .boolean()
+          .optional()
+          .describe("True when they asked you to keep watching over time and tell them when something turns up (\"let me know when...\", \"keep an eye out for...\"), not for one result now."),
       }),
-      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline }) => {
+      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout }) => {
         const T = await import("../services/coTasks.js");
         const recent = ctx.dryRun
           ? ""
@@ -386,7 +390,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
           ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${localStamp(dl.finalCheckAt, zone)}.` : ""}`);
           return { ok: true, deadline: dl };
         }
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl });
+        // A look-out's origin, recorded now so the send path never guesses (Royce, 2026-10-09): theirs only when this message asks Co
+        // to watch or says yes to Co's offer to (their finds are deliveries); otherwise Co's, and its finds are counted (review of #131).
+        const offer = lookout ? T.watchOfferIn(String(ctx.lastCoMessage ?? "")) : null;
+        const offerLogged = offer ? await import("../harness/proactive.js").then((P) => P.replyWatchOfferLogged(ctx.userId, String(ctx.lastCoMessage ?? ""))).catch(() => false) : false;
+        const origin = lookout ? T.lookoutOriginAt({ message: ctx.resolvedContent, quote: theirWords, lastCoMessage: ctx.lastCoMessage, offerLogged }) : null;
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}) });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };

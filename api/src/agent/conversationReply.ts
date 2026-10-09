@@ -650,6 +650,13 @@ ${TOOL_TURN_RULES(input.isVoice)}
     }
   }
 
+  // A watching offer this reply made ("want me to keep an eye out for X?") is a Co-initiated find on the ledger, so the door to a
+  // member look-out is paid for (Royce, 2026-10-09). Bookkeeping after it went, never a gate on the text.
+  if (state.sent && !opts.dryRun && opts.record !== false) {
+    const offer = (await import("../services/coTasks.js")).watchOfferIn(state.sentMessages.join("\n"));
+    if (offer) await import("../harness/proactive.js").then((P) => P.recordReplyWatchOffer(input.userId, offer)).catch((err: any) => console.error("conversationReply: logging the watch offer failed (non-fatal):", err?.message ?? err));
+  }
+
   // A set-aside goal the reply was told about: told once a sent text raised it, else one more hint used (services/goalEdges.ts).
   const aside = input.facts.goalSetAside;
   if (aside && state.sent && !opts.dryRun && opts.record !== false) {

@@ -369,13 +369,22 @@ export type TaskDocDeps = {
   record: typeof recordDocumentSent;
   now: () => Date;
   receipts?: ReceiptStore;
+  // A Co-initiated document (a look-out from Co's own promise): claimed on the proactive ledger first, released if nothing went.
+  claim?: (o: { userId: string; targetKey: string; message: string; kind: "find" | null; zone: string | null; now: Date }) => Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }>;
+  release?: (userId: string, ledgerId: number) => Promise<void>;
 };
-export const realTaskDocDeps: TaskDocDeps = { theirWords: loadTheirWords, blocked: documentSendBlocked, deliver: deliverDocument, record: recordDocumentSent, now: () => new Date() };
+export const realTaskDocDeps: TaskDocDeps = {
+  theirWords: loadTheirWords, blocked: documentSendBlocked, deliver: deliverDocument, record: recordDocumentSent, now: () => new Date(),
+  claim: async (c) => (await import("../harness/proactive.js")).claimCoInitiatedSend({ userId: c.userId, type: "task_update", targetKey: c.targetKey, message: c.message, kind: c.kind, timezone: c.zone, now: c.now }),
+  release: async (userId, id) => (await import("../harness/proactive.js")).releaseCoInitiatedClaim(userId, id),
+};
 
 export async function sendDocumentForTask(
   input: import("./documentSheet.js").WriteDocumentInput,
   // askedAt: when they asked (the promise task's start), so a later delivery says when: "Here's the plan you asked for last night."
-  o: { userId: string; taskId: number; firstName: string; phone: string; zone: string | null; taskTheirWords: string; read: string; askedAt?: Date | null },
+  // coInitiated: a document Co starts itself (a look-out from Co's own promise), PDF or Google Doc alike: it waits on the same gate
+  // as any Co-initiated text and goes on the ledger with its kind (Royce, 2026-10-09). Absent: owed, as before.
+  o: { userId: string; taskId: number; firstName: string; phone: string; zone: string | null; taskTheirWords: string; read: string; askedAt?: Date | null; coInitiated?: { kind: "find" | null } },
   deps: TaskDocDeps = realTaskDocDeps,
 ): Promise<TaskDocResult> {
   const { resolveDocument, documentProblems } = await import("./documentSheet.js");
@@ -392,12 +401,29 @@ export async function sendDocumentForTask(
     return { ok: false, blocked: true, nextAt, why: `Not sent: ${blocked}.${nextAt ? ` It goes at ${DateTime.fromJSDate(nextAt).setZone(o.zone && DateTime.now().setZone(o.zone).isValid ? o.zone : "America/Los_Angeles").toFormat("h:mma cccc").toLowerCase()} their time; your next look is set for then.` : " Note it and schedule your next look for when it can go."}` };
   }
   const now = deps.now();
-  // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
-  const line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
-  const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line };
-  const rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
-  if (rd.duplicate) return { ok: false, duplicate: true, why: `Not sent: ${(rd.results[0] as any).why}.` };
+  let claimed: number | null = null;
+  if (o.coInitiated) {
+    if (!deps.claim) return { ok: false, blocked: true, why: "Not sent: a document Co starts itself needs the proactive ledger, and it isn't available here." };
+    const c = await deps.claim({ userId: o.userId, targetKey: `task:${o.taskId}:doc:${now.getTime()}`, message: `[document] ${doc.title}`, kind: o.coInitiated.kind, zone: o.zone, now });
+    if (!c.ok) return { ok: false, blocked: true, nextAt: c.retryAt, why: `Not sent: ${c.reason}.` };
+    claimed = c.ledgerId;
+  }
+  const unclaim = async () => { if (claimed !== null) await deps.release?.(o.userId, claimed).catch(() => {}); };
+  // Anything that throws before something went out (a caption, a receipts read) releases the claim too (re-review of #131).
+  let rd: Awaited<ReturnType<typeof deliverAndRecord>>;
+  let line: string;
+  try {
+    // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
+    line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
+    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line };
+    rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
+  } catch (err) {
+    await unclaim();
+    throw err;
+  }
+  if (rd.duplicate) { await unclaim(); return { ok: false, duplicate: true, why: `Not sent: ${(rd.results[0] as any).why}.` }; }
   const { results, sentOk } = rd;
+  if (!sentOk.length) await unclaim();
   if (!sentOk.length) return { ok: false, why: `Not sent: ${results.map((r) => (r.ok ? "" : r.why)).filter(Boolean).join("; ") || "it didn't go out"}.` };
   const via = sentOk.map((r) => r.via).join("+");
   // Recorded at the real moment it went (never a pinned test clock: a send dated in the future would "keep" later promises).

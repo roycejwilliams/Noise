@@ -163,7 +163,7 @@ export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string
     : "";
   return `${CO_VOICE}
 
-${t.source === "lookout" ? `Right now you're keeping an eye out for ${o.firstName}, as you told them on a call you would. Nobody is waiting on a message: look, and text only when something real turns up, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat you said you'd look out for: "${t.goal.replace(/^Keep an eye out, as promised on a call:\s*/i, "")}"\nWhat they had said just before: "${t.theirWords}"` : t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. They're expecting it: do what you said and send it when it's done. If it isn't done yet, keep working and say nothing: no progress reports, no "no details yet", no "a few leads". Text before it's done only when you need something from them (ask for exactly that), or when it truly can't be done (say plainly what you couldn't find and what you'd do instead). Never hold their own thing back because you judge it not good enough yet.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
+${t.source === "lookout" && t.lookoutOrigin === "member" ? `Right now you're keeping an eye out for ${o.firstName} because they asked you to, in their words: "${t.theirWords}". They're waiting to hear when something real turns up: look, and text when it does, with the thing itself, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat they asked you to watch for: "${t.goal}"` : t.source === "lookout" ? `Right now you're keeping an eye out for ${o.firstName}, as you told them on a call you would. Nobody is waiting on a message: look, and text only when something real turns up, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat you said you'd look out for: "${t.goal.replace(/^Keep an eye out, as promised on a call:\s*/i, "")}"\nWhat they had said just before: "${t.theirWords}"` : t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. They're expecting it: do what you said and send it when it's done. If it isn't done yet, keep working and say nothing: no progress reports, no "no details yet", no "a few leads". Text before it's done only when you need something from them (ask for exactly that), or when it truly can't be done (say plainly what you couldn't find and what you'd do instead). Never hold their own thing back because you judge it not good enough yet.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
 Steps: ${t.steps.length ? t.steps.map((s) => `${s.done ? "[done]" : "[ ]"} ${s.text}`).join("; ") : "(none written)"}
 What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}${o.onFile?.length ? `\nAlready on file and verified for them (send any of these with tellThem, by their link; no need to find them again):\n${o.onFile.slice(0, 12).map((f) => `- ${f.name} (${f.url})${f.facts.length ? `: ${f.facts.slice(0, 3).join("; ")}` : ""}`).join("\n")}` : ""}
 Your notes so far (oldest first):
@@ -279,7 +279,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
         // Owed (review of #129): the thing they asked for or were promised, whenever it lands, not only as the first text. A
         // promise stays owed until it's kept (promiseCloseCheck above stops it after); links for an ask are its delivery.
-        const owed = task.source === "promise" || owedText(asOfNow, deps.now());
+        // A look-out they asked for is a delivery every time: they asked for this text (Royce, 2026-10-09).
+        const owed = task.source === "promise" || task.lookoutOrigin === "member" || owedText(asOfNow, deps.now());
         const held = (r: { reason?: string; retryAt?: Date }) => {
           if (r.retryAt && (!heldUntil || r.retryAt > heldUntil)) heldUntil = r.retryAt;
           return `Held, not sent: ${r.reason ?? "pacing"}. This is Co starting a text, so it waits like every other one.${r.retryAt ? ` Your next look is set for ${r.retryAt.toISOString()}.` : ""} Note it; send the same thing then if it still holds.`;
@@ -483,8 +484,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           did.push(`document not sent: ${r.why.slice(0, 140)}`);
           // Their quiet hours (9pm to 8am): the next look is their 8am, set here, not left to the model's arithmetic.
           const quietUntil = "nextAt" in r ? r.nextAt : undefined;
+          // Held for pacing (a Co look-out's document): the same hold as a held text, and the wake given back.
+          if (quietUntil && /^Not sent: held:/.test(r.why) && (!heldUntil || quietUntil > heldUntil)) heldUntil = quietUntil;
           if (quietUntil && deps.scheduleAt) {
-            await deps.scheduleAt(quietUntil, "Send the document you promised: it was ready during their quiet hours.");
+            await deps.scheduleAt(quietUntil, /^Not sent: held:/.test(r.why) ? "Send the document now if it still holds: it was held for pacing." : "Send the document you promised: it was ready during their quiet hours.");
             nextAt = quietUntil;
             decided = "scheduled";
           }
@@ -605,6 +608,12 @@ export function chases(text: string, t: Pick<CoTask, "lastTextedAt" | "theirRepl
   // The last check before their deadline may ask what they want next; that's where it stands, not a re-ask.
   if (!o.final && awaitingThem(t) && /\?/.test(text)) return "it asks again while your last text to them has no reply";
   return null;
+}
+
+// Pure: the restraint kind a task's Co-initiated text counts as. A look-out from Co's own promise sends finds; one they asked for
+// sends deliveries, which never count toward backoff; other task updates have no kind.
+export function lookoutKind(t: Pick<CoTask, "source" | "lookoutOrigin">): "find" | null {
+  return t.source === "lookout" && t.lookoutOrigin !== "member" ? "find" : null;
 }
 
 export { FAILURE_CLAIM, inventedFailure } from "./speakable.js";
@@ -799,15 +808,17 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     },
     writeDocument: async (input, { read }) => {
       const { sendDocumentForTask, realTaskDocDeps } = await import("./documentDelivery.js");
-      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null }, { ...realTaskDocDeps, now: clock });
+      // A Co look-out's document, PDF or Google Doc, is a Co-initiated find like its texts; a member look-out's is owed (Royce, 2026-10-09).
+      const kind = lookoutKind(task);
+      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null, ...(kind ? { coInitiated: { kind } } : {}) }, { ...realTaskDocDeps, now: clock });
       await recordDecision({ layer: 7, decision: "task.writeDocument", userId, outcome: r.ok ? "act" : "skip", action: r.ok ? r.title : "not_sent", reason: r.ok ? null : r.why.slice(0, 300), proposal: { taskId: task.id, via: r.ok ? r.via : null } }).catch(() => {});
       return r;
     },
     textsToday: () => taskTextsToday(userId),
     send: async (messages, o) => {
-      // Only a text they're owed goes exempt. No restraint kind yet: whether a lookout's finds count as finds for their backoff
-      // is Royce's call (review of #129: a lookout is something they agreed to, which kind restraint never suppresses).
-      const coInitiated = o?.owed ? undefined : { kind: null };
+      // Only a text they're owed goes exempt. A look-out from Co's own promise sends finds, counted and held like sweep finds
+      // (Royce, 2026-10-09: "without this, lookouts are a spam path around restraint"); one they asked for is owed, never kinded.
+      const coInitiated = o?.owed ? undefined : { kind: lookoutKind(task) };
       const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated });
       const urls = messages.filter((m) => /^https?:\/\//.test(m));
       if (r.sent && urls.length) await recordSentItems(userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});

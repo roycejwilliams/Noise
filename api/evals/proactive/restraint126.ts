@@ -42,13 +42,13 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("a task update spaces the next text Co starts", !P.spacingCheck({ now: at("11:45"), sends: [rec("task_update", "11:30", true)] }).pass);
   check("an event-change notice still doesn't", P.spacingCheck({ now: at("11:45"), sends: [rec("event_change", "11:30", true)] }).pass);
   const px = src("harness/proactive.ts");
-  check("sendExempt reads the gates inside the lock and holds a Co-initiated text with its reason, logged", /if \(opts\.coInitiated\) \{[\s\S]{0,900}loadSends\(client, opts\.userId\)[\s\S]{0,900}record\("skip", "held_co_initiated", reason\)/.test(px));
-  check("a backoff it can't read holds a text with a kind (fails closed), not one without", /couldn't read their backoff/.test(px) && /suppressed \|\| !opts\.coInitiated\.kind/.test(px));
+  check("sendExempt reads the gates inside the lock (coInitiatedHold on the locked client) and holds a Co-initiated text with its reason, logged", /if \(opts\.coInitiated\) \{[\s\S]{0,300}coInitiatedHold\(client, /.test(px) && /async function coInitiatedHold\(client: Queryable[\s\S]{0,200}loadSends\(client, o\.userId\)/.test(px) && /record\("skip", "held_co_initiated", reason\)/.test(px));
+  check("a backoff it can't read holds a send with a kind (fails closed); one without a kind never reads it", /couldn't read their backoff/.test(px) && /const suppressed = o\.kind \? await loadKindRestraint\(/.test(px));
   check("the kind goes on the ledger so restraint learns from task texts", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, \$5\)/.test(px));
   const tt = src("services/taskTurn.ts");
-  check("task updates pass owed; anything else goes as Co-initiated (no restraint kind until Royce decides lookouts)", /const coInitiated = o\?\.owed \? undefined : \{ kind: null \}/.test(tt));
+  check("task updates pass owed; anything else goes as Co-initiated, kinded by the look-out's recorded origin (Royce, 2026-10-09)", /const coInitiated = o\?\.owed \? undefined : \{ kind: lookoutKind\(task\) \}/.test(tt));
   check("the window warning is owed: held, it would land after the time it's about (review of #129)", /type: "task_window"(?![^\n]*coInitiated)/.test(tt));
-  check("a promise stays owed until it's kept, and links for an ask are its delivery (review of #129)", /const owed = task\.source === "promise" \|\| owedText\(asOfNow, deps\.now\(\)\);/.test(tt) && /deps\.send\(messages, \{ owed: owed \|\| task\.source !== "lookout" \}\)/.test(tt));
+  check("a promise stays owed until it's kept, and links for an ask are its delivery (review of #129)", /const owed = task\.source === "promise" \|\| task\.lookoutOrigin === "member" \|\| owedText\(asOfNow, deps\.now\(\)\);/.test(tt) && /deps\.send\(messages, \{ owed: owed \|\| task\.source !== "lookout" \}\)/.test(tt));
   check("the turn is told it was held and when it's next", /Held, not sent: \$\{r\.reason \?\? "pacing"\}/.test(tt));
 }
 
