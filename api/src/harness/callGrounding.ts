@@ -363,6 +363,8 @@ export function promiseThreadTask(p: Pick<PlannedPromise, "what" | "quotes">, th
     firstPlan: `You said on a call: "${p.quotes[0]?.slice(0, 160) ?? p.what}". Keep it: look now, and keep looking over the next days. Text only when you have something real.`,
     inHours: 6,
     source: "lookout" as const,
+    // Co's own promise: its finds count toward backoff like sweep finds (Royce, 2026-10-09).
+    lookoutOrigin: "co" as const,
   };
 }
 

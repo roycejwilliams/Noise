@@ -358,8 +358,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
           .object({ date: z.string().describe("YYYY-MM-DD"), theirWords: z.string().describe("Their own words giving it, copied exactly (\"by Friday\").") })
           .optional()
           .describe("Only if they gave a deadline."),
+        lookout: z
+          .boolean()
+          .optional()
+          .describe("True when they asked you to keep watching over time and tell them when something turns up (\"let me know when...\", \"keep an eye out for...\"), not for one result now."),
       }),
-      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline }) => {
+      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout }) => {
         const T = await import("../services/coTasks.js");
         const recent = ctx.dryRun
           ? ""
@@ -386,7 +390,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
           ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${localStamp(dl.finalCheckAt, zone)}.` : ""}`);
           return { ok: true, deadline: dl };
         }
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl });
+        // A look-out they asked for (or said yes to): its finds are deliveries, recorded as theirs now so the send path never guesses
+        // (Royce, 2026-10-09). This tool only opens what they asked for (their words are checked above), so its origin is "member".
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(lookout ? { source: "lookout" as const, lookoutOrigin: "member" as const } : {}) });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };

@@ -55,7 +55,19 @@ export type CoTask = {
   // A commitment's window in their local time (services/memberTime.ts), kept in the row's followup JSON (work tasks don't use it
   // otherwise): when Co said they'd have it, and the last moment Co can still tell them inside it.
   window?: CommitWindow | null;
+  // A look-out's origin, recorded when it opens (Royce, 2026-10-09), so the send path never infers it: "member" when they asked
+  // for it ("let me know when...", "keep an eye out for X", or yes to Co's offer to), whose finds are deliveries and never count
+  // toward backoff; "co" when it came from Co's own promise ("you'll hear from me"), whose finds count like sweep finds.
+  lookoutOrigin?: LookoutOrigin | null;
 };
+export type LookoutOrigin = "member" | "co";
+
+// Pure: a look-out's origin from its followup JSON. A look-out with none recorded (opened before origins) is Co's: until #131 the
+// only look-outs were Co's own call promises (harness/callGrounding.ts openPromiseThread).
+export function lookoutOriginOf(source: string | null | undefined, followup: any): LookoutOrigin | null {
+  if (source !== "lookout") return null;
+  return followup?.lookoutOrigin === "member" ? "member" : "co";
+}
 
 // Pure: a work task's commitment window, from its followup JSON.
 export function windowOf(followup: any): CommitWindow | null {
@@ -220,6 +232,7 @@ function rowTo(r: any): CoTask {
     targetKey: r.target_key ?? null,
     source: r.source === "promise" ? "promise" : r.source === "lookout" ? "lookout" : "ask",
     window: r.kind === "followup" || r.kind === "research_brief" ? null : windowOf(r.followup),
+    lookoutOrigin: lookoutOriginOf(r.source, r.followup),
   };
 }
 
@@ -233,7 +246,15 @@ export async function getTask(userId: string, id: number): Promise<CoTask | null
   return rows[0] ? rowTo(rows[0]) : null;
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; window?: CommitWindow | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+// Pure: what a new task keeps in its followup JSON: its window, and a look-out's origin (always recorded; Co's unless told).
+export function followupJson(input: { source?: string; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null }): string | null {
+  const f: Record<string, unknown> = {};
+  if (input.window) f.window = input.window;
+  if (input.source === "lookout") f.lookoutOrigin = input.lookoutOrigin ?? "co";
+  return Object.keys(f).length ? JSON.stringify(f) : null;
+}
+
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   const open = await openTasks(input.userId);
   if (open.length >= TASK_LIMITS.maxOpen) return { ok: false, why: `already working on ${open.length} things for them; finish or drop one first` };
   const goal = input.goal.trim().slice(0, 200);
@@ -245,7 +266,7 @@ export async function startTask(input: { userId: string; goal: string; theirWord
   const { rows } = await pool.query(
     `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, source, followup)
      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11::jsonb) RETURNING *`,
-    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.source ?? "ask", input.window ? JSON.stringify({ window: input.window }) : null],
+    [input.userId, goal, input.theirWords.trim().slice(0, 400), JSON.stringify(steps), input.firstPlan.trim().slice(0, 240), next, JSON.stringify([{ at: new Date().toISOString(), text: "Started." }]), dl?.deadline ?? null, dl?.finalCheckAt ?? null, input.source ?? "ask", followupJson(input)],
   );
   return { ok: true, task: rowTo(rows[0]) };
 }

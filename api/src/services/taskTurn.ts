@@ -279,7 +279,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (!allowed.ok) return { ok: false, error: `Not sent: ${allowed.why}. Note it and schedule the next look instead.` };
         // Owed (review of #129): the thing they asked for or were promised, whenever it lands, not only as the first text. A
         // promise stays owed until it's kept (promiseCloseCheck above stops it after); links for an ask are its delivery.
-        const owed = task.source === "promise" || owedText(asOfNow, deps.now());
+        // A look-out they asked for is a delivery every time: they asked for this text (Royce, 2026-10-09).
+        const owed = task.source === "promise" || task.lookoutOrigin === "member" || owedText(asOfNow, deps.now());
         const held = (r: { reason?: string; retryAt?: Date }) => {
           if (r.retryAt && (!heldUntil || r.retryAt > heldUntil)) heldUntil = r.retryAt;
           return `Held, not sent: ${r.reason ?? "pacing"}. This is Co starting a text, so it waits like every other one.${r.retryAt ? ` Your next look is set for ${r.retryAt.toISOString()}.` : ""} Note it; send the same thing then if it still holds.`;
@@ -607,6 +608,12 @@ export function chases(text: string, t: Pick<CoTask, "lastTextedAt" | "theirRepl
   return null;
 }
 
+// Pure: the restraint kind a task's Co-initiated text counts as. A look-out from Co's own promise sends finds; one they asked for
+// sends deliveries, which never count toward backoff; other task updates have no kind.
+export function lookoutKind(t: Pick<CoTask, "source" | "lookoutOrigin">): "find" | null {
+  return t.source === "lookout" && t.lookoutOrigin !== "member" ? "find" : null;
+}
+
 export { FAILURE_CLAIM, inventedFailure } from "./speakable.js";
 import { inventedFailure } from "./speakable.js";
 
@@ -805,9 +812,9 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     },
     textsToday: () => taskTextsToday(userId),
     send: async (messages, o) => {
-      // Only a text they're owed goes exempt. No restraint kind yet: whether a lookout's finds count as finds for their backoff
-      // is Royce's call (review of #129: a lookout is something they agreed to, which kind restraint never suppresses).
-      const coInitiated = o?.owed ? undefined : { kind: null };
+      // Only a text they're owed goes exempt. A look-out from Co's own promise sends finds, counted and held like sweep finds
+      // (Royce, 2026-10-09: "without this, lookouts are a spam path around restraint"); one they asked for is owed, never kinded.
+      const coInitiated = o?.owed ? undefined : { kind: lookoutKind(task) };
       const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated });
       const urls = messages.filter((m) => /^https?:\/\//.test(m));
       if (r.sent && urls.length) await recordSentItems(userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
