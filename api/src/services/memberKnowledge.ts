@@ -52,7 +52,7 @@ import type { GoalState, GoalStateRow } from "./goalEdges.js";
 import { goalHash } from "./goalEdges.js";
 import { RESTRAINT, type ProactiveKind } from "./kindRestraint.js";
 import { REASONABLE_HOUR_END, REASONABLE_HOUR_START } from "./localHours.js";
-import { linkedMemberNames, safeMemory } from "./memberSafeMemories.js";
+import { memberNamesStrict, safeMemory } from "./memberSafeMemories.js";
 import { localDay, localStamp, memberZone, sendableAt, wordsZone } from "./memberTime.js";
 import { DELIVERY_SHAPE_RULE } from "./speakable.js";
 import { notToTeammate } from "./teamLines.js";
@@ -204,7 +204,8 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     return r ? { firstName: r.first_name ?? null, city: r.city ?? null, goals: Array.isArray(r.goals) ? r.goals.map(String) : null, intent: r.intent ?? null, updatedAt: dateOrNull(r.updated_at) } : null;
   },
   zone: (userId) => memberZone(userId),
-  linkedNames: (userId) => linkedMemberNames(userId),
+  // The same full name set memberSafe uses (linked matches, Co's records, introductions), read strictly (PR #118).
+  linkedNames: (userId) => memberNamesStrict(userId),
   goalStates: async (userId) => [...(await (await import("./goalEdges.js")).goalStates(userId)).values()],
   asks: async (userId) =>
     (await rows(`SELECT ask_id, ask_text, kind, created_at, last_mentioned_at FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY last_mentioned_at DESC NULLS LAST, created_at DESC LIMIT 12`, [userId])).map((r) => ({
@@ -544,7 +545,8 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
       });
   const skip = <T,>(s: KnowledgeSection | KnowledgeSection[], what: string, p: () => Promise<T>, fallback: T) => ((Array.isArray(s) ? s.some(on) : on(s)) ? safe(what, p, fallback) : Promise.resolve(fallback));
 
-  const [profile, zone, names] = await Promise.all([safe("profile", () => d.profile(userId), null), safe("zone", () => d.zone(userId), null), safe("linked names", () => d.linkedNames(userId), [] as string[])]);
+  const [profile, zone, names] = await Promise.all([safe("profile", () => d.profile(userId), null), safe("zone", () => d.zone(userId), null), d.linkedNames(userId)]);
+  // No names, no knowledge: a failed name read throws rather than returning anything unstripped (fails closed, PR #118).
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 

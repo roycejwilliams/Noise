@@ -271,5 +271,10 @@ check("rules: quiet hours are 8am to 9pm in their zone, with where now sits", /b
 check("rules: restraint is read from their state", /space/.test(rules.restraint) && /goal_nudge/.test(rules.restraint) && /hard time/.test(rules.restraint) && !rules.restraint.includes("Co starts nothing on its own until"));
 check("rules: no restraint read, no restraint rule", memberRules({ ...k, restraint: null }).restraint === "");
 
+// Fails closed (PR #118): a failed name read rejects the whole call; nothing unstripped comes back.
+{
+  const rejected = await MK.memberKnowledge("u-fail", {}, { linkedNames: async () => { throw new Error("db down"); } } as any).then(() => false).catch(() => true);
+  check("a failed name read rejects memberKnowledge instead of returning unstripped facts", rejected);
+}
 console.log(`member knowledge: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
