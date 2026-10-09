@@ -28,7 +28,7 @@ const NOW = new Date("2026-10-09T18:00:00Z"); // 11am in San Francisco
 const H = 3_600_000;
 const iso = (h: number) => new Date(NOW.getTime() - h * H).toISOString();
 const ZONE = "America/Los_Angeles";
-const calm: Restraint = { holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 0, lastInboundAt: iso(0), lastSentAt: null, pausedUntil: null }, verifiedAt: NOW.toISOString() };
+const calm: Restraint = { holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 0, lastInboundAt: iso(0), lastSentAt: null }, verifiedAt: NOW.toISOString() };
 const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   userId: "u",
   asOf: NOW.toISOString(),
@@ -122,6 +122,34 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   const rf3 = RG.createReplyFacts();
   RG.addMemberKnowledge(rf3, null, null);
   check("no knowledge (names unreadable): nothing added", rf3.facts.length === 0 && rf3.instructions.length === 0);
+}
+
+// ---------------------------------------------------------------- review of #125
+{
+  const pending = knowledge({ restraint: { ...calm, unanswered: { count: 2, lastInboundAt: iso(30), lastSentAt: iso(4) } } });
+  const rf = RG.createReplyFacts();
+  RG.addMemberKnowledge(rf, pending, MK.memberRules(pending));
+  check("rules: Co's unanswered texts bring the restraint line (a count, no pause date)", RG.restraintOn(pending.restraint) && rf.instructions.some((i) => /^Restraint:/.test(i)), rf.instructions);
+  const blanked = knowledge({
+    claims: [{ text: "", provenance: "user_said", kind: "building", quote: "x", expiresOn: null, verifiedAt: "2026-10-03T00:00:00.000Z" }],
+    goals: [{ text: " ", state: "active", reason: null, told: true, verifiedAt: iso(1) }],
+    preferences: [{ text: "", source: "taste", verifiedAt: iso(1) }],
+    corrections: [{ field: "city", was: "", now: null, verifiedAt: iso(1) }],
+  });
+  const said = RG.heldClaimsFrom(blanked, NOW)!;
+  check("strip: a claim the strip blanked is left out, never an empty line", said.enduring.length === 0 && said.theySaid.length === 0);
+  check("strip: a blanked goal is no direction", RG.goalLens(blanked, null)!.texts.length === 0);
+  const rf2 = RG.createReplyFacts();
+  RG.addMemberKnowledge(rf2, blanked, null);
+  check("strip: a blanked taste or correction adds no fact", rf2.facts.length === 0, rf2.facts);
+  check("strip: a blanked carried item is left out", TC.carryFromKnowledge([{ what: "", kind: "loop", state: "outstanding", told: false, theyHaveIt: false, dueAt: null, ref: "loop 1", status: "open", detail: null, verifiedAt: NOW.toISOString() }], ZONE).length === 0);
+  const promise = TC.carryFromKnowledge(
+    [{ what: "text you the guest list", kind: "promise", state: "due", told: true, theyHaveIt: false, dueAt: "2026-10-10T05:00:00.000Z", ref: "task #4", status: null, detail: null, verifiedAt: NOW.toISOString() }],
+    "America/New_York",
+    new Map([["task #4", { words: "tonight", deadline: "2026-10-10T05:00:00.000Z", zone: ZONE }]]),
+  )[0];
+  check("carrying: a promise keeps its window's words and the zone it was said in", /^your promise, task #4: text you the guest list \(tonight, by .*10pm/.test(promise.label), promise.label);
+  check("cold start reads its own asks when member knowledge is missing (never an undercount)", /loadColdStart\(userId, \{ profile, asks: knowledge \? asks : undefined \}\)/.test(src("services/turnContext.ts")));
 }
 
 // ---------------------------------------------------------------- the path reads the layer, once, and its duplicate loaders are gone

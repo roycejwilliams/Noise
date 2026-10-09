@@ -106,19 +106,26 @@ export const TEXT_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "ca
 // Pure: member knowledge's carrying as the text reply's one-line items (carryingBlock). The one carrying builder (memberKnowledge.ts
 // carryingOf) adds what this path never saw before: a call's promises collapsed against what was delivered, and documents only Co's
 // own record (co_facts 'sent') has.
-export function carryFromKnowledge(items: Fact<KnownCarry>[], zone: string | null): CarryItem[] {
+// windows: an open task's own window by its ref ("task #12"), so a promise keeps its words ("tonight") and the zone it was said in.
+export function carryFromKnowledge(items: Fact<KnownCarry>[], zone: string | null, windows: Map<string, { words: string; deadline: string; zone: string | null }> = new Map()): CarryItem[] {
   // A deadline day is stored as that day's 23:59 UTC (carryingOf): said as the day, never as a clock time.
-  const by = (at: string | null) => (!at ? "" : /T23:59:00(?:\.000)?Z$/.test(at) ? ` (their deadline ${at.slice(0, 10)})` : ` (by ${localStamp(at, zone)})`);
+  const by = (at: string | null, ref: string | null) => {
+    const w = ref ? windows.get(ref) : undefined;
+    if (w) return ` (${w.words}, by ${localStamp(w.deadline, w.zone ?? zone)})`;
+    return !at ? "" : /T23:59:00(?:\.000)?Z$/.test(at) ? ` (their deadline ${at.slice(0, 10)})` : ` (by ${localStamp(at, zone)})`;
+  };
   return items
+    // A line the strip blanked is left out, never an empty entry.
+    .filter((i) => i.what.trim())
     .map((i): CarryItem => {
       const base = { state: i.state, told: i.told, dueMs: i.dueAt ? new Date(i.dueAt).getTime() : null };
       const ref = i.ref;
       switch (i.kind) {
         case "task":
-          return { ...base, kind: "task", label: `${ref ?? "task"}: "${i.what}"${by(i.dueAt)}` };
+          return { ...base, kind: "task", label: `${ref ?? "task"}: "${i.what}"${by(i.dueAt, ref)}` };
         case "promise":
         case "lookout":
-          return { ...base, kind: "promise", label: `${ref ? `your promise, ${ref}` : "your promise on a call"}: ${i.what}${i.theyHaveIt ? " (they have it)" : ""}${by(i.dueAt)}` };
+          return { ...base, kind: "promise", label: `${ref ? `your promise, ${ref}` : "your promise on a call"}: ${i.what}${i.theyHaveIt ? " (they have it)" : ""}${by(i.dueAt, ref)}` };
         case "brief":
           return { ...base, kind: "brief", label: `research ${ref ?? "brief"}: "${i.what}"${i.detail ? `, ${i.detail}` : ""}` };
         case "document":
@@ -351,8 +358,9 @@ export async function assembleContext(
   const keep = (x: string | null | undefined) => (safe && x ? safe(String(x)) : null);
   const keepAll = (xs: string[]) => xs.map(keep).filter((x): x is string => !!x);
   // Open asks (the newest 12) and Co's lessons (the newest 6), from member knowledge.
-  const asks = (knowledge?.asks ?? []).map((a) => ({ text: a.text, kind: a.kind }));
-  const lessons = (knowledge?.lessons ?? []).map((l) => l.text);
+  // A line the strip blanked is left out, never an empty entry.
+  const asks = (knowledge?.asks ?? []).filter((a) => a.text.trim()).map((a) => ({ text: a.text, kind: a.kind }));
+  const lessons = (knowledge?.lessons ?? []).map((l) => l.text).filter((t) => t.trim());
   // Their Google, read from the cache in their own time zone (never fetched while they wait).
   const google = await loadGoogleFacts(userId, zone).catch(() => [] as string[]);
   const [kit, story, advice, tasks, briefs, todayEvent, docOffer] = await Promise.all([
@@ -386,7 +394,8 @@ export async function assembleContext(
   const drift = recentDocs.map((d) => receiptDrift(d, { notes, rejected, eventStartsAt: todayEvent?.startAt ? new Date(todayEvent.startAt) : null })).filter((x): x is Drift => !!x);
   const rawTasks = await tasksOnce().catch(() => [] as CoTask[]);
   const rawBriefs = await briefsOnce().catch(() => [] as BriefView[]);
-  const carrying = carryFromKnowledge(knowledge?.carrying ?? [], zone).flatMap((c) => { const label = keep(c.label); return label ? [{ ...c, label }] : []; });
+  const windows = new Map(rawTasks.filter((t) => t.status === "open" && t.window && !t.window.closedAt).map((t) => [`task #${t.id}`, { words: t.window!.words, deadline: t.window!.deadline, zone: t.window!.zone ?? null }]));
+  const carrying = carryFromKnowledge(knowledge?.carrying ?? [], zone, windows).flatMap((c) => { const label = keep(c.label); return label ? [{ ...c, label }] : []; });
   const openWork = keepAll([...rawTasks.filter((t) => t.status === "open").map((t) => t.goal), ...rawBriefs.filter((b) => b.status === "open").map((b) => `research brief: ${b.goal}`)]);
   // The plan sheet, venue brief and stale-document offers decide per reply from these (services/documentOffer.ts docOfferLines).
   if (docOffer) {
@@ -394,7 +403,8 @@ export async function assembleContext(
       .then((m) => m.loadArtifactSignals(userId, { drift, openWork, delivered: [...new Map(receipts.map((r) => [r.docKey, r])).values()].map((r) => ({ title: r.title, kind: r.kind, at: r.deliveredAt })) }))
       .catch(() => null);
   }
-  const coldStartP = import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null);
+  // Without member knowledge, cold start reads their asks itself (never an empty list that would undercount their seeds).
+  const coldStartP = import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks: knowledge ? asks : undefined })).catch(() => null);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   const coldStart = await coldStartP;
   return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, knowledge, rules: knowledge ? memberRules(knowledge) : null };

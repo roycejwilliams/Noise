@@ -26,7 +26,7 @@ check(
     /threads: safeThreads/.test(tc) &&
     /memberKnowledge\(userId, \{ include: TEXT_KNOWLEDGE \}[\s\S]{0,40}\)\.catch\([\s\S]{0,200}return null;/.test(tc) &&
     !/FROM open_loops/.test(tc) &&
-    /carryFromKnowledge\(knowledge\?\.carrying \?\? \[\], zone\)\.flatMap\(\(c\) => \{ const label = keep\(c\.label\)/.test(tc),
+    /carryFromKnowledge\(knowledge\?\.carrying \?\? \[\], zone, windows\)\.flatMap\(\(c\) => \{ const label = keep\(c\.label\)/.test(tc),
 );
 
 // Review of #118: the realistic failure is the name lookup, and it must fail closed (throw), never strip nothing.

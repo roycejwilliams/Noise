@@ -393,22 +393,23 @@ export function addMemberKnowledge(rf: ReplyFacts, k: MemberKnowledge | null | u
     addInstruction(rf, `${rules.quietHours} A follow-up or a delivery you set up lands outside those hours, never inside them.`);
   }
   if (!k) return;
-  for (const p of k.preferences) addFact(rf, "known", p.text);
-  if (k.corrections.length) {
-    addFact(rf, "known", `What they corrected (only the new version is true; never bring back the old one): ${k.corrections.slice(0, 6).map((c) => `${c.field.replace(/_/g, " ")} was "${c.was.slice(0, 80)}", now ${c.now ? `"${c.now.slice(0, 80)}"` : "removed"}`).join("; ")}.`);
+  for (const p of k.preferences) if (p.text.trim()) addFact(rf, "known", p.text);
+  const corrections = k.corrections.filter((c) => c.field.trim() && (c.was.trim() || c.now?.trim()));
+  if (corrections.length) {
+    addFact(rf, "known", `What they corrected (only the new version is true; never bring back the old one): ${corrections.slice(0, 6).map((c) => `${c.field.replace(/_/g, " ")} was "${c.was.slice(0, 80)}", now ${c.now ? `"${c.now.slice(0, 80)}"` : "removed"}`).join("; ")}.`);
   }
 }
 
 // Pure: whether any restraint is on for them right now (otherwise its rule is only "nothing is on", and left out).
 export function restraintOn(r: Restraint | null): boolean {
-  return !!r && (r.safetyHold || !!r.holdUntil || !!r.spaceUntil || !!r.unanswered.pausedUntil || r.suppressedKinds.length > 0 || r.needsCare || r.frustratedWithCo);
+  return !!r && (r.safetyHold || !!r.holdUntil || !!r.spaceUntil || r.unanswered.count > 0 || r.suppressedKinds.length > 0 || r.needsCare || r.frustratedWithCo);
 }
 
 // Pure: where they're headed, from goals WITH their state: only active goals are direction (a goal they closed, or one Co set aside,
 // is history, never current). The arc is the goals they closed, from their goal entries (goalJourney.ts arcLine).
 export function goalLens(k: MemberKnowledge | null | undefined, intent: unknown): { texts: string[]; arc: string | null; rule: string } | null {
   if (!k) return null;
-  return { texts: k.goals.filter((g) => g.state === "active").map((g) => g.text), arc: arcLine(intent), rule: LENS_RULE };
+  return { texts: k.goals.filter((g) => g.state === "active" && g.text.trim()).map((g) => g.text), arc: arcLine(intent), rule: LENS_RULE };
 }
 
 // Pure: what they've told Co that still holds, rendered the way a reply reads claims (factLabels.ts renderLive), from member knowledge
@@ -416,7 +417,7 @@ export function goalLens(k: MemberKnowledge | null | undefined, intent: unknown)
 export function heldClaimsFrom(k: MemberKnowledge | null | undefined, now: Date = new Date()): ReturnType<typeof renderLive> | null {
   if (!k) return null;
   const zone = k.identity.timeZone;
-  return renderLive(k.claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, saidOn: c.verifiedAt.slice(0, 10), confirmedOn: c.verifiedAt.slice(0, 10), expiresOn: c.expiresOn })), now, zone);
+  return renderLive(k.claims.filter((c) => c.text.trim()).map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, saidOn: c.verifiedAt.slice(0, 10), confirmedOn: c.verifiedAt.slice(0, 10), expiresOn: c.expiresOn })), now, zone);
 }
 
 // Pure: today's date in the member's own zone, naming the zone (the fallback zone, said as such, when theirs isn't known).
