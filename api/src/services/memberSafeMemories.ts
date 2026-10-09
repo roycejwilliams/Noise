@@ -143,7 +143,7 @@ export async function memberSafeLine(userId: string, linked?: string[]): Promise
   return (s: string) => safeMemory("context", String(s ?? ""), names);
 }
 
-async function memberNamesStrict(userId: string): Promise<string[]> {
+export async function memberNamesStrict(userId: string): Promise<string[]> {
   const [linked, records, intros] = await Promise.all([
     pool.query(
       `SELECT DISTINCT u.first_name FROM users u
