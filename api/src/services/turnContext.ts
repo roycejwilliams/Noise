@@ -339,6 +339,11 @@ export async function assembleContext(
     Promise.resolve(opts.inlineTarget ?? null).catch(() => null),
     ledgerFacts(userId, `${message}\n${opts.ledgerContext ?? ""}`, zone).catch(() => ({ lines: [] as string[], named: [] as string[] })),
   ]);
+  // Another member's details stripped from everything this context carries that isn't their own words (2026-10-09 audit and
+  // review of #118). Fails closed: if the names can't be read, none of these are sent.
+  const safe = await import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null);
+  const keep = (x: string | null | undefined) => (safe && x ? safe(String(x)) : null);
+  const keepAll = (xs: string[]) => xs.map(keep).filter((x): x is string => !!x);
   // Their Google, read from the cache in their own time zone (never fetched while they wait).
   const google = await loadGoogleFacts(userId, zone).catch(() => [] as string[]);
   const [kit, story, advice, tasks, briefs, todayEvent, docOffer] = await Promise.all([
@@ -370,12 +375,15 @@ export async function assembleContext(
       .then((r) => (r.rows[0]?.brief ? { headcount: typeof r.rows[0].brief.headcount === "number" ? r.rows[0].brief.headcount : null, when: r.rows[0].brief.when ?? null, updatedAt: r.rows[0].updated_at ? new Date(r.rows[0].updated_at) : null } : null))
       .catch(() => null),
   ]);
+  // What Co is carrying, its loops and their threads, stripped too (keep, above).
+  const safeLoops = loops.flatMap((x) => { const title = keep(x.title); return title ? [{ ...x, title, detail: x.detail ? keep(x.detail) : x.detail }] : []; });
+  const safeThreads = threads.flatMap((t) => { const text = keep(t.text); const line = keep(t.line); return text && line ? [{ ...t, text, line }] : []; });
   const recentDocs = newestDocs(receipts, 3);
   const drift = recentDocs.map((d) => receiptDrift(d, { notes, rejected, eventStartsAt: todayEvent?.startAt ? new Date(todayEvent.startAt) : null })).filter((x): x is Drift => !!x);
   const rawTasks = await tasksOnce().catch(() => [] as CoTask[]);
   const rawBriefs = await briefsOnce().catch(() => [] as BriefView[]);
-  const carrying = carryingItems({ tasks: rawTasks, briefs: rawBriefs, receipts, loops, now: new Date(), zone });
-  const openWork = [...rawTasks.filter((t) => t.status === "open").map((t) => t.goal), ...rawBriefs.filter((b) => b.status === "open").map((b) => `research brief: ${b.goal}`)];
+  const carrying = carryingItems({ tasks: rawTasks, briefs: rawBriefs, receipts, loops: safeLoops, now: new Date(), zone }).flatMap((c) => { const label = keep(c.label); return label ? [{ ...c, label }] : []; });
+  const openWork = keepAll([...rawTasks.filter((t) => t.status === "open").map((t) => t.goal), ...rawBriefs.filter((b) => b.status === "open").map((b) => `research brief: ${b.goal}`)]);
   // The plan sheet, venue brief and stale-document offers decide per reply from these (services/documentOffer.ts docOfferLines).
   if (docOffer) {
     docOffer.signals = await import("./documentOffer.js")
@@ -385,7 +393,7 @@ export async function assembleContext(
   const coldStartP = import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   const coldStart = await coldStartP;
-  return { userId, message, profile, snapshot, sent, asks, threads, offersThisWeek, emotional, lessons, inlineTarget, ledger, capabilities: capabilitySheet(), google, kit, story, advice, tasks, briefs, todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart };
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.
