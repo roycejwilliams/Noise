@@ -531,7 +531,7 @@ export const PROMISE_ASK_PREFIX = "promise:";
 // "event_offer" candidate; src/harness/proactive.ts decides whether it goes
 // out and drafts it (a tease, or a direct reveal if it's short notice by
 // then). queued: true when the front item is waiting in the harness.
-export async function attemptEventSurfacing(candidate: SurfacingCandidate): Promise<{ queued: boolean }> {
+export async function attemptEventSurfacing(candidate: SurfacingCandidate): Promise<{ queued: boolean; fed?: boolean }> {
   // Search every day, not only when the backlog is empty, and merge
   // anything new behind what's already queued. Urgent items (happening
   // soon) move to the front so they aren't stuck behind a later event.
@@ -583,6 +583,14 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   if (!pending.length) {
     await log("skip", trace.found.length ? "nothing_fresh" : "nothing_found");
     return { queued: false };
+  }
+
+  // A member whose sends Co's daily picker decides (services/sweepShadow.ts, Royce 2026-10-08): this sweep only feeds the
+  // backlog. The picker judges the whole backlog across their asks, goals and texts, and queues its sends below
+  // (queuePickedOffer), so nothing reaches them that the picker didn't choose.
+  if (await pickerDecides(candidate.userId)) {
+    await log("act", "fed_to_picker");
+    return { queued: false, fed: true };
   }
 
   // One queued offer per event: an event already waiting to go out (often
@@ -667,6 +675,35 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   if (queuedAny) return { queued: true };
   await log("skip", "nothing_queued", { skipped });
   return { queued: false };
+}
+
+// Members whose sends Co's daily picker decides: the picker accounts (sweepShadow.ts pickerUserIds), on co-test only.
+export async function pickerDecides(userId: string): Promise<boolean> {
+  const S = await import("./sweepShadow.js");
+  return S.pickerLive() && (await S.pickerUserIds()).includes(userId);
+}
+
+// Queues one thing the picker chose to send, through the same queue and send step as every find (Royce, 2026-10-08): the
+// send step bundles it by tier with whatever else is waiting (one per tier), checks it's still fresh, and holds it to the
+// lane's one find a day, the pause after an unanswered text, and 8am-9pm. The picker's reason is the reason it fits.
+// Returns false when it's already sent or decided (the queue keeps one row per thing).
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string }): Promise<boolean> {
+  const zone = await memberZone(userId);
+  const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
+  if (await alreadyDecided(userId, item)) return false;
+  if (isPastEvent(o.match, zone)) return false;
+  const match = await enrichMatch({ ...o.match, whyItFits: o.why || o.match.whyItFits });
+  const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
+  const { queued } = await enqueueCandidate({
+    userId,
+    type: "event_offer",
+    targetKey: offerTargetKey(item),
+    summary: `${o.reminder ? "Reminder, already shown to them: " : ""}${o.match.kind === "opportunity" ? "An opportunity" : "An event"} Co's daily pick chose for them: ${o.match.name}`,
+    payload,
+    expiresAt: offerExpiresAt(match, zone),
+    priority: isShortNotice(o.match, zone) ? 95 : undefined,
+  });
+  return queued;
 }
 
 export { isShortNotice };

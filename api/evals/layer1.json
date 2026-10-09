@@ -132,6 +132,7 @@
     "evals/deploy/coTestDeps.ts",
     "evals/calls/contextAndVoice.ts",
     "evals/calls/promiseWiring.ts",
+    "evals/proactive/pickerLive.ts",
     "evals/calls/reasonGate.ts"
   ]
 }
