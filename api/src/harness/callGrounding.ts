@@ -28,6 +28,7 @@ import { ABILITIES, LIMITS, isMemberMoAbility } from "../services/capabilities.j
 import { memberRecordText, overlap, sameCallCommitment, sameCommitment, significant, specificsIn, specificsOnRecord } from "../services/followThrough.js";
 import { wordsAreTheirs } from "../services/coTasks.js";
 import type { MemberKnowledge } from "../services/memberKnowledge.js";
+import { plainCorrected } from "../services/memberKnowledge.js";
 import { DateTime } from "luxon";
 
 export type CallClaim = {
@@ -105,7 +106,11 @@ export function knownBeforeFrom(
     ...k.asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
     ...k.delivered.slice(0, 12).map((d) => `Co sent them ${d.kind === "document" ? "the document " : ""}"${d.what}"${d.url ? ` (${d.url})` : ""} on ${day(d.at)}.`),
     // The corrected version only: an old value is never "on record" (it's the one thing that must still be caught if Co said it).
-    ...k.corrections.map((c) => (c.now ? `They corrected their ${c.field}: it's "${c.now}" now.` : `They corrected their ${c.field}; what Co had no longer holds.`)),
+    ...k.corrections.map((c) => {
+      const v = plainCorrected(c.now);
+      if (!c.now) return `They corrected their ${c.field}; what Co had no longer holds.`;
+      return v.settled ? `They corrected their ${c.field} to "${v.text}", and that goal is ${v.settled === "done" ? "done" : "set aside"} now (history, not current).` : `They corrected their ${c.field}: it's "${c.now}" now.`;
+    }),
     ...claims.filter((c) => c.provenance === "user_said").map((c) => `They said (${saidDay(c.saidOn)}): ${c.text}${c.quote ? ` ("${c.quote}")` : ""}`),
   ];
   const goals = k.goals.length
