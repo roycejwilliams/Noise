@@ -390,9 +390,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
           ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${localStamp(dl.finalCheckAt, zone)}.` : ""}`);
           return { ok: true, deadline: dl };
         }
-        // A look-out they asked for (or said yes to): its finds are deliveries, recorded as theirs now so the send path never guesses
-        // (Royce, 2026-10-09). This tool only opens what they asked for (their words are checked above), so its origin is "member".
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(lookout ? { source: "lookout" as const, lookoutOrigin: "member" as const } : {}) });
+        // A look-out's origin, recorded now so the send path never guesses (Royce, 2026-10-09): theirs only when this message asks Co
+        // to watch or says yes to Co's offer to (their finds are deliveries); otherwise Co's, and its finds are counted (review of #131).
+        const origin = lookout ? T.lookoutOriginAt({ message: ctx.resolvedContent, quote: theirWords, lastCoMessage: ctx.lastCoMessage }) : null;
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}) });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };

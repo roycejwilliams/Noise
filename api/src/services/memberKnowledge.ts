@@ -426,7 +426,9 @@ export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: 
     const deadlineDue = t.deadline ? new Date(`${t.deadline}T23:59:00Z`).getTime() : null;
     const due = (windowDue !== null && windowDue - now <= DAY) || (!!t.deadline && t.deadline <= tomorrow) || (!!t.nextCheckAt && new Date(t.nextCheckAt).getTime() <= now);
     // A promise from a reply, or a look-out said aloud on a call: they heard it, so it's told (review of #113).
-    const kind: CarryKind = t.source === "lookout" ? "lookout" : t.source === "promise" ? "promise" : "task";
+    // A look-out they asked for is their ask in Co's hands, never "your promise on a call" (review of #131: the label would have Co
+    // say it promised on a call that never happened).
+    const kind: CarryKind = t.source === "lookout" && t.lookoutOrigin !== "member" ? "lookout" : t.source === "promise" ? "promise" : "task";
     const what = kind === "task" ? t.goal : t.goal.replace(/^(?:Keep your promise|Keep an eye out, as promised on a call):\s*/i, "");
     const dueMs = windowDue ?? deadlineDue;
     items.push(item({ what, kind, state: due ? "due" : "outstanding", told: kind !== "task" || !!t.lastTextedAt, theyHaveIt: false, dueAt: dueMs !== null ? new Date(dueMs).toISOString() : null, ref: `task #${t.id}`, verifiedAt: latest(t.createdAt, t.lastTextedAt, t.theirReplyAt, ...(t.notes ?? []).map((n: any) => n?.at)) }));

@@ -110,7 +110,24 @@ export function wordsAreTheirs(quote: unknown, theirText: string): boolean {
 // check needs six characters, which "yes" and "sure" never have.
 const YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|do it|sounds good|that would be great|yes please|go ahead|definitely|absolutely)[.!]*$/i;
 export function isYesToOffer(message: string, lastCoMessage: string | null | undefined): boolean {
-  return YES.test(message.trim()) && /\b(?:check in|check on|follow up|how it went|ping you|text you)\b/i.test(lastCoMessage ?? "") && /\?\s*$/.test((lastCoMessage ?? "").trim());
+  return YES.test(message.trim()) && /\b(?:check in|check on|follow up|how it went|ping you|text you)\b/i.test(lastCoMessage ?? "") && /\?\s*$/.test((lastCoMessage ?? "").trim()) || isYesToWatchOffer(message, lastCoMessage);
+}
+
+// Asking Co to watch over time, in their words (Royce, 2026-10-09: "let me know when...", "keep an eye out for X").
+export const WATCH_ASK = /\b(?:let me know (?:when|if)|keep an eye out|keep (?:an )?eye on|keep (?:me )?posted|keep me in the loop|tell me (?:when|if)|(?:text|ping|message|hit) me (?:up )?(?:when|if)|look(?:ing)? out for|watch (?:out )?for|heads up (?:when|if)|be on the lookout)\b/i;
+// A watching offer from Co ("want me to keep an eye out for...?", "should I let you know when...?").
+const WATCH_OFFER = /\b(?:keep an eye out|keep (?:an )?eye on|let you know (?:when|if)|text you (?:when|if)|ping you (?:when|if)|watch for|look out for|on the lookout|keep (?:you )?posted)\b/i;
+export function isYesToWatchOffer(message: string, lastCoMessage: string | null | undefined): boolean {
+  const offer = (lastCoMessage ?? "").trim();
+  return YES.test(message.trim()) && WATCH_OFFER.test(offer) && /\?\s*$/.test(offer);
+}
+
+// Pure: a look-out is theirs only when they asked to be told over time, now: their current message asks Co to watch (and the quote
+// is from it), or it's a yes to Co's offer to watch (review of #131: any quote of theirs plus a model's lookout flag made one,
+// exempt from all restraint). Anything else the model calls a look-out is Co's, and its finds are counted.
+export function lookoutOriginAt(o: { message: string; quote: string; lastCoMessage: string | null | undefined }): LookoutOrigin {
+  if (isYesToWatchOffer(o.message, o.lastCoMessage)) return "member";
+  return WATCH_ASK.test(o.message) && wordsAreTheirs(o.quote, o.message) ? "member" : "co";
 }
 
 // Co picks when; code keeps it between an hour and two weeks.
