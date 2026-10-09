@@ -60,5 +60,20 @@ const corr = (now: string | null, field = "goal") => ({ field, was: "shifting fo
   check("nudges: the done goal isn't in where they're headed", !(block.split("\n").find((l) => /headed/.test(l)) ?? "").includes(DONE));
 }
 
+// 3. Comparisons read the plain value (review of #130): the marker never shifts what a call keeps or which correction stands.
+{
+  const CC = await import("../../src/services/callContext.js");
+  const at = (d: string) => `2026-10-0${d}T18:00:00Z`;
+  const marked = `(${MK.SETTLED_GOAL.done}) run a marathon`;
+  check("plainCorrected strips the marker and says which", JSON.stringify(MK.plainCorrected(marked)) === JSON.stringify({ text: "run a marathon", settled: "done" }) && MK.plainCorrected("run a marathon").settled === null);
+  const rows = [{ field: "goals", old_value: "run a half marathon", new_value: marked, corrected_at: at(6) }];
+  check("a call line that says the corrected (done) goal is still kept", CC.retiredBy("Training to run the marathon, not the half marathon", rows) === null);
+  const later = [...rows, { field: "goals", old_value: "run a marathon", new_value: "coach a running club", corrected_at: at(8) }];
+  check("a correction overruled later is still covered by the later one", !CC.renderSettled(later).includes("run a marathon (not"), CC.renderSettled(later));
+  const G = await import("../../src/harness/callGrounding.js");
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/harness/callGrounding.ts", import.meta.url), "utf8");
+  check("call grounding says a settled goal is history, not \"it's X now\"", /and that goal is \$\{v\.settled === "done" \? "done" : "set aside"\} now \(history, not current\)/.test(src) && !!G);
+}
+
 console.log(`done-goal corrections: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

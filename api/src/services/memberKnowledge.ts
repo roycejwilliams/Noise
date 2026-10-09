@@ -360,6 +360,14 @@ export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fac
 // match: an active goal with the same words, or one that restates it, leaves it alone.
 // The marker leads the value, so a reader that caps the line (nudges cut it at 80 characters) still carries it.
 export const SETTLED_GOAL = { done: "since done, history only:", stale: "since set aside, history only:" } as const;
+// Pure: a corrected value without the marker, and which marker it had. Comparisons read the plain value (review of #130:
+// the marker's words shifted callContext's overlap match, so short goals' call lines were dropped); only display shows it.
+const SETTLED_PREFIX = /^\((since done|since set aside), history only:\)\s*/;
+export function plainCorrected(v: string | null | undefined): { text: string; settled: "done" | "stale" | null } {
+  const s = String(v ?? "");
+  const m = s.match(SETTLED_PREFIX);
+  return { text: m ? s.slice(m[0].length) : s, settled: m ? (m[1] === "since done" ? "done" : "stale") : null };
+}
 export function settleGoalCorrections<C extends Correction>(corrections: C[], goals: Pick<Goal, "text" | "state">[]): C[] {
   const same = (a: string, b: string) => goalHash(a) === goalHash(b) || (restates(a, b) && restates(b, a));
   return corrections.map((c) => {
