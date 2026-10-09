@@ -484,8 +484,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           did.push(`document not sent: ${r.why.slice(0, 140)}`);
           // Their quiet hours (9pm to 8am): the next look is their 8am, set here, not left to the model's arithmetic.
           const quietUntil = "nextAt" in r ? r.nextAt : undefined;
+          // Held for pacing (a Co look-out's document): the same hold as a held text, and the wake given back.
+          if (quietUntil && /^Not sent: held:/.test(r.why) && (!heldUntil || quietUntil > heldUntil)) heldUntil = quietUntil;
           if (quietUntil && deps.scheduleAt) {
-            await deps.scheduleAt(quietUntil, "Send the document you promised: it was ready during their quiet hours.");
+            await deps.scheduleAt(quietUntil, /^Not sent: held:/.test(r.why) ? "Send the document now if it still holds: it was held for pacing." : "Send the document you promised: it was ready during their quiet hours.");
             nextAt = quietUntil;
             decided = "scheduled";
           }
@@ -806,7 +808,9 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     },
     writeDocument: async (input, { read }) => {
       const { sendDocumentForTask, realTaskDocDeps } = await import("./documentDelivery.js");
-      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null }, { ...realTaskDocDeps, now: clock });
+      // A Co look-out's document, PDF or Google Doc, is a Co-initiated find like its texts; a member look-out's is owed (Royce, 2026-10-09).
+      const kind = lookoutKind(task);
+      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null, ...(kind ? { coInitiated: { kind } } : {}) }, { ...realTaskDocDeps, now: clock });
       await recordDecision({ layer: 7, decision: "task.writeDocument", userId, outcome: r.ok ? "act" : "skip", action: r.ok ? r.title : "not_sent", reason: r.ok ? null : r.why.slice(0, 300), proposal: { taskId: task.id, via: r.ok ? r.via : null } }).catch(() => {});
       return r;
     },

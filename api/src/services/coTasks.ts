@@ -117,6 +117,11 @@ export function isYesToOffer(message: string, lastCoMessage: string | null | und
 export const WATCH_ASK = /\b(?:let me know (?:when|if)|keep an eye out|keep (?:an )?eye on|keep (?:me )?posted|keep me in the loop|tell me (?:when|if)|(?:text|ping|message|hit) me (?:up )?(?:when|if)|look(?:ing)? out for|watch (?:out )?for|heads up (?:when|if)|be on the lookout)\b/i;
 // A watching offer from Co ("want me to keep an eye out for...?", "should I let you know when...?").
 const WATCH_OFFER = /\b(?:keep an eye out|keep (?:an )?eye on|let you know (?:when|if)|text you (?:when|if)|ping you (?:when|if)|watch for|look out for|on the lookout|keep (?:you )?posted)\b/i;
+// Pure: the watching offer in a text Co sent ("Want me to keep an eye out for founder runs?"), or null: a question that offers to watch.
+export function watchOfferIn(text: string): string | null {
+  for (const sentence of text.split(/(?<=[.!?])\s+/)) if (/\?\s*["')\]]*$/.test(sentence.trim()) && WATCH_OFFER.test(sentence)) return sentence.trim();
+  return null;
+}
 export function isYesToWatchOffer(message: string, lastCoMessage: string | null | undefined): boolean {
   const offer = (lastCoMessage ?? "").trim();
   return YES.test(message.trim()) && WATCH_OFFER.test(offer) && /\?\s*$/.test(offer);

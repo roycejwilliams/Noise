@@ -131,5 +131,72 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   check("suppression of Co-initiated look-outs never touches member-requested ones", memberAgain.sent.length === 1 && memberAgain.held.length === 0, memberAgain);
 }
 
+// (a) A watching offer Co makes inside a reply is logged as a Co-initiated find (Royce, 2026-10-09, option 1).
+{
+  check("the offer is found in what Co sent", CT.watchOfferIn("Nice. Want me to keep an eye out for founder runs this month?") === "Want me to keep an eye out for founder runs this month?");
+  check("\"should I let you know when the waitlist opens?\" is an offer", CT.watchOfferIn("Should I let you know when the waitlist opens?") !== null);
+  check("a statement isn't an offer (no question)", CT.watchOfferIn("I'll keep an eye out for founder runs.") === null);
+  check("a question that doesn't offer to watch isn't one", CT.watchOfferIn("Want me to send the menu?") === null);
+  check("the reply logs it after it went, never gates it", /const offer = \(await import\("\.\.\/services\/coTasks\.js"\)\)\.watchOfferIn\(state\.sentMessages\.join\("\\n"\)\);[\s\S]{0,200}recordReplyWatchOffer\(input\.userId, offer\)/.test(src("agent/conversationReply.ts")) && /if \(state\.sent && !opts\.dryRun && opts\.record !== false\) \{\s*const offer/.test(src("agent/conversationReply.ts")));
+  check("it goes on the ledger as a find (exempt, so it never takes a cap)", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, 'find', \$5\)/.test(src("harness/proactive.ts")) && P.REPLY_WATCH_OFFER_TYPE === "watch_offer");
+  const now = new Date("2026-10-20T18:00:00Z");
+  const ago = (h: number) => new Date(now.getTime() - h * 3_600_000);
+  const v = KR.evaluateKindRestraint({ sends: [{ id: "o1", kind: "find", sentAt: ago(120), message: "Want me to keep an eye out for founder runs?" }, { id: "s1", kind: "find", sentAt: ago(60), message: "A pitch night Tuesday" }], inbound: [], now });
+  check("an offer they let pass counts toward the two-ignored suppression with sweep finds", KR.suppressedKinds(v).includes("find"));
+  check("restraint reads the ledger's kind, so the offer row counts", /ps\.kind/.test(src("services/kindRestraint.ts")));
+}
+
+// (b) A yes/yeah to Co's watching offer opens a member look-out that delivers exempt.
+{
+  for (const yes of ["yes", "yeah", "yep", "sure", "yes please"]) {
+    check(`"${yes}" to "want me to keep an eye out?" passes the reply loop's yes check`, CT.isYesToOffer(yes, "Want me to keep an eye out for founder runs?"));
+    check(`"${yes}" opens it as theirs`, CT.lookoutOriginAt({ message: yes, quote: yes, lastCoMessage: "Want me to keep an eye out for founder runs?" }) === "member");
+  }
+}
+
+// (c) A Co look-out's documents, PDF or Google Doc, are Co-initiated finds; a member look-out's are owed.
+{
+  const DD = await import("../../src/services/documentDelivery.js");
+  const RC = await import("../../src/services/deliveryReceipts.js");
+  const THEIRS = "After the Sequin AI November event I want the people we meet to remember us. I don't want it to be a one night thing.";
+  const doc = { title: "Staying present after the Sequin AI event", note: "A plan for after the November event.", sections: [{ heading: "What you want", bullets: ["The people you meet at the Sequin AI November event remember you", "Not a one night thing"] }], suggestions: ["Send each new contact a short personal note within two days of the event", "Host a small dinner for the people who connected most"] };
+  const NOW = new Date("2026-10-20T18:00:00Z");
+  const run = async (o: { coInitiated?: { kind: "find" | null }; claim?: "ok" | "held"; delivered?: boolean; saveTo?: string; theirWords?: string }) => {
+    const log = { claims: [] as any[], released: [] as number[], delivered: [] as string[] };
+    const deps: any = {
+      receipts: RC.memoryReceipts(), theirWords: async () => THEIRS, blocked: async () => null, now: () => NOW, record: async () => {},
+      deliver: async (d: any, _to: any, target: string) => { log.delivered.push(target); return o.delivered === false ? { ok: false, why: "it didn't go out" } : { ok: true, via: target, filename: "Co-x.pdf", ...(target === "google_docs" ? { link: "https://docs.google.com/x" } : {}) }; },
+      googleToken: async () => "t",
+      claim: async (c: any) => { log.claims.push(c); return o.claim === "held" ? { ok: false, reason: "held: they keep letting find texts pass", retryAt: new Date(NOW.getTime() + 7 * 86_400_000) } : { ok: true, ledgerId: 77 }; },
+      release: async (_u: string, id: number) => { log.released.push(id); },
+    };
+    const r = await DD.sendDocumentForTask({ ...doc, ...(o.saveTo ? { saveTo: o.saveTo } : {}) } as any, { userId: "u", taskId: 9, firstName: "Jordan", phone: "+14155550100", zone: "America/Los_Angeles", taskTheirWords: o.theirWords ?? THEIRS, read: "", ...(o.coInitiated ? { coInitiated: o.coInitiated } : {}) }, deps);
+    return { r, log };
+  };
+  const coPdf = await run({ coInitiated: { kind: "find" } });
+  check("a Co look-out's PDF is claimed on the ledger as a find before it goes", coPdf.r.ok && coPdf.log.claims.length === 1 && coPdf.log.claims[0].kind === "find" && coPdf.log.delivered.includes("pdf_text"), coPdf);
+  const held = await run({ coInitiated: { kind: "find" }, claim: "held" });
+  check("a Co look-out's document is held like a find (nothing delivered, a retry time back)", !held.r.ok && held.log.delivered.length === 0 && "nextAt" in held.r && !!held.r.nextAt && /held/.test(held.r.why), held);
+  const failed = await run({ coInitiated: { kind: "find" }, delivered: false });
+  check("a claimed document that didn't go out comes off the ledger (never counted as let pass)", !failed.r.ok && failed.log.released.includes(77), failed);
+  const member = await run({});
+  check("a member look-out's document is owed: no claim, it goes", member.r.ok && member.log.claims.length === 0, member);
+  const tt = src("services/taskTurn.ts");
+  check("the task passes a Co look-out's kind to its document send (PDF and Google Doc go through the same send)", /const kind = lookoutKind\(task\);[\s\S]{0,400}\.\.\.\(kind \? \{ coInitiated: \{ kind \} \} : \{\}\)/.test(tt));
+  check("a held document holds the task like a held text", /Not sent: held:/.test(tt) && /heldUntil = quietUntil/.test(tt));
+  const dd = src("services/documentDelivery.ts");
+  check("one claim covers every target of the send (PDF and Google Doc both go after it)", dd.indexOf("const c = await deps.claim(") < dd.indexOf("const rd = await deliverAndRecord(") && /claimCoInitiatedSend\(\{ userId: c\.userId, type: "task_update"/.test(dd));
+  check("a Co document goes on the ledger as a task text, so it spaces the next text Co starts too", !P.spacingCheck({ now: new Date("2026-10-20T18:30:00Z"), sends: [{ type: "task_update", targetKey: "task:9:doc:1", topicKey: null, sentAt: new Date("2026-10-20T18:00:00Z"), exempt: true }] }).pass);
+}
+
+// (d) Explicit watch language routes to a look-out, not saveAsk.
+{
+  const CAP = src("services/capabilities.ts");
+  const start = CAP.slice(CAP.indexOf('tool: "startTask"'), CAP.indexOf('id: "task_update"'));
+  const save = CAP.slice(CAP.indexOf('tool: "saveAsk"'), CAP.indexOf('id: "reactions"'));
+  check("startTask's guidance: explicit watch language is a look-out (lookout: true), never saveAsk", /Explicit watch language[\s\S]{0,200}startTask with lookout: true, never saveAsk/.test(start));
+  check("saveAsk's guidance: vaguer interest stays here; explicit watch language goes to the look-out", /vaguer interest/.test(save) && /startTask with lookout: true, not saveAsk/.test(save) && !/or they want Co to keep an eye out\./.test(save));
+}
+
 console.log(`look-out origin: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

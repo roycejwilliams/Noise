@@ -489,6 +489,72 @@ export function coInitiatedRetryAt(state: Pick<PickState, "now" | "sends">, fail
   return new Date(Math.max(spaced, state.now.getTime() + Math.max(1, ...waits) * HOUR));
 }
 
+// The Co-initiated gate, read inside the caller's lock (like sendWithLedger: a text that just went is seen). The backoff is read only
+// for a send with a kind, and one it can't read holds that send (retried at retryAt) rather than going past a backoff it couldn't see.
+async function coInitiatedHold(client: Queryable, o: { userId: string; timezone: string | null; now: Date; kind: ProactiveKind | null }): Promise<{ failed: GateCheck[]; sends: SendRecord[] }> {
+  const sends = await loadSends(client, o.userId);
+  const lastInboundAt = await loadLastInbound(client, o.userId);
+  const suppressed = o.kind ? await loadKindRestraint(client, o.userId, o.now).then((r) => suppressedKinds(r.verdicts)).catch(() => null) : [];
+  const failed = suppressed
+    ? coInitiatedChecks({ now: o.now, timezone: o.timezone, optedOut: false, sends, lastInboundAt, suppressedKinds: suppressed }, o.kind).filter((c) => !c.pass)
+    : [{ name: "kind_restraint", pass: false, reason: "couldn't read their backoff" }];
+  return { failed, sends };
+}
+
+// A Co-initiated send that isn't a text through sendExempt (a look-out's document, PDF or Google Doc, services/documentDelivery.ts):
+// the same gate and the same ledger row, claimed before it goes (Royce, 2026-10-09: "a Co lookout must not be able to send an
+// uncounted PDF"). The caller delivers, then releases the claim if nothing went out, so a send that failed never counts as let pass.
+export async function claimCoInitiatedSend(o: { userId: string; type: ExemptType; targetKey: string; message: string; kind: ProactiveKind | null; timezone: string | null; now?: Date }): Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }> {
+  if (proactivePaused()) return { ok: false, reason: "proactive outreach is paused" };
+  const now = o.now ?? new Date();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`proactive:${o.userId}`]);
+    const out = await client.query(`SELECT COALESCE(sms_opted_out, false) AS opted_out FROM users WHERE id = $1`, [o.userId]).then((r) => r.rows[0]?.opted_out === true);
+    if (out) {
+      await client.query("ROLLBACK");
+      return { ok: false, reason: "opted out" };
+    }
+    const { failed, sends } = await coInitiatedHold(client, { userId: o.userId, timezone: o.timezone, now, kind: o.kind });
+    if (failed.length) {
+      await client.query("ROLLBACK");
+      const reason = failed.map((c) => c.reason ?? c.name).join("; ");
+      await recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: o.userId, outcome: "skip", action: "held_co_initiated", reason, proposal: { type: o.type, targetKey: o.targetKey } }).catch(() => {});
+      return { ok: false, reason: `held: ${reason}`, retryAt: coInitiatedRetryAt({ now, sends }, failed.map((c) => c.name)) };
+    }
+    const ins = await client.query(
+      `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind)
+       VALUES ($1, $2, $3, $3, $4, true, $5)
+       ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
+      [o.userId, o.type, o.targetKey, o.message, o.kind],
+    );
+    await client.query("COMMIT");
+    return ins.rows[0] ? { ok: true, ledgerId: Number(ins.rows[0].id) } : { ok: false, reason: "already sent" };
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    return { ok: false, reason: `couldn't claim the send (${String(err?.message ?? err).slice(0, 80)})` };
+  } finally {
+    client.release();
+  }
+}
+// Nothing went out: the claim comes off the ledger, so it never counts as sent or let pass.
+export async function releaseCoInitiatedClaim(userId: string, ledgerId: number): Promise<void> {
+  await pool.query(`DELETE FROM proactive_sends WHERE user_id = $1 AND id = $2`, [userId, ledgerId]);
+}
+
+// A watching offer Co made inside a reply ("want me to keep an eye out for X?"): logged as a Co-initiated find, so a yes that opens a
+// member look-out was paid for at the door (Royce, 2026-10-09, option 1). Bookkeeping after the reply went; never a gate on it.
+export const REPLY_WATCH_OFFER_TYPE = "watch_offer";
+export async function recordReplyWatchOffer(userId: string, message: string, now: Date = new Date()): Promise<void> {
+  await pool.query(
+    `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, message, exempt, kind, sent_at)
+     VALUES ($1, $2, $3, $3, $4, true, 'find', $5)
+     ON CONFLICT (user_id, target_key) DO NOTHING`,
+    [userId, REPLY_WATCH_OFFER_TYPE, `${REPLY_WATCH_OFFER_TYPE}:${now.getTime()}`, message.slice(0, 2000), now],
+  );
+}
+
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
 export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds">, opts: { answering?: boolean } = {}): GateCheck[] {
@@ -1440,15 +1506,7 @@ export async function sendExempt(opts: {
     }
     if (opts.coInitiated) {
       const now = opts.now ?? new Date();
-      // Read inside the lock, like sendWithLedger: a text that just went is seen. A restraint read that fails holds the text
-      // (retried at retryAt) rather than sending past a backoff it couldn't read.
-      const sends = await loadSends(client, opts.userId);
-      const lastInboundAt = await loadLastInbound(client, opts.userId);
-      const suppressed = await loadKindRestraint(client, opts.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => null);
-      // A backoff it couldn't read holds only a text that has a kind to back off from (review of #129).
-      const failed = suppressed || !opts.coInitiated.kind
-        ? coInitiatedChecks({ now, timezone: opts.timezone ?? null, optedOut: false, sends, lastInboundAt, suppressedKinds: suppressed ?? [] }, opts.coInitiated.kind).filter((c) => !c.pass)
-        : [{ name: "kind_restraint", pass: false, reason: "couldn't read their backoff" }];
+      const { failed, sends } = await coInitiatedHold(client, { userId: opts.userId, timezone: opts.timezone ?? null, now, kind: opts.coInitiated.kind });
       if (failed.length) {
         await client.query("ROLLBACK");
         const reason = failed.map((c) => c.reason ?? c.name).join("; ");
