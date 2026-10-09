@@ -37,8 +37,10 @@ const confirmedAt = (g: IntentEntry & { confirmed_at?: string | null }): number 
 // Pure: the one goal worth a seasonal check-in, or null. Oldest-unconfirmed first.
 export function dueGoalCheckin(intent: unknown, lastGoalCheckinAt: Date | string | null, now = new Date()): (IntentEntry & { confirmed_at?: string | null }) | null {
   if (lastGoalCheckinAt && now.getTime() - new Date(lastGoalCheckinAt).getTime() < GOAL_CHECKIN.everyDays * DAY) return null;
-  const old = (goalEntries(intent) as (IntentEntry & { confirmed_at?: string | null })[])
+  const old = (goalEntries(intent) as (IntentEntry & { confirmed_at?: string | null; checkin_done_at?: string | null })[])
     .filter((g) => confirmedAt(g) > 0 && now.getTime() - confirmedAt(g) >= GOAL_CHECKIN.minAgeDays * DAY)
+    // Dropped because its state is done (goalCheckinState): never queued again, unless they confirm it again after that.
+    .filter((g) => !g.checkin_done_at || confirmedAt(g) > new Date(g.checkin_done_at).getTime())
     .sort((a, b) => confirmedAt(a) - confirmedAt(b));
   return old[0] ?? null;
 }
@@ -141,6 +143,17 @@ export async function runGoalCheckins(now = new Date()): Promise<number> {
 export function goalCheckinState(goals: readonly { text: string; state: "active" | "done" | "stale" }[], text: string): "active" | "done" | "stale" | null {
   const key = text.trim().toLowerCase();
   return goals.find((g) => g.text.trim().toLowerCase() === key)?.state ?? null;
+}
+
+// A check-in dropped because the goal's state is done (the profile entry still reads active): marked on the entry so the cron
+// (dueGoalCheckin) stops re-queuing it every month. Only confirming the goal again after this re-arms it.
+export const GOAL_DONE_SKIP = "that goal is done";
+export async function markGoalCheckinDone(userId: string, goalId: string): Promise<void> {
+  const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]);
+  const intent: any[] = Array.isArray(rows[0]?.intent) ? rows[0].intent : [];
+  if (!intent.some((e) => e?.id === goalId)) return;
+  const next = intent.map((e) => (e?.id === goalId ? { ...e, checkin_done_at: new Date().toISOString() } : e));
+  await pool.query(`UPDATE co_profiles SET intent = $2::jsonb WHERE user_id = $1`, [userId, JSON.stringify(next)]);
 }
 
 // Sending a seasonal check-in resets that goal's clock, so the next one is a season away.

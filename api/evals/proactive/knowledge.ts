@@ -42,7 +42,7 @@ const k: MemberKnowledge = {
   corrections: [v({ field: "city", was: "Boston", now: "New York" })],
   preferences: [v({ text: "Small founder dinners land; big mixers don't", source: "taste" })],
   claims: [],
-  restraint: v({ holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: true, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 0, lastInboundAt: null, lastSentAt: null, pausedUntil: null } }),
+  restraint: v({ holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: true, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 0, lastInboundAt: null, lastSentAt: null } }),
   exchanges: [
     v({ from: "co", text: "Want me to look for angels who back fintech?", call: false, verifiedAt: at(26) }),
     v({ from: "member", text: "yes please", call: false, verifiedAt: at(25) }),
@@ -69,7 +69,7 @@ const block = P.memberDraftBlock(k, rules);
 check("block: the member-level rules are the shared constants themselves", [DISCRETION_GUIDE, CO_MEMBER_SAFETY, CO_GROUNDING, DELIVERY_SHAPE_RULE].every((r) => block.includes(r)));
 check("block: restraint and quiet hours come from their state", block.includes(rules.restraint) && block.includes(rules.quietHours) && /hard time/.test(block));
 check("block: only an active goal is where they're headed; a done goal is history", /headed \(the lens: never recite it\): Raise a pre-seed round$/m.test(block) && /history, never current direction\): Ship the first version \(done\)/.test(block));
-check("block: what they already have is named so it's never pitched as new", /Already sent them \(they have these: never offer or pitch one as new\): Founders Breakfast \(event, Thu Oct 8, they reacted: loved\)/.test(block));
+check("block: what they already have is named: never re-pitched as new, but reminders and follow-ups are fine", /Already sent them \(don't re-pitch any as new; a reminder, follow-up or update about one is fine\): Founders Breakfast \(event, Thu Oct 8, they reacted: loved\)/.test(block));
 check("block: carrying shows what's open, not what's done", /find two angel investors \(task, outstanding, they know\)/.test(block) && !/The pitch outline/.test(block));
 check("block: corrections, taste, lessons and open asks are in it", /city: New York, not Boston/.test(block) && /Small founder dinners/.test(block) && /one line in the morning/.test(block) && /design partner in fintech/.test(block));
 check("block: background only, never a source to state, never a reason to SKIP", /never a source for a date, an event or a commitment/.test(block) && /none of them is a reason to SKIP/.test(block));
@@ -100,7 +100,14 @@ check("block: nothing on file still renders", /nothing more on file/.test(P.memb
   check("dispatch: the gates keep their own reads (needsCare, safety hold, kind restraint, hold/space)", /state\.needsCare = emotional\.needsCare;/.test(body) && /state\.safetyHold = await safetyHoldActive\(userId\);/.test(body) && /loadKindRestraint\(pool, userId, state\.now\)/.test(body) && /hold_until, space_until FROM proactive_user_state/.test(body));
   check("dispatch: the knowledge read comes after the gates, never before them", body.indexOf("memberKnowledge(") > body.indexOf("evaluateCandidates(state, opts)"));
   check("dispatch: the model reads get the stamped transcript, the parsers the stored one", /choosePick\(ev\.eligible, \{ recentConversation: recentStamped/.test(body) && (body.match(/stillRelevant\([^)]*recentConversation: recentStamped/g) ?? []).length === 2 && /repeatQuestionCheck\(text, recent\)/.test(body) && /payloadFirst\(\{[^}]*recent,/.test(body));
-  check("dispatch: every draft (first, redraft, batched offers) runs with the knowledge", (body.match(/drafting\(\(\) =>/g) ?? []).length === 3 && !/feelingForDraft\.run\(renderEmotionalContext\(emotional\), \(\) => registry/.test(body));
+  check("dispatch: every draft (first, redraft, batched offers) runs through drafting, by its type", /drafting\(c\.type, \(\) => registry\[c\.type\]\.draft/.test(body) && /drafting\(c\.type, \(\) => draftAgain/.test(body) && /drafting\(sib\.type, \(\) => registry\.event_offer\.draft/.test(body) && !/feelingForDraft\.run\(renderEmotionalContext\(emotional\), \(\) => registry/.test(body));
+  // post_call builds its own member section (PR #121): no dispatch block for it, so nothing is in its prompt twice.
+  check("dispatch: post_call drafts get no member block; every other type does", P.OWN_MEMBER_CONTEXT.has("post_call") && P.OWN_MEMBER_CONTEXT.size === 1 && /OWN_MEMBER_CONTEXT\.has\(type\) \? draftWithKnowledge\(null, null,/.test(body));
+  const prompts: string[] = [];
+  P.setProactiveModelForTests(async (p) => { prompts.push(p); return "How did the call land?"; });
+  await P.draftWithKnowledge(null, null, () => P.draftProactive({ functionId: "t", firstName: "Jordan", facts: { x: "y" }, task: "Ask." }));
+  P.setProactiveModelForTests(null);
+  check("dispatch: a draft run without knowledge (post_call) carries no member block or rules", !prompts[0].includes("WHAT YOU KNOW ABOUT THEM") && !prompts[0].includes("MEMBER RULES") && !prompts[0].includes(DISCRETION_GUIDE));
 }
 
 // ---- goal check-in: a goal done in the knowledge is never asked about
@@ -117,6 +124,19 @@ check("block: nothing on file still renders", /nothing more on file/.test(P.memb
   (pool as any).query = orig;
   check("goal check-in: done in the knowledge, skipped even while the profile entry still reads active", !!inDispatch.skip);
   check("goal check-in: without knowledge, the profile entry decides as before", !alone.skip && /first version/.test(alone.text));
+  check("goal check-in: the done skip has its own reason", inDispatch.skip === J.GOAL_DONE_SKIP);
+
+  // Dropped as done: the entry is marked, so the monthly cron stops re-queuing it (and only a fresh confirmation re-arms it).
+  const writes: any[] = [];
+  (pool as any).query = async (sql: string, args: any[]) => { if (/UPDATE co_profiles/.test(sql)) writes.push(JSON.parse(args[1])); return { rows: [{ intent }] }; };
+  await proactiveRegistry.goal_checkin.onDropped!(cand, "skipped", J.GOAL_DONE_SKIP);
+  await proactiveRegistry.goal_checkin.onDropped!(cand, "skipped", "model chose SKIP");
+  (pool as any).query = orig;
+  check("goal check-in: a done drop marks the entry; any other drop doesn't", writes.length === 1 && !!writes[0][0].checkin_done_at);
+  const old = "2026-06-01T00:00:00Z";
+  const due = (e: any) => J.dueGoalCheckin([{ id: "g1", kind: "goal", text: "Ship the first version", status: "active", created_at: old, confirmed_at: old, ...e }], null, NOW);
+  check("goal check-in: the cron re-queues an old goal, but not one marked done", !!due({}) && due({ checkin_done_at: "2026-09-01T00:00:00Z" }) === null);
+  check("goal check-in: confirmed again after the mark, it's due again in its season", !!J.dueGoalCheckin([{ id: "g1", kind: "goal", text: "x", status: "active", created_at: old, confirmed_at: "2026-07-01T00:00:00Z", checkin_done_at: "2026-06-15T00:00:00Z" }], null, NOW));
 }
 
 // ---- weekly reflection: what Co knows, and the restraint, in the prompt

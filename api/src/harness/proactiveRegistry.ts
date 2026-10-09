@@ -510,8 +510,8 @@ export const proactiveRegistry: ProactiveRegistry = {
       // Its state in what Co knows about them (the dispatch's one read): a goal closed since is history, not a question.
       const known = draftKnowledge();
       if (known) {
-        const { goalCheckinState } = await import("../services/goalJourney.js");
-        if (goalCheckinState(known.goals, String(c.payload.text ?? "")) === "done") return skip("that goal is done");
+        const { goalCheckinState, GOAL_DONE_SKIP } = await import("../services/goalJourney.js");
+        if (goalCheckinState(known.goals, String(c.payload.text ?? "")) === "done") return skip(GOAL_DONE_SKIP);
       }
       const text = await draftProactive({
         functionId: "goalJourney.checkin.draft",
@@ -525,6 +525,11 @@ export const proactiveRegistry: ProactiveRegistry = {
       const { markGoalCheckedIn } = await import("../services/goalJourney.js");
       await markGoalCheckedIn(c.userId, c.payload.goalId);
       await writeMemory(c.userId, "check_in", `Asked, as a seasonal check-in, whether this still holds: ${c.payload.text}`);
+    },
+    // Dropped because the goal is done: marked on the entry so the monthly cron stops re-queuing (and re-dropping) it.
+    async onDropped(c, _status, reason) {
+      const { GOAL_DONE_SKIP, markGoalCheckinDone } = await import("../services/goalJourney.js");
+      if (reason === GOAL_DONE_SKIP) await markGoalCheckinDone(c.userId, String(c.payload.goalId));
     },
   },
 

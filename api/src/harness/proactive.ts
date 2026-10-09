@@ -680,6 +680,9 @@ export const DISPATCH_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks",
 // The transcript the pick, the relevance check, the repeat-question check and payload first read: the last 12 exchanges, as far
 // back as they go (the same window the dispatch always read).
 export const DISPATCH_EXCHANGES = { exchanges: 12, exchangeDays: 365 } as const;
+// Types whose draft builds its own member section from memberKnowledge (jobs/postCallFollowUp.ts, PR #121): the dispatch hands
+// them no member block, so the lists and rules aren't in the prompt twice.
+export const OWN_MEMBER_CONTEXT: ReadonlySet<ProactiveType> = new Set<ProactiveType>(["post_call"]);
 
 // Pure: the exchanges as the thread is stored ("User said: ..." / "Co replied: ..." / "[Call] ..."), oldest first, for the code
 // that parses it (harness/repeatAsk.ts turnsFromConversation, harness/payloadFirst.ts theirText). With stamps, each line opens
@@ -707,7 +710,7 @@ export function memberDraftBlock(k: MemberKnowledge, rules: MemberRules): string
   if (past.length) lines.push(`- Goals that are done or set aside (history, never current direction): ${past.map((g) => `${cap(g.text, 100)} (${g.state})`).join("; ")}`);
   if (k.asks.length) lines.push(`- What they've asked Co for that's still open: ${k.asks.slice(0, 5).map((a) => cap(a.text, 120)).join("; ")}`);
   const sent = k.delivered.slice(0, 10);
-  if (sent.length) lines.push(`- Already sent them (they have these: never offer or pitch one as new): ${sent.map((d) => `${cap(d.what, 80)} (${d.kind}, ${day(d.at)}${d.reaction ? `, they reacted: ${cap(d.reaction, 40)}` : ""})`).join("; ")}`);
+  if (sent.length) lines.push(`- Already sent them (don't re-pitch any as new; a reminder, follow-up or update about one is fine): ${sent.map((d) => `${cap(d.what, 80)} (${d.kind}, ${day(d.at)}${d.reaction ? `, they reacted: ${cap(d.reaction, 40)}` : ""})`).join("; ")}`);
   const carrying = k.carrying.filter((c) => c.state !== "done").slice(0, 6);
   if (carrying.length) lines.push(`- What Co is carrying for them: ${carrying.map((c) => `${cap(c.what, 100)} (${c.kind}, ${c.state}${c.told ? ", they know" : ""})`).join("; ")}`);
   if (k.corrections.length) lines.push(`- They corrected (only the corrected version exists): ${k.corrections.slice(0, 4).map((c) => `${c.field}: ${c.now ? cap(c.now, 80) : "(removed)"}, not ${cap(c.was, 60)}`).join("; ")}`);
@@ -1636,7 +1639,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const recent = known ? exchangeTranscript(known) : "";
   const recentStamped = known ? exchangeTranscript(known, { stamped: true }) : "";
   const taste = known?.preferences[0]?.text ?? null;
-  const drafting = <T,>(fn: () => Promise<T>): Promise<T> => draftWithKnowledge(known, rules, () => feelingForDraft.run(renderEmotionalContext(emotional), fn));
+  const drafting = <T,>(type: ProactiveType, fn: () => Promise<T>): Promise<T> => (OWN_MEMBER_CONTEXT.has(type) ? draftWithKnowledge(null, null, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)) : draftWithKnowledge(known, rules, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)));
   const picked = await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: renderEmotionalContext(emotional), taste, person: known?.person?.text ?? null });
   if (!picked.pick) {
     await pool.query(
@@ -1666,7 +1669,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   let draft: DraftResult;
   try {
-    draft = await drafting(() => registry[c.type].draft(c, person));
+    draft = await drafting(c.type, () => registry[c.type].draft(c, person));
   } catch (err: any) {
     await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
     if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft error: ${err?.message ?? err}`);
@@ -1702,7 +1705,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
     const first = { draft: draft.text, failed: describeFailed(dg.failed) };
-    const second = await drafting(() => draftAgain(first, () => registry[c.type].draft(c, person)))
+    const second = await drafting(c.type, () => draftAgain(first, () => registry[c.type].draft(c, person)))
       .catch(() => null);
     if (second && "messages" in second) {
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
@@ -1767,7 +1770,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
             continue;
           }
         }
-        const d = await drafting(() => registry.event_offer.draft(sib, person));
+        const d = await drafting(sib.type, () => registry.event_offer.draft(sib, person));
         if ("skip" in d || "defer" in d) continue;
         const msgs = d.messages.map(capitalizeSentences);
         const sibGate = gate(checkDraft(capitalizeSentences(d.text), d.rules));
