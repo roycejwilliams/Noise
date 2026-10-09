@@ -234,7 +234,7 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   check("A5: the rule Co reads leaves the decision read to Co, one line at most", /Only if they settled a decision or a plan in their own words/.test(O.RECAP_OFFER_RULE) && /one short line/.test(O.RECAP_OFFER_RULE));
   check("A5: the record notices a recap offer in the sent text", O.madeArtifactOffer("Want me to put what you decided on a one-page recap?", "recap") && !O.madeArtifactOffer("Good luck with Sam on Friday.", "recap"));
   const pc = src("jobs/postCallFollowUp.ts");
-  check("A5: the post-call draft gets the permission only when code allows it, and never beside the confirmation", /may_offer_a_one_page_recap: recapOffer && !confirmationSent \? RECAP_OFFER_RULE : null/.test(pc) && /recapOfferFor\(userId, followUpId, \{ callAt, confirmed: !!confirmed, coCommitted: promised\.length > 0 \}\)/.test(pc));
+  check("A5: the post-call draft gets the permission only when code allows it, and never beside the confirmation", /may_offer_a_one_page_recap: recapOffer && !confirmationSent \? RECAP_OFFER_RULE : null/.test(pc) && /recapOfferFor\(userId, followUpId, \{ callAt, confirmed: !!confirmed, coCommitted: promised\.length > 0 \}(?:, k)?\)/.test(pc));
   check("A5: the post-call onSent records the offer", /recordRecapOffer\(c\.userId, c\.payload\.followUpId, messages \?\? \[\]\)/.test(src("harness/proactiveRegistry.ts")));
 }
 

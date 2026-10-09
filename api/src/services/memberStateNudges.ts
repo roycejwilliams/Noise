@@ -475,6 +475,11 @@ async function caredOf(userId: string, zone: string | null): Promise<CaredItem[]
   return out;
 }
 
+// Detection reads the member's own raw rows, not services/memberKnowledge.ts: every entry's fingerprint is a hash of these exact
+// texts (a goal's text, a commitment's quote), and the layer's strip rewrites prose, which would change a fingerprint and re-arm a
+// nudge already sent; it also needs their own lines from the last DEFAULT_LOOKBACK_DAYS and their call transcripts, which the layer
+// doesn't carry. The DRAFT reads what Co knows about them: it runs inside the dispatch, which reads memberKnowledge once and hands
+// it, with the member-level rules (memberRules), to draftProactive (harness/proactive.ts draftWithKnowledge).
 export async function loadSnapshot(userId: string, now = new Date()): Promise<Snapshot> {
   const zone = await memberZone(userId).catch(() => null);
   const { goalEntries } = await import("../harness/profileWrite.js");
