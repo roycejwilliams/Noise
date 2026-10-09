@@ -157,6 +157,7 @@ check("a quiet day where they'd have wanted something fails that part of the bar
   check("the lens line still lists only active goals", /the LENS[^\n]*\n- Raise a pre-seed round\n\n/.test(p) && !/the LENS[^\n]*\n[^\n]*Find a cofounder/.test(p));
   const sh = readFileSync(new URL("../../src/services/sweepShadow.ts", import.meta.url), "utf8");
   check("the shadow run reads the layer once and never re-picks what they already have", /const knowledge = await loadKnowledge\(userId, now\)/.test(sh) && /\(knowledge\?\.delivered \?\? \[\]\)\.map\(\(d\) => d\.what\)/.test(sh) && /loadMemberContext\(q, userId, now, \{ knowledge \}\)/.test(sh) && /dayOf\(now, zone\)/.test(sh));
+check("if the layer fails closed, the picker skips the day as an error (retried) and applies no picks", /if \(!knowledge\) \{[\s\S]{0,300}action: "error"[\s\S]{0,200}return \{ day: today, signature: "", skipped: true/.test(sh) && sh.indexOf("if (!knowledge) {") < sh.indexOf("applyPicks(userId"));
   check("a rejected member-knowledge read (name lookup failed) is caught and the picker goes without member facts, never unstripped ones", /memberKnowledge\(userId, \{ now, \.\.\.PICKER_KNOWLEDGE \}\)\.catch\([\s\S]{0,200}return null;/.test(readFileSync(new URL("../../src/services/sweepSelectContext.ts", import.meta.url), "utf8")));
   check("no hard-coded Pacific zone left in the picker's context", !/America\/Los_Angeles/.test(readFileSync(new URL("../../src/services/sweepSelectContext.ts", import.meta.url), "utf8")));
 }

@@ -128,6 +128,12 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   const { asks, idFor } = await loadAsks(q, userId, now, askIds, zone);
   // What they know about: the shared member layer (services/memberKnowledge.ts), read once for this run. null = it failed closed.
   const knowledge = await loadKnowledge(userId, now);
+  // The layer failed closed: no picking blind (review of #120: with no goals, texts or delivered list the picker could send what
+  // they'd declined or already have, on a live account). The day is logged as an error, which the once-a-day check retries.
+  if (!knowledge) {
+    if (!opts.dryRun) await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: "member knowledge unavailable (failed closed); no picks today", proposal: { day: today } });
+    return { day: today, signature: "", skipped: true, judgments: [], pool: [], error: "member knowledge unavailable" };
+  }
   // Never re-pick what they already have: the offers Co sent, plus everything the layer has as delivered (receipts, Co's ledger,
   // sent offers). A reminder or a month-later resurface still stays (buildShadowPool).
   const sentNames = new Set(
