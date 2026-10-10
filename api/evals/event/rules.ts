@@ -127,7 +127,7 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   const regSrc = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
   c(/FROM event_backlogs b WHERE b\.user_id = \$1 AND \$\{ASK_STILL_OPEN\("b\.ask_id"\)\}/.test(sweepSrc), "saved finds from a closed ask stop coming back");
   c(/\$\{ASK_STILL_OPEN\("pc\.payload->>'askId'"\)\}/.test(sweepSrc), "queued offers from a closed ask stop coming back");
-  c(/if \(!\(await askStillOpen\(p\.askId\)\)\) return skip\("their ask has since closed"\);/.test(regSrc), "a queued offer isn't sent once its ask has closed");
+  c(/if \(!\(await askStillOpen\(p\.askId\)\)\) return \{ skip: "their ask has since closed" \};/.test(regSrc), "a queued offer isn't sent once its ask has closed");
   c(/ASK_STILL_OPEN = \(col: string\) =>\s*`\(\$\{col\} = '\$\{PROFILE_ASK_ID\}' OR \$\{col\} IS NULL/.test(sweepSrc), "profile-based finds (no ask) still count");
 }
 

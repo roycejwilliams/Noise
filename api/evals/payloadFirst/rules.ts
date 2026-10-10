@@ -61,7 +61,7 @@ check("check-ins, follow-ups, debrief and post-call texts are checked", ["ask_ch
 // Wiring: the step runs after the draft passes its checks and before anything is sent.
 const src = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
 const at = src.indexOf("const pf = await payloadFirst(");
-check("payload first runs after the draft checks and before the send", at > src.indexOf("if (!dg.ok) {\n    await pool.query(`UPDATE proactive_candidates SET attempts") && at < src.indexOf("result = await sendWithLedger(") && at < src.indexOf("let outgoing = draft.messages;"));
+check("payload first runs after the draft checks and before the send", at > src.indexOf("if (!dg.ok) {\n    await pool.query(`UPDATE proactive_candidates SET attempts") && at < src.indexOf("result = await sendWithLedger(") && at < src.indexOf("const outgoing = draft.messages;"));
 const block = src.slice(at, src.indexOf("let outgoing = draft.messages;"));
 check("handed off: the question is dropped and the turn ends", /"handedTo" in pf\) \{[\s\S]*dropCandidate\(registry, c, "skipped"[\s\S]*return;/.test(block));
 check("can't deliver it now: dropped (its source asks again later), not asked, and logged once", /"hold" in pf\) \{[\s\S]*dropCandidate\(registry, c, "skipped"[\s\S]*recordSkipOnce\([\s\S]*return;/.test(block) && !/"hold" in pf\) \{[\s\S]*SET due_at/.test(block));

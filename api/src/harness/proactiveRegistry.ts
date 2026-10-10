@@ -6,7 +6,7 @@ import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
 import { memberMoOn } from "../services/capabilities.js";
-import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type ProactiveRegistry } from "./proactive.js";
+import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type Person, type ProactiveRegistry } from "./proactive.js";
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
@@ -170,21 +170,31 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
   };
 }
 
+// One offer, made ready to say at send time (Phase C: the bundle composer and the single reveal both use it). Their ask still open, its
+// dates still ahead in their zone (services/dateGuard.ts), and how it ties to the rest of what they've said (services/connectDots.ts).
+export async function prepareOffer(c: Candidate, person: Person): Promise<{ skip: string } | { dots: string[]; why: string; item: import("../agent/eventDiscoverySurfacing.js").RevealItem }> {
+  const p = c.payload as EventOfferPayload;
+  // Their ask closed since this was queued: don't send it (2026-09-26).
+  if (!(await askStillOpen(p.askId))) return { skip: "their ask has since closed" };
+  const when = offerable(readDates(itemDays(p.match, person.timezone), localToday(person.timezone)));
+  if (!when.ok) return { skip: `not offered: ${when.why}` };
+  const { gatherDots, findDots, whyContext } = await import("../services/connectDots.js");
+  const known = await gatherDots(c.userId);
+  const dots = p.reminder ? [] : (await findDots({ ...known, now: `Co is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (${p.fromProfile ? `Co noticed it for them from where they're headed, not an ask: ${p.askText}` : `it came up for their ask: "${p.askText}"`})` })).map((d) => d.link);
+  const why = whyContext(known);
+  const { revealItem } = await import("../agent/eventDiscoverySurfacing.js");
+  return { dots, why, item: revealItem(p.askText, p.fromProfile, p.match, { dots, why }) };
+}
+
 export const proactiveRegistry: ProactiveRegistry = {
   event_offer: {
+    // A reminder rides alone and is drafted here; every other offer goes out through the bundle composer (harness/bundleComposer.ts),
+    // which uses prepareOffer below for each find.
     async draft(c, person) {
+      const prep = await prepareOffer(c, person);
+      if ("skip" in prep) return skip(prep.skip);
       const p = c.payload as EventOfferPayload;
-      // Their ask closed since this was queued: don't send it (2026-09-26).
-      if (!(await askStillOpen(p.askId))) return skip("their ask has since closed");
-      // Still ahead today, checked when it's about to go out, not only when
-      // it was queued (services/dateGuard.ts).
-      const when = offerable(readDates(itemDays(p.match, person.timezone), localToday(person.timezone)));
-      if (!when.ok) return skip(`not offered: ${when.why}`);
-      // How this ties to the rest of what they've said (services/connectDots.ts).
-      const { gatherDots, findDots, whyContext } = await import("../services/connectDots.js");
-      const known = await gatherDots(c.userId);
-      const dots = p.reminder ? [] : await findDots({ ...known, now: `Co is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (${p.fromProfile ? `Co noticed it for them from where they're headed, not an ask: ${p.askText}` : `it came up for their ask: "${p.askText}"`})` });
-      const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again, dots: dots.map((d) => d.link), why: whyContext(known) });
+      const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again, dots: prep.dots, why: prep.why });
       return r ?? skip("model chose SKIP");
     },
     async onSent(c) {
