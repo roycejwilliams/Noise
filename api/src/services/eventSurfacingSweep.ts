@@ -156,14 +156,28 @@ async function getBacklog(userId: string, askId: string): Promise<BacklogItem[]>
   return ((rows[0]?.items as BacklogItem[]) ?? []).filter((i) => i.match.tier === 3 || Boolean((i.match as any).event_api_id));
 }
 
-async function saveBacklog(userId: string, askId: string, items: BacklogItem[]): Promise<void> {
-  await pool
-    .query(
+// A save merged into the row as it is now, under the row's lock (re-review of #133): `read` is what this caller read before it
+// worked, so another writer's removals and read days in between survive (workingSet.ts mergeSweepSave).
+async function saveBacklogMerged(userId: string, askId: string, read: BacklogItem[], next: BacklogItem[]): Promise<void> {
+  const { mergeSweepSave } = await import("./workingSet.js");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(`SELECT items FROM event_backlogs WHERE user_id = $1 AND ask_id = $2 FOR UPDATE`, [userId, askId]);
+    const now = ((rows[0]?.items as BacklogItem[]) ?? []).filter((i) => i.match.tier === 3 || Boolean((i.match as any).event_api_id));
+    const items = rows[0] ? mergeSweepSave(read, next, now, exitKey) : next;
+    await client.query(
       `INSERT INTO event_backlogs (user_id, ask_id, items, updated_at) VALUES ($1, $2, $3, NOW())
        ON CONFLICT (user_id, ask_id) DO UPDATE SET items = $3, updated_at = NOW()`,
       [userId, askId, JSON.stringify(items)],
-    )
-    .catch((err: any) => console.error("saveBacklog: write failed (non-fatal):", err?.message ?? err));
+    );
+    await client.query("COMMIT");
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("saveBacklog: write failed (non-fatal):", err?.message ?? err);
+  } finally {
+    client.release();
+  }
 }
 
 // Lead-time handling (Royce, 2026-08-30) — "are you giving enough time for
@@ -215,7 +229,7 @@ export function isPastEvent(match: TierMatch, zone: string | null = null, now = 
 }
 
 function isShortNotice(match: TierMatch, zone: string | null = null): boolean {
-  const date = relevantDate(match);
+  const date = relevantDate(match, zone);
   return date !== null && daysUntilDate(date, zone) >= 0 && daysUntilDate(date, zone) <= SHORT_NOTICE_DAYS;
 }
 
@@ -589,6 +603,9 @@ async function settleNewFinds(userId: string, items: BacklogItem[], today: strin
     if (!known) reads++;
     const c = known ? { match: it.match, result: "known" as const } : await classifyFind(it.match, today).catch(() => ({ match: it.match, result: "unknown" as const }));
     const match = c.match as TierMatch;
+    // Its key once classified can differ from the raw find's (a date found on the page): an exit under either keeps it out (re-review of #133).
+    const k = exitKey(match);
+    if (k !== exitKey(it.match) && (exited.has(k) || (await W.exitedFindKeys(userId, [k]).catch(() => new Set<string>())).size)) continue;
     const end = lifeEndOf(match, zone);
     if (c.result === "undated" || c.result === "unknown") {
       out.push({ ...it, match, unread: { days: [today], why: c.result } });
@@ -609,7 +626,8 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // soon) move to the front so they aren't stuck behind a later event.
   // Their zone (or Pacific): "today", "past" and "short notice" are their days, never the server's.
   const zone = await memberZone(candidate.userId);
-  const queued = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId), zone);
+  const readAtStart = await getBacklog(candidate.userId, candidate.askId);
+  const queued = await dropStaleFront(candidate.userId, readAtStart, zone);
   const { items: rawFound, trace } = await findFreshPending(candidate, zone);
   // What each new find IS, read at capture (services/findForm.ts): a dated event or an opening. An event whose date its page doesn't
   // state, or one already past, exits with its fact; an exited find found again stays out (services/workingSet.ts).
@@ -632,7 +650,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       await waitingOfferTiers(candidate.userId),
     ),
   ], zone);
-  await saveBacklog(candidate.userId, candidate.askId, pending);
+  await saveBacklogMerged(candidate.userId, candidate.askId, readAtStart, pending);
 
   // Every run is recorded, so a quiet week can be traced to where things
   // were dropped instead of guessed at (2026-09-18).
@@ -812,7 +830,7 @@ export { isShortNotice };
 
 async function removeFromBacklog(userId: string, askId: string, match: TierMatch): Promise<void> {
   const items = await getBacklog(userId, askId);
-  await saveBacklog(userId, askId, items.filter((i) => !sameMatch(i.match, match)));
+  await saveBacklogMerged(userId, askId, items, items.filter((i) => !sameMatch(i.match, match)));
 }
 
 // Harness hook after the text actually went out.

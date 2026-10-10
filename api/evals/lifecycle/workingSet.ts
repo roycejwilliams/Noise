@@ -219,7 +219,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   // 5. A failed search isn't an empty run.
   const ess = src("services/eventSurfacingSweep.ts");
   const sf = src("services/sweepFind.ts");
-  check("#5 empty runs count only when a search really ran", /&& trace\.searched\) \{\s*await pool\.query\(`UPDATE ask_checkins SET empty_runs/.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3 && /!\/\^No web search right now\//.test(sf));
+  check("#5 empty runs count only when a search really ran", /&& trace\.searched\) \{\s*await pool\.query\(`UPDATE ask_checkins SET empty_runs/.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3);
   // 6. Person asks are in the people graph and Mo's gaps.
   check("#6 person asks count in peopleGraph and Mo's network gaps", /kind IN \('find', 'person'\)/.test(src("services/peopleGraph.ts")) && (src("mo/team.ts").match(/kind IN \('find', 'person'\)/g) ?? []).length === 2);
   // 7. A goal change that didn't happen is never reported.
@@ -252,6 +252,31 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("#14 restating an open ask resets its empty-run count", /last_mentioned_at = NOW\(\), empty_runs = 0/.test(src("services/profileExtraction.ts")));
   // The held items stay out of every offer path.
   check("held items are never offered: picker pool, queue, task finds", /!it\?\.unread/.test(src("services/sweepShadow.ts")) && /item\.unread/.test(ess) && /!it\?\.unread/.test(src("services/taskTurn.ts")));
+}
+
+// ---------------------------------------------------------------- re-review of #133
+{
+  const on = (t: string) => [...F.datesOnPage(t, 2026)];
+  check("a range in one month puts every day on the page, so a festival's last day is kept", ["Oct 6-8", "October 6 – 8, 2026", "Oct 6 to 8"].every((t) => on(t).includes("2026-10-08") && on(t).includes("2026-10-07")) && F.readClassification('{"form":"event","date":"2026-10-06","end":"2026-10-08"}', "Hardly Strictly, Oct 6-8")?.end === "2026-10-08");
+  check("a rating, a measure, a price or a version isn't a date", !on("4/5 stars").length && !on("3/4 cup flour").length && !on("$10/12").length && !on("version 1.2.2026").length && !on("v1.2.2026").length && on("Doors 10/12").join() === "2026-10-12");
+  check("a timestamp with a space, or with no offset, keeps its written date", F.dayIn("2026-10-10 19:00", "America/Los_Angeles") === "2026-10-10" && F.dayIn("2026-10-10T02:00:00", "America/Los_Angeles") === "2026-10-10");
+  check("Title Case doesn't hide an identity term; a real place still passes", ["Black Women In Tech Summit", "Gay Bar Crawl", "Queer Film Fest", "Men's Circle Vulnerability", "Christian Fellowship"].every((q) => Q.assumedIdentity(q, "tech events").length > 0) && !Q.assumedIdentity("Asian Art Museum late night", "events").length && !Q.assumedIdentity("talk at the Women's Building", "talks").length && !Q.assumedIdentity("Veterans Memorial Building gala", "galas").length);
+  check("lgbtq+ they said matches lgbtq+ in the query", !Q.assumedIdentity("LGBTQ+ mixer SF", "any lgbtq+ events").length);
+  const ess = src("services/eventSurfacingSweep.ts");
+  check("a find exited under its classified key stays out when found again raw", /if \(k !== exitKey\(it\.match\) && \(exited\.has\(k\)/.test(ess));
+  check("short notice is judged in their zone", /function isShortNotice\(match: TierMatch, zone: string \| null = null\): boolean \{\s*const date = relevantDate\(match, zone\);/.test(ess));
+  check("every sweep write to the backlog merges under the row lock", !/async function saveBacklog\(/.test(ess) && (ess.match(/saveBacklogMerged\(/g) ?? []).length === 3 && /FOR UPDATE/.test(ess));
+  const k = F.exitKey;
+  const read = [ev("A"), ev("B"), ev("C")];
+  const now = [ev("A"), { ...ev("C"), unread: { days: ["2026-10-08", TODAY], why: "unknown" } }, ev("D picked elsewhere")];
+  const next = [ev("A"), ev("B"), { ...ev("C"), unread: { days: ["2026-10-08"], why: "unknown" } }, ev("E new")];
+  const m = W.mergeSweepSave(read, next, now, k).map((i: any) => i.match.name);
+  check("the sweep's save keeps others' removals and adds, and the read days since", m.join() === "A,C,E new,D picked elsewhere" && W.mergeSweepSave(read, next, now, k).find((i: any) => i.match.name === "C").unread.days.length === 2, m);
+  const dup = W.applyChange([ev("A"), ev("A")], { remove: new Set(), replace: new Map([[k(ev("A").match), { ...ev("A"), unread: { days: [TODAY], why: "unknown" } }]]) }, k);
+  check("two items under one key are replaced once, not copied", dup.length === 1);
+  const sf = src("services/sweepFind.ts");
+  check("an ask whose queries are refused or that searches nothing still counts its run; an outage doesn't", /searched: searched \|\| !blocked/.test(sf) && (sf.match(/blocked = true;/g) ?? []).length === 4);
+  check("a goal set aside only when the change really happened", /const changed = await deps\.setState\([\s\S]{0,120}\.catch\(\(\) => false\);\s*if \(changed !== false\) \{\s*setAside\.push/.test(src("services/goalEdges.ts")));
 }
 
 console.log(`working set + tiers: ${total - failed}/${total} passed`);

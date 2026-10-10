@@ -91,24 +91,24 @@ const IDENTITY_TERMS = /\b(?:men'?s|women'?s|male|female|mens|womens|guys?'?|gir
 // Phrases where a group word is part of a thing, not a person (review of #133: "black tie gala", "parent company", "trans-Pacific",
 // "Mothers Day" were refused).
 const NOT_ABOUT_PEOPLE = /\b(?:black[\s-]tie|parent company|trans[\s-]?pacific|trans[\s-]?atlantic|(?:mother|father|parent)s?'?\s+day|black\s+friday|senior\s+(?:engineer|designer|manager|developer|pm)|20s\s+(?:style|theme|party))\b/gi;
-// A capitalized group word inside a proper name is a venue or institution ("Asian Art Museum", "Contemporary Jewish Museum",
-// "Veterans Building"), when a capitalized word sits next to it.
+// A capitalized group word inside the name of a place or institution ("Asian Art Museum", "Contemporary Jewish Museum", "Veterans
+// Building", "Women's Building"): the name ends, within two more capitalized words, in a word for a place. Capitals alone aren't a
+// venue (re-review of #133: "Black Women In Tech Summit", "Queer Film Fest" passed in Title Case).
+const PLACE = /^(?:\s+[A-Z][\w'&.-]*){0,2}?\s+(?:Building|Hall|Museum|Center|Centre|Theater|Theatre|Library|College|University|Institute|Gallery|Park|Plaza|Square|Street|Cathedral|Memorial|Auditorium|Pavilion|Opera House)\b/;
 function inProperName(query: string, index: number, length: number): boolean {
-  const word = query.slice(index, index + length);
-  if (!/^[A-Z]/.test(word)) return false;
-  const before = query.slice(0, index).match(/([A-Z][\w'&.-]*)\s+$/);
-  const after = query.slice(index + length).match(/^\s+([A-Z][\w'&.-]*)/);
-  return !!(before || after);
+  if (!/^[A-Z]/.test(query.slice(index, index + length))) return false;
+  return PLACE.test(query.slice(index + length));
 }
 export function assumedIdentity(query: string, theirWords: string): string[] {
   const cleaned = query.replace(NOT_ABOUT_PEOPLE, (m) => " ".repeat(m.length));
-  const said = new Set((theirWords.toLowerCase().match(/[a-z0-9'+-]+/g) ?? []).map((w) => w.replace(/'?s$/, "")));
+  const base = (w: string) => w.replace(/\+$/, "").replace(/'?s$/, "");
+  const said = new Set((theirWords.toLowerCase().match(/[a-z0-9'+-]+/g) ?? []).map(base));
   const out = new Set<string>();
   for (const m of cleaned.matchAll(IDENTITY_TERMS)) {
     if (inProperName(query, m.index ?? 0, m[0].length)) continue;
     const w = m[0].toLowerCase();
     // Whole words only (review of #133: "men's" passed because "mentor" contained "men").
-    if (!said.has(w.replace(/'?s$/, ""))) out.add(w);
+    if (!said.has(base(w))) out.add(w);
   }
   return [...out];
 }

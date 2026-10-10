@@ -171,8 +171,38 @@ export type PruneDeps = ExitDeps & {
   exited?: (userId: string, keys: string[]) => Promise<Set<string>>;
 };
 // Pure: apply a change to a backlog's current items.
+// Two items under one key are the same find: a replacement lands once, never as two copies (re-review of #133).
 export function applyChange(items: any[], change: BacklogChange, key: (m: any) => string): any[] {
-  return (Array.isArray(items) ? items : []).filter((it) => !change.remove.has(key(it?.match ?? {}))).map((it) => change.replace.get(key(it?.match ?? {})) ?? it);
+  const placed = new Set<string>();
+  const out: any[] = [];
+  for (const it of Array.isArray(items) ? items : []) {
+    const k = key(it?.match ?? {});
+    if (change.remove.has(k)) continue;
+    const r = change.replace.get(k);
+    if (!r) { out.push(it); continue; }
+    if (placed.has(k)) continue;
+    placed.add(k);
+    out.push(r);
+  }
+  return out;
+}
+
+// Pure: a sweep's save, merged into the row as it is now (re-review of #133: the sweep overwrote the row with a list read before a
+// minutes-long search, undoing a prune's or picker's work in between). What the sweep read (`read`), what it wants (`next`) and what's
+// there now (`now`): an item someone else removed since the read stays out; one someone else added stays in; a held item keeps the
+// read days recorded since.
+export function mergeSweepSave(read: any[], next: any[], now: any[], key: (m: any) => string): any[] {
+  const k = (it: any) => key(it?.match ?? {});
+  const readKeys = new Set(read.map(k));
+  const nowBy = new Map(now.map((it) => [k(it), it]));
+  const kept = next
+    .filter((it) => !readKeys.has(k(it)) || nowBy.has(k(it)))
+    .map((it) => {
+      const cur = nowBy.get(k(it));
+      return cur?.unread && (!it.unread || (cur.unread.days?.length ?? 0) > (it.unread.days?.length ?? 0)) ? { ...it, unread: cur.unread } : it;
+    });
+  const nextKeys = new Set(next.map(k));
+  return [...kept, ...now.filter((it) => !readKeys.has(k(it)) && !nextKeys.has(k(it)))];
 }
 
 // Pure: the decision for one backlog item on a date, from its form and dates (services/findForm.ts).

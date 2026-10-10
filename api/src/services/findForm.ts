@@ -15,9 +15,11 @@ const zoneOr = (zone: string | null | undefined) => (zone && DateTime.now().setZ
 // A plain date stays as written; a timestamp is read in their zone, the way dateGuard.itemDays does.
 export function dayIn(x: unknown, zone: string | null = null): string | null {
   if (typeof x !== "string" || !x.trim()) return null;
-  const t = x.trim();
+  const t = x.trim().replace(/^(\d{4}-\d{2}-\d{2}) (\d)/, "$1T$2");
   if (ISO.test(t)) return t;
   if (!/^\d{4}-\d{2}-\d{2}T/.test(t)) return null;
+  // A time with no offset is a wall-clock time where the thing happens: its date is as written (never the server's zone).
+  if (!/(?:Z|[+-]\d{2}:?\d{2})$/i.test(t)) return DateTime.fromISO(t.slice(0, 10)).isValid ? t.slice(0, 10) : null;
   const d = DateTime.fromISO(t, { setZone: true });
   return d.isValid ? d.setZone(zoneOr(zone)).toISODate() : null;
 }
@@ -79,9 +81,16 @@ export function datesOnPage(page: string, aroundYear: number): Set<string> {
   };
   const year = (y: string | undefined) => (y ? (y.length === 2 ? 2000 + Number(y) : Number(y)) : aroundYear);
   for (const m of text.matchAll(new RegExp(`\\b${MONTH_RE}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, "g"))) add(year(m[3]), MONTHS[m[1]], Number(m[2]));
+  // A range in one month ("Oct 6-8", "October 6 – 8, 2026"): every day of it, so a festival's last day is on the page (re-review of #133).
+  for (const m of text.matchAll(new RegExp(`\\b${MONTH_RE}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?\\s*(?:-|\u2013|\u2014|to|through|thru)\\s*(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, "g"))) {
+    const [a, b] = [Number(m[2]), Number(m[3])];
+    if (b > a && b - a <= 31) for (let d = a; d <= b; d++) add(year(m[4]), MONTHS[m[1]], d);
+  }
   for (const m of text.matchAll(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH_RE}\\.?\\b(?:,?\\s+(\\d{4}))?`, "g"))) add(year(m[3]), MONTHS[m[2]], Number(m[1]));
-  for (const m of text.matchAll(/(?<![\d/.-])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])/g)) add(year(m[3]), Number(m[1]), Number(m[2]));
-  for (const m of text.matchAll(/(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{4})(?![\d.])/g)) add(Number(m[3]), Number(m[2]), Number(m[1]));
+  // Not a price, a rating or a measure ("$10/12", "4/5 stars", "3/4 cup").
+  for (const m of text.matchAll(/(?<![\d/.$-])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])(?!\s*(?:stars?|cups?|tbsp|tsp|oz|lbs?|pts?|points|rating|scale)\b)/g)) add(year(m[3]), Number(m[1]), Number(m[2]));
+  // Not a version number ("v1.2.2026", "version 1.2.2026").
+  for (const m of text.matchAll(/(?<![\d.]|\bv|version\s)(\d{1,2})\.(\d{1,2})\.(\d{4})(?![\d.])/g)) add(Number(m[3]), Number(m[2]), Number(m[1]));
   for (const m of text.matchAll(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g)) add(Number(m[1]), Number(m[2]), Number(m[3]));
   return out;
 }
@@ -137,8 +146,10 @@ export async function classifyFind<M extends TierMatch>(m: M, today: string, dep
 }
 
 // The key a find exits under (services/workingSet.ts): an event by its own id; a web find by its name plus the date it's for (or its
-// link), so a weekly meetup that exits once can come back next week and a reject tied to one date doesn't block every later one
-// (review of #133: the name alone blocked all of them, stronger than the fact's "this find").
+// link), so an exit tied to one date doesn't block every later one (review of #133: the name alone blocked all of them, stronger than
+// the fact's "this find"). The send queue's own key (eventSurfacingSweep.ts offerTargetKey) is still the name: a sent or decided row
+// for one week's meetup still holds the next one there. Keying that by date too would let finds already sent under the old keys go
+// out again, so it's left as is.
 export function exitKey(m: any): string {
   if (m?.event_api_id) return `event:${m.event_api_id}`;
   const name = String(m?.name ?? "").toLowerCase().trim();

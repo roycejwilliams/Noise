@@ -221,9 +221,12 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
   for (const e of derived) {
     const life = lifecycle(e, { today, corrections, prior: states.get(goalHash(e.goal)) ?? null, retired: deps.retired });
     if (life.state !== "active") {
-      await deps.setState(userId, e.goal, life.state, life.reason, "context").catch(() => {});
-      setAside.push({ goal: e.goal, state: life.state, reason: life.reason });
-      continue;
+      // Set aside only when the change really happened (re-review of #133): a failed fact write leaves the goal and its asks live.
+      const changed = await deps.setState(userId, e.goal, life.state, life.reason, "context").catch(() => false);
+      if (changed !== false) {
+        setAside.push({ goal: e.goal, state: life.state, reason: life.reason });
+        continue;
+      }
     }
     if (e.edges.length) active.push(e);
     else passed.push({ goal: e.goal, why: `${e.kind}: ${e.why || "no findable side"}` });
