@@ -20,7 +20,8 @@ import { loadMilestones, storyLines } from "./milestones.js";
 import pool from "../db/db.js";
 import { capabilitySheet } from "./capabilities.js";
 import { ledgerFacts } from "./coFacts.js";
-import { renderEventDetails, type EventDetails } from "./eventDetails.js";
+import { type EventDetails } from "./eventDetails.js";
+import { renderDetailsAsOf } from "./asOf.js";
 import { describeRead, readLinksLater, savedRead, type LinkRead } from "./linkReader.js";
 import { loadKit, type Kit } from "./memberKit.js";
 import type { RepliedTo } from "./inlineReply.js";
@@ -44,6 +45,8 @@ export type SentItem = {
   postText: string | null;
   // The saved read of its page (services/linkReader.ts), when there is one.
   read?: LinkRead | null;
+  // When its details were last read from its page (services/sendCheck.ts stamps it at send); null: as old as the find.
+  checkedAt?: string | null;
 };
 
 export type TurnContext = {
@@ -203,6 +206,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[]): SentItem
       // Same thing from another source: keep the first key, fill in what's missing.
       had.url ??= item.url;
       had.details ??= item.details;
+      had.checkedAt ??= item.checkedAt ?? null;
       had.postText ??= item.postText;
       had.reaction ??= item.reaction;
     }
@@ -223,6 +227,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[]): SentItem
       reaction: null,
       details: m.details ?? null,
       postText: m.opportunity?.postText ?? m.evidence ?? null,
+      checkedAt: m.checkedAt ?? null,
     });
   }
   for (const r of recs) {
@@ -280,7 +285,8 @@ function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number): string[] {
     .map((s) => {
       if (s.read) return describeRead(s.name, s.read).facts.join(" ");
       if (!s.details) return `Co sent them "${s.name}"${s.url ? ` (${s.url})` : ""}; its page hasn't been read yet, so Co has no start time or address for it.`;
-      const known = renderEventDetails(s.name, s.details).join(" ");
+      // Stale volatile lines say so (Phase B, B3): a reply never states a days-old spot count or time as current.
+      const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null).join(" ");
       const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "address"].filter(Boolean);
       return `Details on file for "${s.name}", which Co sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`;
     });

@@ -6,6 +6,7 @@ import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 import { enrichMatch } from "./eventDetails.js";
+import { UNDATED_QUEUE_DAYS } from "./sendCheck.js";
 import { sweepFind } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
 import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
@@ -235,7 +236,8 @@ function isShortNotice(match: TierMatch, zone: string | null = null): boolean {
 // Pure: when a queued offer stops being offerable (Royce, 2026-10-07: evening Pacific events were dropped at 5pm Pacific, when the
 // old `${date}T23:59:00Z` expiry passed, 2-4 hours before they started). An event with a known start: at its start. An event with
 // only a date: the end of that day in the event's own zone (its page's), else theirs, else Pacific. A deadline: the end of that
-// day in their zone. Undated: two weeks.
+// day in their zone. Undated: UNDATED_QUEUE_DAYS (Phase B, B2, 2026-10-10: it was two weeks, never read again; every send now
+// re-reads its page first, services/sendCheck.ts, and past this it exits on that fact instead of waiting blind).
 export function offerExpiresAt(match: TierMatch, zone: string | null, now = new Date()): Date {
   const startAt = match.kind !== "opportunity" ? match.details?.startAt : null;
   const start = startAt ? new Date(startAt) : null;
@@ -243,7 +245,7 @@ export function offerExpiresAt(match: TierMatch, zone: string | null, now = new 
   const date = relevantDate(match);
   const end = date ? endOfLocalDay(date.slice(0, 10), match.details?.timezone ?? zone) : null;
   if (end && !Number.isNaN(end.getTime())) return end;
-  return new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+  return new Date(now.getTime() + UNDATED_QUEUE_DAYS * 24 * 60 * 60 * 1000);
 }
 
 // The real, periodic "Luma & X asks surface periodically" mechanism (Royce,
@@ -901,7 +903,14 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
 
 // Harness hook when the candidate is skipped or expires: take it out of the
 // backlog so the next match can be queued.
-export async function onEventOfferDropped(userId: string, payload: EventOfferPayload): Promise<void> {
+// A queue window that ran out is a fact, never a silent drop (Phase B, B2, 2026-10-10): the find exits through the working set with
+// why (its time came, its last useful day passed, or it's undated and wasn't sent within UNDATED_QUEUE_DAYS), fact first.
+export async function onEventOfferDropped(userId: string, payload: EventOfferPayload, status: "skipped" | "expired" = "skipped"): Promise<void> {
+  if (status === "expired") {
+    const { exitOnQueueExpiry } = await import("./sendCheck.js");
+    const { realExitDeps } = await import("./workingSet.js");
+    await exitOnQueueExpiry(userId, payload, await memberZone(userId), realExitDeps).catch((err: any) => console.error("onEventOfferDropped: exit fact failed (non-fatal):", err?.message ?? err));
+  }
   await removeFromBacklog(userId, payload.askId, payload.match);
 }
 

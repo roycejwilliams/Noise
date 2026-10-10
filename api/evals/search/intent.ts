@@ -68,7 +68,7 @@ B.rememberLinks("https://www.peerspace.com/venues/san-francisco--ca/corporate-ev
 check("a result on a list page links its own listing, on the same site", B.ownLink("https://www.peerspace.com/venues/san-francisco--ca/corporate-event-venue", "Versatile and Modern Event Space in Downtown SF") === "https://www.peerspace.com/pages/listings/abc123" && B.ownLink("https://www.peerspace.com/venues/san-francisco--ca/corporate-event-venue", "Something Else") === null);
 check("BROWSER_READ=off turns it off", !B.browserReadEnabled({ BROWSER_READ: "off" } as any) && B.browserReadEnabled({} as any));
 const wos = src("services/webOpportunitySearch.ts");
-check("the browser is only a fallback: a readable fetch is used as is, a 404 isn't retried", /if \(text\.length >= MIN_FETCHED_TEXT\) return/.test(wos) && /res\.status === 404 \|\| res\.status === 410\)\)\s*return null/.test(wos) && /browserPageText\(u\.toString\(\)\)/.test(wos));
+check("the browser is only a fallback: a readable fetch is used as is, a 404 isn't retried", /if \(text\.length >= MIN_FETCHED_TEXT\) return/.test(wos) && /res\.status === 404 \|\| res\.status === 410\)\)\s*return \{ text: null, gone: true \}/.test(wos) && /browserPageText\(u\.toString\(\)\)/.test(wos));
 const docker = fs.readFileSync(new URL("../../../co-test/Dockerfile", import.meta.url), "utf8") + fs.readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
 // co-test runs api code compiled into its own folder, so packages resolve from
 // co-test's node_modules (2026-10-01: playwright-core was only in api's, and the

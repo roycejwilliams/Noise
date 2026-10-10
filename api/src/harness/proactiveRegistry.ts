@@ -176,6 +176,10 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload as EventOfferPayload;
       // Their ask closed since this was queued: don't send it (2026-09-26).
       if (!(await askStillOpen(p.askId))) return skip("their ask has since closed");
+      // Its own page, read again now (Phase B, services/sendCheck.ts): sold out, gone or past exits on its fact; the rest is drafted
+      // from the refreshed record (p.match), never the one captured days ago.
+      const fresh = await (await import("../services/sendCheck.js")).checkBeforeSend(c, person.timezone);
+      if (!("ok" in fresh)) return fresh;
       // Still ahead today, checked when it's about to go out, not only when
       // it was queued (services/dateGuard.ts).
       const when = offerable(readDates(itemDays(p.match, person.timezone), localToday(person.timezone)));
@@ -192,8 +196,8 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload as EventOfferPayload;
       await writeMemory(c.userId, "event_discovery_surfacing", `Sent directly${isShortNotice(p.match) ? " (short notice)" : ""}: ${p.match.name}`);
     },
-    async onDropped(c) {
-      await onEventOfferDropped(c.userId, c.payload as EventOfferPayload);
+    async onDropped(c, status) {
+      await onEventOfferDropped(c.userId, c.payload as EventOfferPayload, status);
     },
   },
 

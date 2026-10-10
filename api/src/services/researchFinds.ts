@@ -6,6 +6,7 @@
 // stored as a research_find, and every later reply sees them as facts it can
 // hand over (a link in a draft is only allowed when it's on file).
 import pool from "../db/db.js";
+import { asOfWords, isStale, STALE_MARK } from "./asOf.js";
 
 export type ResearchFind = { name: string; url: string; facts: string; at: string };
 
@@ -15,9 +16,13 @@ export const RESEARCH_FIND_MAX = 20;
 // Shown to a reply: only the ones that matter to this message.
 export const RESEARCH_FIND_SHOWN = 3;
 
-// Pure: the finds as fact lines for a reply.
-export function findLines(finds: ResearchFind[]): string[] {
-  return finds.map((f) => `You researched "${f.name}" and have its link: ${f.url}${f.facts ? `. What its page says: ${f.facts}` : ""}. If they ask for it, send this link.`);
+// Pure: the finds as fact lines for a reply. A find is kept up to RESEARCH_FIND_DAYS; past a few hours what its page said is marked
+// as of then (Phase B, B3, 2026-10-10: a 9-day-old "12 spots" read as today's, and the reply's fact check passed it against itself).
+export function findLines(finds: ResearchFind[], now = new Date()): string[] {
+  return finds.map((f) => {
+    const said = !f.facts ? "" : isStale(f.at || null, now) ? `. What its page said when you found it (as of ${asOfWords(f.at || null)}, ${STALE_MARK}): ${f.facts}` : `. What its page says: ${f.facts}`;
+    return `You researched "${f.name}" and have its link: ${f.url}${said}. If they ask for it, send this link.`;
+  });
 }
 
 // Pure: whether a message is asking for a link or site. A link word they use

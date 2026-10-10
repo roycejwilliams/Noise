@@ -48,6 +48,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { renderEmotionalContext } from "./emotion.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
+import { captionNumbersBacked } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
@@ -972,6 +973,8 @@ export type OutputRules = {
   // None of these may appear, e.g. the event name in a tease.
   mustNotInclude?: string[];
   forbidden?: { pattern: RegExp; reason: string }[];
+  // The record a find's caption was drafted from (Phase B, B4): every price and count it states must be on it (services/sendCheck.ts).
+  backedBy?: string;
 };
 
 const ALWAYS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
@@ -1069,6 +1072,11 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
   }
   for (const f of [...ALWAYS_FORBIDDEN, ...(rules.forbidden ?? [])]) {
     checks.push({ name: "draft_forbidden", pass: !f.pattern.test(text), reason: f.reason });
+  }
+  // A find's prices and counts, on its record (Phase B, B4, 2026-10-10: task texts were checked, find captions weren't).
+  if (rules.backedBy !== undefined) {
+    const b = captionNumbersBacked(text, rules.backedBy);
+    checks.push({ name: "draft_numbers_backed", pass: b.ok, reason: b.problems.join("; ") || "ok" });
   }
   // One voice standard with calls (services/speakable.ts): no "Starting the…", "working on", "once it's worth sending".
   const narration = narratesInternalState(text);
@@ -1354,8 +1362,10 @@ Return ONLY JSON: {"id": "<one id from the list>", "why": "one short line"}`,
 // "still relevant" answer is kept on the candidate for a day, so a draft that
 // skips or defers doesn't pay for it again.
 export const RELEVANCE_RECHECK_HOURS = 24;
+// Every find too, goal finds included (Phase B, B6, 2026-10-10): a find for where they're headed waited as long as one for an ask and
+// was never re-judged; now both are, against their page as it is now (stillRelevant reads the source first).
 export function needsRelevanceCheck(c: Candidate, now: Date): boolean {
-  if (!isAnswering(c) || now.getTime() - c.createdAt.getTime() <= RELEVANCE_RECHECK_HOURS * HOUR) return false;
+  if (!(isAnswering(c) || c.type === "event_offer") || now.getTime() - c.createdAt.getTime() <= RELEVANCE_RECHECK_HOURS * HOUR) return false;
   const checked = Date.parse(String((c.payload as { relevantAt?: string })?.relevantAt ?? ""));
   return !(checked && now.getTime() - checked < RELEVANCE_RECHECK_HOURS * HOUR);
 }
@@ -1385,8 +1395,19 @@ export function readRelevance(text: string): { relevant: boolean; why: string } 
 
 // Co reads it against the conversation since. null when Co couldn't answer:
 // the caller holds it for the next tick, neither sending nor archiving.
-export async function stillRelevant(c: Candidate, about: { recentConversation: string; now: Date; timezone: string | null }): Promise<{ relevant: boolean; why: string } | null> {
+// A find reads its source first (Phase B, B6, 2026-10-10: this read only the conversation, never the page): a real check where one
+// exists. Its page re-read (services/sendCheck.ts checkBeforeSend) settles sold out, gone and past in code, with its exit fact; what
+// the page says now goes to the model with the conversation; a page that can't be read now holds it (null), never sends it unread.
+export async function stillRelevant(c: Candidate, about: { recentConversation: string; now: Date; timezone: string | null; checkDeps?: import("../services/sendCheck.js").SendCheckDeps }): Promise<{ relevant: boolean; why: string } | null> {
   const day = (d: Date) => localStamp(d, about.timezone);
+  let source: string | null = null;
+  if (c.type === "event_offer") {
+    const S = await import("../services/sendCheck.js");
+    const s = await S.checkBeforeSend(c, about.timezone, about.checkDeps).catch(() => null);
+    if (!s || "defer" in s) return null;
+    if ("skip" in s) return { relevant: false, why: s.skip };
+    source = S.sourceLine(s.match, about.now);
+  }
   try {
     const { text } = await Promise.race([
       generateText({
@@ -1396,7 +1417,7 @@ export async function stillRelevant(c: Candidate, about: { recentConversation: s
         prompt: `A text Co was going to send this member has been waiting since ${day(c.createdAt)}. It's now ${day(about.now)}.
 
 What it was going to do: [${c.type}] ${c.summary}
-
+${source ? `\n${source}\n` : ""}
 Their recent texts with Co (oldest first):
 ${about.recentConversation.slice(-2500) || "(none)"}
 
@@ -2045,6 +2066,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
           }
         }
         const d = await drafting(sib.type, () => registry.event_offer.draft(sib, person));
+        // A sibling whose page re-read exited it (services/sendCheck.ts, its fact already written) is archived, never left waiting.
+        if ("skip" in d && (d as { exited?: boolean }).exited && !opts.dryRun) await dropCandidate(registry, sib, "skipped", d.skip);
         if ("skip" in d || "defer" in d) continue;
         const msgs = d.messages.map(capitalizeSentences);
         const sibGate = gate(checkDraft(capitalizeSentences(d.text), d.rules));
