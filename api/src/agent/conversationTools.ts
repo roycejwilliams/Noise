@@ -27,6 +27,7 @@ import { localStamp, memberZone, memberZoneOrFallback } from "../services/member
 import { DateTime } from "luxon";
 import { googleTools } from "../services/googleTools.js";
 import { loopTools, newLoopState } from "./loopTools.js";
+import { eventPageTools } from "./eventPageTool.js";
 import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
 
 // A date as the member would say it, in their own zone (2026-09-22 code
@@ -1255,6 +1256,20 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
   // Leaving it at the reaction needs a reaction to have gone out this turn.
   if (!ctx.ackSent) delete (tools as Record<string, unknown>).leaveItAtReaction;
+  // A hosted event page (agent/eventPageTool.ts): team only, so it's added before the team-only tools are taken out below.
+  Object.assign(
+    tools,
+    eventPageTools(ctx, {
+      notDone,
+      deliverLink: async (url) => {
+        const ok = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: url, asVoice: false });
+        if (ok === false) return false;
+        await logDelivered(`Co replied: ${url}`);
+        state.sentMessages.push(url);
+        return true;
+      },
+    }),
+  );
   // Team-only tools never exist for anyone else (services/capabilities.ts teamOnly).
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
   // Member-facing Mo exists for a member only while its switches are on (services/capabilities.ts memberMoOn).

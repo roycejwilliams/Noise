@@ -35,6 +35,7 @@
     "evals/email/rules.ts",
     "evals/capabilities/rules.ts",
     "evals/capabilities/guards.ts",
+    "evals/eventPages/content.ts",
     "evals/emotion/run.ts",
     "evals/intake/run.ts",
     "evals/profile/run.ts",

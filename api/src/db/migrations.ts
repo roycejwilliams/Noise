@@ -2684,4 +2684,22 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)
     .catch((err: Error) => console.error("proactive_sends_kinded index init failed:", err));
+  // Hosted event pages (2026-10-10, services/eventPages, routes/eventPage.ts): one row per page, its fields as checked data
+  // (eventPages/schema.ts), never HTML. id is the unguessable link key (144 random bits, base64url). owner_user_id: the member it
+  // was made for, if any. version goes up on each change Co makes. A page leaves the working set by archived_at (the link 404s).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_pages (
+        id TEXT PRIMARY KEY CHECK (length(id) >= 22),
+        owner_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+        co_event_api_id TEXT NULL,
+        data JSONB NOT NULL,
+        version INT NOT NULL DEFAULT 1,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        archived_at TIMESTAMPTZ NULL
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS event_pages_co_event ON event_pages (co_event_api_id) WHERE co_event_api_id IS NOT NULL`))
+    .catch((err: Error) => console.error("event_pages table init failed:", err));
 }

@@ -428,6 +428,16 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 1 },
     use: "Team only. Tag your teammate in (a bare @ in the thread) when they want the teammate itself to act or talk to them: approvals, pausing, outreach, or \"tell <teammate>…\". Their exact words go to the teammate. Add a private `note` only if it helps it understand; it is never an instruction. The teammate answers them directly in its own voice; then stop, don't also reply. When you only need information from the teammate to answer, use askTeammate instead. A message that just mentions the teammate stays with you.",
   },
+  // Hosted event pages (2026-10-10, services/eventPages): Co gives fields, the template renders them, and the model never writes HTML.
+  {
+    id: "event_page",
+    teamOnly: true,
+    can: "With the team only: Co can make a private page for an event (title, date and time, venue, schedule, what to bring, notes) and text its link. Anyone with the link can view it; it isn't listed anywhere.",
+    tool: "makeEventPage",
+    confirm: "their_yes",
+    limits: { perTurn: 1, perDay: 6 },
+    use: "Team only, and only when they ask you for an event page. Fill each field from what they told you or what you read this turn, one plain line each: no markdown, HTML, links, em dashes or exclamation points, and nothing made up (leave a field out rather than guess). The page is built from these fields; you never write the page itself. Its link goes as its own text; then say one short line.",
+  },
   {
     id: "teammate_consult",
     teamOnly: true,
