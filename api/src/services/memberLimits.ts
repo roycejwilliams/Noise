@@ -121,7 +121,7 @@ export function judgedOf(m: any): Judged {
 // An ask that names a day or a time asks for it: when they're usually free doesn't overrule it (review of #134: "anything this Saturday?"
 // from a "weeknights" member had every Saturday item refused).
 // Days and plain when-words only: "trivia night", "lunch spots" or "morning run club" name a kind of thing, not when (re-review of #134).
-const NAMES_A_TIME = /\b(mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?s?\b|\b(weekends?|weekdays?|weeknights?|tonight|tomorrow|today|this (?:week|morning|afternoon|evening)|next week|(?:after|before) work|(?:after|before|at|around|from) \d{1,2}(?::\d{2})?\s?(?:am|pm)?|\d{1,2}(?::\d{2})?\s?(?:am|pm)|(?:mornings|afternoons|evenings) (?:this|next) (?:week|month))\b/i;
+const NAMES_A_TIME = /\b(mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?s?\b|\b(weekends?|weekdays?|weeknights?|tonight|tomorrow|today|this (?:week|morning|afternoon|evening)|next week|(?:after|before) work|(?:after|before) \d{1,2}(?::\d{2})?\s?(?:am|pm)?|(?:at|around|from) \d{1,2}(?::\d{2}\s?(?:am|pm)?|\s?(?:am|pm))|\d{1,2}(?::\d{2})?\s?(?:am|pm)|(?:mornings|afternoons|evenings) (?:this|next) (?:week|month))\b/i;
 export function askNamesATime(askText: string | null | undefined): boolean {
   return NAMES_A_TIME.test(askText ?? "");
 }
