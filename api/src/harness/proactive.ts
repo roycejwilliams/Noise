@@ -1967,7 +1967,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       const prep = await prepareOffer(x, person).catch((err: any) => ({ skip: `couldn't be prepared: ${err?.message ?? err}` }));
       if ("skip" in prep) {
         if (x.id === c.id) {
-          await dropCandidate(registry, c, "skipped", prep.skip);
+          if (!opts.dryRun) await dropCandidate(registry, c, "skipped", prep.skip);
           await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${prep.skip}` });
           return;
         }
@@ -1977,33 +1977,43 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string } }).pick;
       items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again) });
     }
-    const set = items.map((b) => (b.candidate.payload as { pick?: { set?: string | null } }).pick?.set).find((x) => typeof x === "string" && x.trim()) ?? null;
+    // The pick's set line only for a bundle of exactly the finds it chose together (review of #135: a set line could describe finds
+    // that didn't make it into the message).
+    const set = B.setFor(items);
     const live = !!state.lastInboundAt && state.now.getTime() - state.lastInboundAt.getTime() < B.LIVE_MINUTES * 60_000;
+    const mayWait = B.mayWait(items.map((b) => ({ waits: Number((b.candidate.payload as { waits?: number }).waits ?? 0), expiresAt: b.candidate.expiresAt })), state.now);
     const res = await B.composeBundle({
       firstName: person.firstName,
       items,
       set,
-      leadWhy: picked.reason ?? null,
+      // Only the code's own reason (the expiring-find rule): choosePick's free text sees every candidate's summary, which can name
+      // another member, so it never reaches a member-facing prompt (review of #135).
+      leadWhy: picked.source === "code" ? picked.reason : null,
       memberBlock: known && rules ? memberDraftBlock(known, rules) : null,
       feeling: feelingText || null,
       thread: recentStamped,
       recent,
       threadLive: live,
+      mayWait,
     }).catch((err: any): import("./bundleComposer.js").ComposeResult => ({ fail: `the composer failed: ${err?.message ?? err}`, calls: 0, notes: [] }));
     if ("wait" in res) {
-      // A live conversation about something else: the find waits an hour rather than landing on top of it (C5).
+      // A live conversation about something else: the whole bundle waits an hour rather than landing on top of it (C5), so the next
+      // tick doesn't lead with a sibling and compose again; each wait is counted (B.mayWait caps them and never waits past expiry).
       const at = new Date(state.now.getTime() + 3_600_000);
-      if (!opts.dryRun) await pool.query(`UPDATE proactive_candidates SET due_at = $2, updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [c.id, at]);
+      if (!opts.dryRun) await pool.query(`UPDATE proactive_candidates SET due_at = $2, payload = jsonb_set(payload, '{waits}', to_jsonb(COALESCE((payload->>'waits')::int, 0) + 1)), updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'pending'`, [items.map((b) => b.candidate.id), at]);
       await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: at.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `waiting on a live conversation: ${res.wait}` });
       return;
     }
     if ("fail" in res) {
-      if (res.leadSkipped) await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
-      else {
-        await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
-        if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${res.fail}`);
+      if (!opts.dryRun) {
+        if (res.leadSkipped) await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
+        else {
+          await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
+          if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${res.fail}`);
+        }
       }
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.fail });
+      // Logged the way every failed draft is, so the proactive_blocked monitor counts composed bundles too (review of #135).
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `draft skipped: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
       return;
     }
     composed = res;
@@ -2043,7 +2053,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     const again = repeatQuestionCheck(text, recent);
     return again.pass ? checks : [...checks, again as GateCheck];
   };
-  let draftChecks = composed ? [] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
+  // A composed bundle's checks ran inside the composer: its record says so, with how many calls it took and what was left out.
+  let draftChecks: GateCheck[] = composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
   let dg = gate(draftChecks);
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {

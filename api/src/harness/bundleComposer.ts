@@ -45,10 +45,14 @@ export type ComposeInput = {
   recent: string;
   // A fact, in code: they wrote to Co within the last LIVE_MINUTES (dispatch reads it from the record).
   threadLive: boolean;
+  // Whether waiting is still possible (dispatch, in code: few enough waits so far, and nothing in the bundle expires in the next
+  // hour). When it isn't, a live thread is acknowledged rather than waited on (review of #135: waits could loop and expire finds).
+  mayWait?: boolean;
 };
 export type ComposeDeps = { model: (prompt: string) => Promise<string> };
 export const realComposeDeps: ComposeDeps = {
-  model: async (prompt) => (await generateText({ model: anthropic(DRAFT_MODEL), experimental_telemetry: { isEnabled: true, functionId: "proactive.bundleComposer" }, prompt })).text,
+  // Bounded, so three tries in a row can't hold a dispatch worker (review of #135).
+  model: async (prompt) => (await generateText({ model: anthropic(DRAFT_MODEL), maxOutputTokens: 4000, providerOptions: { anthropic: { effort: "medium" } }, abortSignal: AbortSignal.timeout(45_000), experimental_telemetry: { isEnabled: true, functionId: "proactive.bundleComposer" }, prompt })).text,
 };
 export const LIVE_MINUTES = 45;
 
@@ -66,6 +70,25 @@ export type Composed = {
   notes: string[];
 };
 export type ComposeResult = Composed | { wait: string; calls: number } | { fail: string; leadSkipped?: boolean; calls: number; notes: string[] };
+
+// ---------------------------------------------------------------- set and wait (pure)
+
+// The pick's set line, only when the bundle is exactly the finds it chose together (more than one).
+export function setFor(items: BundleItem[]): string | null {
+  if (items.length < 2) return null;
+  const picks = items.map((b) => (b.candidate.payload as { pick?: { set?: string | null; setKeys?: string[] } })?.pick);
+  const first = picks[0];
+  if (!first?.set || !first.setKeys?.length) return null;
+  const keys = new Set(items.map((b) => b.candidate.targetKey));
+  const same = first.setKeys.length === keys.size && first.setKeys.every((k) => keys.has(k)) && picks.every((p) => p?.set === first.set);
+  return same ? first.set : null;
+}
+
+// Waiting on a live conversation is possible while no find in the bundle has waited MAX_WAITS times and none expires within the hour.
+export const MAX_WAITS = 3;
+export function mayWait(items: { waits: number; expiresAt: Date | null }[], now: Date): boolean {
+  return items.every((x) => x.waits < MAX_WAITS && (!x.expiresAt || x.expiresAt.getTime() - now.getTime() > 3_600_000));
+}
 
 // ---------------------------------------------------------------- the prompt (pure)
 
@@ -89,14 +112,15 @@ ${many ? "- An opening line: one short sentence on why these, together, today (t
 - ${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY}
 - A thing they didn't ask for is something you noticed for them: never say or imply they asked for it.
 - Only the facts listed for a thing back what you say about it. Days, dates, prices, counts: only as written there.
-- If one of them doesn't actually fit, skip it (say why) rather than stretch.
+- If one of them doesn't actually fit them, skip it (say why) rather than stretch. The member rules further down are never a reason to skip; fit is.
+- The closing asks which one, or whether any, interests them. It never offers to do something ("want me to...", "should I..."): what they want next is theirs to say.
 
-THE THINGS
+THE THINGS (CONFIRMED_FACTS for each: the only facts you may state about it)
 ${items}
-${i.set ? `\nTHE DAY'S SET (what Co's pick saw in these together)\n${i.set}\n` : ""}${i.leadWhy ? `\nWHY THE FIRST ONE LEADS\n${i.leadWhy}\n` : ""}${i.memberBlock ? `\n${i.memberBlock}\n` : ""}${i.feeling ? `\nHOW THEY'VE BEEN FEELING (it shapes how you say this, never whether: if they've been struggling, gentler and lower-pressure; never name the feeling)\n${i.feeling}\n` : ""}
+${i.set && many ? `\nTHE DAY'S SET (what Co's pick saw in these together)\n${i.set}\n` : ""}${i.leadWhy ? `\nWHY THE FIRST ONE LEADS\n${i.leadWhy}\n` : ""}${i.memberBlock ? `\n${i.memberBlock}\n` : ""}${i.feeling ? `\nHOW THEY'VE BEEN FEELING (it shapes how you say this, never whether: if they've been struggling, gentler and lower-pressure; never name the feeling)\n${i.feeling}\n` : ""}
 THE THREAD (your recent texts with them, oldest first, their time)
 ${i.thread.trim() || "(nothing recent)"}
-${i.threadLive ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes: a conversation may be live. Never land these on top of something unrelated. If the thread is about something else and not finished, answer with {"wait": "why"}. If it's about this, or it's clearly done, go ahead and say in "connects" how this follows from it.\n` : ""}${o.problems?.length ? `\nYOUR LAST VERSION (not sent)\n${o.last ?? ""}\nIt broke: ${o.problems.join(" | ")}. Write the whole message again with those fixed, keeping what worked.\n` : ""}
+${i.threadLive && i.mayWait !== false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes: a conversation may be live. Never land these on top of something unrelated. If the thread is about something else and not finished, answer with {"wait": "why"}. If it's about this, or it's clearly done, go ahead and say in "connects" how this follows from it.\n` : ""}${i.threadLive && i.mayWait === false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes, and this can't wait any longer. If the thread is about something else, open by acknowledging it lightly in a few words before the rest, and say in "connects" how you did.\n` : ""}${o.problems?.length ? `\nYOUR LAST VERSION (not sent)\n${o.last ?? ""}\nIt broke: ${o.problems.join(" | ")}. Write the whole message again with those fixed, keeping what worked.\n` : ""}
 Answer only with JSON:
 {${many ? '"opening": "...", ' : '"opening": null, '}"items": [{"n": 1, "caption": "..."}, {"n": 2, "skip": "why it doesn't fit"}], "closing": "...?"${i.threadLive ? ', "connects": "how this follows from the thread"' : ""}}
 or {"wait": "why"}`;
@@ -127,7 +151,10 @@ export function readComposed(raw: string): Draft | null {
 
 const tidy = (s: string) => capitalizeSentences(brandSafe(cleanCoMessage(s.trim().replace(/^["']|["']$/g, "").trim())));
 const STOP = new Set("the and for but not you are was has had with that this what your have just like would want into some more they them their from about also then than over will its it's one there here where when been being who our out all any can get got".split(" "));
-const meaning = (s: string, minus: Set<string>) => new Set((s.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !STOP.has(w) && !minus.has(w)));
+// When and what it costs are said in every caption by design: never evidence of a repeated reason (review of #135: two Saturday-evening
+// free events read as the same reason).
+const LOGISTICS = new Set("monday tuesday wednesday thursday friday saturday sunday weekend weeknight tonight tomorrow today morning afternoon evening night late early january february march april june july august september october november december sept free entry ticket tickets price dollars cost costs open doors starts start begins runs until noon week weeks next this".split(" "));
+const meaning = (s: string, minus: Set<string>) => new Set((s.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !STOP.has(w) && !LOGISTICS.has(w) && !minus.has(w)));
 // Pure: two captions giving the same reason: most of the smaller one's meaning words (beyond each thing's own name) are in the other.
 export function sameReason(a: string, b: string, namesA: string, namesB: string): boolean {
   const minus = new Set([...(namesA.toLowerCase().match(/[a-z]{4,}/g) ?? []), ...(namesB.toLowerCase().match(/[a-z]{4,}/g) ?? [])]);
@@ -165,19 +192,31 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
   for (let x = 0; x < said.length; x++)
     for (let y = x + 1; y < said.length; y++)
       if (sameReason(said[x][1], said[y][1], i.items[said[x][0] - 1].item.name, i.items[said[y][0] - 1].item.name)) problems.push({ at: "bundle", why: `captions ${said[x][0]} and ${said[y][0]} give the same reason; say a shared reason once${i.items.length > 1 ? " in the opening" : ""} and what's different in each` });
+  // The opening and the closing are held to every rule a caption is (review of #135: identity, "thinking about you" and "you asked"
+  // went unchecked there): every item's forbidden patterns, and nothing about who they are beyond the grounding of the whole set.
+  const forbidden = [...new Map(i.items.flatMap((b) => b.item.rules.forbidden ?? []).map((f) => [f.pattern.source, f])).values()];
+  const grounding = i.items.map((b) => b.item.grounding).join("\n");
+  const framing = (text: string, at: "opening" | "closing", maxChars: number) => {
+    const bad = checkDraft(text, { maxChars, maxSentences: 2, forbidden }).filter((k) => !k.pass);
+    if (bad.length) problems.push({ at, why: `the ${at}: ${bad.map((k) => `${k.name}${k.reason ? ` (${k.reason})` : ""}`).join(", ")}` });
+    else if ((stripUngroundedIdentity(text, grounding) ?? "").trim() !== text.trim()) problems.push({ at, why: `the ${at} says who they are beyond what they've told Co` });
+    else if (unbackedSpecifics(text, allFacts).length) problems.push({ at, why: `the ${at} states something the things' facts don't back` });
+    else return true;
+    return false;
+  };
   if (i.items.length > 1 && d.opening) {
     const o = tidy(d.opening);
-    const bad = checkDraft(o, { maxChars: BUNDLE_LIMITS.openingChars, maxSentences: 2 }).filter((k) => !k.pass);
-    if (bad.length || /\?\s*$/.test(o) || /https?:\/\//i.test(o)) problems.push({ at: "opening", why: `the opening: ${bad.map((k) => k.name).join(", ") || "it's a question or has a link"}` });
-    else if (unbackedSpecifics(o, allFacts).length) problems.push({ at: "opening", why: "the opening states something the things' facts don't back" });
+    if (/\?\s*$/.test(o) || /https?:\/\//i.test(o)) problems.push({ at: "opening", why: "the opening is a question or has a link" });
+    else framing(o, "opening", BUNDLE_LIMITS.openingChars);
   }
   if (d.closing) {
     const q = tidy(d.closing);
     if (!/\?\s*$/.test(q) || (q.match(/\?/g) ?? []).length > 1) problems.push({ at: "closing", why: "the closing must be one question" });
+    else if (/\b(?:want me to|should i|shall i|i can (?:grab|save|book|hold|send|get)|let me (?:grab|save|book|hold))\b/i.test(q)) problems.push({ at: "closing", why: "the closing offers to do something; it asks which one, or whether any, interests them" });
     else if (q.length > BUNDLE_LIMITS.closingChars) problems.push({ at: "closing", why: `the closing is ${q.length} characters (max ${BUNDLE_LIMITS.closingChars})` });
     else if (STOCK.has(q.toLowerCase())) problems.push({ at: "closing", why: "the closing is a stock line; write it from what you said" });
     else if (!repeatQuestionCheck(q, i.recent).pass) problems.push({ at: "closing", why: "the closing repeats a question they already answered" });
-    else if (unbackedSpecifics(q, allFacts).length) problems.push({ at: "closing", why: "the closing states something the facts don't back" });
+    else framing(q, "closing", BUNDLE_LIMITS.closingChars);
   } else problems.push({ at: "closing", why: "no closing question" });
   return { captions, problems };
 }
@@ -202,9 +241,9 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
       continue;
     }
     if (d.wait) {
-      // Waiting is for a live thread only (a fact, in code): with none, it's a draft that didn't do the job.
-      if (input.threadLive) return { wait: d.wait, calls };
-      problems = ["they haven't written in a while: there's no live conversation to wait on; write the message"];
+      // Waiting is for a live thread only, and only while it's still possible (facts, in code); otherwise write the message.
+      if (input.threadLive && input.mayWait !== false) return { wait: d.wait, calls };
+      problems = [input.threadLive ? "this can't wait any longer: write it, acknowledging the thread lightly first" : "they haven't written in a while: there's no live conversation to wait on; write the message"];
       last = raw.slice(0, 800);
       continue;
     }
@@ -214,6 +253,8 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
       if (skips.some((x) => x.n === 1)) return { fail: `the first thing doesn't fit: ${skips.find((x) => x.n === 1)!.skip}`, leadSkipped: true, calls, notes };
       for (const s of skips) dropped.push({ item: items[s.n - 1], why: `skipped by the composer: ${s.skip}` });
       items = items.filter((_, idx) => !skips.some((s) => s.n === idx + 1));
+      // The pick's view of the set was about the set it chose: once the set changes, it no longer describes what goes.
+      input = { ...input, set: null };
       problems = [];
       last = null;
       continue;
@@ -236,6 +277,7 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
           if (badSiblings.length && !blocking.some((p) => p.at === 1 || p.at === "bundle")) {
             for (const n of badSiblings) dropped.push({ item: items[n - 1], why: blocking.filter((p) => p.at === n).map((p) => p.why).join("; ") });
             items = items.filter((_, idx) => !badSiblings.includes(idx + 1));
+            input = { ...input, set: null };
             problems = [];
             last = null;
           }

@@ -308,9 +308,12 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
   const uniq = [...new Map(rejectedFinds.map((r) => [r.key, r])).values()];
   await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
   const queuedNames: string[] = [];
+  // The finds the pick chose together, by the key each is queued under: the set line rides only with a bundle of exactly these.
+  const setKeys = () => plan.queue.map((x) => offerTargetKeyOf({ match: x.match, reminder: x.reminder, again: x.again }));
+  const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
   for (const q of plan.queue) {
     // The pick's view of the set rides with each find it chose today, only when it chose more than one (Phase C3).
-    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set) : null } }).catch((err: any) => {
+    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}) } }).catch((err: any) => {
       console.error("picker: queueing a pick failed (non-fatal):", err?.message ?? err);
       return false;
     });

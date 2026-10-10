@@ -125,7 +125,7 @@ const stub = (answers: any[]) => {
   check("the picker is asked for its view of the set, and it's read", /add "set": one line on why these go together today/.test(src("services/sweepSelect.ts")) && S.parseSet('{"set":"two quiet rooms","verdicts":[]}') === "two quiet rooms" && S.parseSet('{"verdicts":[]}') === null);
   const plan = SH.planPicks([{ key: SH.shadowKey("X", null), verdict: "send", why: "they asked for small rooms (A2)", whyNow: "it's this Friday", name: "X", lastDay: null }] as any, [{ askId: "a1", askText: "x", fromProfile: false, match: { name: "X" } }] as any, []);
   check("the pick's why-member and why-now stay apart (member-safe), not flattened into one bullet", plan.queue.length === 1 && (plan.queue[0].whyMember === "they asked for small rooms" && plan.queue[0].whyNow === "it's this Friday"), plan.queue);
-  check("they ride on the queued find (payload.pick), with the set only when the pick sent more than one", /pick: \{ whyMember: q\.whyMember, whyNow: q\.whyNow, set: plan\.queue\.length > 1 && set \? memberSafeWhy\(set\) : null \}/.test(src("services/sweepShadow.ts")) && /\.\.\.\(o\.pick \? \{ pick: o\.pick \} : \{\}\)/.test(src("services/eventSurfacingSweep.ts")));
+  check("they ride on the queued find (payload.pick), with the set only when the pick sent more than one", /pick: \{ whyMember: q\.whyMember, whyNow: q\.whyNow, set: plan\.queue\.length > 1 && set \? memberSafeWhy\(set\) : null, \.\.\.\(plan\.queue\.length > 1 && set \? \{ setKeys: setKeys\(\) \} : \{\}\) \}/.test(src("services/sweepShadow.ts")) && /\.\.\.\(o\.pick \? \{ pick: o\.pick \} : \{\}\)/.test(src("services/eventSurfacingSweep.ts")));
 }
 
 // ---------------------------------------------------------------- C1: one composer in dispatch, no stitching
@@ -134,6 +134,37 @@ const stub = (answers: any[]) => {
   check("C1: every find bundle (not a lone reminder) goes through the composer; each find is made ready before anything is written", /const bundled = c\.type === "event_offer" && !\(c\.payload as \{ reminder\?: boolean \}\)\.reminder;/.test(ps) && /await prepareOffer\(x, person\)/.test(ps) && /await B\.composeBundle\(\{/.test(ps));
   check("no code stitching: what goes out is what the composer wrote, and each find is ledgered with its own link and caption", /const outgoing = draft\.messages;/.test(ps) && /composed \? composed\.perItem\.slice\(1\) : \[\]/.test(ps) && !/outgoing = \[\.\.\.draft\.messages, \.\.\.extras\.flatMap/.test(ps));
   check("captions are no longer told they stand alone: the composer's prompt is one message with several things, not 'one message, one reason'", !/One message, one reason/.test(B.composePrompt(input())));
+}
+
+// ---------------------------------------------------------------- review of #135
+{
+  const prof = (name: string, url: string) => E.revealItem("where they're headed: meeting founders", true, m(name, url, "small and unhurried"));
+  const pi = [prof("Founder Supper Club", "https://lu.ma/supper"), prof("Quiet Builders Walk", "https://lu.ma/walk")].map((item, i) => ({ candidate: cand(`p${i}`, {}, null), item, pick: null, again: false }));
+  const d = { opening: "Since you're a founder, I was thinking about you and these two you asked for.", items: [{ n: 1, caption: "Founder Supper Club on Oct 24, a small table." }, { n: 2, caption: "Quiet Builders Walk on Oct 24, a slow loop." }], closing: "As a founder, which one you asked about fits?", connects: null };
+  const c = B.checkComposed(d as any, input({ items: pi }) as any);
+  check("review #1: the opening and closing are held to the captions' guards (identity, 'thinking about you', 'you asked')", c.problems.some((x) => x.at === "opening") && c.problems.some((x) => x.at === "closing"), c.problems);
+  check("review #2: choosePick's free text never reaches the composer; only the code's own expiring-find reason does", /leadWhy: picked\.source === "code" \? picked\.reason : null,/.test(src("harness/proactive.ts")));
+  const keyed = (keys: string[], set: string) => items.map((b, i) => ({ ...b, candidate: { ...b.candidate, targetKey: keys[i], payload: { ...b.candidate.payload, pick: { whyMember: "", whyNow: "", set, setKeys: ["k1", "k2", "k3"] } } } }));
+  check("review #3: the set line only for a bundle of exactly the finds the pick chose together", B.setFor(keyed(["k1", "k2", "k3"], "s")) === "s" && B.setFor(keyed(["k1", "k2", "kX"], "s")) === null && B.setFor(keyed(["k1", "k2", "k3"], "s").slice(0, 2)) === null && B.setFor(keyed(["k1"], "s").slice(0, 1)) === null);
+  const skip2 = { ...good, items: [good.items[0], { n: 2, skip: "no" }, good.items[2]] };
+  const two = { opening: "Two small rooms, neither of them a stage.", items: [good.items[0], { n: 2, caption: good.items[2].caption }], closing: "Either one your speed?" };
+  const sk = stub([skip2, two]);
+  await B.composeBundle(input(), sk.deps);
+  check("review #3: once the composer takes a find out, the set line is dropped (it described a different set)", /THE DAY'S SET/.test(sk.prompts[0]) && !/THE DAY'S SET/.test(sk.prompts[1]));
+  const now = new Date("2026-10-10T18:00:00Z");
+  check("review #4: waits are capped and never run past a find's expiry", B.mayWait([{ waits: 0, expiresAt: null }], now) && !B.mayWait([{ waits: B.MAX_WAITS, expiresAt: null }], now) && !B.mayWait([{ waits: 0, expiresAt: new Date(now.getTime() + 30 * 60_000) }], now));
+  const nw = stub([{ wait: "mid-conversation" }, { ...good, connects: "acknowledged their week first" }]);
+  const rnw: any = await B.composeBundle(input({ threadLive: true, mayWait: false }), nw.deps);
+  check("review #4: when it can't wait, a live thread is acknowledged instead, never waited on again", "messages" in rnw && /can't wait any longer/.test(nw.prompts[0]) && /this can't wait any longer: write it/.test(nw.prompts[1]));
+  check("review #4: a wait moves the whole bundle and counts it", /WHERE id = ANY\(\$1::bigint\[\]\) AND status = 'pending'`, \[items\.map\(\(b\) => b\.candidate\.id\), at\]\)/.test(src("harness/proactive.ts")) && /jsonb_set\(payload, '\{waits\}'/.test(src("harness/proactive.ts")));
+  check("review #5: shared logistics (a day, a time, free entry) aren't a repeated reason", !B.sameReason("Jazz at Pier 23 on Saturday evening, free entry and a live quartet.", "Gallery Night on Saturday evening, free entry, wine and new work.", "Jazz at Pier 23", "Gallery Night") && B.sameReason("Founder Supper Club, a small room where you can drop your guard with other founders.", "Quiet Builders Walk, a small room where you can drop your guard with other founders.", "Founder Supper Club", "Quiet Builders Walk"));
+  check("review #6: a failed composition is logged as a failed draft, so the proactive_blocked monitor counts it", /`draft failed checks: composer: \$\{res\.fail\}`/.test(src("harness/proactive.ts")) && /reason LIKE 'draft failed checks%'/.test(src("harness/monitor.ts")) && /name: "composer_checks"/.test(src("harness/proactive.ts")));
+  const offer = B.checkComposed({ ...good, closing: "Want me to save you a spot at one?" } as any, input() as any);
+  check("review #7: a closing that offers to do something is refused (it asks which, or whether any)", offer.problems.some((x) => x.at === "closing" && /offers to do something/.test(x.why)));
+  const pr = B.composePrompt(input());
+  check("review #8: the prompt names CONFIRMED_FACTS and says member rules are never a reason to skip", /THE THINGS \(CONFIRMED_FACTS for each/.test(pr) && /The member rules further down are never a reason to skip; fit is/.test(pr));
+  check("review #9: the composer's call is bounded (timeout and output cap)", /maxOutputTokens: 4000, providerOptions: \{ anthropic: \{ effort: "medium" \} \}, abortSignal: AbortSignal\.timeout\(45_000\)/.test(src("harness/bundleComposer.ts")));
+  check("review #10: a dry run writes nothing on the new path", /if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", prep\.skip\);/.test(src("harness/proactive.ts")) && /if \(!opts\.dryRun\) \{\s*if \(res\.leadSkipped\)/.test(src("harness/proactive.ts")));
 }
 
 console.log(`phase C, assemble: ${total - failed}/${total} passed`);

@@ -138,7 +138,7 @@ async function repeatFor(userId: string, match: TierMatch, zone: string | null =
 // unread: held because its page didn't say when it is, or couldn't be read (services/workingSet.ts); never offered while held.
 type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean; again?: boolean; unread?: { days: string[]; why: "undated" | "unknown" } };
 
-function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder" | "again">): string {
+export function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder" | "again">): string {
   return `event_offer:${item.reminder ? "reminder:" : item.again ? "again:" : ""}${matchKey(item.match)}`;
 }
 
@@ -549,7 +549,10 @@ export type EventOfferPayload = {
   // The last day it's worth sending (the pick's own read): its expiry and its rank among finds.
   lastDay?: string;
   // The pick's own why, kept apart, and its view of the day's set (Phase C3): what the bundle composer writes from.
-  pick?: { whyMember: string; whyNow: string; set: string | null };
+  // setKeys: the target keys of every find the pick chose together; its set line only describes a bundle of exactly those.
+  pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] };
+  // How many times a live conversation has made this wait (Phase C5); capped by dispatch.
+  waits?: number;
   askId: string;
   askText: string;
   fromProfile: boolean;
@@ -790,7 +793,7 @@ export async function pickerDecides(userId: string): Promise<boolean> {
 // send step bundles it by tier with whatever else is waiting (one per tier), checks it's still fresh, and holds it to the
 // lane's one find a day, the pause after an unanswered text, and 8am-9pm. The picker's reason is the reason it fits.
 // Returns false when it's already sent or decided (the queue keeps one row per thing).
-export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null } }): Promise<boolean> {
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] } }): Promise<boolean> {
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   if (await alreadyDecided(userId, item)) return false;
