@@ -9,6 +9,7 @@ import pool from "../db/db.js";
 import { attemptEventSurfacing, PROFILE_ASK_ID } from "./eventSurfacingSweep.js";
 import { goalEntries } from "../harness/profileWrite.js";
 import { COLD_START, isNewMember, seedSignature } from "./coldStart.js";
+import { goalHash } from "./goalEdges.js";
 
 export const GOAL_SWEEP_EVERY_HOURS = 20;
 export const GOAL_SURFACE_COOLDOWN_DAYS = 3;
@@ -38,6 +39,12 @@ export const GOAL_SWEEP_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_num
             AND pss.last_attempted_at <= NOW() - INTERVAL '${COLD_START_RESWEEP_HOURS} hours'))
  ORDER BY (pss.last_attempted_at IS NULL OR pss.last_attempted_at <= NOW() - INTERVAL '${GOAL_SWEEP_EVERY_HOURS} hours') DESC
  LIMIT ${GOAL_SWEEP_BATCH}`;
+
+// Pure: the goals planning reads: their own words for each goal the record holds as active and on file.
+export function planGoals(row: { goals?: string[] | null; intent?: unknown }, goals: { hash: string; state: string; onFile: boolean }[]): string[] {
+  const live = new Set(goals.filter((g) => g.state === "active" && g.onFile).map((g) => g.hash));
+  return (goalSweepGoals(row) ?? []).filter((g) => live.has(goalHash(g)));
+}
 
 export function goalSweepGoals(row: { goals?: string[] | null; intent?: unknown }): string[] | null {
   const g = [...new Set([...(row.goals ?? []), ...goalEntries(row.intent).map((e) => String(e.text).trim())].filter(Boolean))];
@@ -107,8 +114,10 @@ const realDeps: GoalSweepDeps = {
     const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
     return planGoalSweep(
       row.user_id,
-      // Active goals on file: a goal entry they closed or set aside, or a state row whose goal is gone, is never planned from.
-      k.goals.filter((g) => g.state === "active" && g.onFile).map((g) => g.text),
+      // Active goals on file: a goal entry they closed or set aside, or a state row whose goal is gone, is never planned from. Their
+      // own words (the record's text is stripped, which would change the goal's hash and orphan its state; review of #134), chosen by
+      // the record's hash.
+      planGoals(row, k.goals),
       {
         city: k.identity.city ?? row.city ?? null,
         zone: k.identity.zone,

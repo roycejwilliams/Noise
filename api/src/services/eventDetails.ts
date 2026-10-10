@@ -277,7 +277,9 @@ async function fitKnowledge(userId: string) {
 export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<FitResult | null> {
   const k = person.userId ? await fitKnowledge(person.userId) : null;
   const picture = k?.person?.text ?? "";
-  person = withPreferences(person, k);
+  // A record that failed closed still has their limits applied: the same reader, alone (their own words; nothing of anyone else's).
+  const limits = k?.limits ?? (person.userId ? await import("./memberKnowledge.js").then((M) => M.realKnowledgeDeps.limits(person.userId!)).catch(() => null) : null);
+  person = withPreferences(person, k ? { ...k, limits } : limits ? { limits, preferences: [] } : null);
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),

@@ -78,7 +78,9 @@ export type Identity = {
 // done/stale goals are history, never current direction: read only state === "active" as where they're headed.
 // onFile: the goal is on their profile or a goal entry now; false for a state row whose goal is no longer on file (history only, never
 // planned from; Phase A4).
-export type Goal = { text: string; state: GoalState; reason: string | null; told: boolean; onFile: boolean };
+// hash: goalHash of the goal as written, before the strip (a goal naming a linked member is rewritten by it), so a reader can match
+// the goal to its state row and to its own words (Phase A4).
+export type Goal = { text: string; state: GoalState; reason: string | null; told: boolean; onFile: boolean; hash: string };
 export type Ask = { id: string; text: string; kind: "find" | "help" };
 
 // Where a delivered item was seen: a document receipt (document_deliveries), Co's action record (co_facts relation 'sent'), or a
@@ -375,7 +377,7 @@ export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fac
     const s = byHash.get(h);
     // A stored state wins over "active from the profile"; a closed entry stays done whatever the stored row says.
     const state: GoalState = base.state !== "active" ? base.state : s?.state ?? "active";
-    out.set(h, { text: t, state, reason: s?.reason || base.reason || null, told: s ? !!s.toldAt || s.source !== "context" : true, onFile, verifiedAt: latest(base.at, s?.changedAt) });
+    out.set(h, { text: t, state, reason: s?.reason || base.reason || null, told: s ? !!s.toldAt || s.source !== "context" : true, onFile, hash: h, verifiedAt: latest(base.at, s?.changedAt) });
   };
   // Goal entries: active is active, resolved is done (goalJourney.ts goalHistory), anything else (set aside, replaced) is stale.
   for (const e of Array.isArray(profile?.intent) ? (profile!.intent as any[]) : []) {
@@ -562,7 +564,7 @@ export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> |
 // ---------------------------------------------------------------- the strip (every string, inside)
 
 // Keys whose values are structure, not prose: never rewritten (a kind, a state, an id, a time, a URL, the zone, their own name).
-const STRUCTURAL = new Set(["userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
+const STRUCTURAL = new Set(["hash", "userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
 // Their own words: a claim's quote. (Their exchange lines are kept by the walk below, by from === "member".)
 const OWN_WORDS = new Set(["quote"]);
 

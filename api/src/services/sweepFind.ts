@@ -230,8 +230,9 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         did.push(...run.map((q) => `web: ${q}`));
         const { taskWebSearch } = await import("./taskWeb.js");
         const all = await Promise.all(run.map((q) => taskWebSearch(c.userId, q, { city: c.city, zone: opts.timezone ?? null, source: "sweep" }).catch(() => null)));
-        // Every search failed outright: an outage, not an empty run (re-review of #133).
-        if (all.every((r) => r === null)) {
+        // Every search failed outright: an outage, not an empty run (re-review of #133). taskWebSearch catches its own failures and says
+        // so in its note (review of #134: it never returns null).
+        if (all.every((r) => r === null || /^Web search failed/.test(r.note ?? ""))) {
           blocked = true;
           return { ok: false, error: "Web search failed just now; nothing came back." };
         }

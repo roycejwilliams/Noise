@@ -1799,17 +1799,18 @@ export function heldNow(s: Pick<MemberSendState, "holdUntil" | "spaceUntil">, no
 // The sweep gate (Phase A3, 2026-10-10 audit: restraint, pause and dormancy were checked only at dispatch, so a member whose finds
 // couldn't go out still cost a full sweep a day, and the finds often expired before the backoff let one through). A sweep runs only
 // when dispatch would let what it finds go out, by dispatch's own checks on a find of that kind:
-//   - an ask's find answers them: only what holds every send stops it (opted out, a hold, the space after a task, a safety hold);
+//   - an ask's find answers them: only what holds every send for days stops it (opted out, a safety hold, finds paused for everyone);
 //   - a goal's find is discovery: the pace that holds discovery stops it too (kind restraint, the weekly cap, the engagement pace that
 //     slows a quiet or dormant member, the unanswered pause).
-// Hours, the daily cap and spacing clear within the day, so they never stop a sweep. Returns why it's held; empty: it runs.
+// Never a hold or the space after a task (review of #134): a hold is the pick's "nothing to send now", which a new find clears, so
+// holding the sweep on it would keep the new find from ever coming; the space is hours. Hours, the daily cap and spacing clear within
+// the day too. Returns why it's held; empty: it runs.
 export type SweepKind = "ask" | "goal";
 export const SWEEP_BLOCKERS: Record<SweepKind, readonly string[]> = {
   ask: ["not_opted_out", "safety_hold"],
   goal: ["not_opted_out", "safety_hold", "kind_restraint", "weekly_cap", "engagement_pace", "unanswered_pause"],
 };
-export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | "spaceUntil">, kind: SweepKind): string[] {
-  const held = heldNow(s, s.state.now);
+export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | "spaceUntil">, kind: SweepKind, paused: string[] = pausedTypes()): string[] {
   const find: Candidate = {
     id: "sweep",
     userId: "",
@@ -1826,7 +1827,7 @@ export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | 
   };
   const ev = evaluateCandidates({ ...s.state, candidates: [find] });
   const failed = [...ev.userChecks, ...(ev.perCandidate[0]?.checks ?? [])].filter((c) => !c.pass && SWEEP_BLOCKERS[kind].includes(c.name)).map((c) => c.name);
-  return [...(held ? [held] : []), ...new Set(failed)];
+  return [...(paused.includes("event_offer") ? ["paused"] : []), ...new Set(failed)];
 }
 const PROFILE_ASK_ID_FOR_GATE = "profile";
 export async function sweepHold(userId: string, kind: SweepKind, now = new Date()): Promise<string[]> {

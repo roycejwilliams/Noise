@@ -19,12 +19,18 @@ export type Limits = { avoid: string[]; availability: string | null };
 const SHAPE = new Set(["event", "events", "thing", "things", "stuff", "kind", "kinds", "type", "types", "anything", "any", "more", "the", "a", "an", "of", "to", "for", "and", "or"]);
 const tokens = (s: string) => (s.toLowerCase().match(/[a-z0-9+#]+/g) ?? []);
 // One form for singular and plural ("hackathons" and "hackathon" are the same word here).
-const stem = (w: string) => (w.length > 4 && w.endsWith("ies") ? `${w.slice(0, -3)}y` : w.length > 3 && /(?:ss|us)$/.test(w) ? w : w.length > 3 && w.endsWith("es") && /(?:ch|sh|x|z)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w);
-// Pure: the words that make a kind what it is.
+// Words that only look plural ("news" is not "new", "series" not "sery").
+const NOT_PLURAL = new Set(["news", "series", "species", "analytics", "physics", "politics", "economics", "athletics", "aerobics", "gymnastics", "business", "class", "glass", "chess", "dress", "press", "fitness", "wellness", "yoga", "plus", "bus", "campus", "always", "towards"]);
+const stem = (w: string) => (NOT_PLURAL.has(w) ? w : w.length > 4 && w.endsWith("ies") ? `${w.slice(0, -3)}y` : w.length > 3 && /(?:ss|us)$/.test(w) ? w : w.length > 3 && w.endsWith("es") && /(?:ch|sh|x|z)es$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w);
+// Words that describe how a thing is, not what it is ("big", "late", "loud"): a kind made only of these ("big events", "anything late")
+// can't be matched on words (review of #134: "anything late" refused "SF founder dinner late October"). The judge reads those at keep.
+const MANNER = new Set(["big", "small", "large", "huge", "late", "early", "loud", "quiet", "long", "short", "new", "old", "fancy", "casual", "formal", "crowded", "busy", "expensive", "cheap", "far", "night", "morning", "weekend", "weekday", "online", "virtual", "boring", "fun", "good", "bad"]);
+// Pure: the words that make a kind what it is. Empty when nothing in it can be matched on words.
 export function kindWords(kind: string): string[] {
   const all = tokens(kind).map(stem);
   const core = all.filter((w) => !SHAPE.has(w));
-  return core.length ? core : all;
+  const words = core.length ? core : all;
+  return words.every((w) => MANNER.has(w)) ? [] : words;
 }
 
 // Pure: the ruled-out kinds a text names, in their own words, whole words (every word of the kind present).
@@ -112,8 +118,15 @@ export function judgedOf(m: any): Judged {
   return { name: String(m?.name ?? ""), details: lines.join(" ").slice(0, 600) };
 }
 
-// The keep, held to their limits: a kind they ruled out is out, and so is an event that starts outside when they're free. `out` says why,
-// in words fit for the log and the record.
+// An ask that names a day or a time asks for it: when they're usually free doesn't overrule it (review of #134: "anything this Saturday?"
+// from a "weeknights" member had every Saturday item refused).
+const NAMES_A_TIME = /\b(mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?s?\b|\b(weekends?|weekdays?|weeknights?|tonight|tomorrow|today|morning|afternoon|evening|night|brunch|lunch|this week|next week)\b/i;
+export function askNamesATime(askText: string | null | undefined): boolean {
+  return NAMES_A_TIME.test(askText ?? "");
+}
+
+// The keep, held to their limits: a kind they ruled out is out, and so is an event that starts outside when they're free (unless the ask
+// itself names a day or time). `out` says why, in words fit for the log and the record.
 export async function limitsGate<M>(matches: M[], limits: Limits | null, o: { askText?: string | null; deps?: JudgeDeps } = {}): Promise<{ kept: M[]; out: { match: M; why: string }[]; read: "model" | "words" | null }> {
   if (!limits || !matches.length) return { kept: matches, out: [], read: null };
   const avoid = avoidFor(limits.avoid, o.askText);
@@ -123,7 +136,7 @@ export async function limitsGate<M>(matches: M[], limits: Limits | null, o: { as
   matches.forEach((m, i) => {
     if (kinds[i]) return out.push({ match: m, why: `they asked Co to stop suggesting ${kinds[i]}` });
     const d = (m as any)?.details;
-    const conflict = availabilityConflict(limits.availability, d?.startAt ?? null, d?.timezone ?? null);
+    const conflict = askNamesATime(o.askText) ? null : availabilityConflict(limits.availability, d?.startAt ?? null, d?.timezone ?? null);
     if (conflict) return out.push({ match: m, why: conflict });
     kept.push(m);
   });

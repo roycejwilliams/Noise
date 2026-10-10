@@ -316,6 +316,8 @@ export async function exitAvoidedFinds(userId: string, kind: string, deps: Avoid
   const { judgedOf } = await import("./memberLimits.js");
   const waiting: { key: string; match: any; askText: string | null; pendingId: string | null }[] = [];
   const seen = new Set<string>();
+  // Queued offers first: they're the next to go out (review of #134: a full backlog crowded them out of the judged set).
+  for (const p of await deps.pending(userId)) waiting.push({ key: deps.key(p.match ?? {}), match: p.match, askText: p.askText, pendingId: p.id });
   for (const b of await deps.backlogs(userId)) {
     for (const it of b.items ?? []) {
       const key = deps.key(it?.match ?? {});
@@ -324,10 +326,11 @@ export async function exitAvoidedFinds(userId: string, kind: string, deps: Avoid
       waiting.push({ key, match: it.match, askText: it?.askText ?? null, pendingId: null });
     }
   }
-  for (const p of await deps.pending(userId)) waiting.push({ key: deps.key(p.match ?? {}), match: p.match, askText: p.askText, pendingId: p.id });
-  const judged = waiting.slice(0, AVOID_JUDGE_MAX);
+  const judged = waiting;
   if (!judged.length) return { backlog: 0, queued: 0 };
-  const kinds = await deps.judge(judged.map((w) => judgedOf(w.match)), [kind]);
+  // Everything waiting is judged, AVOID_JUDGE_MAX to a read.
+  const kinds: (string | null)[] = [];
+  for (let i = 0; i < judged.length; i += AVOID_JUDGE_MAX) kinds.push(...(await deps.judge(judged.slice(i, i + AVOID_JUDGE_MAX).map((w) => judgedOf(w.match)), [kind])));
   const reason = `they asked Co to stop suggesting ${kind}`;
   const out = new Set<string>();
   const written = new Set<string>();

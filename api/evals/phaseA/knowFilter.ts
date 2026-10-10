@@ -88,6 +88,9 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   check("A2 keep: a ruled-out kind is out, judged by its main activity, with the reason in their terms", g.out.some((o) => o.match === hack && /stop suggesting hackathons/.test(o.why)) && /judged by its own main activity/.test(prompt), g.out);
   check("availability at keep, in code: a Sunday is out for 'weeknights only'; a weeknight stays", g.out.some((o) => o.match === sun && /outside when they said they're usually free/.test(o.why)) && g.kept.includes(dinner), g.out.map((o) => (o.match as any).name));
   const AV = await import("../../src/services/availability.js");
+  check("review of #134: a negation the windows would read backwards is context, never a rule", ["can't do weekdays", "not mornings", "anytime except mornings", "busy weeknights", "never Sundays"].every((t) => !AV.availabilityIsLimit(t)) && !AV.availabilityConflict("can't do weekdays", "2026-10-18T02:00:00Z", "America/Los_Angeles") && !AV.availabilityConflict("busy weeknights", "2026-10-18T02:00:00Z", "America/Los_Angeles"));
+  const askedSunday = await L.limitsGate([sun], { avoid: [], availability: "weeknights only" }, { askText: "anything fun this Sunday?" });
+  check("review of #134: an ask that names a day or time asks for it: their usual availability doesn't overrule it", askedSunday.kept.length === 1 && L.askNamesATime("this weekend") && !L.askNamesATime("AI founder events"));
   check("found on the way: a leaning is not a limit ('more flexible on weekends' cut every weekday event; it's context now); 'only' and a bare window still are", !AV.availabilityIsLimit("more flexible on weekends") && !AV.availabilityConflict("more flexible on weekends", dinner.details.startAt, "America/Los_Angeles") && AV.availabilityIsLimit("weeknights only") && AV.availabilityIsLimit("evenings") && AV.availabilityIsLimit("no weekends") && AV.availabilityIsLimit("prefer weeknights only"));
   const lean = await L.limitsGate([sun, dinner], { avoid: [], availability: "more flexible on weekends" }, { deps: judge });
   check("so the keep holds nothing back for a leaning", lean.kept.length === 2 && !lean.out.length);
@@ -96,6 +99,7 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   const wrongKind = L.readAvoidAnswer('[{"n":1,"kind":"poetry"}]', 1, ["hackathons"]);
   check("the judge can only name a kind on their list", wrongKind?.[0] === null);
   check("the sweep runs the limits gate after the fact gate, for every member, and logs what it took out", /const limits = await limitsGate\(factGated,/.test(src("services/sweepFind.ts")) && /limitsOut: limits\.out\.map/.test(src("services/sweepFind.ts")));
+  check("review of #134: no false hits from words that only look plural or only say how a thing is", !L.avoidHits("New York tech week", ["news"]).length && L.avoidHits("tech news roundup", ["news"]).length === 1 && !L.avoidHits("SF founder dinner late October", ["anything late"]).length && !L.avoidHits("big founder dinner", ["big events"]).length && L.kindWords("big events").length === 0 && L.kindWords("chess").join() === "chess");
   check("kind words: 'crypto events' is the kind 'crypto'; plurals are the same word", L.kindWords("crypto events").join() === "crypto" && L.avoidHits("Hackathon night", ["hackathons"]).length === 1 && !L.avoidHits("AI founders dinner", ["hackathons"]).length);
   // The working set: a kind ruled out takes what's waiting.
   const store = new Map<string, any[]>([["a1", [{ askText: "AI events", match: { name: "Cal Hacks", url: "https://cal" } }, { askText: "AI events", match: { name: "Founder Dinner", url: "https://fd" } }]]]);
@@ -113,6 +117,18 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   const lt = src("agent/loopTools.ts");
   check("A2 live search: every reply search (events, web, X) refuses a ruled-out kind before it runs, unless this text names it", (lt.match(/const avoided = await ruledOut\(/g) ?? []).length === 3 && /avoidHits\(query, avoidFor\(l\.avoid, theirWords\(\)\)\)/.test(lt) && /M\.realKnowledgeDeps\.limits\(ctx\.userId\)/.test(lt));
   check("A2 live keep: shareFinds holds every item (this turn's or the shortlist's) to their limits before anything sends", /const g = await limitsGate\(known\.map[\s\S]{0,200}\{ askText: theirWords\(\) \}\)/.test(lt) && /if \(outByLink\.has\(it\.link\)\) \{\s*refused\.push/.test(lt) && /const known = items\.map\(\(it\) => \(\{ link: it\.link, f: foundFor\(it\.link\) \}\)\)/.test(lt));
+  const many = new Map<string, any[]>([["a1", Array.from({ length: 25 }, (_, i) => ({ askText: "x", match: { name: `Thing ${i}`, url: `https://t/${i}` } }))]]);
+  const judgedNames: string[][] = [];
+  const r2 = await W.exitAvoidedFinds("u", "hackathons", {
+    backlogs: async () => [...many.entries()].map(([ask_id, items]) => ({ ask_id, items })),
+    merge: async (_u, askId, change) => { many.set(askId, W.applyChange(many.get(askId)!, change, F.exitKey)); },
+    key: F.exitKey,
+    writeFact: async () => {},
+    judge: async (items) => { judgedNames.push(items.map((i) => i.name)); return items.map((i) => (/Hack|Thing 24/.test(i.name) ? "hackathons" : null)); },
+    pending: async () => [{ id: "c1", match: { name: "Hack Night", url: "https://hn" }, askText: "x" }],
+    skipPending: async () => {},
+  });
+  check("review of #134: queued offers are judged first, and everything waiting is judged (a full backlog no longer hides them)", judgedNames[0][0] === "Hack Night" && judgedNames.flat().length === 26 && r2.queued === 1 && r2.backlog === 1, { judged: judgedNames.map((j) => j.length), r2 });
   check("steerAwayFrom runs it in the background when a kind is added (not on undo)", /if \(!undo\) \{[\s\S]{0,400}W\.exitAvoidedFinds\(userId, k, \{ \.\.\.S\.realPruneDeps, \.\.\.S\.realAvoidDeps \}\)/.test(src("agent/conversationTools.ts")));
 }
 
@@ -127,7 +143,8 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   check("their asks are still answered (an answer skips the discovery pace, as at dispatch)", !P.sweepBlockedBy(dormant, "ask").length);
   const muted = st({ suppressedKinds: ["find"] });
   check("test: a member whose finds are backed off (kind restraint) gets zero goal sweeps; an ask's answer still goes", P.sweepBlockedBy(muted, "goal").includes("kind_restraint") && !P.sweepBlockedBy(muted, "ask").length);
-  check("a hold, the space after a task, or a safety hold stops every sweep", P.sweepBlockedBy(st({}, { holdUntil: new Date(NOW.getTime() + 3_600_000) }), "ask").includes("hold") && P.sweepBlockedBy(st({}, { spaceUntil: new Date(NOW.getTime() + 3_600_000) }), "goal").includes("space") && P.sweepBlockedBy(st({ safetyHold: true }), "ask").includes("safety_hold"));
+  check("a safety hold stops every sweep; finds paused for everyone too", P.sweepBlockedBy(st({ safetyHold: true }), "ask").includes("safety_hold") && P.sweepBlockedBy(st(), "goal", ["event_offer"]).includes("paused") && !P.sweepBlockedBy(st(), "goal", ["companion"]).length);
+  check("review of #134: the pick's hold (cleared only by a new find) and the hours of space after a task never stop a sweep", !P.sweepBlockedBy(st({}, { holdUntil: new Date(NOW.getTime() + 6 * 3_600_000) }), "ask").length && !P.sweepBlockedBy(st({}, { spaceUntil: new Date(NOW.getTime() + 3_600_000) }), "goal").length);
   check("hours, the daily cap and spacing never stop a sweep (they clear within the day)", !P.sweepBlockedBy(st({ now: new Date("2026-10-10T10:00:00Z"), sends: [{ ...send(1, "companion"), exempt: false }] }), "ask").length);
   check("the gate is dispatch's own state and checks (one builder, memberSendState), never a copy", /export function sweepBlockedBy[\s\S]{0,1600}evaluateCandidates\(\{ \.\.\.s\.state, candidates: \[find\] \}\)/.test(src("harness/proactive.ts")) && /return sweepBlockedBy\(await memberSendState\(userId, person, now\), kind\);/.test(src("harness/proactive.ts")));
   const calls: string[] = [];
@@ -148,7 +165,9 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   check("a member nothing holds is planned and searched", (await run(row, [])) === "mark,plan,surface");
   check("a gate that can't be read holds (nothing spent on a guess)", /deps\.held\(row\.user_id\)\.catch\(\(\) => \["gate_unreadable"\]\)/.test(src("services/goalSweep.ts")));
   const jobs = src("jobs/index.ts");
-  check("the ask sweep checks the gate once per member before any search, and marks today's check done", /sweepHold\(userRows\[0\]\.user_id, "ask"\)[\s\S]{0,400}UPDATE ask_checkins SET last_attempted_at = NOW\(\) WHERE id = ANY\(\$1::uuid\[\]\)[\s\S]{0,300}decision: "sweep\.held"[\s\S]{0,200}return;/.test(jobs) && jobs.indexOf('sweepHold(userRows[0].user_id, "ask")') < jobs.indexOf("await attemptEventSurfacing({"));
+  const gate = jobs.slice(jobs.indexOf("// Zero sweeps for a member dispatch would hold every find for"), jobs.indexOf("const localToday = DateTime.now()"));
+  check("the ask sweep checks the gate once per member, only when an ask is due (run-today, backoff, daily cap), before any search", /askSearchDue\(r\)\)/.test(gate) && /ranToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY\) return;/.test(gate) && /sweepHold\(userRows\[0\]\.user_id, "ask"\)[\s\S]{0,200}decision: "sweep\.held"[\s\S]{0,200}return;/.test(gate) && jobs.indexOf('sweepHold(userRows[0].user_id, "ask")') < jobs.indexOf("await attemptEventSurfacing({"));
+  check("review of #134: a held ask is never marked attempted (a held day doesn't move its backoff clock)", !/UPDATE ask_checkins/.test(gate));
 
   // ---------------------------------------------------------------- A4 + the work order's third test: the goal cooldown is enforced
   check("test: a find within the cooldown means no goal sweep (no plan, no search), not a computed-and-logged flag", (await run({ ...row, cooldown_cleared: false }, [])) === "mark,skipped:cooldown");
@@ -162,8 +181,11 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   const e = G.parseEdges(["meet other founders"], '[{"n":1,"kind":"findable","edges":["SF founder hackathons October","small SF founder dinners"],"why":""}]', "Jordan", { today: "2026-10-10", avoid: ["hackathons"] });
   check("an edge for a ruled-out kind is dropped in code, however the model wrote it", e[0].edges.join() === "small SF founder dinners", e[0].edges);
   const gs = src("services/goalSweep.ts");
-  check("the plan reads the record: active goals on file only, the limits, taste, open asks, the person", /memberKnowledge\(row\.user_id, \{ include: \["goals", "asks", "preferences", "limits", "person"\] \}\)/.test(gs) && /k\.goals\.filter\(\(g\) => g\.state === "active" && g\.onFile\)/.test(gs) && /if \(!k\.limits\) throw/.test(gs));
+  check("the plan reads the record: active goals on file only, the limits, taste, open asks, the person", /memberKnowledge\(row\.user_id, \{ include: \["goals", "asks", "preferences", "limits", "person"\] \}\)/.test(gs) && /planGoals\(row, k\.goals\)/.test(gs) && /if \(!k\.limits\) throw/.test(gs));
   const k = await MK.memberKnowledge("u", { now: NOW, include: ["goals"] }, deps({ goalStates: async () => [{ goalHash: G.goalHash("old plan"), goal: "old plan", state: "active", reason: "", source: "member", changedAt: ago(500), toldAt: null, hints: 0 }] }));
+  const row = { goals: ["intro me to Maya's team at Stripe", "meet other founders"], intent: [] };
+  const recordGoals = [{ hash: G.goalHash("intro me to Maya's team at Stripe"), state: "active", onFile: true, text: "intro me to another member's team" }, { hash: G.goalHash("meet other founders"), state: "active", onFile: true, text: "meet other founders" }];
+  check("review of #134: the plan uses their own words, chosen by the record's hash (a stripped goal keeps its state row)", GS.planGoals(row, recordGoals).join("|") === "intro me to Maya's team at Stripe|meet other founders" && GS.planGoals(row, [{ ...recordGoals[1], state: "done" }]).length === 0 && /planGoals\(row, k\.goals\)/.test(src("services/goalSweep.ts")) && /const STRUCTURAL = new Set\(\["hash",/.test(src("services/memberKnowledge.ts")));
   check("a closed goal entry is done and a state row whose goal is gone isn't on file: neither is planned", k.goals.find((g) => g.text === "run a marathon")?.state === "done" && k.goals.find((g) => g.text === "old plan")?.onFile === false && k.goals.filter((g) => g.state === "active" && g.onFile).map((g) => g.text).join() === "meet other founders who aren't performing");
 }
 
@@ -190,6 +212,7 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   const ed = src("services/eventDetails.ts");
   check("A6 avoid/availability: one reader (the record's limits); explainFit and the asks listing read it there", !/FROM co_profiles/.test(ed) && /memberKnowledge\(userId, \{ include: \["limits", "person", "preferences"\] \}\)/.test(ed) && /realKnowledgeDeps\.limits\(ctx\.userId\)/.test(src("agent/conversationTools.ts")) && !/SELECT intent, avoid FROM co_profiles/.test(src("agent/conversationTools.ts")));
   check("A6 the person picture: explainFit reads the record's person model, never the raw snapshot", !/getPersonSnapshot|renderSnapshot/.test(ed));
+  check("review of #134: a record that fails closed still has their limits applied in explainFit (the same reader, alone)", /const limits = k\?\.limits \?\? \(person\.userId \? await import\("\.\/memberKnowledge\.js"\)\.then\(\(M\) => M\.realKnowledgeDeps\.limits\(person\.userId!\)\)/.test(ed));
   const k = await MK.memberKnowledge("u", { now: NOW, include: ["corrections"], corrections: { limit: 40, days: null } }, deps());
   check("A6 corrections: one reader with a window the caller sets (replies the recent 8, goal planning all 40)", seen.corrections?.limit === 40 && seen.corrections?.days === null && k.corrections.length === 1 && /realKnowledgeDeps\.corrections\(userId, \{ limit: 40, days: null \}\)/.test(src("services/goalEdges.ts")) && !/FROM profile_corrections/.test(src("services/goalEdges.ts")));
   await MK.memberKnowledge("u", { now: NOW, include: ["corrections"] }, deps());
@@ -205,7 +228,7 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
 // ---------------------------------------------------------------- the small items carried from #133's re-review
 {
   const sf = src("services/sweepFind.ts");
-  check("a web search that fails outright is an outage, not an empty run", /if \(all\.every\(\(r\) => r === null\)\) \{\s*blocked = true;/.test(sf));
+  check("a web search that fails outright is an outage, not an empty run (taskWebSearch says so in its note; it never returns null)", /if \(all\.every\(\(r\) => r === null \|\| \/\^Web search failed\/\.test\(r\.note \?\? ""\)\)\) \{\s*blocked = true;/.test(sf) && /note: `Web search failed: /.test(src("services/taskWeb.ts")));
   const k = F.exitKey;
   const held = { askText: "x", match: { name: "Pop-up", url: "https://p" }, unread: { days: ["2026-10-09"], why: "unknown" } };
   const classified = { askText: "x", match: { name: "Pop-up", url: "https://p", form: "opening" } };
