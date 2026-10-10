@@ -90,15 +90,43 @@ export type GoalSweepDeps = {
   lastSeedSig?: (userId: string) => Promise<string | null>;
   // A new member's sweep that came back with nothing to search (services/coldStart.ts): a flagged miss. Optional; nothing is sent.
   coldStartMiss?: (row: any, why: string, passed: { goal: string; why: string }[]) => Promise<void>;
+  // Why dispatch would hold a goal find for them now (harness/proactive.ts sweepHold, Phase A3); empty: nothing holds it.
+  held?: (userId: string) => Promise<string[]>;
+  // A run that didn't search (held, or a find surfaced within the cooldown), for the log.
+  skipped?: (row: any, why: string, detail: string[]) => Promise<void>;
 };
 const realDeps: GoalSweepDeps = {
   rows: async () => (await pool.query(GOAL_SWEEP_SQL)).rows,
   plan: async (row, seedSig) => {
-    const { planGoalSweep, realGoalDeps } = await import("./goalEdges.js");
-    const { memberZone } = await import("./memberTime.js");
-    const goals = goalSweepGoals(row) ?? [];
+    const { planGoalSweep, realGoalDeps, PLAN_RECORD_LIMITS } = await import("./goalEdges.js");
+    // The member record (Phase A4): their goals with state, the kind of room they want, what they ruled out, what their asks already
+    // search, who they are. A record that can't be read (a failed name read fails closed) means no plan this run.
+    const { memberKnowledge } = await import("./memberKnowledge.js");
+    const k = await memberKnowledge(row.user_id, { include: ["goals", "asks", "preferences", "limits", "person"] });
+    if (!k.limits) throw new Error("their limits couldn't be read");
     const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
-    return planGoalSweep(row.user_id, goals, { city: row.city ?? null, zone: await memberZone(row.user_id), now: new Date(), firstName: row.first_name ?? null, direction: row.long_term_direction ? String(row.long_term_direction) : null, enjoys: row.activity_preferences ?? null, specifics: latest.concrete_preferences ?? null, seedSig }, realGoalDeps);
+    return planGoalSweep(
+      row.user_id,
+      // Active goals on file: a goal entry they closed or set aside, or a state row whose goal is gone, is never planned from.
+      k.goals.filter((g) => g.state === "active" && g.onFile).map((g) => g.text),
+      {
+        city: k.identity.city ?? row.city ?? null,
+        zone: k.identity.zone,
+        now: new Date(),
+        firstName: row.first_name ?? null,
+        direction: row.long_term_direction ? String(row.long_term_direction) : null,
+        enjoys: row.activity_preferences ?? null,
+        specifics: latest.concrete_preferences ?? null,
+        seedSig,
+        record: {
+          person: (k.person?.text ?? "").slice(0, PLAN_RECORD_LIMITS.person),
+          statedTaste: k.preferences.filter((p) => p.source === "stated").map((p) => p.text),
+          avoid: k.limits.avoid,
+          openAsks: k.asks.map((a) => a.text),
+        },
+      },
+      realGoalDeps,
+    );
   },
   lastSeedSig: async (userId) => {
     const { rows } = await pool.query(`SELECT proposal->>'seedSig' AS sig FROM harness_decisions WHERE user_id = $1 AND decision = 'goal_sweep.plan' ORDER BY created_at DESC LIMIT 1`, [userId]);
@@ -109,6 +137,11 @@ const realDeps: GoalSweepDeps = {
     await noteColdStartSweep({ userId: row.user_id, sweep: "goal", searched: null, found: false, why, tried: [], turnedAway: passed.map((p) => `${p.goal.slice(0, 100)}: ${p.why.slice(0, 80)}`) });
   },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
+  held: async (userId) => (await import("../harness/proactive.js")).sweepHold(userId, "goal"),
+  skipped: async (row, why, detail) => {
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 7, decision: "goal_sweep.skip", userId: row.user_id, outcome: "skip", action: why, proposal: { detail } });
+  },
   surface: async (row, context) => {
     await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
   },
@@ -125,6 +158,21 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
     if (!goalSweepDue(row)) {
       const last = deps.lastSeedSig ? await deps.lastSeedSig(row.user_id).catch(() => sig) : sig;
       if (!goalSweepRuns(row, sig, last).run) return;
+    }
+    // One find per GOAL_SURFACE_COOLDOWN_DAYS (Phase A4: the cooldown was computed and only logged, so a member who'd just had a find
+    // still got a full goal sweep every day). The budget is marked, so it's looked at again on the next one.
+    if (row.cooldown_cleared === false) {
+      await deps.mark(row.user_id);
+      await deps.skipped?.(row, "cooldown", [`a find went out within ${GOAL_SURFACE_COOLDOWN_DAYS} days`]).catch(() => {});
+      return;
+    }
+    // Zero sweeps for a member dispatch would hold a goal find for (Phase A3): a hold, a safety hold, kind restraint, the weekly cap,
+    // the engagement pace, the unanswered pause. A gate that can't be read holds too: nothing is spent on a guess.
+    const held = deps.held ? await deps.held(row.user_id).catch(() => ["gate_unreadable"]) : [];
+    if (held.length) {
+      await deps.mark(row.user_id);
+      await deps.skipped?.(row, "held", held).catch(() => {});
+      return;
     }
     await deps.mark(row.user_id);
     n++;

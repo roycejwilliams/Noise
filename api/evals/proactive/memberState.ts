@@ -246,7 +246,7 @@ const cand = (type: any, over: Partial<import("../../src/harness/proactive.js").
   check("restraint: the dispatch gate holds every suppressed kind", held(cand("intro_nudge")) && held(cand("deadline_nudge")) && held(cand("goal_nudge")) && held(cand("commitment_nudge")) && held(cand("event_offer", { payload: { askId: "profile", fromProfile: true } })) && held(cand("event_match_nudge")) && held(cand("goal_checkin")) && held(cand("event_offer", { payload: { askId: "a1", reminder: true } })));
   check("restraint: an answer to their own explicit ask is never held (they asked)", !held(cand("event_offer", { payload: { askId: "a1" } })));
   check("restraint: untracked types are never held (companion, debrief)", !held(cand("companion")) && !held(cand("debrief")));
-  check("restraint: the gate is in the pick and re-checked at send time", /state\.suppressedKinds = restraint/.test(src("harness/proactive.ts")) && /suppressedKinds: await loadKindRestraint\(client, person\.userId, now\)/.test(src("harness/proactive.ts")));
+  check("restraint: the gate is in the pick and re-checked at send time", /suppressedKinds: raw\.suppressed,/.test(src("harness/proactive.ts")) && /suppressedKinds: await loadKindRestraint\(client, person\.userId, now\)/.test(src("harness/proactive.ts")));
 
   // Re-enabled by an answer: a positive tapback on one of them (any time later), or a reply in the window of a later one.
   const loved = K.evaluateKindRestraint({ sends: [s1, s2], inbound: [{ at: new Date(t0.getTime() + 8 * DAY), text: "Loved “Want me to draft a short note to Sarah for you?”" }], now: new Date(t0.getTime() + 9 * DAY) });

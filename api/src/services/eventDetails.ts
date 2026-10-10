@@ -15,7 +15,6 @@
 //   Tier 3 (X opportunities): the source post's own text, which is the only
 //   real record there is.
 import { audienceLine } from "./eventAudience.js";
-import pool from "../db/db.js";
 import { parseModelJson } from "./modelJson.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
@@ -23,8 +22,6 @@ import { DateTime } from "luxon";
 import { MODELS } from "../models.js";
 import { IDENTITY_RULE, stripUngroundedIdentity } from "./identityGuard.js";
 import type { TierMatch } from "./tieredRecommendation.js";
-import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
-import { latestAskEntry } from "../harness/profileWrite.js";
 import { availabilityConflict } from "./availability.js";
 
 export type EventDetails = {
@@ -174,8 +171,8 @@ export function missingEventDetails(name: string, d: EventDetails | undefined): 
   return missing.length ? `For "${name}", Co does not have: ${missing.join(", ")}.` : null;
 }
 
-// avoid and availability (2026-09-22) are loaded by explainFit itself from
-// userId, so every search and sweep caller gets them without passing them.
+// avoid and availability (2026-09-22) are loaded by explainFit itself from userId, through the member record (services/memberKnowledge.ts
+// "limits", the one reader since Phase A6), so a caller gets them without passing them.
 export type PersonForFit = {
   userId?: string;
   firstName: string;
@@ -192,6 +189,8 @@ export type PersonForFit = {
   feeling?: string;
   avoid?: string[] | null;
   availability?: string | null;
+  // The kind of room they've told Co they want (services/roomTaste.ts), their words: background for the fit (Phase A5).
+  roomTaste?: string[] | null;
 };
 
 // A personal reason, grounded only in what they've said and the real
@@ -219,6 +218,7 @@ ${person.askText ?? "(no specific ask)"}${latest ? `\nTheir latest text, for con
 Background on them:
 ${picture ? picture : person.goals?.length ? `Goals: ${person.goals.slice(0, 4).join("; ")}` : "(none)"}
 ${person.city ? `Based in: ${person.city}` : ""}
+${person.roomTaste?.length ? `The kind of room they've told Co they want, in their words: ${person.roomTaste.map((t) => `"${t}"`).join("; ")}. Something that clearly clashes with it isn't worth their time unless this search asked for exactly that.` : ""}
 ${person.feeling ? `How they've been feeling: ${person.feeling}` : ""}`;
   const rules = `Rules:
 - ${IDENTITY_RULE}
@@ -263,23 +263,21 @@ ${rules}
 Return ONLY JSON: {${fitFields(person)}}`;
 }
 
-// What they've ruled out, and when they're usually free, straight from
-// their profile (2026-09-22). The latest ask's own availability wins over
-// the profile-wide pattern, since it's what they said about this ask.
-async function loadFitPreferences(userId: string): Promise<{ avoid: string[]; availability: string | null }> {
-  const { rows } = await pool
-    .query(`SELECT avoid, availability_pattern, intent FROM co_profiles WHERE user_id = $1`, [userId])
-    .catch(() => ({ rows: [] as any[] }));
-  const r = rows[0];
-  if (!r) return { avoid: [], availability: null };
-  const latest = latestAskEntry(r.intent);
-  const availability = (latest?.availability && latest.availability.trim()) || (r.availability_pattern && String(r.availability_pattern).trim()) || null;
-  return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()) : [], availability };
+// What they've ruled out, when they're usually free, the kind of room they want and who they are, from the member record (one read, every
+// string already stripped of other members' details; review of the audit: this read co_profiles and the raw snapshot on its own). A
+// record that can't be read (a failed name read fails closed) gives no picture and no limits rather than anything unstripped.
+async function fitKnowledge(userId: string) {
+  const { memberKnowledge } = await import("./memberKnowledge.js");
+  return memberKnowledge(userId, { include: ["limits", "person", "preferences"] }).catch((err: any) => {
+    console.error("eventDetails: member record read failed (non-fatal, judging without it):", err?.message ?? err);
+    return null;
+  });
 }
 
 export async function explainFit(match: EnrichedMatch, person: PersonForFit): Promise<FitResult | null> {
-  const picture = person.userId ? renderSnapshot(await getPersonSnapshot(person.userId)) : "";
-  person = await withPreferences(person);
+  const k = person.userId ? await fitKnowledge(person.userId) : null;
+  const picture = k?.person?.text ?? "";
+  person = withPreferences(person, k);
   try {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
@@ -324,12 +322,13 @@ function finishFit(p: RawFit, match: EnrichedMatch, person: PersonForFit, pictur
   return { fits, rightKind: fits || p.rightKind === true, outsideTimeFrame, outsidePlace, why };
 }
 
-async function withPreferences(person: PersonForFit): Promise<PersonForFit> {
-  if (person.userId && (person.avoid === undefined || person.availability === undefined)) {
-    const prefs = await loadFitPreferences(person.userId);
-    return { ...person, avoid: person.avoid ?? prefs.avoid, availability: person.availability ?? prefs.availability };
-  }
-  return person;
+function withPreferences(person: PersonForFit, k: { limits: { avoid: string[]; availability: string | null } | null; preferences: { text: string; source: string }[] } | null): PersonForFit {
+  return {
+    ...person,
+    avoid: person.avoid ?? k?.limits?.avoid ?? [],
+    availability: person.availability ?? k?.limits?.availability ?? null,
+    roomTaste: person.roomTaste ?? k?.preferences.filter((p) => p.source === "stated").map((p) => p.text) ?? null,
+  };
 }
 
 // Attach real details (and, with a person, a personal reason) to a match.

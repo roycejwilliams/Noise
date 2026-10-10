@@ -8,6 +8,7 @@
 //      pages that list the thing ("SF tech events November 2026"). The same string never goes to both.
 //   4. Every query is logged next to every keep and every pass (sweepFind.ts, sweep.find `queries`): the tuning data.
 // Pure; the sweep's tools refuse a query that breaks these (it isn't run and costs no budget) and Co rewrites it.
+import { avoidHits } from "./memberLimits.js";
 
 export const QUERY_LIMITS = { contentWords: 4 } as const;
 
@@ -87,17 +88,24 @@ export type QuerySource = "web" | "x" | "events";
 // Pure: what's wrong with a query, in words Co can act on. Empty: it may run.
 // Who someone is (gender, age bracket, faith, ethnicity, sexuality, parenthood) is never assumed in a search (Royce, 2026-10-09: "drop my
 // guard" was searched as "men's circle vulnerability sharing"). A group word goes in a query only when their own ask says it.
-const IDENTITY_TERMS = /\b(?:men'?s|women'?s|male|female|mens|womens|guys?'?|girls?'?|ladies|moms?|mothers?|dads?|fathers?|parents?|gay|lesbian|queer|lgbtq\+?|trans|black|latin[oax]s?|latine|asian|christian|muslim|jewish|catholic|seniors?|20s|30s|40s|50s|twenty-?somethings|millennials?|gen z|veterans?)\b/gi;
+const IDENTITY_TERMS = /\b(?:men'?s|women'?s|women|woman|men|male|female|mens|womens|guys?'?|girls?'?|ladies|moms?|mothers?|dads?|fathers?|parents?|gay|lesbian|queer|lgbtq\+?|trans|black|latin[oax]s?|latine|asian|christian|muslim|jewish|catholic|seniors?|20s|30s|40s|50s|twenty-?somethings|millennials?|gen z|veterans?)\b/gi;
 // Phrases where a group word is part of a thing, not a person (review of #133: "black tie gala", "parent company", "trans-Pacific",
 // "Mothers Day" were refused).
 const NOT_ABOUT_PEOPLE = /\b(?:black[\s-]tie|parent company|trans[\s-]?pacific|trans[\s-]?atlantic|(?:mother|father|parent)s?'?\s+day|black\s+friday|senior\s+(?:engineer|designer|manager|developer|pm)|20s\s+(?:style|theme|party))\b/gi;
 // A capitalized group word inside the name of a place or institution ("Asian Art Museum", "Contemporary Jewish Museum", "Veterans
 // Building", "Women's Building"): the name ends, within two more capitalized words, in a word for a place. Capitals alone aren't a
-// venue (re-review of #133: "Black Women In Tech Summit", "Queer Film Fest" passed in Title Case).
-const PLACE = /^(?:\s+[A-Z][\w'&.-]*){0,2}?\s+(?:Building|Hall|Museum|Center|Centre|Theater|Theatre|Library|College|University|Institute|Gallery|Park|Plaza|Square|Street|Cathedral|Memorial|Auditorium|Pavilion|Opera House)\b/;
+// venue (re-review of #133: "Black Women In Tech Summit", "Queer Film Fest" passed in Title Case). A name with two group words in it
+// ("Gay Men's Chorus Hall", "Asian Women Founders Park") is about people, not a place (Phase A, the re-review's low finding).
+const PLACE_RE = "(?:\\s+[A-Z][\\w'&.-]*){0,2}?\\s+(?:Building|Hall|Museum|Center|Centre|Theater|Theatre|Library|College|University|Institute|Gallery|Park|Plaza|Square|Street|Cathedral|Memorial|Auditorium|Pavilion|Opera House)\\b";
+const PLACE = new RegExp(`^${PLACE_RE}`);
 function inProperName(query: string, index: number, length: number): boolean {
   if (!/^[A-Z]/.test(query.slice(index, index + length))) return false;
-  return PLACE.test(query.slice(index + length));
+  const rest = query.slice(index + length).match(PLACE);
+  if (!rest) return false;
+  // The words from this one to the place word, and any capitalized words right before it: one group word at most.
+  const lead = query.slice(0, index).match(/(?:[A-Z][\w'&.-]*\s+)*$/)?.[0] ?? "";
+  const name = `${lead}${query.slice(index, index + length)}${rest[0]}`;
+  return (name.match(IDENTITY_TERMS) ?? []).length <= 1;
 }
 export function assumedIdentity(query: string, theirWords: string): string[] {
   const cleaned = query.replace(NOT_ABOUT_PEOPLE, (m) => " ".repeat(m.length));
@@ -113,10 +121,14 @@ export function assumedIdentity(query: string, theirWords: string): string[] {
   return [...out];
 }
 
-export function queryProblems(q: string, o: { terms: string[]; source: QuerySource; otherSourceQueries?: string[]; theirWords?: string }): string[] {
+export function queryProblems(q: string, o: { terms: string[]; source: QuerySource; otherSourceQueries?: string[]; theirWords?: string; avoid?: string[] }): string[] {
   const out: string[] = [];
   const text = q.trim();
   if (!text) return ["it's empty"];
+  // A kind they told Co to stop suggesting is never searched for (services/memberLimits.ts; Phase A2). The list passed here is already
+  // the one for this ask (avoidFor): a kind the ask names is theirs again.
+  const ruledOut = o.avoid?.length ? avoidHits(text, o.avoid) : [];
+  if (ruledOut.length) out.push(`it looks for ${ruledOut.map((k) => `"${k}"`).join(", ")}, which they told Co to stop suggesting: search for something else they want`);
   const assumed = o.theirWords !== undefined ? assumedIdentity(text, o.theirWords) : [];
   if (assumed.length) out.push(`it assumes who they are (${assumed.join(", ")}), which their ask doesn't say: search for the thing itself`);
   // Whole words only, never inside a hyphenated word ("Co" is not in "co-working"). A one-word term matches case as written (a name
@@ -146,14 +158,15 @@ export type Looked = { source: LedgerSource; url: string; query?: string };
 export class QueryLedger {
   readonly queries: QueryLog[] = [];
   // theirWords: the ask, in their words: the only source a group word in a query may come from (assumedIdentity).
-  constructor(private terms: string[], private theirWords?: string) {}
+  // avoid: the kinds they ruled out that apply to this ask (services/memberLimits.ts avoidFor).
+  constructor(private terms: string[], private theirWords?: string, private avoid: string[] = []) {}
   private asked(source: LedgerSource): string[] {
     return this.queries.filter((x) => x.source === source && !x.refused).map((x) => x.query);
   }
   // Problems for a query before it runs (it's refused and logged when there are any). X and web are checked against each other.
   check(source: LedgerSource, query: string): string[] {
     const other = source === "x" ? this.asked("web") : source === "web" ? this.asked("x") : [];
-    const bad = queryProblems(query, { terms: this.terms, source, otherSourceQueries: other, theirWords: this.theirWords });
+    const bad = queryProblems(query, { terms: this.terms, source, otherSourceQueries: other, theirWords: this.theirWords, avoid: this.avoid });
     if (bad.length) this.queries.push({ source, query: query.slice(0, 200), results: 0, kept: 0, passed: 0, refused: bad });
     return bad;
   }

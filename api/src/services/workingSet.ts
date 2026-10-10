@@ -189,17 +189,25 @@ export function applyChange(items: any[], change: BacklogChange, key: (m: any) =
 
 // Pure: a sweep's save, merged into the row as it is now (re-review of #133: the sweep overwrote the row with a list read before a
 // minutes-long search, undoing a prune's or picker's work in between). What the sweep read (`read`), what it wants (`next`) and what's
-// there now (`now`): an item someone else removed since the read stays out; one someone else added stays in; a held item keeps the
-// read days recorded since.
+// there now (`now`): an item someone else removed since the read stays out; one someone else added stays in; an item someone else
+// changed since the read (a prune classified it, added a read day, or cleared its hold) keeps their version when the sweep left it as
+// it was (Phase A, the re-review's low finding: a held copy came back after the prune had read it); when both changed it, the sweep's
+// wins, with the read days recorded since.
 export function mergeSweepSave(read: any[], next: any[], now: any[], key: (m: any) => string): any[] {
   const k = (it: any) => key(it?.match ?? {});
   const readKeys = new Set(read.map(k));
+  const readBy = new Map(read.map((it) => [k(it), JSON.stringify(it)]));
   const nowBy = new Map(now.map((it) => [k(it), it]));
   const kept = next
     .filter((it) => !readKeys.has(k(it)) || nowBy.has(k(it)))
     .map((it) => {
       const cur = nowBy.get(k(it));
-      return cur?.unread && (!it.unread || (cur.unread.days?.length ?? 0) > (it.unread.days?.length ?? 0)) ? { ...it, unread: cur.unread } : it;
+      if (!cur) return it;
+      const was = readBy.get(k(it));
+      const theyChanged = was !== undefined && JSON.stringify(cur) !== was;
+      const sweepChanged = was === undefined || JSON.stringify(it) !== was;
+      if (theyChanged && !sweepChanged) return cur;
+      return cur.unread && (!it.unread || (cur.unread.days?.length ?? 0) > (it.unread.days?.length ?? 0)) ? { ...it, unread: cur.unread } : it;
     });
   const nextKeys = new Set(next.map(k));
   return [...kept, ...now.filter((it) => !readKeys.has(k(it)) && !nextKeys.has(k(it)))];
@@ -291,6 +299,57 @@ export async function exitRejectedFinds(userId: string, rejected: { key: string;
     if ((b.items ?? []).some((it: any) => out.has(deps.key(it?.match ?? {})))) await deps.merge(userId, b.ask_id, { remove: out, replace: new Map() });
   }
   return out.size;
+}
+
+// A kind they ruled out takes what's already waiting with it (Phase A2: "I'll stop suggesting it" held only for new searches, so a
+// hackathon already in the backlog or queued still went out). Each thing waiting is judged against the kind by its main activity
+// (services/memberLimits.ts judgeAvoided, their own words when the read fails); one that is leaves every backlog, and a queued offer
+// is skipped, each with its fact first.
+export type AvoidDeps = Pick<PruneDeps, "backlogs" | "merge" | "key"> &
+  ExitDeps & {
+    judge: (items: { name: string; details: string }[], avoid: string[]) => Promise<(string | null)[]>;
+    pending: (userId: string) => Promise<{ id: string; match: any; askText: string | null }[]>;
+    skipPending: (id: string, reason: string) => Promise<void>;
+  };
+export const AVOID_JUDGE_MAX = 20;
+export async function exitAvoidedFinds(userId: string, kind: string, deps: AvoidDeps): Promise<{ backlog: number; queued: number }> {
+  const { judgedOf } = await import("./memberLimits.js");
+  const waiting: { key: string; match: any; askText: string | null; pendingId: string | null }[] = [];
+  const seen = new Set<string>();
+  for (const b of await deps.backlogs(userId)) {
+    for (const it of b.items ?? []) {
+      const key = deps.key(it?.match ?? {});
+      if (seen.has(key)) continue;
+      seen.add(key);
+      waiting.push({ key, match: it.match, askText: it?.askText ?? null, pendingId: null });
+    }
+  }
+  for (const p of await deps.pending(userId)) waiting.push({ key: deps.key(p.match ?? {}), match: p.match, askText: p.askText, pendingId: p.id });
+  const judged = waiting.slice(0, AVOID_JUDGE_MAX);
+  if (!judged.length) return { backlog: 0, queued: 0 };
+  const kinds = await deps.judge(judged.map((w) => judgedOf(w.match)), [kind]);
+  const reason = `they asked Co to stop suggesting ${kind}`;
+  const out = new Set<string>();
+  const written = new Set<string>();
+  let queued = 0;
+  for (let i = 0; i < judged.length; i++) {
+    if (!kinds[i]) continue;
+    const w = judged[i];
+    // One fact per thing, though it can be both in a backlog and queued.
+    const ok = written.has(w.key) || await writeExitFact({ userId, kind: "find", itemKey: w.key, label: String(w.match?.name ?? ""), state: "rejected", reason, scope: `this find${w.askText ? `, found for: ${w.askText.slice(0, 100)}` : ""}; the rule itself is on their record` }, deps);
+    if (!ok) continue;
+    written.add(w.key);
+    if (w.pendingId) {
+      await deps.skipPending(w.pendingId, reason);
+      queued++;
+    } else out.add(w.key);
+  }
+  if (out.size) {
+    for (const b of await deps.backlogs(userId)) {
+      if ((b.items ?? []).some((it: any) => out.has(deps.key(it?.match ?? {})))) await deps.merge(userId, b.ask_id, { remove: out, replace: new Map() });
+    }
+  }
+  return { backlog: out.size, queued };
 }
 
 // ------------------------------------------------------------------ the daily pass

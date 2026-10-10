@@ -87,10 +87,10 @@ export function datesOnPage(page: string, aroundYear: number): Set<string> {
     if (b > a && b - a <= 31) for (let d = a; d <= b; d++) add(year(m[4]), MONTHS[m[1]], d);
   }
   for (const m of text.matchAll(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH_RE}\\.?\\b(?:,?\\s+(\\d{4}))?`, "g"))) add(year(m[3]), MONTHS[m[2]], Number(m[1]));
-  // Not a price, a rating or a measure ("$10/12", "4/5 stars", "3/4 cup").
-  for (const m of text.matchAll(/(?<![\d/.$-])(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])(?!\s*(?:stars?|cups?|tbsp|tsp|oz|lbs?|pts?|points|rating|scale)\b)/g)) add(year(m[3]), Number(m[1]), Number(m[2]));
-  // Not a version number ("v1.2.2026", "version 1.2.2026").
-  for (const m of text.matchAll(/(?<![\d.]|\bv|version\s)(\d{1,2})\.(\d{1,2})\.(\d{4})(?![\d.])/g)) add(Number(m[3]), Number(m[2]), Number(m[1]));
+  // Not a price, a rating or a measure ("$10/12", "4/5 stars", "rated 4/5", "3/4 cup").
+  for (const m of text.matchAll(/(?<![\d/.$-])(?<!\b(?:rated|rating|score[ds]?|scored)\s)(\d{1,2})\/(\d{1,2})(?:\/(\d{4}|\d{2}))?(?![\d/])(?!\s*(?:stars?|cups?|tbsp|tsp|oz|lbs?|pts?|points|rating|scale)\b)/g)) add(year(m[3]), Number(m[1]), Number(m[2]));
+  // Not a version number ("v1.2.2026", "ver. 1.2.2026", "version 1.2.2026").
+  for (const m of text.matchAll(/(?<![\d.]|\bv|\bver\.?\s?|version\s)(\d{1,2})\.(\d{1,2})\.(\d{4})(?![\d.])/g)) add(Number(m[3]), Number(m[2]), Number(m[1]));
   for (const m of text.matchAll(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g)) add(Number(m[1]), Number(m[2]), Number(m[3]));
   return out;
 }

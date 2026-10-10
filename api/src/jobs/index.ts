@@ -557,6 +557,20 @@ export function registerJobs(io: Server) {
         const timezone = userRows[0].city ? await getTimezoneForCity(userRows[0].city) : null;
         if (!isReasonableLocalHour(timezone)) return; // wrong hour for this user — nothing touched, retried next hourly tick
 
+        // Zero sweeps for a member dispatch would hold every find for (harness/proactive.ts sweepHold, Phase A3): opted out, a hold,
+        // the space after a task, a safety hold. An answer to their ask skips the discovery pace, so only these stop it. Today's
+        // check counts as done (each due ask is marked), so it's looked at again tomorrow, not every hour.
+        const fresh = userRows.filter((r) => !r.last_attempted_at || DateTime.fromJSDate(r.last_attempted_at).setZone(hoursZone(timezone)).toISODate() !== DateTime.now().setZone(hoursZone(timezone)).toISODate());
+        if (fresh.length) {
+          const { sweepHold } = await import("../harness/proactive.js");
+          const held = await sweepHold(userRows[0].user_id, "ask").catch(() => ["gate_unreadable"]);
+          if (held.length) {
+            await pool.query(`UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = ANY($1::uuid[])`, [fresh.map((r) => r.id)]).catch(() => {});
+            await recordDecision({ layer: 5, decision: "sweep.held", userId: userRows[0].user_id, outcome: "skip", action: held.join(","), proposal: { asks: fresh.length } }).catch(() => {});
+            return;
+          }
+        }
+
         const localToday = DateTime.now().setZone(hoursZone(timezone)).toISODate(); // their day, or Pacific's (never the server's UTC day)
         const localDayOf = (d: Date | null) => (d ? DateTime.fromJSDate(d).setZone(hoursZone(timezone)).toISODate() : null);
         // At most this many of one person's asks get a full search per day

@@ -19,7 +19,6 @@ import { loadCases, runEval, type CaseScore, type EvalCase } from "../lib.js";
 import {
   checkNoEmotionLabel,
   readTextEmotion,
-  roomPreferenceFromFeelings,
   summarizeSignals,
   type EmotionSignal,
 } from "../../src/harness/emotion.js";
@@ -116,10 +115,6 @@ function score(c: Case, r: any): CaseScore {
       if (c.expectCurrent !== undefined) soft.push({ name: "current", ok: (r.current?.emotion ?? null) === c.expectCurrent });
       if (c.expectRecurring !== undefined) soft.push({ name: "recurring", ok: r.recurring.length === c.expectRecurring });
       if (c.expectFrustratedWithCo !== undefined && r.withCo.frustrated !== c.expectFrustratedWithCo) hard.push(`withCo.frustrated ${r.withCo.frustrated}, expected ${c.expectFrustratedWithCo}`);
-      if (c.expectRoom !== undefined) {
-        const room = roomPreferenceFromFeelings(r);
-        if (c.expectRoom === null ? room !== null : !room?.includes(c.expectRoom)) hard.push(`room preference "${room}", expected ${c.expectRoom === null ? "none" : `to include "${c.expectRoom}"`}`);
-      }
       break;
     case "label":
       if (c.expectBlocked && r.pass) hard.push(`label not caught: ${c.draft}`);

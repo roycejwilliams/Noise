@@ -59,7 +59,7 @@ const sf = fs.readFileSync(new URL("../../src/services/sweepFind.ts", import.met
 
 // ---- the brief: tiers, and when X fits
 {
-  const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "a founder dinner this month", city: "San Francisco" }, { today: "2026-10-08", picture: "", feeling: null, shown: [] });
+  const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "a founder dinner this month", city: "San Francisco" }, { today: "2026-10-08", record: SF.emptySweepRecord() });
   check("the brief names every tier and how to reach it", p.includes(SF.SWEEP_TIERS) && /Co's own events/.test(SF.SWEEP_TIERS) && /public event feed/.test(SF.SWEEP_TIERS) && /webSearch/.test(SF.SWEEP_TIERS) && /searchPosts/.test(SF.SWEEP_TIERS));
   check("an event-shaped ask looks at searchEvents before finishing (guidance, not a forced call)", /look at searchEvents before you finish/.test(SF.SWEEP_TIERS) && !/toolChoice/.test(sf));
   check("X is skipped for things that aren't to find", /isn't a thing to find at all/.test(SF.SWEEP_X_GUIDANCE) && /skip X for that sweep/.test(SF.SWEEP_X_GUIDANCE));

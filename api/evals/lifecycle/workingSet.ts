@@ -144,7 +144,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   // Identity in queries.
   check("a search never assumes who they are", Q.assumedIdentity("men's circle vulnerability sharing San Francisco", "seeking a room/gathering where they can drop their guard").join() === "men's");
   check("a group word they used themselves is fine", Q.assumedIdentity("women's hiking group SF", "looking for a women's hiking group").length === 0);
-  check("the sweep's ledger refuses an assumed-identity query", Q.queryProblems("men's circle vulnerability sharing", { terms: [], source: "web", theirWords: "a room where I can drop my guard" }).some((p) => /assumes who they are/.test(p)) && /new QueryLedger\(memberTerms\([\s\S]{0,120}\), c\.askText\)/.test(src("services/sweepFind.ts")));
+  check("the sweep's ledger refuses an assumed-identity query", Q.queryProblems("men's circle vulnerability sharing", { terms: [], source: "web", theirWords: "a room where I can drop my guard" }).some((p) => /assumes who they are/.test(p)) && /new QueryLedger\(memberTerms\([\s\S]{0,120}\), c\.askText, record\.avoid\)/.test(src("services/sweepFind.ts")));
   // An urgent find triggers a pick run.
   const ten = new Date("2026-10-09T17:30:00Z"); // 10:30am Pacific
   check("a find ending before the next scheduled pick (tomorrow 10am) triggers a pick run", ES.endsBeforeNextPick({ statedDates: { start: "2026-10-09" }, form: "event" } as any, "America/Los_Angeles", ten) && !ES.endsBeforeNextPick({ statedDates: { start: "2026-10-12" }, form: "event" } as any, "America/Los_Angeles", ten));
@@ -275,7 +275,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const dup = W.applyChange([ev("A"), ev("A")], { remove: new Set(), replace: new Map([[k(ev("A").match), { ...ev("A"), unread: { days: [TODAY], why: "unknown" } }]]) }, k);
   check("two items under one key are replaced once, not copied", dup.length === 1);
   const sf = src("services/sweepFind.ts");
-  check("an ask whose queries are refused or that searches nothing still counts its run; an outage doesn't", /searched: searched \|\| !blocked/.test(sf) && (sf.match(/blocked = true;/g) ?? []).length === 4);
+  check("an ask whose queries are refused or that searches nothing still counts its run; an outage doesn't", /searched: searched \|\| !blocked/.test(sf) && (sf.match(/blocked = true;/g) ?? []).length === 5);
   check("a goal set aside only when the change really happened", /const changed = await deps\.setState\([\s\S]{0,120}\.catch\(\(\) => false\);\s*if \(changed !== false\) \{\s*setAside\.push/.test(src("services/goalEdges.ts")));
 }
 
