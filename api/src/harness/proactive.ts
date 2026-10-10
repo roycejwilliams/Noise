@@ -1830,7 +1830,18 @@ export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | 
   return [...(paused.includes("event_offer") ? ["paused"] : []), ...new Set(failed)];
 }
 const PROFILE_ASK_ID_FOR_GATE = "profile";
+// An ask's sweep stops only on what holds every send for days (SWEEP_BLOCKERS.ask): finds paused for everyone, a safety hold, opted out.
+// Those are read alone (the same readers the full state uses), so a member held for days with an ask due costs one query an hour, not
+// the full restraint read (review of #134). A goal's sweep needs the pace, so it reads the full state.
 export async function sweepHold(userId: string, kind: SweepKind, now = new Date()): Promise<string[]> {
+  if (kind === "ask") {
+    if (pausedTypes().includes("event_offer")) return ["paused"];
+    const { rows } = await pool.query(`SELECT COALESCE(sms_opted_out, false) AS out, phone_number FROM users WHERE id = $1`, [userId]);
+    if (!rows[0]?.phone_number) return ["no_phone"];
+    if (rows[0].out) return ["not_opted_out"];
+    const { safetyHoldActive } = await import("../services/safety.js");
+    return (await safetyHoldActive(userId)) ? ["safety_hold"] : [];
+  }
   const person = await loadPerson(userId);
   if (!person) return ["no_phone"];
   return sweepBlockedBy(await memberSendState(userId, person, now), kind);
