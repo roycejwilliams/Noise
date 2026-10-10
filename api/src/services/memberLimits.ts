@@ -120,7 +120,8 @@ export function judgedOf(m: any): Judged {
 
 // An ask that names a day or a time asks for it: when they're usually free doesn't overrule it (review of #134: "anything this Saturday?"
 // from a "weeknights" member had every Saturday item refused).
-const NAMES_A_TIME = /\b(mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?s?\b|\b(weekends?|weekdays?|weeknights?|tonight|tomorrow|today|morning|afternoon|evening|night|brunch|lunch|this week|next week)\b/i;
+// Days and plain when-words only: "trivia night", "lunch spots" or "morning run club" name a kind of thing, not when (re-review of #134).
+const NAMES_A_TIME = /\b(mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?s?\b|\b(weekends?|weekdays?|weeknights?|tonight|tomorrow|today|this (?:week|morning|afternoon|evening)|next week)\b/i;
 export function askNamesATime(askText: string | null | undefined): boolean {
   return NAMES_A_TIME.test(askText ?? "");
 }
