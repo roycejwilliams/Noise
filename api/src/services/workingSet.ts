@@ -154,7 +154,10 @@ export type BacklogEntry = { askId: string; index: number; item: any };
 // An undated or unreadable find is held (never offered) and read again once a day; it exits only after this many separate days
 // (review of #133: one failed read, or three passes in one day, used to exit it with a false "no date" fact).
 export const UNREAD_DAYS = 3;
-export type Unread = { days: string[]; why: "undated" | "unknown" };
+// "stalled" (Phase B, re-review of #138): a find the send path couldn't send after several tries (its queue window ended unsent again
+// and again, or its page kept holding it back). It leaves the dispatch pool (offerable is false), is never re-classified back in (that
+// was an endless loop: requeue, expire, reopen), and exits after UNREAD_DAYS separate days held. note: why it stalled.
+export type Unread = { days: string[]; why: "undated" | "unknown" | "stalled"; note?: string };
 // Pure: is a backlog item offerable? A held one isn't, anywhere (picker pool, the queue, a task's on-file finds).
 export function offerable(item: { unread?: Unread | null } | null | undefined): boolean {
   return !item?.unread;
@@ -248,7 +251,13 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
       const held: Unread | null = it?.unread ?? null;
       let v = backlogVerdict(match, today, { lifeEnd, form: F.formOf });
       let nowHeld: Unread | null = null;
-      if (v === "classify" || held) {
+      if (held?.why === "stalled" && v !== "past") {
+        if (held.days.includes(today)) {
+          kept++;
+          continue;
+        }
+        nowHeld = { ...held, days: [...new Set([...held.days, today])] };
+      } else if (v === "classify" || held) {
         if (held?.days.includes(today) || classified >= (opts.classifyLimit ?? 12)) {
           kept++;
           continue; // read today already, or over this run's reading budget: tomorrow
@@ -266,7 +275,7 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
       if (tooLong || v === "past") {
         const end = lifeEnd(match);
         const reason = tooLong
-          ? nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
+          ? nowHeld!.why === "stalled" ? `it couldn't be sent after repeated tries (${nowHeld!.note ?? "held at send"}), and was held ${UNREAD_DAYS} separate days` : nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
           : `${F.formOf(match) === "opening" ? "its deadline" : "its date"} (${end}) passed`;
         const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
         if (ok) {

@@ -1954,7 +1954,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     const r = await stillRelevant(c, { recentConversation: recentStamped, now: state.now, timezone: person.timezone });
     if (!opts.dryRun) await settleRelevance(c, r);
     if (!r) {
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `relevance check unanswered; held ${RELEVANCE_RETRY_HOURS}h` });
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `relevance check unanswered; held ${RELEVANCE_RETRY_HOURS}h` });
       return;
     }
     if (!r.relevant) {
@@ -1980,7 +1980,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type = 'event_offer' AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
       [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000)],
     );
-    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });
+    if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });
     return;
   }
 
@@ -2070,7 +2070,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
         }
         const d = await drafting(sib.type, () => registry.event_offer.draft(sib, person));
         // A sibling whose page re-read exited it (services/sendCheck.ts, its fact already written) is archived, never left waiting.
-        if ("skip" in d && (d as { exited?: boolean }).exited && !opts.dryRun) await dropCandidate(registry, sib, "skipped", d.skip);
+        if ("skip" in d && ((d as { exited?: boolean }).exited || (d as { held?: boolean }).held) && !opts.dryRun) await dropCandidate(registry, sib, "skipped", d.skip);
         if ("skip" in d || "defer" in d) continue;
         const msgs = d.messages.map(capitalizeSentences);
         const sibGate = gate(checkDraft(capitalizeSentences(d.text), d.rules));

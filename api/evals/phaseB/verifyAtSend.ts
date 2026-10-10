@@ -51,9 +51,9 @@ const details = (o: Partial<EventDetails> = {}): EventDetails => ({ startAt: "20
 const lumaFind = (o: any = {}): any => ({ tier: 2, kind: "public_event", event_api_id: "evt-1", event_date: "2026-10-13", name: "Founders Supper Club", url: "https://lu.ma/supper", reason: "founders dinner", whyItFits: "a small founders dinner", details: details(), ...o });
 const webFind = (o: any = {}): any => ({ tier: 3, kind: "opportunity", source: "web", name: "Harbor Fellowship", url: "https://harbor.example.org/apply", reason: "a fellowship for climate founders", deadline: "2026-10-20", form: "opening", evidence: "Harbor Fellowship. Applications close October 20, 2026.", ...o });
 
-type Calls = { luma: string[]; page: string[]; facts: any[]; saved: any[] };
+type Calls = { luma: string[]; page: string[]; facts: any[]; saved: any[]; defers: number[] };
 const depsWith = (o: { luma?: EventDetails | null; page?: { text: string | null; gone: boolean }; factFails?: boolean } = {}): { deps: import("../../src/services/sendCheck.js").SendCheckDeps; calls: Calls } => {
-  const calls: Calls = { luma: [], page: [], facts: [], saved: [] };
+  const calls: Calls = { luma: [], page: [], facts: [], saved: [], defers: [] };
   return {
     calls,
     deps: {
@@ -62,6 +62,7 @@ const depsWith = (o: { luma?: EventDetails | null; page?: { text: string | null;
       now: () => NOW,
       writeFact: async (e) => { if (o.factFails) throw new Error("db down"); calls.facts.push(e); },
       saveMatch: async (_id, m) => { calls.saved.push(m); },
+      saveDefers: async (_id, n) => { calls.defers.push(n); },
     },
   };
 };
@@ -165,7 +166,8 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   const r1 = await S.checkBeforeSend(c, LA, deps);
   const r2 = await S.checkBeforeSend(c, LA, deps);
   const r3 = await S.checkBeforeSend(c, LA, deps);
-  check("B1 e2e: an unreadable page defers a few hours, every time, and never writes an exit fact", [r1, r2, r3].every((r) => "defer" in r && r.defer.getTime() - NOW.getTime() === S.RECHECK_RETRY_HOURS * 3_600_000) && calls.facts.length === 0, { r1, f: calls.facts });
+  check("B1 e2e: an unreadable page defers a few hours (counted), never with an exit fact", [r1, r2].every((r) => "defer" in r && r.defer.getTime() - NOW.getTime() === S.RECHECK_RETRY_HOURS * 3_600_000) && calls.defers.join() === "1,2" && calls.facts.length === 0, { r1, d: calls.defers });
+  check(`B1 e2e: the defer cap: on try ${S.RECHECK_MAX_DEFERS} it stops deferring and is held (skip, held, not exited, no fact, a failed attempt)`, "skip" in r3 && r3.held === true && !r3.exited && r3.skip.includes(S.HELD_MARK) && W.isFailedAttempt(r3.skip) && calls.facts.length === 0, r3);
   const words = depsWith({ page: { text: "Harbor Fellowship\nThe Harbor Fellowship has been cancelled. Applications close October 20, 2026.", gone: false } });
   const rw = await S.checkBeforeSend(cand(webFind()), LA, words.deps);
   check("B1 e2e: a closing word on a web page defers with no fact (uncertain)", "defer" in rw && words.calls.facts.length === 0, rw);
@@ -209,7 +211,7 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   const at = reg.indexOf("checkBeforeSend(c, person.timezone)");
   check("B1 hook: the event_offer draft re-reads before the date check and drafting", at > 0 && at < reg.indexOf("offerable(readDates(itemDays(p.match") && /if \(!\("ok" in fresh\)\) return fresh;/.test(reg));
   const pro = src("harness/proactive.ts");
-  check("B1 hook: a sibling whose re-read exited it is archived in dispatch (one line), never left pending", /if \("skip" in d && \(d as \{ exited\?: boolean \}\)\.exited && !opts\.dryRun\) await dropCandidate\(registry, sib, "skipped", d\.skip\);/.test(pro));
+  check("B1 hook: a sibling whose re-read exited it is archived in dispatch (one line), never left pending", /if \("skip" in d && \(\(d as \{ exited\?: boolean \}\)\.exited \|\| \(d as \{ held\?: boolean \}\)\.held\) && !opts\.dryRun\) await dropCandidate\(registry, sib, "skipped", d\.skip\);/.test(pro));
 }
 
 // ================================================================ B2: undated finds don't queue blind
@@ -219,7 +221,7 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   check(`B2: an undated find waits ${S.UNDATED_QUEUE_DAYS} days in the queue, not 14`, ES.offerExpiresAt(undated, LA, NOW).getTime() - NOW.getTime() === S.UNDATED_QUEUE_DAYS * 86_400_000);
   check("B2: an undated find whose window ends goes back to the backlog; a dated one or a pick's last day doesn't", S.returnsOnExpiry({ match: undated }, LA) && !S.returnsOnExpiry({ match: lumaFind() }, LA) && !S.returnsOnExpiry({ match: undated, lastDay: "2026-10-11" }, LA));
   check("B2: a window that ended unsent is not a decision (it may be queued again) and not an exit", W.isFailedAttempt(`${S.WINDOW_ENDED}: undated, back to the backlog`) && !W.decidedByRows([{ skip_reason: `${S.WINDOW_ENDED}: undated` }]) && !/exitOnQueueExpiry|writeExitFact/.test(src("services/eventSurfacingSweep.ts").slice(src("services/eventSurfacingSweep.ts").indexOf("export async function onEventOfferDropped"), src("services/eventSurfacingSweep.ts").indexOf("export async function surfaceNewAsksNow"))));
-  check("B2: the expiry hook marks the row and keeps it in the backlog; the sweep clears a failed attempt's row so it can land again", /onEventOfferDropped\(c\.userId, c\.payload as EventOfferPayload, status, c\.id\)/.test(src("harness/proactiveRegistry.ts")) && /returnsOnExpiry\(payload[\s\S]{0,700}return;/.test(src("services/eventSurfacingSweep.ts")) && /await reopenFailedAttempt\(candidate\.userId, targetKey\);/.test(src("services/eventSurfacingSweep.ts")));
+  check("B2: the expiry hook marks the row and keeps it in the backlog; the sweep clears a failed attempt's row so it can land again", /onEventOfferDropped\(c\.userId, c\.payload as EventOfferPayload, status, c\.id, c\.targetKey, reason \?\? null\)/.test(src("harness/proactiveRegistry.ts")) && /returnsOnExpiry\(payload[\s\S]{0,700}return;/.test(src("services/eventSurfacingSweep.ts")) && /await reopenFailedAttempt\(candidate\.userId, targetKey\);/.test(src("services/eventSurfacingSweep.ts")));
 }
 
 // ================================================================ B3: as-of, live, and the check that isn't circular
@@ -334,6 +336,76 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   const m = { ...lumaFind(), checkedAt: iso(-0.1), details: details({ spotsRemaining: 7 }) };
   check("B6: what its page says now is a line the model reads", /read just now: .*7 spots left/.test(S.sourceLine(m, NOW) ?? ""), S.sourceLine(m, NOW));
   check("B6: the prompt carries it", /\$\{source \? `\\n\$\{source\}\\n` : ""\}/.test(src("harness/proactive.ts")));
+}
+
+// ================================================================ re-review of #138: the bounds, with the queue and backlog faked in memory
+
+{
+  const pool: any = (await import("../../src/db/db.js")).default;
+  const rows: any[] = [];
+  const backlogs = new Map<string, any[]>();
+  let nextId = 1;
+  const run = async (sql: string, params: any[] = []): Promise<{ rows: any[] }> => {
+    const q = sql.replace(/\s+/g, " ");
+    if (/^(BEGIN|COMMIT|ROLLBACK)/.test(q)) return { rows: [] };
+    if (/FROM co_profiles/.test(q)) return { rows: [] };
+    if (/SELECT items FROM event_backlogs/.test(q)) return { rows: backlogs.has(`${params[0]}|${params[1]}`) ? [{ items: backlogs.get(`${params[0]}|${params[1]}`) }] : [] };
+    if (/INSERT INTO event_backlogs/.test(q)) { backlogs.set(`${params[0]}|${params[1]}`, JSON.parse(params[2])); return { rows: [] }; }
+    if (/SET skip_reason = \$2 WHERE id = \$1 AND status = 'expired'/.test(q)) { const r = rows.find((x) => x.id === params[0] && x.status === "expired"); if (r) r.skip_reason = params[1]; return { rows: [] }; }
+    if (/SELECT COUNT\(\*\)::int AS n/.test(q)) return { rows: [{ n: rows.filter((r) => r.user_id === params[0] && (r.target_key === params[1] || r.target_key.startsWith(`${params[1]}#retired:`)) && String(r.skip_reason ?? "").startsWith(params[2])).length }] };
+    if (/SELECT id, skip_reason FROM proactive_candidates WHERE user_id = \$1 AND target_key = \$2 AND status <> 'pending'/.test(q)) return { rows: rows.filter((r) => r.user_id === params[0] && r.target_key === params[1] && r.status !== "pending") };
+    if (/SET target_key = target_key \|\| '#retired:'/.test(q)) { for (const r of rows) if (params[1].includes(r.id) && r.status !== "pending") r.target_key = `${r.target_key}#retired:${r.id}`; return { rows: [] }; }
+    throw new Error(`fake db: unhandled ${q.slice(0, 80)}`);
+  };
+  const realQuery = pool.query, realConnect = pool.connect;
+  pool.query = run;
+  pool.connect = async () => ({ query: run, release: () => {} });
+  try {
+    const rolling = webFind({ deadline: undefined, form: "opening", name: "Rolling Studio Residency", evidence: "Rolling admissions." });
+    const key = "event_offer:opportunity:rolling studio residency";
+    backlogs.set("u1|a1", [{ askText: "residencies", match: rolling, source: "full" }]);
+    const payload: any = { askId: "a1", askText: "residencies", fromProfile: false, match: rolling };
+    const held = () => backlogs.get("u1|a1")!.find((i) => i.match.name === rolling.name)?.unread ?? null;
+    const heldAfter: (string | null)[] = [];
+    for (let cycle = 1; cycle <= 3; cycle++) {
+      // queued, then its window ends unsent; dispatch marks it expired and calls the hook
+      const id = nextId++;
+      rows.push({ id, user_id: "u1", target_key: key, status: "expired", skip_reason: "expired" });
+      await ES.onEventOfferDropped("u1", payload, "expired", id as any, key, null);
+      heldAfter.push(held()?.why ?? null);
+      // the next sweep or pick reopens it (retires the row) and queues it again
+      if (!held()) await ES.reopenFailedAttempt("u1", key);
+    }
+    check(`cycle cap: expire, reopen, requeue returns it ${S.WINDOW_CYCLES_MAX - 1} times, then it's held as stalled (${heldAfter.join(",")})`, heldAfter[0] === null && heldAfter[1] === null && heldAfter[2] === "stalled", heldAfter);
+    check("cycle cap: reopen retires rows (history kept, so the count survives), never deletes", rows.length === 3 && rows.filter((r) => r.target_key.includes("#retired:")).length === 2);
+    check("cycle cap: a stalled find leaves the dispatch pool (not offerable)", !W.offerable(backlogs.get("u1|a1")![0]));
+    // The defer cap's hold goes to the same place.
+    const other = webFind({ name: "Harbor Fellowship" });
+    backlogs.set("u1|a2", [{ askText: "fellowships", match: other, source: "full" }]);
+    await ES.onEventOfferDropped("u1", { askId: "a2", askText: "fellowships", fromProfile: false, match: other }, "skipped", "9", "k", `send failed: ${S.HELD_MARK}: its page couldn't be read just now, on 3 tries`);
+    check("defer cap: the held skip keeps the find in its backlog as stalled (not dropped)", backlogs.get("u1|a2")!.length === 1 && backlogs.get("u1|a2")![0].unread?.why === "stalled");
+  } finally {
+    pool.query = realQuery;
+    pool.connect = realConnect;
+  }
+  // The daily prune: a stalled item is never classified back in; it accrues days and exits after UNREAD_DAYS, on a scoped fact.
+  let classified = 0;
+  const facts: any[] = [];
+  let items: any[] = [{ askText: "residencies", match: webFind({ deadline: undefined, form: "opening", name: "Rolling Studio Residency" }), source: "full", unread: { days: [], why: "stalled", note: "held for daily re-reads: its queue window ended unsent 3 times" } }];
+  const deps: any = {
+    backlogs: async () => [{ ask_id: "a1", items }], merge: async (_u: string, _a: string, ch: any) => { items = W.applyChange(items, ch, F.exitKey); },
+    classify: async (m: any) => { classified++; return { match: m, result: "opening" }; }, zone: async () => LA, key: F.exitKey, writeFact: async (e: any) => { facts.push(e); },
+  };
+  for (const day of ["2026-10-11", "2026-10-12", "2026-10-13"]) await W.pruneBacklogs("u1", day, deps);
+  check(`stalled: never re-classified back in; out after ${W.UNREAD_DAYS} separate days on a scoped fact`, classified === 0 && items.length === 0 && facts.length === 1 && W.isScoped(facts[0]) && /couldn't be sent after repeated tries/.test(facts[0].reason), { classified, items, facts });
+}
+
+// Re-review of #138: closing words about the find with no date on file, and one shared name word.
+{
+  check("closedOnPage: 'Applications for the Climate Fellowship 2026 are now closed' (no date on file) is caught", S.closedOnPage("Applications for the Climate Fellowship 2026 are now closed.", "Climate Fellowship 2026", null) !== null);
+  check("closedOnPage: this year's closure is caught when the name has no year", S.closedOnPage("Applications for the Climate Fellowship are now closed for 2026.", "Climate Fellowship", null) !== null);
+  check("closedOnPage: 'Past: Founders Breakfast NYC, Sold out' doesn't hold 'Founders Dinner SF'", S.closedOnPage("Upcoming\nFounders Dinner SF, Oct 14.\nPast: Founders Breakfast NYC. Sold out.", "Founders Dinner SF", null) === null);
+  check("closedOnPage: one shared word isn't enough ('Founders Breakfast is sold out' vs 'Founders Dinner')", S.closedOnPage("The Founders Breakfast is sold out.", "Founders Dinner", null) === null && S.closedOnPage("The Founders Dinner is sold out.", "Founders Dinner", null) !== null);
 }
 
 console.log(`phase B verify at send: ${total - failed}/${total} passed`);

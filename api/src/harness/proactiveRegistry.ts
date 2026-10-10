@@ -196,8 +196,8 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload as EventOfferPayload;
       await writeMemory(c.userId, "event_discovery_surfacing", `Sent directly${isShortNotice(p.match) ? " (short notice)" : ""}: ${p.match.name}`);
     },
-    async onDropped(c, status) {
-      await onEventOfferDropped(c.userId, c.payload as EventOfferPayload, status, c.id);
+    async onDropped(c, status, reason) {
+      await onEventOfferDropped(c.userId, c.payload as EventOfferPayload, status, c.id, c.targetKey, reason ?? null);
     },
   },
 

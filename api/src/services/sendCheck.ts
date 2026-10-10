@@ -32,6 +32,18 @@ import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
 export const RECHECK_FRESH_MS = 30 * 60 * 1000;
 // Anything uncertain is read again after this long (and never later than the row's own expiry, harness/proactive.ts).
 export const RECHECK_RETRY_HOURS = 3;
+// Bounds (re-review of #138: an unreadable or "closed" page deferred every ~3h forever, a pick's model read and a page read each
+// time; a rolling opening cycled expire, reopen, requeue forever). After this many defers, or this many queue windows ended unsent,
+// the find is held in its backlog as stalled (workingSet.ts Unread): out of the dispatch pool, out of the working set after its days.
+export const RECHECK_MAX_DEFERS = 3;
+export const WINDOW_CYCLES_MAX = 3;
+// In a skip reason: the backlog holds the find instead of dropping it (eventSurfacingSweep.ts onEventOfferDropped). Its "send failed"
+// prefix makes the row a failed attempt, never a decision.
+export const HELD_MARK = "held for daily re-reads";
+// Pure: after `ended` queue windows ended unsent for one thing, it goes back to the backlog, or is held.
+export function windowCycleAction(ended: number): "return" | "hold" {
+  return ended >= WINDOW_CYCLES_MAX ? "hold" : "return";
+}
 // How long an undated find may wait in the queue (B2): it used to be 14 days, never read again. Its window ending returns it to
 // the backlog (eventSurfacingSweep.ts onEventOfferDropped), never an exit.
 export const UNDATED_QUEUE_DAYS = 3;
@@ -55,7 +67,7 @@ const zoneOr = (zone: string | null | undefined) => (zone && DateTime.now().setZ
 const localDay = (now: Date, zone: string | null) => DateTime.fromJSDate(now).setZone(zoneOr(zone)).toISODate()!;
 
 // Closing words on a page (review of #138: "cancelled" with no "is/was/has been" in front read a refund policy as a cancellation).
-const CLOSED = /\b(sold out|(?:has been|was|is|been) (?:cancel+ed|postponed)|registration (?:is |has )?(?:now )?closed|applications? (?:are |is |have )?(?:now )?closed|no longer accepting (?:applications|registrations|rsvps)|fully booked|at capacity)\b/i;
+const CLOSED = /\b(sold out|(?:has been|was|is|been) (?:cancel+ed|postponed)|(?:registration|applications?|rsvps?)(?: for [^.!?]{1,80}?)? (?:are |is |has |have )?(?:now )?closed|no longer accepting (?:applications|registrations|rsvps)|fully booked|at capacity)\b/i;
 // Conditional and policy wording around a closing word: never a statement that it happened.
 const CONDITIONAL = /\b(?:if|unless|in case|should|whether|what if|what happens|refunds?|refundable|policy|policies|faq|terms|in the event)\b/i;
 // A tier or level of the thing ("VIP tier: waitlist") isn't the thing.
@@ -63,32 +75,47 @@ const TIER_WORDS = /\b(?:vip|tier|level|add-?on|upgrade|early bird|premium)\b/i;
 // Pure: a closing word that is genuinely about this find. The sentence (or the heading line right above it) must carry a word of its
 // name; the sentence must not be conditional or policy; a sentence naming another date (a past cohort's year, another session) is
 // about that date, not this find; and a tier of it isn't it. Null when there's nothing it could be sure of.
+// More of the name has to be there than one shared word (re-review of #138: "Past: Founders Breakfast NYC, sold out" held "Founders
+// Dinner SF" on "founders" alone): all of its distinctive words when it has one or two, else all but one.
+const NAME_STOP = new Set(["with", "from", "your", "this", "that", "event", "night", "the", "and", "for", "2025", "2026", "2027"]);
+export function nameWordsIn(text: string, name: string): boolean {
+  const words = [...new Set(name.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !/^\d+$/.test(w) && !NAME_STOP.has(w)))];
+  if (!words.length) return false;
+  const lower = text.toLowerCase();
+  const have = words.filter((w) => new RegExp(`\\b${w}\\b`).test(lower)).length;
+  return have >= (words.length <= 2 ? words.length : words.length - 1);
+}
+// A sentence or heading about something else: past events, another listing.
+const OTHER_EVENT = /^\s*(?:past|previous|earlier|archived?|recent)\b|\bpast events?\b|\bprevious (?:events?|sessions?|editions?)\b/i;
 export function closedOnPage(page: string, name: string, onFile: string | null = null): string | null {
-  const words = name.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length >= 4 && !/^\d+$/.test(w));
-  if (!words.length) return null;
+  if (!name.trim()) return null;
   const lines = page.split(/\n+/);
   for (let li = 0; li < lines.length; li++) {
-    const heading = li > 0 && lines[li - 1].length < 120 ? lines[li - 1].toLowerCase() : "";
+    // A heading: the line above, when it's short and isn't itself a sentence.
+    const above = li > 0 ? lines[li - 1].trim() : "";
+    const heading = above && above.length < 80 && !/[.!?]$/.test(above) ? above : "";
+    if (OTHER_EVENT.test(lines[li])) continue;
     for (const sentence of lines[li].split(/(?<=[.!?])\s+/)) {
       const m = sentence.match(CLOSED);
       if (!m) continue;
-      const lower = sentence.toLowerCase();
       if (CONDITIONAL.test(sentence) || /\?/.test(sentence) || TIER_WORDS.test(sentence)) continue;
-      if (!words.some((w) => lower.includes(w) || heading.includes(w))) continue;
-      if (otherDate(sentence, onFile)) continue;
+      if (OTHER_EVENT.test(sentence) || OTHER_EVENT.test(heading)) continue;
+      if (!nameWordsIn(sentence, name) && !(nameWordsIn(heading, name) && !/[A-Z][a-z]+ [A-Z][a-z]+/.test(sentence.replace(/^\W+/, "").slice(1)))) continue;
+      if (otherDate(sentence, onFile, name)) continue;
       return m[0];
     }
   }
   return null;
 }
-// Pure: does a sentence name a date (or a year) other than the one on file? A find with no date on file: any dated sentence is about
-// something more specific than the find itself, so it isn't counted either.
-function otherDate(sentence: string, onFile: string | null): boolean {
-  const year = onFile ? Number(onFile.slice(0, 4)) : new Date().getFullYear();
-  const dates = datesOnPage(sentence, year);
-  const years = [...sentence.matchAll(/\b(20\d{2})\b/g)].map((y) => y[1]);
-  if (!dates.size && !years.length) return false;
-  if (!onFile) return true;
+// Pure: does a sentence name a date (or a year) other than the one on file? With no date on file, a full date is about something more
+// specific than the find, but the current and next year, and any year in the find's own name, are the find's own (re-review of
+// #138: "Applications for the Climate Fellowship 2026 are now closed" read as another year and went out as live).
+function otherDate(sentence: string, onFile: string | null, name = "", now = new Date()): boolean {
+  const year = onFile ? Number(onFile.slice(0, 4)) : now.getFullYear();
+  const own = new Set([...name.matchAll(/\b(20\d{2})\b/g)].map((y) => y[1]));
+  const dates = datesOnPage(sentence.replace(/\b20\d{2}\b/g, (y) => (own.has(y) ? "" : y)), year);
+  const years = [...sentence.matchAll(/\b(20\d{2})\b/g)].map((y) => y[1]).filter((y) => !own.has(y));
+  if (!onFile) return dates.size > 0 || years.some((y) => Number(y) !== year && Number(y) !== year + 1);
   return [...dates].some((d) => d !== onFile.slice(0, 10)) || years.some((y) => y !== onFile.slice(0, 4));
 }
 
@@ -158,6 +185,8 @@ export type SendCheckDeps = RecheckDeps &
     now: () => Date;
     // The refreshed record onto the waiting row, so every later read (the reply's details, the send record) has it.
     saveMatch: (candidateId: string, match: TierMatch) => Promise<void>;
+    // How many times the re-read held this waiting text back (RECHECK_MAX_DEFERS).
+    saveDefers: (candidateId: string, defers: number) => Promise<void>;
   };
 export const realSendCheckDeps: SendCheckDeps = {
   luma: async (url) => (await import("./eventDetails.js")).fetchLumaEventDetails(url, { maxAgeMs: RECHECK_FRESH_MS }),
@@ -168,10 +197,15 @@ export const realSendCheckDeps: SendCheckDeps = {
     const pool = (await import("../db/db.js")).default;
     await pool.query(`UPDATE proactive_candidates SET payload = jsonb_set(payload, '{match}', $2::jsonb), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [id, JSON.stringify(match)]);
   },
+  saveDefers: async (id, defers) => {
+    const pool = (await import("../db/db.js")).default;
+    await pool.query(`UPDATE proactive_candidates SET payload = payload || jsonb_build_object('recheckDefers', $2::int), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [id, defers]);
+  },
 };
 
 export type SendCandidate = { id: string; userId: string; payload: any };
-export type SendCheck = { ok: true; match: TierMatch } | { skip: string; exited: boolean } | { defer: Date; reason: string };
+// held: skipped after RECHECK_MAX_DEFERS defers; the caller archives the row and the backlog holds the find (HELD_MARK in the reason).
+export type SendCheck = { ok: true; match: TierMatch } | { skip: string; exited: boolean; held?: boolean } | { defer: Date; reason: string };
 
 // Pure: the fact an exit writes, scoped to this find (and the ask it was for), never wider.
 export function findExit(userId: string, match: TierMatch, askText: string | null | undefined, state: ExitState, reason: string) {
@@ -197,7 +231,13 @@ export async function checkBeforeSend(c: SendCandidate, zone: string | null, dep
     if (r.verified && !dry) await deps.saveMatch(c.id, r.match).catch((err: any) => console.error("sendCheck: refreshed record not saved (non-fatal):", err?.message ?? err));
     return { ok: true, match: r.match };
   }
-  if (!r.exit) return { defer: later, reason: `not sent unchecked: ${r.why}` };
+  if (!r.exit) {
+    const defers = Number(p.recheckDefers ?? 0) + 1;
+    if (defers >= RECHECK_MAX_DEFERS) return { skip: `send failed: ${HELD_MARK}: ${r.why}, on ${defers} tries`, exited: false, held: true };
+    p.recheckDefers = defers;
+    if (!dry) await deps.saveDefers(c.id, defers).catch(() => {});
+    return { defer: later, reason: `not sent unchecked: ${r.why} (try ${defers} of ${RECHECK_MAX_DEFERS})` };
+  }
   if (dry) return { skip: `re-read at send: ${r.why} (dry run: nothing written)`, exited: true };
   const ok = await writeExitFact(findExit(c.userId, match, p.askText, r.state ?? "expired", r.why), deps);
   return ok ? { skip: `re-read at send: ${r.why}`, exited: true } : { defer: later, reason: `re-read at send: ${r.why}; its exit fact couldn't be written, so it waits` };
