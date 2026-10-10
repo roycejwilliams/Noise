@@ -48,13 +48,18 @@ export function renderDetailsAsOf(name: string, d: EventDetails, checkedAt: stri
   return lines.map((l) => (VOLATILE_LINE.test(l) ? `${l.replace(/\.\s*$/, "")} (as of ${when}, ${STALE_MARK}; say it as of then, or check it again).` : l));
 }
 
-// Pure: their message asks something only a live read answers truly: spots, sold out, still on, the time, the price.
+// Pure: their message is an explicit live-detail question: spots or tickets left, sold out, still on, what time it starts, the price.
+// Narrow on purpose (review of #138: "I'm still on the fence", "any chance you're around Sunday" and "I want to start running again"
+// each set off a read they waited on). Royce has an open question on keeping the live read at all; it stays narrow and bounded.
 export function asksLiveDetail(message: string): boolean {
-  const m = message.toLowerCase();
+  const m = message.toLowerCase().replace(/[’‘]/g, "'");
   return (
-    /\b(?:still|any|are there|is there|got)\b[^.?!]{0,30}\b(?:spots?|seats?|tickets?|room|space|places?|openings?|available|left|open|on|happening)\b/.test(m) ||
-    /\bsold out\b|\b(?:is it|it's|is that|already) full\b|\bwait ?list\b|\bcancel+ed\b|\bpostponed\b/.test(m) ||
-    /\bwhat time\b|\bwhen (?:does|is) (?:it|that|the)\b|\bstart(?:s|ing)?\b|\bhow much\b|\bprice\b|\bcost\b|\btickets?\b/.test(m)
+    /\b(?:any|still|are there|is there)\s+(?:\w+\s+)?(?:spots?|seats?|tickets?|room|space)\b/.test(m) ||
+    /\b(?:spots?|seats?|tickets?)\s+(?:left|available|remaining)\b/.test(m) ||
+    /\b(?:sold out|full)\s*\?|\bis it (?:sold out|full)\b|\bdid it sell out\b/.test(m) ||
+    /\b(?:is|it's) (?:it |that |this |the \w+ )?still (?:on|happening|going ahead)\b|\bstill (?:on|happening) for\b|\b(?:was|is) it (?:cancel+ed|postponed)\b/.test(m) ||
+    /\bwhat time (?:does|is|do)\b|\bwhen does (?:it|that|this|the \w+) (?:start|begin|kick off)\b/.test(m) ||
+    /\bhow much (?:is|are|does|do)\b|\bwhat(?:'s| is| are) the (?:price|cost)\b|\bticket price\b|\bis it free\b/.test(m)
   );
 }
 
@@ -74,10 +79,12 @@ function clocks(s: string): string[] {
   return out;
 }
 // Pure: the volatile things a piece of text states, as comparable tokens (a draft's sentence or a fact line, read the same way):
-// spots:12, reg:40, price:25, price:free, soldout, avail, time:19:00.
-export function volatileTokens(text: string): string[] {
+// spots:12, reg:40, price:25, price:free, soldout, avail. Clock times only with o.times (review of #138: "It starts at 7pm Saturday"
+// in a plain "ok I'm in" reply and "want me to remind you at 6:30pm?" were cut): the cut covers availability, price and counts only;
+// a stale time is marked in its fact, never cut from a reply.
+export function volatileTokens(text: string, o: { times?: boolean } = {}): string[] {
   const t = text.replace(/[’‘]/g, "'");
-  const out = new Set<string>(clocks(t));
+  const out = new Set<string>(o.times ? clocks(t) : []);
   for (const m of t.matchAll(/\$\s?(\d[\d,]*(?:\.\d+)?)/g)) out.add(`price:${num(m[1])}`);
   for (const m of t.matchAll(/\b(\d[\d,]*(?:\.\d+)?)\s?(?:usd|dollars|bucks)\b/gi)) out.add(`price:${num(m[1])}`);
   if (/\b(?:it'?s|is|are|totally|completely)\s+free\b|\bfree (?:to (?:attend|join|go)|entry|admission|tickets?)\b|\bno (?:cover|cost|charge)\b/i.test(t)) out.add("price:free");

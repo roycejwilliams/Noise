@@ -78,7 +78,7 @@ function revealFacts(askText: string, fromProfile: boolean, match: TierMatch): F
 // What a reveal's prices and counts may come from (Phase B, B4, 2026-10-10): its name, its own page's record (refreshed at send,
 // services/sendCheck.ts), the post it came from, and what they said themselves. Never the fit read (whyItFits), which is a model's.
 export function captionRecord(askText: string, match: TierMatch, own: string[] = []): string {
-  return [match.name, askText, "event_date" in match ? match.event_date : "", "deadline" in match ? (match.deadline ?? "") : "", ...(match.details ? renderEventDetails(match.name, match.details) : []), match.opportunity?.postText ?? "", ...own].join("\n");
+  return [match.name, askText, "event_date" in match ? match.event_date : "", "deadline" in match ? (match.deadline ?? "") : "", ...(match.details ? renderEventDetails(match.name, match.details) : []), match.opportunity?.postText ?? "", match.pageNow ?? "", ...own].join("\n");
 }
 
 // Tease: hint without naming it, one yes/no question.

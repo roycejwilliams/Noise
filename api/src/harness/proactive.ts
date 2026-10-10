@@ -48,7 +48,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { renderEmotionalContext } from "./emotion.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
-import { captionNumbersBacked } from "../services/sendCheck.js";
+import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
@@ -1870,6 +1870,8 @@ export async function sweepHold(userId: string, kind: SweepKind, now = new Date(
 
 // dryRun drafts and composes what would go out, prints it, and stops before the ledger and the send.
 export async function dispatchForUser(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
+  // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
+  if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUser(registry, userId, opts));
   const person = await loadPerson(userId);
   if (!person) return;
 
@@ -1973,8 +1975,9 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
 
   if ("defer" in draft) {
-    await pool.query(
-      `UPDATE proactive_candidates SET due_at = $2, expires_at = $3, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+    // A find's defer (a re-read held it, Phase B) never pushes it past its own expiry: a dated row would outlive its date.
+    if (!opts.dryRun) await pool.query(
+      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type = 'event_offer' AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
       [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000)],
     );
     await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });

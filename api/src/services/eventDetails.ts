@@ -369,14 +369,19 @@ export async function lumaDetailsFromPost(postText: string): Promise<{ details: 
 
 export async function enrichMatch(match: TierMatch | EnrichedMatch, person?: PersonForFit): Promise<EnrichedMatch> {
   const m: EnrichedMatch = { ...match };
+  // A read here is a read: stamped, so a reply doesn't call it stale (Phase B, review of #138; the cache is at most an hour old).
   if (m.kind !== "opportunity" && !m.details && "url" in m && m.url) {
     m.details = (await fetchLumaEventDetails(m.url)) ?? undefined;
+    if (m.details) m.checkedAt = new Date().toISOString();
   }
   if (m.kind === "opportunity" && !m.opportunity && m.evidence) m.opportunity = { postText: m.evidence };
   // Any event Co surfaces gets its time: an X post with a Luma link reads it from Luma.
   if (!m.details && m.opportunity?.postText) {
     const found = await lumaDetailsFromPost(m.opportunity.postText).catch(() => null);
-    if (found) m.details = found.details;
+    if (found) {
+      m.details = found.details;
+      m.checkedAt = new Date().toISOString();
+    }
   }
   if (person && !m.whyItFits) {
     const fit = await explainFit(m, person);

@@ -51,9 +51,9 @@ const details = (o: Partial<EventDetails> = {}): EventDetails => ({ startAt: "20
 const lumaFind = (o: any = {}): any => ({ tier: 2, kind: "public_event", event_api_id: "evt-1", event_date: "2026-10-13", name: "Founders Supper Club", url: "https://lu.ma/supper", reason: "founders dinner", whyItFits: "a small founders dinner", details: details(), ...o });
 const webFind = (o: any = {}): any => ({ tier: 3, kind: "opportunity", source: "web", name: "Harbor Fellowship", url: "https://harbor.example.org/apply", reason: "a fellowship for climate founders", deadline: "2026-10-20", form: "opening", evidence: "Harbor Fellowship. Applications close October 20, 2026.", ...o });
 
-type Calls = { luma: string[]; page: string[]; facts: any[]; saved: any[]; misses: number[] };
+type Calls = { luma: string[]; page: string[]; facts: any[]; saved: any[] };
 const depsWith = (o: { luma?: EventDetails | null; page?: { text: string | null; gone: boolean }; factFails?: boolean } = {}): { deps: import("../../src/services/sendCheck.js").SendCheckDeps; calls: Calls } => {
-  const calls: Calls = { luma: [], page: [], facts: [], saved: [], misses: [] };
+  const calls: Calls = { luma: [], page: [], facts: [], saved: [] };
   return {
     calls,
     deps: {
@@ -62,7 +62,6 @@ const depsWith = (o: { luma?: EventDetails | null; page?: { text: string | null;
       now: () => NOW,
       writeFact: async (e) => { if (o.factFails) throw new Error("db down"); calls.facts.push(e); },
       saveMatch: async (_id, m) => { calls.saved.push(m); },
-      saveMisses: async (_id, n) => { calls.misses.push(n); },
     },
   };
 };
@@ -129,7 +128,16 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   const r = await S.recheckFind(lumaFind(), { now: NOW, zone: LA, deps: depsWith({ luma: details({ spotsRemaining: 0, soldOut: false }) }).deps });
   check("B1: full (no spots left) exits", !r.ok && r.exit && /no spots left/.test(r.why));
   const s = await S.recheckFind(lumaFind(), { now: NOW, zone: LA, deps: depsWith({ luma: details({ startAt: iso(-1) }) }).deps });
-  check("B1: already started exits", !s.ok && s.exit && /already started/.test(s.why));
+  check("B1: under way with no end time exits", !s.ok && s.exit && /under way/.test(s.why));
+  const fest = await S.recheckFind(lumaFind(), { now: NOW, zone: LA, deps: depsWith({ luma: details({ startAt: iso(-20), endAt: iso(30) }) }).deps });
+  check("B1: a multi-day event that started but hasn't ended stays (its end time decides)", fest.ok, fest);
+  const ended = await S.recheckFind(lumaFind(), { now: NOW, zone: LA, deps: depsWith({ luma: details({ startAt: iso(-5), endAt: iso(-1) }) }).deps });
+  check("B1: one that's over exits", !ended.ok && ended.exit && /over/.test(ended.why));
+  const slugCalls: string[] = [];
+  const slug = await S.recheckFind(lumaFind({ url: "supper" }), { now: NOW, zone: LA, deps: { ...depsWith().deps, luma: async (u) => { slugCalls.push(u); return details(); } } });
+  check("B1: a Co or public event with a Luma slug (not a full link) is read on Luma too", slug.ok && slug.verified && slugCalls[0] === "supper");
+  const coNoUrl = await S.recheckFind(lumaFind({ tier: 1, kind: "co_event", url: undefined }), { now: NOW, zone: LA, deps: depsWith().deps });
+  check("B1: a Co event with no link goes marked unverified", coNoUrl.ok && !coNoUrl.verified);
   const u = await S.recheckFind(lumaFind(), { now: NOW, zone: LA, deps: depsWith({ luma: null }).deps });
   check("B1: an unreadable event page is a miss, never an exit or a send", !u.ok && !u.exit);
 }
@@ -138,27 +146,52 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   check("B1: a dead link (404/410) exits as cancelled", !r.ok && r.exit && r.state === "cancelled" && /dead link/.test(r.why), r);
   const long = "Lorem ipsum. ".repeat(200);
   const c1 = await S.recheckFind(webFind(), { now: NOW, zone: LA, deps: depsWith({ page: { text: `Harbor Fellowship 2026. The Harbor Fellowship has been cancelled this year. ${long} Applications close October 20, 2026.`, gone: false } }).deps });
-  check("B1: 'cancelled' next to its name exits as cancelled", !c1.ok && c1.exit && c1.state === "cancelled", c1);
+  check("B1: 'has been cancelled' next to its name holds it (defer), never a permanent exit: words aren't certain", !c1.ok && !c1.exit && /cancel/.test(c1.why), c1);
   const c2 = await S.recheckFind(webFind(), { now: NOW, zone: LA, deps: depsWith({ page: { text: `Harbor Fellowship. Applications close October 20, 2026. ${long} Our unrelated gala sold out last spring.`, gone: false } }).deps });
   check("B1: 'sold out' far from its name on a long page is not about it (stays)", c2.ok, c2);
   const c3 = await S.recheckFind(webFind(), { now: NOW, zone: LA, deps: depsWith({ page: { text: `Harbor Fellowship. Applications now close November 3, 2026. ${long}`, gone: false } }).deps });
-  check("B1: a date on file its page no longer states is held (a miss), not sent with the old date", !c3.ok && !c3.exit && /isn't on its page/.test(c3.why), c3);
+  check("B1: a date on file its page doesn't show is held (defer), not sent with the old date, never an exit", !c3.ok && !c3.exit && /isn't shown on its page/.test(c3.why), c3);
   const ok = await S.recheckFind(webFind(), { now: NOW, zone: LA, deps: depsWith({ page: { text: `Harbor Fellowship. Applications close October 20, 2026. Stipend $5,000. ${long}`, gone: false } }).deps });
-  check("B1: a page that still holds is the new record (its text now, stamped)", ok.ok && ok.verified && /\$5,000/.test(String((ok.match as any).evidence)) && (ok.match as any).checkedAt === NOW.toISOString(), ok);
+  check("B1: a page that still holds: its text now in pageNow, stamped; the evidence it was found from is kept", ok.ok && ok.verified && /\$5,000/.test(String((ok.match as any).pageNow)) && (ok.match as any).evidence === webFind().evidence && (ok.match as any).checkedAt === NOW.toISOString(), ok);
   const x = await S.recheckFind({ tier: 3, kind: "opportunity", source: "x", name: "Demo night", url: "https://x.com/someone/status/1", reason: "demo night", opportunity: { postText: "Demo night, 30 spots" } } as any, { now: NOW, zone: LA, deps: depsWith().deps });
   check("B1: an X post with no event page goes as found, marked unverified (no read possible)", x.ok && !x.verified);
   const xl = await S.recheckFind({ tier: 3, kind: "opportunity", source: "x", name: "Demo night", url: "https://x.com/someone/status/1", reason: "demo night", opportunity: { postText: "Demo night https://lu.ma/demo" } } as any, { now: NOW, zone: LA, deps: depsWith({ luma: details({ soldOut: true }) }).deps });
   check("B1: an X post with a Luma page is checked on that page", !xl.ok && xl.exit);
 }
-// checkBeforeSend: misses, fact failures, fresh reads.
+// checkBeforeSend end to end, stub deps: a certain exit writes its fact; anything uncertain defers and writes nothing, however often.
 {
   const { deps, calls } = depsWith({ luma: null });
   const c = cand(lumaFind());
   const r1 = await S.checkBeforeSend(c, LA, deps);
-  check("B1: an unreadable page defers a few hours and counts the try", "defer" in r1 && calls.misses[0] === 1 && r1.defer.getTime() - NOW.getTime() === S.RECHECK_RETRY_HOURS * 3_600_000, r1);
-  c.payload.recheckMisses = S.RECHECK_MAX_MISSES - 1;
+  const r2 = await S.checkBeforeSend(c, LA, deps);
   const r3 = await S.checkBeforeSend(c, LA, deps);
-  check(`B1: after ${S.RECHECK_MAX_MISSES} unread tries it exits on that fact (never sent unchecked)`, "skip" in r3 && r3.exited && calls.facts.length === 1 && /couldn't be read/.test(calls.facts[0].reason), { r3, f: calls.facts });
+  check("B1 e2e: an unreadable page defers a few hours, every time, and never writes an exit fact", [r1, r2, r3].every((r) => "defer" in r && r.defer.getTime() - NOW.getTime() === S.RECHECK_RETRY_HOURS * 3_600_000) && calls.facts.length === 0, { r1, f: calls.facts });
+  const words = depsWith({ page: { text: "Harbor Fellowship\nThe Harbor Fellowship has been cancelled. Applications close October 20, 2026.", gone: false } });
+  const rw = await S.checkBeforeSend(cand(webFind()), LA, words.deps);
+  check("B1 e2e: a closing word on a web page defers with no fact (uncertain)", "defer" in rw && words.calls.facts.length === 0, rw);
+  const dead = depsWith({ page: { text: null, gone: true } });
+  const rd = await S.checkBeforeSend(cand(webFind()), LA, dead.deps);
+  check("B1 e2e: a 404 exits: one scoped fact, then skip+exited (certain)", "skip" in rd && rd.exited && dead.calls.facts.length === 1 && dead.calls.facts[0].state === "cancelled" && W.isScoped(dead.calls.facts[0]), { rd, f: dead.calls.facts });
+  const sold = depsWith({ luma: details({ soldOut: true }) });
+  const dry = await S.checkBeforeSend(cand(lumaFind()), LA, sold.deps, { dryRun: true });
+  const dry2 = await S.sendCheckDryRun.run(true, () => S.checkBeforeSend(cand(lumaFind()), LA, depsWith({ luma: details({ spotsRemaining: 4 }) }).deps));
+  check("B1: a dry run reads but writes nothing (no exit fact, no saved record), by flag or by dispatch's scope", "skip" in dry && sold.calls.facts.length === 0 && sold.calls.saved.length === 0 && "ok" in dry2, { dry, f: sold.calls });
+  check("B1: dispatch runs a dry run inside that scope, and a find's defer never extends its expiry", /if \(opts\.dryRun && !sendCheckDryRun\.getStore\(\)\) return sendCheckDryRun\.run\(true/.test(src("harness/proactive.ts")) && /LEAST\(expires_at, \$3\)/.test(src("harness/proactive.ts")));
+}
+// closedOnPage: none of these is about the find being closed (review of #138), so none holds it.
+{
+  const name = "Harbor Fellowship";
+  const negatives: [string, string, string | null][] = [
+    ["refund policy", "Harbor Fellowship info session. Full refund if the event is cancelled.", null],
+    ["no refunds unless", "Harbor Fellowship dinner. No refunds unless cancelled by the host.", null],
+    ["another sold-out event on a host page", "Harbor Fellowship\nApplications close October 20, 2026.\n\nPast events\nThe Winter Gala sold out in hours.", "2026-10-20"],
+    ["a past session of a series", "Harbor Fellowship monthly salon. The Oct 2 session was cancelled; Nov 6 is open.", "2026-11-06"],
+    ["last year's cohort", "Harbor Fellowship. 2025 cohort: applications closed. 2026 applications open now.", "2026-10-20"],
+    ["a tier of it", "Harbor Fellowship dinner. VIP tier is sold out; general admission open.", null],
+    ["an FAQ", "Harbor Fellowship FAQ. What if the event is at capacity? We'll add a second night.", null],
+  ];
+  for (const [label, page, onFile] of negatives) check(`closedOnPage: ${label} is not a closure`, S.closedOnPage(page, name, onFile) === null, S.closedOnPage(page, name, onFile));
+  check("closedOnPage: a plain statement about it is caught (and still only holds it)", S.closedOnPage("Harbor Fellowship\nThe Harbor Fellowship has been cancelled for this year.", name, null) !== null);
 }
 {
   const { deps, calls } = depsWith({ luma: details({ soldOut: true }), factFails: true });
@@ -184,11 +217,9 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
 {
   const undated = webFind({ deadline: undefined, form: "opening", evidence: "Rolling admissions." });
   check(`B2: an undated find waits ${S.UNDATED_QUEUE_DAYS} days in the queue, not 14`, ES.offerExpiresAt(undated, LA, NOW).getTime() - NOW.getTime() === S.UNDATED_QUEUE_DAYS * 86_400_000);
-  const facts: any[] = [];
-  const ok = await S.exitOnQueueExpiry("u1", { match: undated, askText: "climate fellowships" }, LA, { writeFact: async (e) => { facts.push(e); } });
-  check("B2: when its window runs out it exits on a scoped fact (no silent drop)", ok && facts.length === 1 && W.isScoped(facts[0]) && /no date/.test(facts[0].reason) && facts[0].state === "expired", facts);
-  check("B2: a dated one's reason is its time; a pick's is its last useful day", /its time \(2026-10-13\)/.test(S.queueExpiryReason({ match: lumaFind() }, LA)) && /last useful day \(2026-10-11\)/.test(S.queueExpiryReason({ match: lumaFind(), lastDay: "2026-10-11" }, LA)));
-  check("B2: the queue's expiry hook passes its status through to that exit", /onEventOfferDropped\(c\.userId, c\.payload as EventOfferPayload, status\)/.test(src("harness/proactiveRegistry.ts")) && /if \(status === "expired"\)[\s\S]{0,200}exitOnQueueExpiry/.test(src("services/eventSurfacingSweep.ts")));
+  check("B2: an undated find whose window ends goes back to the backlog; a dated one or a pick's last day doesn't", S.returnsOnExpiry({ match: undated }, LA) && !S.returnsOnExpiry({ match: lumaFind() }, LA) && !S.returnsOnExpiry({ match: undated, lastDay: "2026-10-11" }, LA));
+  check("B2: a window that ended unsent is not a decision (it may be queued again) and not an exit", W.isFailedAttempt(`${S.WINDOW_ENDED}: undated, back to the backlog`) && !W.decidedByRows([{ skip_reason: `${S.WINDOW_ENDED}: undated` }]) && !/exitOnQueueExpiry|writeExitFact/.test(src("services/eventSurfacingSweep.ts").slice(src("services/eventSurfacingSweep.ts").indexOf("export async function onEventOfferDropped"), src("services/eventSurfacingSweep.ts").indexOf("export async function surfaceNewAsksNow"))));
+  check("B2: the expiry hook marks the row and keeps it in the backlog; the sweep clears a failed attempt's row so it can land again", /onEventOfferDropped\(c\.userId, c\.payload as EventOfferPayload, status, c\.id\)/.test(src("harness/proactiveRegistry.ts")) && /returnsOnExpiry\(payload[\s\S]{0,700}return;/.test(src("services/eventSurfacingSweep.ts")) && /await reopenFailedAttempt\(candidate\.userId, targetKey\);/.test(src("services/eventSurfacingSweep.ts")));
 }
 
 // ================================================================ B3: as-of, live, and the check that isn't circular
@@ -201,7 +232,8 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   const rf = RG.createReplyFacts();
   RG.addEventFacts(rf, lumaFind(), null, LA);
   check("B3: the reply's event facts (the offer they said yes to) carry the mark too", rf.facts.some((f: any) => /12 spots left \(as of an earlier day, not checked since/.test(f.text)));
-  check("B3: a time stated as current from a stale fact is caught; from a fresh one, passes", A.staleCurrentClaims("It starts at 6pm.", old).length === 1 && A.staleCurrentClaims("It starts at 6pm.", fresh).length === 0, A.staleCurrentClaims("It starts at 6pm.", old));
+  check("B3: times are marked in their facts but never cut from a reply ('It starts at 6pm Saturday', 'remind you at 5:30pm?')", A.staleCurrentClaims("Ok, it starts at 6pm Saturday.", old).length === 0 && A.staleCurrentClaims("Want me to remind you at 5:30pm?", old).length === 0);
+  check("B3: a Luma read in enrichMatch is stamped (a fresh read is never called stale)", /if \(m\.details\) m\.checkedAt = new Date\(\)\.toISOString\(\);/.test(src("services/eventDetails.ts")));
   check("B3: a detail no fact states is left to the other checks (no double flag)", A.staleCurrentClaims("There are 80 seats.", old).length === 0);
   check("B3: 'not sold out' and 'still spots' read as availability claims", A.volatileTokens("It's not sold out, still a few spots.").includes("avail"));
   // The claim read's citation: a stale fact never backs the same detail said as current.
@@ -224,7 +256,9 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   check(`B3: no live question, no read; a live one reads at most ${A.LIVE_READS_MAX} Luma pages`, none2.length === 0 && many.length === A.LIVE_READS_MAX && reads === A.LIVE_READS_MAX);
   const failedRead = await A.liveDetailFacts("is it sold out?", [{ name: "A", url: "https://lu.ma/a" }], { luma: async () => null, isLuma: () => true }, NOW);
   check("B3: a live read that fails says the stored details are as of when found, never current", failedRead.length === 1 && /never current/.test(failedRead[0]));
-  check("B3: live questions are recognised; small talk isn't", ["still spots?", "Any tickets left", "is it sold out", "what time does it start", "how much is it"].every(A.asksLiveDetail) && !["thanks!", "sounds fun", "I'm free Saturday"].some(A.asksLiveDetail));
+  const liveQs = ["still spots?", "Any tickets left", "is it sold out", "what time does it start", "how much is it", "is it still on?", "when does the dinner start"];
+  const notLive = ["thanks!", "sounds fun", "I'm free Saturday", "I'm still on the fence", "any chance you're around on Sunday", "I want to start running again", "that's a lot of tickets to sell", "I'm full from dinner"];
+  check(`B3: live questions are recognised; everything else isn't (${[...liveQs.filter((q) => !A.asksLiveDetail(q)), ...notLive.filter(A.asksLiveDetail)].join(" | ") || "ok"})`, liveQs.every(A.asksLiveDetail) && !notLive.some(A.asksLiveDetail));
   check("B3: the reply gathers live facts only from this member's own sends (opts.turn.sent)", /liveDetailFacts\(opts\.turn\.message \?\? "", recentSends/.test(src("harness/replyGrounding.ts")) && /const recentSends = opts\.turn\.sent\./.test(src("harness/replyGrounding.ts")));
 }
 

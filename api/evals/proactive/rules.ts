@@ -267,7 +267,7 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("the draft knows when Co sent it and what it said", /co_sent_it_on: sent\?\.date/.test(reg) && /what_co_said_when_it_sent_it/.test(reg) && !/"a few days ago"/.test(reg));
   check("the send is remembered for Co's next replies", /writeMemory\(c\.userId, "followup_context"/.test(reg) && /memory_type = 'followup_context'/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
   const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
-  check("a deferred candidate moves, it isn't dropped", /if \("defer" in draft\) \{\s*await pool\.query\(\s*`UPDATE proactive_candidates SET due_at = \$2/.test(pr));
+  check("a deferred candidate moves, it isn't dropped", /if \("defer" in draft\) \{[\s\S]{0,200}?if \(!opts\.dryRun\) await pool\.query\(\s*`UPDATE proactive_candidates SET due_at = \$2/.test(pr));
 }
 
 // Every memory type code writes must be allowed by the table (2026-09-26:

@@ -4,20 +4,24 @@
 // open, the date against today, already sent). The reply loop already had the right pattern (agent/loopTools.ts storedFinds /
 // seedFound / usableFacts: a stored find expires and is read again before anything cites it); this is that pattern on the send path.
 //
-//   B1 recheckFind: one find's own page read again right before it sends. Luma: the event's details, fresh (sold out, no spots left,
-//      a moved start, already started). A web page: gone (404/410), says it's sold out, cancelled or closed next to its name, or no
-//      longer states the date on file. What comes back replaces the stored record, stamped checkedAt.
-//   checkBeforeSend: the send path's hook (harness/proactiveRegistry.ts event_offer draft, and stillRelevant for B6). A find that's
-//      sold out, cancelled, gone or past EXITS through the working set (services/workingSet.ts writeExitFact: the fact first, with its
-//      scoped reason, never silently dropped). One that can't be read right now waits a few hours and is read again; after
-//      RECHECK_MAX_MISSES unread tries it exits on that fact.
-//   B2 exitOnQueueExpiry: a queued find whose window ran out leaves on a fact too (an undated one now waits UNDATED_QUEUE_DAYS, not 14).
+//   B1 recheckFind: one find's own page read again right before it sends. What comes back replaces the stored record, stamped
+//      checkedAt. Only a CERTAIN signal exits (review of #138): its date on record passed; Luma's own flags (sold out, no spots, ended);
+//      a dead link (404/410). Words on a web page ("cancelled", "sold out", "closed") are never certain (a refund policy, another
+//      session, last year's cohort, an FAQ), so they hold the send and it's read again: a defer, never an exit.
+//   checkBeforeSend: the send path's hook (harness/proactiveRegistry.ts event_offer draft, and stillRelevant for B6). A certain exit goes
+//      through the working set (services/workingSet.ts writeExitFact: the fact first, scoped, never silently dropped). Anything
+//      uncertain (unreadable now, a closing word, a date the page doesn't show) defers and is read again; the queue's own window bounds
+//      how long. Nothing writes in a dispatch dry run (sendCheckDryRun).
+//   B2 queue windows: an undated find waits UNDATED_QUEUE_DAYS, not 14 blind. When its window ends unsent that is not an exit and not a
+//      decision (review of #138: "not picked in 3 days" or a paused dispatch said nothing about the find): it goes back to the backlog
+//      and may be queued again, and it's re-read before any send.
 //   B4 captionNumbersBacked: a caption's prices and counts must be on the record it was drafted from.
 //   B5 recheckOnFile: a task's "on file" find is read again (or left out) before a task sends it.
 //   B6 sourceLine: what its page says now, for stillRelevant to read instead of the conversation alone.
 //
 // Phase C moves the event_offer bundle into one composer (harness/bundleComposer.ts prepareOffer): checkBeforeSend is the one call
 // it needs, so the hooks here stay one or two lines.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DateTime } from "luxon";
 import type { TierMatch } from "./tieredRecommendation.js";
 import type { EventDetails } from "./eventDetails.js";
@@ -26,17 +30,17 @@ import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
 
 // A read this recent counts as now: the plan/email tool's own window for a Luma page (agent/loopTools.ts emailPlan).
 export const RECHECK_FRESH_MS = 30 * 60 * 1000;
-// A page that can't be read is tried again after this long, and exits after this many unread tries (the backlog's own rule for an
-// unreadable page is UNREAD_DAYS separate days; a queued find is about to go, so it gets hours, not days).
+// Anything uncertain is read again after this long (and never later than the row's own expiry, harness/proactive.ts).
 export const RECHECK_RETRY_HOURS = 3;
-export const RECHECK_MAX_MISSES = 3;
-// How long an undated find may wait in the queue (B2): it used to be 14 days, never read again. Every send re-reads it now; past
-// this it leaves on that fact, and a new search finds it again only if they ask again.
+// How long an undated find may wait in the queue (B2): it used to be 14 days, never read again. Its window ending returns it to
+// the backlog (eventSurfacingSweep.ts onEventOfferDropped), never an exit.
 export const UNDATED_QUEUE_DAYS = 3;
+// A dispatch dry run (harness/proactive.ts dispatchForUser) runs the drafts: inside it, the check reads but never writes.
+export const sendCheckDryRun = new AsyncLocalStorage<boolean>();
 
 export type PageRead = { text: string | null; gone: boolean };
 export type RecheckDeps = {
-  // A Luma event's details, read fresh (a cached read younger than RECHECK_FRESH_MS counts).
+  // A Luma event's details, read fresh (a cached read younger than RECHECK_FRESH_MS counts). Takes a full link or a Luma slug.
   luma: (url: string) => Promise<EventDetails | null>;
   // Any other page: its text, and whether it's gone (404/410).
   page: (url: string) => Promise<PageRead>;
@@ -50,18 +54,42 @@ const isX = (url: string | null | undefined) => !!url && /^https?:\/\/(?:www\.|m
 const zoneOr = (zone: string | null | undefined) => (zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles");
 const localDay = (now: Date, zone: string | null) => DateTime.fromJSDate(now).setZone(zoneOr(zone)).toISODate()!;
 
-// Said on a page next to the thing's name: sold out, cancelled, postponed, full, closed to applications.
-const CLOSED = /\b(sold out|(?:has been |was |is )?cancel+ed|(?:has been |was |is )postponed|registration (?:is |has )?closed|applications? (?:are |is |have )?(?:now )?closed|no longer accepting|at capacity|fully booked|wait ?list only|join the wait ?list)\b/i;
-// Pure: a closing word on the page, about this thing: next to a word of its name, or on a short page that's only about it.
-export function closedOnPage(page: string, name: string): string | null {
-  const words = name.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length >= 4);
-  const lower = page.toLowerCase();
-  for (const m of lower.matchAll(new RegExp(CLOSED.source, "gi"))) {
-    const at = m.index ?? 0;
-    const near = lower.slice(Math.max(0, at - 300), at + 300);
-    if (page.length < 1500 || !words.length || words.some((w) => near.includes(w))) return m[0];
+// Closing words on a page (review of #138: "cancelled" with no "is/was/has been" in front read a refund policy as a cancellation).
+const CLOSED = /\b(sold out|(?:has been|was|is|been) (?:cancel+ed|postponed)|registration (?:is |has )?(?:now )?closed|applications? (?:are |is |have )?(?:now )?closed|no longer accepting (?:applications|registrations|rsvps)|fully booked|at capacity)\b/i;
+// Conditional and policy wording around a closing word: never a statement that it happened.
+const CONDITIONAL = /\b(?:if|unless|in case|should|whether|what if|what happens|refunds?|refundable|policy|policies|faq|terms|in the event)\b/i;
+// A tier or level of the thing ("VIP tier: waitlist") isn't the thing.
+const TIER_WORDS = /\b(?:vip|tier|level|add-?on|upgrade|early bird|premium)\b/i;
+// Pure: a closing word that is genuinely about this find. The sentence (or the heading line right above it) must carry a word of its
+// name; the sentence must not be conditional or policy; a sentence naming another date (a past cohort's year, another session) is
+// about that date, not this find; and a tier of it isn't it. Null when there's nothing it could be sure of.
+export function closedOnPage(page: string, name: string, onFile: string | null = null): string | null {
+  const words = name.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter((w) => w.length >= 4 && !/^\d+$/.test(w));
+  if (!words.length) return null;
+  const lines = page.split(/\n+/);
+  for (let li = 0; li < lines.length; li++) {
+    const heading = li > 0 && lines[li - 1].length < 120 ? lines[li - 1].toLowerCase() : "";
+    for (const sentence of lines[li].split(/(?<=[.!?])\s+/)) {
+      const m = sentence.match(CLOSED);
+      if (!m) continue;
+      const lower = sentence.toLowerCase();
+      if (CONDITIONAL.test(sentence) || /\?/.test(sentence) || TIER_WORDS.test(sentence)) continue;
+      if (!words.some((w) => lower.includes(w) || heading.includes(w))) continue;
+      if (otherDate(sentence, onFile)) continue;
+      return m[0];
+    }
   }
   return null;
+}
+// Pure: does a sentence name a date (or a year) other than the one on file? A find with no date on file: any dated sentence is about
+// something more specific than the find itself, so it isn't counted either.
+function otherDate(sentence: string, onFile: string | null): boolean {
+  const year = onFile ? Number(onFile.slice(0, 4)) : new Date().getFullYear();
+  const dates = datesOnPage(sentence, year);
+  const years = [...sentence.matchAll(/\b(20\d{2})\b/g)].map((y) => y[1]);
+  if (!dates.size && !years.length) return false;
+  if (!onFile) return true;
+  return [...dates].some((d) => d !== onFile.slice(0, 10)) || years.some((y) => y !== onFile.slice(0, 4));
 }
 
 // Pure-with-deps: one find's own page, read again now. Never throws.
@@ -77,15 +105,19 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   if (before) return before;
   const url = "url" in match ? (match.url ?? null) : null;
   const checkedAt = now.toISOString();
-  // The Luma page that is its record: its own link, else a Luma link in the post it came from.
+  // The Luma page that is its record: a Co or public event's own link (a full link or a slug: both come from Luma's own API,
+  // services/tieredRecommendation.ts), a Luma link, else a Luma link in the post it came from.
   const postText = String(match.opportunity?.postText ?? ("evidence" in match ? match.evidence ?? "" : ""));
-  const lumaUrl = isLuma(url) ? url : (postText.match(/https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\/[^\s)"'<>]+/i)?.[0] ?? null);
+  const lumaUrl = match.kind !== "opportunity" && url ? url : isLuma(url) ? url : (postText.match(/https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\/[^\s)"'<>]+/i)?.[0] ?? null);
   if (lumaUrl) {
     const d = await deps.luma(lumaUrl).catch(() => null);
     if (!d) return { ok: false, exit: false, why: "its event page couldn't be read just now" };
+    // Luma's own flags are certain.
     if (d.soldOut === true) return { ok: false, exit: true, state: "expired", why: `sold out when Co read its page on ${today}` };
     if (d.spotsRemaining === 0) return { ok: false, exit: true, state: "expired", why: `no spots left when Co read its page on ${today}` };
-    if (d.startAt && new Date(d.startAt).getTime() <= now.getTime()) return { ok: false, exit: true, state: "expired", why: `it had already started (${d.startAt}) when Co read its page` };
+    // Over: past its end when it has one (a festival that started yesterday still runs), else past its start.
+    const over = d.endAt ? d.endAt : d.startAt;
+    if (over && new Date(over).getTime() <= now.getTime()) return { ok: false, exit: true, state: "expired", why: `it was already ${d.endAt ? "over" : "under way"} (${over}) when Co read its page` };
     const old = match.details ?? null;
     const changed: string[] = [];
     if (old?.startAt && d.startAt && old.startAt !== d.startAt) changed.push(`start moved from ${old.startAt} to ${d.startAt}`);
@@ -98,22 +130,24 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     if (after) return after;
     return { ok: true, match: next, checkedAt, changed, verified: true };
   }
-  // An X post with no event page behind it: the post is the only record and can't be read again without the X API. It goes as it
-  // was found, unverified; its caption may not claim spots or a price the post doesn't state (captionNumbersBacked).
+  // No page to read again: a Co event with no link, or an X post with no event page behind it (the post can't be read again without
+  // the X API). It goes as it was found, marked unverified; its caption may not claim spots or a price its record doesn't state.
   if (!url || isX(url) || match.kind !== "opportunity") return { ok: true, match, checkedAt: match.checkedAt ?? "", changed: [], verified: false };
   const r = await deps.page(url).catch((): PageRead => ({ text: null, gone: false }));
+  // A dead link is certain.
   if (r.gone) return { ok: false, exit: true, state: "cancelled", why: `its page is gone (a dead link when Co checked on ${today})` };
   if (!r.text) return { ok: false, exit: false, why: "its page couldn't be read just now" };
-  const closed = closedOnPage(r.text, match.name);
-  if (closed) return { ok: false, exit: true, state: /cancel|postpone/i.test(closed) ? "cancelled" : "expired", why: `its page says "${closed}" (checked ${today})` };
-  // A date on file the page no longer states, while it states others: it moved, and Co doesn't know where to. Read again later.
+  // Words are never certain: held and read again.
   const onFile = eventDateOf(match, zone) ?? (isOpening && "deadline" in match ? match.deadline ?? null : null);
+  const closed = closedOnPage(r.text, match.name, onFile);
+  if (closed) return { ok: false, exit: false, why: `its page says "${closed}" next to its name (checked ${today}); held and read again, not sent` };
+  // A date on file the page doesn't show (it moved, or the page writes it in a form the date reader misses): held, never an exit.
   if (onFile) {
     const stated = datesOnPage(r.text, Number(onFile.slice(0, 4)));
-    if (stated.size && !stated.has(onFile.slice(0, 10))) return { ok: false, exit: false, why: `the date on file (${onFile.slice(0, 10)}) isn't on its page any more` };
+    if (stated.size && !stated.has(onFile.slice(0, 10))) return { ok: false, exit: false, why: `the date on file (${onFile.slice(0, 10)}) isn't shown on its page now` };
   }
-  const page = r.text.slice(0, 6000);
-  const next: any = { ...match, evidence: page, checkedAt, ...(match.opportunity || match.source === "web" ? { opportunity: { postText: page.slice(0, 2000) } } : {}) };
+  // The page now, in its own field: the post or evidence it was found from stays as it was (review of #138).
+  const next: any = { ...match, pageNow: r.text.slice(0, 3000), checkedAt };
   return { ok: true, match: next, checkedAt, changed: [], verified: true };
 }
 
@@ -124,7 +158,6 @@ export type SendCheckDeps = RecheckDeps &
     now: () => Date;
     // The refreshed record onto the waiting row, so every later read (the reply's details, the send record) has it.
     saveMatch: (candidateId: string, match: TierMatch) => Promise<void>;
-    saveMisses: (candidateId: string, misses: number) => Promise<void>;
   };
 export const realSendCheckDeps: SendCheckDeps = {
   luma: async (url) => (await import("./eventDetails.js")).fetchLumaEventDetails(url, { maxAgeMs: RECHECK_FRESH_MS }),
@@ -134,10 +167,6 @@ export const realSendCheckDeps: SendCheckDeps = {
   saveMatch: async (id, match) => {
     const pool = (await import("../db/db.js")).default;
     await pool.query(`UPDATE proactive_candidates SET payload = jsonb_set(payload, '{match}', $2::jsonb), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [id, JSON.stringify(match)]);
-  },
-  saveMisses: async (id, misses) => {
-    const pool = (await import("../db/db.js")).default;
-    await pool.query(`UPDATE proactive_candidates SET payload = payload || jsonb_build_object('recheckMisses', $2::int), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [id, misses]);
   },
 };
 
@@ -149,48 +178,40 @@ export function findExit(userId: string, match: TierMatch, askText: string | nul
   return { userId, kind: "find" as const, itemKey: exitKey(match), label: String(match.name ?? ""), state, reason, scope: `this ${formOf(match as any) ?? "find"}${askText ? `, found for: ${String(askText).slice(0, 100)}` : ""}; nothing about what they like` };
 }
 
-// The hook. ok: c.payload.match is now the refreshed record (draft from it). skip with exited: it left the working set on its fact
-// (the caller archives the row: dispatch's dropCandidate). defer: read again later. A fact that can't be written keeps the find live
-// (workingSet.ts: the fact first), so that's a defer too.
-export async function checkBeforeSend(c: SendCandidate, zone: string | null, deps: SendCheckDeps = realSendCheckDeps): Promise<SendCheck> {
+// The hook. ok: c.payload.match is now the refreshed record (draft from it). skip with exited: a certain exit, its fact written (the
+// caller archives the row: dispatch's dropCandidate). defer: anything uncertain, read again later. A fact that can't be written keeps
+// the find live (workingSet.ts: the fact first), so that's a defer too. In a dry run nothing is written (o.dryRun, or sendCheckDryRun).
+export async function checkBeforeSend(c: SendCandidate, zone: string | null, deps: SendCheckDeps = realSendCheckDeps, o: { dryRun?: boolean } = {}): Promise<SendCheck> {
+  const dry = o.dryRun ?? sendCheckDryRun.getStore() === true;
   const p = c.payload ?? {};
   const match: TierMatch | undefined = p.match;
   if (!match) return { skip: "no find on the waiting text", exited: false };
   const now = deps.now();
+  const later = new Date(now.getTime() + RECHECK_RETRY_HOURS * 3_600_000);
   // Read moments ago (stillRelevant ran first this tick): no second read.
   const at = match.checkedAt ? Date.parse(match.checkedAt) : NaN;
   if (!Number.isNaN(at) && now.getTime() - at < RECHECK_FRESH_MS) return { ok: true, match };
   const r = await recheckFind(match, { now, zone, deps });
   if (r.ok) {
     p.match = r.match;
-    if (r.verified) await deps.saveMatch(c.id, r.match).catch((err: any) => console.error("sendCheck: refreshed record not saved (non-fatal):", err?.message ?? err));
+    if (r.verified && !dry) await deps.saveMatch(c.id, r.match).catch((err: any) => console.error("sendCheck: refreshed record not saved (non-fatal):", err?.message ?? err));
     return { ok: true, match: r.match };
   }
-  const exitWith = async (state: ExitState, why: string): Promise<SendCheck> => {
-    const ok = await writeExitFact(findExit(c.userId, match, p.askText, state, why), deps);
-    return ok ? { skip: `re-read at send: ${why}`, exited: true } : { defer: new Date(now.getTime() + RECHECK_RETRY_HOURS * 3_600_000), reason: `re-read at send: ${why}; its exit fact couldn't be written, so it waits` };
-  };
-  if (r.exit) return exitWith(r.state ?? "expired", r.why);
-  const misses = Number(p.recheckMisses ?? 0) + 1;
-  if (misses >= RECHECK_MAX_MISSES) return exitWith("expired", `${r.why}, on ${misses} tries before it could send, so nothing about it could be checked`);
-  p.recheckMisses = misses;
-  await deps.saveMisses(c.id, misses).catch(() => {});
-  return { defer: new Date(now.getTime() + RECHECK_RETRY_HOURS * 3_600_000), reason: `not sent unchecked: ${r.why} (try ${misses} of ${RECHECK_MAX_MISSES})` };
+  if (!r.exit) return { defer: later, reason: `not sent unchecked: ${r.why}` };
+  if (dry) return { skip: `re-read at send: ${r.why} (dry run: nothing written)`, exited: true };
+  const ok = await writeExitFact(findExit(c.userId, match, p.askText, r.state ?? "expired", r.why), deps);
+  return ok ? { skip: `re-read at send: ${r.why}`, exited: true } : { defer: later, reason: `re-read at send: ${r.why}; its exit fact couldn't be written, so it waits` };
 }
 
 // ---------------------------------------------------------------- B2: a queue window that ran out
 
-// Pure: why a waiting find's window ran out, as the fact's reason.
-export function queueExpiryReason(p: { match: TierMatch; lastDay?: string | null }, zone: string | null): string {
-  if (p.lastDay) return `its last useful day (${p.lastDay}) passed before it was sent`;
-  const end = lifeEndOf(p.match, zone);
-  if (end) return `its time (${end}) came before it was sent`;
-  return `it has no date, and it wasn't sent within ${UNDATED_QUEUE_DAYS} days of being queued, so it doesn't wait unchecked`;
-}
-// The queue's own expiry (harness/proactive.ts, status 'expired') used to take a find out of the backlog with no fact. Now it exits.
-export async function exitOnQueueExpiry(userId: string, p: { match: TierMatch; askText?: string | null; lastDay?: string | null }, zone: string | null, deps: ExitDeps): Promise<boolean> {
-  if (!p?.match?.name) return false;
-  return writeExitFact(findExit(userId, p.match, p.askText, "expired", queueExpiryReason(p, zone)), deps);
+// The skip reason an undated find's row gets when its window ends unsent: a failed attempt (workingSet.ts isFailedAttempt), never a
+// decision, so it goes back to the backlog and may be queued again.
+export const WINDOW_ENDED = "window ended unsent";
+// Pure: does a waiting find go back to the backlog when its window ends? An undated one does (nothing about it ended); one whose date
+// or last useful day ended doesn't (the backlog's own prune exits a past date on its fact).
+export function returnsOnExpiry(p: { match: TierMatch; lastDay?: string | null }, zone: string | null): boolean {
+  return !p.lastDay && !lifeEndOf(p.match, zone);
 }
 
 // ---------------------------------------------------------------- B4: a caption's prices and counts
@@ -270,6 +291,6 @@ export function sourceLine(match: TierMatch | null | undefined, now = new Date()
     const bits = [d.startAt ? `starts ${d.startAt}` : null, d.soldOut ? "sold out" : typeof d.spotsRemaining === "number" ? `${d.spotsRemaining} spots left` : null, d.price ? `price ${d.price}` : null].filter(Boolean);
     return `Its event page, read just now: ${bits.join(", ") || "still listed"}.`;
   }
-  const page = String(match.opportunity?.postText ?? ("evidence" in match ? match.evidence ?? "" : "")).replace(/\s+/g, " ").slice(0, 600);
+  const page = String(match.pageNow ?? match.opportunity?.postText ?? ("evidence" in match ? match.evidence ?? "" : "")).replace(/\s+/g, " ").slice(0, 600);
   return page ? `Its page, read just now, opens: ${page}` : null;
 }

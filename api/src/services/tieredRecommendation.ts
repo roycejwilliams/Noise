@@ -53,8 +53,9 @@ import type { PoolClient } from "pg";
 // outsidePlace: somewhere other than where they asked, and not online (2026-09-27).
 // audience: who it is for when it names a group ("women"), as Co judged it (services/eventAudience.ts); absent when open to everyone.
 // checkedAt (Phase B, 2026-10-10): when its own page was last read (services/sendCheck.ts recheckFind). Details without it are as
-// old as the find, and are never said as current (services/asOf.ts).
-type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string };
+// old as the find, and are never said as current (services/asOf.ts). pageNow: a web find's page text at that read, kept apart from the
+// post or evidence it was found from.
+type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)

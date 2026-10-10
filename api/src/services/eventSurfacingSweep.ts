@@ -754,6 +754,9 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       ...(item.reminder ? { reminder: true } : {}),
       ...(item.again ? { again: true } : {}),
     };
+    // A failed attempt's row (a failed draft, or an undated find's window that ended unsent) is cleared so this lands, the way a
+    // pick's does (queuePickedOffer); alreadyDecided above already let it through (Phase B, B2).
+    await reopenFailedAttempt(candidate.userId, targetKey);
     const { queued: ok } = await enqueueCandidate({
       userId: candidate.userId,
       type: "event_offer",
@@ -903,13 +906,17 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
 
 // Harness hook when the candidate is skipped or expires: take it out of the
 // backlog so the next match can be queued.
-// A queue window that ran out is a fact, never a silent drop (Phase B, B2, 2026-10-10): the find exits through the working set with
-// why (its time came, its last useful day passed, or it's undated and wasn't sent within UNDATED_QUEUE_DAYS), fact first.
-export async function onEventOfferDropped(userId: string, payload: EventOfferPayload, status: "skipped" | "expired" = "skipped"): Promise<void> {
+// An undated find whose queue window ended unsent goes back to the backlog (Phase B, B2, review of #138): not being picked within
+// UNDATED_QUEUE_DAYS, or a paused dispatch, says nothing about the find, so it's neither an exit nor a decision. Its row is marked a
+// failed attempt (workingSet.ts isFailedAttempt: "window ended unsent"), so a sweep or a pick may queue it again; every send re-reads
+// it first. A dated find whose time came leaves the backlog as before (the backlog prune exits a past date on its own fact).
+export async function onEventOfferDropped(userId: string, payload: EventOfferPayload, status: "skipped" | "expired" = "skipped", candidateId: string | null = null): Promise<void> {
   if (status === "expired") {
-    const { exitOnQueueExpiry } = await import("./sendCheck.js");
-    const { realExitDeps } = await import("./workingSet.js");
-    await exitOnQueueExpiry(userId, payload, await memberZone(userId), realExitDeps).catch((err: any) => console.error("onEventOfferDropped: exit fact failed (non-fatal):", err?.message ?? err));
+    const { returnsOnExpiry, WINDOW_ENDED } = await import("./sendCheck.js");
+    if (returnsOnExpiry(payload, await memberZone(userId))) {
+      if (candidateId) await pool.query(`UPDATE proactive_candidates SET skip_reason = $2 WHERE id = $1 AND status = 'expired'`, [candidateId, `${WINDOW_ENDED}: undated, back to the backlog`]).catch((err: any) => console.error("onEventOfferDropped: window mark failed (non-fatal):", err?.message ?? err));
+      return;
+    }
   }
   await removeFromBacklog(userId, payload.askId, payload.match);
 }
