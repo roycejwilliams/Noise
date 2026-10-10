@@ -2684,4 +2684,24 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)
     .catch((err: Error) => console.error("proactive_sends_kinded index init failed:", err));
+  // Event page member actions (services/eventPages/actions.ts, behind EVENT_PAGE_ACTIONS_ENABLED): RSVP, reactions, comments and
+  // questions, one row each, retracted rather than deleted. page_id is event_pages.id (the content layer's table); no foreign key, so
+  // the two layers' migrations can land in either order. One live RSVP per member per page, one live row per reaction.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_page_actions (
+        id BIGSERIAL PRIMARY KEY,
+        page_id TEXT NOT NULL,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('rsvp','reaction','comment','question')),
+        value TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        retracted_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS event_page_actions_one_rsvp ON event_page_actions (page_id, user_id) WHERE kind = 'rsvp' AND retracted_at IS NULL`))
+    .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS event_page_actions_one_reaction ON event_page_actions (page_id, user_id, value) WHERE kind = 'reaction' AND retracted_at IS NULL`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS event_page_actions_page ON event_page_actions (page_id, kind) WHERE retracted_at IS NULL`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS event_page_actions_rate ON event_page_actions (user_id, kind, created_at DESC)`))
+    .catch((err: Error) => console.error("event_page_actions table init failed:", err));
 }

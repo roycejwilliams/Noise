@@ -24,6 +24,7 @@ import { createCoRouter } from "../../api/src/routes/co.js";
 import { createCallLlmRouter } from "../../api/src/routes/callLlm.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
+import { createEventPageActionsRouter } from "../../api/src/routes/eventPageActions.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { createMoRouter } from "../../api/src/routes/mo.js";
 import { createGoogleRouter } from "../../api/src/routes/google.js";
@@ -109,6 +110,8 @@ async function main() {
   // A member's invite link: mirrors production's identical route in
   // api/src/server.ts (api/src/routes/invitePage.ts).
   app.get("/i/:code", serveInvitePage);
+  // Event page member actions: mirrors api/src/server.ts (api/src/routes/eventPageActions.ts). Behind EVENT_PAGE_ACTIONS_ENABLED.
+  app.use("/e", createEventPageActionsRouter());
 
   // Serves generated voice-note audio (ElevenLabs) — mirrors
   // production's identical route in api/src/server.ts. Needed here since

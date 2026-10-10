@@ -18,6 +18,7 @@
 //   record  — recordDecision(layer 3, "reply.grounding")
 //   eval    — evals/reply/run.ts
 import type { GoalStateRow } from "../services/goalEdges.js";
+import { pageActivityLines } from "../services/eventPages/memory.js";
 import type { MemberKnowledge, MemberRules, Restraint } from "../services/memberKnowledge.js";
 import { renderLive } from "../services/factLabels.js";
 import { arcLine, LENS_RULE } from "../services/goalJourney.js";
@@ -394,6 +395,8 @@ export function addMemberKnowledge(rf: ReplyFacts, k: MemberKnowledge | null | u
   }
   if (!k) return;
   for (const p of k.preferences) if (p.text.trim()) addFact(rf, "known", p.text);
+  // Their own event-page activity (services/eventPages/memory.ts): owner-scoped, never another member's.
+  for (const line of pageActivityLines(k.pageActivity ?? [])) addFact(rf, "known", line);
   const corrections = k.corrections.filter((c) => c.field.trim() && (c.was.trim() || c.now?.trim()));
   if (corrections.length) {
     addFact(rf, "known", `What they corrected (only the new version is true; never bring back the old one): ${corrections.slice(0, 6).map((c) => `${c.field.replace(/_/g, " ")} was "${c.was.slice(0, 80)}", now ${c.now ? `"${c.now.slice(0, 80)}"` : "removed"}`).join("; ")}.`);

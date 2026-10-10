@@ -101,7 +101,8 @@ export type TurnContext = {
 
 // The sections of member knowledge a text reply reads. The path reads the rest itself: the thread (raw, with its hold lines and the
 // gaps between texts, before this context is assembled), what Co sent with its saved details (loadSentItems), and the person snapshot.
-export const TEXT_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "carrying", "lessons", "corrections", "preferences", "claims", "restraint"];
+// pageActivity: their own RSVPs, reactions, comments and questions on Co's event pages (services/eventPages/memory.ts).
+export const TEXT_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "pageActivity"];
 
 // Pure: member knowledge's carrying as the text reply's one-line items (carryingBlock). The one carrying builder (memberKnowledge.ts
 // carryingOf) adds what this path never saw before: a call's promises collapsed against what was delivered, and documents only Co's

@@ -11,6 +11,7 @@
     "evals/proactive/cadence.ts",
     "evals/proactive/durableSends.ts",
     "evals/events/audience.ts",
+    "evals/eventPages/actions.ts",
     "evals/plan/rules.ts",
     "evals/rhythm/rules.ts",
     "evals/delivery/rules.ts",

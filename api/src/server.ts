@@ -24,6 +24,7 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createCallLlmRouter } from "./routes/callLlm.js";
 import { createCoRouter } from "./routes/co.js";
 import { serveInvitePage } from "./routes/invitePage.js";
+import { createEventPageActionsRouter } from "./routes/eventPageActions.js";
 import { createLumaRouter } from "./routes/luma.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { createReferralsRouter } from "./routes/referrals.js";
@@ -112,6 +113,10 @@ app.get("/co.vcf", (_req, res) => {
 // A member's invite link (routes/invitePage.ts): opens a text to Co with the
 // code and a greeting filled in. Public, like /co.vcf.
 app.get("/i/:code", serveInvitePage);
+
+// Event page member actions (routes/eventPageActions.ts): POST /e/:id/actions/*, members only. Behind EVENT_PAGE_ACTIONS_ENABLED
+// (off: 404). Only /e/:id/actions is handled here; the page itself (GET /e/:id) is the content layer's.
+app.use("/e", createEventPageActionsRouter());
 
 // Serve ElevenLabs-generated voice note audio files for Sendblue media messages
 // Files are stored in memory with a 10-minute TTL — long enough for Sendblue to fetch

@@ -30,6 +30,7 @@ import { promiseKeptBy, sendsSince, significant, wantsDocument, type Sent } from
 import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, sendableAt, windowLine, type CommitWindow } from "./memberTime.js";
 import { toolUse } from "./capabilities.js";
 import { WRITE_DOCUMENT_INPUT, type WriteDocumentInput } from "./documentSheet.js";
+import { eventPageTools } from "./eventPages/actions.js";
 import type { GateCheck } from "../harness/core.js";
 
 export const TASK_MODEL = MODELS.sonnet;
@@ -499,6 +500,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         return { ok: true, note: "It's sent, with its one line. If it's what you promised, finish the task as done. Don't text about it or its contents: the delivery is complete." };
       },
     }),
+    // A question asked on a Co event page (services/eventPages/actions.ts): Co may also put its answer on the page, in its own
+    // words. Only for a task opened from a page question, and only while EVENT_PAGE_ACTIONS_ENABLED is on; otherwise nothing.
+    ...eventPageTools(task),
   };
 
   try {

@@ -58,6 +58,7 @@ import { memberNamesStrict, safeMemory } from "./memberSafeMemories.js";
 import { localDay, localStamp, memberZone, sendableAt, wordsZone } from "./memberTime.js";
 import { DELIVERY_SHAPE_RULE } from "./speakable.js";
 import { notToTeammate } from "./teamLines.js";
+import { pageActivityOf, type PageActivity, type RawPageActivity } from "./eventPages/memory.js";
 import type { SentItem } from "./turnContext.js";
 
 // ---------------------------------------------------------------- types
@@ -127,6 +128,9 @@ export type Restraint = {
 };
 
 export type Exchange = { from: "member" | "co"; text: string; call: boolean };
+// What they did on Co's event pages (services/eventPages/memory.ts): their RSVP, reactions, comments and questions, their own
+// only. `text` is their choice or their own words (kept by the strip, like an exchange line: from === "member").
+export type { PageActivity } from "./eventPages/memory.js";
 
 export type MemberKnowledge = {
   userId: string;
@@ -143,9 +147,10 @@ export type MemberKnowledge = {
   restraint: Fact<Restraint> | null;
   exchanges: Fact<Exchange>[];
   person: Fact<{ text: string }> | null;
+  pageActivity: Fact<PageActivity>[];
 };
 
-export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person"] as const;
+export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "pageActivity"] as const;
 export type KnowledgeSection = (typeof KNOWLEDGE_SECTIONS)[number];
 export const EXCHANGE_DEFAULTS = { limit: 20, days: 14 } as const;
 export type KnowledgeOptions = { now?: Date; exchanges?: number; exchangeDays?: number; include?: readonly KnowledgeSection[] };
@@ -197,6 +202,7 @@ export type KnowledgeDeps = {
   restraint: (userId: string, now: Date) => Promise<RawRestraint>;
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
   person: (userId: string) => Promise<string>;
+  pageActivity: (userId: string) => Promise<RawPageActivity[]>;
 };
 
 const rows = (sql: string, args: unknown[]) => pool.query(sql, args).then((r) => r.rows as any[]);
@@ -299,6 +305,8 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     const P = await import("./personModel.js");
     return P.renderPersonModel(await P.personModelParts(userId));
   },
+  // Owner-scoped (owner_user_id = $1): never another member's page activity.
+  pageActivity: async (userId) => (await import("./eventPages/memory.js")).loadPageActivity(userId),
 };
 
 // ---------------------------------------------------------------- pure builders
@@ -564,6 +572,7 @@ const empty = (userId: string, now: Date, identity: Fact<Identity>): MemberKnowl
   restraint: null,
   exchanges: [],
   person: null,
+  pageActivity: [],
 });
 
 export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {}, deps: Partial<KnowledgeDeps> = {}): Promise<MemberKnowledge> {
@@ -586,7 +595,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
-  const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person] = await Promise.all([
+  const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, pages] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
     skip("asks", "asks", () => d.asks(userId), [] as RawAsk[]),
@@ -605,6 +614,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     skip("restraint", "restraint", () => d.restraint(userId, now), null as RawRestraint | null),
     skip("exchanges", "exchanges", () => d.exchanges(userId, { limit: Math.max(1, opts.exchanges ?? EXCHANGE_DEFAULTS.limit), days: Math.max(1, opts.exchangeDays ?? EXCHANGE_DEFAULTS.days) }), [] as { content: string; at: Date }[]),
     skip("person", "person model", () => d.person(userId), ""),
+    skip("pageActivity", "event page activity", () => d.pageActivity(userId), [] as RawPageActivity[]),
   ]);
 
   if (on("goals")) k.goals = goalsOf(profile, states);
@@ -621,6 +631,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
   if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
+  if (on("pageActivity")) k.pageActivity = pageActivityOf(pages);
 
   // The strip, last, over everything (see the header): nothing un-stripped leaves.
   const linked = [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))];
