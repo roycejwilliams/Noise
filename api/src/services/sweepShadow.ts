@@ -17,6 +17,7 @@ import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
 import { holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
 import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
 import { memberZone } from "./memberTime.js";
+import { exitKey } from "./findForm.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -164,7 +165,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   const queued = await q(`SELECT payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId]);
   const raw: RawCandidate[] = [
     ...backlogs.flatMap((b: any) =>
-      (Array.isArray(b.items) ? b.items : []).map((it: any) => ({
+      (Array.isArray(b.items) ? b.items : []).filter((it: any) => !it?.unread).map((it: any) => ({
         name: String(it?.match?.name ?? ""),
         date: dateOf(it?.match),
         tier: Number(it?.match?.tier ?? 0),
@@ -299,7 +300,8 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
   // queued rows came out, so the rest were judged again every morning.
   const rejectedFinds = judgments
     .filter((j) => j.verdict === "reject")
-    .flatMap((j) => backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).map((b) => ({ key: matchKeyOf(b.match), name: String(b.match?.name ?? j.name), why: String(j.why ?? j.reason ?? ""), askText: b.askText })));
+    // The reason goes through the member-safe filter: no record ids (A17), no internal labels (review of #133).
+    .flatMap((j) => backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).map((b) => ({ key: exitKeyOf(b.match), name: String(b.match?.name ?? j.name), why: memberSafeWhy(String(j.why ?? j.reason ?? "")), askText: b.askText })));
   const uniq = [...new Map(rejectedFinds.map((r) => [r.key, r])).values()];
   await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
   const queuedNames: string[] = [];
@@ -322,19 +324,33 @@ export async function rerunPickerForUrgentFind(userId: string): Promise<void> {
 }
 
 // The backlog, read and written where it lives (event_backlogs), for the working-set exits.
+// Changes merge into the row as it is now, under a row lock, so a find a sweep saves meanwhile is never lost (review of #133).
 export const realPruneDeps = {
   backlogs: async (userId: string) => (await pool.query(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId])).rows,
-  save: async (userId: string, askId: string, items: any[]) => {
-    await pool.query(`UPDATE event_backlogs SET items = $3, updated_at = NOW() WHERE user_id = $1 AND ask_id = $2`, [userId, askId, JSON.stringify(items)]);
+  merge: async (userId: string, askId: string, change: import("./workingSet.js").BacklogChange) => {
+    const W = await import("./workingSet.js");
+    const F = await import("./findForm.js");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(`SELECT items FROM event_backlogs WHERE user_id = $1 AND ask_id = $2 FOR UPDATE`, [userId, askId]);
+      if (rows[0]) await client.query(`UPDATE event_backlogs SET items = $3, updated_at = NOW() WHERE user_id = $1 AND ask_id = $2`, [userId, askId, JSON.stringify(W.applyChange(rows[0].items, change, F.exitKey))]);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   },
   classify: async (match: any, today: string) => (await import("./findForm.js")).classifyFind(match, today),
   zone: (userId: string) => memberZone(userId),
-  key: (match: any) => matchKeyOf(match),
+  key: (match: any) => exitKeyOf(match),
+  exited: async (userId: string, keys: string[]) => (await import("./workingSet.js")).exitedFindKeys(userId, keys),
   writeFact: async (e: any) => (await import("./workingSet.js")).realExitDeps.writeFact(e),
 };
-function matchKeyOf(match: any): string {
-  return match && "event_api_id" in match && match.event_api_id ? `event:${match.event_api_id}` : `opportunity:${String(match?.name ?? "").toLowerCase().trim()}`;
-}
+// One key everywhere a find exits or is checked for having exited (services/findForm.ts exitKey).
+const exitKeyOf = (match: any): string => exitKey(match);
 
 export async function rerunPickerForTaste(userId: string): Promise<void> {
   // Only for members the daily picker serves (review of #132: anyone saving a taste got a paid picker run).

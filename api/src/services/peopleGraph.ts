@@ -74,7 +74,7 @@ async function gather(userId: string): Promise<PeopleInput | null> {
   const [u, p, asks, snap] = await Promise.all([
     pool.query(`SELECT first_name FROM users WHERE id = $1 AND archived_at IS NULL`, [userId]).catch(() => ({ rows: [] as any[] })),
     pool.query(`SELECT goals, life_chapters, intent FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] })),
-    pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find' ORDER BY created_at DESC LIMIT 5`, [userId]).catch(() => ({ rows: [] as any[] })),
+    pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind IN ('find', 'person') ORDER BY created_at DESC LIMIT 5`, [userId]).catch(() => ({ rows: [] as any[] })),
     getPersonSnapshot(userId).catch(() => null),
   ]);
   if (!u.rows[0]) return null;

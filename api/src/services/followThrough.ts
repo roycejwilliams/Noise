@@ -170,7 +170,8 @@ export async function memberRecordText(userId: string, days = 60): Promise<strin
     ),
     // What they said on earlier calls is their own words too ("user:" lines only).
     pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND created_at > NOW() - make_interval(days => $2) ORDER BY created_at DESC LIMIT 20`, [userId, days]),
-    pool.query(`SELECT subject, relation, object_label FROM co_facts WHERE owner_user_id = $1 AND retired_at IS NULL ORDER BY created_at DESC LIMIT 400`, [userId]),
+    // Working-set exit facts are audit, not Co's record of what it did: they never crowd it out (review of #133).
+    pool.query(`SELECT subject, relation, object_label FROM co_facts WHERE owner_user_id = $1 AND retired_at IS NULL AND relation <> 'exited' ORDER BY created_at DESC LIMIT 400`, [userId]),
   ]);
   const theirCallLines = calls.rows.flatMap((r: any) => String(r.content ?? "").split("\n").filter((l) => /^\s*user\s*:/i.test(l)));
   return [...mem.rows.map((r: any) => String(r.content ?? "")), ...theirCallLines, ...facts.rows.map((r: any) => `${r.subject} ${r.relation} ${r.object_label ?? ""}`)].join("\n").slice(0, 200_000);

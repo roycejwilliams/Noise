@@ -29,10 +29,10 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const store = new Map(lists.map((l) => [l.ask_id, l.items]));
   const deps: any = {
     backlogs: async () => [...store.entries()].map(([ask_id, items]) => ({ ask_id, items })),
-    save: async (_u: string, askId: string, items: any[]) => { log.push(`save ${askId} ${items.length}`); store.set(askId, items); },
+    merge: async (_u: string, askId: string, change: any) => { log.push(`save ${askId}`); store.set(askId, W.applyChange(store.get(askId) ?? [], change, deps.key)); },
     classify: async (m: any) => (o.classify ? o.classify(m) : { match: m, result: "unknown" }),
     zone: async () => "America/Los_Angeles",
-    key: (m: any) => `opportunity:${String(m?.name ?? "").toLowerCase()}`,
+    key: (m: any) => F.exitKey(m),
     writeFact: async (e: any) => { log.push(`fact ${e.label}`); if (o.failFact?.(e)) throw new Error("db down"); facts.push(e); },
   };
   return { deps, log, facts, store };
@@ -78,12 +78,20 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const r = await W.pruneBacklogs("u", TODAY, w.deps);
   const names = w.store.get("a1")!.map((i: any) => i.match.name);
   check("tiers (c): an undated item is classified and kept with its date", names.includes("Fleet Fest") && w.store.get("a1")!.find((i: any) => i.match.name === "Fleet Fest").match.statedDates.start === "2026-10-10");
-  check("an event whose page has no date exits, with that fact", !names.includes("Sound Bath Meditation") && w.facts.some((f) => f.label === "Sound Bath Meditation" && /doesn't say when/.test(f.reason)));
-  check("one whose page couldn't be read stays, for the next pass (no exit on a fetch failure)", names.includes("Unreadable Page") && r.exited === 1);
-  check("an unread item counts its tries", w.store.get("a1")!.find((i: any) => i.match.name === "Unreadable Page")?.unreadTries === 1);
-  const third = world([{ ask_id: "a1", items: [{ ...ev("Unreadable Page"), unreadTries: 2 }] }]);
+  // Review of #133: one read never exits; held (never offered) and read again once a day, out after 3 separate days.
+  const sound = w.store.get("a1")!.find((i: any) => i.match.name === "Sound Bath Meditation");
+  check("an event whose page has no date is held, not exited, on its first read", !!sound && sound.unread?.why === "undated" && sound.unread.days.join() === TODAY && !w.facts.some((f) => f.label === "Sound Bath Meditation"), sound);
+  check("one whose page couldn't be read is held too", w.store.get("a1")!.find((i: any) => i.match.name === "Unreadable Page")?.unread?.why === "unknown" && r.exited === 0);
+  check("a held item is never offered", !W.offerable(sound) && W.offerable(w.store.get("a1")!.find((i: any) => i.match.name === "Fleet Fest")));
+  const sameDay = world([{ ask_id: "a1", items: [{ ...ev("Sound Bath"), unread: { days: [TODAY], why: "undated" } }] }], { classify: (m: any) => { throw new Error("read again the same day"); } });
+  await W.pruneBacklogs("u", TODAY, sameDay.deps);
+  check("it's read at most once a day (three passes in one day aren't three days)", sameDay.store.get("a1")!.length === 1 && sameDay.store.get("a1")![0].unread.days.length === 1);
+  const third = world([{ ask_id: "a1", items: [{ ...ev("Sound Bath"), unread: { days: ["2026-10-07", "2026-10-08"], why: "undated" } }] }], { classify: (m: any) => ({ match: { ...m, form: "event" }, result: "undated" }) });
   await W.pruneBacklogs("u", TODAY, third.deps);
-  check("on its third unreadable pass it exits, saying so", !third.store.get("a1")!.length && /couldn't be read on 3 tries/.test(third.facts[0]?.reason ?? ""), third.facts);
+  check("on its third separate day without a date it exits, saying so", !third.store.get("a1")!.length && /didn't say when it is on 3 separate days/.test(third.facts[0]?.reason ?? ""), third.facts);
+  const later = world([{ ask_id: "a1", items: [{ ...ev("Sound Bath"), unread: { days: ["2026-10-08"], why: "unknown" } }] }], { classify: (m: any) => ({ match: { ...m, form: "event", statedDates: { start: "2026-10-18" } }, result: "dated_event" }) });
+  await W.pruneBacklogs("u", TODAY, later.deps);
+  check("a held item whose page later gives a date is kept, no longer held", later.store.get("a1")!.length === 1 && !later.store.get("a1")![0].unread && later.store.get("a1")![0].match.statedDates.start === "2026-10-18");
   check("the picker prunes before it builds its pool, and a daily pass prunes everyone", /W\.pruneBacklogs\(userId, today, realPruneDeps\)/.test(src("services/sweepShadow.ts")) && /cron\.schedule\("30 7 \* \* \*"[\s\S]{0,300}pruneAllWorkingSets/.test(src("jobs/index.ts")));
 }
 
@@ -102,7 +110,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("the fact carries the reason and the scope, never just a verdict", /Set aside the find "Tech Parents & Founders mixer": Co's daily pick: an investor mixer/.test(label) && /Scope: this find, for: events this weekend; nothing broader/.test(label), label);
   check("an ask exits fact first, then the one close (askKind.ts closeAsk)", (() => { const s = src("services/workingSet.ts"); const f = s.slice(s.indexOf("export async function exitAsk")); return f.indexOf("writeExitFact") < f.indexOf("closeAsk(") && /if \(!ok\) return false;/.test(f); })());
   check("a date-expired ask writes its fact before it closes", (() => { const s = src("services/askExpiry.ts"); return s.indexOf("writeExitFact") > -1 && s.indexOf("writeExitFact") < s.indexOf("UPDATE ask_checkins SET resolved_at = NOW(), expired_at = NOW()"); })());
-  check("a goal set aside or done writes its fact first, once (only on a real change)", /if \(state !== "active" && prior !== state\) \{[\s\S]{0,300}writeExitFact[\s\S]{0,400}if \(!ok\) return;\s*\}\s*await writeGoalState/.test(src("services/goalEdges.ts")));
+  check("a goal set aside or done writes its fact first, once (only on a real change)", /if \(state !== "active" && prior !== state\) \{[\s\S]{0,300}writeExitFact[\s\S]{0,400}if \(!ok\) return false;\s*\}\s*await writeGoalState[\s\S]{0,80}return true;/.test(src("services/goalEdges.ts")));
 }
 
 // ---------------------------------------------------------------- lifecycle (a): exited means inert
@@ -111,12 +119,12 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
     { ask_id: "a1", items: [ev("San Francisco Fleet Week Air Show"), ev("Mahjong Party", { tier: 2, kind: "public_event", m: { event_date: "2026-10-13" } })] },
     { ask_id: "a2", items: [ev("San Francisco Fleet Week Air Show")] },
   ]);
-  const n = await W.exitRejectedFinds("u", [{ key: "opportunity:san francisco fleet week air show", name: "San Francisco Fleet Week Air Show", why: "an air show doesn't fit his stated wish to avoid performative events", askText: "events this weekend" }], w.deps);
+  const n = await W.exitRejectedFinds("u", [{ key: F.exitKey(ev("San Francisco Fleet Week Air Show").match), name: "San Francisco Fleet Week Air Show", why: "an air show doesn't fit his stated wish to avoid performative events", askText: "events this weekend" }], w.deps);
   check("(a) a find the picker rejected leaves every backlog, queued or not", n === 1 && !w.store.get("a1")!.some((i: any) => /Fleet/.test(i.match.name)) && !w.store.get("a2")!.length);
   check("its fact keeps the picker's reason and is scoped to the find and the ask", w.facts[0]?.state === "rejected" && /air show doesn't fit/.test(w.facts[0].reason) && /this find, for: events this weekend; nothing broader/.test(w.facts[0].scope), w.facts[0]);
   const ess = src("services/eventSurfacingSweep.ts");
-  check("an exited find found again by a sweep stays out (never re-queued)", /exitedFindKeys\(userId, items\.map/.test(ess) && /if \(exited\.has\(matchKey\(it\.match\)\)\) continue;/.test(ess) && /exitedFindKeys\(userId, \[matchKey\(item\.match\)\]\)/.test(ess));
-  check("every picker reject runs the exit, not only queued rows", /\.filter\(\(j\) => j\.verdict === "reject"\)[\s\S]{0,400}exitRejectedFinds/.test(src("services/sweepShadow.ts")));
+  check("an exited find found again by a sweep stays out (never re-queued)", /exitedFindKeys\(userId, items\.map\(\(i\) => exitKey\(i\.match\)\)\)/.test(ess) && /if \(exited\.has\(exitKey\(it\.match\)\)\) continue;/.test(ess) && /exitedFindKeys\(userId, \[exitKey\(item\.match\)\]\)/.test(ess));
+  check("every picker reject runs the exit, not only queued rows", /\.filter\(\(j\) => j\.verdict === "reject"\)[\s\S]{0,800}exitRejectedFinds/.test(src("services/sweepShadow.ts")));
 }
 
 // ---------------------------------------------------------------- lifecycle (c): only live items count
@@ -190,6 +198,60 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("a rolling opening says so", F.formLabel({ kind: "opportunity", form: "opening" }, "America/Los_Angeles", now) === "an opening you can apply to or join now");
   check("a Co event and a public event keep their names, with the day", F.formLabel({ kind: "co_event", event_date: "2026-10-08" }, "America/Los_Angeles", now) === "a Co event tomorrow" && F.formLabel({ kind: "public_event", event_date: "2026-10-20" }, "America/Los_Angeles", now) === "an event on Oct 20");
   check("never the generic \"a real opportunity\"", !/a real opportunity"\s*;?\s*$/m.test(src("agent/eventDiscoverySurfacing.ts").replace(/\/\/.*$/gm, "")) && /return formLabel\(match, zone\);/.test(src("agent/eventDiscoverySurfacing.ts")) && !/\(a real opportunity Co pointed/.test(src("harness/proactiveRegistry.ts")));
+}
+
+// ---------------------------------------------------------------- review of #133: the 14 findings
+{
+  // 1. Dates in the member's zone.
+  check("#1 a 7pm Pacific timestamp is that day for a Pacific member, not the next UTC day", F.dayIn("2026-10-10T02:00:00Z", "America/Los_Angeles") === "2026-10-09" && F.dayIn("2026-10-10T02:00:00Z", "Europe/London") === "2026-10-10" && F.dayIn("2026-10-09", "Asia/Tokyo") === "2026-10-09");
+  check("#1 an event's date and end read in their zone", F.eventDateOf({ details: { startAt: "2026-10-10T02:00:00Z" } }, "America/Los_Angeles") === "2026-10-09" && F.lifeEndOf({ kind: "public_event", details: { startAt: "2026-10-10T02:00:00Z" } }, "America/Los_Angeles") === "2026-10-09");
+  // 2. Dates parsed as whole tokens.
+  const on = (t: string) => [...F.datesOnPage(t, 2026)];
+  check("#2 every common way a page writes a date is read", ["Oct 06", "10/06/2026", "06 Oct 2026", "6th of October", "October 6th, 2026", "06.10.2026", "2026-10-06"].every((t) => on(t).includes("2026-10-06")) && on("Sept 12").includes("2026-09-12"), ["Oct 06", "10/06/2026", "06 Oct 2026", "06.10.2026"].map(on));
+  check("#2 a phone number or a stray substring is never a date", !on("Call 415-10-12 or 10-12-2026x").includes("2026-10-12") && !on("Room 110/122").length && on("Doors 10/12").join() === "2026-10-12");
+  check("#2 an undated item leaves only after repeated failed reads on separate days", W.UNREAD_DAYS === 3);
+  // 3. A deadline means opening.
+  check("#3 a find with a deadline is an opening even when it also carries a start date", F.formOf({ kind: "opportunity", deadline: "2026-10-05", statedDates: { start: "2026-11-01" } } as any) === "opening" && F.lifeEndOf({ kind: "opportunity", deadline: "2026-10-05", statedDates: { start: "2026-11-01" } }) === "2026-10-05");
+  // 4. Web finds exit by name plus date (or link).
+  const weekly = (d: string) => F.exitKey({ kind: "opportunity", name: "SF Chess Night", statedDates: { start: d } });
+  check("#4 a weekly find that exits once can come back next week", weekly("2026-10-09") !== weekly("2026-10-16") && weekly("2026-10-09") === F.exitKey({ kind: "opportunity", name: "sf chess night ", statedDates: { start: "2026-10-09" } }));
+  check("#4 an undated find is keyed by its link; a Co event by its id", F.exitKey({ name: "A", url: "https://A.com/x" }) === "opportunity:a|https://a.com/x" && F.exitKey({ event_api_id: "evt_1", name: "Dinner" }) === "event:evt_1");
+  // 5. A failed search isn't an empty run.
+  const ess = src("services/eventSurfacingSweep.ts");
+  const sf = src("services/sweepFind.ts");
+  check("#5 empty runs count only when a search really ran", /&& trace\.searched\) \{\s*await pool\.query\(`UPDATE ask_checkins SET empty_runs/.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3 && /!\/\^No web search right now\//.test(sf));
+  // 6. Person asks are in the people graph and Mo's gaps.
+  check("#6 person asks count in peopleGraph and Mo's network gaps", /kind IN \('find', 'person'\)/.test(src("services/peopleGraph.ts")) && (src("mo/team.ts").match(/kind IN \('find', 'person'\)/g) ?? []).length === 2);
+  // 7. A goal change that didn't happen is never reported.
+  const lt = src("agent/loopTools.ts");
+  check("#7 markGoal reports an error when the goal didn't change", /const changed = await G\.setGoalState\([\s\S]{0,200}\.catch\(\(\) => false\);\s*if \(!changed\) return \{ ok: false, error: "The goal couldn't be marked just now; nothing changed\. Don't tell them it was\." \};/.test(lt));
+  check("#7 a short reason gets a scoped default, the member's words kept", /const why = reason\?\.trim\(\) && reason\.trim\(\)\.length >= 6 \? reason\.trim\(\) : reason\?\.trim\(\) \? `\$\{base\} \(\$\{reason\.trim\(\)\}\)` : base;/.test(src("services/goalEdges.ts")));
+  // 8. Concurrent saves don't drop each other's finds.
+  const before = [ev("A"), ev("B")];
+  const midRun = [...before, ev("C added by a sweep mid-run")];
+  const merged = W.applyChange(midRun, { remove: new Set([F.exitKey(ev("A").match)]), replace: new Map([[F.exitKey(ev("B").match), { ...ev("B"), unread: { days: [TODAY], why: "unknown" } }]]) }, F.exitKey);
+  check("#8 a prune merges into the current row: a find added mid-run survives", merged.length === 2 && merged.some((i: any) => /^C /.test(i.match.name)) && merged.find((i: any) => i.match.name === "B")?.unread?.why === "unknown", merged.map((i: any) => i.match.name));
+  check("#8 the merge locks the row it changes", /SELECT items FROM event_backlogs[\s\S]{0,200}FOR UPDATE/.test(src("services/sweepShadow.ts")));
+  // 9. Exit facts: member-safe reasons, kept out of the reply ledger.
+  check("#9 a picker reject's reason goes through the member-safe filter", /why: memberSafeWhy\(String\(j\.why \?\? j\.reason \?\? ""\)\)/.test(src("services/sweepShadow.ts")));
+  check("#9 exit facts stay out of what replies read", /relation <> 'exited'/.test(src("services/coFacts.ts")) && /relation <> 'exited'/.test(src("services/followThrough.ts")));
+  // 10. A send error is a failed attempt.
+  check("#10 a send error is a failed attempt, not a decision", W.isFailedAttempt("send error: 502") && !W.decidedByRows([{ skip_reason: "send error: 502" }]));
+  // 11. "3 passes" means 3 days (the hold tests above run it).
+  check("#11 an unread item is read at most once a day", /days\.includes\(today\)/.test(src("services/workingSet.ts")));
+  // 12. Identity: whole words, venues allowed.
+  check("#12 'men's' is caught even when they said 'mentor'", Q.assumedIdentity("men's founder circle SF", "looking for a mentor").includes("men's"));
+  check("#12 a venue or a phrase that isn't about people passes", !Q.assumedIdentity("events at the Women's Building SF", "events this weekend").length && !Q.assumedIdentity("black tie gala SF", "a gala").length && !Q.assumedIdentity("senior engineer meetup", "meetups").length);
+  check("#12 an identity they said themselves passes", !Q.assumedIdentity("women's founder dinner", "I'm a woman founder, any women's dinners").length && Q.assumedIdentity("Black founders mixer", "founder mixers").length === 1);
+  // 13. Classification capped per sweep, the sweep's page reused.
+  check("#13 at most a few new finds are read per sweep; the rest are held, not dropped", ES.CLASSIFY_PER_SWEEP === 3 && /if \(!known && reads >= CLASSIFY_PER_SWEEP\) \{\s*out\.push\(\{ \.\.\.it, unread: \{ days: \[\], why: "unknown" \} \}\);/.test(ess));
+  let fetched = 0;
+  const reused = await F.classifyFind({ tier: 3, kind: "opportunity", name: "Ramen Pop-up", url: "https://r", evidence: "Ramen pop-up on Oct 14. ".repeat(30), reason: "" } as any, TODAY, { page: async () => { fetched++; return ""; }, model: async () => '{"form":"event","date":"2026-10-14"}' });
+  check("#13 the page the sweep already read is used, not fetched again", fetched === 0 && reused.result === "dated_event");
+  // 14. Restating an ask resets its empty runs.
+  check("#14 restating an open ask resets its empty-run count", /last_mentioned_at = NOW\(\), empty_runs = 0/.test(src("services/profileExtraction.ts")));
+  // The held items stay out of every offer path.
+  check("held items are never offered: picker pool, queue, task finds", /!it\?\.unread/.test(src("services/sweepShadow.ts")) && /item\.unread/.test(ess) && /!it\?\.unread/.test(src("services/taskTurn.ts")));
 }
 
 console.log(`working set + tiers: ${total - failed}/${total} passed`);

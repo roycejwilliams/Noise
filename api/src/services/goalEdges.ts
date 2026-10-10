@@ -185,7 +185,7 @@ export type GoalPlan = { searchText: string | null; active: GoalEdge[]; passed: 
 export type GoalDeps = {
   model: (prompt: string) => Promise<string>;
   states: (userId: string) => Promise<Map<string, GoalStateRow>>;
-  setState: (userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]) => Promise<void>;
+  setState: (userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]) => Promise<unknown>;
   corrections: (userId: string) => Promise<Correction[]>;
   retired: (goal: string, c: Correction[], lastSaid?: Date | string | null) => Correction | null;
   findAsks: (userId: string) => Promise<{ id: number; text: string }[]>;
@@ -271,14 +271,19 @@ export async function goalStates(userId: string): Promise<Map<string, GoalStateR
 // A context set-aside waits to be told (told_at NULL); one Co or the member made in conversation is already said.
 // A goal leaving the working set (done, or set aside as stale) writes its fact first (services/workingSet.ts), with the reason it
 // left and its scope; going back to active writes none.
-export async function setGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]): Promise<void> {
+// Returns whether it changed (review of #133: a tool reported "marked done" when the fact write had failed and nothing changed). A short
+// or empty reason gets a scoped default, so "done" never throws.
+export async function setGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]): Promise<boolean> {
   const prior = await pool.query(`SELECT state FROM goal_states WHERE user_id = $1 AND goal_hash = $2`, [userId, goalHash(goal)]).then((r) => r.rows[0]?.state ?? "active").catch(() => "active");
   if (state !== "active" && prior !== state) {
     const { writeExitFact } = await import("./workingSet.js");
-    const ok = await writeExitFact({ userId, kind: "goal", itemKey: `goal:${goalHash(goal)}`, label: goal, state: state === "done" ? "fulfilled" : "expired", reason: reason?.trim() || (state === "done" ? "they said it's done" : "set aside"), scope: "this goal only; saying it again makes it current" });
-    if (!ok) return;
+    const base = state === "done" ? "they said it's done" : "set aside";
+    const why = reason?.trim() && reason.trim().length >= 6 ? reason.trim() : reason?.trim() ? `${base} (${reason.trim()})` : base;
+    const ok = await writeExitFact({ userId, kind: "goal", itemKey: `goal:${goalHash(goal)}`, label: goal, state: state === "done" ? "fulfilled" : "expired", reason: why, scope: "this goal only; saying it again makes it current" }).catch(() => false);
+    if (!ok) return false;
   }
   await writeGoalState(userId, goal, state, reason, source);
+  return true;
 }
 async function writeGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]): Promise<void> {
   await pool.query(

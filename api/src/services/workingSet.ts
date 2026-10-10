@@ -31,7 +31,7 @@ export function askLifeState(r: { resolved_at: unknown; closed_reason?: string |
 // queued again). Only a sent text or a member-visible outcome closes a find; a draft that failed its checks or a send that failed
 // re-enters the working set.
 export function isFailedAttempt(skipReason: string | null | undefined): boolean {
-  return /^(?:draft failed|send failed|send_failed|draft_failed)/i.test(String(skipReason ?? "").trim());
+  return /^(?:draft failed|send failed|send_failed|draft_failed|send error)/i.test(String(skipReason ?? "").trim());
 }
 // Pure: do these finished rows for one thing decide it? Any row that isn't a failed attempt does; failed attempts alone don't.
 export function decidedByRows(rows: { skip_reason?: string | null }[]): boolean {
@@ -150,15 +150,30 @@ export async function exitGoneMembersAsks(deps: ExitDeps = realExitDeps): Promis
 // ------------------------------------------------------------------ the backlog
 
 export type BacklogEntry = { askId: string; index: number; item: any };
-// A page that couldn't be read is tried on this many daily passes before the item exits ("its page couldn't be read").
-export const UNREAD_TRIES = 3;
+// An undated or unreadable find is held (never offered) and read again once a day; it exits only after this many separate days
+// (review of #133: one failed read, or three passes in one day, used to exit it with a false "no date" fact).
+export const UNREAD_DAYS = 3;
+export type Unread = { days: string[]; why: "undated" | "unknown" };
+// Pure: is a backlog item offerable? A held one isn't, anywhere (picker pool, the queue, a task's on-file finds).
+export function offerable(item: { unread?: Unread | null } | null | undefined): boolean {
+  return !item?.unread;
+}
+
+// The backlog, changed by merging into what's there now (review of #133: prune read the backlog, classified slowly, then overwrote it,
+// so a find a sweep added in between was lost). remove: keys out; replace: the classified or held version of an item, by key.
+export type BacklogChange = { remove: Set<string>; replace: Map<string, any> };
 export type PruneDeps = ExitDeps & {
   backlogs: (userId: string) => Promise<{ ask_id: string; items: any[] }[]>;
-  save: (userId: string, askId: string, items: any[]) => Promise<void>;
+  merge: (userId: string, askId: string, change: BacklogChange) => Promise<void>;
   classify: (match: any, today: string) => Promise<{ match: any; result: "dated_event" | "opening" | "undated" | "unknown" }>;
   zone: (userId: string) => Promise<string | null>;
   key: (match: any) => string;
+  exited?: (userId: string, keys: string[]) => Promise<Set<string>>;
 };
+// Pure: apply a change to a backlog's current items.
+export function applyChange(items: any[], change: BacklogChange, key: (m: any) => string): any[] {
+  return (Array.isArray(items) ? items : []).filter((it) => !change.remove.has(key(it?.match ?? {}))).map((it) => change.replace.get(key(it?.match ?? {})) ?? it);
+}
 
 // Pure: the decision for one backlog item on a date, from its form and dates (services/findForm.ts).
 export function backlogVerdict(match: any, today: string, f: { lifeEnd: (m: any) => string | null; form: (m: any) => "event" | "opening" | null }): "keep" | "past" | "classify" {
@@ -170,67 +185,71 @@ export function backlogVerdict(match: any, today: string, f: { lifeEnd: (m: any)
   return "keep";
 }
 
-// Every backlog item for one member, through the same rules: a past one exits on its date; an undated one is classified from its
-// page and dated, or exits when it can't be ("couldn't confirm when it is"); the rest stay. Applied to the whole backlog, not just the
-// front (the old dropStaleFront stopped at the first live item, so Hardly Strictly from Oct 3 sat behind it for a week).
+// Every backlog item for one member, through the same rules, in their zone: a past one exits on its date; an undated or unreadable
+// one is held and read again once a day, and exits after UNREAD_DAYS separate days; the rest stay. Applied to the whole backlog.
 export async function pruneBacklogs(userId: string, today: string, deps: PruneDeps, opts: { classifyLimit?: number } = {}): Promise<{ exited: number; dated: number; kept: number }> {
   const F = await import("./findForm.js");
+  const zone = await deps.zone(userId).catch(() => null);
+  const lifeEnd = (m: any) => F.lifeEndOf(m, zone);
   const lists = await deps.backlogs(userId);
+  const already = deps.exited ? await deps.exited(userId, lists.flatMap((b) => (b.items ?? []).map((it: any) => deps.key(it?.match ?? {})))).catch(() => new Set<string>()) : new Set<string>();
   let exited = 0, dated = 0, kept = 0, classified = 0;
   const gone = new Set<string>();
   for (const b of lists) {
-    const next: any[] = [];
+    const change: BacklogChange = { remove: new Set(), replace: new Map() };
     for (const it of Array.isArray(b.items) ? b.items : []) {
       let match = it?.match;
       if (!match) continue;
       const k = deps.key(match);
-      if (gone.has(k)) continue; // already exited from another ask's backlog this run: out of every backlog
-      let v = backlogVerdict(match, today, { lifeEnd: F.lifeEndOf, form: F.formOf });
-      let unread = false;
-      if (v === "classify") {
-        if (classified >= (opts.classifyLimit ?? 12)) {
-          next.push(it);
+      // Exited already (another ask's backlog this run, or an earlier exit a racing save put back): out, no second fact.
+      if (gone.has(k) || already.has(k)) {
+        change.remove.add(k);
+        continue;
+      }
+      const held: Unread | null = it?.unread ?? null;
+      let v = backlogVerdict(match, today, { lifeEnd, form: F.formOf });
+      let nowHeld: Unread | null = null;
+      if (v === "classify" || held) {
+        if (held?.days.includes(today) || classified >= (opts.classifyLimit ?? 12)) {
           kept++;
-          continue;
+          continue; // read today already, or over this run's reading budget: tomorrow
         }
         classified++;
         const c = await deps.classify(match, today).catch(() => ({ match, result: "unknown" as const }));
         match = c.match;
-        // A page that couldn't be read is tried again on the next pass; only one read with no date exits.
-        if (c.result === "unknown" && Number(it?.unreadTries ?? 0) + 1 < UNREAD_TRIES) {
-          next.push({ ...it, match, unreadTries: Number(it?.unreadTries ?? 0) + 1 });
-          kept++;
-          continue;
-        }
-        if (c.result === "unknown") unread = true;
-        if (c.result === "undated") unread = true;
+        if (c.result === "undated" || c.result === "unknown") nowHeld = { days: [...new Set([...(held?.days ?? []), today])], why: c.result };
         else {
           dated++;
-          v = backlogVerdict(match, today, { lifeEnd: F.lifeEndOf, form: F.formOf });
+          v = backlogVerdict(match, today, { lifeEnd, form: F.formOf });
         }
       }
-      if (unread || v === "past") {
-        const end = F.lifeEndOf(match);
-        const reason = unread
-          ? Number(it?.unreadTries ?? 0) + 1 >= UNREAD_TRIES && !F.formOf(match) ? `its page couldn't be read on ${UNREAD_TRIES} tries, so when it is can't be checked` : "its page doesn't say when it is, so it can't be checked against a date"
+      const tooLong = !!nowHeld && nowHeld.days.length >= UNREAD_DAYS;
+      if (tooLong || v === "past") {
+        const end = lifeEnd(match);
+        const reason = tooLong
+          ? nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
           : `${F.formOf(match) === "opening" ? "its deadline" : "its date"} (${end}) passed`;
         const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
         if (ok) {
           gone.add(k);
+          change.remove.add(k);
           exited++;
           continue;
         }
       }
-      next.push({ ...it, match });
+      const next = { ...it, match };
+      if (nowHeld) next.unread = nowHeld;
+      else delete next.unread;
+      change.replace.set(k, next);
       kept++;
     }
-    await deps.save(userId, b.ask_id, next);
+    if (change.remove.size || change.replace.size) await deps.merge(userId, b.ask_id, change);
   }
   return { exited, dated, kept };
 }
 
 // A find the picker rejected leaves every backlog for good, with the picker's reason, scoped to the thing and the ask it was for.
-export async function exitRejectedFinds(userId: string, rejected: { key: string; name: string; why: string; askText?: string | null }[], deps: Pick<PruneDeps, "backlogs" | "save" | "key"> & ExitDeps): Promise<number> {
+export async function exitRejectedFinds(userId: string, rejected: { key: string; name: string; why: string; askText?: string | null }[], deps: Pick<PruneDeps, "backlogs" | "merge" | "key"> & ExitDeps): Promise<number> {
   if (!rejected.length) return 0;
   const out = new Set<string>();
   for (const r of rejected) {
@@ -239,8 +258,7 @@ export async function exitRejectedFinds(userId: string, rejected: { key: string;
   }
   if (!out.size) return 0;
   for (const b of await deps.backlogs(userId)) {
-    const items = (Array.isArray(b.items) ? b.items : []).filter((it: any) => !out.has(deps.key(it?.match ?? {})));
-    if (items.length !== (b.items ?? []).length) await deps.save(userId, b.ask_id, items);
+    if ((b.items ?? []).some((it: any) => out.has(deps.key(it?.match ?? {})))) await deps.merge(userId, b.ask_id, { remove: out, replace: new Map() });
   }
   return out.size;
 }
@@ -268,7 +286,8 @@ export async function pruneAllWorkingSets(deps: PruneDeps, now = new Date()): Pr
         if (ok) goneItems++;
         else left.push(it);
       }
-      await deps.save(g.id, b.ask_id, left);
+      const keep = new Set(left.map((it: any) => deps.key(it?.match ?? {})));
+      await deps.merge(g.id, b.ask_id, { remove: new Set((b.items ?? []).map((it: any) => deps.key(it?.match ?? {})).filter((k: string) => !keep.has(k))), replace: new Map() });
     }
     const { rows: waiting } = await pool.query(`SELECT id, summary FROM proactive_candidates WHERE user_id = $1 AND status = 'pending'`, [g.id]);
     for (const c of waiting) {

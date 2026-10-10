@@ -197,7 +197,7 @@ export async function ledgerFacts(userId: string, context: string, zoneIn?: stri
   const { rows } = await pool
     .query(
       `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end FROM co_facts
-       WHERE owner_user_id = $1 AND subject = 'co' AND happened_at > NOW() - INTERVAL '90 days'
+       WHERE owner_user_id = $1 AND subject = 'co' AND relation <> 'exited' AND happened_at > NOW() - INTERVAL '90 days'
        ORDER BY happened_at DESC LIMIT 400`,
       [userId],
     )

@@ -88,9 +88,29 @@ export type QuerySource = "web" | "x" | "events";
 // Who someone is (gender, age bracket, faith, ethnicity, sexuality, parenthood) is never assumed in a search (Royce, 2026-10-09: "drop my
 // guard" was searched as "men's circle vulnerability sharing"). A group word goes in a query only when their own ask says it.
 const IDENTITY_TERMS = /\b(?:men'?s|women'?s|male|female|mens|womens|guys?'?|girls?'?|ladies|moms?|mothers?|dads?|fathers?|parents?|gay|lesbian|queer|lgbtq\+?|trans|black|latin[oax]s?|latine|asian|christian|muslim|jewish|catholic|seniors?|20s|30s|40s|50s|twenty-?somethings|millennials?|gen z|veterans?)\b/gi;
+// Phrases where a group word is part of a thing, not a person (review of #133: "black tie gala", "parent company", "trans-Pacific",
+// "Mothers Day" were refused).
+const NOT_ABOUT_PEOPLE = /\b(?:black[\s-]tie|parent company|trans[\s-]?pacific|trans[\s-]?atlantic|(?:mother|father|parent)s?'?\s+day|black\s+friday|senior\s+(?:engineer|designer|manager|developer|pm)|20s\s+(?:style|theme|party))\b/gi;
+// A capitalized group word inside a proper name is a venue or institution ("Asian Art Museum", "Contemporary Jewish Museum",
+// "Veterans Building"), when a capitalized word sits next to it.
+function inProperName(query: string, index: number, length: number): boolean {
+  const word = query.slice(index, index + length);
+  if (!/^[A-Z]/.test(word)) return false;
+  const before = query.slice(0, index).match(/([A-Z][\w'&.-]*)\s+$/);
+  const after = query.slice(index + length).match(/^\s+([A-Z][\w'&.-]*)/);
+  return !!(before || after);
+}
 export function assumedIdentity(query: string, theirWords: string): string[] {
-  const said = theirWords.toLowerCase();
-  return [...new Set((query.match(IDENTITY_TERMS) ?? []).map((w) => w.toLowerCase()))].filter((w) => !said.includes(w.replace(/'?s$/, "")));
+  const cleaned = query.replace(NOT_ABOUT_PEOPLE, (m) => " ".repeat(m.length));
+  const said = new Set((theirWords.toLowerCase().match(/[a-z0-9'+-]+/g) ?? []).map((w) => w.replace(/'?s$/, "")));
+  const out = new Set<string>();
+  for (const m of cleaned.matchAll(IDENTITY_TERMS)) {
+    if (inProperName(query, m.index ?? 0, m[0].length)) continue;
+    const w = m[0].toLowerCase();
+    // Whole words only (review of #133: "men's" passed because "mentor" contained "men").
+    if (!said.has(w.replace(/'?s$/, ""))) out.add(w);
+  }
+  return [...out];
 }
 
 export function queryProblems(q: string, o: { terms: string[]; source: QuerySource; otherSourceQueries?: string[]; theirWords?: string }): string[] {

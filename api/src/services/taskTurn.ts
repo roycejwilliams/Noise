@@ -728,6 +728,8 @@ async function onFileFor(userId: string, task: CoTask): Promise<OnFile[]> {
   const { rows } = await pool.query(`SELECT items FROM event_backlogs b WHERE b.user_id = $1 AND ${ASK_STILL_OPEN("b.ask_id")}`, [userId]).catch(() => ({ rows: [] as any[] }));
   const swept: OnFile[] = rows
     .flatMap((r: any) => (Array.isArray(r.items) ? r.items : []))
+    // A held find (its date isn't known yet, services/workingSet.ts) is never sent as on file.
+    .filter((it: any) => !it?.unread)
     .map((it: any) => it?.match)
     .filter((m: any) => m?.url && m?.name && !isPastEvent(m, zone))
     .map((m: any) => ({
