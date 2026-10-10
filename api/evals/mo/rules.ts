@@ -359,7 +359,7 @@ check(
   const tm = src("mo/team.ts");
   check("room: from the next Co event's guests, general terms, leak rule", /export async function roomNeeds/.test(tm) && /getEventGuestList/.test(tm) && /return gaps\.filter\(\(g\) => !queryLeaks\(g\.gap, lines, nameList\)\)/.test(tm));
   check("room: guests' needs come ahead of the network's gaps", /put these ahead of the network's gaps/.test(src("mo/find.ts")));
-  check("gaps: only asks a search can meet (not sponsors)", /a\.resolved_at IS NULL AND a\.kind = 'find' AND u\.archived_at IS NULL/.test(tm));
+  check("gaps: only asks a search or an intro can meet (finds and people, not help asks or sponsors)", /a\.resolved_at IS NULL AND a\.kind IN \('find', 'person'\) AND u\.archived_at IS NULL/.test(tm));
 
   // 4. Learning
   check("learn: an event or an intro yes means they took to Co", L.tookToCo({ replies: 0, events: 1, introYes: 0, daysSinceJoin: 3 }) === "active" && L.tookToCo({ replies: 0, events: 0, introYes: 1, daysSinceJoin: 3 }) === "active");

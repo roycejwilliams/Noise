@@ -85,10 +85,40 @@ export function samePhrasing(a: string, b: string): boolean {
 export type QuerySource = "web" | "x" | "events";
 
 // Pure: what's wrong with a query, in words Co can act on. Empty: it may run.
-export function queryProblems(q: string, o: { terms: string[]; source: QuerySource; otherSourceQueries?: string[] }): string[] {
+// Who someone is (gender, age bracket, faith, ethnicity, sexuality, parenthood) is never assumed in a search (Royce, 2026-10-09: "drop my
+// guard" was searched as "men's circle vulnerability sharing"). A group word goes in a query only when their own ask says it.
+const IDENTITY_TERMS = /\b(?:men'?s|women'?s|male|female|mens|womens|guys?'?|girls?'?|ladies|moms?|mothers?|dads?|fathers?|parents?|gay|lesbian|queer|lgbtq\+?|trans|black|latin[oax]s?|latine|asian|christian|muslim|jewish|catholic|seniors?|20s|30s|40s|50s|twenty-?somethings|millennials?|gen z|veterans?)\b/gi;
+// Phrases where a group word is part of a thing, not a person (review of #133: "black tie gala", "parent company", "trans-Pacific",
+// "Mothers Day" were refused).
+const NOT_ABOUT_PEOPLE = /\b(?:black[\s-]tie|parent company|trans[\s-]?pacific|trans[\s-]?atlantic|(?:mother|father|parent)s?'?\s+day|black\s+friday|senior\s+(?:engineer|designer|manager|developer|pm)|20s\s+(?:style|theme|party))\b/gi;
+// A capitalized group word inside the name of a place or institution ("Asian Art Museum", "Contemporary Jewish Museum", "Veterans
+// Building", "Women's Building"): the name ends, within two more capitalized words, in a word for a place. Capitals alone aren't a
+// venue (re-review of #133: "Black Women In Tech Summit", "Queer Film Fest" passed in Title Case).
+const PLACE = /^(?:\s+[A-Z][\w'&.-]*){0,2}?\s+(?:Building|Hall|Museum|Center|Centre|Theater|Theatre|Library|College|University|Institute|Gallery|Park|Plaza|Square|Street|Cathedral|Memorial|Auditorium|Pavilion|Opera House)\b/;
+function inProperName(query: string, index: number, length: number): boolean {
+  if (!/^[A-Z]/.test(query.slice(index, index + length))) return false;
+  return PLACE.test(query.slice(index + length));
+}
+export function assumedIdentity(query: string, theirWords: string): string[] {
+  const cleaned = query.replace(NOT_ABOUT_PEOPLE, (m) => " ".repeat(m.length));
+  const base = (w: string) => w.replace(/\+$/, "").replace(/'?s$/, "");
+  const said = new Set((theirWords.toLowerCase().match(/[a-z0-9'+-]+/g) ?? []).map(base));
+  const out = new Set<string>();
+  for (const m of cleaned.matchAll(IDENTITY_TERMS)) {
+    if (inProperName(query, m.index ?? 0, m[0].length)) continue;
+    const w = m[0].toLowerCase();
+    // Whole words only (review of #133: "men's" passed because "mentor" contained "men").
+    if (!said.has(base(w))) out.add(w);
+  }
+  return [...out];
+}
+
+export function queryProblems(q: string, o: { terms: string[]; source: QuerySource; otherSourceQueries?: string[]; theirWords?: string }): string[] {
   const out: string[] = [];
   const text = q.trim();
   if (!text) return ["it's empty"];
+  const assumed = o.theirWords !== undefined ? assumedIdentity(text, o.theirWords) : [];
+  if (assumed.length) out.push(`it assumes who they are (${assumed.join(", ")}), which their ask doesn't say: search for the thing itself`);
   // Whole words only, never inside a hyphenated word ("Co" is not in "co-working"). A one-word term matches case as written (a name
   // is capitalized; "events" is not "Events"); a longer one matches in any case.
   const hits = o.terms.filter((t) => new RegExp(`(^|[^\\w-])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\w-])`, /\s/.test(t) ? "i" : "").test(text));
@@ -115,14 +145,15 @@ export type Looked = { source: LedgerSource; url: string; query?: string };
 
 export class QueryLedger {
   readonly queries: QueryLog[] = [];
-  constructor(private terms: string[]) {}
+  // theirWords: the ask, in their words: the only source a group word in a query may come from (assumedIdentity).
+  constructor(private terms: string[], private theirWords?: string) {}
   private asked(source: LedgerSource): string[] {
     return this.queries.filter((x) => x.source === source && !x.refused).map((x) => x.query);
   }
   // Problems for a query before it runs (it's refused and logged when there are any). X and web are checked against each other.
   check(source: LedgerSource, query: string): string[] {
     const other = source === "x" ? this.asked("web") : source === "web" ? this.asked("x") : [];
-    const bad = queryProblems(query, { terms: this.terms, source, otherSourceQueries: other });
+    const bad = queryProblems(query, { terms: this.terms, source, otherSourceQueries: other, theirWords: this.theirWords });
     if (bad.length) this.queries.push({ source, query: query.slice(0, 200), results: 0, kept: 0, passed: 0, refused: bad });
     return bad;
   }

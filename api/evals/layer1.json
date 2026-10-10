@@ -142,6 +142,7 @@
     "evals/proactive/restraint126.ts",
     "evals/proactive/lookoutOrigin.ts",
     "evals/proactive/urgencyTaste.ts",
+    "evals/lifecycle/workingSet.ts",
     "evals/tasks/heldReplay.ts",
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",

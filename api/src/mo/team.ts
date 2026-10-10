@@ -127,7 +127,7 @@ export async function networkGaps(opts: { refresh?: boolean } = {}): Promise<Gap
   const { rows } = await pool
     .query(
       `SELECT a.ask_text FROM ask_checkins a JOIN users u ON u.id = a.user_id
-       WHERE a.resolved_at IS NULL AND a.kind = 'find' AND u.archived_at IS NULL AND a.created_at > NOW() - INTERVAL '45 days'
+       WHERE a.resolved_at IS NULL AND a.kind IN ('find', 'person') AND u.archived_at IS NULL AND a.created_at > NOW() - INTERVAL '45 days'
        ORDER BY a.created_at DESC LIMIT 40`,
     )
     .catch(() => ({ rows: [] as any[] }));
@@ -168,7 +168,7 @@ export async function roomNeeds(opts: { refresh?: boolean } = {}): Promise<RoomN
     const { rows } = ids.length
       ? await pool
           .query(
-            `SELECT a.ask_text FROM ask_checkins a WHERE a.user_id = ANY($1::uuid[]) AND a.resolved_at IS NULL AND a.kind = 'find' ORDER BY a.created_at DESC LIMIT 40`,
+            `SELECT a.ask_text FROM ask_checkins a WHERE a.user_id = ANY($1::uuid[]) AND a.resolved_at IS NULL AND a.kind IN ('find', 'person') ORDER BY a.created_at DESC LIMIT 40`,
             [ids],
           )
           .catch(() => ({ rows: [] as any[] }))

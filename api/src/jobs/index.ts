@@ -485,6 +485,16 @@ export function registerJobs(io: Server) {
   // proactive harness decides whether it goes out. Hour-gated only so the
   // expensive search runs during the day, not to protect the send.
   const MAX_ASK_SEARCHES_PER_USER_PER_DAY = 4;
+  // The working set's daily pass (services/workingSet.ts), before the morning sweep: factual exits for everyone, each with its fact.
+  cron.schedule("30 7 * * *", async () => {
+    try {
+      const [W, S] = await Promise.all([import("../services/workingSet.js"), import("../services/sweepShadow.js")]);
+      const r = await W.pruneAllWorkingSets(S.realPruneDeps as any);
+      console.log(`Working set: ${r.goneAsks} ask(s) and ${r.goneItems} item(s) of gone members closed, ${r.pruned} backlog item(s) exited`);
+    } catch (err: any) {
+      console.error("Working set daily pass failed (non-fatal):", err?.message ?? err);
+    }
+  }, { timezone: "America/Los_Angeles" });
   cron.schedule("0 * * * *", async () => {
     try {
       // Asks past their time limit are closed before anything searches them
@@ -500,15 +510,28 @@ export function registerJobs(io: Server) {
       // Asks Co has answered or delivered close here, on evidence (services/askLifecycle.ts), before anything searches them.
       await import("../services/askLifecycle.js").then((m) => m.closeAnsweredAsksAll()).catch((err: any) => console.error("Ask lifecycle: closing answered asks failed (non-fatal):", err?.message ?? err));
       await classifyOpenAsks().catch((err: any) => console.error("Ask kinds: classify failed (non-fatal):", err?.message ?? err));
+      // The working set (services/workingSet.ts): a member who's gone has nothing live; an ask that came back empty too many times
+      // exits as "searched, nothing found". Each exit writes its fact to the member's record first.
+      await import("../services/workingSet.js")
+        .then(async (W) => {
+          const gone = await W.exitGoneMembersAsks();
+          if (gone) console.log(`Working set: closed ${gone} ask(s) of members who are gone`);
+          const { rows: tired } = await pool.query(`SELECT id, ask_id, user_id, ask_text, empty_runs FROM ask_checkins WHERE resolved_at IS NULL AND kind = 'find' AND empty_runs >= $1`, [W.ASK_BACKOFF.exitAfter]);
+          for (const t of tired) await W.exitAsk({ userId: t.user_id, askRowId: String(t.id), askId: String(t.ask_id), text: String(t.ask_text ?? ""), state: "expired", closedReason: "nothing_found", reason: `searched ${t.empty_runs} times, nothing found`, scope: "this ask; saying it again opens a new search" });
+        })
+        .catch((err: any) => console.error("Working set: exits failed (non-fatal):", err?.message ?? err));
       await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(
-        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, u.id AS user_id, u.first_name, u.phone_number, cp.city,
+        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, ac.kind, ac.empty_runs, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.intent, cp.activity_preferences,
                 (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
          LEFT JOIN co_profiles cp ON cp.user_id = ac.user_id
-         WHERE ac.resolved_at IS NULL AND ac.kind = 'find'
+         -- Only live items of live members (services/workingSet.ts): an archived or opted-out member is swept zero times. Person asks
+         -- go to intros below, never to the event and page search.
+         WHERE ac.resolved_at IS NULL AND ac.kind IN ('find', 'person')
+           AND u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false AND u.phone_number IS NOT NULL
          ORDER BY (COALESCE(ac.last_mentioned_at, ac.created_at) > NOW() - INTERVAL '3 days') DESC,
                   ac.last_attempted_at ASC NULLS FIRST, ac.last_surfaced_at ASC NULLS FIRST`,
       );
@@ -544,8 +567,18 @@ export function registerJobs(io: Server) {
 
         for (const row of userRows) {
           if (localDayOf(row.last_attempted_at) === localToday) continue; // already ran today's check for this ask — don't re-run every hourly tick inside the window
+          // An ask that keeps coming back empty backs off (services/workingSet.ts askSearchDue): every few days, not every morning.
+          const { askSearchDue } = await import("../services/workingSet.js");
+          if (!askSearchDue(row)) continue;
           if (searchedToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY) break;
           searchedToday++;
+
+          // A person to meet or talk to is met by an intro, never by searching events and pages (askKind.ts "person").
+          if (row.kind === "person") {
+            await pool.query(`UPDATE ask_checkins SET last_attempted_at = NOW() WHERE id = $1`, [row.id]);
+            await attemptNetworkSurfacing(row.user_id, row.first_name, row.phone_number, row.ask_id).catch((err: any) => console.error(`Network surfacing for a person ask failed for ${row.user_id}:`, err?.message ?? err));
+            continue;
+          }
 
           try {
             await attemptEventSurfacing({

@@ -955,6 +955,9 @@ export async function printReview(opts: { since?: string; until?: string; model?
   }
   const rejectedText = renderRejectedSample(await rejectedEvents(since, until).catch(() => []), 12);
   if (rejectedText) console.log(`\n${rejectedText}`);
+  // The working set and what each member's sweeps spent (services/workingSet.ts): growth that doesn't stop is a leak, visible here.
+  const W = await import("../services/workingSet.js");
+  console.log(`\n${W.workingSetLines(await W.workingSetRows().catch(() => [])).join("\n")}`);
   if (opts.store) console.log(reviewEnabled() ? `\nstored ${await storeFlags(flags)} new flags` : "\nnot stored: only on co-test with DEV_REVIEW=true");
   await pool.end();
 }

@@ -1,0 +1,373 @@
+// The working set (Royce, 2026-10-09): every ask, goal, find and backlog item is live, fulfilled, expired, rejected, superseded or
+// cancelled, and only live items are ever swept, picked, re-judged or counted against a budget. Items leave on facts only (fulfilled,
+// past their date, rejected by the picker, superseded, their event cancelled, the member gone), never because a model felt they were
+// stale. What leaves stays for audit but is inert. On the way out, the distilled fact goes into the member's one record (co_facts,
+// Co's action record, through coFacts.ts like every other fact Co writes), with its reason and its scope, never stronger than what
+// happened: "set aside Hardly Strictly Bluegrass (an event on Oct 3): its date passed; scope: this event", not "doesn't like music".
+// There is no second store: the states live on the rows that already hold the items, and the facts in the record that already
+// holds the member. A member re-opens anything by saying it again, which makes a fresh item (an exited one never revives).
+import pool from "../db/db.js";
+
+export const LIFE_STATES = ["live", "fulfilled", "expired", "rejected", "superseded", "cancelled"] as const;
+export type LifeState = (typeof LIFE_STATES)[number];
+export type ExitState = Exclude<LifeState, "live">;
+export type ItemKind = "ask" | "goal" | "find" | "backlog";
+
+// ------------------------------------------------------------------ states, read from the rows that already hold the items
+
+// An ask's closed_reason (services/askLifecycle.ts) is its exit reason; the state follows from it.
+const ASK_STATE: Record<string, ExitState> = {
+  member: "fulfilled", answered: "fulfilled", delivered: "fulfilled", co: "fulfilled", fulfilled: "fulfilled",
+  expired: "expired", nothing_found: "expired",
+  moved_on: "cancelled", archived: "cancelled", member_gone: "cancelled", cancelled: "cancelled",
+  superseded: "superseded", rejected: "rejected",
+};
+export function askLifeState(r: { resolved_at: unknown; closed_reason?: string | null }): LifeState {
+  if (!r.resolved_at) return "live";
+  return ASK_STATE[String(r.closed_reason ?? "")] ?? "fulfilled";
+}
+
+// A failed attempt is not a decision (Royce, 2026-10-09: a failed Oct 6 draft kept the Extraordinary Founders Dinner from ever being
+// queued again). Only a sent text or a member-visible outcome closes a find; a draft that failed its checks or a send that failed
+// re-enters the working set.
+export function isFailedAttempt(skipReason: string | null | undefined): boolean {
+  return /^(?:draft failed|send failed|send_failed|draft_failed|send error)/i.test(String(skipReason ?? "").trim());
+}
+// Pure: do these finished rows for one thing decide it? Any row that isn't a failed attempt does; failed attempts alone don't.
+export function decidedByRows(rows: { skip_reason?: string | null }[]): boolean {
+  return rows.some((r) => !isFailedAttempt(r.skip_reason));
+}
+export function candidateLifeState(r: { status: string; skip_reason?: string | null }): LifeState {
+  if (r.status === "pending") return "live";
+  if (r.status === "sent") return "fulfilled";
+  if (r.status === "expired") return "expired";
+  const why = String(r.skip_reason ?? "");
+  if (isFailedAttempt(why)) return "live";
+  if (/^Co's daily pick: reject/i.test(why)) return "rejected";
+  if (/^stale/i.test(why)) return "expired";
+  if (/^sent in a reply/i.test(why)) return "fulfilled";
+  return "rejected";
+}
+
+// ------------------------------------------------------------------ exits
+
+export type Exit = {
+  userId: string;
+  kind: ItemKind;
+  // A stable key for the item (a find's match key, an ask's id), so an exited find is never re-queued when a sweep finds it again.
+  itemKey: string;
+  label: string; // the item, named as the member would know it
+  state: ExitState;
+  reason: string; // the fact it left on, in a few words ("its date (Oct 3) passed", "Co's daily pick: an air show doesn't fit…")
+  scope: string; // what the fact is about, and no wider ("this event, for their ask: events this weekend")
+};
+
+// Pure: the distilled fact, with its reason and scope. Never a verdict about the member.
+export function exitFactLabel(e: Pick<Exit, "kind" | "label" | "state" | "reason" | "scope">): string {
+  const what = { ask: "ask", goal: "goal", find: "find", backlog: "find" }[e.kind];
+  const verb = { fulfilled: "Closed as done", expired: "Closed", rejected: "Set aside", superseded: "Replaced", cancelled: "Closed" }[e.state];
+  return `${verb} the ${what} "${e.label.slice(0, 160)}": ${e.reason.slice(0, 220)}. Scope: ${e.scope.slice(0, 160)}.`;
+}
+// Pure: a fact is scoped only when it carries a reason and a scope, both its own (not just the verdict).
+export function isScoped(e: Pick<Exit, "reason" | "scope">): boolean {
+  return e.reason.trim().length >= 6 && e.scope.trim().length >= 6;
+}
+
+export const EXIT_RELATION = "exited";
+export type ExitDeps = { writeFact: (e: Exit) => Promise<void> };
+export const realExitDeps: ExitDeps = {
+  writeFact: async (e) => {
+    const { recordFactChecked } = await import("./coFacts.js");
+    await recordFactChecked({
+      ownerUserId: e.userId, subject: "co", relation: EXIT_RELATION, label: exitFactLabel(e), visibility: "owner", source: `working_set:${e.kind}`,
+      meta: { kind: e.kind, itemKey: e.itemKey, state: e.state, reason: e.reason, scope: e.scope },
+    });
+  },
+};
+
+// The fact first; only once it's in their record does the caller archive the item. A fact that can't be written keeps the item live.
+export async function writeExitFact(e: Exit, deps: ExitDeps = realExitDeps): Promise<boolean> {
+  if (!isScoped(e)) throw new Error(`an exit needs its own reason and scope (${e.kind} "${e.label}")`);
+  try {
+    await deps.writeFact(e);
+    return true;
+  } catch (err: any) {
+    console.error(`workingSet: exit fact for ${e.kind} "${e.label.slice(0, 60)}" failed, the item stays live:`, err?.message ?? err);
+    return false;
+  }
+}
+
+// Exited finds, by key: a sweep that finds one again never puts it back (inert, never re-queued).
+export async function exitedFindKeys(userId: string, keys: string[]): Promise<Set<string>> {
+  if (!keys.length) return new Set();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT meta->>'itemKey' AS k FROM co_facts WHERE owner_user_id = $1 AND relation = $2 AND meta->>'kind' IN ('find', 'backlog') AND meta->>'itemKey' = ANY($3::text[])`,
+    [userId, EXIT_RELATION, keys],
+  );
+  return new Set(rows.map((r: any) => String(r.k)));
+}
+
+// ------------------------------------------------------------------ asks
+
+// Empty runs (Royce, 2026-10-09): an ask that keeps coming back empty backs off, then exits as "searched, nothing found".
+export const ASK_BACKOFF = { slowAfter: 3, everyDays: 3, exitAfter: 6 } as const;
+// Pure: is a find ask due a search today?
+export function askSearchDue(r: { empty_runs?: number | null; last_attempted_at?: Date | string | null }, now = new Date()): boolean {
+  const empties = Number(r.empty_runs ?? 0);
+  if (empties < ASK_BACKOFF.slowAfter || !r.last_attempted_at) return true;
+  return now.getTime() - new Date(r.last_attempted_at).getTime() >= ASK_BACKOFF.everyDays * 86_400_000;
+}
+export function askExhausted(r: { empty_runs?: number | null }): boolean {
+  return Number(r.empty_runs ?? 0) >= ASK_BACKOFF.exitAfter;
+}
+
+// One ask out of the working set: the fact, then the close (askKind.ts closeAsk, the one way an ask closes, in both places it lives).
+export async function exitAsk(o: { userId: string; askRowId: string; askId: string; text: string; state: ExitState; reason: string; scope?: string; closedReason: string }, deps: ExitDeps = realExitDeps): Promise<boolean> {
+  const ok = await writeExitFact({ userId: o.userId, kind: "ask", itemKey: `ask:${o.askRowId}`, label: o.text, state: o.state, reason: o.reason, scope: o.scope ?? "this ask only; saying it again opens a new one" }, deps);
+  if (!ok) return false;
+  const { closeAsk } = await import("./askKind.js");
+  await closeAsk(o.userId, o.askId, o.closedReason, o.reason.slice(0, 300));
+  return true;
+}
+
+// A member who's gone (archived or opted out) has nothing live (Royce, 2026-10-09: the archived test accounts were swept every
+// morning and spent most of the shared web search budget).
+export async function exitGoneMembersAsks(deps: ExitDeps = realExitDeps): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT ac.id, ac.ask_id, ac.user_id, ac.ask_text, u.archived_at IS NOT NULL AS archived
+     FROM ask_checkins ac JOIN users u ON u.id = ac.user_id
+     WHERE ac.resolved_at IS NULL AND (u.archived_at IS NOT NULL OR COALESCE(u.sms_opted_out, false))
+     LIMIT 500`,
+  );
+  let n = 0;
+  for (const r of rows) {
+    const ok = await exitAsk({ userId: r.user_id, askRowId: String(r.id), askId: String(r.ask_id), text: String(r.ask_text ?? ""), state: "cancelled", closedReason: "member_gone", reason: r.archived ? "the member's account was archived" : "the member opted out of texts", scope: "this ask; nothing about what they wanted" }, deps);
+    if (ok) n++;
+  }
+  return n;
+}
+
+// ------------------------------------------------------------------ the backlog
+
+export type BacklogEntry = { askId: string; index: number; item: any };
+// An undated or unreadable find is held (never offered) and read again once a day; it exits only after this many separate days
+// (review of #133: one failed read, or three passes in one day, used to exit it with a false "no date" fact).
+export const UNREAD_DAYS = 3;
+export type Unread = { days: string[]; why: "undated" | "unknown" };
+// Pure: is a backlog item offerable? A held one isn't, anywhere (picker pool, the queue, a task's on-file finds).
+export function offerable(item: { unread?: Unread | null } | null | undefined): boolean {
+  return !item?.unread;
+}
+
+// The backlog, changed by merging into what's there now (review of #133: prune read the backlog, classified slowly, then overwrote it,
+// so a find a sweep added in between was lost). remove: keys out; replace: the classified or held version of an item, by key.
+export type BacklogChange = { remove: Set<string>; replace: Map<string, any> };
+export type PruneDeps = ExitDeps & {
+  backlogs: (userId: string) => Promise<{ ask_id: string; items: any[] }[]>;
+  merge: (userId: string, askId: string, change: BacklogChange) => Promise<void>;
+  classify: (match: any, today: string) => Promise<{ match: any; result: "dated_event" | "opening" | "undated" | "unknown" }>;
+  zone: (userId: string) => Promise<string | null>;
+  key: (match: any) => string;
+  exited?: (userId: string, keys: string[]) => Promise<Set<string>>;
+};
+// Pure: apply a change to a backlog's current items.
+// Two items under one key are the same find: a replacement lands once, never as two copies (re-review of #133).
+export function applyChange(items: any[], change: BacklogChange, key: (m: any) => string): any[] {
+  const placed = new Set<string>();
+  const out: any[] = [];
+  for (const it of Array.isArray(items) ? items : []) {
+    const k = key(it?.match ?? {});
+    if (change.remove.has(k)) continue;
+    const r = change.replace.get(k);
+    if (!r) { out.push(it); continue; }
+    if (placed.has(k)) continue;
+    placed.add(k);
+    out.push(r);
+  }
+  return out;
+}
+
+// Pure: a sweep's save, merged into the row as it is now (re-review of #133: the sweep overwrote the row with a list read before a
+// minutes-long search, undoing a prune's or picker's work in between). What the sweep read (`read`), what it wants (`next`) and what's
+// there now (`now`): an item someone else removed since the read stays out; one someone else added stays in; a held item keeps the
+// read days recorded since.
+export function mergeSweepSave(read: any[], next: any[], now: any[], key: (m: any) => string): any[] {
+  const k = (it: any) => key(it?.match ?? {});
+  const readKeys = new Set(read.map(k));
+  const nowBy = new Map(now.map((it) => [k(it), it]));
+  const kept = next
+    .filter((it) => !readKeys.has(k(it)) || nowBy.has(k(it)))
+    .map((it) => {
+      const cur = nowBy.get(k(it));
+      return cur?.unread && (!it.unread || (cur.unread.days?.length ?? 0) > (it.unread.days?.length ?? 0)) ? { ...it, unread: cur.unread } : it;
+    });
+  const nextKeys = new Set(next.map(k));
+  return [...kept, ...now.filter((it) => !readKeys.has(k(it)) && !nextKeys.has(k(it)))];
+}
+
+// Pure: the decision for one backlog item on a date, from its form and dates (services/findForm.ts).
+export function backlogVerdict(match: any, today: string, f: { lifeEnd: (m: any) => string | null; form: (m: any) => "event" | "opening" | null }): "keep" | "past" | "classify" {
+  const form = f.form(match);
+  if (!form) return "classify";
+  const end = f.lifeEnd(match);
+  if (end && end < today) return "past";
+  if (form === "event" && !end) return "classify";
+  return "keep";
+}
+
+// Every backlog item for one member, through the same rules, in their zone: a past one exits on its date; an undated or unreadable
+// one is held and read again once a day, and exits after UNREAD_DAYS separate days; the rest stay. Applied to the whole backlog.
+export async function pruneBacklogs(userId: string, today: string, deps: PruneDeps, opts: { classifyLimit?: number } = {}): Promise<{ exited: number; dated: number; kept: number }> {
+  const F = await import("./findForm.js");
+  const zone = await deps.zone(userId).catch(() => null);
+  const lifeEnd = (m: any) => F.lifeEndOf(m, zone);
+  const lists = await deps.backlogs(userId);
+  const already = deps.exited ? await deps.exited(userId, lists.flatMap((b) => (b.items ?? []).map((it: any) => deps.key(it?.match ?? {})))).catch(() => new Set<string>()) : new Set<string>();
+  let exited = 0, dated = 0, kept = 0, classified = 0;
+  const gone = new Set<string>();
+  for (const b of lists) {
+    const change: BacklogChange = { remove: new Set(), replace: new Map() };
+    for (const it of Array.isArray(b.items) ? b.items : []) {
+      let match = it?.match;
+      if (!match) continue;
+      const k = deps.key(match);
+      // Exited already (another ask's backlog this run, or an earlier exit a racing save put back): out, no second fact.
+      if (gone.has(k) || already.has(k)) {
+        change.remove.add(k);
+        continue;
+      }
+      const held: Unread | null = it?.unread ?? null;
+      let v = backlogVerdict(match, today, { lifeEnd, form: F.formOf });
+      let nowHeld: Unread | null = null;
+      if (v === "classify" || held) {
+        if (held?.days.includes(today) || classified >= (opts.classifyLimit ?? 12)) {
+          kept++;
+          continue; // read today already, or over this run's reading budget: tomorrow
+        }
+        classified++;
+        const c = await deps.classify(match, today).catch(() => ({ match, result: "unknown" as const }));
+        match = c.match;
+        if (c.result === "undated" || c.result === "unknown") nowHeld = { days: [...new Set([...(held?.days ?? []), today])], why: c.result };
+        else {
+          dated++;
+          v = backlogVerdict(match, today, { lifeEnd, form: F.formOf });
+        }
+      }
+      const tooLong = !!nowHeld && nowHeld.days.length >= UNREAD_DAYS;
+      if (tooLong || v === "past") {
+        const end = lifeEnd(match);
+        const reason = tooLong
+          ? nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
+          : `${F.formOf(match) === "opening" ? "its deadline" : "its date"} (${end}) passed`;
+        const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
+        if (ok) {
+          gone.add(k);
+          change.remove.add(k);
+          exited++;
+          continue;
+        }
+      }
+      const next = { ...it, match };
+      if (nowHeld) next.unread = nowHeld;
+      else delete next.unread;
+      change.replace.set(k, next);
+      kept++;
+    }
+    if (change.remove.size || change.replace.size) await deps.merge(userId, b.ask_id, change);
+  }
+  return { exited, dated, kept };
+}
+
+// A find the picker rejected leaves every backlog for good, with the picker's reason, scoped to the thing and the ask it was for.
+export async function exitRejectedFinds(userId: string, rejected: { key: string; name: string; why: string; askText?: string | null }[], deps: Pick<PruneDeps, "backlogs" | "merge" | "key"> & ExitDeps): Promise<number> {
+  if (!rejected.length) return 0;
+  const out = new Set<string>();
+  for (const r of rejected) {
+    const ok = await writeExitFact({ userId, kind: "find", itemKey: r.key, label: r.name, state: "rejected", reason: `Co's daily pick: ${r.why || "not for them now"}`, scope: `this find${r.askText ? `, for: ${r.askText.slice(0, 100)}` : ""}; nothing broader about what they like` }, deps);
+    if (ok) out.add(r.key);
+  }
+  if (!out.size) return 0;
+  for (const b of await deps.backlogs(userId)) {
+    if ((b.items ?? []).some((it: any) => out.has(deps.key(it?.match ?? {})))) await deps.merge(userId, b.ask_id, { remove: out, replace: new Map() });
+  }
+  return out.size;
+}
+
+// ------------------------------------------------------------------ the daily pass
+
+// Once a day, before the morning sweep: the same factual exits for everyone. A gone member's live items close (asks, backlog,
+// waiting finds); every live member's backlog is pruned (past dates out, undated items classified and dated or out). The first run
+// migrates the pile that built up before the working set existed.
+export async function pruneAllWorkingSets(deps: PruneDeps, now = new Date()): Promise<{ goneAsks: number; goneItems: number; pruned: number }> {
+  const goneAsks = await exitGoneMembersAsks(deps);
+  const { rows: gone } = await pool.query(
+    `SELECT DISTINCT u.id, u.archived_at IS NOT NULL AS archived FROM users u
+     WHERE (u.archived_at IS NOT NULL OR COALESCE(u.sms_opted_out, false))
+       AND (EXISTS (SELECT 1 FROM event_backlogs b WHERE b.user_id = u.id AND jsonb_array_length(b.items) > 0)
+            OR EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = u.id AND c.status = 'pending'))`,
+  );
+  let goneItems = 0;
+  for (const g of gone) {
+    const why = g.archived ? "the member's account was archived" : "the member opted out of texts";
+    for (const b of await deps.backlogs(g.id)) {
+      const left: any[] = [];
+      for (const it of b.items ?? []) {
+        const ok = await writeExitFact({ userId: g.id, kind: "backlog", itemKey: deps.key(it?.match ?? {}), label: String(it?.match?.name ?? "a find"), state: "cancelled", reason: why, scope: "this find; nothing about what they wanted" }, deps);
+        if (ok) goneItems++;
+        else left.push(it);
+      }
+      const keep = new Set(left.map((it: any) => deps.key(it?.match ?? {})));
+      await deps.merge(g.id, b.ask_id, { remove: new Set((b.items ?? []).map((it: any) => deps.key(it?.match ?? {})).filter((k: string) => !keep.has(k))), replace: new Map() });
+    }
+    const { rows: waiting } = await pool.query(`SELECT id, summary FROM proactive_candidates WHERE user_id = $1 AND status = 'pending'`, [g.id]);
+    for (const c of waiting) {
+      const ok = await writeExitFact({ userId: g.id, kind: "find", itemKey: `candidate:${c.id}`, label: String(c.summary ?? "a waiting text"), state: "cancelled", reason: why, scope: "this text; nothing about them" }, deps);
+      if (ok) {
+        await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [c.id, `member gone: ${why}`]);
+        goneItems++;
+      }
+    }
+  }
+  const { rows: live } = await pool.query(
+    `SELECT DISTINCT b.user_id FROM event_backlogs b JOIN users u ON u.id = b.user_id
+     WHERE u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false AND jsonb_array_length(b.items) > 0`,
+  );
+  let pruned = 0;
+  for (const r of live) {
+    const zone = await deps.zone(r.user_id).catch(() => null);
+    const z = zone ?? "America/Los_Angeles";
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: z, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    pruned += (await pruneBacklogs(r.user_id, today, deps)).exited;
+  }
+  return { goneAsks, goneItems, pruned };
+}
+
+// ------------------------------------------------------------------ visibility
+
+export type WorkingSetRow = { userId: string; name: string; asks: number; goals: number; finds: number; backlog: number; sweeps24h: number; web24h: number; x24h: number };
+// Pure: the report's lines (Royce, 2026-10-09: "unbounded growth means a leak, and it should be visible on day one").
+export function workingSetLines(rows: WorkingSetRow[]): string[] {
+  if (!rows.length) return ["Working set: nothing live."];
+  return [
+    "Working set (live items) and search spend, last 24h, per member:",
+    ...rows.map((r) => `- ${r.name}: ${r.asks} asks, ${r.goals} goals, ${r.finds} finds waiting, ${r.backlog} in backlog | ${r.sweeps24h} sweeps, ${r.web24h} web + ${r.x24h} X searches`),
+  ];
+}
+export async function workingSetRows(): Promise<WorkingSetRow[]> {
+  const { rows } = await pool.query(
+    `SELECT u.id, COALESCE(u.first_name, '?') AS name,
+       (SELECT COUNT(*) FROM ask_checkins a WHERE a.user_id = u.id AND a.resolved_at IS NULL)::int AS asks,
+       (SELECT COALESCE(array_length(cp.goals, 1), 0) FROM co_profiles cp WHERE cp.user_id = u.id)
+         - (SELECT COUNT(*) FROM goal_states g WHERE g.user_id = u.id AND g.state <> 'active')::int AS goals,
+       (SELECT COUNT(*) FROM proactive_candidates c WHERE c.user_id = u.id AND c.status = 'pending')::int AS finds,
+       (SELECT COALESCE(SUM(jsonb_array_length(b.items)), 0) FROM event_backlogs b WHERE b.user_id = u.id)::int AS backlog,
+       (SELECT COUNT(*) FROM harness_decisions d WHERE d.user_id = u.id AND d.decision IN ('sweep.surface', 'goal_sweep.plan') AND d.created_at > NOW() - INTERVAL '1 day')::int AS sweeps,
+       (SELECT COUNT(*) FROM web_search_log w WHERE w.user_id = u.id AND w.created_at > NOW() - INTERVAL '1 day')::int AS web,
+       (SELECT COUNT(*) FROM x_search_log x WHERE x.user_id = u.id AND x.created_at > NOW() - INTERVAL '1 day')::int AS x
+     FROM users u`,
+  );
+  return rows
+    .map((r: any) => ({ userId: r.id, name: r.name, asks: r.asks, goals: Math.max(0, Number(r.goals ?? 0)), finds: r.finds, backlog: r.backlog, sweeps24h: r.sweeps, web24h: r.web, x24h: r.x }))
+    .filter((r) => r.asks || r.goals || r.finds || r.backlog || r.sweeps24h || r.web24h || r.x24h)
+    .sort((a, b) => b.web24h + b.x24h + b.sweeps24h - (a.web24h + a.x24h + a.sweeps24h));
+}

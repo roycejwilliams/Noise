@@ -17,6 +17,7 @@ import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
 import { holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
 import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
 import { memberZone } from "./memberTime.js";
+import { exitKey } from "./findForm.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -134,7 +135,10 @@ async function noteGoalStarvation(q: Q, userId: string, now: Date, today: string
   });
 }
 
-export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean } = {}): Promise<ShadowRun | null> {
+// trigger "urgent_find": a sweep found something that ends before the next scheduled pick (eventSurfacingSweep.ts endsBeforeNextPick);
+// it runs the pick now, at most URGENT_PICK_RUNS_PER_DAY times a day.
+export const URGENT_PICK_RUNS_PER_DAY = 3;
+export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
   const zone = await memberZone(userId);
@@ -146,7 +150,14 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
      LIMIT 1`,
     [userId, today],
   );
-  if (done.length && !opts.dryRun) return null;
+  if (done.length && !opts.dryRun) {
+    if (opts.trigger !== "urgent_find") return null;
+    const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2`, [userId, today]);
+    if (Number(n) >= URGENT_PICK_RUNS_PER_DAY + 1) return null;
+  }
+  // The working set (services/workingSet.ts): past and undated backlog items exit, with their facts, before the pool is built, so
+  // the picker never re-judges them.
+  if (!opts.dryRun) await import("./workingSet.js").then((W) => W.pruneBacklogs(userId, today, realPruneDeps)).catch((err: any) => console.error("picker: backlog prune failed (non-fatal):", err?.message ?? err));
   // Asks win contested slots, and goals must not starve for it (Royce, 2026-10-09): logged for review, once a day, nothing held.
   if (!opts.dryRun) await noteGoalStarvation(q, userId, now, today).catch((err: any) => console.error("picker: goal starvation check failed (non-fatal):", err?.message ?? err));
 
@@ -154,7 +165,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   const queued = await q(`SELECT payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId]);
   const raw: RawCandidate[] = [
     ...backlogs.flatMap((b: any) =>
-      (Array.isArray(b.items) ? b.items : []).map((it: any) => ({
+      (Array.isArray(b.items) ? b.items : []).filter((it: any) => !it?.unread).map((it: any) => ({
         name: String(it?.match?.name ?? ""),
         date: dateOf(it?.match),
         tier: Number(it?.match?.tier ?? 0),
@@ -285,6 +296,14 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
   }
   // Held: the row goes (it would send), the thing stays in the backlog for the picker to judge again.
   for (const d of plan.unqueue) await pool.query(`DELETE FROM proactive_candidates WHERE id = $1 AND status = 'pending'`, [d.id]);
+  // Every find the picker rejected, queued or not, leaves every backlog for good with its fact (services/workingSet.ts): before, only
+  // queued rows came out, so the rest were judged again every morning.
+  const rejectedFinds = judgments
+    .filter((j) => j.verdict === "reject")
+    // The reason goes through the member-safe filter: no record ids (A17), no internal labels (review of #133).
+    .flatMap((j) => backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).map((b) => ({ key: exitKeyOf(b.match), name: String(b.match?.name ?? j.name), why: memberSafeWhy(String(j.why ?? j.reason ?? "")), askText: b.askText })));
+  const uniq = [...new Map(rejectedFinds.map((r) => [r.key, r])).values()];
+  await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
   const queuedNames: string[] = [];
   for (const q of plan.queue) {
     const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null }).catch((err: any) => {
@@ -299,6 +318,40 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
 // They just said what kind of room they want: the picker re-ranks today, not tomorrow at 10 (Royce, 2026-10-09). Same gates as the
 // daily run (reviewEnabled, the members it serves, and applyPicks only for picker members); the once-a-day guard lets it through
 // because the taste is newer. noteRoomTaste's own limit (capabilities.ts, 3 a day) bounds how often.
+export async function rerunPickerForUrgentFind(userId: string): Promise<void> {
+  if (!reviewEnabled() || !(await shadowUserIds()).includes(userId)) return;
+  await runSweepShadow(userId, new Date(), { trigger: "urgent_find" }).catch((err: any) => console.error(`picker run for an urgent find failed for ${userId} (non-fatal):`, err?.message ?? err));
+}
+
+// The backlog, read and written where it lives (event_backlogs), for the working-set exits.
+// Changes merge into the row as it is now, under a row lock, so a find a sweep saves meanwhile is never lost (review of #133).
+export const realPruneDeps = {
+  backlogs: async (userId: string) => (await pool.query(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId])).rows,
+  merge: async (userId: string, askId: string, change: import("./workingSet.js").BacklogChange) => {
+    const W = await import("./workingSet.js");
+    const F = await import("./findForm.js");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query(`SELECT items FROM event_backlogs WHERE user_id = $1 AND ask_id = $2 FOR UPDATE`, [userId, askId]);
+      if (rows[0]) await client.query(`UPDATE event_backlogs SET items = $3, updated_at = NOW() WHERE user_id = $1 AND ask_id = $2`, [userId, askId, JSON.stringify(W.applyChange(rows[0].items, change, F.exitKey))]);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+  classify: async (match: any, today: string) => (await import("./findForm.js")).classifyFind(match, today),
+  zone: (userId: string) => memberZone(userId),
+  key: (match: any) => exitKeyOf(match),
+  exited: async (userId: string, keys: string[]) => (await import("./workingSet.js")).exitedFindKeys(userId, keys),
+  writeFact: async (e: any) => (await import("./workingSet.js")).realExitDeps.writeFact(e),
+};
+// One key everywhere a find exits or is checked for having exited (services/findForm.ts exitKey).
+const exitKeyOf = (match: any): string => exitKey(match);
+
 export async function rerunPickerForTaste(userId: string): Promise<void> {
   // Only for members the daily picker serves (review of #132: anyone saving a taste got a paid picker run).
   if (!reviewEnabled() || !(await shadowUserIds()).includes(userId)) return;

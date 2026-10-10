@@ -934,7 +934,8 @@ export function loopTools(
         if (close.length > 1) return { ok: false, error: `That could be more than one of their goals (${close.map((g) => `"${g.slice(0, 60)}"`).join(", ")}). Call again with the goal exactly as it reads.` };
         const match = close[0];
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was changed." };
-        await G.setGoalState(ctx.userId, match, state, why, state === "active" ? "member" : "co");
+        const changed = await G.setGoalState(ctx.userId, match, state, why, state === "active" ? "member" : "co").catch(() => false);
+        if (!changed) return { ok: false, error: "The goal couldn't be marked just now; nothing changed. Don't tell them it was." };
         ctx.facts?.add("did_this_turn", `Marked their goal "${match.slice(0, 100)}" ${state}${why ? ` (${why.slice(0, 80)})` : ""}.`);
         return { ok: true, note: state === "active" ? "It's active again: the daily search uses it." : "It stays on file and stops generating searches. Don't announce the bookkeeping; just answer them." };
       },

@@ -808,6 +808,9 @@ export async function runMigrations(): Promise<void> {
     .catch((err: Error) => console.error("ask_checkins.serves_goal_id migration failed:", err));
   await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS closed_reason TEXT, ADD COLUMN IF NOT EXISTS closed_evidence TEXT, ADD COLUMN IF NOT EXISTS answered_checked_at TIMESTAMPTZ`)
+    // The working set (services/workingSet.ts, 2026-10-09): empty runs in a row (backoff, then "searched, nothing found"), and which
+    // version of the kind prompt read the ask.
+    .then(() => pool.query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS empty_runs INT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS kind_version INT NOT NULL DEFAULT 1`))
     .catch((err: Error) => console.error("ask_checkins lifecycle columns migration failed:", err));
   await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ`)

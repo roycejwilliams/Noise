@@ -1419,7 +1419,7 @@ export async function persistCapturedIntent(
     if (kind === "ask") {
       const renewedUntil = await askExpiresAtForUser(user_id, ask!.text).catch(() => null);
       await pool.query(
-        `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at), last_mentioned_at = NOW() WHERE user_id = $1 AND ask_id = $2`,
+        `UPDATE ask_checkins SET ask_text = $3, expires_at = COALESCE($4::timestamptz, expires_at), last_mentioned_at = NOW(), empty_runs = 0 WHERE user_id = $1 AND ask_id = $2`,
         [user_id, intentId, ask!.text, renewedUntil],
       );
     }

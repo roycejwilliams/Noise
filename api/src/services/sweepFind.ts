@@ -95,8 +95,13 @@ ${SWEEP_QUERY_RULES}
 Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them. Keeping nothing is fine when nothing fits. When you're done, note in skip() the results you looked at and passed on, each with a few words on why, in the same step as your keeps. Then stop.`;
 }
 
-export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; feeling?: string | null; shown?: string[] } = {}): Promise<{ matches: TierMatch[]; did: string[] }> {
+// searched: the sweep really looked: a search came back, or nothing stood in its way (it chose not to search, or its queries were
+// refused for how they were written, which is the ask's own run). Not when a budget was used up or a source failed and nothing came
+// back: that's an outage, not an empty run (services/workingSet.ts empty runs; review and re-review of #133).
+export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; feeling?: string | null; shown?: string[] } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean }> {
   const did: string[] = [];
+  let searched = false;
+  let blocked = false;
   const found = new Map<string, TierMatch>();
   const kept: TierMatch[] = [];
   let webQueries = 0;
@@ -108,7 +113,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const passReasons = new Map<string, string>();
   let xError: ReturnType<typeof xFailure> | null = null;
   // Every query, run or refused (sweepQuery.ts): the member never in it, simple, phrased for its source; logged with its outcomes.
-  const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: c.goals ?? [], except: c.askText }));
+  const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: c.goals ?? [], except: c.askText }), c.askText);
   // A page kept in place of the post that pointed to it: the post counts as kept too.
   const postOf = new Map<string, string>();
   // The one model of them (services/personModel.ts).
@@ -124,12 +129,16 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         const [r, openings] = await Promise.all([
           eventCandidates(what, c.city, { when: when ?? null, userId: c.userId, timezone: opts.timezone ?? null, limit: 8 }),
           import("./eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(c.userId)).catch(() => [] as TierMatch[]),
-        ]);
+        ]).catch((err) => {
+          blocked = true;
+          throw err;
+        });
         for (const { match } of r.candidates) if ("url" in match && match.url) {
           found.set(match.url, match);
           lookedAt.push({ source: "events", name: match.name, url: match.url, query: what });
         }
         ledger.ran("events", what, r.candidates.length);
+        searched = true;
         for (const m of openings) if ("url" in m && m.url) found.set(m.url, m);
         return {
           events: r.candidates.map(({ match, lines }) => ({ link: "url" in match ? match.url : null, details: lines })),
@@ -165,7 +174,11 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
           lookedAt.push({ source: "web", name: k.name, url: k.url, query: queryOf.get(k.url) });
           found.set(k.url, { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}), ...(k.deadline ? { deadline: k.deadline } : {}) } as unknown as TierMatch);
         }
-        if (all.every((r) => r && /^No web search right now/.test(r.note))) return { ok: false, error: "Web search budget is used up for today." };
+        if (all.every((r) => r && /^No web search right now/.test(r.note))) {
+          blocked = true;
+          return { ok: false, error: "Web search budget is used up for today." };
+        }
+        if (all.some((r) => r && !/^No web search right now/.test(r.note ?? ""))) searched = true;
         return { results: kept.map((k) => ({ link: k.url, name: k.name, facts: k.facts, date: k.date, deadline: k.deadline })), ...(refusals.length ? { note: refusals.join(" ") } : {}) };
       },
     }),
@@ -179,7 +192,10 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         if (bad.length) return { ok: false, error: ledger.refusal(q, bad) };
         xSearches++;
         const budget = await reserveXSearch(c.userId, "sweep", q);
-        if (!budget.ok) return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
+        if (!budget.ok) {
+          blocked = true;
+          return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
+        }
         did.push(`x: ${q}`);
         const { searchRecentPosts, X_SEARCH_RESULTS } = await import("./xSearch.js");
         let posts: Awaited<ReturnType<typeof searchRecentPosts>>;
@@ -188,11 +204,13 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         } catch (err) {
           // Logged by kind and status, never swallowed into "no posts" (2026-10-08).
           xError = xFailure(err);
+          blocked = true;
           console.error(`sweepFind: X search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""}) for user ${c.userId}`);
           return { ok: false, error: xFailedNote(xError) };
         }
         xPosts += posts.length;
         ledger.ran("x", q, posts.length);
+        searched = true;
         for (const p of posts) {
           lookedAt.push({ source: "x", name: `${p.author ? `@${p.author}: ` : ""}${p.text.slice(0, 60)}`, url: p.url, query: q });
           const post = { tier: 3, kind: "opportunity", source: "x", name: p.text.slice(0, 80), url: p.url, reason: p.text, evidence: p.text } as unknown as TierMatch;
@@ -268,5 +286,5 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const { queries, keptBy } = ledger.finish(lookedAt, keptUrls, gated.map((m) => ({ name: m.name, url: "url" in m && m.url ? String(m.url) : "" })), postOf);
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
   await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy } }).catch(() => {});
-  return { matches: gated, did };
+  return { matches: gated, did, searched: searched || !blocked };
 }
