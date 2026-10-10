@@ -54,6 +54,7 @@ import type { GoalState, GoalStateRow } from "./goalEdges.js";
 import { goalHash, restates } from "./goalEdges.js";
 import { RESTRAINT, type ProactiveKind } from "./kindRestraint.js";
 import { REASONABLE_HOUR_END, REASONABLE_HOUR_START } from "./localHours.js";
+import type { Limits } from "./memberLimits.js";
 import { memberNamesStrict, safeMemory } from "./memberSafeMemories.js";
 import { localDay, localStamp, memberZone, sendableAt, wordsZone } from "./memberTime.js";
 import { DELIVERY_SHAPE_RULE } from "./speakable.js";
@@ -75,7 +76,11 @@ export type Identity = {
 };
 
 // done/stale goals are history, never current direction: read only state === "active" as where they're headed.
-export type Goal = { text: string; state: GoalState; reason: string | null; told: boolean };
+// onFile: the goal is on their profile or a goal entry now; false for a state row whose goal is no longer on file (history only, never
+// planned from; Phase A4).
+// hash: goalHash of the goal as written, before the strip (a goal naming a linked member is rewritten by it), so a reader can match
+// the goal to its state row and to its own words (Phase A4).
+export type Goal = { text: string; state: GoalState; reason: string | null; told: boolean; onFile: boolean; hash: string };
 export type Ask = { id: string; text: string; kind: "find" | "help" };
 
 // Where a delivered item was seen: a document receipt (document_deliveries), Co's action record (co_facts relation 'sent'), or a
@@ -127,6 +132,9 @@ export type Restraint = {
 };
 
 export type Exchange = { from: "member" | "co"; text: string; call: boolean };
+// What they ruled out (co_profiles.avoid, written by steerAwayFrom) and when they're usually free (their latest ask's own availability,
+// else the profile's pattern). Read here only (Phase A6: one reader per fact); applied by services/memberLimits.ts.
+export type { Limits };
 
 export type MemberKnowledge = {
   userId: string;
@@ -143,12 +151,15 @@ export type MemberKnowledge = {
   restraint: Fact<Restraint> | null;
   exchanges: Fact<Exchange>[];
   person: Fact<{ text: string }> | null;
+  limits: Fact<Limits> | null;
 };
 
-export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person"] as const;
+export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"] as const;
 export type KnowledgeSection = (typeof KNOWLEDGE_SECTIONS)[number];
 export const EXCHANGE_DEFAULTS = { limit: 20, days: 14 } as const;
-export type KnowledgeOptions = { now?: Date; exchanges?: number; exchangeDays?: number; include?: readonly KnowledgeSection[] };
+// Corrections: the recent ones by default; goal planning reads them all (a goal retired by an old correction must stay retired).
+export const CORRECTION_DEFAULTS = { limit: 8, days: 90 as number | null } as const;
+export type KnowledgeOptions = { now?: Date; exchanges?: number; exchangeDays?: number; include?: readonly KnowledgeSection[]; corrections?: { limit: number; days: number | null } };
 
 export type MemberRules = {
   discretion: string;
@@ -169,12 +180,16 @@ export type RawRestraint = {
   holdUntil: Date | null;
   spaceUntil: Date | null;
   safetyHold: boolean;
-  emotional: Pick<EmotionalContext, "needsCare" | "withCo" | "current"> | null;
+  // The whole read (dispatch renders the feeling for its drafts from this same read); the record itself uses needsCare, withCo, current.
+  emotional: EmotionalContext | null;
   suppressed: ProactiveKind[];
   trial: ProactiveKind[];
   lastInboundAt: Date | null;
   // Co's proactive sends since lastInboundAt (not exempt), oldest first.
   unansweredSends: Date[];
+  // The kind-restraint read itself (services/kindRestraint.ts), for dispatch to sync the learned preference from the same read
+  // (Phase A6: dispatch read restraint and emotion a second time); null when it failed and the stored preferences stood in.
+  kinds?: { verdicts: Map<ProactiveKind, import("./kindRestraint.js").KindVerdict>; stored: import("./kindRestraint.js").StoredPref[] } | null;
 };
 export type KnowledgeDeps = {
   profile: (userId: string) => Promise<RawProfile | null>;
@@ -190,7 +205,8 @@ export type KnowledgeDeps = {
   loops: (userId: string) => Promise<RawLoop[]>;
   promiseResults: (userId: string) => Promise<{ at: Date; content: string }[]>;
   lessons: (userId: string) => Promise<{ text: string; at: Date }[]>;
-  corrections: (userId: string) => Promise<CorrectionRow[]>;
+  corrections: (userId: string, o: { limit: number; days: number | null }) => Promise<CorrectionRow[]>;
+  limits: (userId: string) => Promise<Limits & { at: Date | null }>;
   taste: (userId: string) => Promise<{ text: string; at: Date } | null>;
   roomTaste: (userId: string) => Promise<{ text: string; at: Date }[]>;
   claims: (userId: string, now: Date, zone: string | null) => Promise<Claim[]>;
@@ -248,8 +264,19 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     })),
   lessons: async (userId) =>
     (await rows(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesson' ORDER BY created_at DESC LIMIT 6`, [userId])).map((r) => ({ text: String(r.content), at: new Date(r.created_at) })),
-  corrections: async (userId) =>
-    (await rows(`SELECT field, old_value, new_value, corrected_at FROM profile_corrections WHERE user_id = $1 AND corrected_at > NOW() - INTERVAL '90 days' ORDER BY corrected_at DESC LIMIT 8`, [userId])) as CorrectionRow[],
+  corrections: async (userId, o) =>
+    (await rows(
+      `SELECT field, old_value, new_value, corrected_at FROM profile_corrections WHERE user_id = $1 AND ($2::int IS NULL OR corrected_at > NOW() - make_interval(days => $2::int)) ORDER BY corrected_at DESC LIMIT $3`,
+      [userId, o.days, o.limit],
+    )) as CorrectionRow[],
+  limits: async (userId) => {
+    const r = (await rows(`SELECT avoid, availability_pattern, intent, updated_at FROM co_profiles WHERE user_id = $1`, [userId]))[0];
+    if (!r) return { avoid: [], availability: null, at: null };
+    const { latestAskEntry } = await import("../harness/profileWrite.js");
+    const latestAsk = latestAskEntry(r.intent);
+    const availability = (latestAsk?.availability && String(latestAsk.availability).trim()) || (r.availability_pattern && String(r.availability_pattern).trim()) || null;
+    return { avoid: Array.isArray(r.avoid) ? r.avoid.filter((a: unknown) => typeof a === "string" && a.trim()).map((a: string) => a.trim()) : [], availability, at: dateOrNull(r.updated_at) };
+  },
   roomTaste: async (userId) => {
     const R = await import("./roomTaste.js");
     return (await R.loadRoomTaste(userId)).map((r) => ({ text: R.roomTasteLine(r.taste), at: r.at }));
@@ -267,9 +294,14 @@ export const realKnowledgeDeps: KnowledgeDeps = {
       import("./safety.js").then((s) => s.safetyHoldActive(userId)),
       import("../harness/emotion.js").then((e) => e.getEmotionalContext(userId, now)).catch(() => null),
       import("./kindRestraint.js").then(async (K) => {
-        const r = await K.loadKindRestraint(pool, userId, now).catch(() => null);
-        if (!r) return { suppressed: (await K.loadStoredPrefs(pool, userId)).filter((p) => p.state === "suppressed").map((p) => p.kind), trial: [] as ProactiveKind[] };
-        return { suppressed: K.suppressedKinds(r.verdicts), trial: [...r.verdicts.values()].filter((v) => v.suppressed && v.trial).map((v) => v.kind) };
+        const r = await K.loadKindRestraint(pool, userId, now).catch((err: any) => {
+          console.error("memberKnowledge: kind restraint read failed (non-fatal, holding what's stored):", err?.message ?? err);
+          return null;
+        });
+        if (!r) return { suppressed: (await K.loadStoredPrefs(pool, userId).catch(() => [])).filter((p) => p.state === "suppressed").map((p) => p.kind), trial: [] as ProactiveKind[], read: null };
+        // A kind whose days off are up has one trial: suppressed is false then, trial true (kindRestraint.ts). It used to be read as
+        // suppressed && trial, which is never true, so the trial was never named (Phase A6).
+        return { suppressed: K.suppressedKinds(r.verdicts), trial: [...r.verdicts.values()].filter((v) => v.trial).map((v) => v.kind), read: r };
       }),
       rows(`SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%')`, [userId]).then((r) => dateOrNull(r[0]?.at)),
     ]);
@@ -281,6 +313,7 @@ export const realKnowledgeDeps: KnowledgeDeps = {
       emotional,
       suppressed: kinds.suppressed,
       trial: kinds.trial,
+      kinds: kinds.read,
       lastInboundAt: inbound,
       unansweredSends: sends.map((s) => new Date(s.sent_at)),
     };
@@ -336,7 +369,7 @@ const sameThing = (a: string, b: string) => {
 export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fact<Goal>[] {
   const byHash = new Map(states.map((s) => [s.goalHash, s]));
   const out = new Map<string, Fact<Goal>>();
-  const add = (text: string, base: { state: GoalState; at: Date | string | null; reason?: string | null }) => {
+  const add = (text: string, base: { state: GoalState; at: Date | string | null; reason?: string | null }, onFile = true) => {
     const t = text.trim();
     if (!t) return;
     const h = goalHash(t);
@@ -344,7 +377,7 @@ export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fac
     const s = byHash.get(h);
     // A stored state wins over "active from the profile"; a closed entry stays done whatever the stored row says.
     const state: GoalState = base.state !== "active" ? base.state : s?.state ?? "active";
-    out.set(h, { text: t, state, reason: s?.reason || base.reason || null, told: s ? !!s.toldAt || s.source !== "context" : true, verifiedAt: latest(base.at, s?.changedAt) });
+    out.set(h, { text: t, state, reason: s?.reason || base.reason || null, told: s ? !!s.toldAt || s.source !== "context" : true, onFile, hash: h, verifiedAt: latest(base.at, s?.changedAt) });
   };
   // Goal entries: active is active, resolved is done (goalJourney.ts goalHistory), anything else (set aside, replaced) is stale.
   for (const e of Array.isArray(profile?.intent) ? (profile!.intent as any[]) : []) {
@@ -355,7 +388,7 @@ export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fac
     else add(e.text, { state: "stale", at, reason: e.status ? `marked ${e.status}` : null });
   }
   for (const g of profile?.goals ?? []) add(String(g), { state: "active", at: profile?.updatedAt ?? null });
-  for (const s of states) add(s.goal, { state: s.state, at: s.changedAt });
+  for (const s of states) add(s.goal, { state: s.state, at: s.changedAt }, false);
   const rank = { active: 0, stale: 1, done: 2 } as const;
   return [...out.values()].sort((a, b) => rank[a.state] - rank[b.state]);
 }
@@ -531,7 +564,7 @@ export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> |
 // ---------------------------------------------------------------- the strip (every string, inside)
 
 // Keys whose values are structure, not prose: never rewritten (a kind, a state, an id, a time, a URL, the zone, their own name).
-const STRUCTURAL = new Set(["userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
+const STRUCTURAL = new Set(["hash", "userId", "asOf", "verifiedAt", "at", "dueAt", "expiresOn", "saidOn", "holdUntil", "spaceUntil", "lastInboundAt", "lastSentAt", "id", "ref", "kind", "state", "status", "via", "from", "source", "provenance", "field", "url", "zone", "timeZone", "firstName", "suppressedKinds", "trialKinds"]);
 // Their own words: a claim's quote. (Their exchange lines are kept by the walk below, by from === "member".)
 const OWN_WORDS = new Set(["quote"]);
 
@@ -564,6 +597,7 @@ const empty = (userId: string, now: Date, identity: Fact<Identity>): MemberKnowl
   restraint: null,
   exchanges: [],
   person: null,
+  limits: null,
 });
 
 export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {}, deps: Partial<KnowledgeDeps> = {}): Promise<MemberKnowledge> {
@@ -586,7 +620,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const identity: Fact<Identity> = { firstName: profile?.firstName ?? null, city: profile?.city ?? null, zone, timeZone: wordsZone(zone), verifiedAt: latest(profile?.updatedAt ?? null) };
   const k = empty(userId, now, identity);
 
-  const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person] = await Promise.all([
+  const [states, asks, receipts, ledger, offers, tasks, briefs, loops, promises, lessons, corrections, taste, stated, claims, restraint, exchanges, person, limits] = await Promise.all([
     // Corrections read the goal states too: a corrected goal that's since done is history, not their current goal.
     skip(["goals", "corrections"], "goal states", () => d.goalStates(userId), [] as GoalStateRow[]),
     skip("asks", "asks", () => d.asks(userId), [] as RawAsk[]),
@@ -598,13 +632,14 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     skip("carrying", "loops", () => d.loops(userId), [] as RawLoop[]),
     skip("carrying", "promises", () => d.promiseResults(userId), [] as { at: Date; content: string }[]),
     skip("lessons", "lessons", () => d.lessons(userId), [] as { text: string; at: Date }[]),
-    skip("corrections", "corrections", () => d.corrections(userId), [] as CorrectionRow[]),
+    skip("corrections", "corrections", () => d.corrections(userId, opts.corrections ?? CORRECTION_DEFAULTS), [] as CorrectionRow[]),
     skip("preferences", "taste", () => d.taste(userId), null),
     skip("preferences", "room taste", () => d.roomTaste(userId), [] as { text: string; at: Date }[]),
     skip("claims", "claims", () => d.claims(userId, now, zone), [] as Claim[]),
     skip("restraint", "restraint", () => d.restraint(userId, now), null as RawRestraint | null),
     skip("exchanges", "exchanges", () => d.exchanges(userId, { limit: Math.max(1, opts.exchanges ?? EXCHANGE_DEFAULTS.limit), days: Math.max(1, opts.exchangeDays ?? EXCHANGE_DEFAULTS.days) }), [] as { content: string; at: Date }[]),
     skip("person", "person model", () => d.person(userId), ""),
+    skip("limits", "limits", () => d.limits(userId), null as (Limits & { at: Date | null }) | null),
   ]);
 
   if (on("goals")) k.goals = goalsOf(profile, states);
@@ -621,6 +656,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
   if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
+  if (on("limits") && limits) k.limits = { avoid: limits.avoid, availability: limits.availability, verifiedAt: latest(limits.at) };
 
   // The strip, last, over everything (see the header): nothing un-stripped leaves.
   const linked = [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))];
@@ -652,7 +688,9 @@ export function restraintRule(r: Restraint | null, zone: string | null): string 
     r.unanswered.count ? `${r.unanswered.count} of Co's own texts since they last wrote ${r.unanswered.count === 1 ? "has" : "have"} no reply yet: go lighter, and let them lead.` : null,
     r.suppressedKinds.length
       ? `Kinds of message they keep letting pass, which Co doesn't start (off ${RESTRAINT.offDays} days, then one trial): ${r.suppressedKinds.join(", ")}${r.trialKinds.length ? ` (a trial may go now: ${r.trialKinds.join(", ")})` : ""}. Answers to their own asks still go.`
-      : null,
+      : r.trialKinds.length
+        ? `Kinds of message they had let pass, now off ${RESTRAINT.offDays} days: one trial may go now (${r.trialKinds.join(", ")}). Answers to their own asks still go.`
+        : null,
     r.needsCare ? "They're having a hard time lately: it shapes how Co says things, never whether they get events or people." : null,
     r.frustratedWithCo ? "They've been frustrated with Co lately: look wider and try harder." : null,
   ].filter(Boolean);

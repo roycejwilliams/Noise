@@ -1020,9 +1020,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({}),
       execute: async () => {
         if (ctx.dryRun) return { ok: true, asks: [] };
-        const { rows } = await pool.query(`SELECT intent, avoid FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
+        const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [ctx.userId]);
         const entries = askEntries(rows[0]?.intent ?? null);
-        const avoid: string[] = Array.isArray(rows[0]?.avoid) ? rows[0].avoid : [];
+        // What they ruled out, from the record's one reader (services/memberKnowledge.ts limits; Phase A6).
+        const avoid: string[] = (await import("../services/memberKnowledge.js").then((M) => M.realKnowledgeDeps.limits(ctx.userId)).catch(() => null))?.avoid ?? [];
         const fmt = await memberDate(ctx.userId);
         const asks = entries
           .filter((e) => e.text)
@@ -1062,6 +1063,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const next = undo ? current.filter((a) => a.toLowerCase() !== k) : [...current.filter((a) => a.toLowerCase() !== k), k].slice(-20);
         await pool.query(`UPDATE co_profiles SET avoid = $2 WHERE user_id = $1`, [ctx.userId, next]);
         await recordDecision({ layer: 3, decision: "reply.steerAwayFrom", userId: ctx.userId, outcome: "act", action: undo ? "removed" : "added", proposal: { kind: k, avoid: next } }).catch(() => {});
+        // What's already waiting for them of that kind leaves too, each with its fact (services/workingSet.ts exitAvoidedFinds), in the
+        // background: the reply doesn't wait on it.
+        if (!undo) {
+          const userId = ctx.userId;
+          void Promise.all([import("../services/workingSet.js"), import("../services/sweepShadow.js")])
+            .then(([W, S]) => W.exitAvoidedFinds(userId, k, { ...S.realPruneDeps, ...S.realAvoidDeps }))
+            .then((r) => recordDecision({ layer: 3, decision: "reply.steerAwayFrom.workingSet", userId, outcome: r.backlog || r.queued ? "act" : "skip", action: `out: ${r.backlog} waiting, ${r.queued} queued`, proposal: { kind: k, ...r } }))
+            .catch((err: any) => console.error("steerAwayFrom: clearing what's waiting failed (non-fatal):", err?.message ?? err));
+        }
         ctx.facts?.add(
           "did_this_turn",
           undo ? `Co will suggest "${k}" again when something fits.` : `Co will stop suggesting "${k}" in every search and sweep from now on, until they say otherwise.`,

@@ -22,6 +22,12 @@ import { MODELS } from "../models.js";
 import { isCoCommitment } from "./askKind.js";
 import { retiredBy } from "./callContext.js";
 import { memberTerms, queryProblems } from "./sweepQuery.js";
+import { avoidHits } from "./memberLimits.js";
+
+// What goal planning reads from the member record (Phase A4, 2026-10-10 audit: it saw goal text and city only, so it planned searches
+// for a room they'd said they don't want, for kinds they'd ruled out, and for things an open ask was already searching).
+export type PlanRecord = { person: string; statedTaste: string[]; avoid: string[]; openAsks: string[] };
+export const PLAN_RECORD_LIMITS = { person: 700, asks: 6 } as const;
 
 export type GoalKind = "findable" | "work" | "co_task";
 export type GoalState = "active" | "done" | "stale";
@@ -58,9 +64,11 @@ export function goalHash(goal: string): string {
   return createHash("sha1").update(goal.trim().toLowerCase()).digest("hex").slice(0, 20);
 }
 
-export function edgePrompt(goals: string[], o: { city: string | null; today: string }): string {
+export function edgePrompt(goals: string[], o: { city: string | null; today: string; record?: PlanRecord | null }): string {
+  const r = o.record;
   return `A member of a private club in ${o.city ?? "San Francisco"} has these goals on file, oldest first (today is ${o.today}):
 ${goals.map((g, i) => `${i + 1}. ${g}`).join("\n")}
+${r?.person ? `\nWho they are (Co's record): ${r.person.slice(0, PLAN_RECORD_LIMITS.person)}\n` : ""}${r?.statedTaste.length ? `\nThe kind of room they've told Co they want, in their words: ${r.statedTaste.map((t) => `"${t}"`).join("; ")}. Write edges for that kind of room; never one for the kind they said they don't want.\n` : ""}${r?.avoid.length ? `\nThey told Co to stop suggesting: ${r.avoid.map((a) => `"${a}"`).join(", ")}. Never an edge for one of those.\n` : ""}${r?.openAsks.length ? `\nTheir open asks already have their own searches; don't write an edge that repeats one: ${r.openAsks.slice(0, PLAN_RECORD_LIMITS.asks).map((a) => `"${a}"`).join("; ")}.\n` : ""}
 
 Co searches the world each day for things worth texting them about: events and gatherings, programs and cohorts, open calls, fellowships and grants, communities, people worth meeting. For each goal:
 - kind: "findable" if the goal itself is something like that to look for; "work" if it's their own work plan (partnering, pitching, building, launching, raising); "co_task" if it's something Co itself is doing for them (drafting, sending, planning, keeping something going).
@@ -124,7 +132,7 @@ export function readEdgeAnswer(raw: string): { arr: any[]; read: EdgeRead } {
   return { arr, read: arr.length ? "cut_off" : "failed" };
 }
 
-export function parseEdges(goals: string[], raw: string, firstName?: string | null, o: { today?: string; direction?: number | null } = {}): GoalEdge[] {
+export function parseEdges(goals: string[], raw: string, firstName?: string | null, o: { today?: string; direction?: number | null; avoid?: string[] } = {}): GoalEdge[] {
   const { arr } = readEdgeAnswer(raw);
   const found = goals.map((_, i) => arr.find((x) => Number(x?.n) === i + 1));
   const rows = found.map((r) => r ?? {});
@@ -138,7 +146,8 @@ export function parseEdges(goals: string[], raw: string, firstName?: string | nu
     const explicit = isCoTaskGoal(goal) || (!!arr.length && (k === "findable" || k === "co_task" || k === "work"));
     const edges = (Array.isArray(r.edges) ? r.edges : [])
       .map((e: unknown) => String(e ?? "").replace(/\s+/g, " ").trim().slice(0, EDGE_LIMITS.chars))
-      .filter((e: string) => e && !goals.some((g) => restates(e, g)) && !queryProblems(e, { terms, source: "events" }).length)
+      // A kind they ruled out is never searched (services/memberLimits.ts; Phase A2), however the model wrote it.
+      .filter((e: string) => e && !goals.some((g) => restates(e, g)) && !queryProblems(e, { terms, source: "events" }).length && !avoidHits(e, o.avoid ?? []).length)
       .slice(0, EDGE_LIMITS.perGoal);
     const named = /\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|\d{1,2}\/\d{1,2}|\d{4}-\d{2}|this (?:week|weekend|month)|tonight|tomorrow)\b/i.test(goal);
     let until = typeof r.until === "string" && ISO.test(r.until) && DateTime.fromISO(r.until).isValid ? r.until : null;
@@ -199,7 +208,7 @@ export type GoalDeps = {
 // direction: their long-term direction, read as a goal but never superseding one (review of #107).
 // seedSig: a fingerprint of what this run read (services/coldStart.ts seedSignature), logged so a new member's sweep reruns only when
 // their seeds change (services/goalSweep.ts goalSweepRuns).
-export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null; direction?: string | null; seedSig?: string }, deps: GoalDeps): Promise<GoalPlan> {
+export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null; direction?: string | null; seedSig?: string; record?: PlanRecord | null }, deps: GoalDeps): Promise<GoalPlan> {
   const today = DateTime.fromJSDate(o.now).setZone(o.zone && DateTime.now().setZone(o.zone).isValid ? o.zone : "America/Los_Angeles").toISODate()!;
   const uniq = [...new Set([...goals, ...(o.direction ? [o.direction] : [])].map((g) => g.trim()).filter(Boolean))];
   const states = await deps.states(userId).catch(() => new Map<string, GoalStateRow>());
@@ -208,14 +217,14 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
     const s = states.get(goalHash(g));
     return !s || s.state === "active";
   });
-  const raw = live.length ? await deps.model(edgePrompt(live, { city: o.city, today })).catch(() => "") : "";
+  const raw = live.length ? await deps.model(edgePrompt(live, { city: o.city, today, record: o.record ?? null })).catch(() => "") : "";
   const answer = readEdgeAnswer(raw);
   const readCount = live.length ? new Set(answer.arr.map((x) => Number(x?.n)).filter((n) => n >= 1 && n <= live.length)).size : 0;
   // Every goal came back, only the list's closing bracket didn't: that's a whole read.
   // A closed list that leaves goals out didn't read them all either (review of #128): that's a cut-off read, flagged.
   const read: EdgeRead | null = !live.length ? null : readCount === live.length && answer.read !== "failed" ? "full" : answer.read === "full" && readCount < live.length ? "cut_off" : answer.read;
   const dir = o.direction ? live.indexOf(o.direction.trim()) : -1;
-  const derived = parseEdges(live, raw, o.firstName, { today, direction: dir >= 0 ? dir : null });
+  const derived = parseEdges(live, raw, o.firstName, { today, direction: dir >= 0 ? dir : null, avoid: o.record?.avoid ?? [] });
   const corrections = await deps.corrections(userId).catch(() => [] as Correction[]);
   const active: GoalEdge[] = [], passed: { goal: string; why: string }[] = [], setAside: GoalPlan["setAside"] = [];
   for (const e of derived) {
@@ -336,7 +345,8 @@ export const realGoalDeps: GoalDeps = {
   },
   states: goalStates,
   setState: setGoalState,
-  corrections: async (userId) => (await pool.query(`SELECT field, old_value, new_value, corrected_at FROM profile_corrections WHERE user_id = $1 ORDER BY corrected_at DESC LIMIT 40`, [userId])).rows,
+  // The record's one corrections reader (services/memberKnowledge.ts), all of them: a goal an old correction retired stays retired.
+  corrections: async (userId) => (await (await import("./memberKnowledge.js")).realKnowledgeDeps.corrections(userId, { limit: 40, days: null })) as Correction[],
   // The same check that retires a corrected thread in the call context (services/callContext.ts).
   retired: (goal, c, lastSaid) => retiredBy(goal, c as any, lastSaid ?? undefined) as Correction | null,
   findAsks: async (userId) => (await pool.query(`SELECT id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find'`, [userId])).rows.map((r: any) => ({ id: Number(r.id), text: String(r.ask_text ?? "") })),

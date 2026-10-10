@@ -307,7 +307,7 @@ check("the record starts filled from what was already logged", /backfillCoAction
   check("in a list line, only the item naming another member is stripped", /^Wants right now: a technical cofounder; /.test(list) && !MAYA.test(list), list as any);
   // Background prompts: the sweep (member-facing offers), tasks and follow-ups (#49 follow-up).
   const pm = src("services/personModel.ts"), tt = src("services/taskTurn.ts"), fu = src("services/followUps.ts");
-  check("the sweep's and tasks' person model and the task/follow-up recent texts go through the strip", /memberSafe\(userId, \[\{ content: text, memory_type: "person_model" \}\]\)/.test(pm) && /m\.personModel\(c\.userId/.test(src("services/sweepFind.ts")) &&
+  check("the sweep's and tasks' person model and the task/follow-up recent texts go through the strip", /memberSafe\(userId, \[\{ content: text, memory_type: "person_model" \}\]\)/.test(pm) && /memberKnowledge\(userId, \{ include: SWEEP_KNOWLEDGE \}\)/.test(src("services/sweepFind.ts")) && /"person", "limits"\]/.test(src("services/sweepFind.ts")) &&
     // Tasks and follow-ups read through the member-knowledge layer, which strips every string inside (evals/member/knowledge.ts).
     /return stripDeep\(k, strip\);/.test(src("services/memberKnowledge.ts")) && /const k = await memberKnowledge\(userId, \{[^}]*"exchanges", "person"/.test(tt) && /recent: k \? exchangeText\(k\.exchanges/.test(tt) && /personModel: k\?\.person\?\.text/.test(tt) && /memberKnowledge\(userId, \{ now: asOf, [^}]*"exchanges"/.test(fu) && /recent: k \? exchangeText\(k\.exchanges/.test(fu));
   const cc = src("services/callContext.ts");

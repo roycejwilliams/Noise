@@ -313,27 +313,6 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   };
 }
 
-// What kind of room would suit how they've been, from feelings about their
-// life only. Orders search results (the ask still decides what's eligible),
-// so a hard stretch changes which rooms Co picks, not whether it picks one.
-const ROOM_FOR_FEELING: { re: RegExp; room: string }[] = [
-  { re: /burn|drain|exhaust|tired|overwhelm|stress|swamp|spent|fried/, room: "small, low-key, relaxed gatherings, not big networking events" },
-  { re: /lonel|isolat|disconnect|left out|alone|new (?:to|in) (?:the )?city|moved/, room: "recurring community gatherings where people get to know each other, over one-off networking" },
-  { re: /anx|worr|stuck|nervous|uncertain|discourag|rejected|doubt/, room: "rooms with people who've been through the same thing and can help" },
-  { re: /excit|proud|thrill|hopeful|energi|pumped/, room: "rooms that build on what's going well for them" },
-];
-
-export function roomPreferenceFromFeelings(ctx: EmotionalContext): string | null {
-  const life = [ctx.current, ...(ctx.lastCall?.moments ?? [])].filter((s): s is EmotionSignal => !!s && s.intensity !== "low");
-  const recurring = ctx.recurring.flatMap((r) => r.emotions.map((emotion) => ({ emotion, about: r.about })));
-  const pool = [...life.map((s) => ({ emotion: s.emotion, about: s.about })), ...recurring];
-  for (const { re, room } of ROOM_FOR_FEELING) {
-    const hit = pool.find((p) => re.test(`${p.emotion} ${p.about ?? ""}`.toLowerCase()));
-    if (hit) return `Right now, ${room}${hit.about ? ` (they've been feeling ${hit.emotion} about ${hit.about})` : ""}.`;
-  }
-  return null;
-}
-
 function rank(i: Intensity): number {
   return i === "high" ? 3 : i === "medium" ? 2 : 1;
 }

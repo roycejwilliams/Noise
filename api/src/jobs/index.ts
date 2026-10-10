@@ -557,6 +557,24 @@ export function registerJobs(io: Server) {
         const timezone = userRows[0].city ? await getTimezoneForCity(userRows[0].city) : null;
         if (!isReasonableLocalHour(timezone)) return; // wrong hour for this user — nothing touched, retried next hourly tick
 
+        // Zero sweeps for a member dispatch would hold every find for (harness/proactive.ts sweepHold, Phase A3): opted out, a safety hold,
+        // finds paused for everyone. An answer to their ask skips the discovery pace, so only these stop it. Checked only when an ask is
+        // really due this tick (not run today, past its backoff), and nothing is marked when it holds: a held day never moves an ask's
+        // backoff clock, and it's looked at again next tick (review of #134).
+        {
+          const today = DateTime.now().setZone(hoursZone(timezone)).toISODate();
+          const { askSearchDue } = await import("../services/workingSet.js");
+          const due = userRows.filter((r) => (!r.last_attempted_at || DateTime.fromJSDate(r.last_attempted_at).setZone(hoursZone(timezone)).toISODate() !== today) && askSearchDue(r));
+          const ranToday = userRows.filter((r) => r.last_attempted_at && DateTime.fromJSDate(r.last_attempted_at).setZone(hoursZone(timezone)).toISODate() === today).length;
+          if (!due.length || ranToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY) return;
+          const { sweepHold } = await import("../harness/proactive.js");
+          const held = await sweepHold(userRows[0].user_id, "ask").catch(() => ["gate_unreadable"]);
+          if (held.length) {
+            await recordDecision({ layer: 5, decision: "sweep.held", userId: userRows[0].user_id, outcome: "skip", action: held.join(","), proposal: { asks: due.length } }).catch(() => {});
+            return;
+          }
+        }
+
         const localToday = DateTime.now().setZone(hoursZone(timezone)).toISODate(); // their day, or Pacific's (never the server's UTC day)
         const localDayOf = (d: Date | null) => (d ? DateTime.fromJSDate(d).setZone(hoursZone(timezone)).toISODate() : null);
         // At most this many of one person's asks get a full search per day

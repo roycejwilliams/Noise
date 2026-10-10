@@ -65,7 +65,7 @@ check("payload first runs after the draft checks and before the send", at > src.
 const block = src.slice(at, src.indexOf("let outgoing = draft.messages;"));
 check("handed off: the question is dropped and the turn ends", /"handedTo" in pf\) \{[\s\S]*dropCandidate\(registry, c, "skipped"[\s\S]*return;/.test(block));
 check("can't deliver it now: dropped (its source asks again later), not asked, and logged once", /"hold" in pf\) \{[\s\S]*dropCandidate\(registry, c, "skipped"[\s\S]*recordSkipOnce\([\s\S]*return;/.test(block) && !/"hold" in pf\) \{[\s\S]*SET due_at/.test(block));
-check("after a hand-off nothing else goes out before the spacing window ends", /"handedTo" in pf\) \{[\s\S]*space_until[\s\S]*RULES\.minHoursBetweenTexts/.test(block) && /if \(hold\.rows\[0\]\?\.space_until && new Date\(hold\.rows\[0\]\.space_until\) > new Date\(\)\) return;/.test(src));
+check("after a hand-off nothing else goes out before the spacing window ends", /"handedTo" in pf\) \{[\s\S]*space_until[\s\S]*RULES\.minHoursBetweenTexts/.test(block) && /if \(heldNow\(member, now\)\) return;/.test(src) && /if \(s\.spaceUntil && s\.spaceUntil\.getTime\(\) > now\.getTime\(\)\) return "space";/.test(src));
 check("a dry run says what it would do and sends nothing", /"wouldHandOff" in pf\) \{[\s\S]*return;/.test(block) && /dryRun: opts\.dryRun/.test(block));
 check("every hand-off and hold is recorded", (block.match(/decision: "proactive\.payloadFirst"/g) ?? []).length === 2);
 const pf = readFileSync(new URL("../../src/harness/payloadFirst.ts", import.meta.url), "utf8");

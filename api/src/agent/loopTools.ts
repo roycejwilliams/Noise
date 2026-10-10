@@ -205,6 +205,18 @@ export function loopTools(
   const theirWords = () => `${ctx.resolvedContent} ${ctx.turn?.message ?? ""}`;
   // Probes and dry runs never spend on searches (ctx.stubSearch).
   const STUB = { ok: true, note: "Test run: nothing was searched. Say you looked and nothing solid came up yet." };
+  // What they ruled out and when they're free, from the record's one reader (services/memberKnowledge.ts limits), read once a turn
+  // (Phase A2: "I'll stop suggesting it in every search and sweep" held for no live search). A kind they name in this text is theirs
+  // again for this turn. A dry run reads nothing.
+  let limitsRead: Promise<{ avoid: string[]; availability: string | null } | null> | null = null;
+  const limits = () => (limitsRead ??= ctx.dryRun ? Promise.resolve(null) : import("../services/memberKnowledge.js").then((M) => M.realKnowledgeDeps.limits(ctx.userId)).catch(() => null));
+  const ruledOut = async (query: string): Promise<string | null> => {
+    const l = await limits();
+    if (!l?.avoid.length) return null;
+    const { avoidFor, avoidHits } = await import("../services/memberLimits.js");
+    const hit = avoidHits(query, avoidFor(l.avoid, theirWords()))[0];
+    return hit ? `Not searched: they told Co to stop suggesting ${hit}. Look for something else they want (if they're asking for it again now, say so plainly and steerAwayFrom with undo first).` : null;
+  };
   // A receipt for every search, empty or not, so "I looked and nothing turned
   // up" is backed (2026-10-01: with no record, the fact check cut it).
   const receipt = (what: string) => ctx.facts?.add("did_this_turn", what);
@@ -228,6 +240,8 @@ export function loopTools(
         whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
       }),
       execute: async ({ what, when, city, whileLooking }) => {
+        const avoided = await ruledOut(what);
+        if (avoided) return { ok: false, error: avoided };
         if (ctx.stubSearch) {
           receipt(`Looked up events for "${what}"${when ? `, ${when}` : ""} just now: nothing came back.`);
           return { ...STUB, events: [] };
@@ -283,6 +297,10 @@ export function loopTools(
       execute: async ({ queries, sites, whileLooking, theirs }) => {
         // Their constraints go into the notes with the search (2026-10-01 next-live run:
         // turn one's 120 people, $3k and 4 hours were lost in 2 of 4 runs when no updateNotes followed).
+        for (const q of queries) {
+          const avoided = await ruledOut(q);
+          if (avoided) return { ok: false, error: `"${q}": ${avoided}` };
+        }
         const saved = Object.fromEntries(Object.entries(theirs ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== ""));
         if (Object.keys(saved).length && !ctx.stubSearch) await remember(saved as Partial<SearchIntent>);
         if (ctx.stubSearch) {
@@ -361,6 +379,8 @@ export function loopTools(
         whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
       }),
       execute: async ({ query, whileLooking }) => {
+        const avoided = await ruledOut(query);
+        if (avoided) return { ok: false, error: avoided };
         if (ctx.stubSearch) return { ...STUB, posts: [] };
         if (outOfTime()) return OUT_OF_TIME;
         const q = query.trim().slice(0, 200);
@@ -421,8 +441,23 @@ export function loopTools(
         const sent: string[] = [];
         const refused: string[] = [];
         const uncaptioned: string[] = [];
+        // Their limits at keep (Phase A2), all items in one read: a kind they ruled out (judged by its main activity), an event outside
+        // when they're free. A kind they name in this text is theirs again.
+        const foundFor = (link: string) => loop.found.get(link) ?? (notes?.shortlist ?? []).map((s) => ({ name: s.name, url: s.url, facts: s.note ?? "", match: null, blocked: null }) as Found).find((s) => s.url === link);
+        const lim = await limits();
+        const outByLink = new Map<string, string>();
+        if (lim && (lim.avoid.length || lim.availability)) {
+          const { limitsGate } = await import("../services/memberLimits.js");
+          const known = items.map((it) => ({ link: it.link, f: foundFor(it.link) })).filter((x) => x.f);
+          const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: theirWords() }).catch(() => null);
+          for (const o of g?.out ?? []) outByLink.set(String((o.match as any).link), o.why);
+        }
         for (const it of items) {
-          const f = loop.found.get(it.link) ?? (notes?.shortlist ?? []).map((s) => ({ name: s.name, url: s.url, facts: s.note ?? "", match: null, blocked: null }) as Found).find((s) => s.url === it.link);
+          if (outByLink.has(it.link)) {
+            refused.push(`${foundFor(it.link)?.name ?? it.link}: ${outByLink.get(it.link)}`);
+            continue;
+          }
+          const f = foundFor(it.link);
           if (!f) {
             refused.push(`${it.link}: not something you found this turn or have in your notes`);
             continue;

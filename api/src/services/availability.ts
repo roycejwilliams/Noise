@@ -49,10 +49,28 @@ export function availabilityWindows(text: string): Window[] | null {
   return usable.length ? usable : null;
 }
 
+// A preference is not a limit (Phase A, 2026-10-10: "more flexible on weekends" read as "free only on weekends", so every weekday
+// event was a misfit, and the sweep would have dropped them all). Only words that restrict make it a rule in code: "only", "just",
+// "no weekends", "can't do weekdays". Words that lean ("more flexible", "prefer", "ideally", "easier") stay with the model, as context.
+// Only phrases the windows above read the right way round are rules: "only"/"just" a window, a bare window, "no weekends". Any other
+// negation ("can't do weekdays", "not mornings", "busy weeknights", "anytime except mornings") the windows would read backwards (as
+// the time they're free), so it's context for the model, never a rule in code (review of #134).
+const LEANS = /\b(more flexible|flexible|prefer(?:ably|red|s)?|ideally|easier|better|mostly|usually more|tend to|if possible|when possible|works best)\b/i;
+const NEGATES = /\b(can'?t|cannot|can not|no|not|never|except|without|unavailable|busy|avoid|other than|besides)\b/i;
+const NO_WEEKENDS = /\b(no|not|never|except|without)\s+(on\s+)?weekends?\b/gi;
+export function availabilityIsLimit(availability: string | null | undefined): boolean {
+  const t = availability?.trim() ?? "";
+  if (!t) return false;
+  if (LEANS.test(t) && !/\bonly\b/i.test(t)) return false;
+  if (NEGATES.test(t.replace(NO_WEEKENDS, " "))) return false;
+  return true;
+}
+
 // A plain sentence saying why the event is outside when they're free, or
-// null when it's inside, the phrase isn't recognized, or the time is unknown.
+// null when it's inside, the phrase isn't recognized, it's a preference rather than a limit, or the time is unknown.
 export function availabilityConflict(availability: string | null | undefined, startAt: string | null | undefined, zone: string | null | undefined): string | null {
   if (!availability?.trim() || !startAt) return null;
+  if (!availabilityIsLimit(availability)) return null;
   const windows = availabilityWindows(availability);
   if (!windows) return null;
   const start = DateTime.fromISO(startAt, { setZone: true }).setZone(zone || "America/Los_Angeles");

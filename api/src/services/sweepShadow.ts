@@ -323,6 +323,16 @@ export async function rerunPickerForUrgentFind(userId: string): Promise<void> {
   await runSweepShadow(userId, new Date(), { trigger: "urgent_find" }).catch((err: any) => console.error(`picker run for an urgent find failed for ${userId} (non-fatal):`, err?.message ?? err));
 }
 
+// A kind they ruled out, applied to what's already waiting (services/workingSet.ts exitAvoidedFinds, Phase A2).
+export const realAvoidDeps = {
+  judge: async (items: { name: string; details: string }[], avoid: string[]) => (await (await import("./memberLimits.js")).judgeAvoided(items, avoid)).kinds,
+  pending: async (userId: string) =>
+    (await pool.query(`SELECT id, payload FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND type = 'event_offer'`, [userId])).rows.map((r: any) => ({ id: String(r.id), match: r.payload?.match ?? {}, askText: r.payload?.askText ?? null })),
+  skipPending: async (id: string, reason: string) => {
+    await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [id, reason]);
+  },
+};
+
 // The backlog, read and written where it lives (event_backlogs), for the working-set exits.
 // Changes merge into the row as it is now, under a row lock, so a find a sweep saves meanwhile is never lost (review of #133).
 export const realPruneDeps = {

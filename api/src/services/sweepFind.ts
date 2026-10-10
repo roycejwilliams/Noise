@@ -11,8 +11,10 @@ import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { getPersonSnapshot, renderSnapshot } from "../harness/personSnapshot.js";
 import { gateMatches, type GatedOut } from "../harness/matchGate.js";
+import { localDay } from "./memberTime.js";
+import { avoidFor, limitsGate } from "./memberLimits.js";
+import type { KnowledgeSection, MemberKnowledge } from "./memberKnowledge.js";
 import { eventCandidates, reserveXSearch, type TierMatch } from "./tieredRecommendation.js";
 import { memberTerms, QueryLedger, SWEEP_QUERY_RULES } from "./sweepQuery.js";
 
@@ -76,30 +78,96 @@ export function xFailedNote(f: ReturnType<typeof xFailure>): string {
 export const SWEEP_X_TOOL =
   "Recent X posts (the last 7 days), for what's announced there first: programs and cohorts taking applications, open calls, fellowships, residencies, grants, founder or builder gatherings, investors or people looking for what they want. One search a sweep. Write it the way such posts are written, broad: two or three OR-grouped sets of synonyms in parentheses, e.g. (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply by). No niche words, no city, no year, no venue or vendor names. Each post comes with its own links expanded; when a post points to the program's own page, keep that link rather than the post.";
 
-export type SweepCandidate = { userId: string; firstName: string; askText: string; fromProfile?: boolean; city: string | null; goals?: string[] | null };
+export type SweepCandidate = { userId: string; firstName: string; askText: string; fromProfile?: boolean; city: string | null };
 
-export function sweepPrompt(c: SweepCandidate, o: { today: string; picture: string; feeling: string | null; shown: string[] }): string {
+// What the sweep reads about them: the member record (services/memberKnowledge.ts), the same one the picker, dispatch, tasks and
+// replies read (Phase A1, 2026-10-10: the sweep ran on a snapshot paragraph, a regex guess at the room they want from their feelings,
+// and 15 sent names; it never saw stated taste, the avoid list, availability, corrections, lessons, goal states or claims).
+export const SWEEP_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "delivered", "lessons", "corrections", "preferences", "claims", "restraint", "person", "limits"];
+export const SWEEP_RECORD_LIMITS = { person: 1800, goals: 6, asks: 6, shown: 15, learned: 8, claims: 6 } as const;
+
+export type SweepRecord = {
+  person: string;
+  goals: string[];
+  goalsPast: string[];
+  otherAsks: string[];
+  statedTaste: string[];
+  observedTaste: string | null;
+  // The kinds ruled out that apply to this ask (avoidFor), and when they're usually free.
+  avoid: string[];
+  availability: string | null;
+  learned: string[];
+  claims: string[];
+  feeling: string | null;
+  frustratedWithCo: boolean;
+  shown: string[];
+  // Every goal's words, for keeping names out of queries (memberTerms), done ones too.
+  goalWords: string[];
+};
+
+// A record with nothing in it (a member Co knows little about yet).
+export function emptySweepRecord(): SweepRecord {
+  return { person: "", goals: [], goalsPast: [], otherAsks: [], statedTaste: [], observedTaste: null, avoid: [], availability: null, learned: [], claims: [], feeling: null, frustratedWithCo: false, shown: [], goalWords: [] };
+}
+
+// Pure: the record, read for one ask's sweep.
+export function sweepRecord(k: MemberKnowledge, askText: string): SweepRecord {
+  const L = SWEEP_RECORD_LIMITS;
+  const same = (a: string) => a.trim().toLowerCase() === askText.trim().toLowerCase();
+  return {
+    person: (k.person?.text ?? "").slice(0, L.person),
+    goals: k.goals.filter((g) => g.state === "active").map((g) => g.text).slice(0, L.goals),
+    goalsPast: k.goals.filter((g) => g.state !== "active").map((g) => g.text).slice(0, L.goals),
+    otherAsks: k.asks.filter((a) => !same(a.text)).map((a) => a.text).slice(0, L.asks),
+    statedTaste: k.preferences.filter((p) => p.source === "stated").map((p) => p.text),
+    observedTaste: k.preferences.filter((p) => p.source === "taste").map((p) => p.text).join(" ") || null,
+    avoid: avoidFor(k.limits?.avoid ?? [], askText),
+    availability: k.limits?.availability ?? null,
+    learned: [...k.corrections.map((c) => `Corrected ${c.field}: ${c.now ?? "(removed)"}`), ...k.lessons.map((l) => `Lesson: ${l.text}`)].slice(0, L.learned),
+    claims: k.claims.map((c) => `${c.text}${c.expiresOn ? ` (until ${c.expiresOn})` : ""}`).slice(0, L.claims),
+    feeling: k.restraint?.feeling ?? null,
+    frustratedWithCo: !!k.restraint?.frustratedWithCo,
+    shown: k.delivered.map((d) => d.what).slice(0, L.shown),
+    goalWords: k.goals.map((g) => g.text),
+  };
+}
+
+export function sweepPrompt(c: SweepCandidate, o: { today: string; record: SweepRecord }): string {
+  const r = o.record;
+  const section = (title: string, lines: string[]) => (lines.length ? `${title}\n${lines.map((l) => `- ${l}`).join("\n")}\n` : "");
   return `You're Co, finding things worth texting ${c.firstName} about over the next couple of weeks. Nothing is sent now: what you keep goes into a queue, and Co texts at most one a day, so keep only what genuinely fits.
 
 ${c.fromProfile ? "They haven't asked for something specific; this is what they've shared they want" : "What they asked Co to keep an eye out for"}: "${c.askText}"
 Where they are: ${c.city ?? "unknown"}. Today: ${o.today}.
-What you know about them:
-${o.picture || "(little known yet)"}${o.feeling ? `\nHow they've been: ${o.feeling} (this shapes how Co says it, never whether they hear about something)` : ""}
-Already sent to them recently (don't keep these again): ${o.shown.length ? o.shown.slice(0, 15).join("; ") : "(nothing)"}
+
+What Co knows about them (their record):
+${r.person || "(little known yet)"}
+${section("Where they're headed now:", r.goals)}${section("Goals since done or set aside (history, not what to look for):", r.goalsPast)}${section("Their other open asks (each gets its own sweep; context only):", r.otherAsks)}${section("What they've corrected or Co has learned (only the corrected version exists):", r.learned)}${section("What they've told Co, still holding:", r.claims)}${r.observedTaste ? `How what Co sent has landed: ${r.observedTaste}\n` : ""}${r.feeling ? `How they've been: ${r.feeling} (this shapes how Co says it, never whether they hear about something)\n` : ""}${r.frustratedWithCo ? "They've been frustrated with what Co has found: look wider and try harder.\n" : ""}
+${r.statedTaste.length ? `THE KIND OF ROOM THEY'VE TOLD CO THEY WANT (their own words, newest first; the strongest signal you have about fit):\n${r.statedTaste.map((t) => `- ${t}`).join("\n")}\nJudge every result against it and give each keep a taste: "matches", "neutral" or "clashes". Keep the ones that match first. Something that clashes isn't kept.\n` : ""}${r.avoid.length ? `They told Co to stop suggesting these kinds of things: ${r.avoid.map((a) => `"${a}"`).join(", ")}. Never search for them and never keep one, judged by its main activity (a chess night full of founders is a chess night).\n` : ""}${r.availability ? `When they've said they're free, in their words: "${r.availability}". Weigh an event's day and time against it as they said it: a limit when they said only, a leaning when they said more or prefer.\n` : ""}Already sent to them recently (don't keep these again): ${r.shown.length ? r.shown.join("; ") : "(nothing)"}
 
 Search only for this one ask. Other things they're working on (in who they are) are context for judging fit, not things to look for in this sweep, because each ask gets its own sweep (2026-10-01: a founder-events sweep kept a venue from another ask).
 Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Co will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
 
 Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}
 ${SWEEP_QUERY_RULES}
-Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them. Keeping nothing is fine when nothing fits. When you're done, note in skip() the results you looked at and passed on, each with a few words on why, in the same step as your keeps. Then stop.`;
+Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them, tied to something in their record. Keeping nothing is fine when nothing fits. When you're done, note in skip() the results you looked at and passed on, each with a few words on why, in the same step as your keeps. Then stop.`;
 }
 
 // searched: the sweep really looked: a search came back, or nothing stood in its way (it chose not to search, or its queries were
 // refused for how they were written, which is the ask's own run). Not when a budget was used up or a source failed and nothing came
 // back: that's an outage, not an empty run (services/workingSet.ts empty runs; review and re-review of #133).
-export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; feeling?: string | null; shown?: string[] } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean }> {
+export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; knowledge?: (userId: string) => Promise<MemberKnowledge> } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean; frustratedWithCo: boolean }> {
   const did: string[] = [];
+  // The record, read once. A record that can't be read (a failed name read fails closed) means no sweep: the avoid list and taste
+  // couldn't be applied, so nothing is searched, and it isn't an empty run.
+  const read = opts.knowledge ?? (async (userId: string) => (await import("./memberKnowledge.js")).memberKnowledge(userId, { include: SWEEP_KNOWLEDGE }));
+  const k = await read(c.userId).catch((err: any) => {
+    console.error("sweepFind: member record read failed (no sweep this run):", err?.message ?? err);
+    return null;
+  });
+  // Limits that couldn't be read (null, not an empty list) can't be applied: no sweep either.
+  if (!k || !k.limits) return { matches: [], did, searched: false, frustratedWithCo: false };
+  const record = sweepRecord(k, c.askText);
   let searched = false;
   let blocked = false;
   const found = new Map<string, TierMatch>();
@@ -113,11 +181,9 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const passReasons = new Map<string, string>();
   let xError: ReturnType<typeof xFailure> | null = null;
   // Every query, run or refused (sweepQuery.ts): the member never in it, simple, phrased for its source; logged with its outcomes.
-  const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: c.goals ?? [], except: c.askText }), c.askText);
+  const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: record.goalWords, except: c.askText }), c.askText, record.avoid);
   // A page kept in place of the post that pointed to it: the post counts as kept too.
   const postOf = new Map<string, string>();
-  // The one model of them (services/personModel.ts).
-  const picture = await import("./personModel.js").then((m) => m.personModel(c.userId, { maxDid: 5 })).catch(() => renderSnapshot(null));
   const tools = {
     searchEvents: tool({
       description: "Co's own events, the public event feed, and openings Co already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",
@@ -164,6 +230,12 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         did.push(...run.map((q) => `web: ${q}`));
         const { taskWebSearch } = await import("./taskWeb.js");
         const all = await Promise.all(run.map((q) => taskWebSearch(c.userId, q, { city: c.city, zone: opts.timezone ?? null, source: "sweep" }).catch(() => null)));
+        // Every search failed outright: an outage, not an empty run (re-review of #133). taskWebSearch catches its own failures and says
+        // so in its note (review of #134: it never returns null).
+        if (all.every((r) => r === null || /^Web search failed/.test(r.note ?? ""))) {
+          blocked = true;
+          return { ok: false, error: "Web search failed just now; nothing came back." };
+        }
         const { checkVerified } = await import("./factCheck.js");
         const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? [])).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
         run.forEach((q, i) => ledger.ran("web", q, all[i]?.kept?.length ?? 0));
@@ -243,13 +315,25 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       },
     }),
     keep: tool({
-      description: "Keep one thing for the queue: its link (from a result), the name of the thing as its record states it, and one plain sentence on why it fits them.",
-      inputSchema: z.object({ link: z.string(), name: z.string().optional(), why: z.string(), audience: z.string().optional().describe("Only if the thing is aimed at a particular group (women, men, moms, a community): who, in a few words. Leave out when it is open to everyone.") }),
-      execute: async ({ link, name, why, audience }) => {
+      description: "Keep one thing for the queue: its link (from a result), the name of the thing as its record states it, one plain sentence on why it fits them, and how it sits with the kind of room they've said they want.",
+      inputSchema: z.object({
+        link: z.string(),
+        name: z.string().optional(),
+        why: z.string(),
+        taste: z.enum(["matches", "neutral", "clashes"]).optional().describe("Against the kind of room they've told Co they want, when they have: matches, neutral or clashes."),
+        audience: z.string().optional().describe("Only if the thing is aimed at a particular group (women, men, moms, a community): who, in a few words. Leave out when it is open to everyone."),
+      }),
+      execute: async ({ link, name, why, taste, audience }) => {
         const m = found.get(link);
         if (!m) return { ok: false, error: "That link isn't one of your results." };
         if (kept.length >= SWEEP_BUDGET.keep) return { ok: false, error: "That's enough for this sweep." };
-        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), whyItFits: why.trim(), fits: true, rightKind: true, ...(audience && audience.trim() ? { audience: audience.trim().slice(0, 60) } : {}) } as TierMatch);
+        // Taste ranks for everyone (Phase A5): what clashes with the room they've said they want isn't kept.
+        const fit = record.statedTaste.length ? taste ?? "neutral" : null;
+        if (fit === "clashes") {
+          passReasons.set(link, "clashes with the kind of room they've said they want");
+          return { ok: false, error: "That clashes with the kind of room they've said they want, so it isn't kept." };
+        }
+        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), whyItFits: why.trim(), fits: true, rightKind: true, ...(fit ? { taste: fit } : {}), ...(audience && audience.trim() ? { audience: audience.trim().slice(0, 60) } : {}) } as TierMatch);
         return { ok: true };
       },
     }),
@@ -270,21 +354,31 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       tools,
       stopWhen: stepCountIs(SWEEP_BUDGET.steps),
       experimental_telemetry: { isEnabled: true, functionId: "sweep.find", metadata: { userId: c.userId } },
-      prompt: sweepPrompt(c, { today: new Date().toISOString().slice(0, 10), picture, feeling: opts.feeling ?? null, shown: opts.shown ?? [] }),
+      prompt: sweepPrompt(c, { today: localDay(new Date(), opts.timezone ?? null), record }),
     });
   } catch (err: any) {
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
   }
   // Facts only: sold out, past, too far, and a name/date the record actually states.
   const gatedOut: GatedOut[] = [];
-  const gated = await gateMatches(kept, { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null, gatedOut }).catch(() => kept);
+  const factGated = await gateMatches(kept, { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null, gatedOut }).catch(() => kept);
   // Kept but stopped by the fact gate: the gate's reason, unless Co gave one.
   for (const g of gatedOut) if (g.url && !passReasons.has(g.url)) passReasons.set(g.url, `kept, then the fact gate: ${g.reasons.join("; ")}`);
+  // Their limits, for every member (Phase A2): a kind they ruled out, judged by its main activity, and an event outside when they're free.
+  // The ask itself, so a day or time it names isn't overruled by when they're usually free (re-review of #134).
+  const limits = await limitsGate(factGated, k.limits ? { avoid: record.avoid, availability: record.availability } : null, { askText: c.askText }).catch(() => ({ kept: [] as TierMatch[], out: factGated.map((m) => ({ match: m, why: "their limits couldn't be checked" })), read: null }));
+  for (const o of limits.out) {
+    const url = "url" in o.match && o.match.url ? String(o.match.url) : "";
+    if (url) passReasons.set(url, `kept, then their limits: ${o.why}`);
+  }
+  // What matches the room they want goes first (Phase A5).
+  const rankOf = (m: TierMatch) => ((m as any).taste === "matches" ? 0 : (m as any).taste === "clashes" ? 2 : 1);
+  const gated = limits.kept.map((m, i) => ({ m, i })).sort((a, b) => rankOf(a.m) - rankOf(b.m) || a.i - b.i).map((x) => x.m);
   const keptUrls = new Set(gated.flatMap((m) => ("url" in m && m.url ? [String(m.url), postOf.get(String(m.url)) ?? ""] : [])).filter(Boolean));
   const passed = passedOver(lookedAt, keptUrls, passReasons);
   // Each query beside what became of its results, and each keep with the query that found it (the tuning log, sweepQuery.ts).
   const { queries, keptBy } = ledger.finish(lookedAt, keptUrls, gated.map((m) => ({ name: m.name, url: "url" in m && m.url ? String(m.url) : "" })), postOf);
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
-  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy } }).catch(() => {});
-  return { matches: gated, did, searched: searched || !blocked };
+  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy } }).catch(() => {});
+  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo };
 }

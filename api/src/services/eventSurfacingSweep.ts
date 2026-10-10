@@ -6,7 +6,6 @@ import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 import { enrichMatch } from "./eventDetails.js";
-import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 import { sweepFind } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
 import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
@@ -299,6 +298,13 @@ const URGENT_WINDOW_DAYS = 3;
 // Tier 2 kept filling the slot. Order within a tier is unchanged. Starts with
 // the tier after the one Co offered last (in the order the tiers appeared,
 // which already carries the outcome bias), then takes one from each in turn.
+// Pure: what matches the kind of room they've said they want first, then neutral, then the rest, each in its own order (Phase A5: taste
+// ranks for every member, not only picker accounts). The sweep's keep sets the taste (services/sweepFind.ts); without one it's neutral.
+export function byTaste<T extends { match: unknown }>(items: T[]): T[] {
+  const rank = (it: T) => ((it.match as any)?.taste === "matches" ? 0 : (it.match as any)?.taste === "clashes" ? 2 : 1);
+  return items.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map((x) => x.it);
+}
+
 export function interleaveByTier<T extends { match: { tier: number } }>(items: T[], lastTier: number | null, waitingTiers: number[] = []): T[] {
   const groups = new Map<number, T[]>();
   for (const it of items) {
@@ -355,9 +361,8 @@ async function lastOfferedTier(userId: string): Promise<number | null> {
 type SweepSearchTrace = {
   searchText: string;
   searched?: boolean;
-  // Frustrated with what Co has found: searched wider and sends sooner.
-  widened: boolean;
-  roomPreference: string | null;
+  // Frustrated with what Co has found (the record's restraint): the sweep is told to look wider, and a find goes out sooner, revealed.
+  frustratedWithCo: boolean;
   found: { name: string; tier: number; date: string | null }[];
   staleOrRepeat: string[];
   // Shown over a month ago with no reply, and coming back once.
@@ -369,18 +374,12 @@ type SweepSearchTrace = {
 
 async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
   // Their time zone (memberTime.ts), so event dates are their local calendar dates.
-  // Feelings shape how Co says it, never whether they hear about something
-  // (2026-09-18); frustration with what Co has found sends the real thing
-  // instead of a tease (attemptEventSurfacing, revealNow).
-  const feelings = await getEmotionalContext(candidate.userId).catch(() => null);
-  const widen = !!feelings?.withCo.frustrated;
-  const roomPreference = feelings ? roomPreferenceFromFeelings(feelings) : null;
-  // Co finds and judges in its own loop, with the whole person in view
-  // (services/sweepFind.ts, 2026-10-01): no search brief, no model gates.
-  const shown = await import("./reactionCatchup.js").then((m) => m.sentItems(candidate.userId)).then((s) => s.map((x) => x.name)).catch(() => [] as string[]);
+  // Co finds and judges in its own loop, reading their record (services/sweepFind.ts, Phase A1): what they've said they want and ruled
+  // out, how they've been, what was already sent. Feelings shape how Co says it, never whether they hear about something (2026-09-18);
+  // frustration with what Co has found sends the real thing instead of a tease (attemptEventSurfacing, revealNow).
   const result = await sweepFind(
-    { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: candidate.city, goals: candidate.goals },
-    { timezone, feeling: [roomPreference, feelings ? renderEmotionalContext(feelings) : null].filter(Boolean).join(" ") || null, shown },
+    { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: candidate.city },
+    { timezone },
   ).catch((err: any) => {
     console.error("attemptEventSurfacing: sweepFind failed (non-fatal):", err?.message ?? err);
     return null;
@@ -416,8 +415,7 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
     items,
     trace: {
       searchText: candidate.askText,
-      widened: widen,
-      roomPreference,
+      frustratedWithCo: result?.frustratedWithCo ?? false,
       found: matches.map((m) => ({ name: m.name, tier: m.tier, date: relevantDate(m) })),
       staleOrRepeat: matches.flatMap((m, i) => (repeats[i].action === "blocked" ? [`${m.name}: ${repeats[i].reason}`] : [])),
       resurfaced: [...again].map((m) => m.name),
@@ -643,9 +641,9 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     ...found.filter((f) => f.reminder || !queued.some((q) => sameMatch(q.match, f.match))),
   ];
   const pending = await dropStaleFront(candidate.userId, [
-    ...merged.filter((i) => i.source === "urgent" || isShortNotice(i.match, zone)),
+    ...byTaste(merged.filter((i) => i.source === "urgent" || isShortNotice(i.match, zone))),
     ...interleaveByTier(
-      merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match, zone))),
+      byTaste(merged.filter((i) => !(i.source === "urgent" || isShortNotice(i.match, zone)))),
       await lastOfferedTier(candidate.userId),
       await waitingOfferTiers(candidate.userId),
     ),
@@ -750,7 +748,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       match,
       // Frustrated with what Co has found: send the real thing, not a tease
       // they have to answer before seeing it.
-      ...(trace.widened ? { revealNow: true } : {}),
+      ...(trace.frustratedWithCo ? { revealNow: true } : {}),
       ...(item.reminder ? { reminder: true } : {}),
       ...(item.again ? { again: true } : {}),
     };
@@ -764,7 +762,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       // deadline's, in local time); an undated opportunity gets two weeks.
       expiresAt: offerExpiresAt(match, zone),
       // Short notice is the most time-bound thing Co can send.
-      priority: isShortNotice(item.match, zone) ? 95 : trace.widened ? 85 : undefined,
+      priority: isShortNotice(item.match, zone) ? 95 : trace.frustratedWithCo ? 85 : undefined,
     });
     if (ok) {
       await log("act", "queued", { queued: { name: item.match.name, tier: item.match.tier, date }, skipped });

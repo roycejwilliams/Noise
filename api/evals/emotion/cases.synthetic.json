@@ -134,8 +134,7 @@
       }
     ],
     "expectNeedsCare": false,
-    "expectFrustratedWithCo": true,
-    "expectRoom": null
+    "expectFrustratedWithCo": true
   },
   {
     "id": "c11_legacy_row_about_co",
@@ -168,8 +167,7 @@
       }
     ],
     "expectNeedsCare": true,
-    "expectFrustratedWithCo": false,
-    "expectRoom": "small, low-key"
+    "expectFrustratedWithCo": false
   },
   {
     "id": "c13_both_at_once",
@@ -195,8 +193,7 @@
       }
     ],
     "expectNeedsCare": true,
-    "expectFrustratedWithCo": true,
-    "expectRoom": "community"
+    "expectFrustratedWithCo": true
   },
   {
     "id": "c14_happy_with_results_clears_frustration",

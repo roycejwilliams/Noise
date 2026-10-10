@@ -63,7 +63,7 @@ const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta
 
 // The sweep: when and how to search X.
 {
-  const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "accelerators for a pre-seed consumer app", city: "San Francisco" }, { today: "2026-10-07", picture: "", feeling: null, shown: [] });
+  const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "accelerators for a pre-seed consumer app", city: "San Francisco" }, { today: "2026-10-07", record: SF.emptySweepRecord() });
   check("the sweep prompt carries the X guidance", p.includes(SF.SWEEP_X_GUIDANCE));
   check("X once a sweep, for the asks X covers", /search X once in this sweep/.test(SF.SWEEP_X_GUIDANCE) && /accelerator/.test(SF.SWEEP_X_GUIDANCE) && /open call/.test(SF.SWEEP_X_GUIDANCE) && /founder or builder gatherings/.test(SF.SWEEP_X_GUIDANCE));
   check("an OR-synonym query written the way posts are", /OR/.test(SF.SWEEP_X_GUIDANCE) && /the way those posts are written/.test(SF.SWEEP_X_GUIDANCE) && /\(applications open OR now accepting OR apply\)/.test(SF.SWEEP_X_GUIDANCE) && /Keep it broad/.test(SF.SWEEP_X_GUIDANCE) && /broad/.test(SF.SWEEP_X_TOOL));

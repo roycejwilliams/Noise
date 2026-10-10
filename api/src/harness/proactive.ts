@@ -44,11 +44,10 @@ import { MODELS } from "../models.js";
 import { capitalizeSentences } from "../services/textStyle.js";
 import { offerFollowUp } from "../services/offerFollowUp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { safetyHoldActive } from "../services/safety.js";
 import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
-import { getEmotionalContext, renderEmotionalContext } from "./emotion.js";
-import { kindOf, loadKindRestraint, loadStoredPrefs, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
+import { renderEmotionalContext } from "./emotion.js";
+import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
@@ -1760,43 +1759,112 @@ async function recordSkipOnce(userId: string, reason: string, decision: Paramete
   if (rows[0]) await recordDecision(decision);
 }
 
+// The member-level state every send decision reads, from the member record's one restraint read (services/memberKnowledge.ts; Phase A6:
+// dispatch read the hold, emotion, safety, kind restraint and last inbound itself, then the record read them all again for drafting).
+// Dispatch and the sweep gate (sweepHold, Phase A3) both build it here, so a sweep is never run for a member dispatch would hold.
+export type MemberSendState = { state: Omit<PickState, "candidates">; holdUntil: Date | null; spaceUntil: Date | null; raw: import("../services/memberKnowledge.js").RawRestraint };
+export async function memberSendState(userId: string, person: { timezone: string | null; optedOut: boolean }, now: Date): Promise<MemberSendState> {
+  const MK = await import("../services/memberKnowledge.js");
+  const [raw, sends, undeliveredYes] = await Promise.all([
+    MK.realKnowledgeDeps.restraint(userId, now),
+    loadSends(pool, userId),
+    import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(userId)).catch(() => false),
+  ]);
+  return {
+    state: {
+      now,
+      timezone: person.timezone,
+      optedOut: person.optedOut,
+      sends,
+      lastInboundAt: raw.lastInboundAt,
+      needsCare: !!raw.emotional?.needsCare,
+      safetyHold: raw.safetyHold,
+      undeliveredYes,
+      // Kinds they keep letting pass (services/kindRestraint.ts). A read that fails holds what's stored, never more than that.
+      suppressedKinds: raw.suppressed,
+    },
+    holdUntil: raw.holdUntil,
+    spaceUntil: raw.spaceUntil,
+    raw,
+  };
+}
+
+// Pure: whether a hold or the space after a handed-off task is on (dispatch sends nothing then; new candidates don't clear space).
+export function heldNow(s: Pick<MemberSendState, "holdUntil" | "spaceUntil">, now: Date): "hold" | "space" | null {
+  if (s.holdUntil && s.holdUntil.getTime() > now.getTime()) return "hold";
+  if (s.spaceUntil && s.spaceUntil.getTime() > now.getTime()) return "space";
+  return null;
+}
+
+// The sweep gate (Phase A3, 2026-10-10 audit: restraint, pause and dormancy were checked only at dispatch, so a member whose finds
+// couldn't go out still cost a full sweep a day, and the finds often expired before the backoff let one through). A sweep runs only
+// when dispatch would let what it finds go out, by dispatch's own checks on a find of that kind:
+//   - an ask's find answers them: only what holds every send for days stops it (opted out, a safety hold, finds paused for everyone);
+//   - a goal's find is discovery: the pace that holds discovery stops it too (kind restraint, the weekly cap, the engagement pace that
+//     slows a quiet or dormant member, the unanswered pause).
+// Never a hold or the space after a task (review of #134): a hold is the pick's "nothing to send now", which a new find clears, so
+// holding the sweep on it would keep the new find from ever coming; the space is hours. Hours, the daily cap and spacing clear within
+// the day too. Returns why it's held; empty: it runs.
+export type SweepKind = "ask" | "goal";
+export const SWEEP_BLOCKERS: Record<SweepKind, readonly string[]> = {
+  ask: ["not_opted_out", "safety_hold"],
+  goal: ["not_opted_out", "safety_hold", "kind_restraint", "weekly_cap", "engagement_pace", "unanswered_pause"],
+};
+export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | "spaceUntil">, kind: SweepKind, paused: string[] = pausedTypes()): string[] {
+  const find: Candidate = {
+    id: "sweep",
+    userId: "",
+    type: "event_offer",
+    targetKey: "event_offer:sweep",
+    topicKey: "sweep",
+    summary: "",
+    priority: 50,
+    dueAt: s.state.now,
+    expiresAt: null,
+    payload: kind === "ask" ? { askId: "sweep-ask", fromProfile: false } : { askId: PROFILE_ASK_ID_FOR_GATE, fromProfile: true },
+    attempts: 0,
+    createdAt: s.state.now,
+  };
+  const ev = evaluateCandidates({ ...s.state, candidates: [find] });
+  const failed = [...ev.userChecks, ...(ev.perCandidate[0]?.checks ?? [])].filter((c) => !c.pass && SWEEP_BLOCKERS[kind].includes(c.name)).map((c) => c.name);
+  return [...(paused.includes("event_offer") ? ["paused"] : []), ...new Set(failed)];
+}
+const PROFILE_ASK_ID_FOR_GATE = "profile";
+// An ask's sweep stops only on what holds every send for days (SWEEP_BLOCKERS.ask): finds paused for everyone, a safety hold, opted out.
+// Those are read alone (the same readers the full state uses), so a member held for days with an ask due costs one query an hour, not
+// the full restraint read (review of #134). A goal's sweep needs the pace, so it reads the full state.
+export async function sweepHold(userId: string, kind: SweepKind, now = new Date()): Promise<string[]> {
+  if (kind === "ask") {
+    if (pausedTypes().includes("event_offer")) return ["paused"];
+    const { rows } = await pool.query(`SELECT COALESCE(sms_opted_out, false) AS out, phone_number FROM users WHERE id = $1`, [userId]);
+    if (!rows[0]?.phone_number) return ["no_phone"];
+    if (rows[0].out) return ["not_opted_out"];
+    const { safetyHoldActive } = await import("../services/safety.js");
+    return (await safetyHoldActive(userId)) ? ["safety_hold"] : [];
+  }
+  const person = await loadPerson(userId);
+  if (!person) return ["no_phone"];
+  return sweepBlockedBy(await memberSendState(userId, person, now), kind);
+}
+
 // dryRun drafts and composes what would go out, prints it, and stops before the ledger and the send.
 export async function dispatchForUser(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
   const person = await loadPerson(userId);
   if (!person) return;
 
-  const hold = await pool.query(`SELECT hold_until, space_until FROM proactive_user_state WHERE user_id = $1`, [userId]);
-  if (hold.rows[0]?.hold_until && new Date(hold.rows[0].hold_until) > new Date()) return;
-  // Spacing after work was handed to a task (harness/payloadFirst.ts). Unlike
-  // hold_until, new candidates don't clear it.
-  if (hold.rows[0]?.space_until && new Date(hold.rows[0].space_until) > new Date()) return;
+  const now = new Date();
+  const member = await memberSendState(userId, person, now);
+  // A hold, or the spacing after work was handed to a task (harness/payloadFirst.ts): nothing goes. Unlike hold_until, new candidates
+  // don't clear the space.
+  if (heldNow(member, now)) return;
 
   const { rows: candRows } = await pool.query(
     `SELECT * FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND NOT (type = ANY($2::text[]))`,
     [userId, pausedTypes()],
   );
-  const state: PickState = {
-    now: new Date(),
-    timezone: person.timezone,
-    optedOut: person.optedOut,
-    candidates: candRows.map(rowToCandidate),
-    sends: await loadSends(pool, userId),
-    lastInboundAt: await loadLastInbound(pool, userId),
-  };
-  const emotional = await getEmotionalContext(userId);
-  state.needsCare = emotional.needsCare;
-  state.safetyHold = await safetyHoldActive(userId);
-  state.undeliveredYes = await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(userId)).catch(() => false);
-  // Kinds they keep letting pass (services/kindRestraint.ts); the learned preference is written when it flips. A read that fails
-  // holds what's stored, never more than that.
-  const restraint = await loadKindRestraint(pool, userId, state.now).catch((err: any) => {
-    console.error("proactive: kind restraint read failed (non-fatal, holding what's stored):", err?.message ?? err);
-    return null;
-  });
-  state.suppressedKinds = restraint
-    ? suppressedKinds(restraint.verdicts)
-    : await loadStoredPrefs(pool, userId).then((p) => p.filter((x) => x.state === "suppressed").map((x) => x.kind)).catch(() => []);
-  if (restraint && !opts.dryRun) await syncKindPreferences(userId, restraint.verdicts, restraint.stored).catch(() => 0);
+  const state: PickState = { ...member.state, candidates: candRows.map(rowToCandidate) };
+  // The learned preference is written when it flips, from the same read.
+  if (member.raw.kinds && !opts.dryRun) await syncKindPreferences(userId, member.raw.kinds.verdicts, member.raw.kinds.stored).catch(() => 0);
   const ev = evaluateCandidates(state, opts);
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
@@ -1827,7 +1895,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // stripped inside it. The gates above keep their own reads, exactly as they were. A read that fails (a failed name lookup fails
   // closed) leaves the transcript empty and the drafts as they were, never unstripped.
   const MK = await import("../services/memberKnowledge.js");
-  const known = await MK.memberKnowledge(userId, { now: state.now, include: DISPATCH_KNOWLEDGE, ...DISPATCH_EXCHANGES }).catch((err: any) => {
+  // Restraint is the read the gates above made (one read, Phase A6).
+  const known = await MK.memberKnowledge(userId, { now: state.now, include: DISPATCH_KNOWLEDGE, ...DISPATCH_EXCHANGES }, { restraint: async () => member.raw }).catch((err: any) => {
     console.error("proactive: member knowledge read failed (non-fatal, drafting without it):", err?.message ?? err);
     return null;
   });
@@ -1838,12 +1907,14 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // How what Co sent landed, and, apart from it, the kind of room they've said they want (services/roomTaste.ts).
   const taste = known?.preferences.filter((p) => p.source !== "stated").map((p) => p.text).join(" ") || null;
   const statedTaste = known?.preferences.filter((p) => p.source === "stated").map((p) => p.text).join(" ") || null;
-  const drafting = <T,>(type: ProactiveType, fn: () => Promise<T>): Promise<T> => (OWN_MEMBER_CONTEXT.has(type) ? draftWithKnowledge(null, null, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)) : draftWithKnowledge(known, rules, () => feelingForDraft.run(renderEmotionalContext(emotional), fn)));
+  // How they've been, from the one emotion read the gates used (null when it failed: no feeling line rather than a second read).
+  const feelingText = member.raw.emotional ? renderEmotionalContext(member.raw.emotional) : "";
+  const drafting = <T,>(type: ProactiveType, fn: () => Promise<T>): Promise<T> => (OWN_MEMBER_CONTEXT.has(type) ? draftWithKnowledge(null, null, () => feelingForDraft.run(feelingText, fn)) : draftWithKnowledge(known, rules, () => feelingForDraft.run(feelingText, fn)));
   // A find on its last chance goes before what can wait (expiringFind); otherwise Co picks.
   const urgent = expiringFind(ev.eligible, { now: state.now, zone: person.timezone, sends: state.sends });
   const picked = urgent
     ? { pick: urgent.pick, reason: `expires before the next send slot (ends ${localStamp(urgent.endsAt, person.timezone)}, next slot ${localStamp(urgent.nextSlot, person.timezone)}): it goes ahead of what can wait`, source: "code" as const }
-    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: renderEmotionalContext(emotional), taste, statedTaste, person: known?.person?.text ?? null });
+    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null });
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)

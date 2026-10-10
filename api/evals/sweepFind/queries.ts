@@ -80,7 +80,7 @@ const terms = Q.memberTerms({ firstName: "Royce", goals: GOALS });
   check("phrased the way posts read: allowed", L.check("x", "AI founders SF tonight").length === 0);
   L.ran("x", "AI founders SF tonight", 12);
   check("and a later web query can't repeat the X one", L.check("web", "AI founders SF tonight").some((p) => /same as the X query/.test(p)));
-  check("the sweep is told to phrase for each source and never send the same words to both", /X like what people post/.test(Q.SWEEP_QUERY_RULES) && /the web like the title of a page/.test(Q.SWEEP_QUERY_RULES) && /Never send the same words to both/.test(Q.SWEEP_QUERY_RULES) && SF.sweepPrompt({ userId: "u", firstName: "J", askText: "x", city: "SF" }, { today: "2026-10-08", picture: "", feeling: null, shown: [] }).includes(Q.SWEEP_QUERY_RULES));
+  check("the sweep is told to phrase for each source and never send the same words to both", /X like what people post/.test(Q.SWEEP_QUERY_RULES) && /the web like the title of a page/.test(Q.SWEEP_QUERY_RULES) && /Never send the same words to both/.test(Q.SWEEP_QUERY_RULES) && SF.sweepPrompt({ userId: "u", firstName: "J", askText: "x", city: "SF" }, { today: "2026-10-08", record: SF.emptySweepRecord() }).includes(Q.SWEEP_QUERY_RULES));
 }
 
 // ---- 4. every query logged beside its keeps and passes
