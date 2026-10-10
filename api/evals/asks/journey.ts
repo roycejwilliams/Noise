@@ -70,7 +70,7 @@ check("it does not ride the 7-day ask clock: the ask check-in cron reads ask_che
 // ---- THE SWEEP: goals ambient (own budget), asks active, offers judged against both
 check("offers are judged against the ask AND where they are headed: the ask sweep hands the fit judge profile goals plus goal entries", /goals: goalTexts\(row\.intent, row\.goals\)\.length \? goalTexts\(row\.intent, row\.goals\) : null/.test(src("jobs/index.ts")) && /cp\.goals, cp\.intent, cp\.activity_preferences/.test(src("jobs/index.ts")));
 check("the daily pick is judged against goals too, as a lens that is never the stated reason", /goals: k\.goals\.filter\(\(g\) => g\.state === "active"\)/.test(src("services/sweepSelectContext.ts")) && /goalTexts\(prof\?\.intent, prof\?\.goals\)/.test(src("services/sweepSelectContext.ts")) && /the LENS: judge every candidate against this as well as the asks; never cite it as the reason/.test(src("services/sweepSelect.ts")));
-check("the goal sweep keeps its own budget and the ask sweep still only reads asks", /runGoalSweep\(runWithConcurrency\)/.test(src("jobs/index.ts")) && /WHERE ac\.resolved_at IS NULL AND ac\.kind = 'find'/.test(src("jobs/index.ts")));
+check("the goal sweep keeps its own budget and the ask sweep still only reads asks", /runGoalSweep\(runWithConcurrency\)/.test(src("jobs/index.ts")) && /WHERE ac\.resolved_at IS NULL AND ac\.kind IN \('find', 'person'\)\s+AND u\.archived_at IS NULL/.test(src("jobs/index.ts")));
 
 // ---- EVENTS: goals frame who is worth meeting, asks write the reason
 const onlyGoals = [{ id: "g9", kind: "goal", status: "active", text: "Meet people building consumer social", created_at: day(5) }];

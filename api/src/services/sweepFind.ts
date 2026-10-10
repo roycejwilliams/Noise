@@ -108,7 +108,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const passReasons = new Map<string, string>();
   let xError: ReturnType<typeof xFailure> | null = null;
   // Every query, run or refused (sweepQuery.ts): the member never in it, simple, phrased for its source; logged with its outcomes.
-  const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: c.goals ?? [], except: c.askText }));
+  const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: c.goals ?? [], except: c.askText }), c.askText);
   // A page kept in place of the post that pointed to it: the post counts as kept too.
   const postOf = new Map<string, string>();
   // The one model of them (services/personModel.ts).

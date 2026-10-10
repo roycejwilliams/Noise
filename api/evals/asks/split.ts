@@ -91,7 +91,7 @@ check("an ask can reference the goal it serves: ask_checkins.serves_goal_id exis
 {
   const gate = await A.checkinGate("u1", "g1", { openAsks: async () => [], conversation: async () => [], delivered: async () => null, judge: async () => [], close: async () => {}, markChecked: async () => {} } as any);
   check("REGRESSION: a goal has no ask row, so the check-in gate refuses it (no check-in can be written for a goal)", gate.ok === false);
-  check("REGRESSION: a goal never produces a SEARCH: the ask sweep reads ask_checkins only, and a goal has no row there", /FROM ask_checkins ac\s+JOIN users u/.test(src("jobs/index.ts")) && /WHERE ac\.resolved_at IS NULL AND ac\.kind = 'find'/.test(src("jobs/index.ts")) && !/goalEntries|isActiveGoal/.test(src("jobs/index.ts")) && !/goalEntries|isActiveGoal/.test(src("services/relevance.ts")) && !/goalEntries|isActiveGoal/.test(src("services/askLifecycle.ts")));
+  check("REGRESSION: a goal never produces a SEARCH: the ask sweep reads ask_checkins only, and a goal has no row there", /FROM ask_checkins ac\s+JOIN users u/.test(src("jobs/index.ts")) && /WHERE ac\.resolved_at IS NULL AND ac\.kind IN \('find', 'person'\)\s+AND u\.archived_at IS NULL/.test(src("jobs/index.ts")) && !/goalEntries|isActiveGoal/.test(src("jobs/index.ts")) && !/goalEntries|isActiveGoal/.test(src("services/relevance.ts")) && !/goalEntries|isActiveGoal/.test(src("services/askLifecycle.ts")));
   check("REGRESSION: and the check-in cron reads ask_checkins only", /FROM ask_checkins ac\s+JOIN users u ON u\.id = ac\.user_id\s+LEFT JOIN \(/.test(src("jobs/index.ts")));
 }
 // (b) an answered ask produces neither
@@ -102,7 +102,7 @@ check("an ask can reference the goal it serves: ask_checkins.serves_goal_id exis
   A.setAskDepsForTests({ openAsks: async () => [], conversation: async () => [], delivered: async () => null, judge: async () => [], close: async () => {}, markChecked: async () => {} } as any);
   const r: any = await proactiveRegistry.ask_checkin.draft({ id: "c1", userId: "u1", type: "ask_checkin", payload: { askCheckinId: "i1", askId: "a1", askText: answeredRow.ask_text, checkinCount: 0, hasMatches: false } } as any, { firstName: "Jordan", userId: "u1" } as any);
   check("REGRESSION: an answered (closed) ask produces no check-in and no model call", !!r.skip && drafted === 0 && A.askState(answeredRow as any) === "closed");
-  check("REGRESSION: and no search: a closed ask is not in the ask sweep's read (resolved_at IS NULL)", /WHERE ac\.resolved_at IS NULL AND ac\.kind = 'find'/.test(src("jobs/index.ts")));
+  check("REGRESSION: and no search: a closed ask is not in the ask sweep's read (resolved_at IS NULL)", /WHERE ac\.resolved_at IS NULL AND ac\.kind IN \('find', 'person'\)\s+AND u\.archived_at IS NULL/.test(src("jobs/index.ts")));
   P.setProactiveModelForTests(null);
   A.setAskDepsForTests(null);
 }

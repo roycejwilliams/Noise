@@ -85,10 +85,20 @@ export function samePhrasing(a: string, b: string): boolean {
 export type QuerySource = "web" | "x" | "events";
 
 // Pure: what's wrong with a query, in words Co can act on. Empty: it may run.
-export function queryProblems(q: string, o: { terms: string[]; source: QuerySource; otherSourceQueries?: string[] }): string[] {
+// Who someone is (gender, age bracket, faith, ethnicity, sexuality, parenthood) is never assumed in a search (Royce, 2026-10-09: "drop my
+// guard" was searched as "men's circle vulnerability sharing"). A group word goes in a query only when their own ask says it.
+const IDENTITY_TERMS = /\b(?:men'?s|women'?s|male|female|mens|womens|guys?'?|girls?'?|ladies|moms?|mothers?|dads?|fathers?|parents?|gay|lesbian|queer|lgbtq\+?|trans|black|latin[oax]s?|latine|asian|christian|muslim|jewish|catholic|seniors?|20s|30s|40s|50s|twenty-?somethings|millennials?|gen z|veterans?)\b/gi;
+export function assumedIdentity(query: string, theirWords: string): string[] {
+  const said = theirWords.toLowerCase();
+  return [...new Set((query.match(IDENTITY_TERMS) ?? []).map((w) => w.toLowerCase()))].filter((w) => !said.includes(w.replace(/'?s$/, "")));
+}
+
+export function queryProblems(q: string, o: { terms: string[]; source: QuerySource; otherSourceQueries?: string[]; theirWords?: string }): string[] {
   const out: string[] = [];
   const text = q.trim();
   if (!text) return ["it's empty"];
+  const assumed = o.theirWords !== undefined ? assumedIdentity(text, o.theirWords) : [];
+  if (assumed.length) out.push(`it assumes who they are (${assumed.join(", ")}), which their ask doesn't say: search for the thing itself`);
   // Whole words only, never inside a hyphenated word ("Co" is not in "co-working"). A one-word term matches case as written (a name
   // is capitalized; "events" is not "Events"); a longer one matches in any case.
   const hits = o.terms.filter((t) => new RegExp(`(^|[^\\w-])${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[^\\w-])`, /\s/.test(t) ? "i" : "").test(text));
@@ -115,14 +125,15 @@ export type Looked = { source: LedgerSource; url: string; query?: string };
 
 export class QueryLedger {
   readonly queries: QueryLog[] = [];
-  constructor(private terms: string[]) {}
+  // theirWords: the ask, in their words: the only source a group word in a query may come from (assumedIdentity).
+  constructor(private terms: string[], private theirWords?: string) {}
   private asked(source: LedgerSource): string[] {
     return this.queries.filter((x) => x.source === source && !x.refused).map((x) => x.query);
   }
   // Problems for a query before it runs (it's refused and logged when there are any). X and web are checked against each other.
   check(source: LedgerSource, query: string): string[] {
     const other = source === "x" ? this.asked("web") : source === "web" ? this.asked("x") : [];
-    const bad = queryProblems(query, { terms: this.terms, source, otherSourceQueries: other });
+    const bad = queryProblems(query, { terms: this.terms, source, otherSourceQueries: other, theirWords: this.theirWords });
     if (bad.length) this.queries.push({ source, query: query.slice(0, 200), results: 0, kept: 0, passed: 0, refused: bad });
     return bad;
   }

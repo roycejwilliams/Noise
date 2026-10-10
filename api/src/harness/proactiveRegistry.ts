@@ -157,7 +157,7 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
     task: !went && !isOpportunity
       ? `Co only suggested "${p.eventName}" to them; nothing says they went. Ask, lightly, whether they ended up making it, naming it. Never assume they went: no "how was it", no "who did you meet". One easy question, no pressure either way.`
       : isOpportunity
-      ? `Ask if they got a chance to look into or apply to "${p.eventName}" (a real opportunity Co pointed them to on the date above, not an event) — did anything come of it. If what Co said about it shows it's still ahead of today, SKIP. One text, not a survey.`
+      ? `Ask if they got a chance to look into or apply to "${p.eventName}" (an opening Co pointed them to on the date above, not an event) — did anything come of it. If what Co said about it shows it's still ahead of today, SKIP. One text, not a survey.`
       : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Co pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
   });
   if (!text) return skip("model chose SKIP");

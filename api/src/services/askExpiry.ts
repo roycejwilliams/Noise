@@ -37,9 +37,20 @@ export async function expireStaleAsks(): Promise<{ backfilled: number; expired: 
     const expiresAt = await askExpiresAtForUser(row.user_id, row.ask_text, new Date(row.created_at));
     await pool.query(`UPDATE ask_checkins SET expires_at = $2 WHERE id = $1`, [row.id, expiresAt]);
   }
-  const { rowCount } = await pool.query(
-    `UPDATE ask_checkins SET resolved_at = NOW(), expired_at = NOW(), closed_reason = COALESCE(closed_reason, 'expired')
-     WHERE resolved_at IS NULL AND expires_at IS NOT NULL AND expires_at <= NOW()`,
+  // Each one leaves the working set with its fact in their record first (services/workingSet.ts): the date it was tied to passed.
+  const { rows: due } = await pool.query(
+    `SELECT id, user_id, ask_text, expires_at FROM ask_checkins WHERE resolved_at IS NULL AND expires_at IS NOT NULL AND expires_at <= NOW() LIMIT 500`,
   );
-  return { backfilled: missing.length, expired: rowCount ?? 0 };
+  const { writeExitFact } = await import("./workingSet.js");
+  let expired = 0;
+  for (const r of due) {
+    const ok = await writeExitFact({ userId: r.user_id, kind: "ask", itemKey: `ask:${r.id}`, label: String(r.ask_text ?? ""), state: "expired", reason: `the time it was for passed (${new Date(r.expires_at).toISOString().slice(0, 10)})`, scope: "this ask only; saying it again opens a new one" });
+    if (!ok) continue;
+    const { rowCount } = await pool.query(
+      `UPDATE ask_checkins SET resolved_at = NOW(), expired_at = NOW(), closed_reason = COALESCE(closed_reason, 'expired') WHERE id = $1 AND resolved_at IS NULL`,
+      [r.id],
+    );
+    expired += rowCount ?? 0;
+  }
+  return { backfilled: missing.length, expired };
 }

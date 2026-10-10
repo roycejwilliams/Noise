@@ -36,6 +36,18 @@ export type CoFact = {
 
 const key = (f: Pick<CoFact, "label" | "url">) => (f.url ? f.url.trim() : f.label.toLowerCase().replace(/\s+/g, " ").trim()).slice(0, 300);
 
+// The same write, for a caller that must know it landed before it acts (services/workingSet.ts: an item leaves the working set only
+// after its fact is in the member's record). Throws when it didn't.
+export async function recordFactChecked(f: CoFact): Promise<void> {
+  if (!f.ownerUserId || !f.label?.trim()) throw new Error("a fact needs an owner and a label");
+  await pool.query(
+    `INSERT INTO co_facts (owner_user_id, subject, relation, object_label, object_key, url, visibility, source, happened_at, meta)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, NOW()), $10::jsonb)
+     ON CONFLICT (owner_user_id, relation, object_key, happened_at) DO NOTHING`,
+    [f.ownerUserId, f.subject, f.relation, f.label.trim().slice(0, 500), key(f), f.url ?? null, f.visibility, f.source, f.happenedAt ?? null, JSON.stringify(f.meta ?? {})],
+  );
+}
+
 // Never throws: a fact that can't be written must never break a send.
 export async function recordFact(f: CoFact): Promise<void> {
   if (!f.ownerUserId || !f.label?.trim()) return;

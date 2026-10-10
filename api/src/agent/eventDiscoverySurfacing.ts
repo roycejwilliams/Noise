@@ -1,4 +1,5 @@
 import type { TierMatch } from "../services/tieredRecommendation.js";
+import { formLabel } from "../services/findForm.js";
 import { CO_WHY } from "../services/coVoice.js";
 import { draftAgain, draftProactive, nameTokens, type Facts, type OutputRules } from "../harness/proactive.js";
 import { renderEventDetails } from "../services/eventDetails.js";
@@ -37,8 +38,10 @@ export function describeAsk(askText: string, fromProfile: boolean): string {
 // they asked or were looking: "you mentioned wanting X" ties it to their goal truthfully and passes (review of #128).
 export const CLAIMS_THEY_ASKED = { pattern: /\byou(?:'d| had)? asked\b|\byou (?:wanted|asked) me to\b|\b(?:like|as) you (?:asked|requested|wanted)\b|\bper your (?:ask|request)\b|\byou(?:'re| are|'ve been| have been| were) (?:looking|searching|hunting) for\b|\byou were looking\b|\bthe (?:\w+ )?you asked (?:me )?(?:about|for)\b/i, reason: "says they asked for it or were looking for it, and they didn't: Co noticed it for them" };
 
-function kindLabel(match: TierMatch): string {
-  return match.kind === "co_event" ? "a Co event" : match.kind === "public_event" ? "a public event" : "a real opportunity";
+// What it is, from its form (services/findForm.ts): "an event on Saturday", "an opening, applications close Friday", never the
+// generic "a real opportunity" (Royce, 2026-10-09).
+function kindLabel(match: TierMatch, zone: string | null = null): string {
+  return formLabel(match, zone);
 }
 
 function matchFacts(askText: string, fromProfile: boolean, match: TierMatch): Facts {

@@ -9,7 +9,9 @@ import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 
-export type AskKind = "find" | "help";
+// "person": someone to meet or talk to ("a founder who's done a pre-seed raise to talk to"), which only an intro can meet, never a
+// search of events and pages (Royce, 2026-10-09: that ask came back empty five mornings running). Routed to intros, not swept.
+export type AskKind = "find" | "help" | "person";
 
 // Co's own deliverables and promises are not asks (2026-10-08): "plan will be
 // delivered once ready" and "I'll send the outline tonight" were saved as
@@ -41,7 +43,11 @@ Answer "help" only if it's asking Co to work something out with them: advice, de
 
 Answer "help" as well when it isn't something to find at all: something Co said it would do or deliver (a plan, a draft, a text, an intro), a status ("will be delivered once ready"), or a statement of what they're doing themselves (offering to partner with a company, launching, hosting, a deal in progress) with nothing in it to go and find.
 
-Answer with one word: find or help.`;
+Answer "help" too when it asks Co to take an action for them (email, call, text, book, reserve, contact someone or somewhere): that's something to do, not something to find.
+
+Answer "person" if it's asking for one particular kind of person to meet or talk to one on one (an advisor, a founder who has done something, a mentor, someone to introduce them to). People in general (a community, friends, a crowd to be around) are "find".
+
+Answer with one word: find, help or person.`;
 }
 
 export async function classifyAsk(text: string): Promise<AskKind> {
@@ -57,7 +63,8 @@ export async function classifyAsk(text: string): Promise<AskKind> {
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 4000)),
     ]);
-    return out.trim().toLowerCase().startsWith("help") ? "help" : "find";
+    const w = out.trim().toLowerCase();
+    return w.startsWith("help") ? "help" : w.startsWith("person") ? "person" : "find";
   } catch {
     // When unsure, keep searching it, as before.
     return "find";
@@ -66,11 +73,17 @@ export async function classifyAsk(text: string): Promise<AskKind> {
 
 // Marks open asks that haven't been classified yet (older asks, or one whose
 // check timed out). Run before each morning sweep.
+// ASK_KIND_VERSION: open find asks classified under an older prompt are read again once (2026-10-09: person asks and action requests
+// were saved as find asks and searched every morning).
+export const ASK_KIND_VERSION = 2;
 export async function classifyOpenAsks(limit = 25): Promise<number> {
-  const { rows } = await pool.query(`SELECT id, ask_text FROM ask_checkins WHERE resolved_at IS NULL AND kind_checked_at IS NULL LIMIT $1`, [limit]);
+  const { rows } = await pool.query(
+    `SELECT id, ask_text FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR (kind = 'find' AND COALESCE(kind_version, 1) < $2)) LIMIT $1`,
+    [limit, ASK_KIND_VERSION],
+  );
   for (const r of rows) {
     const kind = await classifyAsk(r.ask_text);
-    await pool.query(`UPDATE ask_checkins SET kind = $2, kind_checked_at = NOW() WHERE id = $1`, [r.id, kind]).catch(() => {});
+    await pool.query(`UPDATE ask_checkins SET kind = $2, kind_checked_at = NOW(), kind_version = $3 WHERE id = $1`, [r.id, kind, ASK_KIND_VERSION]).catch(() => {});
   }
   // Open "find" asks saved before the guard above that are Co's own promise
   // or deliverable stop being searched (no model call; the ask stays open).

@@ -269,7 +269,18 @@ export async function goalStates(userId: string): Promise<Map<string, GoalStateR
 }
 
 // A context set-aside waits to be told (told_at NULL); one Co or the member made in conversation is already said.
+// A goal leaving the working set (done, or set aside as stale) writes its fact first (services/workingSet.ts), with the reason it
+// left and its scope; going back to active writes none.
 export async function setGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]): Promise<void> {
+  const prior = await pool.query(`SELECT state FROM goal_states WHERE user_id = $1 AND goal_hash = $2`, [userId, goalHash(goal)]).then((r) => r.rows[0]?.state ?? "active").catch(() => "active");
+  if (state !== "active" && prior !== state) {
+    const { writeExitFact } = await import("./workingSet.js");
+    const ok = await writeExitFact({ userId, kind: "goal", itemKey: `goal:${goalHash(goal)}`, label: goal, state: state === "done" ? "fulfilled" : "expired", reason: reason?.trim() || (state === "done" ? "they said it's done" : "set aside"), scope: "this goal only; saying it again makes it current" });
+    if (!ok) return;
+  }
+  await writeGoalState(userId, goal, state, reason, source);
+}
+async function writeGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]): Promise<void> {
   await pool.query(
     `INSERT INTO goal_states (user_id, goal_hash, goal_text, state, reason, source, changed_at, told_at, hints)
      VALUES ($1, $2, $3, $4, $5, $6, NOW(), CASE WHEN $6 = 'context' AND $4 <> 'active' THEN NULL ELSE NOW() END, 0)

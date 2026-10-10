@@ -118,7 +118,7 @@ A.setAskDepsForTests(null);
 // ---- a closed ask produces nothing, anywhere
 check("the check-in re-checks the ask at send time, before it writes a word", /checkinGate\(c\.userId, \(c\.payload as AskCheckinPayload\)\.askCheckinId\);\s*if \(!gate\.ok\) return skip\(gate\.why\);\s*const r = await draftAskCheckin/.test(src("harness/proactiveRegistry.ts")));
 check("offers re-check too: event offers and network teases both skip a closed ask", /askStillOpen\(p\.askId\)\)\) return skip\("their ask has since closed"\)/.test(src("harness/proactiveRegistry.ts")) && /askIsOpenRef\(c\.userId, c\.payload\.askId\)\)\) return skip\("their ask has since closed"\)/.test(src("harness/proactiveRegistry.ts")));
-check("searching: the sweep only reads asks that are not resolved", /WHERE ac\.resolved_at IS NULL AND ac\.kind = 'find'/.test(src("jobs/index.ts")));
+check("searching: the sweep only reads asks that are not resolved", /WHERE ac\.resolved_at IS NULL AND ac\.kind IN \('find', 'person'\)\s+AND u\.archived_at IS NULL/.test(src("jobs/index.ts")));
 check("the 7-day check-in cron only reads asks that are not resolved", /WHERE ac\.resolved_at IS NULL AND u\.sms_opted_out = false/.test(src("jobs/index.ts")));
 check("nothing ever reopens a closed ask by itself (their restating makes a new one)", !/resolved_at = NULL|resolved_at=NULL|closed_reason = NULL/.test(["services/askKind.ts", "services/askExpiry.ts", "services/askLifecycle.ts", "services/profileExtraction.ts"].map(src).join("\n")));
 

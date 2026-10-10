@@ -9,6 +9,7 @@ import { enrichMatch } from "./eventDetails.js";
 import { getEmotionalContext, renderEmotionalContext, roomPreferenceFromFeelings } from "../harness/emotion.js";
 import { sweepFind } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
+import { classifyFind, eventDateOf, formOf, lifeEndOf } from "./findForm.js";
 import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
 
@@ -191,10 +192,12 @@ async function saveBacklog(userId: string, askId: string, items: BacklogItem[]):
 // just didn't say) has nothing to check here, same as before.
 const SHORT_NOTICE_DAYS = 1;
 
+// The date a find is about: an event's date (wherever the find carries it: event_date, details, or the stated dates a web find
+// brings), else an opening's deadline (services/findForm.ts). A web event's statedDates used to be ignored here, so a past one never
+// counted as past (2026-10-09: Hardly Strictly from Oct 3 was still judged a week later).
 function relevantDate(match: TierMatch): string | null {
-  if ("event_date" in match) return match.event_date;
-  if ("deadline" in match && match.deadline) return match.deadline;
-  return null;
+  if (formOf(match as any) === "opening") return ("deadline" in match && match.deadline) || null;
+  return eventDateOf(match) ?? (("deadline" in match && match.deadline) || null);
 }
 
 // Days from their today (in their zone, else Pacific; never the server's UTC day, which turns over at 5pm Pacific) to a date.
@@ -205,7 +208,8 @@ function daysUntilDate(dateStr: string, zone: string | null = null, now = new Da
 }
 
 export function isPastEvent(match: TierMatch, zone: string | null = null, now = new Date()): boolean {
-  const date = relevantDate(match);
+  // Past once its useful life is over: an event's last day (a festival runs to its end), an opening's deadline.
+  const date = lifeEndOf(match) ?? relevantDate(match);
   return date !== null && daysUntilDate(date, zone, now) < 0;
 }
 
@@ -465,13 +469,28 @@ export function matchKey(match: TierMatch): string {
   return "event_api_id" in match ? `event:${match.event_api_id}` : `opportunity:${match.name.toLowerCase().trim()}`;
 }
 
+// Clears a failed attempt's row (status skipped with a failed draft or send) so the thing can be queued again.
+export async function reopenFailedAttempt(userId: string, targetKey: string): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT id, skip_reason FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`, [userId, targetKey]);
+  const { isFailedAttempt } = await import("./workingSet.js");
+  const failed = rows.filter((r: any) => isFailedAttempt(r.skip_reason));
+  if (!failed.length || failed.length !== rows.length) return false;
+  await pool.query(`DELETE FROM proactive_candidates WHERE user_id = $1 AND id = ANY($2::bigint[]) AND status <> 'pending'`, [userId, failed.map((r: any) => r.id)]);
+  return true;
+}
+
 // The harness already sent, skipped, or expired this one for this person.
+// A failed attempt (a draft that failed its checks, a send that failed) is not a decision: only a sent text or a member-visible
+// outcome closes a find (Royce, 2026-10-09: a failed Oct 6 draft kept the Extraordinary Founders Dinner out for good). An exited find
+// (services/workingSet.ts) is decided whatever its row says: it's inert and never re-queued.
 async function alreadyDecided(userId: string, item: Pick<BacklogItem, "match" | "reminder" | "again">): Promise<boolean> {
   const { rows } = await pool.query(
-    `SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`,
+    `SELECT skip_reason FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`,
     [userId, offerTargetKey(item)],
   );
-  if (rows.length) return true;
+  const { decidedByRows, exitedFindKeys } = await import("./workingSet.js");
+  if (decidedByRows(rows)) return true;
+  if ((await exitedFindKeys(userId, [matchKey(item.match)]).catch(() => new Set<string>())).size) return true;
   // A reminder for something Co already gave them a deadline heads-up about (services/memberStateNudges.ts, entry
   // deadline:<item key>, queued or sent) would be the same heads-up twice (review of the branch, 2026-10-08).
   if (item.reminder) {
@@ -536,6 +555,40 @@ export const PROMISE_ASK_PREFIX = "promise:";
 // "event_offer" candidate; src/harness/proactive.ts decides whether it goes
 // out and drafts it (a tease, or a direct reveal if it's short notice by
 // then). queued: true when the front item is waiting in the harness.
+// Pure: does a find's useful life end before the next scheduled pick (services/sweepShadow.ts, 10am in their zone)?
+export const PICK_HOUR = 10;
+export function endsBeforeNextPick(match: TierMatch, zone: string | null, now = new Date()): boolean {
+  const end = lifeEndOf(match);
+  if (!end) return false;
+  const z = zone && DateTime.now().setZone(zone).isValid ? zone : "America/Los_Angeles";
+  const local = DateTime.fromJSDate(now).setZone(z);
+  const next = (local.hour < PICK_HOUR ? local : local.plus({ days: 1 })).set({ hour: PICK_HOUR, minute: 0, second: 0, millisecond: 0 });
+  return DateTime.fromISO(end, { zone: z }).endOf("day") < next;
+}
+
+// New finds, settled before they enter the backlog: classified (a dated event or an opening), and out when they're past, undated
+// events, or already exited.
+async function settleNewFinds(userId: string, items: BacklogItem[], today: string, askText: string): Promise<BacklogItem[]> {
+  const W = await import("./workingSet.js");
+  const exited = await W.exitedFindKeys(userId, items.map((i) => matchKey(i.match))).catch(() => new Set<string>());
+  const out: BacklogItem[] = [];
+  for (const it of items) {
+    if (exited.has(matchKey(it.match))) continue;
+    const c = formOf(it.match as any) ? { match: it.match, result: "known" as const } : await classifyFind(it.match, today).catch(() => ({ match: it.match, result: "unknown" as const }));
+    const match = c.match as TierMatch;
+    const end = lifeEndOf(match);
+    // A page that couldn't be read is tried again on a later sweep (no exit on a fetch failure); one read with no date for an event, or
+    // a past date, exits on that fact.
+    if (c.result === "unknown") continue;
+    if (c.result === "undated" || (end && end < today)) {
+      await W.writeExitFact({ userId, kind: "find", itemKey: matchKey(match), label: match.name, state: "expired", reason: end && end < today ? `its date (${end}) had already passed when it was found` : "its page doesn't say when it is", scope: `this find, for: ${askText.slice(0, 100)}` });
+      continue;
+    }
+    out.push({ ...it, match });
+  }
+  return out;
+}
+
 export async function attemptEventSurfacing(candidate: SurfacingCandidate): Promise<{ queued: boolean; fed?: boolean }> {
   // Search every day, not only when the backlog is empty, and merge
   // anything new behind what's already queued. Urgent items (happening
@@ -543,7 +596,14 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // Their zone (or Pacific): "today", "past" and "short notice" are their days, never the server's.
   const zone = await memberZone(candidate.userId);
   const queued = await dropStaleFront(candidate.userId, await getBacklog(candidate.userId, candidate.askId), zone);
-  const { items: found, trace } = await findFreshPending(candidate, zone);
+  const { items: rawFound, trace } = await findFreshPending(candidate, zone);
+  // What each new find IS, read at capture (services/findForm.ts): a dated event or an opening. An event whose date its page doesn't
+  // state, or one already past, exits with its fact; an exited find found again stays out (services/workingSet.ts).
+  const found = await settleNewFinds(candidate.userId, rawFound, localDay(new Date(), zone), candidate.askText);
+  // Empty runs in a row (the backoff, services/workingSet.ts askSearchDue): a real ask only.
+  if (/^[0-9a-f-]{36}$/i.test(candidate.askId)) {
+    await pool.query(`UPDATE ask_checkins SET empty_runs = CASE WHEN $2 THEN 0 ELSE empty_runs + 1 END WHERE id::text = $1`, [candidate.askId, trace.found.length > 0]).catch(() => {});
+  }
   // A reminder replaces an older queued pitch for the same event.
   const merged = [
     ...queued.filter((q) => !found.some((f) => f.reminder && sameMatch(f.match, q.match))),
@@ -595,6 +655,10 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // (queuePickedOffer), so nothing reaches them that the picker didn't choose.
   if (await pickerDecides(candidate.userId)) {
     await log("act", "fed_to_picker");
+    // A find that ends before the next scheduled pick (10am their time) gets a pick run now, not a day late.
+    if (found.some((f) => endsBeforeNextPick(f.match, zone))) {
+      await import("./sweepShadow.js").then((m) => m.rerunPickerForUrgentFind(candidate.userId)).catch((err: any) => console.error("picker rerun for an urgent find failed (non-fatal):", err?.message ?? err));
+    }
     return { queued: false, fed: true };
   }
 
@@ -702,6 +766,9 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
   // it's worth sending (Royce, 2026-10-09: "Fleet Week should never lose its slot to something that will still exist next week").
   const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   const timeBound = pickPriority(o.lastDay ?? null, zone);
+  // A failed earlier attempt for the same thing re-enters the working set: its row (the queue keeps one per thing) is cleared so this
+  // pick lands in it, instead of the insert quietly doing nothing.
+  await reopenFailedAttempt(userId, offerTargetKey(item));
   const { queued } = await enqueueCandidate({
     userId,
     type: "event_offer",
