@@ -74,7 +74,7 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
   const lines: { where: string; text: string }[] = [
     { where: "title", text: d.title },
     { where: "subtitle", text: d.subtitle },
-    ...d.slides.flatMap((s, i) => [{ where: `slide ${i + 2} headline`, text: s.headline }, ...s.bullets.map((b) => ({ where: `slide ${i + 2}`, text: b }))]),
+    ...d.slides.flatMap((s, i) => [{ where: `slide ${i + 2} headline`, text: s.headline }, ...s.bullets.map((b) => ({ where: `slide ${i + 2}`, text: b })), ...(s.notes ? [{ where: `slide ${i + 2} notes`, text: s.notes }] : [])]),
   ];
   const out: string[] = [];
   for (const l of lines) {
