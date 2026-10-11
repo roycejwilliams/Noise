@@ -538,7 +538,8 @@ export const proactiveRegistry: ProactiveRegistry = {
       const text = await draftProactive({
         functionId: "loopLifecycle.check.draft",
         firstName: person.firstName,
-        facts: { the_thing_they_asked_about: c.payload.title },
+        // A note that came with the loop (services/inboundFile.ts: the file Co couldn't open, and what would work instead).
+        facts: { the_thing_they_asked_about: c.payload.title, ...(typeof c.payload.note === "string" && c.payload.note ? { what_would_work: c.payload.note } : {}) },
         task: "Ask one short, light question: is this still on their plate, or should you let it go? Don't say when it was mentioned, don't say what happened with it, don't promise anything.",
       });
       return text ? { messages: [text], text, rules: { maxSentences: 2, maxChars: 220 } } : skip("model chose SKIP");

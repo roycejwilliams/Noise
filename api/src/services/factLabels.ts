@@ -34,6 +34,10 @@ export const KINDS = {
   exploring: { lifetime: "ephemeral", ttlDays: 10 },
   worry: { lifetime: "ephemeral", ttlDays: 10 },
   pending_decision: { lifetime: "ephemeral", ttlDays: 14 },
+  // Away from home ("I'm traveling", "out of town until the 20th"), 2026-10-11: written the moment they say it (services/away.ts),
+  // ends the day after a date they named, else a week on unless they say it again, and at once when they say they're back. While
+  // it holds, finds tied to where they live wait.
+  away: { lifetime: "ephemeral", ttlDays: 7 },
 } as const;
 export type Kind = keyof typeof KINDS;
 export const KIND_LIST = Object.keys(KINDS) as Kind[];

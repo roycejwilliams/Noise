@@ -49,11 +49,13 @@ check("a PDF is known by its own bytes, not its name or type", F.isPdf(PDF) && !
 }
 {
   const sb = src("routes/sendblue.ts");
-  const intake = sb.slice(sb.indexOf("files.isPdf(fileBytes)"), sb.indexOf("} else {", sb.indexOf("files.isPdf(fileBytes)")));
+  // 2026-10-10: a PowerPoint or Word file is kept the same way as a PDF (services/inboundFile.ts); the checks follow the code.
+  const intake = sb.slice(sb.indexOf("if (isKeepable(fileKind))"), sb.indexOf("} else if (fileKind === \"image\""));
   check("intake: only the member's own inbound file (keepFile with their own user id, from their own message's media)", /files\.keepFile\(user\.id, fileBytes, media_url\)/.test(intake));
-  check("intake: what's recorded of the turn is the file's number, never its name or a word of it", /\[sent a PDF, kept as their file #\$\{kept\.n\}\]/.test(intake) && !/title|summary|text\b/.test(intake.replace(/resolvedContent/g, "")));
-  const fact = sb.slice(sb.indexOf("if (fileKept) {"), sb.indexOf("} else if (fileNotKept)"));
-  check("intake: Co is told only that it's kept and its number, and not to guess what it says", /their file #\$\{fileKept\.n\}/.test(fact) && /don't know what it says/.test(fact) && !/fileText|\.text\b/.test(fact));
+  const IF = await import("../../src/services/inboundFile.js");
+  check("intake: what's recorded of the turn is the file's number, never its name or a word of it", IF.fileRecordNote({ kind: "pdf", kept: { n: 4 } }, false) === "[sent a PDF, kept as their file #4]" && IF.fileRecordNote({ kind: "pptx", kept: { n: 5 } }, true) === "[also sent a PowerPoint deck, kept as their file #5]" && !/title|summary|text\b/.test(intake.replace(/resolvedContent/g, "")));
+  const fact = IF.keptFileFact("pdf", { n: 7, isNew: true });
+  check("intake: Co is told only that it's kept and its number, and not to guess what it says", /their file #7/.test(fact) && /don't know what it says/.test(fact) && /keptFileFact\(fileKept\.kind, fileKept\)/.test(sb) && !/fileText/.test(sb.slice(sb.indexOf("if (fileKept) {"), sb.indexOf("if (fileKept) {") + 400)));
   check("never from a linked account: nothing reads Google Drive or Gmail into a member's files", !/googleapis|accessTokenFor|drive/i.test(src("services/memberFiles.ts").replace(/\/\/.*$/gm, "")));
 }
 

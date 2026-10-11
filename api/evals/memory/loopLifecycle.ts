@@ -108,7 +108,7 @@ check("the reply's loops carry whether Co has them in motion", /AS in_motion FRO
 // ---- wiring
 const ol = src("services/openLoops.ts"), pm = src("services/personModel.ts"), mig = src("db/migrations.ts");
 check("check-ins, tasks, the sweep and calls read loops through the draft filter", /describeLoops\(loops, \{ draftOnly: true, zone \}\)/.test(pm) && /last_confirmed_at, decay_asked_at FROM open_loops/.test(pm));
-check("an expired or date-passed loop is a tombstone the sync never reopens (unless they signal after it)", /closed_reason IN \('co', 'expired', 'date_passed'\)/.test(ol) && /signalAt/.test(ol));
+check("an expired or date-passed loop is a tombstone the sync never reopens (unless they signal after it)", /closed_reason IN \('co', 'expired', 'date_passed', 'answered'\)/.test(ol) && /signalAt/.test(ol));
 check("what Co does at their word confirms a loop; a sync alone doesn't", /updated_at = NOW\(\), last_confirmed_at = NOW\(\)/.test(ol) && !/changed_at = NOW\(\)" : ""\}[^`]*last_confirmed_at = NOW/.test(ol));
 check("the columns exist and old rows start from their last touch", /ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS decay_asked_at/.test(mig) && /SET last_confirmed_at = COALESCE\(updated_at, changed_at, created_at\)/.test(mig));
 check("the decay pass runs with the loop sync", /runLoopDecay\(\)/.test(src("jobs/index.ts")));

@@ -56,6 +56,18 @@ export function outcomeForReaction(reaction: OfferReaction): "interested" | "dec
 export async function recordOfferReaction(userId: string, pending: PendingOfferReaction, reaction: OfferReaction, message: string): Promise<void> {
   await pool.query(`UPDATE revealed_offers SET reaction = $2, reacted_at = NOW() WHERE id = $1`, [pending.id, reaction]);
   await recordSuggestionOutcome(userId, pending.kind, pending.itemKey, pending.itemName, outcomeForReaction(reaction), message.slice(0, 160));
+  // Their answer settles the offer's loop too (services/openLoops.ts settleOfferLoop, 2026-10-11).
+  await import("./openLoops.js").then((L) => L.settleOfferLoop(userId, pending.itemName, reaction, message.slice(0, 160))).catch((err: any) => console.error("offerReactions: settling the offer loop failed (non-fatal):", err?.message ?? err));
+}
+
+// A reaction Co recorded with its own tool (noteReaction) or the catch-up read (reactionCatchup.ts), in the noteReaction words:
+// the same two places the router's path writes, so a sent find answered any way is answered everywhere (2026-10-11, loop 53372:
+// noteReaction wrote the outcome, and neither revealed_offers nor the loop heard about it, so the router still waited on it).
+export const REVEAL_REACTION: Record<string, OfferReaction> = { interested: "interested", going: "already_did_it", went_liked: "already_did_it", went_disliked: "already_did_it", not_for_me: "not_interested" };
+export async function settleSentOffer(userId: string, name: string, reaction: string, note: string | null): Promise<void> {
+  const r = REVEAL_REACTION[reaction];
+  if (r) await pool.query(`UPDATE revealed_offers SET reaction = $3, reacted_at = NOW() WHERE user_id = $1 AND lower(item_name) = lower($2) AND reaction IS NULL`, [userId, name, r]).catch((err: any) => console.error("offerReactions: marking the reveal answered failed (non-fatal):", err?.message ?? err));
+  await import("./openLoops.js").then((L) => L.settleOfferLoop(userId, name, reaction, note)).catch((err: any) => console.error("offerReactions: settling the offer loop failed (non-fatal):", err?.message ?? err));
 }
 
 // What the reply should know, in plain words.

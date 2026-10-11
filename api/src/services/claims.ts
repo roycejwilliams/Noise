@@ -114,7 +114,7 @@ For each thing worth keeping, write one claim:
 - "provenance": "user_said" ONLY if they said it and you can copy a "quote" of at least 8 characters from THEIR words below, exactly as written. Otherwise "co_inferred" (something you concluded) with no quote.
 - "kind": one of ${KIND_LIST.join(", ")}.
   Enduring (who they are): identity, building, relationship (cofounder, partner), city, role, preference.
-  Ephemeral (expires): plan, deadline, meeting, mood, exploring, worry, pending_decision.
+  Ephemeral (expires): plan, deadline, meeting, mood, exploring, worry, pending_decision, away (they're traveling or out of town now).
 - "said_on": the date of the message holding the quote (YYYY-MM-DD).
 A test prompt, a hypothetical, advice they asked for about a made-up situation, or something Co said is NOT a claim about them. Never write a date or a day of the week into "text" unless they wrote it; do not turn a plan into a fact about the present. Skip anything you are not sure they said.
 

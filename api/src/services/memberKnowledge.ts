@@ -187,6 +187,8 @@ export type RawRestraint = {
   lastInboundAt: Date | null;
   // Co's proactive sends since lastInboundAt (not exempt), oldest first.
   unansweredSends: Date[];
+  // They said they're away from home, and it still holds (services/away.ts): finds tied to where they live wait.
+  away?: import("./away.js").AwayState | null;
   // The kind-restraint read itself (services/kindRestraint.ts), for dispatch to sync the learned preference from the same read
   // (Phase A6: dispatch read restraint and emotion a second time); null when it failed and the stored preferences stood in.
   kinds?: { verdicts: Map<ProactiveKind, import("./kindRestraint.js").KindVerdict>; stored: import("./kindRestraint.js").StoredPref[] } | null;
@@ -305,6 +307,14 @@ export const realKnowledgeDeps: KnowledgeDeps = {
       }),
       rows(`SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%')`, [userId]).then((r) => dateOrNull(r[0]?.at)),
     ]);
+    // Away (services/away.ts): their live away claim. A failed read holds nothing (no away), like any other claim read.
+    const away = await rows(`SELECT kind, text, quote, expires_on FROM member_claims WHERE user_id = $1 AND kind = 'away'`, [userId])
+      .then(async (r) => {
+        const A = await import("./away.js");
+        const zone = await (await import("./memberTime.js")).memberZone(userId).catch(() => null);
+        return A.awayFromClaims(r.map((x: any) => ({ kind: String(x.kind), text: String(x.text), quote: x.quote ?? null, expiresOn: x.expires_on ? (x.expires_on instanceof Date ? DateTime.fromJSDate(x.expires_on).toISODate() : String(x.expires_on).slice(0, 10)) : null })), now, zone ?? undefined);
+      })
+      .catch(() => null);
     const sends = await rows(`SELECT sent_at FROM proactive_sends WHERE user_id = $1 AND NOT exempt AND sent_at > COALESCE($2::timestamptz, NOW() - INTERVAL '30 days') AND sent_at <= $3 ORDER BY sent_at`, [userId, inbound, now]);
     return {
       holdUntil: dateOrNull(state?.hold_until),
@@ -316,6 +326,7 @@ export const realKnowledgeDeps: KnowledgeDeps = {
       kinds: kinds.read,
       lastInboundAt: inbound,
       unansweredSends: sends.map((s) => new Date(s.sent_at)),
+      away,
     };
   },
   exchanges: async (userId, o) =>

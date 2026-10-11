@@ -395,7 +395,7 @@ check(
   check("the team's facts say what Mo does, and not to pitch it as new", /Mo is Co's teammate/.test(teamSheetAll) && /don't pitch what Mo already does as a new idea/.test(teamSheetAll) && /never mention Mo to anyone else/.test(teamSheetAll));
   const tools = src("agent/conversationTools.ts");
   check("team-only tools are removed from the tool map for everyone else", /if \(!ctx\.isTeam\) for \(const name of teamOnlyTools\(\)\) delete/.test(tools) && C.teamOnlyTools().includes("handToTeammate"));
-  check("team facts are added only for team members", /if \(await isTeamMember\(userId\)\.catch\(\(\) => false\)\) \{\s*for \(const line of teamSheet\(\)\)/.test(src("harness/replyGrounding.ts")));
+  check("team facts are added only for team members", /if \(await isTeamMember\(userId\)\.catch\(\(\) => false\)\) \{\s*addInstruction\(rf, TEAM_BUILDER_LINE\);\s*for \(const line of teamSheet\(\)\)/.test(src("harness/replyGrounding.ts")));
   // The limit is said as what's true (it can't call other people), without quoting the old wrong phrase: quoted bad examples get copied.
   check("Co knows it texts first, and that it calls them but not other people", /Co texts first, not only when they text/.test(memberSheet) && /can't call other people for them; calling them is something it does/.test(memberSheet) && !/no calls/.test(memberSheet));
   check("any way of saying Co can't call is caught", ["And I can't act for you, no calls, no bookings.", "I can't make calls.", "No phone calls on my end.", "This is just text."].every((t) => G.callDenial(t)));

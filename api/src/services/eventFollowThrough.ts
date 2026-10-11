@@ -115,6 +115,8 @@ export async function theirVoice(userId: string): Promise<string[]> {
         .replace(/^User said:\s*/i, "")
         .replace(/\s*\[(?:Replying to|They also sent a photo)[^\]]*\]/gi, "")
         .replace(/\[sent a photo[^\]]*\]/gi, "")
+        // A file's note (services/inboundFile.ts fileRecordNote) is the record's, not their voice.
+        .replace(/\s*\[(?:also )?sent (?:a|an) [^\]]*\]/gi, "")
         .trim()
         .slice(0, 240),
     )

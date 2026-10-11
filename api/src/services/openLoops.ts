@@ -175,7 +175,8 @@ export async function syncOpenLoops(userId: string, now = new Date()): Promise<{
   try {
     await client.query("BEGIN");
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('open_loops:' || $1))`, [userId]);
-    const { rows: existing } = await client.query(`SELECT * FROM open_loops WHERE user_id = $1 AND (closed_at IS NULL OR closed_reason IN ('co', 'expired', 'date_passed'))`, [userId]);
+    // 'answered': an offer loop their reply settled (settleOfferLoop); like Co's own close, a tombstone the next sync keeps closed.
+    const { rows: existing } = await client.query(`SELECT * FROM open_loops WHERE user_id = $1 AND (closed_at IS NULL OR closed_reason IN ('co', 'expired', 'date_passed', 'answered'))`, [userId]);
     const byKey = new Map(existing.map((r: any) => [`${r.source}:${r.source_ref}`, r]));
     for (const d of derived) {
       const key = `${d.source}:${d.sourceRef}`;
@@ -453,4 +454,31 @@ export async function confirmMentioned<T extends { id: number; title: string; de
   await pool.query(`UPDATE open_loops SET last_confirmed_at = NOW() WHERE user_id = $1 AND id = ANY($2::bigint[]) AND closed_at IS NULL`, [userId, ids]).catch((err: any) => console.error("openLoops: confirming mentioned loops failed:", err?.message ?? err));
   const now = new Date();
   return rows.map((r) => (ids.includes(r.id) ? { ...r, lastConfirmedAt: now } : r));
+}
+
+// ---------------------------------------------------------------- an offer they answered
+// Loop 53372 (2026-10-11): Co sent Jacqueline SF Social Club, she answered ("interested when im back in sf"), Co's noteReaction
+// recorded how it landed, and the loop still said "waiting on how it landed". Nothing tied a reaction to its loop: the offer loop
+// closes only when its proactive_candidates row leaves 'sent', and a reaction never touches that row. Now the reaction settles the
+// loop itself, closed with the answer as its detail. 'answered' is a tombstone the sync keeps closed (syncOpenLoops above).
+export const OFFER_TITLE_PREFIX = "Sent them ";
+// Pure: the open offer loops a reaction to `name` settles, by the title deriveLoops gives them or their source key's name.
+export function offerLoopsFor<T extends { source: string; sourceRef: string; title: string; closedAt?: Date | null }>(rows: T[], name: string): T[] {
+  const n = name.trim().toLowerCase();
+  if (!n) return [];
+  return rows.filter((r) => r.source === "offer" && !r.closedAt && (r.title.trim().toLowerCase() === `${OFFER_TITLE_PREFIX}${n}`.toLowerCase() || r.sourceRef.toLowerCase().endsWith(`:${n}`)));
+}
+export function offerLoopDetail(reaction: string, note: string | null | undefined): string {
+  return `they answered: ${reaction.replace(/_/g, " ")}${note ? ` ("${note.slice(0, 160)}")` : ""}`;
+}
+export async function settleOfferLoop(userId: string, name: string, reaction: string, note: string | null = null, db: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<number[]> {
+  const { rows } = await db.query(`SELECT id, source, source_ref, title, closed_at FROM open_loops WHERE user_id = $1 AND source = 'offer' AND closed_at IS NULL`, [userId]);
+  const hits = offerLoopsFor(rows.map((r: any) => ({ id: Number(r.id), source: String(r.source), sourceRef: String(r.source_ref), title: String(r.title), closedAt: r.closed_at ? new Date(r.closed_at) : null })), name);
+  if (!hits.length) return [];
+  await db.query(
+    `UPDATE open_loops SET status = 'done', status_by = 'code', detail = $3, changed_at = NOW(), seen_at = NOW(), updated_at = NOW(), last_confirmed_at = NOW(), closed_at = NOW(), closed_reason = 'answered'
+     WHERE user_id = $1 AND id = ANY($2::bigint[]) AND closed_at IS NULL`,
+    [userId, hits.map((h) => h.id), offerLoopDetail(reaction, note)],
+  );
+  return hits.map((h) => h.id);
 }
