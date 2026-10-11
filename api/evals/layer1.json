@@ -112,6 +112,7 @@
     "evals/calls/spokenGrounding.ts",
     "evals/docs/document.ts",
     "evals/docs/googleDocs.ts",
+    "evals/docs/googleAuditFixes.ts",
     "evals/docs/memberFiles.ts",
     "evals/mo/memberGate.ts",
     "evals/presence/readoutFlow.ts",
