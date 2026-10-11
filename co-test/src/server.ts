@@ -30,6 +30,7 @@ import { createGoogleRouter } from "../../api/src/routes/google.js";
 import { createReadoutRouter } from "../../api/src/routes/readout.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
+import { authLimiter, limiter } from "../../api/src/middleware/rateLimiter.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -55,6 +56,8 @@ async function main() {
   runTestMigrations();
 
   const app = express();
+  // Behind Railway's proxy: the client's address is the first hop, so the rate limits below count per visitor, not per proxy.
+  app.set("trust proxy", 1);
   app.use(trackRequests); // a restart waits for requests mid-flight (services/shutdown.ts)
   // ElevenLabs signs the post-call webhook over the exact raw body
   // (api/src/services/elevenLabsCalls.ts): a parsed-then-stringified body isn't
@@ -90,6 +93,13 @@ async function main() {
 
 
   app.get("/health", (_req, res) => res.status(200).send("ok"));
+
+  // Rate limits (security review, 2026-10-11): co-test had none. The public pages anyone can open without signing in are limited
+  // (100 per 15 minutes per address), and starting a sign-in to 10. The signed-in dashboard polls every few seconds and is behind
+  // its login, and webhooks (Sendblue, Twilio, ElevenLabs, Luma, Resend) and the media Twilio and Sendblue fetch (/audio,
+  // /plan-file, /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
+  app.use(["/i", "/readout", "/google", "/mo/unsubscribe"], limiter);
+  app.use("/api/login/start", authLimiter);
 
   // Serves Co's vCard so Sendblue can attach it to the real onboarding
   // "intro" text (see api/src/routes/sendblue.ts's identity_captured/

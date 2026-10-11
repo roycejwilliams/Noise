@@ -3,7 +3,7 @@ import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 import { getLiveSnapshot, issueSocketToken } from "../services/liveCallState.js";
 import { triggerCallForUser } from "../../../api/src/services/callTrigger.js";
-import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
+import { requireOwnOrTeam, requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
 
@@ -54,7 +54,7 @@ router.post("/session", async (req: Request, res: Response, next: NextFunction) 
 // to mean at any point — call_status='completed' already implies this today
 // (see webhooks.ts's chat_ended handler), but the client checks this field
 // directly rather than trusting that invariant to hold forever.
-router.get("/:user_id/status", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/:user_id/status", requireOwnOrTeam("user_id"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const result = await pool.query(
       `SELECT u.identity_captured, u.call_sid, u.call_status, u.test_case,
@@ -78,7 +78,7 @@ router.get("/:user_id/status", async (req: Request, res: Response, next: NextFun
 // whatever it's already rendered, so calling this redundantly (e.g. right
 // after a socket reconnect even if nothing was actually missed) is always
 // safe — events are idempotent by seq, never re-applied.
-router.get("/:user_id/live-state", (req: Request, res: Response) => {
+router.get("/:user_id/live-state", requireOwnOrTeam("user_id"), (req: Request, res: Response) => {
   const snapshot = getLiveSnapshot(String(req.params.user_id));
   return res.status(200).json({ success: true, ...snapshot });
 });
@@ -87,7 +87,7 @@ router.get("/:user_id/live-state", (req: Request, res: Response) => {
 // belongs to. Works for both real-phone sessions and the original browser-EVI
 // sessions (same users table either way) — see also the /api/session route's
 // generic tag handling for the browser flow.
-router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/:user_id/tag", requireOwnOrTeam("user_id"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { test_case } = req.body as { test_case?: string };
     if (!isTestCase(test_case)) {
@@ -107,7 +107,7 @@ router.post("/:user_id/tag", async (req: Request, res: Response, next: NextFunct
 // come back to THIS service, writing to co-test's own DB. Gated on
 // identity_captured — text-in-first, then name/email, only then a real call
 // unlocks (no separate OTP step anymore, matching production).
-router.post("/:user_id/call", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/:user_id/call", requireOwnOrTeam("user_id"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userResult = await pool.query(
       `SELECT identity_captured FROM users WHERE id = $1`,

@@ -12,7 +12,7 @@ import {
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
 import { buildContextSummary } from "../../../api/src/services/callContext.js";
-import { requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
+import { mayReach, requireOwnOrTeam, requireTeam, requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
 
@@ -24,7 +24,7 @@ router.use(requireTesterLoginApi);
 // (both FK'd to users.id) have somewhere to attach. This tool has no login;
 // every page load is a new synthetic test user, isolated from real accounts
 // because it's a different table row in a different (co-test) database.
-router.post("/session", async (_req: Request, res: Response, next: NextFunction) => {
+router.post("/session", requireTeam, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const suffix = crypto.randomUUID().slice(0, 8);
     const result = await pool.query(
@@ -49,7 +49,7 @@ router.post("/session", async (_req: Request, res: Response, next: NextFunction)
 // phone.ts's /api/phone/:user_id/tag — same users.test_case column, works
 // for both browser-EVI and real-phone sessions since both are just rows in
 // the same users table.
-router.post("/session/:sessionId/tag", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/session/:sessionId/tag", requireOwnOrTeam("sessionId"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { test_case } = req.body as { test_case?: string };
     if (!isTestCase(test_case)) {
@@ -92,6 +92,7 @@ router.get("/prompt", async (_req: Request, res: Response, next: NextFunction) =
 router.post("/assess-coverage", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { transcript, user_id } = req.body as { transcript?: string; user_id?: string };
+    if (user_id && !(await mayReach((req as any).testerId, user_id))) return res.status(404).json({ success: false, error: "Session not found." });
     const priorContext = user_id ? await buildContextSummary(user_id).catch(() => "") : "";
     const start = Date.now();
     const assessment = await assessConversationCoverage(transcript ?? "", priorContext);
@@ -121,6 +122,7 @@ router.post("/extract", async (req: Request, res: Response, next: NextFunction) 
     if (!user_id || !transcript?.trim()) {
       return res.status(400).json({ success: false, error: "Missing user_id or transcript." });
     }
+    if (!(await mayReach((req as any).testerId, user_id))) return res.status(404).json({ success: false, error: "Session not found." });
 
     await storeTranscriptMemory(user_id, transcript);
     const { raw, extracted } = await extractPsychographicProfile(transcript);
@@ -154,7 +156,7 @@ router.post("/extract", async (req: Request, res: Response, next: NextFunction) 
 // GET /api/session/:sessionId/results — the results page's reload path. Pulls
 // the stored 'recap' row for this session from the DB rather than any
 // in-memory state, so the URL is a real, revisitable link.
-router.get("/session/:sessionId/results", async (req: Request, res: Response, next: NextFunction) => {
+router.get("/session/:sessionId/results", requireOwnOrTeam("sessionId"), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = String(req.params.sessionId);
     if (!UUID_RE.test(sessionId)) {

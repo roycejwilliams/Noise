@@ -117,6 +117,15 @@ export async function browserPageText(url: string): Promise<string | null> {
     return null;
   }
   if (u.protocol !== "https:" || privateHost(u.hostname)) return null;
+  // Names are resolved too (security review, 2026-10-11): a public-looking name that points at a private address is refused, for
+  // the page and for every request it makes.
+  const { hostIsPublic } = await import("./linkReader.js");
+  const resolved = new Map<string, Promise<boolean>>();
+  const publicHost = (h: string) => {
+    if (!resolved.has(h)) resolved.set(h, hostIsPublic(h.replace(/^\[|\]$/g, "")).catch(() => false));
+    return resolved.get(h)!;
+  };
+  if (!(await publicHost(u.hostname))) return null;
   const release = await slot();
   let context: Awaited<ReturnType<Browser["newContext"]>> | null = null;
   try {
@@ -127,13 +136,14 @@ export async function browserPageText(url: string): Promise<string | null> {
       viewport: { width: 1280, height: 900 },
       javaScriptEnabled: true,
     });
-    await context.route("**/*", (route) => {
+    await context.route("**/*", async (route) => {
       const req = route.request();
       let host = "";
       try {
         host = new URL(req.url()).hostname;
       } catch {}
       if (!/^https?:/.test(req.url()) || privateHost(host) || ["image", "font", "media"].includes(req.resourceType())) return route.abort();
+      if (!(await publicHost(host))) return route.abort();
       return route.continue();
     });
     const page = await context.newPage();
