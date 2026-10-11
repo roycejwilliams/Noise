@@ -983,6 +983,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         if (!match) return { ok: false, error: "That isn't something Co sent them recently." };
         await recordSuggestionOutcome(ctx.userId, match.kind, match.key, match.name, result, note ?? null);
+        // Their answer settles the sent find everywhere it waits: the router's reveal and the offer's loop (2026-10-11, loop 53372).
+        await import("../services/offerReactions.js").then((O) => O.settleSentOffer(ctx.userId, match.name, reaction, note ?? null)).catch(() => {});
         ctx.facts?.add("did_this_turn", `Noted how "${match.name}" landed with them (${reaction.replace(/_/g, " ")}), so Co leans that way next time.`);
         return { ok: true };
       },

@@ -7,6 +7,7 @@
 // What a task may tell them (2026-09-30): web results prove themselves first
 // (services/taskWeb.ts), and a text is drafted only from verified fields, with
 // every number in it backed by them.
+import { awayFromClaims, awayHoldsTask, awayTaskNote, type AwayState } from "./away.js";
 import { deliveryShapeProblems } from "./speakable.js";
 import { CO_VOICE } from "./coVoice.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -81,6 +82,8 @@ export type TaskTurnDeps = {
   recheckOnFile?: (f: OnFile) => Promise<{ ok: true; facts: string[]; checkedAt: string } | { ok: false; why: string; exited: boolean }>;
   // This turn's verified results, kept on the task for its next turn.
   saveFound?: (items: OnFile[]) => Promise<void>;
+  // They said they're away from home (services/away.ts): a text carrying an event the task found waits until they're back.
+  away?: AwayState | null;
 };
 // checkedAt: when its page was last read (Phase B, B5); a find with none is as old as when it was found.
 export type OnFile = { name: string; url: string; tier: number; facts: string[]; checkedAt?: string | null };
@@ -216,6 +219,12 @@ export async function memberSaysGoalDone(goal: string, recent: string): Promise<
   return { done, quote: done ? String(j.quote) : null };
 }
 
+// Pure: a send carries an event the task found (by its link, or its name in the words).
+export function eventInSend(what: string, links: string[], events: { name: string; url: string | null }[]): boolean {
+  const w = what.toLowerCase();
+  return events.some((e) => (!!e.url && links.includes(e.url)) || (e.name.trim().length >= 6 && w.includes(e.name.trim().toLowerCase())));
+}
+
 export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise<{ action: string; did: string[]; texts: string[]; final: boolean; warning?: string | null }> {
   const final = isFinalCheck(task, deps.now());
   // They already said it's done: close it before any work or text.
@@ -274,6 +283,10 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         // Never a failure nobody checked (Royce, 2026-10-09: "the link wasn't working" was invented): leave it off and say nothing.
         if (inventedFailure(what)) return { ok: false, error: "Not sent: it says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
         if (namesRejected(what)) return { ok: false, error: "Not sent: it names something Co's daily pick rejected for them. Leave it off." };
+        // Away (2026-10-11, tasks 164/165 kept looking for SF rooms while Jacqueline was traveling): an event it found, by its link or
+        // its name, is tied to where they live and waits until they're back. Anything else (a role, a program) still goes.
+        // Only a look-out Co started on its own word waits (awayHoldsTask): what they asked for, and owed deliveries, always go.
+        if (deps.away && awayHoldsTask(task) && eventInSend(what, links ?? [], events)) return { ok: false, error: awayTaskNote(deps.away) };
         const asOfNow = texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task;
         // A promise's delivery (its links) is the thing they're owed: the per-task gap after an unanswered question doesn't hold it
         // (review of #129). Anything else still waits on mayText.
@@ -820,6 +833,8 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     personModel: k?.person?.text || undefined,
     knowledge: (k && taskKnowledge(k, { taskId: task.id, zone })) || undefined,
     rules: k ? taskRules(memberRules(k), k) : undefined,
+    // Their live away claim, from the same read (services/away.ts).
+    away: k ? awayFromClaims(k.claims, clock(), zone ?? undefined) : null,
     note: async (text, stepDone) => void (await noteOnTask(userId, task.id, text, stepDone)),
     schedule: async (h, plan) => (await scheduleTask(userId, task.id, h, plan))?.nextCheckAt ?? null,
     scheduleAt: async (at, plan) => (await scheduleTaskAt(userId, task.id, at, plan))?.nextCheckAt ?? null,

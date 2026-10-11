@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import pool from "../db/db.js";
 import type { DocInput } from "./documentSheet.js";
+import { fileKindOf, isKeepable, officeText } from "./inboundFile.js";
 
 export const FILE_LIMITS = { maxBytes: 15_000_000, maxFiles: 20, maxChars: 30_000, readMs: 45_000, draftMs: 60_000 };
 
@@ -69,10 +70,14 @@ const cleanName = (n: string | null | undefined) => {
 
 export type Kept = { ok: true; n: number; isNew: boolean; read: boolean } | { ok: false; why: string };
 
-// A PDF they sent. The same file again is the one already on file (by its hash, per member). Numbered in their own count ("#2").
-export async function keepFile(userId: string, buf: Buffer, urlOrName: string | null, read: (b: Buffer) => Promise<string | null> = transcribePdf): Promise<Kept> {
+// A PDF they sent, or (2026-10-10, Jacqueline's pitch deck) a PowerPoint or Word file, whose text is read in code with no model
+// call (services/inboundFile.ts officeText). The same four rules for all three. The same file again is the one already on file (by
+// its hash, per member). Numbered in their own count ("#2").
+export async function keepFile(userId: string, buf: Buffer, urlOrName: string | null, read?: (b: Buffer) => Promise<string | null>): Promise<Kept> {
   if (buf.length > FILE_LIMITS.maxBytes) return { ok: false, why: "too large to read here" };
-  if (!isPdf(buf)) return { ok: false, why: "not a PDF" };
+  const kind = fileKindOf(buf);
+  if (!isKeepable(kind)) return { ok: false, why: "not a PDF, PowerPoint or Word file" };
+  read ??= kind === "pdf" ? transcribePdf : async (b: Buffer) => officeText(b, kind);
   const sha = createHash("sha256").update(buf).digest("hex");
   const had = await pool.query(`SELECT n, text FROM member_files WHERE user_id = $1 AND sha256 = $2`, [userId, sha]);
   if (had.rows[0]) return { ok: true, n: Number(had.rows[0].n), isNew: false, read: !!had.rows[0].text };
@@ -98,6 +103,12 @@ export async function keepFile(userId: string, buf: Buffer, urlOrName: string | 
 export async function filesOnFile(userId: string): Promise<{ n: number; sentOn: string; read: boolean }[]> {
   const { rows } = await pool.query(`SELECT n, created_at, text IS NOT NULL AS read FROM member_files WHERE user_id = $1 ORDER BY n DESC LIMIT 20`, [userId]);
   return rows.map((r: any) => ({ n: Number(r.n), sentOn: new Date(r.created_at).toISOString().slice(0, 10), read: !!r.read }));
+}
+
+// When their newest file came, within `days` (services/inboundFile.ts fileRecordFact: whether something readable arrived lately).
+export async function lastFileAt(userId: string, days: number): Promise<Date | null> {
+  const { rows } = await pool.query(`SELECT MAX(created_at) AS at FROM member_files WHERE user_id = $1 AND created_at > NOW() - make_interval(days => $2)`, [userId, days]);
+  return rows[0]?.at ? new Date(rows[0].at) : null;
 }
 
 // One of their files' text, by their number, or their newest when no number is given.

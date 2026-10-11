@@ -102,6 +102,34 @@ export function stripSendClaim(sentence: string): string | null {
   if (!t.trim()) return null;
   return t.replace(DONE_LEAD, (_m, tag) => tag ?? "").replace(/^(\[[a-z ]+\]\s*)?([a-z])/, (_m, tag, c) => `${tag ?? ""}${c.toUpperCase()}`);
 }
+// Co placed the call, so thanking them for calling is false (Jacqueline's call, 2026-10-10: "I'm really glad you called", mid-call,
+// on an outbound call). On an outbound call the clause is taken off; a sentence that is only that is dropped. "Glad we got to talk"
+// and "glad you picked up" are true and stay. Inbound calls are untouched.
+// Only about calling Co (review of #140): the verb ends its clause, or takes only "me" and a time word. "Glad you called me out on
+// that", "happy you called Sam back", "glad you reached out to her", "thanks for calling the venue first" are about something else
+// and are never touched.
+const ABOUT_CO_TAIL = String.raw`(?:\s+me)?(?:\s+(?:back|again|today|tonight|just now|earlier|so late|so early))?(?=\s*(?:[.!?,;]|$)|\s+(?:and|but|so|because)\b)`;
+const THANKS_FOR_CALLING = new RegExp(
+  [
+    String.raw`(?:^|[,;]\s*|\s(?:and|but|so)\s+)(?:(?:i'?m|i am)\s+)?(?:(?:really|so|very)\s+)?(?:glad|happy|thrilled|stoked)\s+(?:that\s+)?you\s+(?:called|rang|reached out|gave me a call)${ABOUT_CO_TAIL}`,
+    String.raw`(?:^|[,;]\s*)(?:thanks|thank you|appreciate (?:you|it))\s+(?:so much\s+)?(?:for\s+)?(?:calling|the call|reaching out|ringing)${ABOUT_CO_TAIL}`,
+    String.raw`(?:^|[,;]\s*)(?:(?:it'?s|it is)\s+)?(?:good|nice|great|kind)\s+of\s+you\s+to\s+call${ABOUT_CO_TAIL}`,
+  ].join("|"),
+  "gi",
+);
+// Pure: an outbound call's sentence without "glad you called" / "thanks for calling"; null when nothing is left of it.
+export function thanksForCallingCut(sentence: string): string | null {
+  const flat = sentence.replace(/[’‘]/g, "'");
+  if (!THANKS_FOR_CALLING.test(flat)) return sentence;
+  THANKS_FOR_CALLING.lastIndex = 0;
+  const tag = flat.match(/^(\[[a-z ]+\]\s*)/i)?.[1] ?? "";
+  const rest = flat.slice(tag.length).replace(THANKS_FOR_CALLING, "").replace(/^[\s,;.!-]+/, "").replace(/^(?:and|but|so|because)\s+/i, "").replace(/\s+([,.!?])/g, "$1").trim();
+  THANKS_FOR_CALLING.lastIndex = 0;
+  if (!/[a-z]{2}/i.test(rest.replace(/^(?:honestly|really|so|and|but|hey|oh)[,.!]?$/i, ""))) return null;
+  return `${tag}${rest.replace(/^([a-z])/, (c) => c.toUpperCase())}`;
+}
+export const isOutboundCall = (system: string): boolean => /This call is outbound\b|This call: you called them\b/i.test(system);
+
 // Pure: a question that counts as the turn's one. A short one counts too ("What changed?", "Why not?", "Did you?"); only an
 // interjection ("Honestly?", "Right?") or an echo of their words ("The dinner?") doesn't (2026-10-08 eval: "What changed? Did
 // something just feel different...?" slipped through as two).
@@ -279,6 +307,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   // ("what's on your mind?"), never followed by Co's own topic (2026-10-08 call eval, casual_hello, twice).
   // Only their first words, and only when those don't ask Co something: an answer to "did you find a caterer?" is never cut
   // (review of #114).
+  // Who placed the call (services/elevenLabsCalls.ts callSituation, and the prompt's {{direction}}).
+  const outbound = isOutboundCall(b.messages.filter((m) => m.role === "system" || m.role === "developer").map((m) => textOf(m.content ?? "")).join("\n"));
   const inboundFirst = /This call is inbound\b/i.test(b.messages.filter((m) => m.role === "system").map((m) => textOf(m.content ?? "")).join("\n")) && b.messages.filter((m) => m.role === "assistant" && textOf(m.content ?? "").trim()).length <= 1 && b.messages.filter((m) => m.role === "user").length === 1 && !asksCo(textOf(b.messages[lastAt]?.content ?? ""));
   const sameTurn = lastAt >= 0 && b.messages.slice(lastAt + 1).every((m) => m.role === "tool" || (m.role === "assistant" && !textOf(m.content).trim()));
   const drained = clean && !voiceOnly && sameTurn && memberStateSignal(textOf(b.messages[lastAt].content));
@@ -333,6 +363,17 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (clean && asked && isQuestion && !safetyTurn && !SAFETY_LINE.test(sentence)) {
       deps.onDropped?.(sentence, "a second question in the turn");
       return null;
+    }
+    if (clean && outbound) {
+      const kept = thanksForCallingCut(sentence);
+      if (kept === null) {
+        deps.onDropped?.(sentence, "thanks them for calling on a call Co placed");
+        return null;
+      }
+      if (kept !== sentence) {
+        deps.onDropped?.(sentence, "\"glad you called\" on a call Co placed");
+        return say(s.replace(sentence, kept));
+      }
     }
     if (clean && insistsAfterPushback(theirLast, sentence)) {
       deps.onDropped?.(sentence, "insists they said something they say they didn't");

@@ -137,6 +137,11 @@ export async function isTeamMember(userId: string): Promise<boolean> {
     .catch(() => false);
 }
 
+// The team builds Co (Jacqueline, 2026-10-10 call: Co told its own co-founder "you just described Co... you're a member of Co.
+// That's not a coincidence", as if she were discovering it). users.mo_approver is the team flag; with it, the text reply and the
+// call both say so, so Co never pitches itself to the people building it. Said only to them: about them, never another member.
+export const TEAM_BUILDER_LINE = "They are on the CoPatible team that builds you, Co (a co-founder or teammate). They know what Co is and how it works because they make it. Never pitch Co to them or present Co as something they're discovering, and never treat Co fitting what they describe as a coincidence or a revelation; when what they describe is Co, talk about it as their own work. Everything else is as with any member: their life, their goals, what you're carrying for them.";
+
 // What Co knows about its teammates, as capability facts, for the team only.
 export function teamSheet(): string[] {
   return EXTENSIONS.flatMap((e) => [

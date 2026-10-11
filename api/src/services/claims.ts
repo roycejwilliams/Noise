@@ -38,12 +38,16 @@ export function theirWordsOf(rows: { content: string; created_at: Date | string 
 }
 
 // The model's proposals, checked and finished by code.
+// The kinds the model may propose. "away" is written only by code, from their own latest words (services/away.ts): a model read
+// that rebuilt one could restore a hold they had already ended (review of #140).
+export const MODEL_KINDS = KIND_LIST.filter((k) => k !== "away");
+
 export function finishClaims(proposed: Proposed[], sources: Source[], today: string, zone: string = ZONE): Claim[] {
   const all = sources.map((s) => s.text).join("\n");
   const out: Claim[] = [];
   for (const p of proposed) {
     const text = typeof p.text === "string" ? p.text.trim().slice(0, 240) : "";
-    const kind = KIND_LIST.find((k) => k === p.kind);
+    const kind = MODEL_KINDS.find((k) => k === p.kind);
     if (!text || !kind) continue;
     const wanted: Provenance = p.provenance === "user_said" ? "user_said" : "co_inferred";
     const checked = checkProvenance(wanted, typeof p.quote === "string" ? p.quote : null, all);
@@ -112,7 +116,7 @@ export async function proposeClaims(sources: Source[], held: Claim[], today: str
 For each thing worth keeping, write one claim:
 - "text": one plain sentence about them, third person.
 - "provenance": "user_said" ONLY if they said it and you can copy a "quote" of at least 8 characters from THEIR words below, exactly as written. Otherwise "co_inferred" (something you concluded) with no quote.
-- "kind": one of ${KIND_LIST.join(", ")}.
+- "kind": one of ${MODEL_KINDS.join(", ")}.
   Enduring (who they are): identity, building, relationship (cofounder, partner), city, role, preference.
   Ephemeral (expires): plan, deadline, meeting, mood, exploring, worry, pending_decision.
 - "said_on": the date of the message holding the quote (YYYY-MM-DD).

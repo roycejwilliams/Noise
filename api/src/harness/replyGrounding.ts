@@ -36,7 +36,7 @@ import { carryingBlock, sentDetailHints, sentDetailLines, type TurnContext } fro
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
-import { handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
+import { TEAM_BUILDER_LINE, handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
 import { memberZone, validZone, wordsZone } from "../services/memberTime.js";
@@ -54,6 +54,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { narratesInternalState } from "../services/speakable.js";
+import { arrivalDenial, recordSaysNothingReadable } from "../services/inboundFile.js";
 import { enrichMatch, fetchLumaEventDetails, isLumaLink, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
 import { citesStaleAsCurrent, liveDetailFacts, renderDetailsAsOf, staleCurrentClaims } from "../services/asOf.js";
 import { recentCallCorrections } from "./callGrounding.js";
@@ -193,6 +194,7 @@ export async function gatherReplyFacts(
   // pitches Mo's work back as a new idea (services/extensions.ts teamSheet).
   // Everyone else gets nothing about them.
   if (await isTeamMember(userId).catch(() => false)) {
+    addInstruction(rf, TEAM_BUILDER_LINE);
     for (const line of teamSheet()) addFact(rf, "capability", line);
     // 2026-09-29: with earlier replies in the thread naming Mo beside a cofounder,
     // Co kept doing it (2 to 3 of 3 replays) until it was told plainly, per replay.
@@ -909,7 +911,10 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   if (!emotionLabel.pass) checks.push(emotionLabel);
   // Co's own state said aloud ("still digging", "hit a limit on my end", "working on it"): the same rule calls and proactive texts
   // are held to (services/speakable.ts). Cut like any failed check, redrafted when too little is left (2026-10-08 review F11).
-  const narrated = narratesInternalState(draft);
+  // "It hasn't come through on my end" is about the file they sent, not Co's machinery: allowed when their file record says nothing
+  // readable arrived (services/inboundFile.ts, 2026-10-10 rows 10405/10410), the same fact that backs it in claimChecks below.
+  const nothingReadable = recordSaysNothingReadable(rf.facts);
+  const narrated = narratesInternalState(draft, { allow: (sentence) => nothingReadable && arrivalDenial(sentence) });
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Co's own state instead of what they get (${narrated})` });
   // A stored spot count, time or price said as current when every fact behind it is marked stale (Phase B, B3, services/asOf.ts):
   // say it as of its read, or it's cut. The sentence is quoted so stripUnsupported cuts exactly it.
@@ -956,6 +961,7 @@ Claims to find (one type each):
 Never claims (don't list these):
 - The member's own words and choices from this conversation, restated or built on ("you already called the daytonaio night your pick", "since you said you're in"). The member is never "another person".
 - Opinions, feelings, questions (an offer asked as a question, "Want me to look now?", is a question), encouragement, and how Co will talk ("I'll keep it short").
+- Saying yes to what they just asked ("Happy to.", "Sure.", "Glad to help.", "Let's do it."): that's agreeing, not a capability. Inviting them to send or share something ("Send it over", "Walk me through the key slides") is a request, not a claim.
 - Advice and possibilities: general know-how about how things usually go ("personal invites beat a mass email"); what kind of people events like this tend to draw; where this could take them ("could be a good place to find the dependable builder people you're after"); a plan or schedule Co proposes for them; a conclusion reasoned from the sources ("if Oct 10 is under 30 days out, the permit may not clear").
 
 Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Co about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
@@ -994,10 +1000,25 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
   // A hint (model-written read) is never support, even when cited.
   const factIds = new Set(rf.facts.filter((f) => f.kind !== "hint").map((f) => f.id));
   const hintIds = new Set(rf.facts.filter((f) => f.kind === "hint").map((f) => f.id));
+  const nothingReadable = recordSaysNothingReadable(rf.facts);
   return claims.map((c) => {
     const sources = sourceText(rf, src, c.type);
     let pass = c.supported;
     let reason = `${c.type}: "${c.text}"`;
+    // Agreeing to help is not a capability claim (row 10393, 2026-10-10: "Happy to." was cut as one, and the reply that asked her to
+    // send the deck became "I don't have a solid read on your deck"). Only the bare yes: "Happy to search X" is still a capability.
+    if (!pass && c.type === "capability" && WILLING.test(c.text.trim())) {
+      pass = true;
+      reason += " (agreeing to what they asked, not a capability)";
+      return { name: `claim_${c.type}`, pass, reason };
+    }
+    // "It hasn't come through on my end": true when their file record says nothing readable arrived (services/inboundFile.ts),
+    // whatever the model cited. Never the other way: "it came through" still needs a fact.
+    if (!pass && nothingReadable && arrivalDenial(c.text)) {
+      pass = true;
+      reason += " (their file record shows nothing readable arrived)";
+      return { name: `claim_${c.type}`, pass, reason };
+    }
     if (pass && c.type === "future_promise") {
       const cited = rf.facts.find((f) => f.id === c.factId);
       if (!cited || !["ongoing", "scheduled", "did_this_turn"].includes(cited.kind)) {
@@ -1155,9 +1176,53 @@ export function clashClaim(text: string): boolean {
 const SENTENCES = /(?:[^.!?\n]|[.!?](?=[^\s.!?]))+[.!?]*/g;
 const SENTENCES_SP = /(?:[^.!?\n]|[.!?](?=[^\s.!?]))+[.!?]*\s*/g;
 
+// Bare agreement, the whole claim: "Happy to.", "Sure, glad to help.", "Absolutely, let's do it." (never "Happy to search for X").
+// The agreeing words are required (review of #140: every part was optional, so "", "." and "Sure." matched); "on it" and "count me
+// in" are left out, since they can promise work.
+export const WILLING = /^(?:(?:yes|yeah|yep|sure|absolutely|of course|definitely|for sure)[,.!]?\s*)?(?:(?:i'?m |i am |i'?d be |i would be )?(?:happy|glad|keen) to(?: help)?|(?:i'?d )?love to(?: help)?|let'?s do (?:it|this))[.!]?$/i;
+
+// The raw words of a failed claim, from its reason (`type: "words" (why)`).
+function claimWords(f: GateCheck): string | null {
+  if (!/^claim_/.test(f.name)) return null;
+  return (f.reason ?? "").match(/^[a-z_]+: "([\s\S]*?)"(?:\s*\([^)]*\))*$/)?.[1] ?? null;
+}
+
+// Pure: a sentence with an unsupported claim as its LAST clause, joined by "and" / "so" / "then" or a comma, keeps the clause
+// before it when that clause is a sentence on its own (4+ words) and carries no failed claim itself. Anything else is left whole,
+// for the sentence-level cut. Remove-only: the kept part is the draft's own words, in order.
+export function cutTrailingClaims(sentence: string, failed: GateCheck[]): string {
+  const flat = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'");
+  let out = sentence;
+  for (const f of failed) {
+    const words = claimWords(f);
+    if (!words || words.trim().length < 6) continue;
+    const s = flat(out);
+    const at = s.lastIndexOf(flat(words.trim()).replace(/[.!?]+$/, ""));
+    if (at <= 0) continue;
+    const after = out.slice(at + words.trim().replace(/[.!?]+$/, "").length);
+    if (!/^[\s.!?"')\]]*$/.test(after)) continue;
+    const head = out.slice(0, at).replace(/\s+$/, "");
+    const m = head.match(/^([\s\S]*?)(?:,\s*(?:and|so|then)?|\s+(?:and|so|then))$/i);
+    if (!m) continue;
+    const kept = m[1].replace(/[,;:\s]+$/, "");
+    if (kept.split(/\s+/).filter(Boolean).length < 4) continue;
+    // A head that announces a count or a list ("I found two options for you, the Rosewood supper.") would promise what was cut.
+    if (/\b(?:\d+|two|three|four|five|six|a few|a couple(?: of)?|several|some)\s+(?:\w+\s+)?(?:options?|picks?|places?|events?|ideas?|spots?|ones?|things?|choices?|venues?|rooms?)\b|:\s*$/i.test(kept)) continue;
+    // A head that only sets up the cut part ("If you send it, I'll read it tonight") would dangle: left whole.
+    if (/^\W*(?:if|when|once|as soon as|after|before|because|since|unless|while|until)\b/i.test(kept)) continue;
+    if (failed.some((g) => g !== f && claimWords(g) && flat(kept).includes(flat(claimWords(g)!.trim()).replace(/[.!?]+$/, "")))) continue;
+    const end = /\?\s*$/.test(out) ? "?" : ".";
+    const trail = out.match(/\s*$/)?.[0] ?? "";
+    out = `${kept}${end}${trail}`;
+  }
+  return out;
+}
+
 // Last resort: drop the sentences that carry an unsupported claim.
-export function stripUnsupported(draft: string, failed: GateCheck[]): string {
-  const sentences = draft.match(SENTENCES_SP) ?? [draft];
+export function stripUnsupported(draft: string, failed: GateCheck[], opts: { allow?: (sentence: string) => boolean } = {}): string {
+  // A sentence whose unsupported claim is only its last clause keeps the rest (row 10393, 2026-10-10: "Send over the deck or walk me
+  // through the key slides and I'll give you a real read." lost the invitation with the promise). See cutTrailingClaim.
+  const sentences = (draft.match(SENTENCES_SP) ?? [draft]).map((s) => cutTrailingClaims(s, failed));
   // Strips the leading `type: "` and the trailing `"`, plus ANY trailing
   // parenthetical claimChecks appended after it — not just literally
   // " (cited support not found)" (2026-09-17 code review: a future_promise
@@ -1173,7 +1238,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[]): string {
     if (failed.some((f) => f.name === "no_unknown_clash") && clashClaim(s)) return false;
     if (failed.some((f) => f.name === "no_emotion_label") && !checkNoEmotionLabel(s).pass) return false;
     if (failed.some((f) => f.name === "no_followup_promise") && followupPromiseMatch(s)) return false;
-    if (failed.some((f) => f.name === "no_internal_narration") && narratesInternalState(s)) return false;
+    if (failed.some((f) => f.name === "no_internal_narration") && narratesInternalState(s, opts)) return false;
     if (failed.some((f) => f.name === "no_prediction") && predictionMatch(s)) return false;
     if (failed.some((f) => f.name === "no_result_promise") && resultPromiseMatch(s)) return false;
     if (failed.some((f) => f.name === "no_capability_denial") && (callDenial(s) || /\b(can(no|')?t|unable to|this is (just )?text)\b.{0,40}\bcalls?\b/i.test(s))) return false;
@@ -1425,9 +1490,11 @@ export async function groundReply(
   } else {
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
-    let cut = stripUnsupported(draft, effectiveFailed1);
+    // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
+    const allowArrival = { allow: (sentence: string) => recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence) };
+    let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
-    if (cutCode.length) cut = stripUnsupported(cut, cutCode);
+    if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);
     const inviteCut = effectiveFailed1.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text));
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).

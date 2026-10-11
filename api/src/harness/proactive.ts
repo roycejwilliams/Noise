@@ -23,6 +23,7 @@
 // still enforces the idempotency key and, where asked, local hours. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
+import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
 import { inventedFailure } from "../services/speakable.js";
 import { proactivePaused, pausedTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
@@ -274,6 +275,8 @@ export type PickState = {
   safetyHold?: boolean;
   // Kinds of message this member keeps letting pass, so Co stopped sending them (services/kindRestraint.ts).
   suppressedKinds?: ProactiveKind[];
+  // They said they're away from home (services/away.ts): finds tied to where they live wait until they're back.
+  away?: AwayState | null;
 };
 
 // While someone is struggling, asks, check-ins on asks, and product updates
@@ -572,7 +575,7 @@ export function watchOfferMatches(logged: string, lastCoLine: string): boolean {
 
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds">, opts: { answering?: boolean } = {}): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away">, opts: { answering?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -620,6 +623,13 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   }
   if (state.safetyHold && PROACTIVE_PURPOSE_MAP[c.type] === "offer") {
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
+  }
+  // Away from home, in their own words (services/away.ts, 2026-10-11: Jacqueline said she was traveling and SF finds kept coming):
+  // a find Co started that brings them into a room waits until they're back; an answer to their own ask never does (awayHoldsCandidate).
+  // It stays pending, so a find
+  // still ahead when they return can go then; one whose date passes expires as usual.
+  if (state.away && awayHoldsCandidate(c)) {
+    checks.push({ name: "away_hold", pass: false, reason: awayHoldReason(state.away) });
   }
   if (state.needsCare && HOLD_WHILE_STRUGGLING.has(c.type)) {
     checks.push({ name: "emotional_timing", pass: false, reason: "they've been struggling in the last day; this can wait" });
@@ -1802,6 +1812,7 @@ export async function memberSendState(userId: string, person: { timezone: string
       undeliveredYes,
       // Kinds they keep letting pass (services/kindRestraint.ts). A read that fails holds what's stored, never more than that.
       suppressedKinds: raw.suppressed,
+      away: raw.away ?? null,
     },
     holdUntil: raw.holdUntil,
     spaceUntil: raw.spaceUntil,
@@ -1828,7 +1839,8 @@ export function heldNow(s: Pick<MemberSendState, "holdUntil" | "spaceUntil">, no
 export type SweepKind = "ask" | "goal";
 export const SWEEP_BLOCKERS: Record<SweepKind, readonly string[]> = {
   ask: ["not_opted_out", "safety_hold"],
-  goal: ["not_opted_out", "safety_hold", "kind_restraint", "weekly_cap", "engagement_pace", "unanswered_pause"],
+  // away_hold (services/away.ts): a goal's discovery sweep finds things where they live; while they're away it would only pile up.
+  goal: ["not_opted_out", "safety_hold", "kind_restraint", "weekly_cap", "engagement_pace", "unanswered_pause", "away_hold"],
 };
 export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | "spaceUntil">, kind: SweepKind, paused: string[] = pausedTypes()): string[] {
   const find: Candidate = {

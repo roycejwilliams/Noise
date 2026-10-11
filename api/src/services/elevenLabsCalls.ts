@@ -28,6 +28,7 @@ import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import { memberZone } from "./memberTime.js";
+import { TEAM_BUILDER_LINE, isTeamMember } from "./extensions.js";
 
 let client: ElevenLabsClient | null = null;
 export function elevenLabs(): ElevenLabsClient {
@@ -61,6 +62,26 @@ export function verifyCallToken(userId: string, token: string | undefined | null
   const a = Buffer.from(mac, "hex");
   const b = Buffer.from(want, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// ---------- who placed the call, and who is on it (2026-10-10, Jacqueline's call)
+// Two slips on one outbound call: "I'm really glad you called" when Co had placed the call, and pitching Co to its own co-founder
+// ("you just described Co... you're a member of Co. That's not a coincidence"). The prompt's {{direction}} only shaped the opening
+// (OPENING_NOTE); later turns had nothing saying who called whom, and nothing said she builds Co. Both now ride at the top of the
+// call's context (context_summary), which the direct path and the call brain (services/callLlmProxy.ts) both read, so it needs no
+// agent push; the call brain also refuses a "glad you called" on an outbound call in code (thanksForCallingCut).
+// Pure.
+export function callSituation(o: { direction: "inbound" | "outbound"; team: boolean }): string {
+  const lines = [
+    o.direction === "outbound"
+      ? "This call: you called them; they did not call you. Never thank them for calling or say you're glad they called (you can be glad to talk with them, or glad they picked up)."
+      : "This call: they called you.",
+    o.team ? TEAM_BUILDER_LINE : null,
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+export function withCallSituation(contextSummary: string, o: { direction: "inbound" | "outbound"; team: boolean }): string {
+  return [callSituation(o), contextSummary.trim()].filter(Boolean).join("\n\n");
 }
 
 // ---------- registering a call
@@ -99,7 +120,8 @@ export async function registerElevenLabsCall(o: {
         user_id: o.userId,
         call_token: callToken,
         first_name: o.firstName,
-        context_summary: o.contextSummary,
+        // Who placed the call and whether they're on the team, first (callSituation above).
+        context_summary: withCallSituation(o.contextSummary, { direction: o.direction, team: await isTeamMember(o.userId).catch(() => false) }),
         direction: o.direction,
         right_now: o.rightNow ?? "",
         finds_now: o.findsNow ?? "Nothing to offer right now. Don't offer an event.",

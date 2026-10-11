@@ -307,7 +307,10 @@ export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
 ];
 
 // Pure: why a line narrates Co's internal state, or null when it doesn't. Checked per sentence; questions pass.
-export function narratesInternalState(text: string): string | null {
+// opts.allow: a sentence the caller knows is a true statement about the member's side, not Co's machinery (2026-10-10, the reply's
+// fact check: "Nothing's come through on my end yet" is about the file they sent, and is allowed when the inbound record shows
+// nothing readable arrived; services/inboundFile.ts).
+export function narratesInternalState(text: string, opts: { allow?: (sentence: string) => boolean } = {}): string | null {
   const sentences = text
     .replace(/\[[a-z][a-z ]*\]\s*/gi, "")
     .replace(/[’‘]/g, "'")
@@ -316,6 +319,7 @@ export function narratesInternalState(text: string): string | null {
     .filter(Boolean);
   for (const s of sentences) {
     if (/\?\s*["')\]]*$/.test(s)) continue;
+    if (opts.allow?.(s)) continue;
     for (const r of NARRATION_RULES) if (r.pattern.test(s)) return `${r.why}: "${s.slice(0, 80)}"`;
   }
   return null;

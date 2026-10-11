@@ -74,6 +74,8 @@ export async function catchUpReaction(userId: string, message: string, toolsCall
   if (!read) return;
   const { match, reaction } = read;
   await recordSuggestionOutcome(userId, match.kind, match.key, match.name, REACTION_RESULT[reaction], message.slice(0, 160));
+  // The same settling noteReaction does (services/offerReactions.ts settleSentOffer).
+  await import("./offerReactions.js").then((O) => O.settleSentOffer(userId, match.name, reaction, message.slice(0, 160))).catch(() => {});
   const { recordDecision } = await import("../harness/core.js");
   await recordDecision({ layer: 6, decision: "reaction.catchup", userId, outcome: "act", action: reaction, proposal: { item: match.name, message: message.slice(0, 200) } }).catch(() => {});
   const { recordFact } = await import("./coFacts.js");

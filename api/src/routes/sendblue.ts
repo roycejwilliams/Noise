@@ -36,6 +36,7 @@ import { dotsInstruction, momentInstruction, readMoment, saveLesson, whyContext,
 import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage, readableImage } from "../services/imageRead.js";
+import { fileKindOf, fileRecordNote, isKeepable, keptFileFact, unreadableFileFact, type FileKind } from "../services/inboundFile.js";
 import { CALL_OFFER, GATE_ASK, INVITE_JOINED, WELCOME, WELCOME_INVITED, WRONG_CODE, pickLine } from "../services/onboardingLines.js";
 import { claimTextLogin } from "../services/textLogin.js";
 import {
@@ -1144,9 +1145,15 @@ export function sendblueRouter(io: Server): Router {
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
-        // A PDF they sent (services/memberFiles.ts): kept for them alone, by number. What it says never enters this turn.
-        let fileKept: { n: number; isNew: boolean } | null = null;
-        let fileNotKept: string | null = null;
+        // A file that came WITH their text: its note rides after their words in the record.
+        let fileNoteWithText: string | null = null;
+        // A file they sent (services/memberFiles.ts): a PDF, PowerPoint or Word file, kept for them alone, by number. What it says
+        // never enters this turn. A file Co can't open is named for what it is (services/inboundFile.ts, 2026-10-10: a pitch deck
+        // sent as a .pptx was logged as "[sent a photo, couldn't load it]", and the first send, which came with her text, left no
+        // trace at all).
+        let fileKept: { n: number; isNew: boolean; kind: FileKind } | null = null;
+        let fileNotKept: { why: string; kind: FileKind } | null = null;
+        let fileUnreadable: { kind: FileKind; why: string | null } | null = null;
 
         if (hasMedia) {
           isVoice = await isAudioUrl(media_url);
@@ -1160,19 +1167,20 @@ export function sendblueRouter(io: Server): Router {
               resolvedContent = "[voice memo]";
             }
           } else {
+            let fileKind: FileKind = "unknown";
             try {
               const imageRes = await fetch(media_url, { signal: AbortSignal.timeout(15000) });
               if (!imageRes.ok) throw new Error(`Image fetch failed: ${imageRes.status}`);
               const fileBytes = Buffer.from(await imageRes.arrayBuffer());
-              // A PDF by its own bytes, before it is taken for a photo (it used to arrive as "[sent a photo, couldn't load it]").
-              // Kept for this member only; the record says that a file came and its number, never what it says.
+              // What it is by its own bytes, before it is taken for a photo.
+              fileKind = fileKindOf(fileBytes, imageRes.headers.get("content-type"));
               const files = await import("../services/memberFiles.js");
-              if (files.isPdf(fileBytes)) {
+              if (isKeepable(fileKind)) {
+                // Kept for this member only; the record says that a file came and its number, never what it says.
                 const kept = await files.keepFile(user.id, fileBytes, media_url).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 80) }));
-                if (kept.ok) fileKept = { n: kept.n, isNew: kept.isNew };
-                else fileNotKept = kept.why;
-                if (!resolvedContent) resolvedContent = kept.ok ? `[sent a PDF, kept as their file #${kept.n}]` : "[sent a PDF Co couldn't keep]";
-              } else {
+                if (kept.ok) fileKept = { n: kept.n, isNew: kept.isNew, kind: fileKind };
+                else fileNotKept = { why: kept.why, kind: fileKind };
+              } else if (fileKind === "image" || fileKind === "heic") {
                 // The format from the file's own bytes (links often say
                 // "application/octet-stream"), HEIC converted to JPEG; only what
                 // the model reads goes to it (services/imageRead.ts, 2026-10-01).
@@ -1184,11 +1192,18 @@ export function sendblueRouter(io: Server): Router {
                 // (services/imageRead.ts, 2026-09-22).
                 photoDescription = await describeImage(buffer, mediaType);
                 if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]` : "[sent a photo]";
+              } else {
+                fileUnreadable = { kind: fileKind, why: null };
+                console.error(`sendblue: a file Co can't open arrived (${fileKind}, ${imageRes.headers.get("content-type") ?? "no type"})`);
               }
             } catch (imgErr: any) {
               console.error("Image fetch for vision failed (non-fatal):", imgErr?.message ?? imgErr);
-              if (!resolvedContent) resolvedContent = "[sent a photo — couldn't load it]";
+              fileUnreadable = { kind: fileKind, why: null };
             }
+            // The record always says a file came: alone it is the message; with their text it rides after it (inboundContent below).
+            const note = fileKept ? fileRecordNote({ kind: fileKept.kind, kept: fileKept }, false) : fileNotKept ? fileRecordNote({ kind: fileNotKept.kind, unreadable: true }, false) : fileUnreadable ? fileRecordNote({ kind: fileUnreadable.kind, unreadable: true }, false) : null;
+            if (note && !resolvedContent) resolvedContent = note;
+            else if (note) fileNoteWithText = fileRecordNote(fileKept ? { kind: fileKept.kind, kept: fileKept } : { kind: (fileNotKept ?? fileUnreadable)!.kind, unreadable: true }, true);
           }
         }
 
@@ -1211,7 +1226,7 @@ export function sendblueRouter(io: Server): Router {
         let reactingToSent = !!inlineTarget?.fromCo && (!!inlineTarget.what || !!bareLink(inlineTarget.text));
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
-          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
+          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${fileNoteWithText ? ` ${fileNoteWithText}` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
 
         // A link they texted is read in the background, kept to them (services/linkReader.ts).
         // The first one is also read for this reply (raced below), so Co can react to what the page says.
@@ -1241,6 +1256,14 @@ export function sendblueRouter(io: Server): Router {
         const theirLinkP: Promise<LinkRead | null> | null = theirLink
           ? import("../services/linkReader.js").then((l) => l.readLink(theirLink, { ownerUserId: user.id })).catch(() => null)
           : null;
+        // Away from home, in their own words ("I'm traveling", "back in SF on the 20th"): a fact, written now, that holds finds tied
+        // to where they live until they're back; "I'm back" ends it (services/away.ts, 2026-10-11).
+        if (hasText) {
+          const A = await import("../services/away.js");
+          const zone = await (await import("../services/memberTime.js")).memberZone(user.id).catch(() => null);
+          const said = await A.noteAwayFromText(pool, user.id, resolvedContent, new Date(), zone).catch((err: any) => { console.error("sendblue: noting away failed (non-fatal):", err?.message ?? err); return null; });
+          if (said) recordDecision({ layer: 4, decision: "member.away", userId: user.id, outcome: "act", action: said, proposal: { message: resolvedContent.slice(0, 200) } }).catch(() => {});
+        }
         // "Stop sharing" ends location use for their events at once, before any reply
         // (services/preArrival.ts). A bare STOP already opted them out of everything above.
         if (hasText) {
@@ -1776,11 +1799,65 @@ export function sendblueRouter(io: Server): Router {
               : "They sent a photo this turn. You can see it attached; its details weren't written down, so describe only what you can see in it.",
           );
         }
-        // A PDF they sent: Co knows it's kept and its number, and what it can do with it. Never what it says.
+        // A file they sent: Co knows it's kept and its number, and what it can do with it. Never what it says.
+        // One Co can't open: say so plainly and offer routes that work (services/inboundFile.ts, 2026-10-10).
         if (fileKept) {
-          addFact(replyFacts, "known", `They sent a PDF this turn. It's kept for them alone as their file #${fileKept.n}${fileKept.isNew ? "" : " (they had sent it before)"}. You haven't read it and don't know what it says, so don't describe or guess its contents. You can write them a document from it when they ask (writeFromFile), and delete it whenever they ask (deleteMyFiles).`);
-        } else if (fileNotKept) {
-          addFact(replyFacts, "known", `They sent a PDF this turn, but it wasn't kept (${fileNotKept}). Say so plainly; don't guess at what it holds.`);
+          addFact(replyFacts, "known", keptFileFact(fileKept.kind, fileKept));
+        } else if (fileNotKept || fileUnreadable) {
+          const u = fileNotKept ?? fileUnreadable!;
+          addFact(replyFacts, "known", unreadableFileFact(u.kind, fileNotKept?.why ?? null));
+        }
+        // The ask that waits on the file (services/inboundFile.ts): an unreadable file opens one loop Co carries, asked about once
+        // a day later if nothing readable comes; a readable file closes it, and the reply picks the request back up.
+        const awaited = (await import("../services/inboundFile.js")).awaitedAction({ kept: fileKept?.kind ?? null, unreadable: (fileNotKept ?? fileUnreadable)?.kind ?? null });
+        if (awaited === "open") {
+          const IF = await import("../services/inboundFile.js");
+          const loopId = await IF.openAwaitedFile(pool, user.id, (fileNotKept ?? fileUnreadable)!.kind).catch((err: any) => { console.error("sendblue: opening the awaited-file loop failed (non-fatal):", err?.message ?? err); return null; });
+          if (loopId != null) {
+            const { enqueueCandidate } = await import("../harness/proactive.js");
+            await enqueueCandidate({
+              userId: user.id,
+              type: "loop_check",
+              targetKey: `loop_check:${loopId}:awaited_file`,
+              topicKey: `loop:${loopId}`,
+              summary: "Ask once whether they still want help with the file Co couldn't open",
+              payload: { loopId, title: IF.awaitedFileTitle((fileNotKept ?? fileUnreadable)!.kind), note: `What works: ${IF.FILE_ROUTES.replace(/ \(you can go over them in this thread\)/, "")}.` },
+              dueAt: new Date(Date.now() + IF.AWAITED_ASK_AFTER_HOURS * 3_600_000),
+              expiresAt: new Date(Date.now() + 4 * 86_400_000),
+            }).catch((err: any) => console.error("sendblue: queueing the awaited-file ask failed (non-fatal):", err?.message ?? err));
+          }
+        } else if (awaited === "close") {
+          // Only a kept document is the copy it waited for (review of #140: a selfie after the failed deck closed it).
+          const IF = await import("../services/inboundFile.js");
+          const waitedFor = await IF.closeAwaitedFile(pool, user.id).catch(() => null);
+          if (waitedFor) addFact(replyFacts, "known", IF.pickUpFact(waitedFor));
+        }
+        // What has arrived from them lately, so "it hasn't come through" is said only when it's true, and never refused when it is
+        // (services/inboundFile.ts fileRecordFact; harness/replyGrounding.ts reads the same fact for both of its checks).
+        {
+          const IF = await import("../services/inboundFile.js");
+          const recentIn = await pool
+            .query(
+              `SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - make_interval(mins => $2) ORDER BY created_at DESC LIMIT 12`,
+              [user.id, IF.RECORD_MINUTES],
+            )
+            .then((r) => r.rows.map((x: any) => ({ at: new Date(x.created_at), content: String(x.content) })))
+            .catch(() => [] as { at: Date; content: string }[]);
+          // Something readable lately: a file Co kept, or a photo it saw (READABLE_LOOKBACK_DAYS). A failed read counts as "something
+          // came", so a denial is never backed by a read that didn't happen.
+          const [keptAt, photoAt] = await Promise.all([
+            import("../services/memberFiles.js").then((F) => F.lastFileAt(user.id, IF.READABLE_LOOKBACK_DAYS)).catch(() => new Date()),
+            pool
+              .query(
+                `SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND (content LIKE '%[sent a photo showing%' OR content LIKE '%[sent a photo]%' OR content LIKE '%[They also sent a photo%') AND created_at > NOW() - make_interval(days => $2)`,
+                [user.id, IF.READABLE_LOOKBACK_DAYS],
+              )
+              .then((r) => (r.rows[0]?.at ? new Date(r.rows[0].at) : null))
+              .catch(() => new Date()),
+          ]);
+          const readableAt = [keptAt, photoAt, imageForVision || fileKept ? new Date() : null].filter((d): d is Date => !!d).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+          const record = IF.fileRecordFact([...recentIn, { at: new Date(), content: inboundContent }], resolvedContent, readableAt);
+          if (record) addFact(replyFacts, "known", record);
         }
         // A problem they're reporting about Co itself is saved for the team
         // (test only, services/issueReports.ts), and the reply can say so.
