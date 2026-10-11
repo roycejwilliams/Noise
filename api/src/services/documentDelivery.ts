@@ -247,7 +247,8 @@ export async function deliverAndRecord(
   // The earlier version was a Google Doc but this one went as a PDF (Docs no longer allowed for it, or Google disconnected): Co says so
   // (rule 6, never a silent downgrade), and never "they asked for a Google Doc" when this time they didn't.
   const docBecamePdf = !!inPlace && !r0.sentOk.some((x) => x.via === "google_docs") && r0.sentOk.length > 0;
-  const r = inPlace && !o.askedForGoogle ? { ...r0, googleRefused: null, googleMissing: false } : r0;
+  // The text already said it's a PDF this time (deliverToTargets), so Co isn't handed a reason to repeat (review of #144).
+  const r = inPlace && (!o.askedForGoogle || docBecamePdf) ? { ...r0, googleRefused: null, googleMissing: false } : r0;
   const receipts: Receipt[] = [];
   // It already reached them: a receipt that can't be written is logged, never turned into "it didn't go out" (which would send it
   // again, review of #106).
