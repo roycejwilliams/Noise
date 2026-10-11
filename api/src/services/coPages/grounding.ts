@@ -28,16 +28,35 @@ export function pageLines(d: CoPageData): { where: string; text: string }[] {
 }
 
 // Pure: what on the page nothing backs. Empty means the page may be stored.
+// Pure: one way of writing a time and a date, so the same fact matches however it was typed (live runs, 2026-10-11: a member's "7pm"
+// refused the page's "7:00 PM", "dinner at 7:45" refused "7:45 PM", and "Oct 24" refused "October 24"). Times become H or H:MM (am/pm
+// dropped: the member's own words rarely carry it, "at 7" and "7:00 PM" are the same), and short month and weekday names become full
+// ones, keeping their capital.
+const MONTHS: Record<string, string> = { jan: "january", feb: "february", mar: "march", apr: "april", jun: "june", jul: "july", aug: "august", sep: "september", sept: "september", oct: "october", nov: "november", dec: "december" };
+const DAYS: Record<string, string> = { mon: "monday", tue: "tuesday", tues: "tuesday", wed: "wednesday", thu: "thursday", thur: "thursday", thurs: "thursday", fri: "friday", sat: "saturday", sun: "sunday" };
+export function sameTimes(s: string): string {
+  return s
+    .replace(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/gi, (_m, h: string, mm: string | undefined) => (mm && mm !== "00" ? `${Number(h)}:${mm}` : `${Number(h)}`))
+    .replace(/\b(\d{1,2}):00\b/g, (_m, h: string) => `${Number(h)}`)
+    .replace(/\b([A-Za-z]{3,5})\.?(?=\s|,|$)/g, (m, w: string) => {
+      const full = MONTHS[w.toLowerCase()] ?? DAYS[w.toLowerCase()];
+      return full ? (/^[A-Z]/.test(w) ? full[0].toUpperCase() + full.slice(1) : full) : m;
+    });
+}
+// Pure: a short label before a colon ("Schedule: cocktails at 7") is Co's label, like a heading, not a claim (the same live run
+// refused "Schedule: ..." for the word "schedule").
+const unlabeled = (s: string) => s.replace(/^\s*[A-Za-z][\w' ]{0,24}:\s+/, "");
+
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
-  const corpus = `${source.theirs}\n${source.read}`;
+  const corpus = sameTimes(`${source.theirs}\n${source.read}`);
   const out: string[] = [];
   for (const l of pageLines(d)) {
-    const bad = unsourced(l.text, corpus);
+    const bad = unsourced(sameTimes(l.text), corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // Headings and the title are Co's labels; the content lines are the claims.
   const claims = pageLines(d).filter((l) => !/heading$|^title$/.test(l.where));
-  for (const u of unbackedClaims(claims.map((l) => l.text), corpus).slice(0, 4)) {
+  for (const u of unbackedClaims(claims.map((l) => unlabeled(sameTimes(l.text))), corpus).slice(0, 4)) {
     out.push(`"${u.text.slice(0, 90)}" isn't backed by what they said or what you read (nothing puts ${u.missing.slice(0, 4).join(", ")} together)`);
   }
   return out.slice(0, 7);

@@ -11,24 +11,11 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { pickPage } from "./pageTools.js";
+import { TASTE_INPUT, imageN } from "./artifactInputs.js";
+export { TASTE_INPUT } from "./artifactInputs.js";
 import { ALSO_ANSWER, withAnswer } from "./linkAnswer.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
-const hex = z.string().nullable().optional().describe("A six-digit hex color like #1F3A5F, from a color they named. Leave it out if they named none.");
-export const TASTE_INPUT = z
-  .object({
-    quote: z.string().describe("Their own words about the look they want, or that they don't mind, copied exactly from what they wrote."),
-    dontCare: z.boolean().optional().describe("True when they said they don't mind how it looks."),
-    mood: z.enum(["minimal", "bold", "warm", "dark", "playful", "editorial", "classic"]).optional().describe("The feel their words point to."),
-    background: hex,
-    text: hex,
-    accent: hex,
-    type: z.enum(["serif", "sans"]).nullable().optional().describe("Serif or sans, only if their words or inspiration point to one."),
-    inspo: line("What they pointed to for inspiration (a Pinterest board, sites, brands), as they said it.").nullable().optional(),
-  })
-  .optional()
-  .describe("Only when they said something about the look in this conversation. Leave it out otherwise: their saved taste, if any, is used.");
-const imageN = (what: string) => z.number().int().positive().nullable().optional().describe(`${what} The number of one of their saved images ("their image #3" in what they sent), only where it belongs. Leave it out otherwise.`);
 export const DECK_INPUT = z.object({
   title: line("The deck's title: their company, project or the talk's name."),
   subtitle: line("The line under it: what it is and who it's for."),
@@ -86,7 +73,11 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: {
 // window), already on it, or that they named by number. An older photo is never placed on Co's own. A number that doesn't fit is
 // an error naming what they do have, never a guess.
 async function assetIds(userId: string, input: z.infer<typeof DECK_INPUT>, dryRun: boolean, o: { words: string; onDeck: string[] }): Promise<{ map: Map<number, string> } | { error: string }> {
-  const wanted = [input.logo, ...input.slides.map((s) => s.image)].filter((n): n is number => typeof n === "number");
+  return assetIdsFor(userId, [input.logo, ...input.slides.map((s) => s.image)], dryRun, { ...o, what: "deck" });
+}
+// The same rule for any artifact (a page too, 2026-10-11 PR 2): wanted = the image numbers it places.
+export async function assetIdsFor(userId: string, numbers: (number | null | undefined)[], dryRun: boolean, o: { words: string; onDeck: string[]; what: "deck" | "page" }): Promise<{ map: Map<number, string> } | { error: string }> {
+  const wanted = numbers.filter((n): n is number => typeof n === "number");
   if (!wanted.length) return { map: new Map() };
   const list = dryRun ? [] : await (await import("../services/memberAssets.js")).listAssets(userId).catch(() => []);
   const since = Date.now() - DECK_WINDOW_HOURS * 3600_000;
@@ -96,7 +87,7 @@ async function assetIds(userId: string, input: z.infer<typeof DECK_INPUT>, dryRu
   const missing = wanted.filter((n) => !map.has(n));
   if (missing.length) {
     const have = usable.slice(0, 8).map((a) => `#${a.n}${a.description ? ` (${a.description.slice(0, 60)})` : ""}`).join("; ");
-    return { error: `Image ${missing.map((n) => `#${n}`).join(", ")} isn't one they sent for this deck. ${have ? `Images you can use: ${have}.` : "They haven't sent any images for it."} Use only those, ask them, or leave images out.` };
+    return { error: `Image ${missing.map((n) => `#${n}`).join(", ")} isn't one they sent for this ${o.what}. ${have ? `Images you can use: ${have}.` : "They haven't sent any images for it."} Use only those, ask them, or leave images out.` };
   }
   return { map };
 }
@@ -113,6 +104,31 @@ export async function deckDataFrom(
   return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s) => ({ headline: s.headline, bullets: s.bullets, image: at(s.image) })), style };
 }
 
+// Their taste, with no asking: what they said about the look now (their exact words, checked, then saved as member knowledge), else
+// what's saved, else null. Decks add the one ask on top (tasteFor); pages never ask and use Co's own design without a taste.
+export async function knownTaste(ctx: ConversationToolContext, said: z.infer<typeof TASTE_INPUT>, theirs: () => Promise<string>): Promise<{ taste: any } | { error: string }> {
+  const D = await import("../services/designTaste.js");
+  if (said) {
+    const { wordsAreTheirs } = await import("../services/coTasks.js");
+    if (!wordsAreTheirs(said.quote, `${ctx.resolvedContent}\n${ctx.isVoice ? String(ctx.turn?.message ?? "") : ""}\n${await theirs()}`)) {
+      return { error: "The taste quote must be copied exactly from what they wrote. Leave taste out if they said nothing about the look." };
+    }
+    const t = {
+      mood: said.dontCare ? "minimal" : (said.mood ?? "minimal"),
+      colors: { background: said.background ?? null, text: said.text ?? null, accent: said.accent ?? null },
+      type: said.type ?? null,
+      inspo: said.inspo ?? null,
+      dontCare: said.dontCare === true,
+      quote: said.quote,
+    };
+    const parsed = D.parseDesignTaste(JSON.stringify(t));
+    if (parsed && !ctx.dryRun) await D.recordDesignTaste(ctx.userId, parsed).catch(() => {});
+    return { taste: parsed ?? t };
+  }
+  const saved = ctx.dryRun ? null : await D.loadDesignTaste(ctx.userId).catch(() => null);
+  return { taste: saved?.taste ?? null };
+}
+
 export function deckTools(
   ctx: ConversationToolContext,
   o: { say: (text: string, record: string) => Promise<boolean>; notDone: (what: string) => void; source: () => Promise<{ theirs: string; read: string }> },
@@ -125,25 +141,9 @@ export function deckTools(
   // neither and hasn't asked yet; after the one ask, minimal.
   const tasteFor = async (said: z.infer<typeof TASTE_INPUT>): Promise<{ taste: any; ask?: false } | { ask: true } | { error: string }> => {
     const D = await T();
-    if (said) {
-      const { wordsAreTheirs } = await import("../services/coTasks.js");
-      if (!wordsAreTheirs(said.quote, `${ctx.resolvedContent}\n${ctx.isVoice ? String(ctx.turn?.message ?? "") : ""}\n${await o.source().then((s) => s.theirs).catch(() => "")}`)) {
-        return { error: "The taste quote must be copied exactly from what they wrote. Leave taste out if they said nothing about the look." };
-      }
-      const t = {
-        mood: said.dontCare ? "minimal" : (said.mood ?? "minimal"),
-        colors: { background: said.background ?? null, text: said.text ?? null, accent: said.accent ?? null },
-        type: said.type ?? null,
-        inspo: said.inspo ?? null,
-        dontCare: said.dontCare === true,
-        quote: said.quote,
-      };
-      const parsed = D.parseDesignTaste(JSON.stringify(t));
-      if (parsed && !ctx.dryRun) await D.recordDesignTaste(ctx.userId, parsed).catch(() => {});
-      return { taste: parsed ?? t };
-    }
-    const saved = ctx.dryRun ? null : await D.loadDesignTaste(ctx.userId).catch(() => null);
-    if (saved) return { taste: saved.taste };
+    const known = await knownTaste(ctx, said, () => o.source().then((s) => s.theirs).catch(() => ""));
+    if ("error" in known) return known;
+    if (known.taste) return { taste: known.taste };
     const asked = ctx.dryRun ? false : await D.tasteAskedRecently(ctx.userId).catch(() => true);
     if (!asked) return { ask: true };
     return { taste: null };
