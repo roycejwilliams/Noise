@@ -25,9 +25,9 @@ const BLOCK = z.union([
 export const PAGE_INPUT = z.object({
   title: line("The page's headline."),
   context: line("The line under it: when, where, for whom."),
-  sections: z.array(z.object({ heading: line("The section's heading."), blocks: z.array(BLOCK).min(1), picture: imageN("A picture of theirs for this section (their space, their product).") })).min(1),
+  sections: z.array(z.object({ heading: line("The section's heading."), blocks: z.array(BLOCK).min(1), picture: imageN("A picture of theirs for this section (their space, their product). On a change, 0 takes this section's picture off; leave it out to keep it.") })).min(1),
   sources: z.array(z.object({ label: line("What the source is."), url: z.string() })).optional().describe("Pages you read that back what's on the page."),
-  logo: imageN("Their logo, on the cover."),
+  logo: imageN("Their logo, on the cover. On a change, 0 takes it off; leave it out to keep it."),
 });
 export type PageInput = z.infer<typeof PAGE_INPUT>;
 
@@ -47,10 +47,10 @@ export function pageDataFrom(input: PageInput, extras?: { style: unknown | null;
   const was = extras?.was ?? null;
   const keptPicture = (heading: string) => (was?.sections ?? []).find((x: any) => x.heading === heading && x.asset)?.asset ?? null;
   const sections = input.sections.map((s) => {
-    const asset = typeof s.picture === "number" ? at(s.picture) : keptPicture(s.heading);
+    const asset = s.picture === 0 ? null : typeof s.picture === "number" ? at(s.picture) : keptPicture(s.heading);
     return { heading: s.heading, blocks: s.blocks.map(norm), image: null, ...(asset ? { asset } : {}) };
   });
-  const logo = typeof input.logo === "number" ? at(input.logo) : (was?.logo ?? null);
+  const logo = input.logo === 0 ? null : typeof input.logo === "number" ? at(input.logo) : (was?.logo ?? null);
   return { title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(extras?.style ? { style: extras.style } : {}), ...(logo ? { logo } : {}) };
 }
 
@@ -103,7 +103,8 @@ export function pageTools(
     // "Don't mind" keeps Co's own page design (review of PR 2): only a taste they described or picked restyles a page.
     const style = t.taste && !t.taste.dontCare ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : t.taste?.dontCare ? null : (was?.style ?? null);
     const onPage = was ? [was.logo, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
-    const ids = await D.assetIdsFor(ctx.userId, [input.logo, ...input.sections.map((x: any) => x.picture)], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
+    const placed = (n: unknown) => (typeof n === "number" && n > 0 ? n : null);
+    const ids = await D.assetIdsFor(ctx.userId, [placed(input.logo), ...input.sections.map((x: any) => placed(x.picture))], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
     if ("error" in ids) return ids;
     return { style, assets: ids.map, was };
   };

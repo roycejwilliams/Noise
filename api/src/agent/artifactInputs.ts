@@ -18,4 +18,4 @@ export const TASTE_INPUT = z
   .optional()
   .describe("Only when they said something about the look in this conversation. Leave it out otherwise: their saved taste, if any, is used.");
 // One of their saved images by its number ("their image #3"), for a deck slide, a page section or a logo.
-export const imageN = (what: string) => z.number().int().positive().nullable().optional().describe(`${what} The number of one of their saved images ("their image #3" in what they sent), only where it belongs. Leave it out otherwise.`);
+export const imageN = (what: string) => z.number().int().nonnegative().nullable().optional().describe(`${what} The number of one of their saved images ("their image #3" in what they sent), only where it belongs. Leave it out otherwise.`);

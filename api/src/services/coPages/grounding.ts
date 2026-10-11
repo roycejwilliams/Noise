@@ -50,7 +50,8 @@ const LABELS = /^\s*(schedule|timing|time|when|where|details|notes|dress|dress c
 const unlabeled = (s: string) => s.replace(LABELS, "");
 
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
-  const corpus = sameTimes(`${source.theirs}\n${source.read}`, "theirs");
+  // A bare time stands for am and pm only in their own words, never in a page Co read ("open until 11"): review of PR 2.
+  const corpus = `${sameTimes(source.theirs, "theirs")}\n${sameTimes(source.read)}`;
   const out: string[] = [];
   for (const l of pageLines(d)) {
     const bad = unsourced(sameTimes(l.text), corpus);

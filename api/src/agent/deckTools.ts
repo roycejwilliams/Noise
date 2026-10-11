@@ -77,7 +77,7 @@ async function assetIds(userId: string, input: z.infer<typeof DECK_INPUT>, dryRu
 }
 // The same rule for any artifact (a page too, 2026-10-11 PR 2): wanted = the image numbers it places.
 export async function assetIdsFor(userId: string, numbers: (number | null | undefined)[], dryRun: boolean, o: { words: string; onDeck: string[]; what: "deck" | "page" }): Promise<{ map: Map<number, string> } | { error: string }> {
-  const wanted = numbers.filter((n): n is number => typeof n === "number");
+  const wanted = numbers.filter((n): n is number => typeof n === "number" && n > 0);
   if (!wanted.length) return { map: new Map() };
   const list = dryRun ? [] : await (await import("../services/memberAssets.js")).listAssets(userId).catch(() => []);
   const since = Date.now() - DECK_WINDOW_HOURS * 3600_000;
