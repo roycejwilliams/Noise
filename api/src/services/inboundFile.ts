@@ -143,18 +143,57 @@ export function fileKindOf(b: Buffer, contentType: string | null = null): FileKi
 
 // ---------------------------------------------------------------- the text of a .pptx or .docx, in code
 const XML_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+// A numeric entity outside Unicode (&#x110000;) or a surrogate becomes nothing, never a thrown error that sinks the whole deck
+// (review of #140).
+const codePoint = (n: number) => (Number.isFinite(n) && n >= 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : "");
 const unxml = (s: string) =>
-  s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, e: string) => (e[0] === "#" ? String.fromCodePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : XML_ENTITIES[e.toLowerCase()] ?? ""));
+  s.replace(/&(#x[0-9a-f]{1,8}|#\d{1,10}|amp|lt|gt|quot|apos);/gi, (_, e: string) => (e[0] === "#" ? codePoint(e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : XML_ENTITIES[e.toLowerCase()] ?? ""));
 
-// One line per paragraph: the runs of <t> text inside each <p>.
-function paragraphs(xml: string, ns: "a" | "w"): string[] {
+// The most XML read from one slide or document, before anything is scanned (review of #140: an 8MB slide is a few KB zipped).
+export const XML_SCAN_MAX = 2_000_000;
+
+// One line per paragraph: the runs of <t> text, a line ending at each </p>. A single linear pass with indexOf (review of #140: the
+// old lazy regex `<a:p[ >][\s\S]*?</a:p>` was quadratic on unclosed openers and could hold the event loop for minutes). Each
+// search starts where the last ended and is reused until passed, so the whole scan is linear in the (capped) input; it stops once
+// OFFICE_MAX_CHARS of text are out.
+function paragraphs(xmlIn: string, ns: "a" | "w"): string[] {
+  const xml = xmlIn.length > XML_SCAN_MAX ? xmlIn.slice(0, XML_SCAN_MAX) : xmlIn;
+  const T_OPEN = `<${ns}:t`, T_CLOSE = `</${ns}:t>`, P_CLOSE = `</${ns}:p>`;
   const out: string[] = [];
-  const pRe = new RegExp(`<${ns}:p[ >][\\s\\S]*?</${ns}:p>`, "g");
-  const tRe = new RegExp(`<${ns}:t(?:\\s[^>]*)?>([\\s\\S]*?)</${ns}:t>`, "g");
-  for (const p of xml.match(pRe) ?? []) {
-    const line = [...p.matchAll(tRe)].map((m) => unxml(m[1])).join("").replace(/\s+/g, " ").trim();
-    if (line) out.push(line);
+  let line = "", chars = 0, pos = 0;
+  let nextP = xml.indexOf(P_CLOSE, 0);
+  const findT = (from: number) => {
+    let t = xml.indexOf(T_OPEN, from);
+    while (t !== -1 && !/[\s>]/.test(xml[t + T_OPEN.length] ?? "")) t = xml.indexOf(T_OPEN, t + T_OPEN.length);
+    return t;
+  };
+  let nextT = findT(0);
+  const flush = () => {
+    const l = line.replace(/\s+/g, " ").trim();
+    if (l) { out.push(l); chars += l.length; }
+    line = "";
+  };
+  while (pos < xml.length && chars < OFFICE_MAX_CHARS) {
+    // The next <t> or <t ...> (never <tab/>, <tbl>, <tr>: the character after the name decides), kept until passed.
+    if (nextT !== -1 && nextT < pos) nextT = findT(pos);
+    const t = nextT;
+    if (nextP !== -1 && nextP < pos) nextP = xml.indexOf(P_CLOSE, pos);
+    if (nextP !== -1 && (t === -1 || nextP < t)) {
+      flush();
+      pos = nextP + P_CLOSE.length;
+      nextP = xml.indexOf(P_CLOSE, pos);
+      continue;
+    }
+    if (t === -1) break;
+    const gt = xml.indexOf(">", t);
+    if (gt === -1) break;
+    if (xml[gt - 1] === "/") { pos = gt + 1; continue; }
+    const close = xml.indexOf(T_CLOSE, gt);
+    if (close === -1) break;
+    line += unxml(xml.slice(gt + 1, close));
+    pos = close + T_CLOSE.length;
   }
+  flush();
   return out;
 }
 
@@ -231,14 +270,22 @@ const READABLE_MARK = /\[(?:also )?sent (?:a photo showing|a photo\]|a PDF, kept
 const UNREADABLE_MARK = /\[(?:also )?sent [^\]]*?(?:Co couldn't open|couldn't load it|Co couldn't keep)\]/;
 
 // Pure: the record fact for this turn, or none. `recent` is their "User said:" lines from the last RECORD_MINUTES, this turn's included.
-export function fileRecordFact(recent: string[], message: string): string | null {
-  const readable = recent.some((l) => READABLE_MARK.test(l));
-  const unreadable = recent.filter((l) => UNREADABLE_MARK.test(l));
-  if (readable) return null;
-  if (unreadable.length) {
-    const what = unreadable.map((l) => l.match(/sent ([^\]]*?)(?: Co couldn't open| — couldn't load it|, couldn't load it| Co couldn't keep)\]/)?.[1]).filter(Boolean)[0] ?? "a file";
-    return `${FILE_RECORD_PREFIX} what they sent (${what}) arrived but couldn't be opened, and no readable file or photo has come through. It is true to say it didn't come through in a form you can open.`;
+// recent: their lines from the last RECORD_MINUTES (this turn's included), each with when it came. lastReadableAt: the newest file Co
+// kept or photo it saw for them over READABLE_LOOKBACK_DAYS (review of #140: a deck kept at 2:00 and "did you get my deck?" at
+// 2:45 made the record say nothing had arrived, and "Nothing's come through" passed both checks). So:
+//   - an unreadable file with nothing readable after it: "it didn't come through in a form you can open";
+//   - anything readable lately (and after the last unreadable one): no fact, so a denial needs real support;
+//   - nothing at all lately, and they say they sent something: "nothing has come through yet".
+export const READABLE_LOOKBACK_DAYS = 7;
+export function fileRecordFact(recent: { at: Date; content: string }[], message: string, lastReadableAt: Date | null = null): string | null {
+  const readableTimes = [...recent.filter((l) => READABLE_MARK.test(l.content)).map((l) => l.at.getTime()), lastReadableAt?.getTime() ?? -Infinity];
+  const lastReadable = Math.max(...readableTimes);
+  const unreadable = recent.filter((l) => UNREADABLE_MARK.test(l.content)).sort((a, b) => b.at.getTime() - a.at.getTime());
+  if (unreadable.length && unreadable[0].at.getTime() > lastReadable) {
+    const what = unreadable.map((l) => l.content.match(/sent ([^\]]*?)(?: Co couldn't open| — couldn't load it|, couldn't load it| Co couldn't keep)\]/)?.[1]).filter(Boolean)[0] ?? "a file";
+    return `${FILE_RECORD_PREFIX} what they sent (${what}) arrived but couldn't be opened, and no readable file or photo has come through since. It is true to say it didn't come through in a form you can open.`;
   }
+  if (Number.isFinite(lastReadable)) return null;
   if ((SENT_TALK.test(message) && FILE_NOUN.test(message)) || RECEIPT_Q.test(message)) {
     return `${FILE_RECORD_PREFIX} no file or photo from them has arrived. It is true to say nothing has come through yet.`;
   }
@@ -263,6 +310,14 @@ export function awaitedFileTitle(kind: FileKind): string {
   return `Going over the ${FILE_LABEL[kind].replace(/^an? /, "")} they sent, once a copy Co can open arrives`;
 }
 export const AWAITED_DETAIL = `waiting on them: Co couldn't open what they sent; a PDF, a link, or the key points pasted as text would work`;
+
+// Pure: what this turn does to the awaited-file loop. An unreadable document opens it; only a kept document closes it (review of
+// #140: a selfie after the failed deck closed it); a photo, a video or nothing at all leaves it as it is.
+export function awaitedAction(t: { kept: FileKind | null; unreadable: FileKind | null }): "open" | "close" | null {
+  if (t.unreadable && AWAITED_KINDS.has(t.unreadable)) return "open";
+  if (t.kept) return "close";
+  return null;
+}
 
 type Q = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
 

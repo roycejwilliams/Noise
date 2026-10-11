@@ -105,6 +105,12 @@ export async function filesOnFile(userId: string): Promise<{ n: number; sentOn: 
   return rows.map((r: any) => ({ n: Number(r.n), sentOn: new Date(r.created_at).toISOString().slice(0, 10), read: !!r.read }));
 }
 
+// When their newest file came, within `days` (services/inboundFile.ts fileRecordFact: whether something readable arrived lately).
+export async function lastFileAt(userId: string, days: number): Promise<Date | null> {
+  const { rows } = await pool.query(`SELECT MAX(created_at) AS at FROM member_files WHERE user_id = $1 AND created_at > NOW() - make_interval(days => $2)`, [userId, days]);
+  return rows[0]?.at ? new Date(rows[0].at) : null;
+}
+
 // One of their files' text, by their number, or their newest when no number is given.
 export async function fileText(userId: string, n?: number | null): Promise<{ n: number; text: string } | null> {
   const { rows } = n

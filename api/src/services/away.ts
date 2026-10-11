@@ -20,21 +20,31 @@ export type AwayState = { until: string | null; quote: string | null; text: stri
 
 const flat = (t: string) => String(t ?? "").replace(/[’‘]/g, "'");
 
-// First person, now: "I'm traveling" (and "imt raveling", her own typo), "I'm away / out of town / on a trip / abroad",
-// "when I'm back", "away until", "back in SF on the 20th".
+// First person, now, in real travel words (review of #140: "when I get back from the gym", "back to back with meetings" and a trip
+// on Friday all started a week's hold; when it's unclear, nothing is held, since holding wrongly keeps a member out of rooms):
+//   "I'm traveling" (and "imt raveling", her own typo), "I'm out of town", "I'm on a trip / vacation", "I'm abroad",
+//   "away until ...", "when I'm back in SF" / "back home" / "back from my trip", "I'll be back in SF on the 20th".
+// Never "I'm away" alone, never "back from" an errand, never a trip still ahead.
+const PLACE_BACK = String.raw`(?:in (?:town|sf|the city|the bay|(?!(?:the |my )?(?:office|gym|studio|class|school|loop|room|meeting|game|swing|saddle)\b)[a-z][a-z.'-]{1,20}(?: [a-z][a-z.'-]{1,20})?)|home|to (?:town|sf|the city)|from (?:my |the |a |this )?(?:trip|travels|travel|vacation|holiday|honeymoon))`;
 const AWAY: RegExp[] = [
-  /\b(?:i'?m|i am|im)\s*t?\s*ravel{1,2}ing\b/i,
-  /\b(?:i'?m|i am|im|we'?re|we are)\s+(?:currently\s+|still\s+|actually\s+|now\s+)?(?:away|out of town|on (?:a |my )?(?:trip|vacation|holiday|work trip)|abroad|overseas|out of the country|traveling)\b/i,
-  /\b(?:when|once|after|until|till) (?:i'?m|i am|im|i get|we'?re|we get) back\b/i,
+  /\b(?:i'?m|i am|im|we'?re|we are)\s*(?:currently\s+|still\s+|actually\s+|now\s+)?t?\s*ravel{1,2}ing\b/i,
+  /\b(?:i'?m|i am|im|we'?re|we are)\s+(?:currently\s+|still\s+|actually\s+|now\s+)?(?:out of town|on (?:a |my )?(?:trip|vacation|holiday|work trip)|abroad|overseas|out of the country)\b/i,
+  new RegExp(String.raw`\b(?:when|once|after|until|till) (?:i'?m|i am|im|i get|we'?re|we get) back ${PLACE_BACK}`, "i"),
   /\b(?:away|traveling|travelling|out of town) (?:until|till|through|thru)\b/i,
-  /\b(?:i'?ll|i will|i'?m|im) (?:be )?back (?:in (?:town|sf|the city|[a-z][a-z .'-]{1,24}?)|home) (?:on|by|next|this|the|in|around)\b/i,
+  new RegExp(String.raw`\b(?:i'?ll|i will|i'?m|im) (?:be )?back ${PLACE_BACK} (?:on|by|next|this|the|around)\b`, "i"),
+  // Without the "I'm": "out of town for the weekend", "back in SF on Sunday" (a return date says they're away until then).
+  /(?:^|[.!?,]\s*)(?:out of town|t?ravel{1,2}ing|on (?:a |my )?(?:trip|vacation|holiday))(?=\s*(?:$|[.!?,]|(?:until|till|through|thru|for|right now|now|at the moment|in|this)\b))/i,
+  new RegExp(String.raw`\bback (?:in (?:town|sf|the city|the bay)|home|to (?:town|sf|the city)) (?:on|by|around)\b`, "i"),
 ];
-// Not away now: away from a desk or phone, or a trip still ahead ("traveling to LA tomorrow", "out of town next week"; "until
-// tomorrow" is a date it ends, and stays away).
-const NOT_NOW = /\baway from (?:my|the) (?:desk|phone|computer|laptop|keyboard)\b|\b(?:traveling|travelling|away|out of town|on (?:a |my )?trip)\s+(?:to [a-z .'-]{1,20}?\s+)?(?:next (?:week|month|weekend)|tomorrow|later (?:this|today)|starting|soon)\b/i;
+// A trip still ahead ("traveling to LA tomorrow", "traveling on Friday", "out of town next week", "this weekend" said midweek): not
+// away now. "until tomorrow" is the date it ends, and stays away.
+const WEEKDAY = "(?:mon|tues|wednes|thurs|fri|satur|sun)day";
+const NOT_NOW = new RegExp(String.raw`\baway from (?:my|the) (?:desk|phone|computer|laptop|keyboard)\b|\b(?:traveling|travelling|out of town|on (?:a |my )?trip|leaving|flying)\s+(?:to [a-z .'-]{1,20}?\s+)?(?:next (?:week|month|weekend)|tomorrow|later (?:this|today)|starting|soon|on ${WEEKDAY}|on the \d|in \d+ days|in a (?:few days|week))\b`, "i");
 const NOT_AWAY = /\b(?:not|no longer|done|finished)\s+(?:traveling|travelling|away|out of town)\b|\b(?:i'?m|im|i am) not (?:away|traveling)\b/i;
-// Back: "I'm back", "just got back", "back in SF", "home now". Never "back to work", "back on track".
-const BACK = /\b(?:i'?m|im|i am|just got|got|finally|we'?re)\s+back\b(?!\s+(?:to (?:work|it|normal|the grind|school)|on (?:track|it)|at it|and forth))|^\s*back (?:in|home)\b|\b(?:i'?m|im) home now\b|\bhome now\b/i;
+// "for the weekend" / "this weekend": ends that Sunday when said Friday to Sunday; said earlier in the week, it's still ahead.
+const WEEKEND = /\b(?:for|this|over) the weekend\b|\bthis weekend\b/i;
+// Back: "I'm back", "just got back", "back in SF", "home now". Never "back to work", "back to back", "back on track".
+const BACK = /\b(?:i'?m|im|i am|just got|got|finally|we'?re)\s+back\b(?!\s+(?:to (?:back|work|it|normal|the grind|school|you)|on (?:track|it)|at it|and forth|from (?:the |my )?(?:gym|lunch|work|class|office|run|walk|meeting|errands?|store|dinner|coffee)))|^\s*back (?:in|home)\b|\b(?:i'?m|im) home now\b/i;
 
 // Pure: what their words say about being away, or null. A date they named ("until the 20th", "back Sunday") becomes `until`.
 export function awayFromWords(text: string, saidOn: string, zone: string = FALLBACK_ZONE): AwayState | null {
@@ -44,7 +54,13 @@ export function awayFromWords(text: string, saidOn: string, zone: string = FALLB
   if (!hit) return null;
   // The words after "until / back ... on", read for a date.
   const tail = t.match(/\b(?:until|till|through|thru|back(?: in [a-z .'-]{1,24}?| home)? (?:on|by|around)?)\s+([^.!?\n]{1,40})/i)?.[1] ?? "";
-  const until = tail ? dateFrom(tail, saidOn, zone) : null;
+  let until = tail ? dateFrom(tail, saidOn, zone) : null;
+  if (!until && WEEKEND.test(t)) {
+    const said = DateTime.fromISO(saidOn, { zone });
+    // Friday (5), Saturday (6), Sunday (7): this weekend's Sunday. Earlier in the week the weekend is still ahead: not away now.
+    if (said.weekday < 5) return null;
+    until = said.plus({ days: 7 - said.weekday }).toISODate();
+  }
   const quote = quoteAround(t, hit.index ?? 0, hit[0].length);
   return { until, quote, text: until ? `They're away from home (traveling) until ${until}.` : "They're away from home right now (traveling)." };
 }
@@ -81,8 +97,10 @@ export function awayClaim(a: AwayState, saidOn: string, zone: string = FALLBACK_
 }
 
 // Pure: the away state from held claims (live only), or null.
-export function awayFromClaims(claims: { kind: string; text: string; quote: string | null; expiresOn: string | null }[], now: Date, zone: string = FALLBACK_ZONE): AwayState | null {
-  const c = claims.find((x) => x.kind === "away" && isLive({ expiresOn: x.expiresOn }, now, zone));
+// Only their own words count (review of #140): a claim Co inferred, or one a rebuild wrote, never holds anything. Code writes the one
+// away claim from their latest statement (noteAwayFromText replaces it), and the nightly model read can't propose one.
+export function awayFromClaims(claims: { kind: string; text: string; quote: string | null; expiresOn: string | null; provenance?: string | null }[], now: Date, zone: string = FALLBACK_ZONE): AwayState | null {
+  const c = claims.find((x) => x.kind === "away" && x.provenance === "user_said" && !!x.quote && isLive({ expiresOn: x.expiresOn }, now, zone));
   if (!c) return null;
   const until = c.text.match(/until (\d{4}-\d{2}-\d{2})/)?.[1] ?? null;
   return { until, quote: c.quote, text: c.text };
@@ -91,6 +109,20 @@ export function awayFromClaims(claims: { kind: string; text: string; quote: stri
 // What waits while they're away: finds that bring them into a room where they live. Not answers about a place they're visiting
 // (no such type exists yet), not intros, not check-ins, not documents.
 export const LOCATION_BOUND_TYPES: ReadonlySet<string> = new Set(["event_offer", "event_match_nudge"]);
+// Pure: whether a candidate waits while they're away. Only Co-initiated, place-bound discovery (review of #140): an answer to their
+// own ask ("I'm in NYC, any founder dinners this week?") always goes, wherever it is, because they asked. The member's home city
+// isn't on the dispatch state, so a profile find in another city waits too; that errs toward quiet for discovery only.
+export function awayHoldsCandidate(c: { type: string; payload?: unknown }): boolean {
+  if (!LOCATION_BOUND_TYPES.has(c.type)) return false;
+  const p = (c.payload ?? {}) as { askId?: string | null; fromProfile?: boolean };
+  const answersTheirAsk = c.type === "event_offer" && !!p.askId && p.askId !== "profile" && p.fromProfile !== true;
+  return !answersTheirAsk;
+}
+// Pure: whether a task's find waits. Only a look-out Co started on its own word; what they asked for (an ask task, a look-out they
+// requested) and what Co promised them (#131's owed deliveries) always go.
+export function awayHoldsTask(t: { source?: string | null; lookoutOrigin?: string | null }): boolean {
+  return t.source === "lookout" && t.lookoutOrigin !== "member";
+}
 export const awayHoldReason = (a: AwayState) => `they said they're away${a.until ? ` until ${a.until}` : ""}${a.quote ? ` ("${a.quote.slice(0, 80)}")` : ""}; finds tied to where they live wait until they're back`;
 
 // The words a task gets when a text carrying a find is refused.

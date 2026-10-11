@@ -1809,7 +1809,8 @@ export function sendblueRouter(io: Server): Router {
         }
         // The ask that waits on the file (services/inboundFile.ts): an unreadable file opens one loop Co carries, asked about once
         // a day later if nothing readable comes; a readable file closes it, and the reply picks the request back up.
-        if ((fileNotKept || fileUnreadable) && (await import("../services/inboundFile.js")).AWAITED_KINDS.has((fileNotKept ?? fileUnreadable)!.kind)) {
+        const awaited = (await import("../services/inboundFile.js")).awaitedAction({ kept: fileKept?.kind ?? null, unreadable: (fileNotKept ?? fileUnreadable)?.kind ?? null });
+        if (awaited === "open") {
           const IF = await import("../services/inboundFile.js");
           const loopId = await IF.openAwaitedFile(pool, user.id, (fileNotKept ?? fileUnreadable)!.kind).catch((err: any) => { console.error("sendblue: opening the awaited-file loop failed (non-fatal):", err?.message ?? err); return null; });
           if (loopId != null) {
@@ -1825,7 +1826,8 @@ export function sendblueRouter(io: Server): Router {
               expiresAt: new Date(Date.now() + 4 * 86_400_000),
             }).catch((err: any) => console.error("sendblue: queueing the awaited-file ask failed (non-fatal):", err?.message ?? err));
           }
-        } else if (fileKept || imageForVision) {
+        } else if (awaited === "close") {
+          // Only a kept document is the copy it waited for (review of #140: a selfie after the failed deck closed it).
           const IF = await import("../services/inboundFile.js");
           const waitedFor = await IF.closeAwaitedFile(pool, user.id).catch(() => null);
           if (waitedFor) addFact(replyFacts, "known", IF.pickUpFact(waitedFor));
@@ -1836,12 +1838,25 @@ export function sendblueRouter(io: Server): Router {
           const IF = await import("../services/inboundFile.js");
           const recentIn = await pool
             .query(
-              `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - make_interval(mins => $2) ORDER BY created_at DESC LIMIT 12`,
+              `SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - make_interval(mins => $2) ORDER BY created_at DESC LIMIT 12`,
               [user.id, IF.RECORD_MINUTES],
             )
-            .then((r) => r.rows.map((x: any) => String(x.content)))
-            .catch(() => [] as string[]);
-          const record = IF.fileRecordFact([...recentIn, inboundContent], resolvedContent);
+            .then((r) => r.rows.map((x: any) => ({ at: new Date(x.created_at), content: String(x.content) })))
+            .catch(() => [] as { at: Date; content: string }[]);
+          // Something readable lately: a file Co kept, or a photo it saw (READABLE_LOOKBACK_DAYS). A failed read counts as "something
+          // came", so a denial is never backed by a read that didn't happen.
+          const [keptAt, photoAt] = await Promise.all([
+            import("../services/memberFiles.js").then((F) => F.lastFileAt(user.id, IF.READABLE_LOOKBACK_DAYS)).catch(() => new Date()),
+            pool
+              .query(
+                `SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND (content LIKE '%[sent a photo showing%' OR content LIKE '%[sent a photo]%' OR content LIKE '%[They also sent a photo%') AND created_at > NOW() - make_interval(days => $2)`,
+                [user.id, IF.READABLE_LOOKBACK_DAYS],
+              )
+              .then((r) => (r.rows[0]?.at ? new Date(r.rows[0].at) : null))
+              .catch(() => new Date()),
+          ]);
+          const readableAt = [keptAt, photoAt, imageForVision || fileKept ? new Date() : null].filter((d): d is Date => !!d).sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+          const record = IF.fileRecordFact([...recentIn, { at: new Date(), content: inboundContent }], resolvedContent, readableAt);
           if (record) addFact(replyFacts, "known", record);
         }
         // A problem they're reporting about Co itself is saved for the team

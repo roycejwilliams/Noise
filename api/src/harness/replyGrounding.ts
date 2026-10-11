@@ -1177,7 +1177,9 @@ const SENTENCES = /(?:[^.!?\n]|[.!?](?=[^\s.!?]))+[.!?]*/g;
 const SENTENCES_SP = /(?:[^.!?\n]|[.!?](?=[^\s.!?]))+[.!?]*\s*/g;
 
 // Bare agreement, the whole claim: "Happy to.", "Sure, glad to help.", "Absolutely, let's do it." (never "Happy to search for X").
-export const WILLING = /^(?:(?:yes|yeah|yep|sure|absolutely|of course|definitely|always|for sure)[,.!]?\s*)?(?:(?:i'?m |i am |i'?d be |i would be )?(?:happy|glad|down|keen) to(?: help)?|(?:i'?d )?love to(?: help)?|let'?s do (?:it|this)|on it|count me in)?[.!]?$/i;
+// The agreeing words are required (review of #140: every part was optional, so "", "." and "Sure." matched); "on it" and "count me
+// in" are left out, since they can promise work.
+export const WILLING = /^(?:(?:yes|yeah|yep|sure|absolutely|of course|definitely|for sure)[,.!]?\s*)?(?:(?:i'?m |i am |i'?d be |i would be )?(?:happy|glad|keen) to(?: help)?|(?:i'?d )?love to(?: help)?|let'?s do (?:it|this))[.!]?$/i;
 
 // The raw words of a failed claim, from its reason (`type: "words" (why)`).
 function claimWords(f: GateCheck): string | null {
@@ -1204,6 +1206,8 @@ export function cutTrailingClaims(sentence: string, failed: GateCheck[]): string
     if (!m) continue;
     const kept = m[1].replace(/[,;:\s]+$/, "");
     if (kept.split(/\s+/).filter(Boolean).length < 4) continue;
+    // A head that announces a count or a list ("I found two options for you, the Rosewood supper.") would promise what was cut.
+    if (/\b(?:\d+|two|three|four|five|six|a few|a couple(?: of)?|several|some)\s+(?:\w+\s+)?(?:options?|picks?|places?|events?|ideas?|spots?|ones?|things?|choices?|venues?|rooms?)\b|:\s*$/i.test(kept)) continue;
     // A head that only sets up the cut part ("If you send it, I'll read it tonight") would dangle: left whole.
     if (/^\W*(?:if|when|once|as soon as|after|before|because|since|unless|while|until)\b/i.test(kept)) continue;
     if (failed.some((g) => g !== f && claimWords(g) && flat(kept).includes(flat(claimWords(g)!.trim()).replace(/[.!?]+$/, "")))) continue;

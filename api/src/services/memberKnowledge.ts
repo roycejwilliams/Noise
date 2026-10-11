@@ -308,11 +308,11 @@ export const realKnowledgeDeps: KnowledgeDeps = {
       rows(`SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%')`, [userId]).then((r) => dateOrNull(r[0]?.at)),
     ]);
     // Away (services/away.ts): their live away claim. A failed read holds nothing (no away), like any other claim read.
-    const away = await rows(`SELECT kind, text, quote, expires_on FROM member_claims WHERE user_id = $1 AND kind = 'away'`, [userId])
+    const away = await rows(`SELECT kind, text, quote, provenance, expires_on FROM member_claims WHERE user_id = $1 AND kind = 'away'`, [userId])
       .then(async (r) => {
         const A = await import("./away.js");
         const zone = await (await import("./memberTime.js")).memberZone(userId).catch(() => null);
-        return A.awayFromClaims(r.map((x: any) => ({ kind: String(x.kind), text: String(x.text), quote: x.quote ?? null, expiresOn: x.expires_on ? (x.expires_on instanceof Date ? DateTime.fromJSDate(x.expires_on).toISODate() : String(x.expires_on).slice(0, 10)) : null })), now, zone ?? undefined);
+        return A.awayFromClaims(r.map((x: any) => ({ kind: String(x.kind), text: String(x.text), quote: x.quote ?? null, provenance: x.provenance ?? null, expiresOn: x.expires_on ? (x.expires_on instanceof Date ? DateTime.fromJSDate(x.expires_on).toISODate() : String(x.expires_on).slice(0, 10)) : null })), now, zone ?? undefined);
       })
       .catch(() => null);
     const sends = await rows(`SELECT sent_at FROM proactive_sends WHERE user_id = $1 AND NOT exempt AND sent_at > COALESCE($2::timestamptz, NOW() - INTERVAL '30 days') AND sent_at <= $3 ORDER BY sent_at`, [userId, inbound, now]);

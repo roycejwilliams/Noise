@@ -147,7 +147,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   // Rows 10405 / 10410: "Nothing's come through on my end yet", with and without the record behind it.
   const draft = "Nothing's come through on my end yet. Send it as a PDF and I'll take a look.";
   const withRecord = G.createReplyFacts();
-  G.addFact(withRecord, "known", IF.fileRecordFact(["User said: [sent a PowerPoint deck Co couldn't open]"], "Did you receive it? I just sent it")!);
+  G.addFact(withRecord, "known", IF.fileRecordFact([{ at: new Date(), content: "User said: [sent a PowerPoint deck Co couldn't open]" }], "Did you receive it? I just sent it")!);
   const noRecord = G.createReplyFacts();
   const narr = (rf: any) => G.codeChecks(draft, rf, empty as any).some((c) => c.name === "no_internal_narration" && !c.pass);
   check("narration: allowed when the record shows nothing readable arrived", !narr(withRecord));
@@ -159,9 +159,13 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   check("narration rule itself is unchanged for Co's machinery", !!S.narratesInternalState("The search hit a limit on my end.") && !S.narratesInternalState("Nothing's come through on my end yet.", { allow: IF.arrivalDenial }));
 }
 {
-  check("the record: an unreadable file means nothing readable has come", /nothing readable|no readable file/.test(IF.fileRecordFact(["User said: Hi Co, can you help pressure test my pitch deck? [also sent a PowerPoint deck Co couldn't open]"], "Did you receive it?") ?? ""));
-  check("the record: the old photo line counts as unreadable", /a photo/.test(IF.fileRecordFact(["User said: [sent a photo — couldn't load it]"], "x") ?? ""));
-  check("the record: a readable photo or kept file means no such fact", IF.fileRecordFact(["User said: [sent a photo showing: a slide]"], "did you get it") === null && IF.fileRecordFact(["User said: here [also sent a PDF, kept as their file #3]"], "did you get it") === null);
+  const at = (min: number) => new Date(Date.UTC(2026, 9, 10, 23, min));
+  const line = (min: number, content: string) => ({ at: at(min), content });
+  check("the record: an unreadable file means nothing readable has come", /no readable file or photo has come through since/.test(IF.fileRecordFact([line(20, "User said: Hi Co, can you help pressure test my pitch deck? [also sent a PowerPoint deck Co couldn't open]")], "Did you receive it?") ?? ""));
+  check("the record: the old photo line counts as unreadable", /a photo/.test(IF.fileRecordFact([line(21, "User said: [sent a photo — couldn't load it]")], "x") ?? ""));
+  check("the record: a readable photo or kept file in the window means no such fact", IF.fileRecordFact([line(1, "User said: [sent a photo showing: a slide]")], "did you get it") === null && IF.fileRecordFact([line(1, "User said: here [also sent a PDF, kept as their file #3]")], "did you get it") === null);
+  check("review #140, 5: a deck kept 45 minutes ago (outside the 30-minute lines) still means 'it came', so no 'nothing arrived' fact", IF.fileRecordFact([line(45, "User said: did you get my deck?")], "did you get my deck?", at(0)) === null);
+  check("review #140, 5: an unreadable file AFTER an older kept one is still 'couldn't open'; one before a newer kept one is not", /couldn't be opened/.test(IF.fileRecordFact([line(30, "User said: [sent a Keynote deck Co couldn't open]")], "x", at(0)) ?? "") && IF.fileRecordFact([line(10, "User said: [sent a Keynote deck Co couldn't open]")], "x", at(20)) === null);
   check("the record: 'I just sent it' with nothing on file says nothing has arrived", /no file or photo from them has arrived/.test(IF.fileRecordFact([], "Did you receive it? I just sent it") ?? ""));
   check("the record: an everyday message gets no fact, nor 'I sent it to my boss'", IF.fileRecordFact([], "How was your weekend?") === null && IF.fileRecordFact([], "I sent it to my boss already") === null && IF.fileRecordFact([], "I can't see why not") === null);
   check("an arrival denial needs an object or an end: 'can't see why' isn't one", !IF.arrivalDenial("I can't see why not.") && IF.arrivalDenial("I can't open it.") && IF.arrivalDenial("Couldn't open that file."));
@@ -223,7 +227,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   check("back: 'I'm back', 'just got back', 'back in SF!'; never 'back to work' or 'when I'm back'", A.backFromWords("I'm back!") && A.backFromWords("just got back last night") && A.backFromWords("back in SF") && !A.backFromWords("I'm back to work tomorrow") && !A.backFromWords("interested when im back in sf"));
   const c = A.awayClaim(her!, "2026-10-11");
   check("the claim: their own words, kind away, a week unless renewed; a dated one ends the day after", c.kind === "away" && c.provenance === "user_said" && c.expiresOn === "2026-10-18" && A.awayClaim(A.awayFromWords("away until Oct 20", "2026-10-11")!, "2026-10-11").expiresOn === "2026-10-21");
-  check("away is a kind with a lifetime the nightly rewrite keeps", FL.KINDS.away.lifetime === "ephemeral" && /away \(they're traveling or out of town now\)/.test(src("services/claims.ts")));
+  check("away is a kind with a lifetime, written by code only", FL.KINDS.away.lifetime === "ephemeral");
   const now = new Date("2026-10-12T17:00:00Z");
   check("live while it holds, gone after", !!A.awayFromClaims([c], now) && !A.awayFromClaims([c], new Date("2026-10-19T17:00:00Z")) && !A.awayFromClaims([{ ...c, kind: "plan" }], now));
 
@@ -239,15 +243,67 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   const away = A.awayFromClaims([c], now)!;
   const cand = (type: string, payload: any = { askId: "profile", fromProfile: true }) => ({ id: "1", userId: "u1", type, targetKey: `${type}:x`, topicKey: "t", summary: "", priority: 50, dueAt: now, expiresAt: null, payload, attempts: 0, createdAt: now }) as any;
   const held = (type: string, payload?: any) => PR.candidateChecks(cand(type, payload), { now, sends: [], lastInboundAt: now, away } as any).some((k) => k.name === "away_hold" && !k.pass);
-  check("dispatch: an SF find waits while she's away, asked for or not; an in-room nudge too", held("event_offer") && held("event_offer", { askId: "a1", fromProfile: false }) && held("event_match_nudge"));
+  check("dispatch: a find Co started waits while she's away; an in-room nudge too", held("event_offer") && held("event_match_nudge"));
+  check("review #140, 2: an answer to her own ask is never held (\"I'm in NYC, any founder dinners this week?\"), nor a resurfaced answer", !held("event_offer", { askId: "a1", fromProfile: false }) && !held("event_offer", { askId: "a1", fromProfile: false, again: true }));
   check("dispatch: what isn't tied to a place still goes (a companion check-in, an intro tease)", !held("companion") && !held("network_tease"));
   check("dispatch: not away, nothing held", !PR.candidateChecks(cand("event_offer"), { now, sends: [], lastInboundAt: now, away: null } as any).some((k) => k.name === "away_hold"));
   check("a goal's discovery sweep doesn't run while she's away", PR.SWEEP_BLOCKERS.goal.includes("away_hold") && PR.sweepBlockedBy({ state: { now, timezone: null, optedOut: false, sends: [], lastInboundAt: now, away } as any, holdUntil: null, spaceUntil: null }, "goal", []).includes("away_hold"));
   check("the restraint read carries it to dispatch", /away: raw\.away \?\? null/.test(src("harness/proactive.ts")) && /kind = 'away'/.test(src("services/memberKnowledge.ts")));
   const events = [{ name: "Founder Friends SF", url: "https://lu.ma/ff" }];
   check("tasks 164/165: a text carrying an event it found is held while she's away; a role still goes", TT.eventInSend("Founder Friends SF is Monday", [], events) && TT.eventInSend("This one fits", ["https://lu.ma/ff"], events) && !TT.eventInSend("A growth role at Acme fits what you said", ["https://acme.com/jobs/1"], events));
-  check("the task turn reads it and refuses with a note to look again after", /if \(deps\.away && eventInSend\(what, links \?\? \[\], events\)\) return \{ ok: false, error: awayTaskNote\(deps\.away\) \}/.test(src("services/taskTurn.ts")) && /away: k \? awayFromClaims\(k\.claims/.test(src("services/taskTurn.ts")) && /schedule your next look for the day after 2026-10-20/.test(A.awayTaskNote({ until: "2026-10-20", quote: null, text: "" })));
+  check("review #140, 2: only a look-out Co started waits; an ask task, a member look-out and a promise (owed delivery) never do", A.awayHoldsTask({ source: "lookout", lookoutOrigin: "co" }) && !A.awayHoldsTask({ source: "lookout", lookoutOrigin: "member" }) && !A.awayHoldsTask({ source: "promise" }) && !A.awayHoldsTask({ source: "ask" }) && /schedule your next look for the day after 2026-10-20/.test(A.awayTaskNote({ until: "2026-10-20", quote: null, text: "" })));
   check("inbound texts note it", /A\.noteAwayFromText\(pool, user\.id, resolvedContent/.test(src("routes/sendblue.ts")));
+}
+
+// ================================================================ review of #140
+{
+  // 1. A crafted slide: 1.5MB of unclosed <a:p> openers (and one of <a:t> with no close) reads in well under a second.
+  const bomb = "<a:p>".repeat(300_000);
+  const t0 = Date.now();
+  const out = IF.officeText(zip({ "ppt/presentation.xml": "x", "ppt/slides/slide1.xml": bomb, "ppt/slides/slide2.xml": "<a:p><a:t>x".repeat(150_000), "ppt/slides/slide3.xml": slide("Still read") }), "pptx");
+  const ms = Date.now() - t0;
+  check("review #140, 1: a 1.5MB slide of unclosed openers finishes in well under a second, and the real slide is still read", ms < 500 && /Still read/.test(out ?? ""), { ms, out: (out ?? "").slice(0, 80) });
+  check("review #140, 1: <a:tab/>, <a:tbl> and <a:tr> are not text runs", IF.officeText(zip({ "ppt/presentation.xml": "x", "ppt/slides/slide1.xml": "<a:p><a:tbl><a:tr>junk</a:tr></a:tbl><a:r><a:t>One</a:t></a:r><a:tab/><a:r><a:t xml:space=\"preserve\"> two</a:t></a:r></a:p>" }), "pptx") === "Slide 1:\nOne two");
+  // 9. An out-of-range entity is dropped, never a thrown error.
+  let threw = false, t9: string | null = null;
+  try { t9 = IF.officeText(zip({ "ppt/presentation.xml": "x", "ppt/slides/slide1.xml": slide("Bad &#x110000; entity &#xD800; ok &#65;") }), "pptx"); } catch { threw = true; }
+  check("review #140, 9: &#x110000; and a lone surrogate don't sink the deck", !threw && t9 === "Slide 1:\nBad entity ok A", t9);
+}
+{
+  // 3. False positives that started a week's hold.
+  const no = ["Traveling is exhausting honestly", "when I get back from the gym", "once I'm back from lunch", "I'm traveling on Friday", "I'm back to back with meetings today", "I'm away", "I'm flying to Austin next week"];
+  check("review #140, 3: none of these say she's away now", no.every((t) => !A.awayFromWords(t, "2026-10-14")), no.filter((t) => A.awayFromWords(t, "2026-10-14")));
+  check("review #140, 3: 'back to back' is not back", !A.backFromWords("I'm back to back with meetings today") && !A.backFromWords("just got back from the gym"));
+  check("review #140, 3: 'out of town for the weekend' said Saturday ends Sunday, not in a week; said Wednesday it's ahead", A.awayFromWords("out of town for the weekend", "2026-10-10")?.until === "2026-10-11" && !A.awayFromWords("I'm out of town for the weekend", "2026-10-14"));
+  check("review #140, 3: real travel still counts", !!A.awayFromWords("when I'm back from my trip", "2026-10-11") && !!A.awayFromWords("I'm on vacation", "2026-10-11") && !!A.awayFromWords("we're abroad until the 20th", "2026-10-11"));
+}
+{
+  // 4. Only her own words hold anything; the nightly model read can't write one.
+  const base = { kind: "away", text: "They're away from home right now (traveling).", quote: "Right now imt raveling", expiresOn: "2026-10-18" };
+  const now = new Date("2026-10-12T17:00:00Z");
+  check("review #140, 4: a co_inferred or unquoted away claim holds nothing; her own does", !A.awayFromClaims([{ ...base, provenance: "co_inferred" }], now) && !A.awayFromClaims([{ ...base, provenance: "user_said", quote: null }], now) && !!A.awayFromClaims([{ ...base, provenance: "user_said" }], now));
+  const C = await import("../../src/services/claims.js");
+  const fin = C.finishClaims([{ text: "She is traveling.", provenance: "user_said", kind: "away", quote: "Right now imt raveling", said_on: "2026-10-11" }, { text: "She cooks.", provenance: "user_said", kind: "preference", quote: "I am a cook.", said_on: "2026-10-10" }], [{ at: "2026-10-11", text: "Right now imt raveling" }, { at: "2026-10-10", text: "I am a cook." }], "2026-10-12");
+  check("review #140, 4: the nightly read drops a proposed away claim and keeps the rest", fin.length === 1 && fin[0].kind === "preference" && !C.MODEL_KINDS.includes("away" as any));
+}
+{
+  // 6. Real sentences about calling someone else are untouched on an outbound call.
+  const keep = ["I'm glad you called me out on that.", "Happy you called Sam back.", "Glad you reached out to her, that took guts.", "Thanks for calling the venue first."];
+  check("review #140, 6: about calling someone else, never cut", keep.every((t) => P.thanksForCallingCut(t) === t), keep.map((t) => P.thanksForCallingCut(t)));
+  check("review #140, 6: about calling Co, still cut", P.thanksForCallingCut("I'm really glad you called.") === null && P.thanksForCallingCut("Thanks for calling me back.") === null && P.thanksForCallingCut("Glad you called today, because I had news.") === "I had news.");
+}
+{
+  // 7. WILLING needs the agreeing words.
+  check("review #140, 7: '', '.', 'Sure.', 'On it.', 'Count me in.' are not bare agreement", !["", ".", "Sure.", "On it.", "Count me in."].some((t) => G.WILLING.test(t)) && G.WILLING.test("Happy to.") && G.WILLING.test("Sure, happy to help."));
+  const sureCap = G.claimChecks([{ text: "On it.", type: "capability", supported: false, factId: null, quote: null }], G.createReplyFacts(), empty as any)[0];
+  check("review #140, 7: 'On it.' as a capability still needs support", sureCap.pass === false);
+  // 8. A head announcing a count or a list is left whole.
+  const f8 = [{ name: "claim_detail", pass: false, reason: `detail: "the Rosewood supper"` }];
+  check("review #140, 8: 'I found two options for you, the Rosewood supper.' is not cut to a promise of two", G.cutTrailingClaims("I found two options for you, the Rosewood supper.", f8) === "I found two options for you, the Rosewood supper." && G.cutTrailingClaims("Here's what I found for you this week: the Rosewood supper.", f8) === "Here's what I found for you this week: the Rosewood supper.");
+}
+{
+  // 10. Only a kept document closes the awaited-file loop.
+  check("review #140, 10: a selfie after the failed deck leaves it open; a kept deck closes it; a failed deck opens it; a failed photo does nothing", IF.awaitedAction({ kept: null, unreadable: null }) === null && IF.awaitedAction({ kept: "pptx", unreadable: null }) === "close" && IF.awaitedAction({ kept: null, unreadable: "keynote" }) === "open" && IF.awaitedAction({ kept: null, unreadable: "image" }) === null);
 }
 
 console.log(`jacqueline 10-10 fixes: ${total - failed}/${total} passed`);

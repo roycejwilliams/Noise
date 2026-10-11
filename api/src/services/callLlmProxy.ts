@@ -105,7 +105,18 @@ export function stripSendClaim(sentence: string): string | null {
 // Co placed the call, so thanking them for calling is false (Jacqueline's call, 2026-10-10: "I'm really glad you called", mid-call,
 // on an outbound call). On an outbound call the clause is taken off; a sentence that is only that is dropped. "Glad we got to talk"
 // and "glad you picked up" are true and stay. Inbound calls are untouched.
-const THANKS_FOR_CALLING = /(?:^|[,;]\s*|\s(?:and|but|so)\s+)(?:(?:i'?m|i am|i'?m (?:really|so)|(?:really|so))\s+)?(?:(?:really|so|very)\s+)?(?:glad|happy|thrilled|stoked)\s+(?:that\s+)?you\s+(?:called(?!\s+(?:it|that|this|them|him|her|out)\b)|rang|reached out|gave me a call)\b(?:(?!\s(?:and|but|so|because)\b)[^.!?,;])*|(?:^|[,;]\s*)(?:thanks|thank you|appreciate (?:you|it))\s+(?:so much\s+)?(?:for\s+)?(?:calling|the call|reaching out|ringing)\b(?:(?!\s(?:and|but|so|because)\b)[^.!?,;])*|(?:^|[,;]\s*)(?:(?:it'?s|it is)\s+)?(?:good|nice|great|kind)\s+of\s+you\s+to\s+call\b(?:(?!\s(?:and|but|so|because)\b)[^.!?,;])*/gi;
+// Only about calling Co (review of #140): the verb ends its clause, or takes only "me" and a time word. "Glad you called me out on
+// that", "happy you called Sam back", "glad you reached out to her", "thanks for calling the venue first" are about something else
+// and are never touched.
+const ABOUT_CO_TAIL = String.raw`(?:\s+me)?(?:\s+(?:back|again|today|tonight|just now|earlier|so late|so early))?(?=\s*(?:[.!?,;]|$)|\s+(?:and|but|so|because)\b)`;
+const THANKS_FOR_CALLING = new RegExp(
+  [
+    String.raw`(?:^|[,;]\s*|\s(?:and|but|so)\s+)(?:(?:i'?m|i am)\s+)?(?:(?:really|so|very)\s+)?(?:glad|happy|thrilled|stoked)\s+(?:that\s+)?you\s+(?:called|rang|reached out|gave me a call)${ABOUT_CO_TAIL}`,
+    String.raw`(?:^|[,;]\s*)(?:thanks|thank you|appreciate (?:you|it))\s+(?:so much\s+)?(?:for\s+)?(?:calling|the call|reaching out|ringing)${ABOUT_CO_TAIL}`,
+    String.raw`(?:^|[,;]\s*)(?:(?:it'?s|it is)\s+)?(?:good|nice|great|kind)\s+of\s+you\s+to\s+call${ABOUT_CO_TAIL}`,
+  ].join("|"),
+  "gi",
+);
 // Pure: an outbound call's sentence without "glad you called" / "thanks for calling"; null when nothing is left of it.
 export function thanksForCallingCut(sentence: string): string | null {
   const flat = sentence.replace(/[’‘]/g, "'");

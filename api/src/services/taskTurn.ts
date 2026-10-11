@@ -7,7 +7,7 @@
 // What a task may tell them (2026-09-30): web results prove themselves first
 // (services/taskWeb.ts), and a text is drafted only from verified fields, with
 // every number in it backed by them.
-import { awayFromClaims, awayTaskNote, type AwayState } from "./away.js";
+import { awayFromClaims, awayHoldsTask, awayTaskNote, type AwayState } from "./away.js";
 import { deliveryShapeProblems } from "./speakable.js";
 import { CO_VOICE } from "./coVoice.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -285,7 +285,8 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (namesRejected(what)) return { ok: false, error: "Not sent: it names something Co's daily pick rejected for them. Leave it off." };
         // Away (2026-10-11, tasks 164/165 kept looking for SF rooms while Jacqueline was traveling): an event it found, by its link or
         // its name, is tied to where they live and waits until they're back. Anything else (a role, a program) still goes.
-        if (deps.away && eventInSend(what, links ?? [], events)) return { ok: false, error: awayTaskNote(deps.away) };
+        // Only a look-out Co started on its own word waits (awayHoldsTask): what they asked for, and owed deliveries, always go.
+        if (deps.away && awayHoldsTask(task) && eventInSend(what, links ?? [], events)) return { ok: false, error: awayTaskNote(deps.away) };
         const asOfNow = texts.length ? { ...task, lastTextedAt: deps.now().toISOString() } : task;
         // A promise's delivery (its links) is the thing they're owed: the per-task gap after an unanswered question doesn't hold it
         // (review of #129). Anything else still waits on mayText.

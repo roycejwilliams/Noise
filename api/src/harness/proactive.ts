@@ -23,7 +23,7 @@
 // still enforces the idempotency key and, where asked, local hours. Layer 6
 // in-room nudges during a live event are owned by eventScoring.ts and stay
 // outside this harness.
-import { LOCATION_BOUND_TYPES, awayHoldReason, type AwayState } from "../services/away.js";
+import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
 import { inventedFailure } from "../services/speakable.js";
 import { proactivePaused, pausedTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
@@ -625,9 +625,10 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
   }
   // Away from home, in their own words (services/away.ts, 2026-10-11: Jacqueline said she was traveling and SF finds kept coming):
-  // a find that brings them into a room where they live waits until they're back, answer or not. It stays pending, so a find
+  // a find Co started that brings them into a room waits until they're back; an answer to their own ask never does (awayHoldsCandidate).
+  // It stays pending, so a find
   // still ahead when they return can go then; one whose date passes expires as usual.
-  if (state.away && LOCATION_BOUND_TYPES.has(c.type)) {
+  if (state.away && awayHoldsCandidate(c)) {
     checks.push({ name: "away_hold", pass: false, reason: awayHoldReason(state.away) });
   }
   if (state.needsCare && HOLD_WHILE_STRUGGLING.has(c.type)) {
