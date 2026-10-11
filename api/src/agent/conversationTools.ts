@@ -168,7 +168,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (state.linkDelivered) {
           // Already said with the link (alsoAnswer): never twice.
           const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
-          if (draft.trim() && norm(state.sentMessages.join(" ")).includes(norm(draft))) return { ok: true, note: "That already went with the link; nothing more went out." };
+          if (norm(draft).length > 20 && norm(state.sentMessages.join(" ")).includes(norm(draft))) {
+            notDone("A reply repeating what already went with the link wasn't sent again.");
+            return { ok: true, note: "That already went with the link; nothing more went out." };
+          }
           const { afterLinkAnswers } = await import("./linkAnswer.js");
           const answers = ctx.dryRun ? true : await afterLinkAnswers(ctx.resolvedContent, state.sentMessages.join("\n"), draft);
           if (!ctx.dryRun) {
