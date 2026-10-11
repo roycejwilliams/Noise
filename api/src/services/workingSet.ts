@@ -61,12 +61,28 @@ export type Exit = {
   state: ExitState;
   reason: string; // the fact it left on, in a few words ("its date (Oct 3) passed", "Co's daily pick: an air show doesn't fit…")
   scope: string; // what the fact is about, and no wider ("this event, for their ask: events this weekend")
+  // Set aside, not gone (Royce, 2026-10-11): a find that stalled at send (a rolling opening nobody picked) may come back once
+  // RECOVER_AFTER_DAYS have passed, if a sweep finds it again for an ask it fits. It's read fresh before any offer (sendCheck.ts).
+  recoverable?: boolean;
 };
+// How long a set-aside find stays out before a sweep may bring it back, and how many times it may be set aside before it's gone for
+// good (review of #146: a recovered rolling opening that stalls again would otherwise cycle forever).
+export const RECOVER_AFTER_DAYS = 7;
+export const RECOVER_MAX_TIMES = 2;
+
+// How many times this find has been set aside for this member already.
+export async function setAsideCount(userId: string, itemKey: string): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM co_facts WHERE owner_user_id = $1 AND relation = $2 AND meta->>'itemKey' = $3 AND COALESCE(meta->>'recoverable', '') = 'true'`,
+    [userId, EXIT_RELATION, itemKey],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
 
 // Pure: the distilled fact, with its reason and scope. Never a verdict about the member.
-export function exitFactLabel(e: Pick<Exit, "kind" | "label" | "state" | "reason" | "scope">): string {
+export function exitFactLabel(e: Pick<Exit, "kind" | "label" | "state" | "reason" | "scope" | "recoverable">): string {
   const what = { ask: "ask", goal: "goal", find: "find", backlog: "find" }[e.kind];
-  const verb = { fulfilled: "Closed as done", expired: "Closed", rejected: "Set aside", superseded: "Replaced", cancelled: "Closed" }[e.state];
+  const verb = e.recoverable ? "Set aside for now" : { fulfilled: "Closed as done", expired: "Closed", rejected: "Set aside", superseded: "Replaced", cancelled: "Closed" }[e.state];
   return `${verb} the ${what} "${e.label.slice(0, 160)}": ${e.reason.slice(0, 220)}. Scope: ${e.scope.slice(0, 160)}.`;
 }
 // Pure: a fact is scoped only when it carries a reason and a scope, both its own (not just the verdict).
@@ -81,7 +97,7 @@ export const realExitDeps: ExitDeps = {
     const { recordFactChecked } = await import("./coFacts.js");
     await recordFactChecked({
       ownerUserId: e.userId, subject: "co", relation: EXIT_RELATION, label: exitFactLabel(e), visibility: "owner", source: `working_set:${e.kind}`,
-      meta: { kind: e.kind, itemKey: e.itemKey, state: e.state, reason: e.reason, scope: e.scope },
+      meta: { kind: e.kind, itemKey: e.itemKey, state: e.state, reason: e.reason, scope: e.scope, ...(e.recoverable ? { recoverable: true } : {}) },
     });
   },
 };
@@ -98,12 +114,14 @@ export async function writeExitFact(e: Exit, deps: ExitDeps = realExitDeps): Pro
   }
 }
 
-// Exited finds, by key: a sweep that finds one again never puts it back (inert, never re-queued).
+// Exited finds, by key: a sweep that finds one again never puts it back (inert, never re-queued). A set-aside one (recoverable)
+// blocks only for RECOVER_AFTER_DAYS; after that a sweep that finds it again may queue it, and it's read fresh before any offer.
 export async function exitedFindKeys(userId: string, keys: string[]): Promise<Set<string>> {
   if (!keys.length) return new Set();
   const { rows } = await pool.query(
-    `SELECT DISTINCT meta->>'itemKey' AS k FROM co_facts WHERE owner_user_id = $1 AND relation = $2 AND meta->>'kind' IN ('find', 'backlog') AND meta->>'itemKey' = ANY($3::text[])`,
-    [userId, EXIT_RELATION, keys],
+    `SELECT DISTINCT meta->>'itemKey' AS k FROM co_facts WHERE owner_user_id = $1 AND relation = $2 AND meta->>'kind' IN ('find', 'backlog') AND meta->>'itemKey' = ANY($3::text[])
+       AND NOT (COALESCE(meta->>'recoverable', '') = 'true' AND created_at < NOW() - make_interval(days => $4))`,
+    [userId, EXIT_RELATION, keys, RECOVER_AFTER_DAYS],
   );
   return new Set(rows.map((r: any) => String(r.k)));
 }
@@ -173,6 +191,8 @@ export type PruneDeps = ExitDeps & {
   zone: (userId: string) => Promise<string | null>;
   key: (match: any) => string;
   exited?: (userId: string, keys: string[]) => Promise<Set<string>>;
+  // How many times a find was set aside before (RECOVER_MAX_TIMES). Without it, a stalled find is set aside as if for the first time.
+  setAsides?: (userId: string, itemKey: string) => Promise<number>;
 };
 // Pure: apply a change to a backlog's current items.
 // Two items under one key are the same find: a replacement lands once, never as two copies (re-review of #133).
@@ -277,7 +297,7 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
         const reason = tooLong
           ? nowHeld!.why === "stalled" ? `it couldn't be sent after repeated tries (${nowHeld!.note ?? "held at send"}), and was held ${UNREAD_DAYS} separate days` : nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
           : `${F.formOf(match) === "opening" ? "its deadline" : "its date"} (${end}) passed`;
-        const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
+        const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", recoverable: tooLong && nowHeld!.why === "stalled" && (deps.setAsides ? await deps.setAsides(userId, k).catch(() => RECOVER_MAX_TIMES) : 0) < RECOVER_MAX_TIMES, reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
         if (ok) {
           gone.add(k);
           change.remove.add(k);

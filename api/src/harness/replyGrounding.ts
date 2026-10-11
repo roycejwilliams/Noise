@@ -65,6 +65,17 @@ import { PROMISE_RE, STARTED_WORK, dropPromise, promiseFact, promiseSentence, pr
 
 // Model policy (Royce, 2026-09-14): Sonnet 5 for anything with judgment or
 // side effects; Haiku only for narrow, code-checked reads.
+// Any other event page, read live for "still spots?" (Royce, 2026-10-11): through safeFetch (every hop checked), its schema.org Event
+// data only, no model, so the reply waits seconds at most. Null when it can't be read.
+async function livePageFacts(url: string): Promise<import("../services/asOf.js").LivePage> {
+  const { safeFetch, structuredEvent, humanTime } = await import("../services/linkReader.js");
+  const r = await safeFetch(url);
+  if ("error" in r || r.status >= 400 || !/html/i.test(r.contentType)) return null;
+  const f = structuredEvent(r.body);
+  if (!f) return null;
+  return { start: f.start ? humanTime(f.start.value, null) : undefined, cost: f.cost?.value, soldOut: f.sold_out?.value === "yes" };
+}
+
 export const LAYER3_MODELS = {
   // REPLY_EVAL_MODEL only exists so evals/reply can compare models.
   reply: process.env.REPLY_EVAL_MODEL || MODELS.sonnet,
@@ -300,7 +311,7 @@ export async function gatherReplyFacts(
   // is today's (Phase B, B3, services/asOf.ts). Only this member's own sends. Everything else stored stays labelled as of its read.
   if (opts.turn) {
     const recentSends = opts.turn.sent.filter((x) => Date.now() - x.sentAt.getTime() < 14 * 86_400_000).map((x) => ({ name: x.name, url: x.url }));
-    const live = await liveDetailFacts(opts.turn.message ?? "", recentSends, { luma: (u) => fetchLumaEventDetails(u, { maxAgeMs: 5 * 60_000 }), isLuma: isLumaLink }).catch(() => [] as string[]);
+    const live = await liveDetailFacts(opts.turn.message ?? "", recentSends, { luma: (u) => fetchLumaEventDetails(u, { maxAgeMs: 5 * 60_000 }), isLuma: isLumaLink, page: livePageFacts }).catch(() => [] as string[]);
     for (const line of live) addFact(rf, "known", line);
   }
   // What Co has for doing things on their behalf, and what it doesn't (services/memberKit.ts).

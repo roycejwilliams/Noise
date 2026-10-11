@@ -364,6 +364,7 @@ export const realPruneDeps = {
   zone: (userId: string) => memberZone(userId),
   key: (match: any) => exitKeyOf(match),
   exited: async (userId: string, keys: string[]) => (await import("./workingSet.js")).exitedFindKeys(userId, keys),
+  setAsides: async (userId: string, itemKey: string) => (await import("./workingSet.js")).setAsideCount(userId, itemKey),
   writeFact: async (e: any) => (await import("./workingSet.js")).realExitDeps.writeFact(e),
 };
 // One key everywhere a find exits or is checked for having exited (services/findForm.ts exitKey).
