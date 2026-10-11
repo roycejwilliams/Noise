@@ -68,6 +68,13 @@ async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
 const MAX_AUTO_INTAKE_ATTEMPTS = 3;
 
 export function registerJobs(io: Server) {
+  // Co pages past their 90 days lose their content; the link answers 404 (services/coPages/store.ts, security review 2026-10-11).
+  cron.schedule("20 4 * * *", () => {
+    import("../services/coPages/store.js")
+      .then((m) => m.wipeExpiredCoPages())
+      .then((n) => { if (n) console.log(`co pages: wiped ${n} expired`); })
+      .catch((err: any) => console.error("co pages: expiry wipe failed:", err?.message ?? err));
+  });
   // Hourly, every hour (Royce, 2026-09-02: was "10am-8pm UTC" — 3am-1pm
   // Pacific, wrong for exactly the users this product is built around; a
   // real "thinking about you" text from a DIFFERENT cron arrived at 2am

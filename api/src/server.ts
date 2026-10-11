@@ -36,6 +36,7 @@ import { buildCoVCard } from "./utils/vcard.js";
 import { createMoRouter } from "./routes/mo.js";
 import { createGoogleRouter } from "./routes/google.js";
 import { createReadoutRouter } from "./routes/readout.js";
+import { createCoPageRouter } from "./routes/coPage.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -96,6 +97,8 @@ app.use("/mo", createMoRouter());
 app.use("/google", createGoogleRouter());
 // The host's read-only partner readout, by an approved link only (services/partnerReadoutSend.ts).
 app.use("/readout", createReadoutRouter());
+// A Co page, by its unguessable link only; never listed (routes/coPage.ts). Behind the global limiter above.
+app.use("/d", createCoPageRouter());
 
 // Serve Co's vCard so Sendblue can attach it to the circle_placement iMessage.
 // Sendblue fetches media_url before sending — this endpoint must be publicly reachable
