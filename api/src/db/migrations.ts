@@ -2622,6 +2622,25 @@ export async function runMigrations(): Promise<void> {
     // A Google Doc Co made keeps its Drive file ID (Google audit, 2026-10-11), so a later edit updates that Doc instead of re-uploading.
     .then(() => pool.query(`ALTER TABLE document_deliveries ADD COLUMN IF NOT EXISTS drive_file_id TEXT`))
     .catch((err: Error) => console.error("document_deliveries table init failed:", err));
+  // Co pages (services/coPages): a hosted page at /d/<id>, one member's only (owner_user_id), private by its unguessable id. A page
+  // expires (expires_at, 90 days after its last change); taken down or expired, its link answers 404 and its content is wiped
+  // (data '{}', see store.ts), so nothing a member asked to remove is kept.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_pages (
+        id TEXT PRIMARY KEY CHECK (length(id) = 24),
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        data JSONB NOT NULL,
+        version INT NOT NULL DEFAULT 1,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        taken_down_at TIMESTAMPTZ NULL
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_pages_owner ON co_pages (owner_user_id, updated_at DESC)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_pages_expiry ON co_pages (expires_at) WHERE taken_down_at IS NULL`))
+    .catch((err: Error) => console.error("co_pages table init failed:", err));
   // Goal lifecycle (2026-10-08, services/goalEdges.ts): a goal is active (no row), done or stale. Stale and done goals stay on file
   // and stop generating searches. A set-aside made from context waits to be told to them (told_at NULL, hints counts replies that
   // carried the hint).
