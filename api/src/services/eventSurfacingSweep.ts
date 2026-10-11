@@ -139,7 +139,7 @@ async function repeatFor(userId: string, match: TierMatch, zone: string | null =
 // unread: held because its page didn't say when it is, or couldn't be read (services/workingSet.ts); never offered while held.
 type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean; again?: boolean; unread?: import("./workingSet.js").Unread };
 
-function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder" | "again">): string {
+export function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder" | "again">): string {
   return `event_offer:${item.reminder ? "reminder:" : item.again ? "again:" : ""}${matchKey(item.match)}`;
 }
 
@@ -572,6 +572,11 @@ export type EventOfferPayload = {
   picked?: boolean;
   // The last day it's worth sending (the pick's own read): its expiry and its rank among finds.
   lastDay?: string;
+  // The pick's own why, kept apart, and its view of the day's set (Phase C3): what the bundle composer writes from.
+  // setKeys: the target keys of every find the pick chose together; its set line only describes a bundle of exactly those.
+  pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] };
+  // How many times a live conversation has made this wait (Phase C5); capped by dispatch.
+  waits?: number;
   askId: string;
   askText: string;
   fromProfile: boolean;
@@ -815,7 +820,7 @@ export async function pickerDecides(userId: string): Promise<boolean> {
 // send step bundles it by tier with whatever else is waiting (one per tier), checks it's still fresh, and holds it to the
 // lane's one find a day, the pause after an unanswered text, and 8am-9pm. The picker's reason is the reason it fits.
 // Returns false when it's already sent or decided (the queue keeps one row per thing).
-export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null }): Promise<boolean> {
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] } }): Promise<boolean> {
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   if (await alreadyDecided(userId, item)) return false;
@@ -823,7 +828,7 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
   const match = await enrichMatch({ ...o.match, whyItFits: o.why || o.match.whyItFits });
   // picked: the daily pick chose it, so the send step bundles it with the other picks waiting (any tier). lastDay: the last day
   // it's worth sending (Royce, 2026-10-09: "Fleet Week should never lose its slot to something that will still exist next week").
-  const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
+  const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.pick ? { pick: o.pick } : {}), ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   const timeBound = pickPriority(o.lastDay ?? null, zone);
   // A failed earlier attempt for the same thing re-enters the working set: its row (the queue keeps one per thing) is cleared so this
   // pick lands in it, instead of the insert quietly doing nothing.

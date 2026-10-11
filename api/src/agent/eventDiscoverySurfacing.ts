@@ -119,6 +119,32 @@ export const REVEAL_LENGTH = `Keep it under ${REVEAL_MAX_CHARS - 40} characters:
 
 // Short-notice reveal: name it, when, and why it fits, upfront that it's
 // short notice. The link (if any) goes out first as its own message.
+// One find as the bundle composer (harness/bundleComposer.ts) and the single reveal both see it: its confirmed facts, the rules its
+// caption is checked against, its link, and what a caption may say about who they are (identity grounding). Pure.
+export type RevealItem = { facts: Facts; rules: OutputRules; url: string | null; grounding: string; name: string; fromProfile: boolean; shortNotice: boolean };
+export function revealItem(askText: string, fromProfile: boolean, match: TierMatch, opts: { dots?: string[]; why?: string } = {}): RevealItem {
+  const dots = opts.dots ?? [];
+  const why = opts.why ?? "";
+  const tokens = nameTokens(match.name);
+  return {
+    facts: { ...revealFacts(askText, fromProfile, match), ...(dots.length ? { how_this_connects_to_the_rest_of_their_life: dots.join(" / ") } : {}), ...(why ? { their_why: why } : {}) },
+    rules: {
+      maxSentences: 2,
+      maxChars: REVEAL_MAX_CHARS,
+      mustIncludeAny: tokens.length ? tokens : [match.name],
+      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY, ...(fromProfile ? [CLAIMS_THEY_ASKED] : [])],
+      // Prices and counts a caption states must be on its record (Phase B4, services/sendCheck.ts captionNumbersBacked).
+      backedBy: captionRecord(askText, match, [...dots, why]),
+      ...whoItIsFor(match),
+    },
+    url: "url" in match && match.url ? match.url : null,
+    grounding: `${askText}\n${match.name}\n${dots.join("\n")}\n${why}`,
+    name: match.name,
+    fromProfile,
+    shortNotice: isShortNotice(match),
+  };
+}
+
 export async function draftEventReveal(
   person: { firstName: string },
   askText: string,
@@ -129,10 +155,11 @@ export async function draftEventReveal(
   const url: string | undefined = "url" in match ? match.url : undefined;
   const dots = opts.dots ?? [];
   const why = opts.why ?? "";
+  const item = revealItem(askText, fromProfile, match, { dots, why });
   const draft = () => draftProactive({
     functionId: "agent.eventDiscoverySurfacing.revealNowDraft",
     firstName: person.firstName,
-    facts: { ...revealFacts(askText, fromProfile, match), ...(dots.length ? { how_this_connects_to_the_rest_of_their_life: dots.join(" / ") } : {}), ...(why ? { their_why: why } : {}) },
+    facts: item.facts,
     // Every event offer goes out with its details now (2026-09-18), so "short
     // notice" is only said when it's true.
     task: `${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY} Do not end with a question or an offer ("want me to grab you a spot?", "want this on your radar?"); a separate text after this one asks if it interests them. ` + (opts.reminder
@@ -145,7 +172,7 @@ export async function draftEventReveal(
   // Nothing about who they are beyond what they said in their ask (identityGuard.ts).
   const finish = (text: string | null): string | null => {
     if (!text) return null;
-    const grounded = stripUngroundedIdentity(text, `${askText}\n${match.name}\n${dots.join("\n")}\n${why}`);
+    const grounded = stripUngroundedIdentity(text, item.grounding);
     return grounded ? stripClosingQuestion(grounded) : null;
   };
   let body = finish(await draft());
@@ -157,19 +184,7 @@ export async function draftEventReveal(
     const shorter = finish(await draftAgain({ draft: body, failed: `draft_length: ${body.length} chars (max ${REVEAL_MAX_CHARS}). Say the same thing in fewer words: its name, when, and the one reason it fits them` }, draft));
     if (shorter) body = shorter;
   }
-  const tokens = nameTokens(match.name);
-  return {
-    messages: url ? [url, body] : [body],
-    text: body,
-    rules: {
-      maxSentences: 2,
-      maxChars: REVEAL_MAX_CHARS,
-      mustIncludeAny: tokens.length ? tokens : [match.name],
-      forbidden: [OFFER_FORBIDDEN, IMPLIES_IDENTITY, ...(fromProfile ? [CLAIMS_THEY_ASKED] : [])],
-      backedBy: captionRecord(askText, match, [...dots, why]),
-      ...whoItIsFor(match),
-    },
-  };
+  return { messages: url ? [url, body] : [body], text: body, rules: item.rules };
 }
 
 // When Co judged the event aimed at a group (the sweep's audience field), the text has to say so, always:

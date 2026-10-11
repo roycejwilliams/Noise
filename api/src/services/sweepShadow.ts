@@ -221,7 +221,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   }
   const count = (v: string) => r.judgments.filter((j) => j.verdict === v).length;
   // The picks go in before the run is recorded: the record is what marks today done (review of #116).
-  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today).catch((err: any) => console.error("picker: applying the picks failed (non-fatal):", err?.message ?? err));
+  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today, r.set ?? null).catch((err: any) => console.error("picker: applying the picks failed (non-fatal):", err?.message ?? err));
   if (!opts.dryRun) await recordDecision({
     layer: 5,
     decision: "sweep.select.shadow",
@@ -264,13 +264,16 @@ export function memberSafeWhy(why: string): string {
 //   - a waiting find the picker held (its own hold, or over the day's send limit) goes back to waiting in the backlog only,
 //     so a later "send" can queue it again; it never sends while held.
 //   - a waiting find the picker never saw is left alone.
-export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: (Waiting & { why: string; lastDay?: string | null })[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
+// whyMember and whyNow stay apart for the composer (Phase C3: they were joined into one string, the "why now" lost as such); `why` is
+// both, for the find's own whyItFits.
+type Queued = Waiting & { why: string; whyMember: string; whyNow: string; lastDay?: string | null };
+export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: Queued[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
   const verdictOf = new Map(judgments.map((j) => [j.key, j]));
-  const queue: (Waiting & { why: string; lastDay?: string | null })[] = [];
+  const queue: Queued[] = [];
   const rank = (b: Waiting) => (b.reminder || b.again ? 0 : 1) * 2 + Number(b.fromProfile);
   for (const j of judgments.filter((x) => x.verdict === "send")) {
     const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => rank(a) - rank(b))[0];
-    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" ")), lastDay: j.lastDay ?? null });
+    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" ")), whyMember: memberSafeWhy(j.why ?? ""), whyNow: memberSafeWhy(j.whyNow ?? ""), lastDay: j.lastDay ?? null });
   }
   const why = (j: { verdict: string; why?: string } | undefined) => `Co's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
   const reject = waitingKeys.filter((w) => verdictOf.get(w.key)?.verdict === "reject").map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
@@ -278,7 +281,7 @@ export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | 
   return { queue, reject, unqueue };
 }
 
-async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string): Promise<void> {
+async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null = null): Promise<void> {
   if (!pickerLive() || !(await pickerUserIds()).includes(userId)) return;
   const { queuePickedOffer, onEventOfferDropped } = await import("./eventSurfacingSweep.js");
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
@@ -305,8 +308,12 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
   const uniq = [...new Map(rejectedFinds.map((r) => [r.key, r])).values()];
   await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
   const queuedNames: string[] = [];
+  // The finds the pick chose together, by the key each is queued under: the set line rides only with a bundle of exactly these.
+  const setKeys = () => plan.queue.map((x) => offerTargetKeyOf({ match: x.match, reminder: x.reminder, again: x.again }));
+  const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
   for (const q of plan.queue) {
-    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null }).catch((err: any) => {
+    // The pick's view of the set rides with each find it chose today, only when it chose more than one (Phase C3).
+    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}) } }).catch((err: any) => {
       console.error("picker: queueing a pick failed (non-fatal):", err?.message ?? err);
       return false;
     });

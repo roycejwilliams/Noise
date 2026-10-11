@@ -145,6 +145,7 @@
     "evals/lifecycle/workingSet.ts",
     "evals/phaseA/knowFilter.ts",
     "evals/phaseB/verifyAtSend.ts",
+    "evals/phaseC/composer.ts",
     "evals/tasks/heldReplay.ts",
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",

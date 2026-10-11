@@ -156,7 +156,7 @@ check("the shown reason is still their own stated ask (the one shared ask the ma
   const sb = src("routes/sendblue.ts");
   check("replies: found alongside the router from the turn's picture, handed to Co before it drafts", /dotsP = turnP\.then\(\(t\) =>\s*readMoment\(/.test(sb) && /const dotsNote = dotsInstruction\(dots\);\s*if \(dotsNote\) \{\s*addInstruction\(replyFacts, dotsNote\);/.test(sb));
   const ev = src("agent/eventDiscoverySurfacing.ts");
-  check("event offers: the connection can be the reason it fits, and isn't stripped as an identity claim", /how_this_connects_to_the_rest_of_their_life/.test(ev) && /stripUngroundedIdentity\(text, `\$\{askText\}\\n\$\{match\.name\}\\n\$\{dots\.join\("\\n"\)\}\\n\$\{why\}`\)/.test(ev));
+  check("event offers: the connection can be the reason it fits, and isn't stripped as an identity claim", /how_this_connects_to_the_rest_of_their_life/.test(ev) && /grounding: `\$\{askText\}\\n\$\{match\.name\}\\n\$\{dots\.join\("\\n"\)\}\\n\$\{why\}`/.test(ev) && /stripUngroundedIdentity\(text, item\.grounding\)/.test(ev) && /stripUngroundedIdentity\(c, b\.item\.grounding\)/.test(src("harness/bundleComposer.ts")));
 }
 
 // ------------------------------------------------ every link ties back to their why (2026-09-28)

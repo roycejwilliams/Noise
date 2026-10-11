@@ -211,7 +211,11 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   const at = reg.indexOf("checkBeforeSend(c, person.timezone)");
   check("B1 hook: the event_offer draft re-reads before the date check and drafting", at > 0 && at < reg.indexOf("offerable(readDates(itemDays(p.match") && /if \(!\("ok" in fresh\)\) return fresh;/.test(reg));
   const pro = src("harness/proactive.ts");
-  check("B1 hook: a sibling whose re-read exited it is archived in dispatch (one line), never left pending", /if \("skip" in d && \(\(d as \{ exited\?: boolean \}\)\.exited \|\| \(d as \{ held\?: boolean \}\)\.held\) && !opts\.dryRun\) await dropCandidate\(registry, sib, "skipped", d\.skip\);/.test(pro));
+  check("B1 hook: a sibling whose re-read exited it (or held it) is archived in the composer's prep, never left pending", /if \(\(prep\.exited \|\| prep\.held\) && !opts\.dryRun\) await dropCandidate\(registry, x, "skipped", prep\.skip\);/.test(pro));
+  const regC = src("harness/proactiveRegistry.ts");
+  check("B+C: the send-time re-read runs inside prepareOffer, so every find in a composed bundle is re-read (and the lone reminder too)", /export async function prepareOffer[\s\S]{0,700}checkBeforeSend\(c, person\.timezone\)[\s\S]{0,60}if \(!\("ok" in fresh\)\) return fresh;/.test(reg) && /const prep = await prepareOffer\(c, person\);[\s\S]{0,300}if \("defer" in prep\) return prep;/.test(reg));
+  check("B+C: a lead whose re-read defers waits (never past its own expiry); a deferred sibling stays pending", /if \("defer" in prep\) \{\s*if \(x\.id === c\.id\) \{[\s\S]{0,300}LEAST\(expires_at, \$3\)/.test(pro));
+  check("B4+C: caption prices and counts are backed by the record in composed captions too (revealItem rules)", /backedBy: captionRecord\(askText, match, \[\.\.\.dots, why\]\),/.test(src("agent/eventDiscoverySurfacing.ts")) && /checkDraft\(c, \{ \.\.\.b\.item\.rules/.test(src("harness/bundleComposer.ts")));
 }
 
 // ================================================================ B2: undated finds don't queue blind
