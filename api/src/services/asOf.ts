@@ -129,18 +129,31 @@ export function citesStaleAsCurrent(claim: string, citedFact: string | null | un
 // ---------------------------------------------------------------- the live read
 
 export type LiveItem = { name: string; url: string | null };
-export type LiveDeps = { luma: (url: string) => Promise<EventDetails | null>; isLuma: (url: string) => boolean };
+// page: any other event page, read without a model (its schema.org Event data: start, price, sold out), Royce 2026-10-11: "live
+// re-read". Optional, so a caller without it keeps Luma-only.
+export type LivePage = { start?: string; cost?: string; soldOut?: boolean } | null;
+export type LiveDeps = { luma: (url: string) => Promise<EventDetails | null>; isLuma: (url: string) => boolean; page?: (url: string) => Promise<LivePage> };
 export const LIVE_READS_MAX = 2;
 // They asked a live question: the Luma pages of the few things Co sent them most recently are read now (a short cache: a read within
-// the last few minutes counts as now), and what comes back is a fact with no mark. Other pages stay as-of: reading them needs a model
-// and the reply never waits on that. Only this member's own sends are passed in (no other member's links ever reach here).
+// the last few minutes counts as now), and what comes back is a fact with no mark. Other event pages (2026-10-11) are read the same
+// way without a model, from their schema.org Event data; a page without it stays as-of. Only this member's own sends are passed in (no other member's links ever reach here).
 export async function liveDetailFacts(message: string, items: LiveItem[], deps: LiveDeps, now = new Date()): Promise<string[]> {
   if (!asksLiveDetail(message)) return [];
   const seen = new Set<string>();
-  const picks = items.filter((i) => i.url && deps.isLuma(i.url) && !seen.has(i.url) && seen.add(i.url)).slice(0, LIVE_READS_MAX);
+  const picks = items.filter((i) => i.url && (deps.isLuma(i.url) || deps.page) && !seen.has(i.url) && seen.add(i.url)).slice(0, LIVE_READS_MAX);
   const lines: string[] = [];
   await Promise.all(
     picks.map(async (i) => {
+      if (!deps.isLuma(i.url!) && deps.page) {
+        const p = await deps.page(i.url!).catch(() => null);
+        const parts = p ? [p.start ? `starts ${p.start}` : "", p.cost ? `price ${p.cost}` : "", p.soldOut ? "sold out" : ""].filter(Boolean) : [];
+        lines.push(
+          parts.length
+            ? `Checked live just now (${now.toISOString().slice(0, 16).replace("T", " ")} UTC), "${i.name}", from its own page: ${parts.join("; ")}${p?.soldOut ? "" : " (the page doesn't say it's sold out)"}.`
+            : `Co tried to check "${i.name}" live just now and its page doesn't list spots, time or price in a form Co can confirm: anything on file about them is as of when it was found, never current.`,
+        );
+        return;
+      }
       const d = await deps.luma(i.url!).catch(() => null);
       if (!d) {
         lines.push(`Co tried to check "${i.name}" live just now and couldn't read its page: anything on file about its spots, time or price is as of when it was found, never current.`);
