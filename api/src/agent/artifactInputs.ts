@@ -8,7 +8,8 @@ export const TASTE_INPUT = z
   .object({
     quote: z.string().describe("Their own words about the look they want, or that they don't mind, copied exactly from what they wrote."),
     dontCare: z.boolean().optional().describe("True when they said they don't mind how it looks."),
-    mood: z.enum(["minimal", "bold", "warm", "dark", "playful", "editorial", "classic"]).optional().describe("The feel their words point to."),
+    mood: z.enum(["minimal", "bold", "warm", "dark", "playful", "editorial", "classic"]).optional().describe("The feel their own description points to. Leave it out when they only picked a look by name."),
+    preset: z.enum(["minimal", "bold", "warm", "dark", "playful", "editorial", "classic"]).optional().describe("A look they picked by name (Minimal, Editorial, Bold, Warm, Dark, Playful, Classic) instead of describing one. Anything they described (colors, type, vibe) wins over it."),
     background: hex,
     text: hex,
     accent: hex,

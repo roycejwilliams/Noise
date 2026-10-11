@@ -13,12 +13,13 @@ import { DECK_MOODS, contrast, styleFrom, type DeckMood, type DeckStyle } from "
 export { DECK_MOODS, MOOD_STYLES, contrast, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
 // image / logo: a member asset's id (services/memberAssets.ts), one of the owner's own images; never a URL. The store checks the
 // owner, and the image is served only through this deck's own link (routes/coPage.ts).
-export type Slide = { headline: string; bullets: string[]; image: string | null };
+// notes: speaker notes for this slide, only when the member asked for them (PR 3, 2026-10-11); shown under the slide, folded.
+export type Slide = { headline: string; bullets: string[]; image: string | null; notes?: string };
 export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: string | null; slides: Slide[]; style: DeckStyle };
 const ASSET = /^[A-Za-z0-9_-]{24}$/;
 const HEX = /^#[0-9a-f]{6}$/i;
 
-export const DECK_LIMITS = { title: 90, subtitle: 140, slidesMin: 2, slides: 15, headline: 90, bulletsMin: 1, bullets: 5, bullet: 160 } as const;
+export const DECK_LIMITS = { title: 90, subtitle: 140, slidesMin: 2, slides: 15, headline: 90, bulletsMin: 1, bullets: 5, bullet: 160, notes: 700 } as const;
 
 // The one gate for a deck, like parseCoPageData for a page: unknown fields refused, every line plain, colors hex only.
 export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | { ok: false; problems: string[] } {
@@ -38,14 +39,15 @@ export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | 
   const slides = list(o.slides, "slides", L.slides, problems, L.slidesMin)
     .map((s, i) => {
       const f = `slides[${i}]`;
-      const r = obj(s, f, ["headline", "bullets", "image"], problems);
+      const r = obj(s, f, ["headline", "bullets", "image", "notes"], problems);
       if (!r) return null;
       const headline = plain(r.headline, `${f}.headline`, L.headline, problems, true);
       const bullets = list(r.bullets, `${f}.bullets`, L.bullets, problems, L.bulletsMin)
         .map((b, j) => plain(b, `${f}.bullets[${j}]`, L.bullet, problems, true))
         .filter((x): x is string => !!x);
       const image = asset(r.image, `${f}.image`);
-      return headline && bullets.length ? { headline, bullets, image } : null;
+      const notes = plain(r.notes, `${f}.notes`, L.notes, problems, false);
+      return headline && bullets.length ? { headline, bullets, image, ...(notes ? { notes } : {}) } : null;
     })
     .filter((x): x is Slide => !!x);
   const st = obj(o.style, "style", ["mood", "background", "text", "accent", "type"], problems);
@@ -88,7 +90,9 @@ function asOf(d: Date, zone: string | null): string {
 // One slide per screen, 16:9, scrolled (and printed) one at a time. No scripts, no controls: a link that reads on a phone or a laptop.
 // assetBase: where this view's images are served, relative to the page's own address ("<deck id>/a/" under /d/, "<share id>/a/" under
 // /d/v/), so a share link never shows the owner's own link.
-export function renderDeck(page: { id: string; data: DeckData; updatedAt: Date }, o: { url: string | null; zone?: string | null; assetBase?: string }): string {
+// showNotes: speaker notes are for the speaker, so only their own link shows them; a share link (their audience) never does (review
+// of PR 3). Never printed.
+export function renderDeck(page: { id: string; data: DeckData; updatedAt: Date }, o: { url: string | null; zone?: string | null; assetBase?: string; showNotes?: boolean }): string {
   const d = page.data;
   const s = d.style;
   const f = FONTS[s.type];
@@ -119,16 +123,20 @@ li::before{content:"";position:absolute;left:0;top:0.55em;width:clamp(6px,0.8vw,
 .split img{width:100%;max-height:52vh;object-fit:contain;border-radius:2px}
 @media (min-width:640px){.split.has-img{grid-template-columns:1.15fr 1fr}.split img{max-height:none;aspect-ratio:4/3;object-fit:cover}}
 .logo{height:clamp(44px,8vw,96px);width:auto;max-width:40%;object-fit:contain;object-position:left center;margin:0 0 clamp(14px,3vw,34px);display:block}
+.notes{width:min(100%,1100px);margin:10px auto 0;font-size:clamp(13px,1.6vw,16px);line-height:1.55;opacity:0.85}
+.notes summary{cursor:pointer;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;opacity:0.7}
+.notes p{margin:8px 0 0;max-width:70ch}
+.slide.with-notes{flex-direction:column}
 .n{position:absolute;right:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
 .mark{position:absolute;left:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
-@media print{html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{border:none}}
+@media print{.notes{display:none}html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{border:none}}
 `;
   // An asset is served only under this deck's own link (relative, so it never names another host).
   const img = (id: string, alt: string, cls = "") => `<img${cls ? ` class="${cls}"` : ""} src="${e(`${o.assetBase ?? `${page.id}/a/`}${id}`)}" alt="${e(alt)}" decoding="async">`;
   const slides = d.slides
     .map(
       (sl, i) =>
-        `<section class="slide"><div class="frame"><div class="split${sl.image ? " has-img" : ""}"><div><div class="rule"></div><h2>${e(sl.headline)}</h2><ul>${sl.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul></div>${sl.image ? img(sl.image, sl.headline) : ""}</div><div class="n">${i + 2} / ${d.slides.length + 1}</div></div></section>`,
+        `<section class="slide${sl.notes && o.showNotes !== false ? " with-notes" : ""}"><div class="frame"><div class="split${sl.image ? " has-img" : ""}"><div><div class="rule"></div><h2>${e(sl.headline)}</h2><ul>${sl.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul></div>${sl.image ? img(sl.image, sl.headline) : ""}</div><div class="n">${i + 2} / ${d.slides.length + 1}</div></div>${sl.notes && o.showNotes !== false ? `<details class="notes"><summary>Speaker notes</summary><p>${e(sl.notes)}</p></details>` : ""}</section>`,
     )
     .join("\n");
   return `<!doctype html>

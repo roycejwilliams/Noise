@@ -21,9 +21,17 @@ export const DECK_INPUT = z.object({
   subtitle: line("The line under it: what it is and who it's for."),
   logo: imageN("Their logo on the title slide."),
   slides: z
-    .array(z.object({ headline: line("The slide's one point."), bullets: z.array(line("A short supporting point.")).min(1).max(5), image: imageN("A picture for this slide (a product shot, the team, the space).") }))
+    .array(
+      z.object({
+        headline: line("The slide's one point."),
+        bullets: z.array(line("A short supporting point.")).min(1).max(5),
+        image: imageN("A picture for this slide (a product shot, the team, the space)."),
+        notes: z.string().nullable().optional().describe("Speaker notes for this slide: what to say out loud, from what they told you, in plain words. Write them only when they asked for speaker notes, on the slides they named (all of them if they said so). On a change, leave it out to keep the slide's notes as they are; an empty string takes them off."),
+      }),
+    )
     .min(2)
-    .max(15),
+    .max(15)
+    .describe("The content slides, in order. The title slide is made from title and subtitle and is slide 1, so the first slide here is slide 2, the second is slide 3, and so on. Never repeat the title slide here."),
 });
 
 // What a deck may say (Royce, 2026-10-11: "only content the member supplied for this deck or explicitly approved goes on the slides.
@@ -97,11 +105,23 @@ export async function deckDataFrom(
   input: z.infer<typeof DECK_INPUT>,
   taste: { mood?: string; colors?: { background?: string | null; text?: string | null; accent?: string | null }; type?: string | null } | null,
   assets: Map<number, string> = new Map(),
+  was: { slides?: { headline: string; bullets?: string[]; notes?: string }[] } | null = null,
 ): Promise<Record<string, unknown>> {
   const { styleFrom } = await import("../services/coPages/deck.js");
   const style = styleFrom(taste?.mood ?? "minimal", taste?.colors ?? {}, taste?.type ?? undefined);
   const at = (n: number | null | undefined) => (typeof n === "number" ? assets.get(n) ?? null : null);
-  return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s) => ({ headline: s.headline, bullets: s.bullets, image: at(s.image) })), style };
+  // A slide's notes on an edit (review of PR 3): written now, or kept from the slide with the same headline (else the same place)
+  // when this version leaves them out; an empty string takes them off. An unrelated edit never drops their notes.
+  // By place only when it's the same slide reworded (it still shares a bullet): a replaced slide never inherits notes about content
+  // that's gone (review of PR 3).
+  const keptNotes = (s: { headline: string; bullets: string[] }, i: number) => {
+    const same = was?.slides?.find((x) => x.headline === s.headline);
+    if (same) return same.notes;
+    const there: any = was?.slides?.[i];
+    return there && (there.bullets ?? []).some((b: string) => s.bullets.includes(b)) ? there.notes : undefined;
+  };
+  const notesFor = (s: { headline: string; bullets: string[]; notes?: string | null }, i: number) => (typeof s.notes === "string" ? s.notes.trim() : keptNotes(s, i)) || null;
+  return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s, i) => ({ headline: s.headline, bullets: s.bullets, image: at(s.image), ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}) })), style };
 }
 
 // Their taste, with no asking: what they said about the look now (their exact words, checked, then saved as member knowledge), else
@@ -114,7 +134,8 @@ export async function knownTaste(ctx: ConversationToolContext, said: z.infer<typ
       return { error: "The taste quote must be copied exactly from what they wrote. Leave taste out if they said nothing about the look." };
     }
     const t = {
-      mood: said.dontCare ? "minimal" : (said.mood ?? "minimal"),
+      // What they describe always wins; a preset they picked is the fallback when they'd rather not describe it (PR 3).
+      mood: said.dontCare ? "minimal" : (said.mood ?? said.preset ?? "minimal"),
       colors: { background: said.background ?? null, text: said.text ?? null, accent: said.accent ?? null },
       type: said.type ?? null,
       inspo: said.inspo ?? null,
@@ -163,11 +184,14 @@ export function deckTools(
         if (t.ask) {
           if (!ctx.dryRun) await (await T()).recordTasteAsked(ctx.userId).catch(() => {});
           ctx.facts?.add("known", "Co hasn't built the deck yet: it is asking one question first, about their taste and anything missing for the content.");
+          // The question names things the fact check would otherwise cut as unsourced (live run, PR 3: the looks and Pinterest were
+          // cut, and only "fine if you don't care" went): they're Co's own offer.
+          ctx.facts?.add("known", "For the look of a deck, Co can follow a Pinterest board, sites or brands they love, colors or a vibe they describe, or one of Co's looks by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic.");
           return {
             ok: false,
             ask: true,
             error:
-              "Not built yet. Ask ONE question, in one text: the look they like (a Pinterest board, sites or brands they love, colors, the vibe; fine if they don't mind) and, only if you need it, the one thing missing about what the deck should say. Then build it from their answer. You won't ask again: if they skip the taste part, it's built clean and minimal.",
+              "Not built yet. Ask ONE question, in one text: the look they like (a Pinterest board, sites or brands they love, colors, the vibe), or, if they'd rather not describe it, one of these looks by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic; fine if they don't mind. Add, only if you need it, the one thing missing about what the deck should say. Then build it from their answer. You won't ask again: if they skip the taste part, it's built clean and minimal.",
           };
         }
         const source = await deckSource(ctx, (await o.source()).read, null);
@@ -226,12 +250,12 @@ export function deckTools(
         }
         // What's on the deck now went out to them and stands; the edit may also use what they said since it was made.
         const was: any = before && before.ownerUserId === ctx.userId && (before.data as any).kind === "deck" ? before.data : null;
-        const lines = was ? [was.title, was.subtitle, ...was.slides.flatMap((x: any) => [x.headline, ...x.bullets])].join("\n") : "";
+        const lines = was ? [was.title, was.subtitle, ...was.slides.flatMap((x: any) => [x.headline, ...x.bullets, ...(x.notes ? [x.notes] : [])])].join("\n") : "";
         const source = await deckSource(ctx, (await o.source()).read, { id: pick.id, lines });
         const onDeck = was ? [was.logo, ...was.slides.map((x: any) => x.image)].filter(Boolean) : [];
         const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
         if ("error" in ids) return { ok: false, error: ids.error };
-        const next = await deckDataFrom(input, taste, ids.map);
+        const next = await deckDataFrom(input, taste, ids.map, was);
         const invented = await inventedClaims(ctx, next, source, was);
         if (invented) {
           o.notDone("The deck wasn't changed: some lines added claims they never made.");

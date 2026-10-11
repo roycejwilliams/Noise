@@ -138,7 +138,7 @@ export const ABILITIES: Ability[] = [
     can: "Co can make them a page: a plan with a few parts, options side by side, or a set of places with their links, at a private link only they get. It can change it in conversation (same link) and take it down when they ask.",
     tool: "makePage",
     limits: { perTurn: 1, perDay: 4 },
-    use: "You pick the format, never them (never ask \"a page or a PDF?\"): one fact or a short answer is a text; a plan with several parts, options to compare, or a set of places with links is a page (makePage); a file to download, print or attach is a PDF (writeDocument); a Google Doc only when they ask for one. A page goes as ONE text, your line saying what you made plus its link, and nothing about its contents in the chat: the page holds them. If their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link. Build it only from what they told you and what you read for them. It takes their look the way a deck does: their saved taste applies on its own, or pass taste when they describe the look now (their exact words); never ask about taste for a page. Images they sent are their image #N: their logo on the cover, a picture of theirs in the section it belongs to, by number, only their own.",
+    use: "You pick the format, never them (never ask \"a page or a PDF?\"): one fact or a short answer is a text; a plan with several parts, options to compare, or a set of places with links is a page (makePage); a file to download, print or attach is a PDF (writeDocument); a Google Doc only when they ask for one. A page goes as ONE text, your line saying what you made plus its link, and nothing about its contents in the chat: the page holds them. If their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link. Build it only from what they told you and what you read for them. It takes their look the way a deck does: their saved taste applies on its own, or pass taste when they describe the look now (their exact words); never ask about taste for a page. Images they sent are their image #N in what you see (the number is only for your tools; never say it to them): their logo on the cover, a picture of theirs in the section it belongs to, only their own. They name images by what they show ('the studio photo', 'take the logo off'); match that to the description and pass its number, or 0 to take one off.",
   },
   {
     id: "co_page_update",
@@ -155,6 +155,13 @@ export const ABILITIES: Ability[] = [
     use: "When they ask you to take a page or a deck down or delete it, take it down and say so in a few words. \"Stop sharing it\" is stopSharing when it has a share link; it doesn't take their own copy down.",
   },
   // Keep, renew and share, for any page or deck (agent/artifactTools.ts, 2026-10-11).
+  {
+    id: "co_artifact_open",
+    can: "Co can open a page or deck it made for them to see what's on it now.",
+    tool: "openArtifact",
+    limits: { perTurn: 2 },
+    use: "Before changing a page or deck you didn't just make in this conversation, open it, then write the whole new version from what's there with updatePage or updateDeck. Never ask them to paste what's on it.",
+  },
   {
     id: "co_artifact_keep",
     can: "Co can keep a page or deck it made for them: for good when they say \"keep this\", or 90 more days when they say \"renew\". Otherwise they last 90 days from their last change, and Co tells them before one they've been using expires.",
@@ -174,7 +181,7 @@ export const ABILITIES: Ability[] = [
     can: "Co keeps the photos they text (for their decks and pages) and deletes them whenever they ask: all of them or by number.",
     tool: "deleteImages",
     limits: { perTurn: 2 },
-    use: "When they ask you to delete or forget the photos or images they sent (all, or specific ones). Say in a few words they're gone.",
+    use: "When they ask you to delete or forget the photos or images they sent (all, or specific ones they describe, like \"the photo of my ID\"): match what they describe to the images you see and pass those numbers. Say in a few words they're gone, by what they showed, never by number.",
   },
   {
     id: "co_artifact_reset_link",
@@ -197,7 +204,7 @@ export const ABILITIES: Ability[] = [
     tool: "makeDeck",
     // Two a turn: one fix after a refused attempt (live run, 2026-10-11: the corrected deck was the one the limit stopped).
     limits: { perTurn: 2, perDay: 3 },
-    use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; fine if they don't mind) and anything you truly need for the content, then build from the answer. Images they sent are saved as their image #N: place their logo on the title slide and a picture on the slide it belongs to, by number, only their own. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat; if their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link.",
+    use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; or, if they'd rather not describe it, a look by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic; fine if they don't mind) and anything you truly need for the content, then build from the answer. Speaker notes only when they ask for them, on the slides they name, from what they told you; they show on their own link, never on a share link, and stay through later edits unless they ask to change them. Images they sent are their image #N in what you see (the number is only for your tools; never say it to them): place their logo on the title slide and a picture on the slide it belongs to, only their own. They name images by what they show ('the studio photo', 'drop the logo'); match that to the description, or leave it out to take it off. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat; if their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link.",
   },
   {
     id: "co_deck_update",

@@ -45,6 +45,6 @@ export async function inventedLines(lines: string[], theirWords: string, judge: 
 }
 
 // Pure: every line of a deck the check reads (the title is a name; the subtitle, headlines and bullets are claims).
-export function deckClaimLines(d: { subtitle: string; slides: { headline: string; bullets: string[] }[] }): string[] {
-  return [d.subtitle, ...d.slides.flatMap((s) => [s.headline, ...s.bullets])];
+export function deckClaimLines(d: { subtitle: string; slides: { headline: string; bullets: string[]; notes?: string }[] }): string[] {
+  return [d.subtitle, ...d.slides.flatMap((s) => [s.headline, ...s.bullets, ...(s.notes ? [s.notes] : [])])];
 }
