@@ -73,8 +73,8 @@ export async function uploadGoogleDoc(accessToken: string, name: string, html: s
 
 // Shared working artifacts (a venue brief, a partnership plan, a readout) are made to be passed to a venue or a partner and edited
 // together, so the Doc is opened to anyone with the link, as an editor, never listed or searchable (allowFileDiscovery false). That is a
-// real tradeoff: whoever holds the link can read and change it. It is used only for those kinds, only for the test pair
-// (services/documentDelivery.ts), and the link goes only to the member, in their own thread. drive.file allows this on files Co created.
+// real tradeoff: whoever holds the link can read and change it. It is used only for those kinds, only for the test pair, and only
+// when their own words ask to share it (SHARE_ASK, services/documentDelivery.ts); the link goes only to the member, in their own thread. drive.file allows this on files Co created.
 // A refusal (a Workspace that forbids link sharing) leaves the Doc private to them, and says so.
 export type DocsShare = { ok: true } | { ok: false; why: string };
 export async function shareWithLink(accessToken: string, fileId: string, fetchImpl: typeof fetch = fetch): Promise<DocsShare> {

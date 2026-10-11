@@ -63,14 +63,15 @@ check("the upload is one multipart body: metadata asking for a Google Doc, then 
   });
   const uploads: string[] = [];
   const shares: string[] = [];
-  const to = { userId: PAIR[0], firstName: "Royce", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-08T18:00:00Z") };
+  // They asked to share it (security review, 2026-10-11: link sharing needs their words; evals/security/reviewFixes.ts covers the private default).
+  const to = { userId: PAIR[0], firstName: "Royce", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-08T18:00:00Z"), shareByLink: true };
   const r = await X.deliverDocument(doc, to, "google_docs", deps());
   check("google_docs: made in their Drive, named like the PDF (without .pdf), and the link texted with the title", r.ok && r.via === "google_docs" && r.filename === "Co-Product-Positioning-Scaling-2026-10-08" && /docs\.google\.com/.test(texts[0]?.content) && texts[0].content.startsWith(doc.title) && !texts[0].media_url, { r, t: texts[0] });
   const nc = await X.deliverDocument(doc, to, "google_docs", deps({ token: null }));
   check("google_docs: not connected (or Docs not allowed) fails plainly, marked so the PDF can go instead", !nc.ok && (nc as any).notConnected === true);
   const bad = await X.deliverDocument(doc, to, "google_docs", deps({ up: { ok: false, why: "Google didn't take the document" } }));
   check("google_docs: Google refusing is a plain failure", !bad.ok && /didn't take/.test((bad as any).why));
-  check("google_docs: the Doc is opened to anyone with the link (the one it just made), and the text says so", (r as any).shared === true && shares.join() === "abc" && /Anyone with this link can open and edit it\./.test(texts[0]?.content));
+  check("google_docs: asked to share, the Doc is opened to anyone with the link (the one it just made), and the text says so", (r as any).shared === true && shares.join() === "abc" && /Anyone with this link can open and edit it\./.test(texts[0]?.content));
   texts.length = 0;
   const priv = await X.deliverDocument(doc, to, "google_docs", deps({ share: { ok: false, why: "their Google account doesn't allow link sharing" } }));
   check("google_docs: a Workspace that refuses link sharing leaves it private, still sent, and the text says only they can open it", priv.ok && (priv as any).shared === false && /Only you can open it/.test(texts[0]?.content) && !/Anyone with this link/.test(texts[0]?.content));

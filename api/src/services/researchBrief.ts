@@ -220,7 +220,7 @@ export async function deliverBrief(
   if (blocked) return { sent: false, why: blocked };
   const askedAt = o.task.createdAt ? new Date(o.task.createdAt) : null;
   const line = await D.captionFor({ title: doc.title, kind: doc.kind, askedAt, sendAt: now, zone: o.zone });
-  const to = { userId: o.task.userId, firstName: o.person.firstName, phone: o.person.phone, zone: o.zone, now, line };
+  const to = { userId: o.task.userId, firstName: o.person.firstName, phone: o.person.phone, zone: o.zone, now, line, shareByLink: D.SHARE_ASK.test(o.task.theirWords ?? "") };
   const changed = o.again ? (o.rechecked ? `rechecked ${o.rechecked === 1 ? "one option" : `${o.rechecked} options`} against their own pages` : "rechecked every option") : null;
   const rd = await D.deliverAndRecord(
     doc,

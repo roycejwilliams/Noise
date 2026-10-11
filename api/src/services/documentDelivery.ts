@@ -21,6 +21,10 @@ import { notToTeammate } from "./teamLines.js";
 export type DocTarget = "pdf_text" | "google_docs";
 // They asked for a Google Doc (or for it in their Drive), in their own words (agent/loopTools.ts re-exports it).
 export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|\b(?:in|to) (?:my )?(?:google )?drive\b/i;
+// They asked for others to get at it (security review, 2026-10-11): the Doc is opened to anyone with the link only then. The kind
+// (venue brief, partnership plan, readout) is Co's own label, so it alone never opens a Doc: their words have to. Otherwise the Doc is
+// theirs alone and the text says they can share it from the Doc.
+export const SHARE_ASK = /\bshar(?:e|ed|ing|eable|able)\b|\b(?:send|forward|pass) (?:it|this|that|the doc)(?: over| along| on)? to\b|\bpass (?:it|this) (?:along|on)\b|\bcollaborat\w*|\bedit (?:it |this )?together\b|\bwork on (?:it|this) together\b|\b(?:so|that) (?:my |the |our )?[\w-]+(?: [\w-]+)? (?:can|could) (?:see|edit|open|read|review|access|look at|work on|add to)\b/i;
 // via text_fallback: the PDF couldn't be made or sent, so the content went as text in the thread, and the PDF is to follow
 // (pdfPending, with the failure in error, retried from the receipt: services/deliveryReceipts.ts).
 export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; shared?: boolean; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
@@ -60,7 +64,7 @@ export type DeliverDeps = {
 };
 // line: the one sentence that goes with the attachment (services/speakable.ts deliveryLine). Without one, the title.
 // noFallback: a retry of a PDF that already went as text (deliveryReceipts) must not send the text again.
-export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean };
+export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean };
 
 const realDeps = async (): Promise<DeliverDeps> => {
   const sendblue = (await import("./sendblue.js")).default;
@@ -123,7 +127,7 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   const { docsHtml } = await import("./googleDocs.js");
   const up = await deps.uploadDoc(token, name, docsHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") }));
   if (!up.ok) return { ok: false, why: up.why };
-  const share = deps.shareDoc ? await deps.shareDoc(token, up.id).catch(() => ({ ok: false as const, why: "Google didn't open the link" })) : { ok: false as const, why: "not shared" };
+  const share = !to.shareByLink ? { ok: false as const, why: "they didn't ask to share it" } : deps.shareDoc ? await deps.shareDoc(token, up.id).catch(() => ({ ok: false as const, why: "Google didn't open the link" })) : { ok: false as const, why: "not shared" };
   const who = share.ok ? "Anyone with this link can open and edit it." : "Only you can open it for now; share it from the Doc when you're ready.";
   try {
     await deps.send({ number: to.phone, content: `${to.line ?? doc.title}\n${up.link}\n${who}`, from_number: deps.from });
@@ -415,7 +419,7 @@ export async function sendDocumentForTask(
   try {
     // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
     line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
-    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line };
+    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line, shareByLink: SHARE_ASK.test(o.taskTheirWords) };
     rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
   } catch (err) {
     await unclaim();

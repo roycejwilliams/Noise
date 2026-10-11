@@ -83,7 +83,7 @@ export function urlAllowed(raw: string): URL | null {
   return u;
 }
 
-async function hostIsPublic(host: string): Promise<boolean> {
+export async function hostIsPublic(host: string): Promise<boolean> {
   if (isIP(host)) return !isPrivateAddress(host);
   try {
     const addrs = await lookup(host, { all: true });

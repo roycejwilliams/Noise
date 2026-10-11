@@ -113,6 +113,7 @@
     "evals/docs/document.ts",
     "evals/docs/googleDocs.ts",
     "evals/docs/googleAuditFixes.ts",
+    "evals/security/reviewFixes.ts",
     "evals/docs/memberFiles.ts",
     "evals/mo/memberGate.ts",
     "evals/presence/readoutFlow.ts",

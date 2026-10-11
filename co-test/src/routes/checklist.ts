@@ -1,3 +1,4 @@
+import { requireTeam } from "../middleware/requireTesterLogin.js";
 import express, { Request, Response, NextFunction } from "express";
 import pool from "../../../api/src/db/db.js";
 
@@ -88,7 +89,7 @@ router.get("/", async (req: Request, res: Response, next: NextFunction) => {
 // POST /api/checklist/:item_key — the tester's own manual-input form.
 // Rejects writes to auto items outright — this endpoint can never be used
 // to fabricate or override a computed value.
-router.post("/:item_key", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/:item_key", requireTeam, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const item = CATALOG.find((i) => i.key === req.params.item_key);
     if (!item) return res.status(404).json({ success: false, error: "Unknown checklist item." });
