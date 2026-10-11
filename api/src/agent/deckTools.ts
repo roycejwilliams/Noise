@@ -11,6 +11,7 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { pickPage } from "./pageTools.js";
+import { ALSO_ANSWER, withAnswer } from "./linkAnswer.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 const hex = z.string().nullable().optional().describe("A six-digit hex color like #1F3A5F, from a color they named. Leave it out if they named none.");
@@ -154,6 +155,7 @@ export function deckTools(
       inputSchema: DECK_INPUT.extend({
         taste: TASTE_INPUT,
         line: line("The one line that goes with the link, saying what you made (\"Here's the pitch deck for Northlight.\")."),
+        alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input) => {
         const t = await tasteFor(input.taste);
@@ -189,7 +191,7 @@ export function deckTools(
           o.notDone("The deck wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
         }
-        const text = `${input.line.trim()}\n${made.url}`;
+        const text = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The deck "${input.title}" was made, but its link didn't send.`);
           return { ok: false, error: "The deck is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
@@ -205,6 +207,7 @@ export function deckTools(
         deck: z.string().describe("Which of their decks: its title, or a word from it."),
         taste: TASTE_INPUT,
         changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\")."),
+        alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input) => {
         const store = await S();
@@ -239,7 +242,7 @@ export function deckTools(
           o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
-        const text = `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.`;
+        const text = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };

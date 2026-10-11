@@ -227,20 +227,26 @@ export async function resetCoPageLink(id: string, ownerUserId: string): Promise<
   if (!CO_PAGE_ID.test(id) || !ownerUserId) return null;
   const fresh = newCoPageId();
   const url = coPageUrl(fresh);
-  // One statement, so it all happens or none of it does (review of the decks PR: a failure between steps left the old link open
-  // while the member was told it had changed).
+  // One statement, so it all happens or none of it does, and the old row is locked first (FOR UPDATE): two resets at once can't
+  // both copy it. The second waits, then finds it already taken down, and makes nothing (Royce, 2026-10-11: "two near-simultaneous
+  // resets must never leave two working own-links").
   const { rows } = await db.query(
-    `WITH ins AS (
-       INSERT INTO co_pages (id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at)
-       SELECT $1, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM co_pages
+    `WITH old AS (
+       SELECT id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM co_pages
        WHERE id = $2 AND owner_user_id = $3 AND taken_down_at IS NULL AND expires_at > NOW()
+       FOR UPDATE
+     ), down AS (
+       UPDATE co_pages p SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW() FROM old
+       WHERE p.id = old.id AND p.taken_down_at IS NULL
+       RETURNING old.owner_user_id, old.data, old.version, old.created_at, old.updated_at, old.expires_at, old.kept, old.last_viewed_at
+     ), ins AS (
+       INSERT INTO co_pages (id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at)
+       SELECT $1, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM down
        RETURNING id
      ), rev AS (
        UPDATE co_page_shares SET revoked_at = NOW() WHERE page_id = $2 AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM ins) RETURNING id
-     ), down AS (
-       UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND EXISTS (SELECT 1 FROM ins) RETURNING id
      )
-     SELECT (SELECT id FROM ins) AS id, (SELECT COUNT(*) FROM down) AS down`,
+     SELECT (SELECT id FROM ins) AS id`,
     [fresh, id, ownerUserId],
   );
   if (!rows[0]?.id) return null;

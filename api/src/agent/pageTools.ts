@@ -8,6 +8,7 @@ import { z } from "zod";
 import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
+import { ALSO_ANSWER, withAnswer } from "./linkAnswer.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 const url = z.string().nullable().optional().describe("Its own https link, only one you read or they gave you. Leave it out otherwise.");
@@ -82,7 +83,7 @@ export function pageTools(
   return {
     makePage: tool({
       description: toolUse("makePage"),
-      inputSchema: PAGE_INPUT.extend({ line: line("The one line that goes with the link, saying what you made (\"Here's Saturday in the Mission, dinner then a drink.\").") }),
+      inputSchema: PAGE_INPUT.extend({ line: line("The one line that goes with the link, saying what you made (\"Here's Saturday in the Mission, dinner then a drink.\")."), alsoAnswer: ALSO_ANSWER }),
       execute: async (input) => {
         const store = await S();
         const source = await o.source();
@@ -98,7 +99,7 @@ export function pageTools(
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
         }
-        const text = `${input.line.trim()}\n${made.url}`;
+        const text = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
           return { ok: false, error: "The page is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
@@ -113,6 +114,7 @@ export function pageTools(
       inputSchema: PAGE_INPUT.extend({
         page: z.string().describe("Which of their pages: its title, or a word from it."),
         changed: line("What changed, in a few words they'd recognize (\"swapped Friday dinner for Saturday at Mesa Verde\")."),
+        alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input) => {
         const store = await S();
@@ -130,7 +132,7 @@ export function pageTools(
           o.notDone(`The page wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
-        const text = `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.`;
+        const text = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
           return { ok: true, note: "The page is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };

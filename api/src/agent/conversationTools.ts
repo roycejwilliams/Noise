@@ -50,6 +50,8 @@ export type ConversationToolContext = {
   // Set by loopTools for this turn: a page's, deck's or share link just went out, and that text is the turn's whole answer
   // (rule 2). The page, deck and share tools call it after the link sends.
   onLinkDelivered?: () => void;
+  // The reply's own fact check and brand guard, for an answer that rides with a link (agent/linkAnswer.ts). Set per turn below.
+  checkAnswer?: (draft: string) => Promise<string>;
   // When their text arrived; the loop's time budget runs from here.
   turnStartedAt?: number;
   userId: string;
@@ -112,6 +114,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // doesn't cleanly expose which tools actually executed.
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false };
+  ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.
   const notDone = (what: string) => ctx.facts?.add("not_done", what);
@@ -155,9 +158,19 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ message: draft }) => {
         // Rule 2 (Royce, 2026-10-11): a page or deck goes as ONE text, the line plus the link. Told so, Co still added a second
         // ("Done. The old link is dead now, only this new one works.") in live runs, so after a link went out nothing more does.
+        // An answer to something else they asked still goes (Royce, 2026-10-11: never drop it silently); commentary on the link
+        // doesn't (agent/linkAnswer.ts afterLinkAnswers). Either way it's logged.
         if (state.linkDelivered) {
-          notDone("A reply after the link this turn wasn't sent (the link's text is the whole delivery).");
-          return { ok: false, error: "Not sent: the link's text was the whole delivery this turn, and nothing goes after it. Don't call sendReply again this turn. If they also asked something else, it wasn't answered: answer it first next time, before the link." };
+          const { afterLinkAnswers } = await import("./linkAnswer.js");
+          const answers = ctx.dryRun ? true : await afterLinkAnswers(ctx.resolvedContent, state.sentMessages.join("\n"), draft);
+          if (!ctx.dryRun) {
+            const { recordDecision } = await import("../harness/core.js");
+            await recordDecision({ layer: 3, decision: "reply.after_link", userId: ctx.userId, outcome: answers ? "act" : "skip", action: answers ? "sent_answer" : "held_commentary", proposal: { draft: draft.slice(0, 300) } }).catch(() => {});
+          }
+          if (!answers) {
+            notDone("A reply about the link after the link wasn't sent (the link's text is the whole delivery).");
+            return { ok: false, error: "Not sent: it was about the page or deck, and the link's text is the whole delivery. Don't call sendReply again this turn." };
+          }
         }
         const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
         // The fact check left nothing to add after what already went out this turn.
