@@ -103,8 +103,9 @@ export function pageTools(
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
           return { ok: false, error: "The page is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
         }
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-        return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. If you reply at all, a few words on something else they said." };
+        return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),
     updatePage: tool({
@@ -115,9 +116,10 @@ export function pageTools(
       }),
       execute: async (input) => {
         const store = await S();
-        const pick = pickPage(await pages(), input.page);
+        // Pages only: a deck is changed with updateDeck (agent/deckTools.ts).
+        const pick = pickPage((await pages()).filter((p: any) => p.kind !== "deck"), input.page);
         if (pick === "ambiguous") return { ok: false, error: "More than one of their pages fits. Ask which one by its title." };
-        if (!pick) return { ok: false, error: "They have no live page by that name. Make a new one (makePage) if that's what they want." };
+        if (!pick) return { ok: false, error: "They have no live page by that name. Make a new one (makePage) if that's what they want; a deck is changed with updateDeck." };
         const source = await o.source();
         // The page as it is now (theirs: listed from their own pages), so its images carry over (review of #148).
         const before = await store.loadCoPage(pick.id).catch(() => null);
@@ -133,8 +135,9 @@ export function pageTools(
           ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
           return { ok: true, note: "The page is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
-        return { ok: true, note: "Same page, same link; the text said what changed. Send nothing more about it." };
+        return { ok: true, note: "Same page, same link; the text said what changed. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),
     takeDownPage: tool({

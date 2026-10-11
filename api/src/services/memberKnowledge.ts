@@ -211,6 +211,8 @@ export type KnowledgeDeps = {
   limits: (userId: string) => Promise<Limits & { at: Date | null }>;
   taste: (userId: string) => Promise<{ text: string; at: Date } | null>;
   roomTaste: (userId: string) => Promise<{ text: string; at: Date }[]>;
+  // Their design taste (services/designTaste.ts), read with room taste as what they told Co. Optional, so stubs without it still work.
+  designTaste?: (userId: string) => Promise<{ text: string; at: Date }[]>;
   claims: (userId: string, now: Date, zone: string | null) => Promise<Claim[]>;
   restraint: (userId: string, now: Date) => Promise<RawRestraint>;
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
@@ -282,6 +284,11 @@ export const realKnowledgeDeps: KnowledgeDeps = {
   roomTaste: async (userId) => {
     const R = await import("./roomTaste.js");
     return (await R.loadRoomTaste(userId)).map((r) => ({ text: R.roomTasteLine(r.taste), at: r.at }));
+  },
+  designTaste: async (userId) => {
+    const D = await import("./designTaste.js");
+    const t = await D.loadDesignTaste(userId);
+    return t ? [{ text: D.designTasteLine(t.taste), at: t.at }] : [];
   },
   taste: async (userId) => {
     const text = await (await import("./outcomes.js")).tasteSummary(userId);
@@ -645,7 +652,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     skip("lessons", "lessons", () => d.lessons(userId), [] as { text: string; at: Date }[]),
     skip("corrections", "corrections", () => d.corrections(userId, opts.corrections ?? CORRECTION_DEFAULTS), [] as CorrectionRow[]),
     skip("preferences", "taste", () => d.taste(userId), null),
-    skip("preferences", "room taste", () => d.roomTaste(userId), [] as { text: string; at: Date }[]),
+    skip("preferences", "room taste", async () => [...(await d.roomTaste(userId)), ...(d.designTaste ? await d.designTaste(userId).catch(() => []) : [])], [] as { text: string; at: Date }[]),
     skip("claims", "claims", () => d.claims(userId, now, zone), [] as Claim[]),
     skip("restraint", "restraint", () => d.restraint(userId, now), null as RawRestraint | null),
     skip("exchanges", "exchanges", () => d.exchanges(userId, { limit: Math.max(1, opts.exchanges ?? EXCHANGE_DEFAULTS.limit), days: Math.max(1, opts.exchangeDays ?? EXCHANGE_DEFAULTS.days) }), [] as { content: string; at: Date }[]),

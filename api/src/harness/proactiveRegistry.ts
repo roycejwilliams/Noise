@@ -790,6 +790,27 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // Fixed wording, not a draft: it names the date a page or deck expires, which has to be exactly right (services/coPages/expiry.ts).
+  // Re-read at send time: kept, renewed, taken down or already past since it was queued means nothing goes.
+  artifact_expiry: {
+    async draft(c) {
+      const { rows } = await pool.query(
+        `SELECT data->>'title' AS title, COALESCE(data->>'kind', 'page') AS kind, expires_at FROM co_pages
+         WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND NOT kept AND expiry_warned_at IS NULL AND expires_at > NOW() + INTERVAL '12 hours'`,
+        [String(c.payload.pageId ?? ""), c.userId],
+      );
+      if (!rows[0]) return skip("kept, renewed, taken down or about to lapse already");
+      const E = await import("../services/coPages/expiry.js");
+      const label = E.expiryDateLabel(new Date(rows[0].expires_at), await memberZone(c.userId));
+      const message = E.expiryText(String(rows[0].title ?? ""), rows[0].kind === "deck" ? "deck" : "page", label);
+      return { messages: [message], text: message, rules: { maxChars: 260, maxSentences: 3, allowGreeting: false, mustIncludeAny: [label] } };
+    },
+    async onSent(c, _p, messages) {
+      await (await import("../services/coPages/store.js")).markExpiryWarned(String(c.payload.pageId ?? ""));
+      await writeMemory(c.userId, "check_in", `Expiry notice: ${messages.join(" ")}`);
+    },
+  },
+
   product_update: {
     async draft(c, person) {
       const { intro, closing, bulletList } = c.payload as { intro: string; closing: string; bulletList: string };

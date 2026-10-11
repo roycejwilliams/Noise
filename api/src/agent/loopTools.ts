@@ -7,6 +7,8 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import { writeMemory } from "../services/memory.js";
 import { pageTools } from "./pageTools.js";
+import { deckTools } from "./deckTools.js";
+import { artifactTools } from "./artifactTools.js";
 import { recordDecision } from "../harness/core.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
@@ -172,7 +174,7 @@ export function mailtoLink(to: string, subject: string, body: string): string {
 
 export function loopTools(
   ctx: ConversationToolContext,
-  state: { sent: boolean; sentMessages: string[] },
+  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean },
   loop: LoopState,
   notDone: (what: string) => void,
 ) {
@@ -244,10 +246,25 @@ export function loopTools(
     const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
     return { theirs, read };
   };
+  // A page's or deck's link, or a share link, is the turn's answer (rule 2: one text, the line plus the link). Once one sends, the
+  // turn counts as answered, so a model that rightly ends without sendReply isn't followed by its leftover text or the fallback line
+  // (live run, 2026-10-11: "Sorry, I got tangled up on that one." went out after a deck's link; pages had the same path), and no
+  // second reply follows it (conversationTools.ts sendReply).
+  ctx.onLinkDelivered = () => {
+    if (ctx.dryRun) return;
+    state.sent = true;
+    state.linkDelivered = true;
+  };
   const pages = pageTools(ctx, { say, notDone, source: pageSource });
+  // Decks (agent/deckTools.ts): the same pipeline and grounding as pages.
+  const decks = deckTools(ctx, { say, notDone, source: pageSource });
+  // Keep, renew and share links, for pages and decks alike (agent/artifactTools.ts).
+  const artifacts = artifactTools(ctx, { say, notDone });
 
   return {
     ...pages,
+    ...decks,
+    ...artifacts,
     searchEvents: tool({
       description: toolUse("searchEvents"),
       inputSchema: z.object({

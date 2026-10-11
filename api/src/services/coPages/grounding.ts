@@ -42,3 +42,22 @@ export function pageProblems(d: CoPageData, source: PageSource): string[] {
   }
   return out.slice(0, 7);
 }
+
+// A deck (deck.ts): every name, number and place on it rests on the owner's own words or what Co read for them, so a deck can't
+// invent a customer, a figure or another member. A deck is their story in Co's words ("Built for independent studios"), so the
+// word-for-word claim check pages use is left off (live run, 2026-10-11: it refused "Built for..." and "No-shows eat a fifth of
+// bookings", both said in their own text); facts are guarded, phrasing isn't.
+export function deckProblems(d: import("./deck.js").DeckData, source: PageSource): string[] {
+  const corpus = `${source.theirs}\n${source.read}`;
+  const lines: { where: string; text: string }[] = [
+    { where: "title", text: d.title },
+    { where: "subtitle", text: d.subtitle },
+    ...d.slides.flatMap((s, i) => [{ where: `slide ${i + 2} headline`, text: s.headline }, ...s.bullets.map((b) => ({ where: `slide ${i + 2}`, text: b }))]),
+  ];
+  const out: string[] = [];
+  for (const l of lines) {
+    const bad = unsourced(l.text, corpus);
+    if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
+  }
+  return out.slice(0, 7);
+}
