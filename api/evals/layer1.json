@@ -152,6 +152,7 @@
     "evals/member/textKnowledge.ts",
     "evals/calls/reasonGate.ts",
     "evals/reply-flow/fixes1010.ts",
-    "evals/tasks/awayReplay.ts"
+    "evals/tasks/awayReplay.ts",
+    "evals/calls/memory.ts"
   ]
 }

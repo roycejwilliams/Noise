@@ -17,7 +17,9 @@ import { mentionsIn } from "./offerGuard.js";
 
 // The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step, so on a
 // call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
-export const CALL_TOOL_NAMES = ["startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents"] as const;
+// steerAwayFrom and noteRoomTaste (2026-10-11, the call-memory gap): "stop sending me crypto stuff" or "I want rooms where I can drop
+// my guard", said on a call, was lost; nothing on the call path or after it wrote the stop-suggesting list or stated taste.
+export const CALL_TOOL_NAMES = ["startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
 export type CallToolName = (typeof CALL_TOOL_NAMES)[number];
 
 // The turn's bounds (steps, time) are in services/callLlmProxy.ts, where the rounds run.
@@ -53,7 +55,9 @@ function memoryFor(key: string): { at: number; did: string[] } {
 }
 export function _resetCallMemoryForTest(): void { callMemory.clear(); }
 
-export type MemberOnCall = { phone: string; firstName: string | null; city: string | null; tasks: { id: number; goal: string }[]; loops: string | null };
+// avoid: the kinds they've asked Co to stop suggesting, read fresh after a tool acts, so a "no more X" said mid-call (or by text during
+// it) holds for the rest of the call without touching the cached prompt (callTools turnNote, past the cache breakpoint).
+export type MemberOnCall = { phone: string; firstName: string | null; city: string | null; tasks: { id: number; goal: string }[]; loops: string | null; avoid?: string[] };
 
 // Pure: the open tasks (with their ids, for updateTask and closeTask) from the layer's one carrying builder: each open co_task is
 // there once, with its "task #N" ref.
@@ -68,7 +72,7 @@ export function tasksFromCarrying(carrying: { ref: string | null; what: string }
 // layer (services/memberKnowledge.ts, member-stripped inside); their phone and the loop list (describeLoops, with the
 // "not confirmed lately" read the layer doesn't keep, and the [loop N] ids updateLoop takes) are read here.
 export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
-  const [u, k, l] = await Promise.all([
+  const [u, k, l, lim] = await Promise.all([
     pool.query(`SELECT phone_number, first_name FROM users WHERE id = $1`, [userId]).then((r) => r.rows[0] ?? null),
     // Fails closed: a layer that can't be read (it throws when the names to strip can't be read) gives no tasks, never unstripped ones.
     import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { include: ["carrying"] })).catch(() => null),
@@ -79,6 +83,8 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
         return O.describeLoops(r.rows.map((x: any) => ({ id: Number(x.id), title: x.title, status: x.status, detail: x.detail, dueDate: x.due_date ? String(x.due_date instanceof Date ? x.due_date.toISOString() : x.due_date).slice(0, 10) : null, source: x.source, lastConfirmedAt: x.last_confirmed_at ? new Date(x.last_confirmed_at) : null, closedAt: null, closedReason: null, decayAskedAt: x.decay_asked_at ? new Date(x.decay_asked_at) : null })), { withIds: true, zone: await (await import("./memberTime.js")).memberZone(userId) });
       })
       .catch(() => null),
+    // The record's one reader for the stop-suggesting list (services/memberKnowledge.ts limits): the member's own words, nobody else's.
+    import("./memberKnowledge.js").then((m) => m.realKnowledgeDeps.limits(userId)).catch(() => null),
   ]);
   if (!u) throw new Error("no such member");
   // Another member's details stripped before they become spoken sources (2026-10-09 audit: the call path's own context strips
@@ -87,7 +93,14 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
   const t = k ? tasksFromCarrying(k.carrying) : [];
   const tasks = t.map((x: any) => ({ id: x.id, goal: safe ? safe(String(x.goal ?? "")) : null })).filter((x: any): x is { id: number; goal: string } => !!x.goal);
   const loops = l && safe ? l.split("\n").map((line: string) => safe(line)).filter((x: string | null): x is string => !!x).join("\n") || null : null;
-  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops };
+  // A failed read leaves avoid undefined, so the caller keeps the last good list (routes/callLlm.ts memberOnCall), never an empty one.
+  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops, avoid: lim ? lim.avoid : undefined };
+}
+
+// Pure: the stop-suggesting list as it stands right now, for this turn only (after the cache breakpoint, so the call's cached prefix is
+// untouched). The call's opening context has it too; this keeps it current when it changes during the call.
+export function avoidNote(avoid: string[] | undefined): string | null {
+  return avoid?.length ? `(Co's note, not their words: right now they've asked you never to suggest ${avoid.map((a) => `"${a}"`).join(", ")}. No need to mention it.)` : null;
 }
 
 export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {
@@ -218,7 +231,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     names: new Set(Object.keys(picked)),
     note: callToolsNote(i.member, mem.did),
     records: callRecords(i.member, mem.did),
-    turnNote: picked.updateTask ? taskFactNote(i.turnWords, i.member.tasks) : null,
+    turnNote: [picked.updateTask ? taskFactNote(i.turnWords, i.member.tasks) : null, avoidNote(i.member.avoid)].filter(Boolean).join("\n") || null,
     did,
     run,
     // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the

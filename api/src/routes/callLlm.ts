@@ -28,13 +28,22 @@ export function callWordsOf(b: OaiRequest): { turnWords: string; callWords: stri
 
 // The member's details the call tools need, read once per call and again after a tool changes them (services/callTools.ts).
 const memberCache = new Map<string, { at: number; m: Promise<MemberOnCall> }>();
+// The last good stop-suggesting list per call (an hour outlasts any call).
+const lastAvoid = new Map<string, { at: number; avoid: string[] }>();
+const LAST_AVOID_MS = 60 * 60_000;
 const MEMBER_CACHE_MS = 60_000;
 function memberOnCall(key: string, userId: string, fresh = false): Promise<MemberOnCall> {
   const now = Date.now();
   for (const [k, v] of memberCache) if (now - v.at > MEMBER_CACHE_MS) memberCache.delete(k);
+  for (const [k, v] of lastAvoid) if (now - v.at > LAST_AVOID_MS) lastAvoid.delete(k);
   const hit = memberCache.get(key);
   if (hit && !fresh) return hit.m;
-  const m = import("../services/callTools.js").then((t) => t.loadMemberOnCall(userId));
+  // A re-read whose avoid list couldn't be read keeps the last good one, kept per call apart from the 60s cache (re-review of #139: the
+  // cache entry had usually expired by then, so the note still dropped on any call over a minute).
+  const m = import("../services/callTools.js").then((t) => t.loadMemberOnCall(userId)).then((x) => {
+    if (x.avoid !== undefined) lastAvoid.set(key, { at: Date.now(), avoid: x.avoid });
+    return x.avoid === undefined && lastAvoid.has(key) ? { ...x, avoid: lastAvoid.get(key)!.avoid } : x;
+  });
   memberCache.set(key, { at: now, m });
   m.catch(() => memberCache.delete(key));
   return m;
