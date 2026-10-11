@@ -184,12 +184,15 @@ export async function deliverToTargets(doc: Doc, to: DeliverTo, o: { saveTo?: "p
   const { targets, googleRefused } = docTargets({ userId: to.userId, kind: doc.kind, saveTo: o.saveTo, askedForGoogle: o.askedForGoogle });
   const results: DeliverResult[] = [];
   let googleMissing = false;
+  // A new version of their Google Doc that can't go to it (Docs not allowed for it now, or Google disconnected) goes as a PDF, and
+  // the text says so itself, on every path (a reply, a task, a brief), never a silent downgrade (rule 6, review of #143).
+  const asPdfInstead = to.inPlace ? { ...to, line: `${to.line ?? doc.title} It's a PDF this time, since I couldn't update your Google Doc.` } : to;
   for (const target of targets) {
-    const r = await deliver(doc, to, target);
+    const r = await deliver(doc, target === "pdf_text" && to.inPlace && !targets.includes("google_docs") ? asPdfInstead : to, target);
     results.push(r);
     if (!r.ok && target === "google_docs" && (r.notConnected || r.notAllowed)) {
       googleMissing = !!r.notConnected;
-      if (!targets.includes("pdf_text")) results.push(await deliver(doc, to, "pdf_text"));
+      if (!targets.includes("pdf_text")) results.push(await deliver(doc, asPdfInstead, "pdf_text"));
     }
   }
   return { results, sentOk: results.filter((r): r is DeliveredOk => r.ok), googleRefused, googleMissing };

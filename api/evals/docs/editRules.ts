@@ -85,7 +85,8 @@ const run = async (o: { update?: any; meta?: any; token?: any } = {}) => {
 {
   const r = await run({ token: null });
   const r2 = r.second as any;
-  check("Google disconnected since: the new version goes as a PDF and Co is told to say so (no 'they asked for a Google Doc')", r2.docBecamePdf === true && r2.sentOk[0]?.via === "pdf_text" && r2.googleRefused === null && r2.googleMissing === false, { docBecamePdf: r2.docBecamePdf, via: r2.sentOk[0]?.via, refused: r2.googleRefused });
+  check("…and the member's own text says it's a PDF this time, on any path (not only Co's reply)", /It's a PDF this time, since I couldn't update your Google Doc\./.test(r.texts.at(-1) ?? ""), r.texts);
+  check("Google disconnected since: the new version goes as a PDF and Co is told the text said so (no 'they asked for a Google Doc')", r2.docBecamePdf === true && r2.sentOk[0]?.via === "pdf_text" && r2.googleRefused === null && r2.googleMissing === false, { docBecamePdf: r2.docBecamePdf, via: r2.sentOk[0]?.via, refused: r2.googleRefused });
 }
 {
   // Rule 4 for callers that don't name the change: worked out from the two versions, specific, never bare.
@@ -99,9 +100,12 @@ const run = async (o: { update?: any; meta?: any; token?: any } = {}) => {
   check("and its receipt carries that note", receipts.all.at(-1)?.changeNote === "changes to the room section (section 1)");
   const again = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "reply", resend: true }, { deliver, receipts, log: async () => null });
   check("asking for it again still sends the version they have", again.sentOk.length === 1);
+  const v3 = D.resolveDocument({ ...v2, sections: [...v2.sections, { heading: "Catering", bullets: ["In house."] }] } as any);
+  const added = await X.deliverAndRecord(v3, to, { askedForGoogle: false, source: "task:2" }, { deliver, receipts, log: async () => null });
+  check("review of #143: a note that only adds a section still names the document", added.line === "Updated the venue brief: a new Catering section.", added.line);
   const sec = (h: string, b: string[]) => ({ heading: h, paragraphs: [], bullets: b });
   const a = { title: "T", note: "", suggestions: [], sections: [sec("Budget", ["$5k"]), sec("Timeline", ["May"]), sec("Room", ["40"])] } as any;
-  check("whatChanged: changed, added and removed sections by name, in Co's own voice (review of #143: never 'Co's suggestions')", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "changes to the Budget section (section 1), and added Catering" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "new suggestions from me" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "took out Timeline");
+  check("whatChanged: changed, added and removed sections by name, in Co's own voice (review of #143: never 'Co's suggestions')", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "changes to the Budget section (section 1), and a new Catering section" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "new suggestions from me" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "no more Timeline section");
 }
 {
   // The Doc is looked up by its document, however many receipts they have.
