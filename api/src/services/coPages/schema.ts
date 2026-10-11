@@ -7,6 +7,7 @@
 // Every text field is plain text: one line, length-capped, no markdown, no HTML, no links. Links live only in the fields made for
 // them (a comparison option's url, a link item's url, a source), and only as plain https. This file is the only gate: the store
 // refuses anything that hasn't passed it, and the page re-checks what it loads.
+import { styleFrom, type DeckStyle } from "./style.js";
 
 export type TextBlock = { type: "text"; text: string };
 // lead: a short label in front of the line (a time on an itinerary, a day on a week view): "7:00 PM", "Thu".
@@ -25,7 +26,8 @@ export type Block = TextBlock | BulletsBlock | ComparisonBlock | LinksBlock;
 // own entities (an option's or a recommendation's link) or a source the page cites. A page can't carry an image of anything it isn't
 // about. Images are filled in code from those pages' own og:image when the page is made (ogImage.ts), never written by the model.
 export type Photo = { url: string; alt: string; sourceUrl: string };
-export type Section = { heading: string; blocks: Block[]; image: Photo | null };
+// asset: one of the owner's own images (services/memberAssets.ts) placed in this section, by id; never a URL (2026-10-11, PR 2).
+export type Section = { heading: string; blocks: Block[]; image: Photo | null; asset?: string };
 export type Source = { label: string; url: string };
 
 export type CoPageData = {
@@ -36,7 +38,12 @@ export type CoPageData = {
   context: string;
   sections: Section[];
   sources: Source[];
+  // The member's own look (services/designTaste.ts, the same style a deck takes) and their logo (a member asset id), when they have
+  // them. Without a style the page is Co's own design (Royce, 2026-10-11: taste and images apply to pages as they do to decks).
+  style?: DeckStyle | null;
+  logo?: string | null;
 };
+const ASSET_ID_RE = /^[A-Za-z0-9_-]{24}$/;
 
 export const PAGE_LIMITS = {
   title: 90,
@@ -245,21 +252,23 @@ const sameUrl = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\
 // The one gate.
 export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } | { ok: false; problems: string[] } {
   const problems: string[] = [];
-  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources"], problems);
+  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources", "style", "logo"], problems);
   if (!o) return { ok: false, problems: ["a page must be an object of fields"] };
   const title = plain(o.title, "title", L.title, problems, true);
   const context = plain(o.context, "context", L.context, problems, true);
   const sections = list(o.sections, "sections", L.sections, problems, 1)
     .map((s, i) => {
       const f = `sections[${i}]`;
-      const r = obj(s, f, ["heading", "blocks", "image"], problems);
+      const r = obj(s, f, ["heading", "blocks", "image", "asset"], problems);
       if (!r) return null;
       const heading = plain(r.heading, `${f}.heading`, L.heading, problems, true);
       const blocks = list(r.blocks, `${f}.blocks`, L.blocksPerSection, problems, 1)
         .map((b, j) => block(b, `${f}.blocks[${j}]`, problems))
         .filter((x): x is Block => !!x);
       const image = photo(r.image, `${f}.image`, problems);
-      return heading && blocks.length ? { heading, blocks, image } : null;
+      if (r.asset !== undefined && r.asset !== null && (typeof r.asset !== "string" || !ASSET_ID_RE.test(r.asset))) problems.push(`${f}.asset must be one of their saved images`);
+      const asset = typeof r.asset === "string" && ASSET_ID_RE.test(r.asset) ? r.asset : null;
+      return heading && blocks.length ? { heading, blocks, image, ...(asset ? { asset } : {}) } : null;
     })
     .filter((x): x is Section => !!x);
   const sources = list(o.sources, "sources", L.sources, problems)
@@ -281,6 +290,16 @@ export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } 
     if (s.image && ![...sectionEntities(s).map((x) => x.url), ...cited].some((u) => sameUrl(u, s.image!.sourceUrl))) problems.push(`sections[${i}].image must come from one of that section's own links or a cited source`);
   });
   if (cover && ![...sections.flatMap((s) => sectionEntities(s).map((x) => x.url)), ...cited].some((u) => sameUrl(u, cover.sourceUrl))) problems.push("cover must come from a link or a source on the page");
+  // Their look and logo: the style re-derived through the deck's own gate (hex only, contrast checked), the logo an asset id only.
+  let style: DeckStyle | null = null;
+  if (o.style !== undefined && o.style !== null) {
+    const st = obj(o.style, "style", ["mood", "background", "text", "accent", "type"], problems);
+    const hex = /^#[0-9a-f]{6}$/i;
+    if (st && (["background", "text", "accent"] as const).some((k) => typeof st[k] !== "string" || !hex.test(String(st[k])))) problems.push("style colors must be six-digit hex");
+    if (st && !problems.length) style = styleFrom(st.mood, { background: st.background, text: st.text, accent: st.accent }, st.type);
+  }
+  if (o.logo !== undefined && o.logo !== null && (typeof o.logo !== "string" || !ASSET_ID_RE.test(o.logo))) problems.push("logo must be one of their saved images");
+  const logo = typeof o.logo === "string" && ASSET_ID_RE.test(o.logo) ? o.logo : null;
   if (problems.length) return { ok: false, problems };
-  return { ok: true, data: { title: title!, context: context!, cover, sections, sources } };
+  return { ok: true, data: { title: title!, context: context!, cover, sections, sources, ...(style ? { style } : {}), ...(logo ? { logo } : {}) } };
 }

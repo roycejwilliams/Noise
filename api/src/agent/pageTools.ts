@@ -9,6 +9,7 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { ALSO_ANSWER, withAnswer } from "./linkAnswer.js";
+import { TASTE_INPUT, imageN } from "./artifactInputs.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 const url = z.string().nullable().optional().describe("Its own https link, only one you read or they gave you. Leave it out otherwise.");
@@ -24,20 +25,33 @@ const BLOCK = z.union([
 export const PAGE_INPUT = z.object({
   title: line("The page's headline."),
   context: line("The line under it: when, where, for whom."),
-  sections: z.array(z.object({ heading: line("The section's heading."), blocks: z.array(BLOCK).min(1) })).min(1),
+  sections: z.array(z.object({ heading: line("The section's heading."), blocks: z.array(BLOCK).min(1), picture: imageN("A picture of theirs for this section (their space, their product). On a change, 0 takes this section's picture off; leave it out to keep it.") })).min(1),
   sources: z.array(z.object({ label: line("What the source is."), url: z.string() })).optional().describe("Pages you read that back what's on the page."),
+  logo: imageN("Their logo, on the cover. On a change, 0 takes it off; leave it out to keep it."),
 });
 export type PageInput = z.infer<typeof PAGE_INPUT>;
 
 // Pure: the tool's input as the page's data (images are filled in by code, once, from the page's own entities).
-export function pageDataFrom(input: PageInput): Record<string, unknown> {
+// extras (2026-10-11, PR 2): their look and their images, resolved by the tool (their taste, their own image ids). Without them, Co's
+// own design, as before.
+// was: the page as it is now, on an edit: its logo and each section's picture (by heading) stay unless this version names new ones
+// (review of PR 2: an edit that didn't repeat the logo dropped it).
+export function pageDataFrom(input: PageInput, extras?: { style: unknown | null; assets: Map<number, string>; was?: any | null }): Record<string, unknown> {
   const norm = (b: any) => {
     if (b.type === "bullets") return { type: "bullets", items: b.items.map((i: any) => ({ text: i.text, lead: i.lead ?? null })) };
     if (b.type === "comparison") return { type: "comparison", options: b.options.map((o: any) => ({ name: o.name, facts: o.facts, note: o.note ?? null, url: o.url ?? null })) };
     if (b.type === "links") return { type: "links", items: b.items.map((i: any) => ({ name: i.name, note: i.note ?? null, url: i.url ?? null, group: i.group ?? null })) };
     return { type: "text", text: b.text };
   };
-  return { title: input.title, context: input.context, cover: null, sections: input.sections.map((s) => ({ heading: s.heading, blocks: s.blocks.map(norm), image: null })), sources: input.sources ?? [] };
+  const at = (n: number | null | undefined) => (typeof n === "number" ? extras?.assets.get(n) ?? null : null);
+  const was = extras?.was ?? null;
+  const keptPicture = (heading: string) => (was?.sections ?? []).find((x: any) => x.heading === heading && x.asset)?.asset ?? null;
+  const sections = input.sections.map((s) => {
+    const asset = s.picture === 0 ? null : typeof s.picture === "number" ? at(s.picture) : keptPicture(s.heading);
+    return { heading: s.heading, blocks: s.blocks.map(norm), image: null, ...(asset ? { asset } : {}) };
+  });
+  const logo = input.logo === 0 ? null : typeof input.logo === "number" ? at(input.logo) : (was?.logo ?? null);
+  return { title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(extras?.style ? { style: extras.style } : {}), ...(logo ? { logo } : {}) };
 }
 
 // Words about the page, not its title (review of #148: "take that page down" named no title and missed their only page).
@@ -79,15 +93,32 @@ export function pageTools(
   o: { say: (text: string, record: string) => Promise<boolean>; notDone: (what: string) => void; source: () => Promise<{ theirs: string; read: string }> },
 ) {
   const S = () => import("../services/coPages/store.js");
+  // Their look and their images for a page (2026-10-11, PR 2), the same way a deck takes them: taste they describe now (their words,
+  // saved) or their saved taste, else Co's own design (a page never asks); images only theirs, sent for it, already on it, or named.
+  const lookFor = async (input: any, was: any | null, theirs: string): Promise<{ style: unknown | null; assets: Map<number, string>; was: any | null } | { error: string }> => {
+    const D = await import("./deckTools.js");
+    const t = await D.knownTaste(ctx, input.taste, async () => theirs);
+    if ("error" in t) return t;
+    const { styleFrom } = await import("../services/coPages/style.js");
+    // "Don't mind" keeps Co's own page design (review of PR 2): only a taste they described or picked restyles a page.
+    const style = t.taste && !t.taste.dontCare ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : t.taste?.dontCare ? null : (was?.style ?? null);
+    const onPage = was ? [was.logo, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
+    const placed = (n: unknown) => (typeof n === "number" && n > 0 ? n : null);
+    const ids = await D.assetIdsFor(ctx.userId, [placed(input.logo), ...input.sections.map((x: any) => placed(x.picture))], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
+    if ("error" in ids) return ids;
+    return { style, assets: ids.map, was };
+  };
   const pages = async () => (ctx.dryRun ? [] : (await S()).livePagesFor(ctx.userId).catch(() => []));
   return {
     makePage: tool({
       description: toolUse("makePage"),
-      inputSchema: PAGE_INPUT.extend({ line: line("The one line that goes with the link, saying what you made (\"Here's Saturday in the Mission, dinner then a drink.\")."), alsoAnswer: ALSO_ANSWER }),
+      inputSchema: PAGE_INPUT.extend({ line: line("The one line that goes with the link, saying what you made (\"Here's Saturday in the Mission, dinner then a drink.\")."), alsoAnswer: ALSO_ANSWER, taste: TASTE_INPUT }),
       execute: async (input) => {
         const store = await S();
         const source = await o.source();
-        const checked = store.checkPage(pageDataFrom(input), source);
+        const look = await lookFor(input, null, source.theirs);
+        if ("error" in look) return { ok: false, error: look.error };
+        const checked = store.checkPage(pageDataFrom(input, look), source);
         if (!checked.ok) {
           o.notDone(`No page made: ${checked.problems.slice(0, 3).join("; ")}.`);
           return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these and try once more, or give them the points in a text and say the page isn't there yet.` };
@@ -116,6 +147,7 @@ export function pageTools(
         page: z.string().describe("Which of their pages: its title, or a word from it."),
         changed: line("What changed, in a few words they'd recognize (\"swapped Friday dinner for Saturday at Mesa Verde\")."),
         alsoAnswer: ALSO_ANSWER,
+        taste: TASTE_INPUT,
       }),
       execute: async (input) => {
         const store = await S();
@@ -126,7 +158,10 @@ export function pageTools(
         const source = await o.source();
         // The page as it is now (theirs: listed from their own pages), so its images carry over (review of #148).
         const before = await store.loadCoPage(pick.id).catch(() => null);
-        const next = await withImages(pageDataFrom(input), before && before.ownerUserId === ctx.userId ? before.data : null);
+        const was: any = before && before.ownerUserId === ctx.userId ? before.data : null;
+        const look = await lookFor(input, was, source.theirs);
+        if ("error" in look) return { ok: false, error: look.error };
+        const next = await withImages(pageDataFrom(input, look), was);
         const r = await store.updateCoPage(pick.id, ctx.userId, next, source);
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         if (!r.ok) {

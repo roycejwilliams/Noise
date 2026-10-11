@@ -28,16 +28,38 @@ export function pageLines(d: CoPageData): { where: string; text: string }[] {
 }
 
 // Pure: what on the page nothing backs. Empty means the page may be stored.
+// Pure: one way of writing a time and a date, so the same fact matches however it was typed (live runs, 2026-10-11: a member's "7pm"
+// refused the page's "7:00 PM", and "Oct 24" refused "October 24"). Review of PR 2 kept it narrow:
+//   - times keep their am/pm ("7:00 PM" and "7 pm" are both "7pm"); only in the member's words (sameTimes(s, "theirs")) does a bare
+//     time ("at 7", "7:45") also stand for 7am and 7pm. A page's "7 AM" never matches their "7pm";
+//   - only a capitalized short month or weekday next to a date expands ("Oct 24", "Sat Oct 24"), so "I sat" or "the sun" never do.
+const MONTHS: Record<string, string> = { Jan: "January", Feb: "February", Mar: "March", Apr: "April", Jun: "June", Jul: "July", Aug: "August", Sep: "September", Sept: "September", Oct: "October", Nov: "November", Dec: "December" };
+const DAYS: Record<string, string> = { Mon: "Monday", Tue: "Tuesday", Tues: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Thur: "Thursday", Thurs: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+const MON = Object.keys(MONTHS).join("|");
+export function sameTimes(s: string, side: "page" | "theirs" = "page"): string {
+  let out = s
+    .replace(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/gi, (_m, h: string, mm: string | undefined, ap: string) => `${Number(h)}${mm && mm !== "00" ? `:${mm}` : ""}${ap.toLowerCase().startsWith("p") ? "pm" : "am"}`)
+    .replace(new RegExp(`\\b(${MON})\\.?(?=\\s+\\d)`, "g"), (_m, w: string) => MONTHS[w])
+    .replace(new RegExp(`\\b(${Object.keys(DAYS).join("|")})\\.?(?=,?\\s+(\\d|${MON}|${Object.values(MONTHS).join("|")}))`, "g"), (_m, w: string) => DAYS[w]);
+  if (side === "theirs") out = out.replace(/\b(at|by|from|until|til|around)\s+(\d{1,2})(?::(\d{2}))?\b(?!\s*(?:am|pm|:\d))/gi, (m, _p, h: string, mm: string | undefined) => `${m} ${h}${mm ? `:${mm}` : ""}am ${h}${mm ? `:${mm}` : ""}pm`).replace(/\b(\d{1,2}):(\d{2})\b(?!\s*(?:am|pm|:\d))/gi, (m, h: string, mm: string) => `${m} ${h}:${mm}am ${h}:${mm}pm`);
+  return out;
+}
+// Pure: Co's own short labels before a colon ("Schedule: cocktails at 7") are labels, like a heading, not claims. Only these words:
+// anything else before a colon (a name, "Ellis Park:") is read as part of the line (review of PR 2).
+const LABELS = /^\s*(schedule|timing|time|when|where|details|notes|dress|dress code|address|getting there|cost|price|budget|plan|food|drinks|the plan|the night)\s*:\s+/i;
+const unlabeled = (s: string) => s.replace(LABELS, "");
+
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
-  const corpus = `${source.theirs}\n${source.read}`;
+  // A bare time stands for am and pm only in their own words, never in a page Co read ("open until 11"): review of PR 2.
+  const corpus = `${sameTimes(source.theirs, "theirs")}\n${sameTimes(source.read)}`;
   const out: string[] = [];
   for (const l of pageLines(d)) {
-    const bad = unsourced(l.text, corpus);
+    const bad = unsourced(sameTimes(l.text), corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // Headings and the title are Co's labels; the content lines are the claims.
   const claims = pageLines(d).filter((l) => !/heading$|^title$/.test(l.where));
-  for (const u of unbackedClaims(claims.map((l) => l.text), corpus).slice(0, 4)) {
+  for (const u of unbackedClaims(claims.map((l) => unlabeled(sameTimes(l.text))), corpus).slice(0, 4)) {
     out.push(`"${u.text.slice(0, 90)}" isn't backed by what they said or what you read (nothing puts ${u.missing.slice(0, 4).join(", ")} together)`);
   }
   return out.slice(0, 7);

@@ -45,9 +45,12 @@ export function coPageUrl(id: string, env: NodeJS.ProcessEnv = process.env): str
   return `${base}/d/${id}`;
 }
 
-// Pure: the member assets an artifact places (services/memberAssets.ts). A page places none yet.
+// Pure: the member assets an artifact places (services/memberAssets.ts): a deck's logo and slide pictures, a page's logo and
+// section pictures.
 export function assetIdsIn(d: CoArtifactData): string[] {
-  return isDeckData(d) ? deckAssetIds(d as DeckData) : [];
+  if (isDeckData(d)) return deckAssetIds(d as DeckData);
+  const p = d as CoPageData;
+  return [...new Set([p.logo, ...p.sections.map((s) => s.asset)].filter((x): x is string => !!x))];
 }
 // Every asset it places must be the owner's own (never another member's image), and placing one counts as using it.
 async function assetsAreTheirs(d: CoArtifactData, ownerUserId: string): Promise<string[]> {
