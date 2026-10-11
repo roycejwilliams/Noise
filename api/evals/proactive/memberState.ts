@@ -79,7 +79,7 @@ const cand = (type: any, over: Partial<import("../../src/harness/proactive.js").
   const b = N.detectIntroNudges(base(now, { intros: [withoutOtherSide] }));
   check("leak: whether the other member replied, opened or said anything never changes the nudge (existence, state or words)", JSON.stringify(a) === JSON.stringify(b) && a.length === 1);
   const factKeys = Object.keys(a[0].facts).sort().join(",");
-  check("leak: the draft facts are only the recipient's view (name, how, how long ago, what the email said)", factKeys === "co_introduced_you_two_by_email,days_since_the_intro_email,their_name,why_the_intro_email_said_you_should_meet,you_have_not_mentioned_them_since");
+  check("leak: the draft facts are only the recipient's view (name, how, how long ago, what the email said)", factKeys === "co_introduced_you_two_by_email,days_since_the_intro_email,their_name,why_the_intro_email_said_you_should_meet,worth_asking,you_have_not_mentioned_them_since");
   check("leak: no reply status and none of the other member's words in the facts", !/SECRET_OTHER_WORDS|repl|opened|seen|read|status|interested/i.test(JSON.stringify(a[0].facts)));
   check("leak: the facts builder takes no input about the other member's side", !/repl|status|interested|opened|seen/i.test(src("services/memberStateNudges.ts").match(/export function introNudgeFacts\(([^)]*)\)/)?.[1] ?? "x"));
   const leakSrc = src("services/memberStateNudges.ts").slice(src("services/memberStateNudges.ts").indexOf("async function introsOf"), src("services/memberStateNudges.ts").indexOf("async function caredOf"));

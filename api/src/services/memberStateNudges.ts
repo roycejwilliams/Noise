@@ -173,6 +173,8 @@ export function introNudgeFacts(i: Pick<IntroFact, "otherFirstName" | "how" | "e
     co_introduced_you_two_by_email: i.how === "event" && i.eventName ? `around ${i.eventName}` : "yes",
     days_since_the_intro_email: Math.max(1, Math.floor((now.getTime() - i.introducedAt.getTime()) / DAY)),
     why_the_intro_email_said_you_should_meet: i.reasonAsEmailed ? i.reasonAsEmailed.slice(0, 240) : null,
+    // Second contact (2026-10-11): what Co is curious about, their side only; never what the other person did.
+    worth_asking: "whether the two of you have met or talked since",
     you_have_not_mentioned_them_since: "true",
   };
 }

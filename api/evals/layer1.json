@@ -116,6 +116,7 @@
     "evals/security/reviewFixes.ts",
     "evals/docs/editRules.ts",
     "evals/identity/describedClaims.ts",
+    "evals/intros/secondContact.ts",
     "evals/docs/memberFiles.ts",
     "evals/mo/memberGate.ts",
     "evals/presence/readoutFlow.ts",
