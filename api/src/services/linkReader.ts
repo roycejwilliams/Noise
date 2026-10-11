@@ -68,6 +68,9 @@ export function isPrivateAddress(ip: string): boolean {
     const v4 = (a: number, b: number) => `${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`;
     if (h.slice(0, 5).every((x) => x === 0) && (h[5] === 0xffff || h[5] === 0)) return isPrivateAddress(v4(h[6], h[7])); // v4-mapped, v4-compatible
     if (h[0] === 0x64 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0)) return isPrivateAddress(v4(h[6], h[7])); // NAT64
+    if (h.slice(0, 4).every((x) => x === 0) && h[4] === 0xffff && h[5] === 0) return isPrivateAddress(v4(h[6], h[7])); // ::ffff:0:a.b.c.d
+    if (h[0] === 0x2002) return isPrivateAddress(v4(h[1], h[2])); // 6to4 carries a v4 address
+    if ((h[0] === 0x2001 && h[1] === 0) || (h[0] === 0x100 && h.slice(1, 4).every((x) => x === 0))) return true; // Teredo, discard
     return false;
   }
   return true;

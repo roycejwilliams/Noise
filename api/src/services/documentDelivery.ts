@@ -26,15 +26,21 @@ export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|
 // theirs alone and the text says they can share it from the Doc. Sentence by sentence: a sentence that says not to share ("don't share
 // it", "keep it private") closes it for the whole message; one that asks to share it with someone else opens it. "Send it to me",
 // "so I can see it" and "the shared space" are not asks to share.
-const SHARE_NO = /\b(?:don'?t|do not|never|no need to|not|without) (?:\w+ )?(?:share|sharing|send|forward|give)\b|\bkeep (?:it|this|that)? ?(?:private|to myself|just for me|between us)\b|\bjust for me\b|\bonly (?:for )?me\b|\bprivate\b/i;
-const OTHERS = "(?!(?:me|myself|us|i|we|you)\\b)(?:my|the|our|his|her|their|a|an)?\\s*[\\w'-]+(?: [\\w'-]+)?";
+const SHARE_NO = /\b(?:don'?t|do not|never|no need to|not|without) (?:\w+ )?(?:share|sharing|send|forward|give)\b|\b(?:keep|make) (?:it|this|that|the doc) (?:private|to myself|just for me|between us)\b|\bjust for me\b|\bonly (?:for )?me\b/i;
+// Who it goes to must be someone else: never them ("me", "I", "we"), and never one of their own places ("my drive", "my email",
+// "my phone"; review of #142: "send it to my drive" is how people ask for a Google Doc).
+const THEIR_OWN = "(?:drive|google|gdrive|docs?|document|email|e-mail|gmail|inbox|mail|phone|laptop|computer|desktop|account|folder|files?|calendar|notes|icloud|dropbox|cloud|own|self|link|it|this|that)";
+const OTHERS = `(?!(?:me|myself|us|i|we|you|it|this|that|the (?:doc|document|link|file))\\b)(?:(?:my|the|our|his|her|their|a|an)\\s+)?(?!(?:my|the|our|his|her|their|a|an|${THEIR_OWN})\\b)[\\w'-]+(?: (?!${THEIR_OWN}\\b)[\\w'-]+)?`;
 const SHARE_YES: RegExp[] = [
   /\bshare (?:it|this|that|the (?:doc|document|link|plan|brief|readout|file))\b/i,
+  new RegExp(`\\b(?:share|sharing) (?:it |this |that )?with ${OTHERS}`, "i"),
   /\bmake (?:it|this|that) (?:shareable|sharable|editable|public)\b/i,
   new RegExp(`\\b(?:send|forward|email|text|pass) (?:it|this|that|the (?:doc|document|link|plan|brief|readout|file))(?: over| along| on)? to ${OTHERS}`, "i"),
   new RegExp(`\\b(?:give|grant) ${OTHERS} access\\b`, "i"),
   new RegExp(`\\blet ${OTHERS} (?:see|edit|open|read|review|access|look at|work on|add to)\\b`, "i"),
-  new RegExp(`\\b(?:so|that) ${OTHERS} (?:can|could) (?:see|edit|open|read|review|access|look at|work on|add to)\\b`, "i"),
+  new RegExp(`\\b(?:so|that) ${OTHERS} (?:can|could) (?:see|edit|open|read|review|access|look at|work on|add)\\b`, "i"),
+  new RegExp(`\\b${OTHERS} (?:needs?|wants?|has|should be able) to (?:see|edit|open|read|review|access|look at|work on|add)\\b`, "i"),
+  /\bso we can (?:both |all )?(?:edit|work on|add to)\b/i,
   /\bcollaborat\w*/i,
   /\b(?:edit|work on) (?:it |this )?together\b/i,
   /\bshareable\b|\bsharable\b/i,
