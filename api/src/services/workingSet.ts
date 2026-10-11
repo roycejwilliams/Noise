@@ -65,8 +65,19 @@ export type Exit = {
   // RECOVER_AFTER_DAYS have passed, if a sweep finds it again for an ask it fits. It's read fresh before any offer (sendCheck.ts).
   recoverable?: boolean;
 };
-// How long a set-aside find stays out before a sweep may bring it back.
+// How long a set-aside find stays out before a sweep may bring it back, and how many times it may be set aside before it's gone for
+// good (review of #146: a recovered rolling opening that stalls again would otherwise cycle forever).
 export const RECOVER_AFTER_DAYS = 7;
+export const RECOVER_MAX_TIMES = 2;
+
+// How many times this find has been set aside for this member already.
+export async function setAsideCount(userId: string, itemKey: string): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM co_facts WHERE owner_user_id = $1 AND relation = $2 AND meta->>'itemKey' = $3 AND COALESCE(meta->>'recoverable', '') = 'true'`,
+    [userId, EXIT_RELATION, itemKey],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
 
 // Pure: the distilled fact, with its reason and scope. Never a verdict about the member.
 export function exitFactLabel(e: Pick<Exit, "kind" | "label" | "state" | "reason" | "scope" | "recoverable">): string {
@@ -180,6 +191,8 @@ export type PruneDeps = ExitDeps & {
   zone: (userId: string) => Promise<string | null>;
   key: (match: any) => string;
   exited?: (userId: string, keys: string[]) => Promise<Set<string>>;
+  // How many times a find was set aside before (RECOVER_MAX_TIMES). Without it, a stalled find is set aside as if for the first time.
+  setAsides?: (userId: string, itemKey: string) => Promise<number>;
 };
 // Pure: apply a change to a backlog's current items.
 // Two items under one key are the same find: a replacement lands once, never as two copies (re-review of #133).
@@ -284,7 +297,7 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
         const reason = tooLong
           ? nowHeld!.why === "stalled" ? `it couldn't be sent after repeated tries (${nowHeld!.note ?? "held at send"}), and was held ${UNREAD_DAYS} separate days` : nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
           : `${F.formOf(match) === "opening" ? "its deadline" : "its date"} (${end}) passed`;
-        const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", recoverable: tooLong && nowHeld!.why === "stalled", reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
+        const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", recoverable: tooLong && nowHeld!.why === "stalled" && (deps.setAsides ? await deps.setAsides(userId, k).catch(() => RECOVER_MAX_TIMES) : 0) < RECOVER_MAX_TIMES, reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
         if (ok) {
           gone.add(k);
           change.remove.add(k);

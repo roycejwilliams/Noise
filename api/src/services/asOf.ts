@@ -140,7 +140,16 @@ export const LIVE_READS_MAX = 2;
 export async function liveDetailFacts(message: string, items: LiveItem[], deps: LiveDeps, now = new Date()): Promise<string[]> {
   if (!asksLiveDetail(message)) return [];
   const seen = new Set<string>();
-  const picks = items.filter((i) => i.url && (deps.isLuma(i.url) || deps.page) && !seen.has(i.url) && seen.add(i.url)).slice(0, LIVE_READS_MAX);
+  // Luma pages first, then pages whose name they used, then the rest (review of #146: an article or a venue page sent last must not
+  // take the slots ahead of the event they're asking about).
+  const named = (i: LiveItem) => i.name.toLowerCase().split(/\s+/).filter((w) => w.length > 3).some((w) => message.toLowerCase().includes(w));
+  const rank = (i: LiveItem) => (deps.isLuma(i.url!) ? 0 : named(i) ? 1 : 2);
+  const picks = items
+    .filter((i) => i.url && (deps.isLuma(i.url) || deps.page) && !seen.has(i.url) && seen.add(i.url))
+    .map((i, n) => ({ i, n }))
+    .sort((a, b) => rank(a.i) - rank(b.i) || a.n - b.n)
+    .map((x) => x.i)
+    .slice(0, LIVE_READS_MAX);
   const lines: string[] = [];
   await Promise.all(
     picks.map(async (i) => {

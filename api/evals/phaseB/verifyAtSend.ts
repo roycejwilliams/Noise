@@ -408,18 +408,22 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
 // Royce, 2026-10-11: a stalled find (a rolling opening nobody picked) is set aside, not gone: it may come back after
 // RECOVER_AFTER_DAYS if a sweep finds it again, read fresh before any offer. Anything else that times out is still gone for good.
 {
-  const run = async (why: "stalled" | "undated") => {
+  const run = async (why: "stalled" | "undated", setAsides?: number) => {
     const facts: any[] = [];
     let items: any[] = [{ askText: "residencies", match: webFind({ deadline: undefined, form: "opening", name: "Rolling Studio Residency" }), source: "full", unread: { days: [], why, note: "held for daily re-reads" } }];
     const deps: any = {
       backlogs: async () => [{ ask_id: "a1", items }], merge: async (_u: string, _a: string, ch: any) => { items = W.applyChange(items, ch, F.exitKey); },
       classify: async (m: any) => ({ match: m, result: "undated" }), zone: async () => LA, key: F.exitKey, writeFact: async (e: any) => { facts.push(e); },
+      ...(setAsides === undefined ? {} : { setAsides: async () => setAsides }),
     };
     for (const day of ["2026-10-11", "2026-10-12", "2026-10-13"]) await W.pruneBacklogs("u1", day, deps);
     return facts;
   };
   const stalled = await run("stalled");
   check("set aside, not gone: a stalled find's fact is recoverable, and says 'Set aside for now'", stalled.length === 1 && stalled[0].recoverable === true && /^Set aside for now the find "Rolling Studio Residency"/.test(W.exitFactLabel(stalled[0])), stalled.map((f) => W.exitFactLabel(f)));
+  const second = await run("stalled", 1);
+  const third = await run("stalled", W.RECOVER_MAX_TIMES);
+  check("review of #146: set aside at most twice; the third time it stalls it's gone for good (no endless cycle)", W.RECOVER_MAX_TIMES === 2 && second[0]?.recoverable === true && third.length === 1 && !third[0].recoverable, { second: second[0]?.recoverable, third: third[0]?.recoverable });
   const undated = await run("undated");
   check("an undated find that never got a date is still gone for good (not recoverable)", undated.length === 1 && !undated[0].recoverable);
   const src = (await import("node:fs")).readFileSync(new URL("../../src/services/workingSet.ts", import.meta.url), "utf8");
@@ -440,6 +444,11 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   check("…and a sold-out one says so", /"Supper Club", from its own page: sold out\./.test(lines.join("\n")), lines);
   const none = await A.liveDetailFacts("still spots?", [{ name: "Pop-up", url: "https://popup.example/x" }], deps, at);
   check("a page with no event data stays as-of (never said as current)", /its page doesn't list spots, time or price in a form Co can confirm: anything on file about them is as of when it was found, never current\./.test(none.join("")), none);
+  // Review of #146: an article or a venue page sent last never takes the slots ahead of the event they're asking about.
+  const read: string[] = [];
+  const order = { luma: async (u: string) => { read.push(u); return null; }, isLuma: deps.isLuma, page: async (u: string) => { read.push(u); return null; } };
+  await A.liveDetailFacts("are there still spots for the founders dinner?", [{ name: "A great article on SF", url: "https://news.example/a" }, { name: "Peerspace loft", url: "https://peerspace.example/l" }, { name: "Founders Dinner", url: "https://supper.example/founders" }, { name: "Rooftop Mixer", url: "https://lu.ma/rooftop" }], order, at);
+  check("review of #146: Luma pages are read first, then the one their message names; never the newest link by default", read.join(",") === "https://lu.ma/rooftop,https://supper.example/founders", read);
   const noPage = await A.liveDetailFacts("still spots?", items, { luma: deps.luma, isLuma: deps.isLuma }, at);
   check("a caller without the page reader keeps Luma-only", noPage.length === 0);
   const rg = (await import("node:fs")).readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
