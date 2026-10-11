@@ -172,10 +172,17 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
 
 // One offer, made ready to say at send time (Phase C: the bundle composer and the single reveal both use it). Their ask still open, its
 // dates still ahead in their zone (services/dateGuard.ts), and how it ties to the rest of what they've said (services/connectDots.ts).
-export async function prepareOffer(c: Candidate, person: Person): Promise<{ skip: string } | { dots: string[]; why: string; item: import("../agent/eventDiscoverySurfacing.js").RevealItem }> {
+// skip with exited/held: its page re-read settled it (Phase B, services/sendCheck.ts): its fact is written (exited) or it's held for
+// the daily re-reads (held); the caller archives the row. defer: anything uncertain, read again later.
+export type PreparedOffer = { skip: string; exited?: boolean; held?: boolean } | { defer: Date; reason: string } | { dots: string[]; why: string; item: import("../agent/eventDiscoverySurfacing.js").RevealItem };
+export async function prepareOffer(c: Candidate, person: Person): Promise<PreparedOffer> {
   const p = c.payload as EventOfferPayload;
   // Their ask closed since this was queued: don't send it (2026-09-26).
   if (!(await askStillOpen(p.askId))) return { skip: "their ask has since closed" };
+  // Its own page, read again now (Phase B, services/sendCheck.ts): sold out, gone or past exits on its fact; the rest is said from the
+  // refreshed record (p.match), never the one captured days ago.
+  const fresh = await (await import("../services/sendCheck.js")).checkBeforeSend(c, person.timezone);
+  if (!("ok" in fresh)) return fresh;
   const when = offerable(readDates(itemDays(p.match, person.timezone), localToday(person.timezone)));
   if (!when.ok) return { skip: `not offered: ${when.why}` };
   const { gatherDots, findDots, whyContext } = await import("../services/connectDots.js");
@@ -192,7 +199,8 @@ export const proactiveRegistry: ProactiveRegistry = {
     // which uses prepareOffer below for each find.
     async draft(c, person) {
       const prep = await prepareOffer(c, person);
-      if ("skip" in prep) return skip(prep.skip);
+      if ("skip" in prep) return { ...skip(prep.skip), ...(prep.exited ? { exited: true } : {}), ...(prep.held ? { held: true } : {}) } as DraftResult;
+      if ("defer" in prep) return prep;
       const p = c.payload as EventOfferPayload;
       const r = await draftEventReveal(person, p.askText, p.fromProfile, p.match, { reminder: p.reminder, again: p.again, dots: prep.dots, why: prep.why });
       return r ?? skip("model chose SKIP");
@@ -202,8 +210,8 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload as EventOfferPayload;
       await writeMemory(c.userId, "event_discovery_surfacing", `Sent directly${isShortNotice(p.match) ? " (short notice)" : ""}: ${p.match.name}`);
     },
-    async onDropped(c) {
-      await onEventOfferDropped(c.userId, c.payload as EventOfferPayload);
+    async onDropped(c, status, reason) {
+      await onEventOfferDropped(c.userId, c.payload as EventOfferPayload, status, c.id, c.targetKey, reason ?? null);
     },
   },
 

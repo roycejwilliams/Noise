@@ -11,6 +11,7 @@ import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
 import { loadBrief, saveBrief, type SearchIntent } from "../services/searchIntent.js";
 import { numbersBacked, placesBacked, unbackedClaims } from "../services/taskWeb.js";
+import { captionNumbersBacked } from "../services/sendCheck.js";
 import { LOOP_BUDGET } from "./loop.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
@@ -144,6 +145,8 @@ export function captionProblems(caption: string, facts: string, theirs: string):
     ...numbersBacked(caption, `${facts} ${theirs}`).missing.map((n) => `"${n}" isn't in its facts`),
     ...placesBacked(caption, `${facts} ${theirs}`).missing.map((p) => `"${p}" isn't in its facts`),
     ...unbackedClaims(caption, facts).map((c) => `"${c}" isn't something its page says`),
+    // "Only a few spots left", "free", "sold out" with no number to check (Phase B, B4): on its page, or not said.
+    ...captionNumbersBacked(caption, `${facts} ${theirs}`).problems.filter((p) => !/^(?:price|count) /.test(p)),
     ...(did ? [`"${did}" isn't something they told you they did`] : []),
   ];
 }

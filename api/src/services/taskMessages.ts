@@ -11,6 +11,7 @@ import { CO_VOICE } from "./coVoice.js";
 import { checkDraft } from "../harness/proactive.js";
 import { parseModelJson } from "./modelJson.js";
 import { numbersBacked, OFFERS_WHAT_CO_CANT, placesBacked } from "./taskWeb.js";
+import { captionNumbersBacked } from "./sendCheck.js";
 
 export type SendItem = { url: string; name: string; tier: number; facts: string[] };
 
@@ -35,6 +36,9 @@ export function captionOk(caption: string, itemFacts: string): { ok: boolean; wh
   if (!nums.ok) return { ok: false, why: `numbers not in its facts: ${nums.missing.join(", ")}` };
   const places = placesBacked(caption, itemFacts);
   if (!places.ok) return { ok: false, why: `places not in its facts: ${places.missing.join(", ")}` };
+  // Scarcity, "free" and "sold out" with no number behind them (Phase B, B4): the same rule a find's caption is held to.
+  const said = captionNumbersBacked(caption, itemFacts);
+  if (!said.ok) return { ok: false, why: said.problems.join("; ") };
   if (OFFERS_WHAT_CO_CANT.test(caption)) return { ok: false, why: "offers something Co can't do" };
   return { ok: true, why: null };
 }

@@ -47,6 +47,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { renderEmotionalContext } from "./emotion.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
+import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
 
 // The seasonal goal window (services/goalJourney.ts GOAL_CHECKIN.everyDays), here so the gate needs no DB import.
@@ -971,6 +972,8 @@ export type OutputRules = {
   // None of these may appear, e.g. the event name in a tease.
   mustNotInclude?: string[];
   forbidden?: { pattern: RegExp; reason: string }[];
+  // The record a find's caption was drafted from (Phase B, B4): every price and count it states must be on it (services/sendCheck.ts).
+  backedBy?: string;
 };
 
 const ALWAYS_FORBIDDEN: { pattern: RegExp; reason: string }[] = [
@@ -1068,6 +1071,11 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
   }
   for (const f of [...ALWAYS_FORBIDDEN, ...(rules.forbidden ?? [])]) {
     checks.push({ name: "draft_forbidden", pass: !f.pattern.test(text), reason: f.reason });
+  }
+  // A find's prices and counts, on its record (Phase B, B4, 2026-10-10: task texts were checked, find captions weren't).
+  if (rules.backedBy !== undefined) {
+    const b = captionNumbersBacked(text, rules.backedBy);
+    checks.push({ name: "draft_numbers_backed", pass: b.ok, reason: b.problems.join("; ") || "ok" });
   }
   // One voice standard with calls (services/speakable.ts): no "Starting the…", "working on", "once it's worth sending".
   const narration = narratesInternalState(text);
@@ -1353,8 +1361,10 @@ Return ONLY JSON: {"id": "<one id from the list>", "why": "one short line"}`,
 // "still relevant" answer is kept on the candidate for a day, so a draft that
 // skips or defers doesn't pay for it again.
 export const RELEVANCE_RECHECK_HOURS = 24;
+// Every find too, goal finds included (Phase B, B6, 2026-10-10): a find for where they're headed waited as long as one for an ask and
+// was never re-judged; now both are, against their page as it is now (stillRelevant reads the source first).
 export function needsRelevanceCheck(c: Candidate, now: Date): boolean {
-  if (!isAnswering(c) || now.getTime() - c.createdAt.getTime() <= RELEVANCE_RECHECK_HOURS * HOUR) return false;
+  if (!(isAnswering(c) || c.type === "event_offer") || now.getTime() - c.createdAt.getTime() <= RELEVANCE_RECHECK_HOURS * HOUR) return false;
   const checked = Date.parse(String((c.payload as { relevantAt?: string })?.relevantAt ?? ""));
   return !(checked && now.getTime() - checked < RELEVANCE_RECHECK_HOURS * HOUR);
 }
@@ -1384,8 +1394,19 @@ export function readRelevance(text: string): { relevant: boolean; why: string } 
 
 // Co reads it against the conversation since. null when Co couldn't answer:
 // the caller holds it for the next tick, neither sending nor archiving.
-export async function stillRelevant(c: Candidate, about: { recentConversation: string; now: Date; timezone: string | null }): Promise<{ relevant: boolean; why: string } | null> {
+// A find reads its source first (Phase B, B6, 2026-10-10: this read only the conversation, never the page): a real check where one
+// exists. Its page re-read (services/sendCheck.ts checkBeforeSend) settles sold out, gone and past in code, with its exit fact; what
+// the page says now goes to the model with the conversation; a page that can't be read now holds it (null), never sends it unread.
+export async function stillRelevant(c: Candidate, about: { recentConversation: string; now: Date; timezone: string | null; checkDeps?: import("../services/sendCheck.js").SendCheckDeps }): Promise<{ relevant: boolean; why: string } | null> {
   const day = (d: Date) => localStamp(d, about.timezone);
+  let source: string | null = null;
+  if (c.type === "event_offer") {
+    const S = await import("../services/sendCheck.js");
+    const s = await S.checkBeforeSend(c, about.timezone, about.checkDeps).catch(() => null);
+    if (!s || "defer" in s) return null;
+    if ("skip" in s) return { relevant: false, why: s.skip };
+    source = S.sourceLine(s.match, about.now);
+  }
   try {
     const { text } = await Promise.race([
       generateText({
@@ -1395,7 +1416,7 @@ export async function stillRelevant(c: Candidate, about: { recentConversation: s
         prompt: `A text Co was going to send this member has been waiting since ${day(c.createdAt)}. It's now ${day(about.now)}.
 
 What it was going to do: [${c.type}] ${c.summary}
-
+${source ? `\n${source}\n` : ""}
 Their recent texts with Co (oldest first):
 ${about.recentConversation.slice(-2500) || "(none)"}
 
@@ -1848,6 +1869,8 @@ export async function sweepHold(userId: string, kind: SweepKind, now = new Date(
 
 // dryRun drafts and composes what would go out, prints it, and stops before the ledger and the send.
 export async function dispatchForUser(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
+  // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
+  if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUser(registry, userId, opts));
   const person = await loadPerson(userId);
   if (!person) return;
 
@@ -1930,7 +1953,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     const r = await stillRelevant(c, { recentConversation: recentStamped, now: state.now, timezone: person.timezone });
     if (!opts.dryRun) await settleRelevance(c, r);
     if (!r) {
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `relevance check unanswered; held ${RELEVANCE_RETRY_HOURS}h` });
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `relevance check unanswered; held ${RELEVANCE_RETRY_HOURS}h` });
       return;
     }
     if (!r.relevant) {
@@ -1964,14 +1987,30 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     // Each find made ready before anything is written, so the composer writes for the set that can go (nothing dropped after).
     const items: import("./bundleComposer.js").BundleItem[] = [];
     for (const x of [c, ...sibs]) {
-      const prep = await prepareOffer(x, person).catch((err: any) => ({ skip: `couldn't be prepared: ${err?.message ?? err}` }));
+      const prep: import("./proactiveRegistry.js").PreparedOffer = await prepareOffer(x, person).catch((err: any) => ({ skip: `couldn't be prepared: ${err?.message ?? err}` }));
+      // Its page re-read wants another look later (Phase B): the lead waits (never past its own expiry); a sibling stays pending.
+      if ("defer" in prep) {
+        if (x.id === c.id) {
+          if (!opts.dryRun) {
+            await pool.query(
+              `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type = 'event_offer' AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+              [c.id, prep.defer, new Date(prep.defer.getTime() + 3 * 24 * 3_600_000)],
+            );
+            await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: prep.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${prep.reason}` });
+          }
+          return;
+        }
+        continue;
+      }
       if ("skip" in prep) {
         if (x.id === c.id) {
           if (!opts.dryRun) await dropCandidate(registry, c, "skipped", prep.skip);
           await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${prep.skip}` });
           return;
         }
-        if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "not_ready", reason: prep.skip, proposal: { candidate: x.id } }).catch(() => {});
+        // A sibling its page re-read exited (its fact written) or held is archived, never left waiting (Phase B).
+        if ((prep.exited || prep.held) && !opts.dryRun) await dropCandidate(registry, x, "skipped", prep.skip);
+        if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: prep.exited ? "exited" : prep.held ? "held" : "not_ready", reason: prep.skip, proposal: { candidate: x.id } }).catch(() => {});
         continue;
       }
       const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string } }).pick;
@@ -2031,11 +2070,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
 
   if ("defer" in draft) {
-    await pool.query(
-      `UPDATE proactive_candidates SET due_at = $2, expires_at = $3, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+    // A find's defer (a re-read held it, Phase B) never pushes it past its own expiry: a dated row would outlive its date.
+    if (!opts.dryRun) await pool.query(
+      `UPDATE proactive_candidates SET due_at = $2, expires_at = CASE WHEN type = 'event_offer' AND expires_at IS NOT NULL THEN LEAST(expires_at, $3) ELSE $3 END, updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
       [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000)],
     );
-    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });
+    if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });
     return;
   }
 

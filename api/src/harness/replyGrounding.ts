@@ -54,7 +54,8 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { checkNoEmotionLabel } from "./emotion.js";
 import { narratesInternalState } from "../services/speakable.js";
-import { enrichMatch, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
+import { enrichMatch, fetchLumaEventDetails, isLumaLink, missingEventDetails, renderEventDetails, type EventDetails, type OpportunityDetails } from "../services/eventDetails.js";
+import { citesStaleAsCurrent, liveDetailFacts, renderDetailsAsOf, staleCurrentClaims } from "../services/asOf.js";
 import { recentCallCorrections } from "./callGrounding.js";
 import { repeatQuestionCheck, sameQuestion } from "./repeatAsk.js";
 import { asksForLink, findLines, linkRequestInstruction, recentResearchFinds, relevantFinds } from "../services/researchFinds.js";
@@ -293,6 +294,13 @@ export async function gatherReplyFacts(
   // What's on file for what Co recently sent: times and places, and what isn't
   // (services/turnContext.ts), before Co ever says it doesn't have them.
   if (opts.turn) for (const line of sentDetailLines(opts.turn)) addFact(rf, "known", line);
+  // A live question ("still spots?", "what time?", "how much?"): the Luma pages of what Co sent them lately, read now, so the answer
+  // is today's (Phase B, B3, services/asOf.ts). Only this member's own sends. Everything else stored stays labelled as of its read.
+  if (opts.turn) {
+    const recentSends = opts.turn.sent.filter((x) => Date.now() - x.sentAt.getTime() < 14 * 86_400_000).map((x) => ({ name: x.name, url: x.url }));
+    const live = await liveDetailFacts(opts.turn.message ?? "", recentSends, { luma: (u) => fetchLumaEventDetails(u, { maxAgeMs: 5 * 60_000 }), isLuma: isLumaLink }).catch(() => [] as string[]);
+    for (const line of live) addFact(rf, "known", line);
+  }
   // What Co has for doing things on their behalf, and what it doesn't (services/memberKit.ts).
   // (A "details on file" instruction added for one incident was removed 2026-09-30:
   // the replay showed it changed nothing; the summary fix did the work.)
@@ -566,7 +574,7 @@ export function ongoingFactsFor(asks: { text: string; kind: "find" | "help" }[])
 // itself grounded.
 export function addEventFacts(
   rf: ReplyFacts,
-  match: { name: string; event_date?: string; deadline?: string; url?: string; kind?: string; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; audience?: string; statedDates?: { start: string; end?: string | null } },
+  match: { name: string; event_date?: string; deadline?: string; url?: string; kind?: string; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; audience?: string; statedDates?: { start: string; end?: string | null }; checkedAt?: string },
   asked?: Days | null,
   zone: string | null = DEFAULT_ZONE,
 ): void {
@@ -577,7 +585,8 @@ export function addEventFacts(
   addFact(rf, "known", match.url ? `Link for "${match.name}": ${match.url}` : `There is no link on file for "${match.name}".`);
   // The real record (event page or source post), so "tell me more" gets
   // real answers instead of "I don't have that".
-  if (match.details) for (const line of renderEventDetails(match.name, match.details)) addFact(rf, "known", line);
+  // Its volatile lines (start, price, spots, sold out) say when they were read: past a few hours, "not checked since" (Phase B, B3).
+  if (match.details) for (const line of renderDetailsAsOf(match.name, match.details, match.checkedAt ?? null, new Date(), zone)) addFact(rf, "known", line);
   addFact(rf, "known", `Co found "${match.name}" through ${sourceOf(match)}. If they ask where it came from, say that.`);
   if (match.opportunity) addFact(rf, "known", `What the source post for "${match.name}" says: ${match.opportunity.postText}`);
   if (match.audience) addFact(rf, "known", `Who "${match.name}" is for, as Co judged it when it found it: ${match.audience}. If you describe the event, say that plainly; never say or imply what they are.`);
@@ -902,6 +911,11 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // are held to (services/speakable.ts). Cut like any failed check, redrafted when too little is left (2026-10-08 review F11).
   const narrated = narratesInternalState(draft);
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Co's own state instead of what they get (${narrated})` });
+  // A stored spot count, time or price said as current when every fact behind it is marked stale (Phase B, B3, services/asOf.ts):
+  // say it as of its read, or it's cut. The sentence is quoted so stripUnsupported cuts exactly it.
+  for (const s of staleCurrentClaims(draft, rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text))) {
+    checks.push({ name: "no_stale_as_current", pass: false, reason: `detail: "${s.sentence}" (states a stored detail as current; it was last read earlier, so say when, or check it live)` });
+  }
   return checks;
 }
 
@@ -1002,6 +1016,12 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     if (pass && c.type !== "capability" && rf.facts.find((f) => f.id === c.factId)?.kind === "not_done") {
       pass = false;
       reason += " (that was tried this turn and did NOT happen)";
+    }
+    // The circular case (Phase B, B3, 2026-10-10): a stored detail checked against itself. A fact marked stale never backs the same
+    // detail said as current; only a live read does, or the claim saying "as of" (services/asOf.ts).
+    if (pass && citesStaleAsCurrent(c.text, rf.facts.find((f) => f.id === c.factId)?.text)) {
+      pass = false;
+      reason += " (that detail is from an earlier read, not checked since: say it as of then, or check it live)";
     }
     if (pass && c.factId && hintIds.has(c.factId) && !(c.quote && norm(c.quote).length >= 6 && sources.includes(norm(c.quote)))) {
       pass = false;

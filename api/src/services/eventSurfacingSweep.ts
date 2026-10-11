@@ -6,6 +6,7 @@ import { enqueueCandidate } from "../harness/proactive.js";
 import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 import { enrichMatch } from "./eventDetails.js";
+import { UNDATED_QUEUE_DAYS } from "./sendCheck.js";
 import { sweepFind } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
 import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
@@ -136,7 +137,7 @@ async function repeatFor(userId: string, match: TierMatch, zone: string | null =
 // again: shown over a month ago, never answered, still open: it comes back
 // once, under its own key so the first send's key doesn't block it.
 // unread: held because its page didn't say when it is, or couldn't be read (services/workingSet.ts); never offered while held.
-type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean; again?: boolean; unread?: { days: string[]; why: "undated" | "unknown" } };
+type BacklogItem = { askText: string; match: TierMatch; source: "full" | "urgent"; reminder?: boolean; again?: boolean; unread?: import("./workingSet.js").Unread };
 
 export function offerTargetKey(item: Pick<BacklogItem, "match" | "reminder" | "again">): string {
   return `event_offer:${item.reminder ? "reminder:" : item.again ? "again:" : ""}${matchKey(item.match)}`;
@@ -235,7 +236,8 @@ function isShortNotice(match: TierMatch, zone: string | null = null): boolean {
 // Pure: when a queued offer stops being offerable (Royce, 2026-10-07: evening Pacific events were dropped at 5pm Pacific, when the
 // old `${date}T23:59:00Z` expiry passed, 2-4 hours before they started). An event with a known start: at its start. An event with
 // only a date: the end of that day in the event's own zone (its page's), else theirs, else Pacific. A deadline: the end of that
-// day in their zone. Undated: two weeks.
+// day in their zone. Undated: UNDATED_QUEUE_DAYS (Phase B, B2, 2026-10-10: it was two weeks, never read again; every send now
+// re-reads its page first, services/sendCheck.ts, and past this it exits on that fact instead of waiting blind).
 export function offerExpiresAt(match: TierMatch, zone: string | null, now = new Date()): Date {
   const startAt = match.kind !== "opportunity" ? match.details?.startAt : null;
   const start = startAt ? new Date(startAt) : null;
@@ -243,7 +245,7 @@ export function offerExpiresAt(match: TierMatch, zone: string | null, now = new 
   const date = relevantDate(match);
   const end = date ? endOfLocalDay(date.slice(0, 10), match.details?.timezone ?? zone) : null;
   if (end && !Number.isNaN(end.getTime())) return end;
-  return new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+  return new Date(now.getTime() + UNDATED_QUEUE_DAYS * 24 * 60 * 60 * 1000);
 }
 
 // The real, periodic "Luma & X asks surface periodically" mechanism (Royce,
@@ -486,13 +488,35 @@ export function matchKey(match: TierMatch): string {
 }
 
 // Clears a failed attempt's row (status skipped with a failed draft or send) so the thing can be queued again.
+// Retired, not deleted (Phase B, re-review of #138): the row moves off the key (target_key + "#retired:<id>") so the queue's one row
+// per key is free, and its history stays, which is what bounds the window-ended cycle (windowsEnded below).
 export async function reopenFailedAttempt(userId: string, targetKey: string): Promise<boolean> {
   const { rows } = await pool.query(`SELECT id, skip_reason FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status <> 'pending'`, [userId, targetKey]);
   const { isFailedAttempt } = await import("./workingSet.js");
   const failed = rows.filter((r: any) => isFailedAttempt(r.skip_reason));
   if (!failed.length || failed.length !== rows.length) return false;
-  await pool.query(`DELETE FROM proactive_candidates WHERE user_id = $1 AND id = ANY($2::bigint[]) AND status <> 'pending'`, [userId, failed.map((r: any) => r.id)]);
+  await pool.query(`UPDATE proactive_candidates SET target_key = target_key || '#retired:' || id::text, updated_at = NOW() WHERE user_id = $1 AND id = ANY($2::bigint[]) AND status <> 'pending'`, [userId, failed.map((r: any) => r.id)]);
   return true;
+}
+
+// How many queue windows ended unsent for this thing, retired rows included.
+async function windowsEnded(userId: string, targetKey: string): Promise<number> {
+  const { WINDOW_ENDED } = await import("./sendCheck.js");
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM proactive_candidates WHERE user_id = $1 AND (target_key = $2 OR target_key LIKE $2 || '#retired:%') AND skip_reason LIKE $3 || '%'`,
+    [userId, targetKey, WINDOW_ENDED],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+// Holds a find in its backlog as stalled (workingSet.ts Unread): out of the dispatch pool, read by the daily prune, out after its
+// separate days held. Put back in the backlog if a send already took it out.
+export async function holdInBacklog(userId: string, askId: string, askText: string, match: TierMatch, note: string): Promise<void> {
+  const items = await getBacklog(userId, askId);
+  const unread = { days: [] as string[], why: "stalled" as const, note: note.slice(0, 160) };
+  const has = items.some((i) => sameMatch(i.match, match));
+  const next = has ? items.map((i) => (sameMatch(i.match, match) ? { ...i, unread: i.unread?.why === "stalled" ? i.unread : unread } : i)) : [...items, { askText, match, source: "full" as const, unread }];
+  await saveBacklogMerged(userId, askId, items, next);
 }
 
 // The harness already sent, skipped, or expired this one for this person.
@@ -757,6 +781,9 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       ...(item.reminder ? { reminder: true } : {}),
       ...(item.again ? { again: true } : {}),
     };
+    // A failed attempt's row (a failed draft, or an undated find's window that ended unsent) is cleared so this lands, the way a
+    // pick's does (queuePickedOffer); alreadyDecided above already let it through (Phase B, B2).
+    await reopenFailedAttempt(candidate.userId, targetKey);
     const { queued: ok } = await enqueueCandidate({
       userId: candidate.userId,
       type: "event_offer",
@@ -906,7 +933,24 @@ export async function onEventOfferSent(userId: string, payload: EventOfferPayloa
 
 // Harness hook when the candidate is skipped or expires: take it out of the
 // backlog so the next match can be queued.
-export async function onEventOfferDropped(userId: string, payload: EventOfferPayload): Promise<void> {
+// An undated find whose queue window ended unsent goes back to the backlog (Phase B, B2, review of #138): not being picked within
+// UNDATED_QUEUE_DAYS, or a paused dispatch, says nothing about the find, so it's neither an exit nor a decision. Its row is marked a
+// failed attempt (workingSet.ts isFailedAttempt: "window ended unsent"), so a sweep or a pick may queue it again; every send re-reads
+// it first. Bounded (re-review of #138: a rolling opening cycled expire, reopen, requeue forever): after WINDOW_CYCLES_MAX windows
+// ended for the same thing it's held in the backlog as stalled instead. A send the re-read held back too often (HELD_MARK in the
+// reason) is held the same way, never dropped from the backlog. A dated find whose time came leaves the backlog as before.
+export async function onEventOfferDropped(userId: string, payload: EventOfferPayload, status: "skipped" | "expired" = "skipped", candidateId: string | null = null, targetKey: string | null = null, reason: string | null = null): Promise<void> {
+  const S = await import("./sendCheck.js");
+  if (status === "skipped" && reason?.includes(S.HELD_MARK)) {
+    await holdInBacklog(userId, payload.askId, payload.askText, payload.match, reason.slice(reason.indexOf(S.HELD_MARK)));
+    return;
+  }
+  if (status === "expired" && S.returnsOnExpiry(payload, await memberZone(userId))) {
+    if (candidateId) await pool.query(`UPDATE proactive_candidates SET skip_reason = $2 WHERE id = $1 AND status = 'expired'`, [candidateId, `${S.WINDOW_ENDED}: undated, back to the backlog`]).catch((err: any) => console.error("onEventOfferDropped: window mark failed (non-fatal):", err?.message ?? err));
+    const ended = targetKey ? await windowsEnded(userId, targetKey).catch(() => 0) : 0;
+    if (S.windowCycleAction(ended) === "hold") await holdInBacklog(userId, payload.askId, payload.askText, payload.match, `${S.HELD_MARK}: its queue window ended unsent ${ended} times`);
+    return;
+  }
   await removeFromBacklog(userId, payload.askId, payload.match);
 }
 

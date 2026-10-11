@@ -125,7 +125,8 @@ const NY = "America/New_York";
   const opp: any = { tier: 3, kind: "opportunity", name: "Grant", url: "https://x", reason: "r", deadline: "2026-10-10" };
   check("a deadline expires at the end of that day in their zone", ES.offerExpiresAt(opp, null, sixPm).toISOString() === "2026-10-11T06:59:59.999Z");
   const undated: any = { tier: 3, kind: "opportunity", name: "Open call", url: "https://x", reason: "r" };
-  check("an undated opportunity keeps two weeks", ES.offerExpiresAt(undated, null, sixPm).getTime() - sixPm.getTime() === 14 * 86_400_000);
+  // Phase B (B2, 2026-10-10): undated finds no longer queue two weeks blind.
+  check("an undated opportunity waits UNDATED_QUEUE_DAYS (3), not two weeks", ES.offerExpiresAt(undated, null, sixPm).getTime() - sixPm.getTime() === 3 * 86_400_000);
   check("the sweep queues with offerExpiresAt (no `${date}T23:59:00Z` left)", /expiresAt: offerExpiresAt\(match, zone\)/.test(src("services/eventSurfacingSweep.ts")) && !/new Date\(`\$\{date\}T23:59:00Z`\)/.test(src("services/eventSurfacingSweep.ts")));
 }
 

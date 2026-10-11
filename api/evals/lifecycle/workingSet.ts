@@ -265,7 +265,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const ess = src("services/eventSurfacingSweep.ts");
   check("a find exited under its classified key stays out when found again raw", /if \(k !== exitKey\(it\.match\) && \(exited\.has\(k\)/.test(ess));
   check("short notice is judged in their zone", /function isShortNotice\(match: TierMatch, zone: string \| null = null\): boolean \{\s*const date = relevantDate\(match, zone\);/.test(ess));
-  check("every sweep write to the backlog merges under the row lock", !/async function saveBacklog\(/.test(ess) && (ess.match(/saveBacklogMerged\(/g) ?? []).length === 3 && /FOR UPDATE/.test(ess));
+  check("every sweep write to the backlog merges under the row lock", !/async function saveBacklog\(/.test(ess) && (ess.match(/saveBacklogMerged\(/g) ?? []).length === 4 && /FOR UPDATE/.test(ess)); // 4: Phase B's holdInBacklog merges too
   const k = F.exitKey;
   const read = [ev("A"), ev("B"), ev("C")];
   const now = [ev("A"), { ...ev("C"), unread: { days: ["2026-10-08", TODAY], why: "unknown" } }, ev("D picked elsewhere")];

@@ -113,22 +113,28 @@ export function htmlToText(html: string): string {
 }
 
 export async function readPageText(url: string): Promise<string | null> {
+  return (await readPageChecked(url)).text;
+}
+
+// The same read, saying whether the page is gone (Phase B, 2026-10-10): a find re-read before it sends (services/sendCheck.ts) exits
+// on a dead link (404, 410), but only on that: a page that timed out or turned Co away is "couldn't read it now", never "gone".
+export async function readPageChecked(url: string): Promise<{ text: string | null; gone: boolean }> {
   try {
     const u = new URL(url);
     // Public https pages only; never a local or bare-IP address.
-    if (u.protocol !== "https:" || u.hostname === "localhost" || /^[\d.]+$|:/.test(u.hostname)) return null;
+    if (u.protocol !== "https:" || u.hostname === "localhost" || /^[\d.]+$|:/.test(u.hostname)) return { text: null, gone: false };
     const res = await fetch(u, { headers: { "user-agent": "Mozilla/5.0 (compatible; Co)" }, redirect: "follow", signal: AbortSignal.timeout(10_000) }).catch(() => null);
     const html = res?.ok && /text\/(html|plain)/.test(res.headers.get("content-type") ?? "");
     const text = html ? htmlToText(await res!.text()) : "";
     // Turned away (403, 429) or a page that loads its content by script: read
     // it in a real browser (services/browserRead.ts, 2026-09-30).
-    if (text.length >= MIN_FETCHED_TEXT) return text.slice(0, PAGE_TEXT_LIMIT);
-    if (res && (res.status === 404 || res.status === 410)) return null;
+    if (text.length >= MIN_FETCHED_TEXT) return { text: text.slice(0, PAGE_TEXT_LIMIT), gone: false };
+    if (res && (res.status === 404 || res.status === 410)) return { text: null, gone: true };
     const { browserPageText } = await import("./browserRead.js");
     const seen = await browserPageText(u.toString());
-    return seen ? seen.slice(0, PAGE_TEXT_LIMIT) : text || null;
+    return { text: seen ? seen.slice(0, PAGE_TEXT_LIMIT) : text || null, gone: false };
   } catch {
-    return null;
+    return { text: null, gone: false };
   }
 }
 

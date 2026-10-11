@@ -77,10 +77,13 @@ export type TaskTurnDeps = {
   onFile?: () => Promise<OnFile[]>;
   // Names Co's daily pick rejected for them (services/sweepShadow.ts): never sent by a task either.
   rejected?: () => Promise<string[]>;
+  // An on-file find, read again before it's sent (Phase B, B5; services/sendCheck.ts recheckOnFile).
+  recheckOnFile?: (f: OnFile) => Promise<{ ok: true; facts: string[]; checkedAt: string } | { ok: false; why: string; exited: boolean }>;
   // This turn's verified results, kept on the task for its next turn.
   saveFound?: (items: OnFile[]) => Promise<void>;
 };
-export type OnFile = { name: string; url: string; tier: number; facts: string[] };
+// checkedAt: when its page was last read (Phase B, B5); a find with none is as old as when it was found.
+export type OnFile = { name: string; url: string; tier: number; facts: string[]; checkedAt?: string | null };
 
 // A promise is kept only by something sent AFTER it was made (2026-10-08: task 111 closed itself as done on a document sent the
 // day before, on a different focus, and nothing went out after the call). Texts sent in this wake-up count; earlier sends never do.
@@ -165,7 +168,7 @@ export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string
 
 ${t.source === "lookout" && t.lookoutOrigin === "member" ? `Right now you're keeping an eye out for ${o.firstName} because they asked you to, in their words: "${t.theirWords}". They're waiting to hear when something real turns up: look, and text when it does, with the thing itself, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat they asked you to watch for: "${t.goal}"` : t.source === "lookout" ? `Right now you're keeping an eye out for ${o.firstName}, as you told them on a call you would. Nobody is waiting on a message: look, and text only when something real turns up, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat you said you'd look out for: "${t.goal.replace(/^Keep an eye out, as promised on a call:\s*/i, "")}"\nWhat they had said just before: "${t.theirWords}"` : t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. They're expecting it: do what you said and send it when it's done. If it isn't done yet, keep working and say nothing: no progress reports, no "no details yet", no "a few leads". Text before it's done only when you need something from them (ask for exactly that), or when it truly can't be done (say plainly what you couldn't find and what you'd do instead). Never hold their own thing back because you judge it not good enough yet.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
 Steps: ${t.steps.length ? t.steps.map((s) => `${s.done ? "[done]" : "[ ]"} ${s.text}`).join("; ") : "(none written)"}
-What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}${o.onFile?.length ? `\nAlready on file and verified for them (send any of these with tellThem, by their link; no need to find them again):\n${o.onFile.slice(0, 12).map((f) => `- ${f.name} (${f.url})${f.facts.length ? `: ${f.facts.slice(0, 3).join("; ")}` : ""}`).join("\n")}` : ""}
+What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}${o.onFile?.length ? `\nAlready on file and verified for them (send any of these with tellThem, by their link; no need to find them again):\n${o.onFile.slice(0, 12).map((f) => `- ${f.name} (${f.url})${f.facts.length ? `: ${f.facts.slice(0, 3).join("; ")}` : ""} [${f.checkedAt ? `read ${f.checkedAt.slice(0, 10)}` : "found on an earlier day"}; its page is read again before it's sent]`).join("\n")}` : ""}
 Your notes so far (oldest first):
 ${t.notes.map((n) => `- [${localStamp(n.at, o.zone)}] ${n.text}`).join("\n") || "- (none)"}
 This is wake-up ${t.wakes} of at most ${TASK_LIMITS.maxWakes}. Now, their time: ${o.now}${o.zone ? ` (their time zone: ${o.zone})` : ""}.
@@ -182,7 +185,7 @@ Then decide:
 You must end with scheduleNext or finish. Never make up results: only what your tools returned.`;
 }
 
-type Found = { name: string; url: string | null; facts: string[]; tier: number; onFile?: boolean };
+type Found = { name: string; url: string | null; facts: string[]; tier: number; onFile?: boolean; checkedAt?: string | null; rechecked?: boolean };
 
 // Their newest lines in the thread ("User said: …", or "[Thu Oct 9, 3pm PDT] User said: …" stamped), oldest first.
 export function newestMemberLines(recent: string, n = 3): string[] {
@@ -245,7 +248,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   // On file and verified already: sendable this turn without being found again.
   for (const f of (await deps.onFile?.().catch(() => [] as OnFile[])) ?? []) {
     if (!f.url || isRejected(f.name) || events.some((e) => e.url === f.url)) continue;
-    events.push({ name: f.name, url: f.url, facts: f.facts.slice(0, 5), tier: f.tier, onFile: true });
+    events.push({ name: f.name, url: f.url, facts: f.facts.slice(0, 5), tier: f.tier, onFile: true, checkedAt: f.checkedAt ?? null });
   }
 
   // A promise goes in one message with everything it promised (Royce, 2026-10-09, "close on the promise, not the attempt"):
@@ -295,11 +298,34 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
           events_found: events.map((e) => `${e.name}${e.url ? ` (${e.url})` : ""}${e.facts.length ? `: ${e.facts.join("; ")}` : ""}`).join(" | ") || "(none)",
           verified_page_facts: pageFacts.join(" | ") || "(none)",
         };
+        // An on-file find is read again before it goes (Phase B, B5, 2026-10-10: on-file finds went out unchecked, with no time on
+        // them): sold out, gone or past is left out (and exits, services/sendCheck.ts recheckOnFile); unreadable is left out of this
+        // send; read is sent from what its page says now. With no reader at hand, its facts say how old they are.
+        const leftOut: string[] = [];
+        const leftOutUrls = new Set<string>();
+        for (const url of known) {
+          const ev = events.find((e) => e.url === url && e.onFile && !e.rechecked);
+          if (!ev) continue;
+          if (!deps.recheckOnFile) {
+            ev.facts = [...ev.facts.filter((f) => !/not checked since/.test(f)), `on file from ${ev.checkedAt ? ev.checkedAt.slice(0, 10) : "an earlier day"}, not checked since`];
+            ev.rechecked = true;
+            continue;
+          }
+          const r = await deps.recheckOnFile({ name: ev.name, url, tier: ev.tier, facts: ev.facts, checkedAt: ev.checkedAt ?? null }).catch(() => ({ ok: false as const, why: "its page couldn't be read", exited: false }));
+          if (r.ok) Object.assign(ev, { facts: r.facts, checkedAt: r.checkedAt, rechecked: true });
+          else {
+            leftOut.push(`${ev.name}: ${r.why}`);
+            leftOutUrls.add(url);
+          }
+        }
+        const sendable = known.filter((url) => !leftOutUrls.has(url));
+        if (known.length && !sendable.length) return { ok: false, error: `Not sent: read again just now, ${leftOut.join("; ")}. Leave it off; say nothing about it unless they ask.` };
+        if (leftOut.length) did.push(`left out after a re-read: ${leftOut.join("; ").slice(0, 160)}`);
         // Things to send: each link, then its own caption, in tier order, the way
         // search results arrive (services/taskMessages.ts). A closing line last.
-        if (known.length) {
+        if (sendable.length) {
           const items: SendItem[] = orderByTier(
-            known.map((url) => {
+            sendable.map((url) => {
               const ev = events.find((e) => e.url === url);
               const v = verified.find((x) => x.url === url);
               return ev
@@ -568,7 +594,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `You told them ${task.window.words}; it moves to ${re.when}. Do the work and send it then: one message with the thing itself.`);
     did.push(`window: moved quietly to ${re.when}, no "not yet" text`);
   }
-  const found: OnFile[] = [...events.filter((e) => e.url && !e.onFile).map((e) => ({ name: e.name, url: e.url!, tier: e.tier ?? 2, facts: e.facts })), ...verified.map((v) => ({ name: v.name, url: v.url, tier: 3, facts: v.facts }))];
+  // Found and checked this turn: stamped, so a later turn knows how old they are (Phase B, B5).
+  const checkedAt = deps.now().toISOString();
+  const found: OnFile[] = [...events.filter((e) => e.url && !e.onFile).map((e) => ({ name: e.name, url: e.url!, tier: e.tier ?? 2, facts: e.facts, checkedAt })), ...verified.map((v) => ({ name: v.name, url: v.url, tier: 3, facts: v.facts, checkedAt }))];
   if (found.length) await deps.saveFound?.(found).catch(() => {});
   return { action: decided ?? "defaulted_24h", did, texts, final, warning };
 }
@@ -737,6 +765,7 @@ async function onFileFor(userId: string, task: CoTask): Promise<OnFile[]> {
       url: String(m.url),
       tier: Number(m.tier ?? 2),
       facts: [m.event_date ? `date: ${String(m.event_date).slice(0, 10)}` : null, m.details?.startAt ? `starts ${String(m.details.startAt).replace("T", " ").slice(0, 16)}` : null, m.details?.venue ?? m.city ?? null].filter(Boolean) as string[],
+      checkedAt: typeof m.checkedAt === "string" && m.checkedAt ? m.checkedAt : null,
     }));
   const out: OnFile[] = [];
   for (const f of [...own, ...swept]) if (f?.url && !out.some((x) => x.url === f.url)) out.push(f);
@@ -850,6 +879,7 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     now: clock,
     sentSince: (since) => sendsSince(userId, since),
     onFile: () => onFileFor(userId, task),
+    recheckOnFile: async (f) => { const S = await import("./sendCheck.js"); return S.recheckOnFile(userId, f, zone, S.realSendCheckDeps); },
     rejected: () => pickerRejected(userId),
     saveFound: (items) => saveTaskFound(userId, task.id, items),
     ...opts.override,

@@ -196,8 +196,10 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
   // went unchecked there): every item's forbidden patterns, and nothing about who they are beyond the grounding of the whole set.
   const forbidden = [...new Map(i.items.flatMap((b) => b.item.rules.forbidden ?? []).map((f) => [f.pattern.source, f])).values()];
   const grounding = i.items.map((b) => b.item.grounding).join("\n");
+  // Prices and counts in the opening or closing are held to the records of the whole set (Phase B4 over C).
+  const backedBy = i.items.map((b) => b.item.rules.backedBy).filter((x): x is string => typeof x === "string" && !!x).join("\n") || undefined;
   const framing = (text: string, at: "opening" | "closing", maxChars: number) => {
-    const bad = checkDraft(text, { maxChars, maxSentences: 2, forbidden }).filter((k) => !k.pass);
+    const bad = checkDraft(text, { maxChars, maxSentences: 2, forbidden, ...(backedBy ? { backedBy } : {}) }).filter((k) => !k.pass);
     if (bad.length) problems.push({ at, why: `the ${at}: ${bad.map((k) => `${k.name}${k.reason ? ` (${k.reason})` : ""}`).join(", ")}` });
     else if ((stripUngroundedIdentity(text, grounding) ?? "").trim() !== text.trim()) problems.push({ at, why: `the ${at} says who they are beyond what they've told Co` });
     else if (unbackedSpecifics(text, allFacts).length) problems.push({ at, why: `the ${at} states something the things' facts don't back` });
