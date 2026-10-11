@@ -138,6 +138,14 @@ export function paletteFor(st: DeckStyle | null | undefined): Palette {
     coverTop: coverBg, coverBottom: coverBg, coverText, serif: st.type === "sans" ? SANS : SERIF, sans,
   };
 }
+// Their accent must read where it's text (review of PR 2: a navy accent on a navy band was 1.6:1): the band's times and dots fall back
+// to the band's text color below 3:1, and the title and group labels to their text color below 3:1 on the paper.
+function readableAccents(st: DeckStyle): string {
+  const p = paletteFor(st);
+  const onBand = contrast(st.accent, p.band) >= 3 ? st.accent : p.bandText;
+  const onPaper = contrast(st.accent, st.background) >= 3 ? st.accent : st.text;
+  return `.band .lead{color:${onBand}}.band .b li::before{background:${onBand}}.band .num{color:${onBand}}h1,.gl,section:not(.band) .lead,.on{color:${onPaper}}.num{color:${onPaper}}`;
+}
 function pageCss(t: Palette): string {
   return `
 *,*::before,*::after{box-sizing:border-box}
@@ -260,7 +268,7 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
 ${og}
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400&display=swap" rel="stylesheet">
 <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500&display=swap" rel="stylesheet">
-<style>${d.style ? pageCss(paletteFor(d.style)) : STYLE}${d.logo ? ".cover-logo{display:block;height:64px;width:auto;max-width:50%;object-fit:contain;margin:0 auto 18px}" : ""}</style>
+<style>${d.style ? pageCss(paletteFor(d.style)) + readableAccents(d.style) : STYLE}${d.logo ? ".cover-logo{display:block;height:64px;width:auto;max-width:50%;object-fit:contain;margin:0 auto 18px}" : ""}</style>
 </head>
 <body>
 <div class="cover${d.cover ? " photo" : ""}"${d.cover ? ` style="background-image:linear-gradient(180deg,rgba(38,19,24,0.25),rgba(38,19,24,0.55)),url('${e(d.cover.url)}')" role="img" aria-label="${e(d.cover.alt)}"` : ""}><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(`${base}${d.logo}`)}" alt="${e(d.title)}" decoding="async">` : ""}<div class="cover-title">${e(d.title)}</div>${d.cover ? `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` : ""}</div>

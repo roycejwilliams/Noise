@@ -29,26 +29,28 @@ export function pageLines(d: CoPageData): { where: string; text: string }[] {
 
 // Pure: what on the page nothing backs. Empty means the page may be stored.
 // Pure: one way of writing a time and a date, so the same fact matches however it was typed (live runs, 2026-10-11: a member's "7pm"
-// refused the page's "7:00 PM", "dinner at 7:45" refused "7:45 PM", and "Oct 24" refused "October 24"). Times become H or H:MM (am/pm
-// dropped: the member's own words rarely carry it, "at 7" and "7:00 PM" are the same), and short month and weekday names become full
-// ones, keeping their capital.
-const MONTHS: Record<string, string> = { jan: "january", feb: "february", mar: "march", apr: "april", jun: "june", jul: "july", aug: "august", sep: "september", sept: "september", oct: "october", nov: "november", dec: "december" };
-const DAYS: Record<string, string> = { mon: "monday", tue: "tuesday", tues: "tuesday", wed: "wednesday", thu: "thursday", thur: "thursday", thurs: "thursday", fri: "friday", sat: "saturday", sun: "sunday" };
-export function sameTimes(s: string): string {
-  return s
-    .replace(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/gi, (_m, h: string, mm: string | undefined) => (mm && mm !== "00" ? `${Number(h)}:${mm}` : `${Number(h)}`))
-    .replace(/\b(\d{1,2}):00\b/g, (_m, h: string) => `${Number(h)}`)
-    .replace(/\b([A-Za-z]{3,5})\.?(?=\s|,|$)/g, (m, w: string) => {
-      const full = MONTHS[w.toLowerCase()] ?? DAYS[w.toLowerCase()];
-      return full ? (/^[A-Z]/.test(w) ? full[0].toUpperCase() + full.slice(1) : full) : m;
-    });
+// refused the page's "7:00 PM", and "Oct 24" refused "October 24"). Review of PR 2 kept it narrow:
+//   - times keep their am/pm ("7:00 PM" and "7 pm" are both "7pm"); only in the member's words (sameTimes(s, "theirs")) does a bare
+//     time ("at 7", "7:45") also stand for 7am and 7pm. A page's "7 AM" never matches their "7pm";
+//   - only a capitalized short month or weekday next to a date expands ("Oct 24", "Sat Oct 24"), so "I sat" or "the sun" never do.
+const MONTHS: Record<string, string> = { Jan: "January", Feb: "February", Mar: "March", Apr: "April", Jun: "June", Jul: "July", Aug: "August", Sep: "September", Sept: "September", Oct: "October", Nov: "November", Dec: "December" };
+const DAYS: Record<string, string> = { Mon: "Monday", Tue: "Tuesday", Tues: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Thur: "Thursday", Thurs: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+const MON = Object.keys(MONTHS).join("|");
+export function sameTimes(s: string, side: "page" | "theirs" = "page"): string {
+  let out = s
+    .replace(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/gi, (_m, h: string, mm: string | undefined, ap: string) => `${Number(h)}${mm && mm !== "00" ? `:${mm}` : ""}${ap.toLowerCase().startsWith("p") ? "pm" : "am"}`)
+    .replace(new RegExp(`\\b(${MON})\\.?(?=\\s+\\d)`, "g"), (_m, w: string) => MONTHS[w])
+    .replace(new RegExp(`\\b(${Object.keys(DAYS).join("|")})\\.?(?=,?\\s+(\\d|${MON}|${Object.values(MONTHS).join("|")}))`, "g"), (_m, w: string) => DAYS[w]);
+  if (side === "theirs") out = out.replace(/\b(at|by|from|until|til|around)\s+(\d{1,2})(?::(\d{2}))?\b(?!\s*(?:am|pm|:\d))/gi, (m, _p, h: string, mm: string | undefined) => `${m} ${h}${mm ? `:${mm}` : ""}am ${h}${mm ? `:${mm}` : ""}pm`).replace(/\b(\d{1,2}):(\d{2})\b(?!\s*(?:am|pm|:\d))/gi, (m, h: string, mm: string) => `${m} ${h}:${mm}am ${h}:${mm}pm`);
+  return out;
 }
-// Pure: a short label before a colon ("Schedule: cocktails at 7") is Co's label, like a heading, not a claim (the same live run
-// refused "Schedule: ..." for the word "schedule").
-const unlabeled = (s: string) => s.replace(/^\s*[A-Za-z][\w' ]{0,24}:\s+/, "");
+// Pure: Co's own short labels before a colon ("Schedule: cocktails at 7") are labels, like a heading, not claims. Only these words:
+// anything else before a colon (a name, "Ellis Park:") is read as part of the line (review of PR 2).
+const LABELS = /^\s*(schedule|timing|time|when|where|details|notes|dress|dress code|address|getting there|cost|price|budget|plan|food|drinks|the plan|the night)\s*:\s+/i;
+const unlabeled = (s: string) => s.replace(LABELS, "");
 
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
-  const corpus = sameTimes(`${source.theirs}\n${source.read}`);
+  const corpus = sameTimes(`${source.theirs}\n${source.read}`, "theirs");
   const out: string[] = [];
   for (const l of pageLines(d)) {
     const bad = unsourced(sameTimes(l.text), corpus);

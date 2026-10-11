@@ -34,7 +34,9 @@ export type PageInput = z.infer<typeof PAGE_INPUT>;
 // Pure: the tool's input as the page's data (images are filled in by code, once, from the page's own entities).
 // extras (2026-10-11, PR 2): their look and their images, resolved by the tool (their taste, their own image ids). Without them, Co's
 // own design, as before.
-export function pageDataFrom(input: PageInput, extras?: { style: unknown | null; assets: Map<number, string> }): Record<string, unknown> {
+// was: the page as it is now, on an edit: its logo and each section's picture (by heading) stay unless this version names new ones
+// (review of PR 2: an edit that didn't repeat the logo dropped it).
+export function pageDataFrom(input: PageInput, extras?: { style: unknown | null; assets: Map<number, string>; was?: any | null }): Record<string, unknown> {
   const norm = (b: any) => {
     if (b.type === "bullets") return { type: "bullets", items: b.items.map((i: any) => ({ text: i.text, lead: i.lead ?? null })) };
     if (b.type === "comparison") return { type: "comparison", options: b.options.map((o: any) => ({ name: o.name, facts: o.facts, note: o.note ?? null, url: o.url ?? null })) };
@@ -42,8 +44,14 @@ export function pageDataFrom(input: PageInput, extras?: { style: unknown | null;
     return { type: "text", text: b.text };
   };
   const at = (n: number | null | undefined) => (typeof n === "number" ? extras?.assets.get(n) ?? null : null);
-  const sections = input.sections.map((s) => ({ heading: s.heading, blocks: s.blocks.map(norm), image: null, ...(at(s.picture) ? { asset: at(s.picture) } : {}) }));
-  return { title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(extras?.style ? { style: extras.style } : {}), ...(at(input.logo) ? { logo: at(input.logo) } : {}) };
+  const was = extras?.was ?? null;
+  const keptPicture = (heading: string) => (was?.sections ?? []).find((x: any) => x.heading === heading && x.asset)?.asset ?? null;
+  const sections = input.sections.map((s) => {
+    const asset = typeof s.picture === "number" ? at(s.picture) : keptPicture(s.heading);
+    return { heading: s.heading, blocks: s.blocks.map(norm), image: null, ...(asset ? { asset } : {}) };
+  });
+  const logo = typeof input.logo === "number" ? at(input.logo) : (was?.logo ?? null);
+  return { title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(extras?.style ? { style: extras.style } : {}), ...(logo ? { logo } : {}) };
 }
 
 // Words about the page, not its title (review of #148: "take that page down" named no title and missed their only page).
@@ -87,16 +95,17 @@ export function pageTools(
   const S = () => import("../services/coPages/store.js");
   // Their look and their images for a page (2026-10-11, PR 2), the same way a deck takes them: taste they describe now (their words,
   // saved) or their saved taste, else Co's own design (a page never asks); images only theirs, sent for it, already on it, or named.
-  const lookFor = async (input: any, was: any | null, theirs: string): Promise<{ style: unknown | null; assets: Map<number, string> } | { error: string }> => {
+  const lookFor = async (input: any, was: any | null, theirs: string): Promise<{ style: unknown | null; assets: Map<number, string>; was: any | null } | { error: string }> => {
     const D = await import("./deckTools.js");
     const t = await D.knownTaste(ctx, input.taste, async () => theirs);
     if ("error" in t) return t;
     const { styleFrom } = await import("../services/coPages/style.js");
-    const style = t.taste ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : (was?.style ?? null);
+    // "Don't mind" keeps Co's own page design (review of PR 2): only a taste they described or picked restyles a page.
+    const style = t.taste && !t.taste.dontCare ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : t.taste?.dontCare ? null : (was?.style ?? null);
     const onPage = was ? [was.logo, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
     const ids = await D.assetIdsFor(ctx.userId, [input.logo, ...input.sections.map((x: any) => x.picture)], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
     if ("error" in ids) return ids;
-    return { style, assets: ids.map };
+    return { style, assets: ids.map, was };
   };
   const pages = async () => (ctx.dryRun ? [] : (await S()).livePagesFor(ctx.userId).catch(() => []));
   return {
