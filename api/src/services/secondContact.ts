@@ -68,7 +68,7 @@ export async function secondContactRate(o: { sinceDays?: number; includeRecent?:
        ORDER BY f.owner_user_id, f.meta->>'otherId', f.happened_at DESC
      ), said AS (
        SELECT i.person_a, i.person_b,
-              COALESCE(bool_or(l.outcome IN ('met_again', 'talked_again') AND l.at <= i.created_at + make_interval(days => $3)), false) AS met,
+              COALESCE(bool_or(l.outcome IN ('met_again', 'talked_again') AND l.at >= i.created_at AND l.at <= i.created_at + make_interval(days => $3)), false) AS met,
               count(l.*) > 0 AS answered
        FROM intros i
        LEFT JOIN latest l ON (l.owner_user_id = i.person_a AND l.other = i.person_b::text) OR (l.owner_user_id = i.person_b AND l.other = i.person_a::text)
