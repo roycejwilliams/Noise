@@ -273,12 +273,13 @@ export async function fillDetails(items: SentItem[], opts: { withinDays?: number
 
 // What's on file for each recent send, and what isn't, as facts: "I don't
 // have the start time" is then only ever true.
-export function sentDetailLines(ctx: Pick<TurnContext, "sent"> & { google?: string[] }, withinDays = 5): string[] {
-  const cutoff = Date.now() - withinDays * 86_400_000;
-  return [...sentLines(ctx, cutoff), ...(ctx.google ?? [])];
+// now: the moment it's read for (tests pin it; 2026-10-11 the Phase B test went red a day later on the real clock).
+export function sentDetailLines(ctx: Pick<TurnContext, "sent"> & { google?: string[] }, withinDays = 5, now = new Date()): string[] {
+  const cutoff = now.getTime() - withinDays * 86_400_000;
+  return [...sentLines(ctx, cutoff, now), ...(ctx.google ?? [])];
 }
 
-function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number): string[] {
+function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number, now = new Date()): string[] {
   return ctx.sent
     .filter((s) => s.sentAt.getTime() > cutoff)
     .slice(0, 5)
@@ -286,7 +287,7 @@ function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number): string[] {
       if (s.read) return describeRead(s.name, s.read).facts.join(" ");
       if (!s.details) return `Co sent them "${s.name}"${s.url ? ` (${s.url})` : ""}; its page hasn't been read yet, so Co has no start time or address for it.`;
       // Stale volatile lines say so (Phase B, B3): a reply never states a days-old spot count or time as current.
-      const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null).join(" ");
+      const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now).join(" ");
       const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "address"].filter(Boolean);
       return `Details on file for "${s.name}", which Co sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`;
     });

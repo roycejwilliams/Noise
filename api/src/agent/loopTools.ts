@@ -213,12 +213,15 @@ export function loopTools(
   // again for this turn. A dry run reads nothing.
   let limitsRead: Promise<{ avoid: string[]; availability: string | null } | null> | null = null;
   const limits = () => (limitsRead ??= ctx.dryRun ? Promise.resolve(null) : import("../services/memberKnowledge.js").then((M) => M.realKnowledgeDeps.limits(ctx.userId)).catch(() => null));
+  // The words an ask is judged on: a text's message (with the text it replies to), or on a call their last three lines (an ask is often
+  // built over a few turns: "I'd love a hackathon again", "which weekend?", "the 20th"), never the whole call (review of #139).
+  const askWords = () => (ctx.isVoice ? String(ctx.turn?.message ?? "").split("\n").filter((l) => l.trim()).slice(-3).join("\n") || ctx.resolvedContent : theirWords());
   const ruledOut = async (query: string): Promise<string | null> => {
     const l = await limits();
     if (!l?.avoid.length) return null;
     const { avoidFor, avoidHits } = await import("../services/memberLimits.js");
-    const hit = avoidHits(query, avoidFor(l.avoid, theirWords()))[0];
-    return hit ? `Not searched: they told Co to stop suggesting ${hit}. Look for something else they want (if they're asking for it again now, say so plainly and steerAwayFrom with undo first).` : null;
+    const hit = avoidHits(query, avoidFor(l.avoid, askWords()))[0];
+    return hit ? `Not searched: they told Co to stop suggesting ${hit}. Look for something else they want. If they're asking for it now, it lifts for this once when their own words ask for it; only use steerAwayFrom with undo if they say they're open to it again in general.` : null;
   };
   // A receipt for every search, empty or not, so "I looked and nothing turned
   // up" is backed (2026-10-01: with no record, the fact check cut it).
@@ -452,7 +455,7 @@ export function loopTools(
         if (lim && (lim.avoid.length || lim.availability)) {
           const { limitsGate } = await import("../services/memberLimits.js");
           const known = items.map((it) => ({ link: it.link, f: foundFor(it.link) })).filter((x) => x.f);
-          const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: theirWords() }).catch(() => null);
+          const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: askWords() }).catch(() => null);
           for (const o of g?.out ?? []) outByLink.set(String((o.match as any).link), o.why);
         }
         for (const it of items) {
