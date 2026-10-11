@@ -6,6 +6,7 @@ import { z } from "zod";
 import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import { writeMemory } from "../services/memory.js";
+import { pageTools } from "./pageTools.js";
 import { recordDecision } from "../harness/core.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
@@ -236,7 +237,17 @@ export function loopTools(
     await hold(line);
   };
 
+  // Co pages (agent/pageTools.ts): grounded on the same source as a document, their words and what Co read this turn.
+  const pageSource = async () => {
+    const { loadTheirWords } = await import("../services/documentDelivery.js");
+    const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
+    const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
+    return { theirs, read };
+  };
+  const pages = pageTools(ctx, { say, notDone, source: pageSource });
+
   return {
+    ...pages,
     searchEvents: tool({
       description: toolUse("searchEvents"),
       inputSchema: z.object({

@@ -28,6 +28,7 @@ import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { createMoRouter } from "../../api/src/routes/mo.js";
 import { createGoogleRouter } from "../../api/src/routes/google.js";
 import { createReadoutRouter } from "../../api/src/routes/readout.js";
+import { createCoPageRouter } from "../../api/src/routes/coPage.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
 import { authLimiter, limiter } from "../../api/src/middleware/rateLimiter.js";
@@ -98,7 +99,7 @@ async function main() {
   // (100 per 15 minutes per address), and starting a sign-in to 10. The signed-in dashboard polls every few seconds and is behind
   // its login, and webhooks (Sendblue, Twilio, ElevenLabs, Luma, Resend) and the media Twilio and Sendblue fetch (/audio,
   // /plan-file, /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
-  app.use(["/i", "/readout", "/google", "/mo/unsubscribe"], limiter);
+  app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
   app.use("/api/login/start", authLimiter);
 
   // Serves Co's vCard so Sendblue can attach it to the real onboarding
@@ -148,6 +149,8 @@ async function main() {
   app.use("/google", createGoogleRouter());
   // The host's read-only partner readout, by an approved link only. Mirrors api/src/server.ts.
   app.use("/readout", createReadoutRouter());
+  // A Co page, by its unguessable link only; never listed (api/src/routes/coPage.ts). Mirrors api/src/server.ts.
+  app.use("/d", createCoPageRouter());
   app.use("/sendblue", sendblueRouter(io));
   app.use("/luma", createLumaRouter());
   // Mo's email opt-out link and inbound email replies (2026-09-25: Mo runs

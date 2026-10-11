@@ -134,6 +134,27 @@ export const ABILITIES: Ability[] = [
     use: "Send them a plan as a one-page sheet when they ask you to plan something with more than one step or time. By default it goes by text, the PDF in this conversation: leave sendBy out. Set it to email, or both, only when they ask for it by email or on their calendar in their own words; never on your own. Build it from what you found or read this turn and what they said: for a step that is an event you found, give its link and leave the time and place to its own record; for any other step give what, where, address and a short detail, and the time as when (2026-10-11T16:30, their time). Put times only in when. The title, note and every step use only places, names and numbers you read this turn or they said, so title it from their words (not a region or a venue you made up). No links. Write the note as one or two plain sentences, in your voice. Don't use it for a single suggestion (answer by text), and don't offer it as a menu: when they asked for a plan, send it. Give line: the one sentence that goes with the PDF, in your voice; the PDF and that line are the whole delivery, so after it sends, send nothing more about it unless you have a question for them (by email only, say in a line it's in their email). The same rule as a document for sending it again: asked for it again (lost it, can't find it, send it again), the same plan goes again; asked for a change, send the changed plan; never on your own. A step that names something you found on an earlier day is re-read before it goes in: an event's own page is re-read for you; anything else, read its page again (readPage) first.",
   },
   {
+    id: "co_page",
+    can: "Co can make them a page: a plan with a few parts, options side by side, or a set of places with their links, at a private link only they get. It can change it in conversation (same link) and take it down when they ask.",
+    tool: "makePage",
+    limits: { perTurn: 1, perDay: 4 },
+    use: "You pick the format, never them (never ask \"a page or a PDF?\"): one fact or a short answer is a text; a plan with several parts, options to compare, or a set of places with links is a page (makePage); a file to download, print or attach is a PDF (writeDocument); a Google Doc only when they ask for one. A page goes as ONE text, your line saying what you made plus its link, and nothing about its contents in the chat: the page holds them. Build it only from what they told you and what you read for them.",
+  },
+  {
+    id: "co_page_update",
+    can: "Co can change a page it made for them; the link stays the same.",
+    tool: "updatePage",
+    limits: { perTurn: 1 },
+    use: "When they ask for a change to a page you made (\"swap the Friday dinner\"), write the whole new version with updatePage and say in a few words what changed. Never send the page again or summarize it.",
+  },
+  {
+    id: "co_page_take_down",
+    can: "Co can take down a page it made for them; the link stops opening and what was on it is deleted.",
+    tool: "takeDownPage",
+    limits: { perTurn: 2 },
+    use: "When they ask you to take a page down, delete it or stop sharing it, take it down and say so in a few words.",
+  },
+  {
     id: "write_document",
     can: "Co can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Co's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Co's offer, and it goes only to them. Co can't make spreadsheets or slides, and can't send it to anyone else for them.",
     tool: "writeDocument",
