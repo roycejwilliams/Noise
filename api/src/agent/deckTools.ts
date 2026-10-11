@@ -191,12 +191,13 @@ export function deckTools(
           o.notDone("The deck wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
         }
-        const text = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The deck "${input.title}" was made, but its link didn't send.`);
           return { ok: false, error: "The deck is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
         }
         ctx.onLinkDelivered?.();
+        confirm();
         ctx.facts?.add("did_this_turn", `Made them a deck, "${input.title}", ${input.slides.length + 1} slides, and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
         return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here." };
       },
@@ -242,12 +243,13 @@ export function deckTools(
           o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
-        const text = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
         ctx.onLinkDelivered?.();
+        confirm();
         ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
         return { ok: true, note: "Same deck, same link; the text said what changed. Send nothing more about it." };
       },

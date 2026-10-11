@@ -99,12 +99,13 @@ export function pageTools(
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
         }
-        const text = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
           return { ok: false, error: "The page is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
         }
         ctx.onLinkDelivered?.();
+        confirm();
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
         return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
       },
@@ -132,12 +133,13 @@ export function pageTools(
           o.notDone(`The page wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
-        const text = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
           return { ok: true, note: "The page is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
         ctx.onLinkDelivered?.();
+        confirm();
         ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
         return { ok: true, note: "Same page, same link; the text said what changed. Nothing more goes out this turn, so don't call sendReply." };
       },

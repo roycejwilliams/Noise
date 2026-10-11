@@ -52,6 +52,8 @@ export type ConversationToolContext = {
   onLinkDelivered?: () => void;
   // The reply's own fact check and brand guard, for an answer that rides with a link (agent/linkAnswer.ts). Set per turn below.
   checkAnswer?: (draft: string) => Promise<string>;
+  // An answer that rode with a link went out: it counts as part of this turn's reply (the call-offer check reads lastReplyText).
+  noteAnswerSent?: (answer: string) => void;
   // When their text arrived; the loop's time budget runs from here.
   turnStartedAt?: number;
   userId: string;
@@ -115,6 +117,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false };
   ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
+  ctx.noteAnswerSent = (answer: string) => {
+    state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${answer}` : answer;
+  };
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.
   const notDone = (what: string) => ctx.facts?.add("not_done", what);
@@ -161,6 +166,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // An answer to something else they asked still goes (Royce, 2026-10-11: never drop it silently); commentary on the link
         // doesn't (agent/linkAnswer.ts afterLinkAnswers). Either way it's logged.
         if (state.linkDelivered) {
+          // Already said with the link (alsoAnswer): never twice.
+          const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
+          if (draft.trim() && norm(state.sentMessages.join(" ")).includes(norm(draft))) return { ok: true, note: "That already went with the link; nothing more went out." };
           const { afterLinkAnswers } = await import("./linkAnswer.js");
           const answers = ctx.dryRun ? true : await afterLinkAnswers(ctx.resolvedContent, state.sentMessages.join("\n"), draft);
           if (!ctx.dryRun) {

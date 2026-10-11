@@ -63,12 +63,13 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         }
         const { recordDecision } = await import("../harness/core.js");
         await recordDecision({ layer: 3, decision: "artifact.share", userId: ctx.userId, outcome: "act", action: "share_link_created", proposal: { page: got.p.id.slice(0, 4), share: made.shareId.slice(0, 4), theirWords: quote.slice(0, 200) } }).catch(() => {});
-        const text = await withAnswer(ctx, `${line.trim()}\n${made.url}`, alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `${line.trim()}\n${made.url}`, alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone("The share link was made, but it didn't send.");
           return { ok: false, error: "The share link is made but didn't send. Give it in your reply." };
         }
         ctx.onLinkDelivered?.();
+        confirm();
         ctx.facts?.add("did_this_turn", `Made a view-only share link to their ${noun((got.p as any).kind)} "${got.p.title}" because they asked, and texted it (${made.url}). They can stop it any time; their own link is unchanged.`);
         return { ok: true, note: "Sent as one text. If you reply, say in a few words it's view-only and they can text you to stop it any time." };
       },
@@ -96,12 +97,13 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         if (!r) return { ok: false, error: "It's already gone (taken down or expired)." };
         const { recordDecision } = await import("../harness/core.js");
         await recordDecision({ layer: 3, decision: "artifact.share", userId: ctx.userId, outcome: "act", action: "own_link_reset", proposal: { from: got.p.id.slice(0, 4), to: r.id.slice(0, 4) } }).catch(() => {});
-        const text = await withAnswer(ctx, `${line.trim()}\n${r.url}`, alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `${line.trim()}\n${r.url}`, alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone("The link was reset, but the new one didn't send.");
           return { ok: false, error: "The old link is off and a new one is made, but it didn't send. Give it in your reply." };
         }
         ctx.onLinkDelivered?.();
+        confirm();
         ctx.facts?.add("did_this_turn", `Gave their ${noun((got.p as any).kind)} "${got.p.title}" a fresh link (${r.url}) because they asked: the old link and any share links no longer open.`);
         return { ok: true, note: "Sent as one text. That's the whole delivery." };
       },

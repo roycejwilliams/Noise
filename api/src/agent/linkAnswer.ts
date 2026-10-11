@@ -19,14 +19,20 @@ export const ALSO_ANSWER = z
   .optional()
   .describe("Only if their message also asked or said something else that needs an answer: your answer to it, in a sentence or two. It goes in the same text, after the link. Never about the page or deck itself.");
 
-// The text with the answer after the link, checked like any reply. The bare text when there's no answer or nothing survives the check.
-export async function withAnswer(ctx: ConversationToolContext, text: string, answer: string | null | undefined): Promise<string> {
+// The text with the answer after the link, checked like any reply; the bare text when there's no answer, no check to run it through,
+// or nothing survives the check. confirm() is called only once the text actually sent: then, and only then, Co's record says it
+// answered (review of PR 1: a receipt written before a failed send would let Co claim an answer that never went).
+export async function withAnswer(ctx: ConversationToolContext, text: string, answer: string | null | undefined): Promise<{ text: string; confirm: () => void }> {
   const a = answer?.trim();
-  if (!a) return text;
-  const checked = (ctx.checkAnswer ? await ctx.checkAnswer(a).catch(() => "") : a).trim();
-  if (!checked) return text;
-  ctx.facts?.add("did_this_turn", `Answered the other thing they asked in the same text as the link: "${checked.slice(0, 160)}"`);
-  return `${text}\n\n${checked}`;
+  const checked = a && ctx.checkAnswer ? (await ctx.checkAnswer(a).catch(() => "")).trim() : "";
+  if (!checked) return { text, confirm: () => {} };
+  return {
+    text: `${text}\n\n${checked}`,
+    confirm: () => {
+      ctx.facts?.add("did_this_turn", `Answered the other thing they asked in the same text as the link: "${checked.slice(0, 160)}"`);
+      ctx.noteAnswerSent?.(checked);
+    },
+  };
 }
 
 export type Judge = (prompt: string) => Promise<string>;
@@ -41,7 +47,7 @@ Co already sent them this, with a link to what it made: """${linkText.slice(0, 6
 
 Co now wants to send a second text: """${draft.slice(0, 1200)}"""
 
-Does the second text answer a question they asked, or respond to something they said, beyond the request to make or change it? Answering a question about how to use, send or present it counts. Describing what Co made (what's in it, how it looks, that it's done or ready) does not count.
+Does the second text answer a question they asked, or respond to something they said, beyond the request to make or change it, and say something the first text didn't already say? Answering a question about how to use, send or present it counts. Describing what Co made (what's in it, how it looks, that it's done or ready) does not count.
 
 Return ONLY JSON: {"answersSomethingElse": true or false}`;
 }
