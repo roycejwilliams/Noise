@@ -215,6 +215,7 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   const regC = src("harness/proactiveRegistry.ts");
   check("B+C: the send-time re-read runs inside prepareOffer, so every find in a composed bundle is re-read (and the lone reminder too)", /export async function prepareOffer[\s\S]{0,700}checkBeforeSend\(c, person\.timezone\)[\s\S]{0,60}if \(!\("ok" in fresh\)\) return fresh;/.test(reg) && /const prep = await prepareOffer\(c, person\);[\s\S]{0,300}if \("defer" in prep\) return prep;/.test(reg));
   check("B+C: a lead whose re-read defers waits (never past its own expiry); a deferred sibling stays pending", /if \("defer" in prep\) \{\s*if \(x\.id === c\.id\) \{[\s\S]{0,300}LEAST\(expires_at, \$3\)/.test(pro));
+  check("B4+C: the opening and closing are held to the whole set's records too", /const backedBy = i\.items\.map\(\(b\) => b\.item\.rules\.backedBy\)/.test(src("harness/bundleComposer.ts")) && /\.\.\.\(backedBy \? \{ backedBy \} : \{\}\)/.test(src("harness/bundleComposer.ts")));
   check("B4+C: caption prices and counts are backed by the record in composed captions too (revealItem rules)", /backedBy: captionRecord\(askText, match, \[\.\.\.dots, why\]\),/.test(src("agent/eventDiscoverySurfacing.ts")) && /checkDraft\(c, \{ \.\.\.b\.item\.rules/.test(src("harness/bundleComposer.ts")));
 }
 
