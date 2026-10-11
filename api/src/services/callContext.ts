@@ -101,7 +101,7 @@ export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" |
     observed ? `How what you've sent them has landed: ${observed}` : null,
     avoid.length ? `Never suggest these kinds of things: they asked you to stop (${avoid.map((a) => `"${a}"`).join(", ")}). Judge by what a thing mainly is. If they bring one up themselves, they're open to it again for that.` : null,
     availability ? `When they're free, in their words: "${availability}" (${isLimit(availability) ? "a limit: don't suggest things outside it" : "a leaning, not a limit"}).` : null,
-    said.length ? `What they've told you that still holds (in their words, with when):\n${said.map((l) => `- ${l}`).join("\n")}` : null,
+    said.length ? `What they've told you that still holds (with when they said it):\n${said.map((l) => `- ${l}`).join("\n")}` : null,
     read.length ? `Co's own reads of them (guesses, not things they told you: never say they said these):\n${read.map((l) => `- ${l}`).join("\n")}` : null,
   ].filter((x): x is string => !!x);
 }

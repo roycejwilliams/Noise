@@ -84,7 +84,7 @@ const NOW = new Date("2026-10-11T18:00:00Z");
 // ---------------------------------------------------------------- review of #139: the turn note
 {
   check("review #10: the note says it's Co's, not their words, and needn't be mentioned", /^\(Co's note, not their words: /.test(CT.avoidNote(["mixers"]) ?? "") && /No need to mention it\.\)$/.test(CT.avoidNote(["mixers"]) ?? ""));
-  check("review #9: a failed limits read keeps the last good list mid-call (never an empty one)", /avoid: lim \? lim\.avoid : undefined/.test(src("services/callTools.ts")) && /x\.avoid === undefined && prev \? \{ \.\.\.x, avoid: \(await prev\.catch\(\(\) => null\)\)\?\.avoid \}/.test(src("routes/callLlm.ts")));
+  check("review #9: a failed limits read keeps the last good list mid-call (never an empty one)", /avoid: lim \? lim\.avoid : undefined/.test(src("services/callTools.ts")) && /if \(x\.avoid !== undefined\) lastAvoid\.set\(key, \{ at: Date\.now\(\), avoid: x\.avoid \}\);/.test(src("routes/callLlm.ts")) && /const LAST_AVOID_MS = 60 \* 60_000;/.test(src("routes/callLlm.ts")));
 }
 
 console.log(`call memory: ${total - failed}/${total} passed`);
