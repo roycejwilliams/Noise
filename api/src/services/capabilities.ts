@@ -152,11 +152,49 @@ export const ABILITIES: Ability[] = [
     can: "Co can take down a page it made for them; the link stops opening and what was on it is deleted.",
     tool: "takeDownPage",
     limits: { perTurn: 2 },
-    use: "When they ask you to take a page down, delete it or stop sharing it, take it down and say so in a few words.",
+    use: "When they ask you to take a page or a deck down or delete it, take it down and say so in a few words. \"Stop sharing it\" is stopSharing when it has a share link; it doesn't take their own copy down.",
+  },
+  // Keep, renew and share, for any page or deck (agent/artifactTools.ts, 2026-10-11).
+  {
+    id: "co_artifact_keep",
+    can: "Co can keep a page or deck it made for them: for good when they say \"keep this\", or 90 more days when they say \"renew\". Otherwise they last 90 days from their last change, and Co tells them before one they've been using expires.",
+    tool: "keepArtifact",
+    limits: { perTurn: 2 },
+    use: "When they say keep it (for good) or renew it (90 more days), including a one-word reply to Co's expiry notice. Say in a few words how long it now stays.",
+  },
+  {
+    id: "co_artifact_share",
+    can: "When they ask, Co can make a separate view-only link to a page or deck they can send to someone (an investor, a cofounder), and stop it any time they say; their own link stays theirs.",
+    tool: "shareArtifact",
+    limits: { perTurn: 1, perDay: 6 },
+    use: "Only when they explicitly ask to share or send it to someone, in this message. Never offer or make one on your own. Copy their asking words exactly. The link goes as one text with your line.",
+  },
+  {
+    id: "co_artifact_stop_sharing",
+    can: "Co can stop a share link from opening, any time they ask; their own link keeps working.",
+    tool: "stopSharing",
+    limits: { perTurn: 2 },
+    use: "When they ask to stop sharing, unshare, or turn off the link they sent someone. Say in a few words the shared link no longer opens and theirs still does.",
+  },
+  // Decks (agent/deckTools.ts, 2026-10-11): an artifact on the same pipeline as pages, styled from the member's own taste.
+  {
+    id: "co_deck",
+    can: "Co can make them a slide deck (a pitch deck, a talk, a plan to present): a title slide and slides of a headline and a few points, at a private link only they get, designed from their own taste. It can change it in conversation (same link) and take it down when they ask.",
+    tool: "makeDeck",
+    // Two a turn: one fix after a refused attempt (live run, 2026-10-11: the corrected deck was the one the limit stopped).
+    limits: { perTurn: 2, perDay: 3 },
+    use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; fine if they don't mind) and anything you truly need for the content, then build from the answer. Images they sent are saved as their image #N: place their logo on the title slide and a picture on the slide it belongs to, by number, only their own. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat.",
+  },
+  {
+    id: "co_deck_update",
+    can: "Co can change a deck it made for them; the link stays the same.",
+    tool: "updateDeck",
+    limits: { perTurn: 1 },
+    use: "When they ask for a change to a deck you made (\"slide 3 is weak\", \"make it darker\"), write the whole new version with updateDeck and say in a few words what changed. Never send the deck again or summarize it.",
   },
   {
     id: "write_document",
-    can: "Co can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Co's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Co's offer, and it goes only to them. Co can't make spreadsheets or slides, and can't send it to anyone else for them.",
+    can: "Co can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Co's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Co's offer, and it goes only to them. Co can't make spreadsheets (a slide deck is makeDeck), and can't send it to anyone else for them.",
     tool: "writeDocument",
     // 8 a day (was 3, 2026-10-08): a fourth explicit "send it again" was refused as "already done today". The receipts are the guard
     // against sending the same artifact twice (deliveryReceipts.ts); this only bounds how many new documents go in a day.

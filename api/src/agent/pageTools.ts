@@ -115,9 +115,10 @@ export function pageTools(
       }),
       execute: async (input) => {
         const store = await S();
-        const pick = pickPage(await pages(), input.page);
+        // Pages only: a deck is changed with updateDeck (agent/deckTools.ts).
+        const pick = pickPage((await pages()).filter((p: any) => p.kind !== "deck"), input.page);
         if (pick === "ambiguous") return { ok: false, error: "More than one of their pages fits. Ask which one by its title." };
-        if (!pick) return { ok: false, error: "They have no live page by that name. Make a new one (makePage) if that's what they want." };
+        if (!pick) return { ok: false, error: "They have no live page by that name. Make a new one (makePage) if that's what they want; a deck is changed with updateDeck." };
         const source = await o.source();
         // The page as it is now (theirs: listed from their own pages), so its images carry over (review of #148).
         const before = await store.loadCoPage(pick.id).catch(() => null);

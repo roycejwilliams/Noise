@@ -79,7 +79,7 @@ const NOT_PLAIN: { test: RegExp; why: string }[] = [
   { test: /!/, why: "has an exclamation point (Co doesn't use them)" },
 ];
 
-function plain(v: unknown, field: string, max: number, problems: string[], required: boolean): string | null {
+export function plain(v: unknown, field: string, max: number, problems: string[], required: boolean): string | null {
   if (v === undefined || v === null || (typeof v === "string" && !v.trim())) {
     if (required) problems.push(`${field} is required`);
     return null;
@@ -122,7 +122,7 @@ function link(v: unknown, field: string, problems: string[], required: boolean):
   }
 }
 
-function list(v: unknown, field: string, maxItems: number, problems: string[], minItems = 0): unknown[] {
+export function list(v: unknown, field: string, maxItems: number, problems: string[], minItems = 0): unknown[] {
   if (v === undefined || v === null) {
     if (minItems) problems.push(`${field} needs at least ${minItems}`);
     return [];
@@ -136,7 +136,7 @@ function list(v: unknown, field: string, maxItems: number, problems: string[], m
   return v.slice(0, maxItems);
 }
 
-function obj(v: unknown, field: string, keys: readonly string[], problems: string[]): Record<string, unknown> | null {
+export function obj(v: unknown, field: string, keys: readonly string[], problems: string[]): Record<string, unknown> | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) {
     problems.push(`${field} must be an object`);
     return null;

@@ -7,6 +7,8 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import { writeMemory } from "../services/memory.js";
 import { pageTools } from "./pageTools.js";
+import { deckTools } from "./deckTools.js";
+import { artifactTools } from "./artifactTools.js";
 import { recordDecision } from "../harness/core.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
@@ -245,9 +247,23 @@ export function loopTools(
     return { theirs, read };
   };
   const pages = pageTools(ctx, { say, notDone, source: pageSource });
+  // A deck's link, or a share link, is the turn's answer (rule 2: one text, the line plus the link). Sent through this, the turn
+  // counts as answered, so a model that rightly ends without sendReply isn't followed by its leftover text or the fallback line
+  // (live run, 2026-10-11: "Sorry, I got tangled up on that one." went out after a deck's link).
+  const deliver = async (text: string, record: string) => {
+    const ok = await say(text, record);
+    if (ok && !ctx.dryRun) state.sent = true;
+    return ok;
+  };
+  // Decks (agent/deckTools.ts): the same pipeline and grounding as pages.
+  const decks = deckTools(ctx, { say: deliver, notDone, source: pageSource });
+  // Keep, renew and share links, for pages and decks alike (agent/artifactTools.ts).
+  const artifacts = artifactTools(ctx, { say: deliver, notDone });
 
   return {
     ...pages,
+    ...decks,
+    ...artifacts,
     searchEvents: tool({
       description: toolUse("searchEvents"),
       inputSchema: z.object({

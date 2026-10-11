@@ -75,6 +75,20 @@ export function registerJobs(io: Server) {
       .then((n) => { if (n) console.log(`co pages: wiped ${n} expired`); })
       .catch((err: any) => console.error("co pages: expiry wipe failed:", err?.message ?? err));
   });
+  // Pages and decks they've been using that expire within a week: one notice each, one word keeps it (services/coPages/expiry.ts).
+  cron.schedule("40 16 * * *", () => {
+    import("../services/coPages/expiry.js")
+      .then((m) => m.enqueueExpiryWarnings())
+      .then((n) => { if (n) console.log(`co pages: queued ${n} expiry notices`); })
+      .catch((err: any) => console.error("co pages: expiry notices failed:", err?.message ?? err));
+  });
+  // Member assets unused for 90 days lose their bytes (services/memberAssets.ts).
+  cron.schedule("25 4 * * *", () => {
+    import("../services/memberAssets.js")
+      .then((m) => m.wipeUnusedAssets())
+      .then((n) => { if (n) console.log(`member assets: wiped ${n} unused`); })
+      .catch((err: any) => console.error("member assets: wipe failed:", err?.message ?? err));
+  });
   // Hourly, every hour (Royce, 2026-09-02: was "10am-8pm UTC" — 3am-1pm
   // Pacific, wrong for exactly the users this product is built around; a
   // real "thinking about you" text from a DIFFERENT cron arrived at 2am

@@ -461,6 +461,8 @@ export async function runMigrations(): Promise<void> {
       "research_find",
       // What kind of room they've said they want (services/roomTaste.ts, 2026-10-09).
       "room_taste",
+      // Their design taste for decks and other artifacts, and Co's one ask about it (services/designTaste.ts, 2026-10-11).
+      "design_taste", "design_taste_asked",
     ];
     const { rows } = await pool.query(
       `SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint
@@ -2640,7 +2642,44 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_pages_owner ON co_pages (owner_user_id, updated_at DESC)`))
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_pages_expiry ON co_pages (expires_at) WHERE taken_down_at IS NULL`))
+    // Keep and renewal (2026-10-11): kept = "keep this" (no expiry, expires_at 'infinity'); last_viewed_at = their link opened (an
+    // artifact in use); expiry_warned_at = Co told them it's about to expire (once per lifetime, cleared on renewal).
+    .then(() => pool.query(`ALTER TABLE co_pages ADD COLUMN IF NOT EXISTS kept BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS last_viewed_at TIMESTAMPTZ NULL, ADD COLUMN IF NOT EXISTS expiry_warned_at TIMESTAMPTZ NULL`))
+    // Share links (2026-10-11): a separate view-only link to one artifact, made only when its owner asks, revocable any time. Every
+    // one is a row here (the log of its creation), and revoked_at ends it.
+    .then(() =>
+      pool.query(`CREATE TABLE IF NOT EXISTS co_page_shares (
+        id TEXT PRIMARY KEY CHECK (length(id) = 24),
+        page_id TEXT NOT NULL REFERENCES co_pages(id) ON DELETE CASCADE,
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        their_words TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        revoked_at TIMESTAMPTZ NULL
+      )`),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_page_shares_page ON co_page_shares (page_id) WHERE revoked_at IS NULL`))
     .catch((err: Error) => console.error("co_pages table init failed:", err));
+  // Member assets (services/memberAssets.ts, 2026-10-11): the pictures, logos and inspiration images a member texts Co, kept for
+  // their own artifacts (a deck now). One member's only; viewable only through a live artifact of theirs that places it
+  // (routes/coPage.ts /d/<page>/a/<asset>). Unused for 90 days, the bytes are wiped.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_assets (
+        id TEXT PRIMARY KEY CHECK (length(id) = 24),
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        n INT NOT NULL,
+        media_type TEXT NOT NULL CHECK (media_type IN ('image/jpeg','image/png','image/gif','image/webp')),
+        bytes BYTEA,
+        description TEXT,
+        sha256 TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        wiped_at TIMESTAMPTZ NULL,
+        UNIQUE (owner_user_id, n)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS member_assets_owner ON member_assets (owner_user_id, created_at DESC)`))
+    .catch((err: Error) => console.error("member_assets table init failed:", err));
   // Goal lifecycle (2026-10-08, services/goalEdges.ts): a goal is active (no row), done or stale. Stale and done goals stay on file
   // and stop generating searches. A set-aside made from context waits to be told to them (told_at NULL, hints counts replies that
   // carried the hint).

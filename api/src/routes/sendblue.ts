@@ -1145,6 +1145,8 @@ export function sendblueRouter(io: Server): Router {
         let isVoice = false;
         let imageForVision: { data: Buffer; mediaType: string } | null = null;
         let photoDescription: string | null = null;
+        // Their image number in the member asset store (services/memberAssets.ts), for decks and other artifacts.
+        let photoAssetN: number | null = null;
         // A file that came WITH their text: its note rides after their words in the record.
         let fileNoteWithText: string | null = null;
         // A file they sent (services/memberFiles.ts): a PDF, PowerPoint or Word file, kept for them alone, by number. What it says
@@ -1191,7 +1193,11 @@ export function sendblueRouter(io: Server): Router {
                 // Written down once, for the record and the reply's fact check
                 // (services/imageRead.ts, 2026-09-22).
                 photoDescription = await describeImage(buffer, mediaType);
-                if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]` : "[sent a photo]";
+                // Kept as theirs for their own decks and pages (a logo, a product shot, an inspiration image). Never blocks the reply.
+                const asset = await import("../services/memberAssets.js").then((m) => m.keepAsset(user.id, buffer, mediaType, photoDescription)).catch(() => null);
+                if (asset?.ok) photoAssetN = asset.n;
+                const assetNote = photoAssetN ? ` (saved as their image #${photoAssetN})` : "";
+                if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]${assetNote}` : `[sent a photo]${assetNote}`;
               } else {
                 fileUnreadable = { kind: fileKind, why: null };
                 console.error(`sendblue: a file Co can't open arrived (${fileKind}, ${imageRes.headers.get("content-type") ?? "no type"})`);
@@ -1226,7 +1232,7 @@ export function sendblueRouter(io: Server): Router {
         let reactingToSent = !!inlineTarget?.fromCo && (!!inlineTarget.what || !!bareLink(inlineTarget.text));
         const inboundContent = isVoice
           ? `User sent a voice memo: ${resolvedContent}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`
-          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}]` : ""}${fileNoteWithText ? ` ${fileNoteWithText}` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
+          : `User said: ${resolvedContent}${hasText && imageForVision ? ` [They also sent a photo${photoDescription ? `. It shows: ${photoDescription}` : ""}${photoAssetN ? `. Saved as their image #${photoAssetN}` : ""}]` : ""}${fileNoteWithText ? ` ${fileNoteWithText}` : ""}${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`;
 
         // A link they texted is read in the background, kept to them (services/linkReader.ts).
         // The first one is also read for this reply (raced below), so Co can react to what the page says.
