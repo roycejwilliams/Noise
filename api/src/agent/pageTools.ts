@@ -105,7 +105,7 @@ export function pageTools(
         }
         ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-        return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. If you reply at all, a few words on something else they said." };
+        return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),
     updatePage: tool({
@@ -137,7 +137,7 @@ export function pageTools(
         }
         ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
-        return { ok: true, note: "Same page, same link; the text said what changed. Send nothing more about it." };
+        return { ok: true, note: "Same page, same link; the text said what changed. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),
     takeDownPage: tool({

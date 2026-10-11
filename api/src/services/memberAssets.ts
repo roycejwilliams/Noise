@@ -9,7 +9,8 @@
 //   - never served on its own: only at /d/<artifact>/a/<asset>, and only while that artifact is live and places it (routes/coPage.ts),
 //     so taking a deck down or its expiry takes its images with it;
 //   - the id is 18 random bytes like a page's, never listed;
-//   - unused for 90 days, the bytes are wiped (jobs/index.ts).
+//   - unused for 90 days and on no live page or deck, the bytes are wiped (jobs/index.ts); they can delete them any time
+//     (agent/artifactTools.ts deleteImages).
 import { createHash, randomBytes } from "crypto";
 import pool from "../db/db.js";
 
@@ -34,12 +35,20 @@ export async function keepAsset(userId: string, data: Buffer, mediaType: string,
   const same = await db.query(`SELECT id, n FROM member_assets WHERE owner_user_id = $1 AND sha256 = $2 AND wiped_at IS NULL LIMIT 1`, [userId, sha]);
   if (same.rows[0]) return { ok: true, id: String(same.rows[0].id), n: Number(same.rows[0].n), isNew: false };
   const id = randomBytes(18).toString("base64url");
-  const { rows } = await db.query(
-    `INSERT INTO member_assets (id, owner_user_id, n, media_type, bytes, description, sha256)
-     VALUES ($1, $2, (SELECT COALESCE(MAX(n), 0) + 1 FROM member_assets WHERE owner_user_id = $2), $3, $4, $5, $6) RETURNING n`,
-    [id, userId, mediaType, data, description ? description.slice(0, 400) : null, sha],
-  );
-  return { ok: true, id, n: Number(rows[0].n), isNew: true };
+  // Two photos in one go arrive as two webhooks at once: both can read the same MAX(n). The (owner, n) unique key refuses the second,
+  // which tries again with the next number (review of the decks PR).
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO member_assets (id, owner_user_id, n, media_type, bytes, description, sha256)
+         VALUES ($1, $2, (SELECT COALESCE(MAX(n), 0) + 1 FROM member_assets WHERE owner_user_id = $2), $3, $4, $5, $6) RETURNING n`,
+        [id, userId, mediaType, data, description ? description.slice(0, 400) : null, sha],
+      );
+      return { ok: true, id, n: Number(rows[0].n), isNew: true };
+    } catch (err: any) {
+      if (err?.code !== "23505" || attempt >= 4) throw err;
+    }
+  }
 }
 
 // Their images, newest first: numbers and what each shows (never the bytes).
@@ -73,10 +82,23 @@ export async function loadAssetFor(ownerUserId: string, id: string): Promise<{ d
   return r && TYPES.has(String(r.media_type)) ? { data: Buffer.from(r.bytes), mediaType: String(r.media_type) } : null;
 }
 
+// Never an image a live page or deck of theirs places (review of the decks PR: a kept deck's logo would have gone at 90 days).
 export async function wipeUnusedAssets(): Promise<number> {
   const { rowCount } = await db.query(
-    `UPDATE member_assets SET bytes = NULL, wiped_at = NOW() WHERE wiped_at IS NULL AND last_used_at < NOW() - make_interval(days => $1)`,
+    `UPDATE member_assets a SET bytes = NULL, wiped_at = NOW()
+     WHERE a.wiped_at IS NULL AND a.last_used_at < NOW() - make_interval(days => $1)
+       AND NOT EXISTS (SELECT 1 FROM co_pages p WHERE p.owner_user_id = a.owner_user_id AND p.taken_down_at IS NULL AND p.expires_at > NOW() AND p.data::text LIKE '%' || a.id || '%')`,
     [ASSET_LIMITS.unusedDays],
+  );
+  return rowCount ?? 0;
+}
+
+// "Delete the photos I sent you": their own images, the bytes gone now (the number stays retired). numbers null = all of them. A
+// page or deck that placed one shows it no more.
+export async function deleteAssets(userId: string, numbers: number[] | null): Promise<number> {
+  const { rowCount } = await db.query(
+    `UPDATE member_assets SET bytes = NULL, description = NULL, wiped_at = NOW() WHERE owner_user_id = $1 AND wiped_at IS NULL AND ($2::int[] IS NULL OR n = ANY($2::int[]))`,
+    [userId, numbers && numbers.length ? numbers : null],
   );
   return rowCount ?? 0;
 }

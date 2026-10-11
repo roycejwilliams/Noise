@@ -61,13 +61,18 @@ export function createCoPageRouter(
   router.get("/v/:shareId", async (req, res) => {
     res.set(CO_PAGE_HEADERS);
     const shareId = String(req.params.shareId ?? "");
+    if (req.originalUrl.split("?")[0].endsWith("/")) return res.redirect(301, `/d/v/${shareId}`);
     const page = await loadShare(shareId).catch(() => null);
     if (!page) return res.status(404).type("html").send(notFoundPage());
+    // Opened through a share link: in use too (the expiry notice).
+    viewed(page.id).catch(() => {});
     return res.status(200).type("html").send(render(page, { shareId }, o.zone));
   });
   router.get("/:id/a/:assetId", async (req, res) => sendAsset(await load(String(req.params.id ?? "")).catch(() => null), String(req.params.assetId ?? ""), res));
   router.get("/:id", async (req, res) => {
     res.set(CO_PAGE_HEADERS);
+    // "/d/<id>/" would resolve a deck's relative image paths one level too deep: the one link has no trailing slash.
+    if (req.originalUrl.split("?")[0].endsWith("/")) return res.redirect(301, `/d/${String(req.params.id ?? "")}`);
     const page = await load(String(req.params.id ?? "")).catch((err: any) => {
       console.error("co page: load failed:", err?.message ?? err);
       return null;

@@ -41,8 +41,7 @@ export const DECK_INPUT = z.object({
 // What a deck may say (Royce, 2026-10-11: "only content the member supplied for this deck or explicitly approved goes on the slides.
 // Nothing from their private knowledge appears in an artifact unprompted."). Co still knows them while writing, but the deck is
 // checked (grounding.ts deckProblems: every name, number and place) only against what they said in this deck's conversation: their
-// texts in the last 12 hours, or since the deck was made when it's an edit, plus what's already on the deck (approved when it went
-// out) and pages Co read this turn. Their older texts, calls, notes and the people graph aren't in it, so none of it can land.
+// texts in the last 12 hours, plus, on an edit, what's already on the deck (approved when it went out), and pages Co read this turn. Their older texts, calls, notes and the people graph aren't in it, so none of it can land.
 export const DECK_WINDOW_HOURS = 12;
 async function deckSource(ctx: ConversationToolContext, read: string, deck: { id: string; lines: string } | null): Promise<{ theirs: string; read: string; words: string }> {
   const { notToTeammate } = await import("../services/teamLines.js");
@@ -52,10 +51,9 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
     : await pool
         .query(
           `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}
-             AND created_at > LEAST(NOW() - make_interval(hours => $2), COALESCE((SELECT created_at FROM co_pages WHERE id = $3 AND owner_user_id = $1), NOW()))
-             AND created_at > NOW() - INTERVAL '30 days'
+             AND created_at > NOW() - make_interval(hours => $2)
            ORDER BY created_at DESC LIMIT 60`,
-          [ctx.userId, DECK_WINDOW_HOURS, deck?.id ?? ""],
+          [ctx.userId, DECK_WINDOW_HOURS],
         )
         .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "")))
         .catch(() => [] as string[]);

@@ -170,6 +170,13 @@ export const ABILITIES: Ability[] = [
     use: "Only when they explicitly ask to share or send it to someone, in this message. Never offer or make one on your own. Copy their asking words exactly. The link goes as one text with your line.",
   },
   {
+    id: "co_images_delete",
+    can: "Co keeps the photos they text (for their decks and pages) and deletes them whenever they ask: all of them or by number.",
+    tool: "deleteImages",
+    limits: { perTurn: 2 },
+    use: "When they ask you to delete or forget the photos or images they sent (all, or specific ones). Say in a few words they're gone.",
+  },
+  {
     id: "co_artifact_reset_link",
     can: "If they forwarded their own link to a page or deck and want it back, Co can give them a fresh link; the old one and any share links stop opening.",
     tool: "resetLink",

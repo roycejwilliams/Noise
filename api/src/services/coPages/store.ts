@@ -165,13 +165,14 @@ export async function noteViewed(id: string): Promise<void> {
   await db.query(`UPDATE co_pages SET last_viewed_at = NOW() WHERE id = $1 AND created_at < NOW() - INTERVAL '10 minutes'`, [id]);
 }
 
-// Live, not kept, expiring within the warning window, not yet warned, and in use: opened or changed in the last 30 days.
+// Live, not kept, expiring within the warning window, not yet warned, and in use: their link or a share link opened in the last 30
+// days. (An edit renews the 90 days, so one inside its last week was never edited in the last month; opening is the signal.)
 export const EXPIRY_WARN_DAYS = 7;
 export async function expiringInUse(): Promise<{ id: string; ownerUserId: string; title: string; kind: "page" | "deck"; expiresAt: Date }[]> {
   const { rows } = await db.query(
     `SELECT id, owner_user_id, data->>'title' AS title, COALESCE(data->>'kind', 'page') AS kind, expires_at FROM co_pages
      WHERE taken_down_at IS NULL AND NOT kept AND expiry_warned_at IS NULL AND expires_at > NOW() AND expires_at < NOW() + make_interval(days => $1)
-       AND (last_viewed_at > NOW() - INTERVAL '30 days' OR (version > 1 AND updated_at > NOW() - INTERVAL '30 days'))`,
+       AND last_viewed_at > NOW() - INTERVAL '30 days'`,
     [EXPIRY_WARN_DAYS],
   );
   return rows.map((r) => ({ id: String(r.id), ownerUserId: String(r.owner_user_id), title: String(r.title ?? ""), kind: r.kind === "deck" ? ("deck" as const) : ("page" as const), expiresAt: new Date(r.expires_at) }));
@@ -226,14 +227,22 @@ export async function resetCoPageLink(id: string, ownerUserId: string): Promise<
   if (!CO_PAGE_ID.test(id) || !ownerUserId) return null;
   const fresh = newCoPageId();
   const url = coPageUrl(fresh);
-  const { rowCount } = await db.query(
-    `INSERT INTO co_pages (id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at)
-     SELECT $1, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM co_pages
-     WHERE id = $2 AND owner_user_id = $3 AND taken_down_at IS NULL AND expires_at > NOW()`,
+  // One statement, so it all happens or none of it does (review of the decks PR: a failure between steps left the old link open
+  // while the member was told it had changed).
+  const { rows } = await db.query(
+    `WITH ins AS (
+       INSERT INTO co_pages (id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at)
+       SELECT $1, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM co_pages
+       WHERE id = $2 AND owner_user_id = $3 AND taken_down_at IS NULL AND expires_at > NOW()
+       RETURNING id
+     ), rev AS (
+       UPDATE co_page_shares SET revoked_at = NOW() WHERE page_id = $2 AND revoked_at IS NULL AND EXISTS (SELECT 1 FROM ins) RETURNING id
+     ), down AS (
+       UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND EXISTS (SELECT 1 FROM ins) RETURNING id
+     )
+     SELECT (SELECT id FROM ins) AS id, (SELECT COUNT(*) FROM down) AS down`,
     [fresh, id, ownerUserId],
   );
-  if (!rowCount) return null;
-  await db.query(`UPDATE co_page_shares SET revoked_at = NOW() WHERE page_id = $1 AND revoked_at IS NULL`, [id]);
-  await db.query(`UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW() WHERE id = $1 AND owner_user_id = $2`, [id, ownerUserId]);
+  if (!rows[0]?.id) return null;
   return { id: fresh, url };
 }

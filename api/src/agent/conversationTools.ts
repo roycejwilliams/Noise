@@ -155,7 +155,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async ({ message: draft }) => {
         // Rule 2 (Royce, 2026-10-11): a page or deck goes as ONE text, the line plus the link. Told so, Co still added a second
         // ("Done. The old link is dead now, only this new one works.") in live runs, so after a link went out nothing more does.
-        if (state.linkDelivered) return { ok: true, note: "Nothing more went out: the link's text was the whole delivery this turn. Don't call sendReply again." };
+        if (state.linkDelivered) {
+          notDone("A reply after the link this turn wasn't sent (the link's text is the whole delivery).");
+          return { ok: false, error: "Not sent: the link's text was the whole delivery this turn, and nothing goes after it. Don't call sendReply again this turn. If they also asked something else, it wasn't answered: answer it first next time, before the link." };
+        }
         const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
         // The fact check left nothing to add after what already went out this turn.
         if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
