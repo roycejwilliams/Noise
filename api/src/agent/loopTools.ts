@@ -174,7 +174,7 @@ export function mailtoLink(to: string, subject: string, body: string): string {
 
 export function loopTools(
   ctx: ConversationToolContext,
-  state: { sent: boolean; sentMessages: string[] },
+  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean },
   loop: LoopState,
   notDone: (what: string) => void,
 ) {
@@ -246,19 +246,20 @@ export function loopTools(
     const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
     return { theirs, read };
   };
-  const pages = pageTools(ctx, { say, notDone, source: pageSource });
-  // A deck's link, or a share link, is the turn's answer (rule 2: one text, the line plus the link). Sent through this, the turn
-  // counts as answered, so a model that rightly ends without sendReply isn't followed by its leftover text or the fallback line
-  // (live run, 2026-10-11: "Sorry, I got tangled up on that one." went out after a deck's link).
-  const deliver = async (text: string, record: string) => {
-    const ok = await say(text, record);
-    if (ok && !ctx.dryRun) state.sent = true;
-    return ok;
+  // A page's or deck's link, or a share link, is the turn's answer (rule 2: one text, the line plus the link). Once one sends, the
+  // turn counts as answered, so a model that rightly ends without sendReply isn't followed by its leftover text or the fallback line
+  // (live run, 2026-10-11: "Sorry, I got tangled up on that one." went out after a deck's link; pages had the same path), and no
+  // second reply follows it (conversationTools.ts sendReply).
+  ctx.onLinkDelivered = () => {
+    if (ctx.dryRun) return;
+    state.sent = true;
+    state.linkDelivered = true;
   };
+  const pages = pageTools(ctx, { say, notDone, source: pageSource });
   // Decks (agent/deckTools.ts): the same pipeline and grounding as pages.
-  const decks = deckTools(ctx, { say: deliver, notDone, source: pageSource });
+  const decks = deckTools(ctx, { say, notDone, source: pageSource });
   // Keep, renew and share links, for pages and decks alike (agent/artifactTools.ts).
-  const artifacts = artifactTools(ctx, { say: deliver, notDone });
+  const artifacts = artifactTools(ctx, { say, notDone });
 
   return {
     ...pages,

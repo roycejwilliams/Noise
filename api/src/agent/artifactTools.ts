@@ -3,6 +3,7 @@
 //   shareArtifact: a separate view-only link, only when they explicitly ask in this message. Never on Co's own. Every one is logged
 //     (co_page_shares holds their words; the decision log records it). Their own link stays theirs.
 //   stopSharing: ends every share link to it. Their own link keeps working; taking it down is takeDownPage.
+//   resetLink: their own link was forwarded somewhere they regret: a fresh link, the old one and every share link off.
 import { z } from "zod";
 import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
@@ -63,8 +64,30 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
           o.notDone("The share link was made, but it didn't send.");
           return { ok: false, error: "The share link is made but didn't send. Give it in your reply." };
         }
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Made a view-only share link to their ${noun((got.p as any).kind)} "${got.p.title}" because they asked, and texted it (${made.url}). They can stop it any time; their own link is unchanged.`);
         return { ok: true, note: "Sent as one text. If you reply, say in a few words it's view-only and they can text you to stop it any time." };
+      },
+    }),
+    resetLink: tool({
+      description: toolUse("resetLink"),
+      inputSchema: z.object({ which, line: z.string().describe("The one line that goes with the new link (\"Here's your new link; the old one no longer opens.\"). Plain words.") }),
+      execute: async ({ which: ref, line }) => {
+        const got = await pick(ref);
+        if ("error" in got) return { ok: false, error: got.error };
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing changed." };
+        const r = await (await S()).resetCoPageLink(got.p.id, ctx.userId).catch(() => null);
+        if (!r) return { ok: false, error: "It's already gone (taken down or expired)." };
+        const { recordDecision } = await import("../harness/core.js");
+        await recordDecision({ layer: 3, decision: "artifact.share", userId: ctx.userId, outcome: "act", action: "own_link_reset", proposal: { from: got.p.id.slice(0, 4), to: r.id.slice(0, 4) } }).catch(() => {});
+        const text = `${line.trim()}\n${r.url}`;
+        if (!(await o.say(text, `Co replied: ${text}`))) {
+          o.notDone("The link was reset, but the new one didn't send.");
+          return { ok: false, error: "The old link is off and a new one is made, but it didn't send. Give it in your reply." };
+        }
+        ctx.onLinkDelivered?.();
+        ctx.facts?.add("did_this_turn", `Gave their ${noun((got.p as any).kind)} "${got.p.title}" a fresh link (${r.url}) because they asked: the old link and any share links no longer open.`);
+        return { ok: true, note: "Sent as one text. That's the whole delivery." };
       },
     }),
     stopSharing: tool({

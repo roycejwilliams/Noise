@@ -138,7 +138,7 @@ export const ABILITIES: Ability[] = [
     can: "Co can make them a page: a plan with a few parts, options side by side, or a set of places with their links, at a private link only they get. It can change it in conversation (same link) and take it down when they ask.",
     tool: "makePage",
     limits: { perTurn: 1, perDay: 4 },
-    use: "You pick the format, never them (never ask \"a page or a PDF?\"): one fact or a short answer is a text; a plan with several parts, options to compare, or a set of places with links is a page (makePage); a file to download, print or attach is a PDF (writeDocument); a Google Doc only when they ask for one. A page goes as ONE text, your line saying what you made plus its link, and nothing about its contents in the chat: the page holds them. Build it only from what they told you and what you read for them.",
+    use: "You pick the format, never them (never ask \"a page or a PDF?\"): one fact or a short answer is a text; a plan with several parts, options to compare, or a set of places with links is a page (makePage); a file to download, print or attach is a PDF (writeDocument); a Google Doc only when they ask for one. A page goes as ONE text, your line saying what you made plus its link, and nothing about its contents in the chat: the page holds them. If their message also asks something else, answer that first with sendReply, because nothing goes after the link. Build it only from what they told you and what you read for them.",
   },
   {
     id: "co_page_update",
@@ -170,6 +170,13 @@ export const ABILITIES: Ability[] = [
     use: "Only when they explicitly ask to share or send it to someone, in this message. Never offer or make one on your own. Copy their asking words exactly. The link goes as one text with your line.",
   },
   {
+    id: "co_artifact_reset_link",
+    can: "If they forwarded their own link to a page or deck and want it back, Co can give them a fresh link; the old one and any share links stop opening.",
+    tool: "resetLink",
+    limits: { perTurn: 1, perDay: 4 },
+    use: "When they want their own link to stop working (\"I sent my link to the wrong person\", \"make my link private again\", \"reset the link\"). The new link goes as one text with your line. A share link they made is stopSharing instead.",
+  },
+  {
     id: "co_artifact_stop_sharing",
     can: "Co can stop a share link from opening, any time they ask; their own link keeps working.",
     tool: "stopSharing",
@@ -183,7 +190,7 @@ export const ABILITIES: Ability[] = [
     tool: "makeDeck",
     // Two a turn: one fix after a refused attempt (live run, 2026-10-11: the corrected deck was the one the limit stopped).
     limits: { perTurn: 2, perDay: 3 },
-    use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; fine if they don't mind) and anything you truly need for the content, then build from the answer. Images they sent are saved as their image #N: place their logo on the title slide and a picture on the slide it belongs to, by number, only their own. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat.",
+    use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; fine if they don't mind) and anything you truly need for the content, then build from the answer. Images they sent are saved as their image #N: place their logo on the title slide and a picture on the slide it belongs to, by number, only their own. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat; if their message also asks something else, answer that first with sendReply, because nothing goes after the link.",
   },
   {
     id: "co_deck_update",
@@ -194,7 +201,7 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "write_document",
-    can: "Co can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Co's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Co's offer, and it goes only to them. Co can't make spreadsheets (a slide deck is makeDeck), and can't send it to anyone else for them.",
+    can: "Co can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Co's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Co's offer, and it goes only to them. Co can't make spreadsheets or slides as a document (a slide deck is makeDeck), and can't send it to anyone else for them.",
     tool: "writeDocument",
     // 8 a day (was 3, 2026-10-08): a fourth explicit "send it again" was refused as "already done today". The receipts are the guard
     // against sending the same artifact twice (deliveryReceipts.ts); this only bounds how many new documents go in a day.

@@ -216,3 +216,24 @@ export async function loadShared(shareId: string): Promise<StoredCoPage | null> 
   const { rows } = await db.query(`SELECT page_id FROM co_page_shares WHERE id = $1 AND revoked_at IS NULL`, [shareId]);
   return rows[0] ? loadCoPage(String(rows[0].page_id)) : null;
 }
+
+// ---------------------------------------------------------------- a fresh link (2026-10-11)
+
+// "Reset my link": a member's own link is a link anyone they forward it to can open (members don't sign in on the web), so the way
+// to revoke it is a new one. The same artifact (content, version, keep and expiry) moves to a fresh id; the old link answers 404 and
+// its content is wiped, and every share link to it ends. Owner's own live artifact only. Null when there's none.
+export async function resetCoPageLink(id: string, ownerUserId: string): Promise<{ id: string; url: string } | null> {
+  if (!CO_PAGE_ID.test(id) || !ownerUserId) return null;
+  const fresh = newCoPageId();
+  const url = coPageUrl(fresh);
+  const { rowCount } = await db.query(
+    `INSERT INTO co_pages (id, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at)
+     SELECT $1, owner_user_id, data, version, created_at, updated_at, expires_at, kept, last_viewed_at FROM co_pages
+     WHERE id = $2 AND owner_user_id = $3 AND taken_down_at IS NULL AND expires_at > NOW()`,
+    [fresh, id, ownerUserId],
+  );
+  if (!rowCount) return null;
+  await db.query(`UPDATE co_page_shares SET revoked_at = NOW() WHERE page_id = $1 AND revoked_at IS NULL`, [id]);
+  await db.query(`UPDATE co_pages SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW() WHERE id = $1 AND owner_user_id = $2`, [id, ownerUserId]);
+  return { id: fresh, url };
+}

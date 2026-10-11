@@ -44,7 +44,7 @@ export const DECK_INPUT = z.object({
 // texts in the last 12 hours, or since the deck was made when it's an edit, plus what's already on the deck (approved when it went
 // out) and pages Co read this turn. Their older texts, calls, notes and the people graph aren't in it, so none of it can land.
 export const DECK_WINDOW_HOURS = 12;
-async function deckSource(ctx: ConversationToolContext, read: string, deck: { id: string; lines: string } | null): Promise<{ theirs: string; read: string }> {
+async function deckSource(ctx: ConversationToolContext, read: string, deck: { id: string; lines: string } | null): Promise<{ theirs: string; read: string; words: string }> {
   const { notToTeammate } = await import("../services/teamLines.js");
   const pool = (await import("../db/db.js")).default;
   const rows = ctx.dryRun
@@ -59,8 +59,28 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
         )
         .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "")))
         .catch(() => [] as string[]);
-  const theirs = [ctx.resolvedContent, ctx.isVoice ? String(ctx.turn?.message ?? "") : "", ...rows, deck?.lines ?? ""].filter(Boolean).join("\n");
-  return { theirs, read };
+  // words: only what they said (for the claim check, which must never take Co's own earlier lines as their word).
+  const words = [ctx.resolvedContent, ctx.isVoice ? String(ctx.turn?.message ?? "") : "", ...rows].filter(Boolean).join("\n");
+  const theirs = [words, deck?.lines ?? ""].filter(Boolean).join("\n");
+  return { theirs, read, words };
+}
+
+// Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
+// deck and what Co read. An error message when a line adds a claim; null when it passes or the check couldn't run (logged).
+async function inventedClaims(ctx: ConversationToolContext, data: any, source: { words: string; read: string }, before: any | null): Promise<string | null> {
+  if (ctx.dryRun || ctx.stubSearch) return null;
+  const C = await import("../services/coPages/deckClaims.js");
+  const had = new Set(before ? C.deckClaimLines(before) : []);
+  const lines = C.deckClaimLines(data).filter((l) => !had.has(l));
+  const fails = await C.inventedLines(lines, [source.words, source.read].filter(Boolean).join("\n"));
+  const { recordDecision } = await import("../harness/core.js");
+  if (fails === null) {
+    await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "check_unavailable", proposal: { lines: lines.length } }).catch(() => {});
+    return null;
+  }
+  if (!fails.length) return null;
+  await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "invented", proposal: { fails } }).catch(() => {});
+  return `These lines add claims they never made: ${fails.map((f) => `"${f.line}" (${f.why})`).join(" | ")}. Sharpen what they said instead, or leave it out; if it matters, ask them. Then try once more.`;
 }
 
 // Their image numbers to asset ids (services/memberAssets.ts): only their own saved images, and only ones sent for this deck (in its
@@ -160,6 +180,11 @@ export function deckTools(
           o.notDone(`No deck made: ${checked.problems.slice(0, 3).join("; ")}.`);
           return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these (only what they told you or you read) and try once more, or give them the points in a text and say the deck isn't there yet.` };
         }
+        const invented = await inventedClaims(ctx, checked.data, source, null);
+        if (invented) {
+          o.notDone("No deck made: some lines added claims they never made.");
+          return { ok: false, error: `Not made. ${invented}` };
+        }
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent.", style: (checked.data as any).style };
         const made = await store.createCoPage(checked.data, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
@@ -171,6 +196,7 @@ export function deckTools(
           o.notDone(`The deck "${input.title}" was made, but its link didn't send.`);
           return { ok: false, error: "The deck is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
         }
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Made them a deck, "${input.title}", ${input.slides.length + 1} slides, and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
         return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here." };
       },
@@ -203,7 +229,13 @@ export function deckTools(
         const onDeck = was ? [was.logo, ...was.slides.map((x: any) => x.image)].filter(Boolean) : [];
         const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
         if ("error" in ids) return { ok: false, error: ids.error };
-        const r = await store.updateCoPage(pick.id, ctx.userId, await deckDataFrom(input, taste, ids.map), source);
+        const next = await deckDataFrom(input, taste, ids.map);
+        const invented = await inventedClaims(ctx, next, source, was);
+        if (invented) {
+          o.notDone("The deck wasn't changed: some lines added claims they never made.");
+          return { ok: false, error: `Not changed. ${invented}` };
+        }
+        const r = await store.updateCoPage(pick.id, ctx.userId, next, source);
         if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
         if (!r.ok) {
           o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
@@ -214,6 +246,7 @@ export function deckTools(
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
         return { ok: true, note: "Same deck, same link; the text said what changed. Send nothing more about it." };
       },

@@ -47,6 +47,9 @@ async function memberDate(userId: string): Promise<(iso: string | Date | null | 
 export type SendCoReply = (params: { phone: string; message: string; asVoice: boolean }) => Promise<boolean | void>;
 
 export type ConversationToolContext = {
+  // Set by loopTools for this turn: a page's, deck's or share link just went out, and that text is the turn's whole answer
+  // (rule 2). The page, deck and share tools call it after the link sends.
+  onLinkDelivered?: () => void;
   // When their text arrived; the loop's time budget runs from here.
   turnStartedAt?: number;
   userId: string;
@@ -107,7 +110,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // sent is an out-of-band signal for the caller (sendblue.ts), same
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[] };
+  // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false };
   // Receipts (2026-09-25): anything tried this turn that didn't happen
   // becomes a fact Co writes from, so it can't say it did.
   const notDone = (what: string) => ctx.facts?.add("not_done", what);
@@ -149,6 +153,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the advice, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. A question to them is always its own last paragraph. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question. Most replies are one to three short beats, up to five when each earns its place."),
       }),
       execute: async ({ message: draft }) => {
+        // Rule 2 (Royce, 2026-10-11): a page or deck goes as ONE text, the line plus the link. Told so, Co still added a second
+        // ("Done. The old link is dead now, only this new one works.") in live runs, so after a link went out nothing more does.
+        if (state.linkDelivered) return { ok: true, note: "Nothing more went out: the link's text was the whole delivery this turn. Don't call sendReply again." };
         const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
         // The fact check left nothing to add after what already went out this turn.
         if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
