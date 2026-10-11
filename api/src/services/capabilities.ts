@@ -360,6 +360,13 @@ export const ABILITIES: Ability[] = [
     use: "Record how something Co sent them landed, whenever they react to it: interested, they're going, they went and liked it, they went and didn't, or it's not for them (\"going to the rooftop thing\", \"that talk was great\", \"not my scene\"). Use the name of what Co sent. Then reply as usual.",
   },
   {
+    id: "second_contact",
+    can: "Co remembers whether people it introduced them to became real connections: whether they saw or talked with each other again.",
+    tool: "noteMetAgain",
+    limits: { perTurn: 2 },
+    use: "When they tell you they saw or talked with someone you introduced them to again (\"grabbed coffee with Noor again\", \"Ellis and I have a call next week\"), or that they haven't or won't, record it with that person's first name. Their side only: never ask what the other person said, and never tell the other person. Then reply as usual.",
+  },
+  {
     id: "close_ask",
     can: "Co can close something it's been looking for once they're done with it, found it, no longer want it, or have moved on to something newer.",
     tool: "closeAsk",

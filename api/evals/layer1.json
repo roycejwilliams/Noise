@@ -119,6 +119,7 @@
     "evals/coPages/document.ts",
     "evals/coPages/security.ts",
     "evals/coPages/tools.ts",
+    "evals/intros/secondContact.ts",
     "evals/docs/memberFiles.ts",
     "evals/mo/memberGate.ts",
     "evals/presence/readoutFlow.ts",

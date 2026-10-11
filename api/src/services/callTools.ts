@@ -19,7 +19,7 @@ import { mentionsIn } from "./offerGuard.js";
 // call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
 // steerAwayFrom and noteRoomTaste (2026-10-11, the call-memory gap): "stop sending me crypto stuff" or "I want rooms where I can drop
 // my guard", said on a call, was lost; nothing on the call path or after it wrote the stop-suggesting list or stated taste.
-export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
+export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
 export type CallToolName = (typeof CALL_TOOL_NAMES)[number];
 
 // The turn's bounds (steps, time) are in services/callLlmProxy.ts, where the rounds run.

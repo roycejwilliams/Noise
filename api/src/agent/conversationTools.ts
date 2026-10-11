@@ -990,6 +990,31 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // Second contact (Royce, 2026-10-11, services/secondContact.ts): they said they saw or talked with someone Co introduced them to
+    // again, or haven't. Recorded in their record only; never told to the other person, never a claim about the other side.
+    noteMetAgain: tool({
+      description: toolUse("noteMetAgain"),
+      inputSchema: z.object({
+        person: z.string().describe("The first name of someone Co introduced them to."),
+        outcome: z.enum(["met_again", "talked_again", "not_yet", "not_going_to"]).describe("What they said: they met up again, talked again (call, text, email), haven't yet, or don't plan to."),
+        note: z.string().optional().describe("Their words, briefly."),
+        metOn: z.string().optional().describe("When they met or talked, as YYYY-MM-DD, only if they said (\"last Tuesday\" with today's date). Leave it out otherwise."),
+      }),
+      execute: async ({ person, outcome, note, metOn }) => {
+        const SC = await import("../services/secondContact.js");
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was recorded." };
+        const pick = SC.pickIntro(await SC.introducedTo(ctx.userId).catch(() => []), person);
+        if (pick === "ambiguous") return { ok: false, error: `More than one person Co introduced them to is called ${person}. Ask which one, then try again.` };
+        if (!pick) {
+          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Co introduced them to.`);
+          return { ok: false, error: "That isn't someone Co introduced them to (only Co's own introductions count)." };
+        }
+        await SC.recordSecondContact(ctx.userId, pick, outcome, note ?? null, new Date(), metOn ?? null);
+        ctx.facts?.add("did_this_turn", `Noted that they ${outcome === "met_again" ? "saw" : outcome === "talked_again" ? "talked with" : outcome === "not_yet" ? "haven't seen" : "don't plan to see"} ${pick.firstName} again.`);
+        return { ok: true };
+      },
+    }),
+
     // Living asks (2026-09-26): Co closes an ask when they say it's done,
     // found, no longer wanted, or replaced by a newer one. Closed in both
     // places it lives (services/askKind.ts closeAsk), with a receipt.
