@@ -2,7 +2,8 @@
 //   1. The co-test dashboard: a user id in a URL or body must be the signed-in tester's own, or the tester is on the team.
 //   2. co-test's public pages are rate limited per visitor (trust proxy); webhooks and the signed-in dashboard are not.
 //   3. Co's page readers check every redirect hop's resolved address (no bouncing to a private or internal one).
-//   4. A Google Doc is opened to anyone with the link only when their own words ask to share it, never on Co's kind label alone.
+//   4. A Google Doc is opened to anyone with the link only when their own words ask to share it, never on Co's kind label alone,
+//      and Co's capability text says so.
 //   npx tsx evals/security/reviewFixes.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
@@ -52,6 +53,10 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
   check("the browser resolves the page's name and every request's before it goes", /if \(!\(await publicHost\(u\.hostname\)\)\) return null;/.test(b) && /if \(!\(await publicHost\(host\)\)\) return route\.abort\(\);/.test(b));
   const L = await import("../../src/services/linkReader.js");
   check("an internal or private address is never public", !(await L.hostIsPublic("10.0.0.5")) && !(await L.hostIsPublic("169.254.169.254")) && !(await L.hostIsPublic("127.0.0.1")) && !(await L.hostIsPublic("fd12::1")));
+  const v6 = ["::ffff:7f00:1", "::ffff:127.0.0.1", "0:0:0:0:0:ffff:a00:5", "64:ff9b::a9fe:a9fe", "fec0::1", "::1", "0::1", "fe80::1%en0", "ff02::1", "::7f00:1"];
+  check("review of #142: every spelling of a private IPv6 address is private (mapped hex, NAT64, site-local, multicast)", v6.every((a) => L.isPrivateAddress(a)), v6.filter((a) => !L.isPrivateAddress(a)));
+  check("public addresses stay public", !L.isPrivateAddress("2606:4700:4700::1111") && !L.isPrivateAddress("::ffff:8.8.8.8") && !L.isPrivateAddress("64:ff9b::808:808") && !L.isPrivateAddress("8.8.8.8"));
+  check("review of #142: a t.co link is resolved through safeFetch too", /const r = await safeFetch\(url\);/.test(read("api/src/services/eventDetails.ts")) && !/redirect: "follow"[^\n]*\n\s*return res\.url/.test(read("api/src/services/eventDetails.ts")));
   const blocked = await L.safeFetch("http://169.254.169.254/latest/meta-data/");
   check("safeFetch refuses a private address before any request", "error" in blocked && blocked.blocked === true);
 }
@@ -60,10 +65,10 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
 {
   const X = await import("../../src/services/documentDelivery.js");
   const D = await import("../../src/services/documentSheet.js");
-  const yes = ["can you share it with my cofounder", "make it shareable", "send it to the venue", "so my partner can edit it", "something we can collaborate on", "so the host can see it", "we'll edit it together"];
-  const no = ["put it in a google doc", "save it to my drive", "make me a partnership plan in google docs", "a readout as a google doc please", "I want to edit it later"];
-  check("asking to share opens it", yes.every((t) => X.SHARE_ASK.test(t)), yes.filter((t) => !X.SHARE_ASK.test(t)));
-  check("asking for a Google Doc alone keeps it theirs", no.every((t) => !X.SHARE_ASK.test(t)), no.filter((t) => X.SHARE_ASK.test(t)));
+  const yes = ["can you share it with my cofounder", "make it shareable", "send it to the venue", "so my partner can edit it", "something we can collaborate on", "so the host can see it", "we will edit it together", "give my business partner access", "forward the link to my cofounder", "email it to the venue owner", "make it editable for my team", "let the venue see it"];
+  const no = ["put it in a google doc", "save it to my drive", "make me a partnership plan in google docs", "a readout as a google doc please", "I want to edit it later", "don't share it with anyone", "keep it private, don't share", "send it to me", "so I can see it", "the shared space at the venue was great", "I'm sharing a table with Ellis, make me a google doc", "share it with my cofounder. actually no, keep it private"];
+  check("asking to share it with someone opens it", yes.every((t) => X.asksToShare(t)), yes.filter((t) => !X.asksToShare(t)));
+  check("review of #142: a Google Doc alone, sending it to themselves, 'shared' about something else, or any 'don't share' keeps it theirs", no.every((t) => !X.asksToShare(t)), no.filter((t) => X.asksToShare(t)));
   const PAIR = ["11111111-1111-4111-8111-111111111111"];
   process.env.GOOGLE_DOCS_TEST_USERS = PAIR.join(",");
   const doc = D.resolveDocument({ title: "Partnership plan for the Mission dinner", note: "", kind: "partnership_plan", sections: [{ heading: "The plan", bullets: ["Split the room booking."] }], suggestions: [] });
@@ -75,7 +80,8 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
   check("a shared kind they didn't ask to share stays private, and the text says they can share it", priv.ok && (priv as any).shared === false && shares.length === 0 && /Only you can open it for now/.test(texts[0] ?? ""));
   const pub = await X.deliverDocument(doc, { ...to, shareByLink: true }, "google_docs", deps);
   check("asked to share: opened by link", pub.ok && (pub as any).shared === true && shares.join() === "f1");
-  check("every delivery path passes their words, not Co's label", /shareByLink: SHARE_ASK\.test\(theirWords\(\)\)/.test(read("api/src/agent/loopTools.ts")) && /shareByLink: SHARE_ASK\.test\(o\.taskTheirWords\)/.test(read("api/src/services/documentDelivery.ts")) && /shareByLink: D\.SHARE_ASK\.test\(o\.task\.theirWords \?\? ""\)/.test(read("api/src/services/researchBrief.ts")));
+  check("Co's capability text no longer says every Doc is open to anyone with the link", /theirs alone unless they ask to share it/.test(read("api/src/services/capabilities.ts")) && !/Drive, open to anyone with the link, and text the link/.test(read("api/src/services/capabilities.ts")));
+  check("every delivery path passes their words, not Co's label", /shareByLink: asksToShare\(theirWords\(\)\)/.test(read("api/src/agent/loopTools.ts")) && /shareByLink: asksToShare\(o\.taskTheirWords\)/.test(read("api/src/services/documentDelivery.ts")) && /shareByLink: D\.asksToShare\(o\.task\.theirWords \?\? ""\)/.test(read("api/src/services/researchBrief.ts")));
 }
 
 console.log(`security review fixes: ${total - failed}/${total} passed`);

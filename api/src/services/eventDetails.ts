@@ -347,8 +347,10 @@ export function isLumaLink(url: string): boolean {
 export async function resolveLink(url: string): Promise<string> {
   if (!/^https?:\/\/t\.co\//i.test(url)) return url;
   try {
-    const res = await fetch(url, { method: "GET", redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT_MS), headers: { "User-Agent": "Mozilla/5.0" } });
-    return res.url || url;
+    // Every hop checked (linkReader.safeFetch, security review 2026-10-11): a t.co link can't send Co's server to a private address.
+    const { safeFetch } = await import("./linkReader.js");
+    const r = await safeFetch(url);
+    return "error" in r ? url : r.finalUrl;
   } catch {
     return url;
   }

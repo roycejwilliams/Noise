@@ -23,8 +23,27 @@ export type DocTarget = "pdf_text" | "google_docs";
 export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|\b(?:in|to) (?:my )?(?:google )?drive\b/i;
 // They asked for others to get at it (security review, 2026-10-11): the Doc is opened to anyone with the link only then. The kind
 // (venue brief, partnership plan, readout) is Co's own label, so it alone never opens a Doc: their words have to. Otherwise the Doc is
-// theirs alone and the text says they can share it from the Doc.
-export const SHARE_ASK = /\bshar(?:e|ed|ing|eable|able)\b|\b(?:send|forward|pass) (?:it|this|that|the doc)(?: over| along| on)? to\b|\bpass (?:it|this) (?:along|on)\b|\bcollaborat\w*|\bedit (?:it |this )?together\b|\bwork on (?:it|this) together\b|\b(?:so|that) (?:my |the |our )?[\w-]+(?: [\w-]+)? (?:can|could) (?:see|edit|open|read|review|access|look at|work on|add to)\b/i;
+// theirs alone and the text says they can share it from the Doc. Sentence by sentence: a sentence that says not to share ("don't share
+// it", "keep it private") closes it for the whole message; one that asks to share it with someone else opens it. "Send it to me",
+// "so I can see it" and "the shared space" are not asks to share.
+const SHARE_NO = /\b(?:don'?t|do not|never|no need to|not|without) (?:\w+ )?(?:share|sharing|send|forward|give)\b|\bkeep (?:it|this|that)? ?(?:private|to myself|just for me|between us)\b|\bjust for me\b|\bonly (?:for )?me\b|\bprivate\b/i;
+const OTHERS = "(?!(?:me|myself|us|i|we|you)\\b)(?:my|the|our|his|her|their|a|an)?\\s*[\\w'-]+(?: [\\w'-]+)?";
+const SHARE_YES: RegExp[] = [
+  /\bshare (?:it|this|that|the (?:doc|document|link|plan|brief|readout|file))\b/i,
+  /\bmake (?:it|this|that) (?:shareable|sharable|editable|public)\b/i,
+  new RegExp(`\\b(?:send|forward|email|text|pass) (?:it|this|that|the (?:doc|document|link|plan|brief|readout|file))(?: over| along| on)? to ${OTHERS}`, "i"),
+  new RegExp(`\\b(?:give|grant) ${OTHERS} access\\b`, "i"),
+  new RegExp(`\\blet ${OTHERS} (?:see|edit|open|read|review|access|look at|work on|add to)\\b`, "i"),
+  new RegExp(`\\b(?:so|that) ${OTHERS} (?:can|could) (?:see|edit|open|read|review|access|look at|work on|add to)\\b`, "i"),
+  /\bcollaborat\w*/i,
+  /\b(?:edit|work on) (?:it |this )?together\b/i,
+  /\bshareable\b|\bsharable\b/i,
+];
+export function asksToShare(words: string): boolean {
+  const sentences = String(words ?? "").split(/(?<=[.!?\n])\s*/).map((x) => x.trim()).filter(Boolean);
+  if (sentences.some((x) => SHARE_NO.test(x))) return false;
+  return sentences.some((x) => SHARE_YES.some((re) => re.test(x)));
+}
 // via text_fallback: the PDF couldn't be made or sent, so the content went as text in the thread, and the PDF is to follow
 // (pdfPending, with the failure in error, retried from the receipt: services/deliveryReceipts.ts).
 export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; shared?: boolean; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
@@ -115,8 +134,8 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   return { ok: true, via: "pdf_text", filename };
 }
 
-// The Google Doc: in their own Drive, named like the PDF (without .pdf), opened to anyone with the link as an editor, and the link
-// texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the narrowing list, or a
+// The Google Doc: in their own Drive, named like the PDF (without .pdf), opened to anyone with the link as an editor only when they
+// asked to share it (asksToShare; otherwise theirs alone), and the link texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the narrowing list, or a
 // kind that isn't a shared working artifact, never gets one.
 async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<DeliverResult> {
   if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a venue brief, partnership plan or readout (and, when GOOGLE_DOCS_TEST_USERS is set, only for those members)", notAllowed: true };
@@ -419,7 +438,7 @@ export async function sendDocumentForTask(
   try {
     // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
     line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
-    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line, shareByLink: SHARE_ASK.test(o.taskTheirWords) };
+    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line, shareByLink: asksToShare(o.taskTheirWords) };
     rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
   } catch (err) {
     await unclaim();

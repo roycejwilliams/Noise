@@ -59,12 +59,35 @@ export function isPrivateAddress(ip: string): boolean {
   const v = ip.toLowerCase();
   if (isIP(v) === 4) return PRIVATE_V4.some((re) => re.test(v));
   if (isIP(v) === 6) {
-    if (v === "::1" || v === "::") return true;
-    if (v.startsWith("fc") || v.startsWith("fd") || v.startsWith("fe80")) return true;
-    const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    return mapped ? isPrivateAddress(mapped[1]) : false;
+    // Read as its eight groups, so every spelling of the same address is judged the same (security review, 2026-10-11: the hex
+    // form of a mapped address, "::ffff:7f00:1", and NAT64 "64:ff9b::/96" used to pass).
+    const h = v6Groups(v);
+    if (!h) return true;
+    if (h.every((x) => x === 0) || (h.slice(0, 7).every((x) => x === 0) && h[7] === 1)) return true; // :: and ::1
+    if ((h[0] & 0xfe00) === 0xfc00 || (h[0] & 0xffc0) === 0xfe80 || (h[0] & 0xffc0) === 0xfec0 || (h[0] & 0xff00) === 0xff00) return true; // ULA, link/site-local, multicast
+    const v4 = (a: number, b: number) => `${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`;
+    if (h.slice(0, 5).every((x) => x === 0) && (h[5] === 0xffff || h[5] === 0)) return isPrivateAddress(v4(h[6], h[7])); // v4-mapped, v4-compatible
+    if (h[0] === 0x64 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0)) return isPrivateAddress(v4(h[6], h[7])); // NAT64
+    return false;
   }
   return true;
+}
+
+// Pure: an IPv6 address as its eight 16-bit groups (a dotted v4 tail counts as two), or null.
+function v6Groups(v: string): number[] | null {
+  let s = v.replace(/%.*$/, "");
+  const tail = s.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (tail) {
+    const [a, b, c, d] = tail.slice(1).map(Number);
+    s = s.slice(0, tail.index) + `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [head, rest] = s.split("::");
+  const left = head ? head.split(":") : [];
+  const right = rest !== undefined && rest ? rest.split(":") : [];
+  const fill = rest !== undefined ? 8 - left.length - right.length : 0;
+  if (fill < 0) return null;
+  const groups = [...left, ...Array(fill).fill("0"), ...right].map((x) => parseInt(x, 16));
+  return groups.length === 8 && groups.every((x) => Number.isInteger(x) && x >= 0 && x <= 0xffff) ? groups : null;
 }
 
 // Only http(s), no credentials in the URL, no local or internal host names.
