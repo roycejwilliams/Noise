@@ -30,7 +30,7 @@ const CLAIMS: { re: RegExp; group: number }[] = [
   // Where "as a …" sits decides it (review of #145): opening a sentence or clause and said to them ("As a French founder, you'd…",
   // "As a mom who loves jazz, you…"), or ending the phrase; or after "you" ("for you as a new dad"). Mid-sentence after a verb it
   // describes a place ("pitched as a new Italian", "as a quiet French bistro") and is never a claim about them.
-  { re: new RegExp(`(?<=^|[.!?;:,\\n]\\s*)(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})(?![\\w])(?=[^.!?]*\\byou)`, "gi"), group: 1 },
+  { re: new RegExp(`(?<=^|[.!?;:,\\n]\\s*)(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})(?![\\w])(?=\\s+you\\b|[^.!?,;]*,\\s*you\\b)`, "gi"), group: 1 },
   { re: new RegExp(`(?<=^|[.!?;:,\\n]\\s*)(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})${ENDS}`, "gi"), group: 1 },
   { re: new RegExp(`\\byou\\b[^.!?]{0,40}?\\b(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})${ENDS}`, "gi"), group: 1 },
   { re: new RegExp(`\\b(?:as|being)\\s+(${D}|${O})s${ENDS}`, "gi"), group: 1 },
