@@ -256,7 +256,8 @@ export function memoryReceipts(): ReceiptStore & { all: Receipt[] } {
 
 // Pure: what changed between two versions of a document, in a few words they'd recognize (Royce, 2026-10-11 rule 4: "updated the
 // venue brief - new capacity terms, section 2", never a bare "I updated your doc"). For callers that don't name the change
-// themselves (a plan, a re-run brief): the sections whose words changed, by heading, or the note or Co's suggestions.
+// themselves (a plan, a re-run brief): the sections whose words changed, by heading, or the note or Co's suggestions. Worded to follow
+// "Updated the <document>: " (changeLine), and in Co's own voice ("new suggestions from me", never "Co's suggestions").
 export function whatChanged(prev: Doc, next: Doc): string {
   const key = (h: string | null, i: number) => (h?.trim() ? h.trim().toLowerCase() : `#${i}`);
   const body = (x: Doc["sections"][number]) => JSON.stringify([x.paragraphs, x.bullets]);
@@ -268,16 +269,16 @@ export function whatChanged(prev: Doc, next: Doc): string {
   next.sections.forEach((x, i) => {
     const was = before.get(key(x.heading, i));
     if (!was) added.push(name(x, i));
-    else if (body(was) !== body(x)) changed.push(`${name(x, i)} (section ${i + 1})`);
+    else if (body(was) !== body(x)) changed.push(`${x.heading?.trim() ? `the ${name(x, i).replace(/^the\s+/i, "")}` : name(x, i)} section (section ${i + 1})`.replace(/^(section \d+) section \(section \d+\)$/, "$1"));
   });
   const removed = prev.sections.filter((x, i) => !after.has(key(x.heading, i))).map((x, i) => name(x, i));
   const parts: string[] = [];
-  if (changed.length) parts.push(`updated ${list(changed)}`);
+  if (changed.length) parts.push(`changes to ${list(changed)}`);
   if (added.length) parts.push(`added ${list(added)}`);
   if (removed.length) parts.push(`took out ${list(removed)}`);
-  if (!parts.length && prev.note !== next.note) parts.push("updated the note at the top");
-  if (!parts.length && JSON.stringify(prev.suggestions) !== JSON.stringify(next.suggestions)) parts.push("updated Co's suggestions");
-  if (!parts.length && prev.title !== next.title) parts.push(`retitled it ${next.title}`);
-  return parts.length ? parts.slice(0, 2).join(", and ") : "updated the wording";
+  if (!parts.length && prev.note !== next.note) parts.push("a new note at the top");
+  if (!parts.length && JSON.stringify(prev.suggestions) !== JSON.stringify(next.suggestions)) parts.push("new suggestions from me");
+  if (!parts.length && prev.title !== next.title) parts.push(`a new title, ${next.title}`);
+  return parts.length ? parts.slice(0, 2).join(", and ") : "some rewording";
 }
 const list = (xs: string[]) => (xs.length <= 2 ? xs.join(" and ") : `${xs.slice(0, 2).join(", ")} and ${xs.length - 2} more`);

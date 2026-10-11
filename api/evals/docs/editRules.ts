@@ -95,13 +95,13 @@ const run = async (o: { update?: any; meta?: any; token?: any } = {}) => {
   const deliver = (d: any, t: any, target: any) => X.deliverDocument(d, t, target, deps);
   await X.deliverAndRecord(v1, to, { askedForGoogle: false, source: "reply" }, { deliver, receipts, log: async () => null });
   const plan = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "task:1" }, { deliver, receipts, log: async () => null });
-  check("review of #143: a plan or re-run brief without a note still goes, with what changed worked out (section by name and number)", plan.sentOk.length === 1 && plan.line === "Updated The room (section 1).", plan.line);
-  check("and its receipt carries that note", receipts.all.at(-1)?.changeNote === "updated The room (section 1)");
+  check("review of #143: a plan or re-run brief without a note still goes, with what changed worked out (section by name and number)", plan.sentOk.length === 1 && plan.line === "Updated the venue brief: changes to the room section (section 1).", plan.line);
+  check("and its receipt carries that note", receipts.all.at(-1)?.changeNote === "changes to the room section (section 1)");
   const again = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "reply", resend: true }, { deliver, receipts, log: async () => null });
   check("asking for it again still sends the version they have", again.sentOk.length === 1);
   const sec = (h: string, b: string[]) => ({ heading: h, paragraphs: [], bullets: b });
   const a = { title: "T", note: "", suggestions: [], sections: [sec("Budget", ["$5k"]), sec("Timeline", ["May"]), sec("Room", ["40"])] } as any;
-  check("whatChanged: changed, added and removed sections by name", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "updated Budget (section 1), and added Catering" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "updated Co's suggestions" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "took out Timeline");
+  check("whatChanged: changed, added and removed sections by name, in Co's own voice (review of #143: never 'Co's suggestions')", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "changes to the Budget section (section 1), and added Catering" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "new suggestions from me" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "took out Timeline");
 }
 {
   // The Doc is looked up by its document, however many receipts they have.
