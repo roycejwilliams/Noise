@@ -45,7 +45,8 @@ const PAGE_REF_WORDS = new Set(["page", "pages", "that", "this", "link", "take",
 export function pickPage<T extends { id: string; title: string }>(pages: T[], ref: string): T | null | "ambiguous" {
   if (!pages.length) return null;
   const words = String(ref ?? "").toLowerCase().split(/\W+/).filter((w) => w.length > 3 && !PAGE_REF_WORDS.has(w));
-  if (!words.length) return pages.length === 1 ? pages[0] : pages[0];
+  // No title word: their only page, or ask which (review of #148: "delete it" with two pages must never wipe the newest).
+  if (!words.length) return pages.length === 1 ? pages[0] : "ambiguous";
   const scored = pages.map((p) => ({ p, n: words.filter((w) => p.title.toLowerCase().includes(w)).length })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n);
   if (!scored.length) return null;
   if (scored.length > 1 && scored[0].n === scored[1].n) return "ambiguous";

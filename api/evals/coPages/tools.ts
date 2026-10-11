@@ -40,6 +40,7 @@ check("the tool's input becomes a page the schema accepts", Sch.parseCoPageData(
   check("none that fits is none", P.pickPage(pages, "the brunch page") === null && P.pickPage([], "anything") === null);
   check("'the page' with one page is that page", (P.pickPage([pages[0]], "the page") as any)?.id === "a");
   check("review of #148: 'take that page down' with one page is that page", (P.pickPage([pages[0]], "take that page down") as any)?.id === "a");
+  check("review of #148: 'take that page down' or 'delete it' with two pages is asked about, never the newest", P.pickPage(pages, "take that page down") === "ambiguous" && P.pickPage(pages, "delete it") === "ambiguous");
 }
 
 // ---------------------------------------------------------------- the tools, end to end on a recording database
