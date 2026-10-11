@@ -150,6 +150,7 @@
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",
     "evals/member/textKnowledge.ts",
-    "evals/calls/reasonGate.ts"
+    "evals/calls/reasonGate.ts",
+    "evals/calls/memory.ts"
   ]
 }

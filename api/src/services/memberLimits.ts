@@ -43,10 +43,26 @@ export function avoidHits(text: string, avoid: string[]): string[] {
 }
 
 // Pure: the list that applies to one ask: a kind the ask itself names is theirs again for it.
+// A kind named only to rule it out ("no more hackathons", "stop sending crypto stuff", "not into mixers") is the rule restated, never
+// the ask taking it back (2026-10-11: on a call, "stop sending me crypto stuff" re-allowed crypto searches for the rest of the call).
+const NEGATES_KIND = /\b(?:no more|not? (?:into|interested in|a fan of|for)|stop(?:\s+\w+){0,3}|don'?t(?:\s+\w+){0,3}|never|enough|tired of|sick of|done with|skip|less|avoid|without)\s+(?:\w+\s+){0,3}$/i;
+function namedToAsk(text: string, kind: string): boolean {
+  const words = kindWords(kind);
+  if (!words.length) return false;
+  // Every place the kind's first word appears: the ask names it when at least one isn't preceded by a negation.
+  const re = new RegExp(`\\b${words[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "gi");
+  for (const m of text.matchAll(re)) {
+    // The negation must be in the same clause: "not into hackathons but any crypto events" still asks for crypto events.
+    const before = text.slice(Math.max(0, (m.index ?? 0) - 60), m.index ?? 0);
+    const clause = before.split(/[.,;:!?]|\b(?:but|and|though|although|except|however|or)\b/i).pop() ?? "";
+    if (!NEGATES_KIND.test(clause)) return true;
+  }
+  return false;
+}
 export function avoidFor(avoid: string[], askText: string | null | undefined): string[] {
   const clean = avoid.map((a) => a.trim()).filter(Boolean);
   if (!askText?.trim()) return clean;
-  const named = new Set(avoidHits(askText, clean));
+  const named = new Set(avoidHits(askText, clean).filter((k) => namedToAsk(askText, k)));
   return clean.filter((k) => !named.has(k));
 }
 

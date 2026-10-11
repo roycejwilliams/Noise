@@ -74,7 +74,28 @@ type ContextParts = {
 // The sections each build reads. A text reply's summary needs only the profile-side facts; a call reads what Co carries and
 // delivered, the lessons, and restraint (for the member rules) too.
 export const SUMMARY_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "corrections", "exchanges"];
-export const CALL_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "corrections", "exchanges", "lessons", "delivered", "carrying", "restraint"];
+// preferences, limits and claims (2026-10-11, closing the call-memory gap; audit item 10): a call knew less than a text. It never saw
+// the room they've said they want, how what Co sent landed, the kinds they asked Co to stop suggesting, when they're free, or what
+// they've told Co that still holds, so a call could pitch a hackathon to someone who'd said "no more hackathons" by text.
+export const CALL_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "corrections", "exchanges", "lessons", "delivered", "carrying", "restraint", "preferences", "limits", "claims"];
+
+// Pure: the record's fit sections for a call, in the same words the sweep and texts use (services/sweepFind.ts sweepPrompt). Strings
+// come from the layer, already stripped of other members' details; the caller strips them again with the call's own name set.
+// keep: drops a claim a later correction retired. Availability is a limit only when their words restrict (services/availability.ts).
+export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" | "claims">, keep: (text: string, at?: string | null) => boolean = () => true, isLimit: (a: string) => boolean = () => true): string[] {
+  const stated = k.preferences.filter((p) => p.source === "stated").map((p) => p.text);
+  const observed = k.preferences.filter((p) => p.source === "taste").map((p) => p.text).join(" ");
+  const avoid = k.limits?.avoid ?? [];
+  const availability = k.limits?.availability ?? null;
+  const claims = k.claims.filter((c) => keep(c.text, c.saidOn)).slice(0, 6).map((c) => `- ${c.text}${c.expiresOn ? ` (until ${c.expiresOn})` : ""}`);
+  return [
+    stated.length ? `The kind of room they've told you they want (their own words, newest first; when you suggest anything, lean this way, and never pitch what clashes with it):\n${stated.map((t) => `- ${t}`).join("\n")}` : null,
+    observed ? `How what you've sent them has landed: ${observed}` : null,
+    avoid.length ? `Never suggest these kinds of things: they asked you to stop (${avoid.map((a) => `"${a}"`).join(", ")}). Judge by what a thing mainly is. If they bring one up themselves, they're open to it again for that.` : null,
+    availability ? `When they're free, in their words: "${availability}" (${isLimit(availability) ? "a limit: don't suggest things outside it" : "a leaning, not a limit"}).` : null,
+    claims.length ? `What they've told you that still holds:\n${claims.join("\n")}` : null,
+  ].filter((x): x is string => !!x);
+}
 // The recent texts (20) and their own words of the last 48 hours (25) both come from one exchange read.
 export const CONTEXT_EXCHANGES = { exchanges: 45, exchangeDays: 30 } as const;
 const RECENT_TEXTS = 20;
@@ -674,11 +695,16 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
     theirWords.unshift(flat);
     wordsUsed += flat.length + 1;
   }
+  // What they want, have ruled out, when they're free and what still holds: the record's fit sections (callFitLines), stripped again
+  // with the call's own name set like every other line here.
+  const { availabilityIsLimit } = await import("./availability.js");
+  const fitLines = await strip(callFitLines(k, (t, at) => keep(t, at), availabilityIsLimit));
   const base = [
     rules,
     who ? `Who they are:\n${who}` : null,
     theirWords.length ? `What they've told you in the last two days (newest facts win over anything below):\n${theirWords.join("\n")}` : null,
     p.openAsks.length ? `What they're looking for right now:\n${p.openAsks.join("\n")}` : null,
+    ...fitLines,
     recap ? `Ongoing summary: ${recap}` : null,
     ...profileLines(p, (t) => keep(t)),
     p.recentTexts.length ? `Recent texts: ${[...p.recentTexts].filter((x) => !/^\[Call\]/.test(x)).reverse().join(" / ")}` : null,

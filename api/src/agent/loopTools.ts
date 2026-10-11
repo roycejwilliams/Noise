@@ -217,7 +217,8 @@ export function loopTools(
     const l = await limits();
     if (!l?.avoid.length) return null;
     const { avoidFor, avoidHits } = await import("../services/memberLimits.js");
-    const hit = avoidHits(query, avoidFor(l.avoid, theirWords()))[0];
+    // This turn's words only: on a call, theirWords() is the whole call, so a kind named once would lift the rule for all of it.
+    const hit = avoidHits(query, avoidFor(l.avoid, ctx.resolvedContent))[0];
     return hit ? `Not searched: they told Co to stop suggesting ${hit}. Look for something else they want (if they're asking for it again now, say so plainly and steerAwayFrom with undo first).` : null;
   };
   // A receipt for every search, empty or not, so "I looked and nothing turned
@@ -452,7 +453,7 @@ export function loopTools(
         if (lim && (lim.avoid.length || lim.availability)) {
           const { limitsGate } = await import("../services/memberLimits.js");
           const known = items.map((it) => ({ link: it.link, f: foundFor(it.link) })).filter((x) => x.f);
-          const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: theirWords() }).catch(() => null);
+          const g = await limitsGate(known.map((x) => ({ ...(x.f!.match ?? {}), name: x.f!.name, reason: x.f!.facts, link: x.link })), lim, { askText: ctx.resolvedContent }).catch(() => null);
           for (const o of g?.out ?? []) outByLink.set(String((o.match as any).link), o.why);
         }
         for (const it of items) {

@@ -91,7 +91,7 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
 }
 // 2. "Still spots?": a live check, or an as-of. Never the stored count as current.
 {
-  const stale = TC.sentDetailLines({ sent: [{ key: "event:evt-1", name: "Founders Supper Club", kind: "event", url: "https://lu.ma/supper", sentAt: new Date(NOW.getTime() - 4 * 86_400_000), reaction: null, details: details(), postText: null, checkedAt: "2026-10-06T16:00:00Z" }] });
+  const stale = TC.sentDetailLines({ sent: [{ key: "event:evt-1", name: "Founders Supper Club", kind: "event", url: "https://lu.ma/supper", sentAt: new Date(NOW.getTime() - 4 * 86_400_000), reaction: null, details: details(), postText: null, checkedAt: "2026-10-06T16:00:00Z" }] }, 5, NOW);
   check("the stored details for a send 4 days old say 'not checked since' on spots, price and time", stale.length === 1 && /12 spots left \(as of [^)]*not checked since/.test(stale[0]) && /Tickets are 25 USD \(as of/.test(stale[0]) && /starts [^.]*\(as of/.test(stale[0]), stale);
   const asStored = "Yes, still 12 spots left.";
   check("WORK ORDER: a 'still spots?' reply stating the stored count as current is caught", A.staleCurrentClaims(asStored, stale).length === 1);

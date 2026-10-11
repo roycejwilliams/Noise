@@ -936,7 +936,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
               .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 6`, [ctx.userId])
               .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
               .catch(() => "");
-        if (!T.wordsAreTheirs(quote, `${ctx.resolvedContent}\n${recent}`)) {
+        // Their words: this message, their recent texts, and on a call, everything they've said on it (ctx.turn.message is the whole
+        // call's words there: the quote can be from earlier in the call).
+        if (!T.wordsAreTheirs(quote, `${ctx.resolvedContent}\n${ctx.isVoice ? String(ctx.turn?.message ?? "") : ""}\n${recent}`)) {
           notDone("Their taste wasn't noted: the quote isn't in their words.");
           return { ok: false, error: "The quote must be copied exactly from what they wrote." };
         }
