@@ -21,22 +21,37 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 const at = "2026-10-10T12:00:00Z";
 
 // ---------------------------------------------------------------- 1. the call reads the record's fit sections
+const RG = await import("../../src/harness/replyGrounding.js");
+const NOW = new Date("2026-10-11T18:00:00Z");
 {
   check("the call loads preferences, limits and claims with everything it already read", ["goals", "asks", "corrections", "exchanges", "lessons", "delivered", "carrying", "restraint", "preferences", "limits", "claims"].every((s) => (CC.CALL_KNOWLEDGE as readonly string[]).includes(s)));
+  const claim = (text: string, day: string, o: any = {}) => ({ text, provenance: "user_said", kind: "plan", quote: null, expiresOn: null, saidOn: day, verifiedAt: `${day}T12:00:00.000Z`, ...o });
+  // Eight they said (Jan..Oct, oldest first, the way the layer returns them), one Co inferred, one a correction retired.
+  const months = ["2026-01-05", "2026-02-05", "2026-03-05", "2026-04-05", "2026-05-05", "2026-06-05", "2026-09-05", "2026-10-09"];
+  const claims = [
+    ...months.map((d, n) => claim(n === 7 ? "in Austin next week" : `older plan ${n + 1}`, d, n === 7 ? { kind: "plan", expiresOn: "2026-10-19" } : { kind: "identity" })),
+    claim("exploring a move to Austin", "2026-10-08", { provenance: "co_inferred", kind: "plan" }),
+    claim("lives in Oakland", "2026-10-07", { kind: "identity" }),
+  ];
   const k: any = {
+    identity: { firstName: "Jordan", city: "San Francisco", zone: "America/Los_Angeles", timeZone: "America/Los_Angeles", verifiedAt: NOW.toISOString() },
     preferences: [{ text: "wants a room where they can drop their guard; avoids performative events", source: "stated", verifiedAt: at }, { text: "small dinners got a yes; a big expo was ignored", source: "taste", verifiedAt: at }],
     limits: { avoid: ["hackathons", "crypto events"], availability: "weeknights only", verifiedAt: at },
-    claims: [{ text: "traveling until Oct 20", provenance: "said", kind: "state", quote: "I'm traveling until the 20th", expiresOn: "2026-10-20", saidOn: "2026-10-10", verifiedAt: at }, { text: "lives in Oakland", provenance: "said", kind: "fact", quote: null, expiresOn: null, saidOn: "2026-09-01", verifiedAt: at }],
+    claims,
   };
-  const lines = CC.callFitLines(k, (t) => !/Oakland/.test(t), AV.availabilityIsLimit).join("\n\n");
-  check("the room they want, in their words, with how to use it", /The kind of room they've told you they want[\s\S]*never pitch what clashes with it\):\n- wants a room where they can drop their guard/.test(lines), lines);
+  const lines = CC.callFitLines(k, (t) => !/Oakland/.test(t), AV.availabilityIsLimit, (kk) => RG.heldClaimsFrom(kk, NOW)).join("\n\n");
+  check("the room they want, in their words, with how to use it (one heading)", /Their room taste, newest first \(when you suggest anything, lean this way, and never pitch what clashes with it\):\n- wants a room where they can drop their guard/.test(lines), lines);
   check("how what Co sent has landed", /How what you've sent them has landed: small dinners got a yes/.test(lines));
-  check("never suggest what they ruled out (and their own mention reopens it)", /Never suggest these kinds of things: they asked you to stop \("hackathons", "crypto events"\)/.test(lines) && /If they bring one up themselves/.test(lines));
-  check("availability says whether it's a limit or a leaning", /"weeknights only" \(a limit/.test(lines) && /a leaning, not a limit/.test(CC.callFitLines({ ...k, limits: { avoid: [], availability: "more flexible on weekends" } }, () => true, AV.availabilityIsLimit).join("\n")));
-  check("what still holds, with its end date; a claim a correction retired is left out", /What they've told you that still holds:\n- traveling until Oct 20 \(until 2026-10-20\)/.test(lines) && !/Oakland/.test(lines));
-  check("nothing on file, no sections (no empty headings)", CC.callFitLines({ preferences: [], limits: { avoid: [], availability: null }, claims: [] } as any).length === 0 && CC.callFitLines({ preferences: [], limits: null, claims: [] } as any).length === 0);
+  check("never suggest what they ruled out (and their own ask reopens it)", /Never suggest these kinds of things: they asked you to stop \("hackathons", "crypto events"\)/.test(lines) && /If they bring one up themselves/.test(lines));
+  check("availability says whether it's a limit or a leaning", /"weeknights only" \(a limit/.test(lines) && /a leaning, not a limit/.test(CC.callFitLines({ ...k, claims: [], limits: { avoid: [], availability: "more flexible on weekends" } }, () => true, AV.availabilityIsLimit).join("\n")));
+  const said = lines.split("What they've told you that still holds")[1]?.split("\n\n")[0] ?? "";
+  check("review #1: the newest claims, not the oldest (the newest is in; the oldest are left past the limit)", /in Austin next week/.test(said) && !/older plan 1\b/.test(said) && !/older plan 2\b/.test(said) && (said.match(/^- /gm) ?? []).length === CC.CALL_CLAIMS_LIMIT, said);
+  check("review #2: Co's guesses are never under what they said, and are labeled as Co's read", !/exploring a move/.test(said) && /Co's own reads of them \(guesses, not things they told you: never say they said these\):\n- exploring a move to Austin \(Co's read, Oct 8\)/.test(lines), lines.slice(-400));
+  check("review #3: an end date is the day it ends, not the day after", /in Austin next week \(they said, Oct 9, until Oct 18\)/.test(said), said);
+  check("a claim a correction retired is left out", !/Oakland/.test(lines));
+  check("nothing on file, no sections (no empty headings)", CC.callFitLines({ ...k, preferences: [], limits: { avoid: [], availability: null }, claims: [] }).length === 0 && CC.callFitLines({ ...k, preferences: [], limits: null, claims: [] }).length === 0);
   const cc = src("services/callContext.ts");
-  check("they go into the call's context after what they're looking for, through the call's own strip", /const fitLines = await strip\(callFitLines\(k, \(t, at\) => keep\(t, at\), availabilityIsLimit\)\);/.test(cc) && /What they're looking for right now:[\s\S]{0,80}\.\.\.fitLines,/.test(cc));
+  check("they go into the call's context after what they're looking for, through the call's own strip, claims by the text path's renderer", /const fitLines = await strip\(callFitLines\(k, \(t, at\) => keep\(t, at\), availabilityIsLimit, \(kk\) => heldClaimsFrom\(kk, now\)\)\);/.test(cc) && /What they're looking for right now:[\s\S]{0,80}\.\.\.fitLines,/.test(cc));
 }
 
 // ---------------------------------------------------------------- 2. saved when said on a call
@@ -48,19 +63,28 @@ const at = "2026-10-10T12:00:00Z";
 
 // ---------------------------------------------------------------- 3. mid-call freshness, after the cache breakpoint
 {
-  check("the turn note carries the stop-suggesting list as it stands now", CT.avoidNote(["crypto events"]) === '(Right now they\'ve asked you never to suggest: "crypto events".)' && CT.avoidNote([]) === null && CT.avoidNote(undefined) === null);
+  check("the turn note carries the stop-suggesting list as it stands now", /never to suggest "crypto events"/.test(CT.avoidNote(["crypto events"]) ?? "") && CT.avoidNote([]) === null && CT.avoidNote(undefined) === null);
   check("it goes in the turn note (past the cache breakpoint), never the cached system prompt", /turnNote: \[picked\.updateTask \? taskFactNote\(i\.turnWords, i\.member\.tasks\) : null, avoidNote\(i\.member\.avoid\)\]/.test(src("services/callTools.ts")) && /if \(co\.turnNote\) req\.messages\[req\.messages\.length - 1\]\.content\.push/.test(src("services/callLlmProxy.ts")));
   check("re-read after any tool acts, from the record's one reader", /realKnowledgeDeps\.limits\(userId\)/.test(src("services/callTools.ts")) && /if \(userId\) memberOnCall\(callKey, userId, true\)/.test(src("routes/callLlm.ts")));
 }
 
 // ---------------------------------------------------------------- 4. naming a kind to rule it out never lifts the rule
 {
-  const av = ["hackathons", "crypto events"];
-  check("'no more', 'stop sending', 'don't', 'tired of' keep the rule", ["no more hackathons please", "stop sending me crypto stuff", "don't send hackathons", "tired of crypto events"].every((t) => L.avoidFor(av, t).length === 2));
-  check("asking for it lifts it for that ask", L.avoidFor(av, "find me a hackathon this month").join() === "crypto events" && L.avoidFor(av, "any good hackathons?").join() === "crypto events");
-  check("a negation stays in its own clause", L.avoidFor(av, "I'm not into hackathons but any crypto events?").join() === "hackathons");
+  const av = ["hackathons", "crypto events", "mixers"];
+  const keeps = (t: string, kind: string) => L.avoidFor(av, t).includes(kind);
+  check("'no more', 'stop sending', 'don't send', 'tired of', 'anything but' keep the rule", keeps("no more hackathons please", "hackathons") && keeps("stop sending me crypto stuff", "crypto events") && keeps("don't send hackathons", "hackathons") && keeps("tired of crypto events", "crypto events") && keeps("anything but crypto events", "crypto events"));
+  check("a negated list stays negated (review #4)", keeps("not into mixers or crypto events", "crypto events") && keeps("never again with crypto events and hackathons", "hackathons") && keeps("find me crypto events, not hackathons", "hackathons") && keeps("tech events but no crypto", "crypto events"));
+  check("asking for it lifts it for that ask", !keeps("find me a hackathon this month", "hackathons") && !keeps("any good hackathons?", "hackathons") && !keeps("I'm not into hackathons but any crypto events?", "crypto events"));
+  check("review #4: 'I don't mind', 'don't forget to look for', 'less talking more' ask for it", !keeps("I don't mind hackathons", "hackathons") && !keeps("don't forget to look for hackathons", "hackathons") && !keeps("less talking more hackathons", "hackathons"));
   const lt = src("agent/loopTools.ts");
-  check("live searches and shares judge the lift on this turn's words (a call's words are the whole call)", /avoidHits\(query, avoidFor\(l\.avoid, ctx\.resolvedContent\)\)/.test(lt) && /lim, \{ askText: ctx\.resolvedContent \}\)/.test(lt));
+  check("review #5/#6: an ask is judged on a text's message (with what it replies to) or a call's last three lines, never the whole call", /const askWords = \(\) => \(ctx\.isVoice \? String\(ctx\.turn\?\.message \?\? ""\)\.split\("\\n"\)\.filter\(\(l\) => l\.trim\(\)\)\.slice\(-3\)\.join\("\\n"\) \|\| ctx\.resolvedContent : theirWords\(\)\);/.test(lt) && /avoidHits\(query, avoidFor\(l\.avoid, askWords\(\)\)\)/.test(lt) && /lim, \{ askText: askWords\(\) \}\)/.test(lt));
+  check("review #5: the refusal doesn't push a permanent undo for a one-off ask", /it lifts for this once when their own words ask for it; only use steerAwayFrom with undo if they say they're open to it again in general/.test(lt));
+}
+
+// ---------------------------------------------------------------- review of #139: the turn note
+{
+  check("review #10: the note says it's Co's, not their words, and needn't be mentioned", /^\(Co's note, not their words: /.test(CT.avoidNote(["mixers"]) ?? "") && /No need to mention it\.\)$/.test(CT.avoidNote(["mixers"]) ?? ""));
+  check("review #9: a failed limits read keeps the last good list mid-call (never an empty one)", /avoid: lim \? lim\.avoid : undefined/.test(src("services/callTools.ts")) && /x\.avoid === undefined && prev \? \{ \.\.\.x, avoid: \(await prev\.catch\(\(\) => null\)\)\?\.avoid \}/.test(src("routes/callLlm.ts")));
 }
 
 console.log(`call memory: ${total - failed}/${total} passed`);

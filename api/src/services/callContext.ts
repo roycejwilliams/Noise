@@ -82,18 +82,27 @@ export const CALL_KNOWLEDGE: readonly KnowledgeSection[] = ["goals", "asks", "co
 // Pure: the record's fit sections for a call, in the same words the sweep and texts use (services/sweepFind.ts sweepPrompt). Strings
 // come from the layer, already stripped of other members' details; the caller strips them again with the call's own name set.
 // keep: drops a claim a later correction retired. Availability is a limit only when their words restrict (services/availability.ts).
-export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" | "claims">, keep: (text: string, at?: string | null) => boolean = () => true, isLimit: (a: string) => boolean = () => true): string[] {
+// Claims go through the text path's own renderer (replyGrounding.ts heldClaimsFrom → factLabels.ts renderLive), newest first: what they
+// said is labeled "they said, <day>", what Co inferred "Co's read, <day>", and an end date is the day it ends (review of #139: the call
+// listed the six oldest, put Co's guesses under "what they've told you", and showed the day after the end).
+export const CALL_CLAIMS_LIMIT = 6;
+export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" | "claims" | "identity">, keep: (text: string, at?: string | null) => boolean = () => true, isLimit: (a: string) => boolean = () => true, renderClaims: (k: any) => { theySaid: string[]; coInferred: string[]; enduring: string[] } | null = () => null): string[] {
   const stated = k.preferences.filter((p) => p.source === "stated").map((p) => p.text);
   const observed = k.preferences.filter((p) => p.source === "taste").map((p) => p.text).join(" ");
   const avoid = k.limits?.avoid ?? [];
   const availability = k.limits?.availability ?? null;
-  const claims = k.claims.filter((c) => keep(c.text, c.saidOn)).slice(0, 6).map((c) => `- ${c.text}${c.expiresOn ? ` (until ${c.expiresOn})` : ""}`);
+  // Newest first, retired by corrections against when each was last confirmed (verifiedAt), not the day it was first said.
+  const newest = [...k.claims].filter((c) => keep(c.text, c.verifiedAt)).sort((a, b) => b.verifiedAt.localeCompare(a.verifiedAt));
+  const held = renderClaims({ ...k, claims: newest });
+  const said = held ? [...held.theySaid, ...held.enduring].slice(0, CALL_CLAIMS_LIMIT) : [];
+  const read = held ? held.coInferred.slice(0, 3) : [];
   return [
-    stated.length ? `The kind of room they've told you they want (their own words, newest first; when you suggest anything, lean this way, and never pitch what clashes with it):\n${stated.map((t) => `- ${t}`).join("\n")}` : null,
+    stated.length ? `Their room taste, newest first (when you suggest anything, lean this way, and never pitch what clashes with it):\n${stated.map((t) => `- ${t}`).join("\n")}` : null,
     observed ? `How what you've sent them has landed: ${observed}` : null,
     avoid.length ? `Never suggest these kinds of things: they asked you to stop (${avoid.map((a) => `"${a}"`).join(", ")}). Judge by what a thing mainly is. If they bring one up themselves, they're open to it again for that.` : null,
     availability ? `When they're free, in their words: "${availability}" (${isLimit(availability) ? "a limit: don't suggest things outside it" : "a leaning, not a limit"}).` : null,
-    claims.length ? `What they've told you that still holds:\n${claims.join("\n")}` : null,
+    said.length ? `What they've told you that still holds (in their words, with when):\n${said.map((l) => `- ${l}`).join("\n")}` : null,
+    read.length ? `Co's own reads of them (guesses, not things they told you: never say they said these):\n${read.map((l) => `- ${l}`).join("\n")}` : null,
   ].filter((x): x is string => !!x);
 }
 // The recent texts (20) and their own words of the last 48 hours (25) both come from one exchange read.
@@ -698,7 +707,8 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // What they want, have ruled out, when they're free and what still holds: the record's fit sections (callFitLines), stripped again
   // with the call's own name set like every other line here.
   const { availabilityIsLimit } = await import("./availability.js");
-  const fitLines = await strip(callFitLines(k, (t, at) => keep(t, at), availabilityIsLimit));
+  const { heldClaimsFrom } = await import("../harness/replyGrounding.js");
+  const fitLines = await strip(callFitLines(k, (t, at) => keep(t, at), availabilityIsLimit, (kk) => heldClaimsFrom(kk, now)));
   const base = [
     rules,
     who ? `Who they are:\n${who}` : null,

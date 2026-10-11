@@ -34,7 +34,9 @@ function memberOnCall(key: string, userId: string, fresh = false): Promise<Membe
   for (const [k, v] of memberCache) if (now - v.at > MEMBER_CACHE_MS) memberCache.delete(k);
   const hit = memberCache.get(key);
   if (hit && !fresh) return hit.m;
-  const m = import("../services/callTools.js").then((t) => t.loadMemberOnCall(userId));
+  // A re-read whose avoid list couldn't be read keeps the last good one (review of #139: a failed read dropped the note silently).
+  const prev = hit?.m;
+  const m = import("../services/callTools.js").then((t) => t.loadMemberOnCall(userId)).then(async (x) => (x.avoid === undefined && prev ? { ...x, avoid: (await prev.catch(() => null))?.avoid } : x));
   memberCache.set(key, { at: now, m });
   m.catch(() => memberCache.delete(key));
   return m;

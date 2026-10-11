@@ -93,13 +93,14 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
   const t = k ? tasksFromCarrying(k.carrying) : [];
   const tasks = t.map((x: any) => ({ id: x.id, goal: safe ? safe(String(x.goal ?? "")) : null })).filter((x: any): x is { id: number; goal: string } => !!x.goal);
   const loops = l && safe ? l.split("\n").map((line: string) => safe(line)).filter((x: string | null): x is string => !!x).join("\n") || null : null;
-  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops, avoid: lim?.avoid ?? [] };
+  // A failed read leaves avoid undefined, so the caller keeps the last good list (routes/callLlm.ts memberOnCall), never an empty one.
+  return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops, avoid: lim ? lim.avoid : undefined };
 }
 
 // Pure: the stop-suggesting list as it stands right now, for this turn only (after the cache breakpoint, so the call's cached prefix is
 // untouched). The call's opening context has it too; this keeps it current when it changes during the call.
 export function avoidNote(avoid: string[] | undefined): string | null {
-  return avoid?.length ? `(Right now they've asked you never to suggest: ${avoid.map((a) => `"${a}"`).join(", ")}.)` : null;
+  return avoid?.length ? `(Co's note, not their words: right now they've asked you never to suggest ${avoid.map((a) => `"${a}"`).join(", ")}. No need to mention it.)` : null;
 }
 
 export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {

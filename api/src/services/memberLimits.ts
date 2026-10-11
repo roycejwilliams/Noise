@@ -43,19 +43,23 @@ export function avoidHits(text: string, avoid: string[]): string[] {
 }
 
 // Pure: the list that applies to one ask: a kind the ask itself names is theirs again for it.
-// A kind named only to rule it out ("no more hackathons", "stop sending crypto stuff", "not into mixers") is the rule restated, never
-// the ask taking it back (2026-10-11: on a call, "stop sending me crypto stuff" re-allowed crypto searches for the rest of the call).
-const NEGATES_KIND = /\b(?:no more|not? (?:into|interested in|a fan of|for)|stop(?:\s+\w+){0,3}|don'?t(?:\s+\w+){0,3}|never|enough|tired of|sick of|done with|skip|less|avoid|without)\s+(?:\w+\s+){0,3}$/i;
+// A kind named only to rule it out ("no more hackathons", "stop sending me crypto stuff", "not into mixers or crypto events", "anything but
+// crypto events") is the rule restated, never the ask taking it back (2026-10-11). Narrow on purpose: "I don't mind hackathons", "don't
+// forget to look for hackathons" and "less talking more hackathons" ask for it (review of #139: a wide "don't …" and "less" kept those).
+// The negation reaches the kind through at most four words in the same clause, so a list stays negated ("never again with crypto events
+// and hackathons") and "but" starts a new clause (except "anything but", which is the negation itself).
+const NEGATION = /\b(?:no more|no|not(?: into| interested in| a fan of| for me)?|never(?: again)?(?: with)?|stop(?:ping)? (?:sending|suggesting|showing|offering)(?: me)?|don'?t (?:send|suggest|show|offer|want)(?: me)?(?: any)?|tired of|sick of|done with|enough(?: with)?|skip(?:ping)?|avoid|anything but|nothing like|except|without)(?:\s+[\w'-]+){0,4}\s*$/i;
 function namedToAsk(text: string, kind: string): boolean {
   const words = kindWords(kind);
   if (!words.length) return false;
-  // Every place the kind's first word appears: the ask names it when at least one isn't preceded by a negation.
   const re = new RegExp(`\\b${words[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "gi");
   for (const m of text.matchAll(re)) {
-    // The negation must be in the same clause: "not into hackathons but any crypto events" still asks for crypto events.
-    const before = text.slice(Math.max(0, (m.index ?? 0) - 60), m.index ?? 0);
-    const clause = before.split(/[.,;:!?]|\b(?:but|and|though|although|except|however|or)\b/i).pop() ?? "";
-    if (!NEGATES_KIND.test(clause)) return true;
+    const before = text.slice(Math.max(0, (m.index ?? 0) - 80), m.index ?? 0);
+    const clause = before.split(/[.;:!?\n]|(?<!\b(?:anything|everything|nothing)\s)\bbut\b/i).pop() ?? "";
+    // A comma ends the clause unless a list continues it ("not into mixers, crypto events or hackathons").
+    const lastComma = clause.lastIndexOf(",");
+    const scope = lastComma >= 0 && !/^\s*(?:[\w'-]+\s+){0,3}(?:or|and)?\s*$/i.test(clause.slice(lastComma + 1)) ? clause.slice(lastComma + 1) : clause;
+    if (!NEGATION.test(scope)) return true;
   }
   return false;
 }
