@@ -2,7 +2,7 @@
 // a search reply said "Given you're French" about an X post aimed at French
 // founders, and nothing in the profile says it. An event being aimed at a group
 // does not put the person in it. This catches claims about who someone is
-// (nationality, where they're from, gender, parent, veteran, immigrant) and
+// (nationality, where they're from, gender, parent or spouse, veteran, immigrant), with or without a describing word ("as a new dad") and
 // drops the sentence unless the same word is in what Co was given about them.
 // No imports, so any drafting path can use it.
 
@@ -12,16 +12,23 @@ const DEMONYMS = [
   "iranian", "vietnamese", "filipino", "pakistani", "colombian", "argentinian", "polish", "ukrainian", "greek", "portuguese", "egyptian",
   "african", "asian", "european", "latino", "latina", "hispanic", "jewish", "muslim", "christian", "catholic", "immigrant", "veteran",
 ];
-const OTHER = ["woman", "man", "mom", "mother", "dad", "father", "parent", "student"];
+const OTHER = ["woman", "man", "mom", "mother", "dad", "father", "parent", "student", "husband", "wife", "widow", "widower", "grandparent", "grandmother", "grandfather", "retiree", "newlywed"];
 
 const D = DEMONYMS.join("|");
 const O = OTHER.join("|");
+// Up to two describing words between the article and the word ("as a new dad", "you're a proud Nigerian", "as a single working mom"):
+// the claim is the same with or without them (2026-10-11, the "as a new dad" gap).
+const ADJ = "(?:[a-z][\\w'’-]*\\s+){0,2}";
 const CLAIMS: { re: RegExp; group: number }[] = [
   { re: new RegExp(`\\byou(?:'|’)?re\\s+(?:a\\s+|an\\s+|also\\s+|fellow\\s+|actually\\s+)*(${D})\\b`, "gi"), group: 1 },
   { re: new RegExp(`\\byou\\s+are\\s+(?:a\\s+|an\\s+|also\\s+|fellow\\s+)*(${D})\\b`, "gi"), group: 1 },
-  { re: new RegExp(`\\b(?:as|being)\\s+(?:a|an)\\s+(${D}|${O})\\b`, "gi"), group: 1 },
+  { re: new RegExp(`\\b(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})s?\\b`, "gi"), group: 1 },
+  { re: new RegExp(`\\b(?:as|being)\\s+(${D}|${O})s\\b`, "gi"), group: 1 },
+  // "dads like you", "a new mom like yourself", "for parents like you": the same claim, said sideways.
+  { re: new RegExp(`\\b(${D}|${O})s?\\s+like\\s+(?:you|yourself)\\b`, "gi"), group: 1 },
   { re: /\byou(?:'|’)?re\s+(?:originally\s+)?from\s+([A-Z][A-Za-z]+)/g, group: 1 },
-  { re: new RegExp(`\\byou(?:'|’)?re\\s+a\\s+(${O})\\b`, "gi"), group: 1 },
+  { re: new RegExp(`\\byou(?:'|’)?re\\s+(?:a|an)\\s+${ADJ}(${D}|${O})\\b`, "gi"), group: 1 },
+  { re: new RegExp(`\\byou\\s+are\\s+(?:a|an)\\s+${ADJ}(${D}|${O})\\b`, "gi"), group: 1 },
 ];
 
 export function ungroundedIdentityClaims(text: string, knownAboutThem: string): string[] {
