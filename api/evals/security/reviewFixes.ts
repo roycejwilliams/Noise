@@ -2,8 +2,8 @@
 //   1. The co-test dashboard: a user id in a URL or body must be the signed-in tester's own, or the tester is on the team.
 //   2. co-test's public pages are rate limited per visitor (trust proxy); webhooks and the signed-in dashboard are not.
 //   3. Co's page readers check every redirect hop's resolved address (no bouncing to a private or internal one).
-//   4. A Google Doc is opened to anyone with the link only when their own words ask to share it, never on Co's kind label alone,
-//      and Co's capability text says so.
+//   4. A Google Doc is never opened to anyone with the link on its own: every Doc is theirs alone (not Co's kind label, not a guess
+//      from their words), and Co's capability text says so.
 //   npx tsx evals/security/reviewFixes.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
@@ -61,14 +61,10 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
   check("safeFetch refuses a private address before any request", "error" in blocked && blocked.blocked === true);
 }
 
-// ---------------------------------------------------------------- 4. Doc link sharing needs their words
+// ---------------------------------------------------------------- 4. no Doc is opened by link on its own
 {
   const X = await import("../../src/services/documentDelivery.js");
   const D = await import("../../src/services/documentSheet.js");
-  const yes = ["can you share it with my cofounder", "make it shareable", "send it to the venue", "so my partner can edit it", "something we can collaborate on", "so the host can see it", "we will edit it together", "give my business partner access", "forward the link to my cofounder", "email it to the venue owner", "make it editable for my team", "let the venue see it", "so Noor can add her notes", "a google doc I can share with the host", "My cofounder needs to see it", "so we can both edit it", "the host should be able to edit this", "Share the brief with Jordan, the private room option looks good"];
-  const no = ["put it in a google doc", "save it to my drive", "make me a partnership plan in google docs", "a readout as a google doc please", "I want to edit it later", "don't share it with anyone", "keep it private, don't share", "send it to me", "so I can see it", "the shared space at the venue was great", "I'm sharing a table with Ellis, make me a google doc", "share it with my cofounder. actually no, keep it private", "share it with me", "share it with myself", "share it to my drive", "share it with my email", "so I can share it later", "send it to my work email", "send it to my personal email", "forward it to my work account", "send it to my work gmail", "send it to my other phone", "send it to my assistant inbox", "send it to my work address", "send it to my ipad", "send it to my mac", "share your thoughts on it", "share some options", "send it to my drive", "send it to my google drive", "send it to my email", "forward it to my inbox", "send the doc to my gmail", "so the doc can open on my phone", "my share of the bill was $80", "put it on my laptop so I can see it", "it needs to open on my phone"];
-  check("asking to share it with someone opens it", yes.every((t) => X.asksToShare(t)), yes.filter((t) => !X.asksToShare(t)));
-  check("review of #142: a Google Doc alone, sending it to themselves, 'shared' about something else, or any 'don't share' keeps it theirs", no.every((t) => !X.asksToShare(t)), no.filter((t) => X.asksToShare(t)));
   const PAIR = ["11111111-1111-4111-8111-111111111111"];
   process.env.GOOGLE_DOCS_TEST_USERS = PAIR.join(",");
   const doc = D.resolveDocument({ title: "Partnership plan for the Mission dinner", note: "", kind: "partnership_plan", sections: [{ heading: "The plan", bullets: ["Split the room booking."] }], suggestions: [] });
@@ -77,11 +73,11 @@ const read = (p: string) => fs.readFileSync(new URL(`../../../${p}`, import.meta
   const deps: any = { render: async () => Buffer.alloc(10), cache: () => "", send: async (m: any) => { texts.push(m.content); return {}; }, from: "+1", googleToken: async () => "tok", uploadDoc: async () => ({ ok: true, id: "f1", link: "https://docs.google.com/document/d/f1/edit" }), shareDoc: async (_t: string, id: string) => { shares.push(id); return { ok: true }; } };
   const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: "America/Los_Angeles", now: new Date("2026-10-11T18:00:00Z") };
   const priv = await X.deliverDocument(doc, to, "google_docs", deps);
-  check("a shared kind they didn't ask to share stays private, and the text says they can share it", priv.ok && (priv as any).shared === false && shares.length === 0 && /Only you can open it for now/.test(texts[0] ?? ""));
+  check("a shared kind stays private, and the text says they can share it", priv.ok && (priv as any).shared === false && shares.length === 0 && /Only you can open it for now/.test(texts[0] ?? ""));
   const pub = await X.deliverDocument(doc, { ...to, shareByLink: true }, "google_docs", deps);
-  check("asked to share: opened by link", pub.ok && (pub as any).shared === true && shares.join() === "f1");
-  check("Co's capability text no longer says every Doc is open to anyone with the link", /theirs alone unless they ask to share it/.test(read("api/src/services/capabilities.ts")) && !/Drive, open to anyone with the link, and text the link/.test(read("api/src/services/capabilities.ts")));
-  check("every delivery path passes their words, not Co's label", /shareByLink: asksToShare\(theirWords\(\)\)/.test(read("api/src/agent/loopTools.ts")) && /shareByLink: asksToShare\(o\.taskTheirWords\)/.test(read("api/src/services/documentDelivery.ts")) && /shareByLink: D\.asksToShare\(o\.task\.theirWords \?\? ""\)/.test(read("api/src/services/researchBrief.ts")));
+  check("only an explicit shareByLink (a later, logged yes) opens it", pub.ok && (pub as any).shared === true && shares.join() === "f1");
+  check("Co's capability text says the Doc is theirs alone", /The Doc is theirs alone; they share it from the Doc themselves\./.test(read("api/src/services/capabilities.ts")) && !/open to anyone with the link/.test(read("api/src/services/capabilities.ts")));
+  check("review of #142: no delivery path opens a Doc by link on its own (no guessing from their words)", !/shareByLink:/.test(read("api/src/agent/loopTools.ts")) && !/shareByLink:/.test(read("api/src/services/researchBrief.ts")) && !/shareByLink: /.test(read("api/src/services/documentDelivery.ts").replace(/export type DeliverTo[^\n]*/, "")) && !/asksToShare|SHARE_ASK/.test(read("api/src/services/documentDelivery.ts")));
 }
 
 console.log(`security review fixes: ${total - failed}/${total} passed`);

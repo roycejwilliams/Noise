@@ -18,7 +18,7 @@ import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
 import { resolvePlan, planProblems, type EventRecord } from "../services/planSheet.js";
 import { WRITE_DOCUMENT_INPUT } from "../services/documentSheet.js";
-import { GOOGLE_DOC_ASK, asksToShare } from "../services/documentDelivery.js";
+import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
 
 // What the loop has seen this turn: every link a tool returned, with the facts
 // that came with it, and every page it read.
@@ -795,7 +795,7 @@ export function loopTools(
         const now = new Date();
         const line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, sendAt: now, zone });
         await holdWhileWriting(input.whileWriting);
-        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone, now, line, shareByLink: asksToShare(theirWords()) };
+        const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone, now, line };
         // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
         // working artifact (venue brief, partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.
         // Not connected (or Docs not allowed): the PDF goes instead, and Co offers to connect Google.

@@ -21,46 +21,10 @@ import { notToTeammate } from "./teamLines.js";
 export type DocTarget = "pdf_text" | "google_docs";
 // They asked for a Google Doc (or for it in their Drive), in their own words (agent/loopTools.ts re-exports it).
 export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|\b(?:in|to) (?:my )?(?:google )?drive\b/i;
-// They asked for others to get at it (security review, 2026-10-11): the Doc is opened to anyone with the link only then. The kind
-// (venue brief, partnership plan, readout) is Co's own label, so it alone never opens a Doc: their words have to. Otherwise the Doc is
-// theirs alone and the text says they can share it from the Doc. Sentence by sentence: a sentence that says not to share ("don't share
-// it", "keep it private") closes it for the whole message; one that asks to share it with someone else opens it. "Send it to me",
-// "so I can see it" and "the shared space" are not asks to share.
-const SHARE_NO = /\b(?:don'?t|do not|never|no need to|not|without) (?:\w+ )?(?:share|sharing|send|forward|give)\b|\b(?:keep|make) (?:it|this|that|the doc) (?:private|to myself|just for me|between us)\b|\bjust for me\b|\bonly (?:for )?me\b/i;
-// Who it goes to must be named as someone else (review of #142, twice: guessing what ISN'T another person leaked "share it with me",
-// "my work email", "my ipad"). So the other side is recognized, never inferred: a role ("my cofounder", "the venue", "our team"),
-// "everyone"/"anyone", or a person's name (a capitalized word that isn't a product or a place of theirs). Anything else stays private.
-const ROLES = "cofounders?|co-founders?|partners?|team|teammates?|venues?|hosts?|clients?|investors?|colleagues?|co-?workers?|friends?|assistants?|managers?|boss|owners?|planners?|organi[sz]ers?|people|group|family|wife|husband|spouse|girlfriend|boyfriend|sisters?|brothers?|mom|dad|parents|board|lawyers?|accountants?|agents?|landlord|guests?|staff|chef|caterers?";
-const THEIR_OWN = "drive|google|gdrive|docs?|document|email|e-mail|gmail|inbox|mail|phone|iphone|ipad|mac|macbook|tablet|laptop|computer|desktop|account|address|folder|files?|calendar|notes|icloud|dropbox|cloud|outlook";
-const NOT_NAMES = "I|I'm|I'll|I'd|Google|Gmail|Drive|Docs?|Doc|Co|Co's|iCloud|Dropbox|Outlook|iPhone|iPad|Mac|MacBook|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|January|February|March|April|May|June|July|August|September|October|November|December|Can|Could|Please|Also|And|But|So|Then|Make|Send|Share|Let|Give";
-// A role, with an optional word before it ("my business partner"), never followed by one of their own places ("my assistant inbox").
-const ROLE = `(?:(?:my|the|our|his|her|their|a|an)\\s+)?(?:[\\w'-]+\\s+)?(?:${ROLES})(?!\\s+(?:${THEIR_OWN})\\b)\\b|\\b(?:everyone|anyone|everybody|anybody)\\b`;
-// A name: case matters, so it's its own pattern (no i flag).
-const NAME = `(?!(?:${NOT_NAMES})\\b)[A-Z][a-z]+(?:'s)?(?!\\s+(?:${THEIR_OWN})\\b)\\b`;
-const verbs = (other: string, flags: string): RegExp[] => [
-  new RegExp(`\\b(?:share|sharing|shared) (?:it |this |that |the (?:doc|document|link|plan|brief|readout|file) )?with (?:${other})`, flags),
-  new RegExp(`\\b(?:send|forward|email|text|pass) (?:it|this|that|the (?:doc|document|link|plan|brief|readout|file))(?: over| along| on)? to (?:${other})`, flags),
-  new RegExp(`\\b(?:give|grant) (?:${other}) access\\b`, flags),
-  new RegExp(`\\blet (?:${other}) (?:see|edit|open|read|review|access|look at|work on|add to)\\b`, flags),
-  new RegExp(`\\b(?:so|that) (?:${other}) (?:can|could) (?:see|edit|open|read|review|access|look at|work on|add)\\b`, flags),
-  new RegExp(`(?:${other}) (?:needs?|wants?|has|should be able) to (?:see|edit|open|read|review|access|look at|work on|add)\\b`, flags),
-  new RegExp(`\\bmake (?:it|this|that) (?:shareable|sharable|editable) (?:for|with) (?:${other})`, flags),
-];
-// Name patterns are tested with the sentence's first letter lowered ("Share it with Noor"); a name that opens the sentence then
-// reads as a plain word and doesn't count, which only ever keeps a Doc private.
-const NAME_YES = verbs(NAME, "");
-const SHARE_YES: RegExp[] = [
-  ...verbs(ROLE, "i"),
-  /\bso we can (?:both |all )?(?:edit|work on|add to)\b/i,
-  /\b(?:edit|work on) (?:it |this )?together\b/i,
-  /\bcollaborat\w*\b(?! with (?:me|myself)\b)/i,
-  /\bmake (?:it|this|that) (?:shareable|sharable)\b/i,
-];
-export function asksToShare(words: string): boolean {
-  const sentences = String(words ?? "").split(/(?<=[.!?\n])\s*/).map((x) => x.trim()).filter(Boolean);
-  if (sentences.some((x) => SHARE_NO.test(x))) return false;
-  return sentences.some((x) => SHARE_YES.some((re) => re.test(x)) || NAME_YES.some((re) => re.test(x.charAt(0).toLowerCase() + x.slice(1))));
-}
+// Link sharing (security review, 2026-10-11): Co never opens a Doc to anyone with the link on its own. Three rounds of reading the
+// member's words for "share it" each found new over-shares ("don't let the venue see it", "share it with Notion", "send it to my work
+// email"), so the guard checks nothing it would have to guess: every Doc is theirs alone, and the text says they can share it from the
+// Doc. shareByLink stays on DeliverTo for a later, explicit yes (a logged answer to "want anyone with the link to edit it?").
 // via text_fallback: the PDF couldn't be made or sent, so the content went as text in the thread, and the PDF is to follow
 // (pdfPending, with the failure in error, retried from the receipt: services/deliveryReceipts.ts).
 export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; shared?: boolean; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
@@ -151,8 +115,8 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   return { ok: true, via: "pdf_text", filename };
 }
 
-// The Google Doc: in their own Drive, named like the PDF (without .pdf), opened to anyone with the link as an editor only when they
-// asked to share it (asksToShare; otherwise theirs alone), and the link texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the narrowing list, or a
+// The Google Doc: in their own Drive, named like the PDF (without .pdf), theirs alone (opened to anyone with the link only on an
+// explicit, logged yes; nothing sets that yet), and the link texted with the title and a plain line saying who can open it. Re-checked here, whoever calls: a member outside the narrowing list, or a
 // kind that isn't a shared working artifact, never gets one.
 async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<DeliverResult> {
   if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a venue brief, partnership plan or readout (and, when GOOGLE_DOCS_TEST_USERS is set, only for those members)", notAllowed: true };
@@ -455,7 +419,7 @@ export async function sendDocumentForTask(
   try {
     // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
     line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
-    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line, shareByLink: asksToShare(o.taskTheirWords) };
+    const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line, };
     rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
   } catch (err) {
     await unclaim();
