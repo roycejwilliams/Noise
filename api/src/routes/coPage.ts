@@ -38,7 +38,7 @@ function render(page: StoredCoPage, v: { shareId?: string }, zone = "America/Los
   const path = v.shareId ? `v/${v.shareId}` : page.id;
   const url = base ? `${base}/d/${path}` : null;
   return isDeckData(page.data)
-    ? renderDeck({ id: page.id, data: page.data as DeckData, updatedAt: page.updatedAt }, { url, zone, assetBase: `${v.shareId ?? page.id}/a/` })
+    ? renderDeck({ id: page.id, data: page.data as DeckData, updatedAt: page.updatedAt }, { url, zone, assetBase: `${v.shareId ?? page.id}/a/`, showNotes: !v.shareId })
     : renderCoPage({ ...page, data: page.data as CoPageData }, { url, ogImageUrl: (page.data as CoPageData).cover?.url ?? null, zone, assetBase: `${v.shareId ?? page.id}/a/` });
 }
 

@@ -23,6 +23,43 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
   };
   const noun = (k: string) => (k === "deck" ? "deck" : "page");
   return {
+    // What's on one of their pages or decks now, so an edit asked days later ("tighten the traction slide") is made from the real
+    // content, never from memory (live run, PR 3: Co asked the member to paste the slide). Theirs only; their image numbers are
+    // given back as numbers so an edit keeps them.
+    openArtifact: tool({
+      description: toolUse("openArtifact"),
+      inputSchema: z.object({ which }),
+      execute: async ({ which: ref }) => {
+        const got = await pick(ref);
+        if ("error" in got) return { ok: false, error: got.error };
+        const page = await (await S()).loadCoPage(got.p.id).catch(() => null);
+        if (!page || page.ownerUserId !== ctx.userId) return { ok: false, error: "It's gone (taken down or expired)." };
+        const assets = await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => []);
+        const num = (id: string | null | undefined) => (id ? assets.find((a) => a.id === id)?.n ?? null : null);
+        const d: any = page.data;
+        if (d.kind === "deck") {
+          return {
+            ok: true,
+            kind: "deck",
+            title: d.title,
+            subtitle: d.subtitle,
+            logo: num(d.logo),
+            slides: d.slides.map((s: any, i: number) => ({ slide: i + 2, headline: s.headline, bullets: s.bullets, image: num(s.image), notes: s.notes ?? null })),
+            note: "Slide 1 is the title slide (title and subtitle). To change it, call updateDeck with the whole new version: unchanged slides as they are here.",
+          };
+        }
+        return {
+          ok: true,
+          kind: "page",
+          title: d.title,
+          context: d.context,
+          logo: num(d.logo),
+          sections: d.sections.map((s: any) => ({ heading: s.heading, blocks: s.blocks, picture: num(s.asset) })),
+          sources: d.sources,
+          note: "To change it, call updatePage with the whole new version: unchanged sections as they are here.",
+        };
+      },
+    }),
     keepArtifact: tool({
       description: toolUse("keepArtifact"),
       inputSchema: z.object({ which, mode: z.enum(["keep", "renew"]).describe("keep: they want it kept for good (\"keep this\", \"keep\"). renew: 90 more days (\"renew\").") }),

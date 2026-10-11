@@ -90,7 +90,9 @@ function asOf(d: Date, zone: string | null): string {
 // One slide per screen, 16:9, scrolled (and printed) one at a time. No scripts, no controls: a link that reads on a phone or a laptop.
 // assetBase: where this view's images are served, relative to the page's own address ("<deck id>/a/" under /d/, "<share id>/a/" under
 // /d/v/), so a share link never shows the owner's own link.
-export function renderDeck(page: { id: string; data: DeckData; updatedAt: Date }, o: { url: string | null; zone?: string | null; assetBase?: string }): string {
+// showNotes: speaker notes are for the speaker, so only their own link shows them; a share link (their audience) never does (review
+// of PR 3). Never printed.
+export function renderDeck(page: { id: string; data: DeckData; updatedAt: Date }, o: { url: string | null; zone?: string | null; assetBase?: string; showNotes?: boolean }): string {
   const d = page.data;
   const s = d.style;
   const f = FONTS[s.type];
@@ -127,14 +129,14 @@ li::before{content:"";position:absolute;left:0;top:0.55em;width:clamp(6px,0.8vw,
 .slide.with-notes{flex-direction:column}
 .n{position:absolute;right:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
 .mark{position:absolute;left:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
-@media print{html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{border:none}}
+@media print{.notes{display:none}html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{border:none}}
 `;
   // An asset is served only under this deck's own link (relative, so it never names another host).
   const img = (id: string, alt: string, cls = "") => `<img${cls ? ` class="${cls}"` : ""} src="${e(`${o.assetBase ?? `${page.id}/a/`}${id}`)}" alt="${e(alt)}" decoding="async">`;
   const slides = d.slides
     .map(
       (sl, i) =>
-        `<section class="slide${sl.notes ? " with-notes" : ""}"><div class="frame"><div class="split${sl.image ? " has-img" : ""}"><div><div class="rule"></div><h2>${e(sl.headline)}</h2><ul>${sl.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul></div>${sl.image ? img(sl.image, sl.headline) : ""}</div><div class="n">${i + 2} / ${d.slides.length + 1}</div></div>${sl.notes ? `<details class="notes"><summary>Speaker notes</summary><p>${e(sl.notes)}</p></details>` : ""}</section>`,
+        `<section class="slide${sl.notes && o.showNotes !== false ? " with-notes" : ""}"><div class="frame"><div class="split${sl.image ? " has-img" : ""}"><div><div class="rule"></div><h2>${e(sl.headline)}</h2><ul>${sl.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul></div>${sl.image ? img(sl.image, sl.headline) : ""}</div><div class="n">${i + 2} / ${d.slides.length + 1}</div></div>${sl.notes && o.showNotes !== false ? `<details class="notes"><summary>Speaker notes</summary><p>${e(sl.notes)}</p></details>` : ""}</section>`,
     )
     .join("\n");
   return `<!doctype html>

@@ -26,7 +26,7 @@ export const DECK_INPUT = z.object({
         headline: line("The slide's one point."),
         bullets: z.array(line("A short supporting point.")).min(1).max(5),
         image: imageN("A picture for this slide (a product shot, the team, the space)."),
-        notes: line("Speaker notes for this slide: what to say out loud, from what they told you. Only when they asked for speaker notes, and only on the slides they named (all of them if they said so). Leave it out otherwise.").nullable().optional(),
+        notes: z.string().nullable().optional().describe("Speaker notes for this slide: what to say out loud, from what they told you, in plain words. Write them only when they asked for speaker notes, on the slides they named (all of them if they said so). On a change, leave it out to keep the slide's notes as they are; an empty string takes them off."),
       }),
     )
     .min(2)
@@ -105,11 +105,16 @@ export async function deckDataFrom(
   input: z.infer<typeof DECK_INPUT>,
   taste: { mood?: string; colors?: { background?: string | null; text?: string | null; accent?: string | null }; type?: string | null } | null,
   assets: Map<number, string> = new Map(),
+  was: { slides?: { headline: string; notes?: string }[] } | null = null,
 ): Promise<Record<string, unknown>> {
   const { styleFrom } = await import("../services/coPages/deck.js");
   const style = styleFrom(taste?.mood ?? "minimal", taste?.colors ?? {}, taste?.type ?? undefined);
   const at = (n: number | null | undefined) => (typeof n === "number" ? assets.get(n) ?? null : null);
-  return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s) => ({ headline: s.headline, bullets: s.bullets, image: at(s.image), ...(s.notes?.trim() ? { notes: s.notes.trim() } : {}) })), style };
+  // A slide's notes on an edit (review of PR 3): written now, or kept from the slide with the same headline (else the same place)
+  // when this version leaves them out; an empty string takes them off. An unrelated edit never drops their notes.
+  const keptNotes = (s: { headline: string }, i: number) => was?.slides?.find((x) => x.headline === s.headline)?.notes ?? was?.slides?.[i]?.notes;
+  const notesFor = (s: { headline: string; notes?: string | null }, i: number) => (typeof s.notes === "string" ? s.notes.trim() : keptNotes(s, i)) || null;
+  return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s, i) => ({ headline: s.headline, bullets: s.bullets, image: at(s.image), ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}) })), style };
 }
 
 // Their taste, with no asking: what they said about the look now (their exact words, checked, then saved as member knowledge), else
@@ -238,12 +243,12 @@ export function deckTools(
         }
         // What's on the deck now went out to them and stands; the edit may also use what they said since it was made.
         const was: any = before && before.ownerUserId === ctx.userId && (before.data as any).kind === "deck" ? before.data : null;
-        const lines = was ? [was.title, was.subtitle, ...was.slides.flatMap((x: any) => [x.headline, ...x.bullets])].join("\n") : "";
+        const lines = was ? [was.title, was.subtitle, ...was.slides.flatMap((x: any) => [x.headline, ...x.bullets, ...(x.notes ? [x.notes] : [])])].join("\n") : "";
         const source = await deckSource(ctx, (await o.source()).read, { id: pick.id, lines });
         const onDeck = was ? [was.logo, ...was.slides.map((x: any) => x.image)].filter(Boolean) : [];
         const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
         if ("error" in ids) return { ok: false, error: ids.error };
-        const next = await deckDataFrom(input, taste, ids.map);
+        const next = await deckDataFrom(input, taste, ids.map, was);
         const invented = await inventedClaims(ctx, next, source, was);
         if (invented) {
           o.notDone("The deck wasn't changed: some lines added claims they never made.");

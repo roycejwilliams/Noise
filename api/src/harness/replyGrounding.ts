@@ -200,7 +200,7 @@ export async function gatherReplyFacts(
   // turn where the deck isn't in the recent texts (live run, 2026-10-11: Co said it had no deck on file while one was live).
   // Titles only, never links (a link goes out only through the tools).
   const live = await import("../services/coPages/store.js").then((m) => m.livePagesFor(userId)).catch(() => [] as { title: string; kind: string }[]);
-  if (live.length) addFact(rf, "known", `Pages and decks you made them that are still live: ${live.slice(0, 8).map((p) => `the ${p.kind} "${p.title}"`).join("; ")}.`);
+  if (live.length) addFact(rf, "known", `Pages and decks you made them that are still live: ${live.slice(0, 8).map((p) => `the ${p.kind} "${p.title}"`).join("; ")}. When they ask to change one ("tighten the traction slide", "move dinner to 8"), open it (openArtifact) and change it from what's there; never ask them to paste or resend it.`);
   // A member an extension brought in (Mo's invitations): what it knew, to
   // ask about rather than state (services/extensions.ts, mo/handoff.ts).
   const handoff = await handoffFor(userId).catch(() => ({ known: [] as string[], instructions: [] as string[] }));

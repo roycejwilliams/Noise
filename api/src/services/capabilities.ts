@@ -156,6 +156,13 @@ export const ABILITIES: Ability[] = [
   },
   // Keep, renew and share, for any page or deck (agent/artifactTools.ts, 2026-10-11).
   {
+    id: "co_artifact_open",
+    can: "Co can open a page or deck it made for them to see what's on it now.",
+    tool: "openArtifact",
+    limits: { perTurn: 2 },
+    use: "Before changing a page or deck you didn't just make in this conversation, open it, then write the whole new version from what's there with updatePage or updateDeck. Never ask them to paste what's on it.",
+  },
+  {
     id: "co_artifact_keep",
     can: "Co can keep a page or deck it made for them: for good when they say \"keep this\", or 90 more days when they say \"renew\". Otherwise they last 90 days from their last change, and Co tells them before one they've been using expires.",
     tool: "keepArtifact",
@@ -197,7 +204,7 @@ export const ABILITIES: Ability[] = [
     tool: "makeDeck",
     // Two a turn: one fix after a refused attempt (live run, 2026-10-11: the corrected deck was the one the limit stopped).
     limits: { perTurn: 2, perDay: 3 },
-    use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; or, if they'd rather not describe it, a look by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic; fine if they don't mind) and anything you truly need for the content, then build from the answer. Speaker notes only when they ask for them, on the slides they name, from what they told you. Images they sent are their image #N in what you see (the number is only for your tools; never say it to them): place their logo on the title slide and a picture on the slide it belongs to, only their own. They name images by what they show ('the studio photo', 'drop the logo'); match that to the description, or leave it out to take it off. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat; if their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link.",
+    use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; or, if they'd rather not describe it, a look by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic; fine if they don't mind) and anything you truly need for the content, then build from the answer. Speaker notes only when they ask for them, on the slides they name, from what they told you; they show on their own link, never on a share link, and stay through later edits unless they ask to change them. Images they sent are their image #N in what you see (the number is only for your tools; never say it to them): place their logo on the title slide and a picture on the slide it belongs to, only their own. They name images by what they show ('the studio photo', 'drop the logo'); match that to the description, or leave it out to take it off. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat; if their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link.",
   },
   {
     id: "co_deck_update",
