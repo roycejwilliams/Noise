@@ -40,12 +40,13 @@ export function secondContactLabel(firstName: string, outcome: SecondContactOutc
   return `${what} (said ${day}; Co introduced them)`;
 }
 
-export async function recordSecondContact(userId: string, intro: Introduced, outcome: SecondContactOutcome, note: string | null, now = new Date()): Promise<void> {
+// metOn: when they met or talked, if they said ("we met last Tuesday"); the metric counts that day, not the day they told Co.
+export async function recordSecondContact(userId: string, intro: Introduced, outcome: SecondContactOutcome, note: string | null, now = new Date(), metOn: string | null = null): Promise<void> {
   const { recordFactChecked } = await import("./coFacts.js");
   await recordFactChecked({
     ownerUserId: userId, subject: "member", relation: SECOND_CONTACT_RELATION, label: secondContactLabel(intro.firstName, outcome, now), visibility: "owner",
     source: "noteMetAgain", happenedAt: now,
-    meta: { otherId: intro.otherId, introducedAt: intro.introducedAt.toISOString(), outcome, note: note?.slice(0, 200) ?? null },
+    meta: { otherId: intro.otherId, introducedAt: intro.introducedAt.toISOString(), outcome, note: note?.slice(0, 200) ?? null, ...(metOn && /^\d{4}-\d{2}-\d{2}$/.test(metOn) ? { metOn } : {}) },
   });
 }
 
@@ -53,16 +54,24 @@ export async function recordSecondContact(userId: string, intro: Introduced, out
 // includeRecent). answered: either side told Co. metAgain: either side said they met or talked again within the window of the intro.
 export async function secondContactRate(o: { sinceDays?: number; includeRecent?: boolean } = {}): Promise<{ intros: number; answered: number; metAgain: number; rate: number | null; answeredRate: number | null }> {
   const { rows } = await pool.query(
+    // Review of #147: archived members (test members are archived on reset) never count; each side's LATEST word stands (a later
+    // "not going to" replaces an earlier "met"); the window is counted from when they met (metOn) when they said, else when they said it.
     `WITH intros AS (
-       SELECT person_a, person_b, created_at FROM member_connections
-       WHERE created_at > NOW() - make_interval(days => $1) AND ($2::boolean OR created_at < NOW() - make_interval(days => $3))
+       SELECT c.person_a, c.person_b, c.created_at FROM member_connections c
+         JOIN users ua ON ua.id = c.person_a AND ua.archived_at IS NULL
+         JOIN users ub ON ub.id = c.person_b AND ub.archived_at IS NULL
+       WHERE c.created_at > NOW() - make_interval(days => $1) AND ($2::boolean OR c.created_at < NOW() - make_interval(days => $3))
+     ), latest AS (
+       SELECT DISTINCT ON (f.owner_user_id, f.meta->>'otherId') f.owner_user_id, f.meta->>'otherId' AS other, f.meta->>'outcome' AS outcome,
+              COALESCE((f.meta->>'metOn')::date::timestamptz, f.happened_at) AS at
+       FROM co_facts f WHERE f.relation = $4 AND f.retired_at IS NULL
+       ORDER BY f.owner_user_id, f.meta->>'otherId', f.happened_at DESC
      ), said AS (
        SELECT i.person_a, i.person_b,
-              bool_or(f.meta->>'outcome' IN ('met_again', 'talked_again') AND f.happened_at <= i.created_at + make_interval(days => $3)) AS met,
-              count(f.*) > 0 AS answered
+              COALESCE(bool_or(l.outcome IN ('met_again', 'talked_again') AND l.at <= i.created_at + make_interval(days => $3)), false) AS met,
+              count(l.*) > 0 AS answered
        FROM intros i
-       LEFT JOIN co_facts f ON f.relation = $4 AND f.retired_at IS NULL
-         AND ((f.owner_user_id = i.person_a AND f.meta->>'otherId' = i.person_b::text) OR (f.owner_user_id = i.person_b AND f.meta->>'otherId' = i.person_a::text))
+       LEFT JOIN latest l ON (l.owner_user_id = i.person_a AND l.other = i.person_b::text) OR (l.owner_user_id = i.person_b AND l.other = i.person_a::text)
        GROUP BY i.person_a, i.person_b
      )
      SELECT count(*)::int AS intros, count(*) FILTER (WHERE answered)::int AS answered, count(*) FILTER (WHERE met)::int AS met FROM said`,
