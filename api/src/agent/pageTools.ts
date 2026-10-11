@@ -39,15 +39,37 @@ export function pageDataFrom(input: PageInput): Record<string, unknown> {
   return { title: input.title, context: input.context, cover: null, sections: input.sections.map((s) => ({ heading: s.heading, blocks: s.blocks.map(norm), image: null })), sources: input.sources ?? [] };
 }
 
+// Words about the page, not its title (review of #148: "take that page down" named no title and missed their only page).
+const PAGE_REF_WORDS = new Set(["page", "pages", "that", "this", "link", "take", "down", "delete", "remove", "kill", "stop", "sharing", "share", "please", "change", "update", "edit", "swap"]);
 // Pure: which of their pages they mean, by title words; the newest when they have just one or say "the page". Null: none fits.
 export function pickPage<T extends { id: string; title: string }>(pages: T[], ref: string): T | null | "ambiguous" {
   if (!pages.length) return null;
-  const words = String(ref ?? "").toLowerCase().split(/\W+/).filter((w) => w.length > 3 && !["page", "that", "this", "link"].includes(w));
+  const words = String(ref ?? "").toLowerCase().split(/\W+/).filter((w) => w.length > 3 && !PAGE_REF_WORDS.has(w));
   if (!words.length) return pages.length === 1 ? pages[0] : pages[0];
   const scored = pages.map((p) => ({ p, n: words.filter((w) => p.title.toLowerCase().includes(w)).length })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n);
   if (!scored.length) return null;
   if (scored.length > 1 && scored[0].n === scored[1].n) return "ambiguous";
   return scored[0].p;
+}
+
+// Images from the page's own entities, inside one hard deadline (review of #148: the per-entity budget let a slow page hold the text
+// 16 to 32s). Past it, the page goes without them. keep: images the page already had, kept where that section still links their source.
+export const IMAGE_DEADLINE_MS = 9_000;
+export async function withImages(data: any, keep: any | null = null, deadlineMs = IMAGE_DEADLINE_MS, attach?: (d: any) => Promise<{ data: any }>): Promise<any> {
+  const { sectionEntities } = await import("../services/coPages/schema.js");
+  const kept = {
+    ...data,
+    cover: data.cover ?? keep?.cover ?? null,
+    sections: data.sections.map((sec: any) => {
+      if (sec.image) return sec;
+      const was = (keep?.sections ?? []).map((x: any) => x.image).find((img: any) => img && sectionEntities(sec).some((e: any) => e.url === img.sourceUrl));
+      return was ? { ...sec, image: was } : sec;
+    }),
+  };
+  const run = attach ?? (async (d: any) => (await import("../services/coPages/ogImage.js")).attachImages(d));
+  const timeout = new Promise<null>((r) => setTimeout(() => r(null), deadlineMs));
+  const got = await Promise.race([run(kept).then((r) => r.data).catch(() => null), timeout]);
+  return got ?? kept;
 }
 
 export function pageTools(
@@ -69,9 +91,8 @@ export function pageTools(
           return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these and try once more, or give them the points in a text and say the page isn't there yet.` };
         }
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent." };
-        const { attachImages } = await import("../services/coPages/ogImage.js");
-        const withImages = await attachImages(checked.data).then((r) => r.data).catch(() => checked.data);
-        const made = await store.createCoPage(withImages, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
+        const imaged = await withImages(checked.data);
+        const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
@@ -82,7 +103,7 @@ export function pageTools(
           return { ok: false, error: "The page is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
         }
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-        return { ok: true, url: made.url, note: "The line and the link went as one text. Add nothing about the page's contents; the page holds them." };
+        return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. If you reply at all, a few words on something else they said." };
       },
     }),
     updatePage: tool({
@@ -97,16 +118,22 @@ export function pageTools(
         if (pick === "ambiguous") return { ok: false, error: "More than one of their pages fits. Ask which one by its title." };
         if (!pick) return { ok: false, error: "They have no live page by that name. Make a new one (makePage) if that's what they want." };
         const source = await o.source();
-        const r = await store.updateCoPage(pick.id, ctx.userId, pageDataFrom(input), source);
+        // The page as it is now (theirs: listed from their own pages), so its images carry over (review of #148).
+        const before = await store.loadCoPage(pick.id).catch(() => null);
+        const next = await withImages(pageDataFrom(input), before && before.ownerUserId === ctx.userId ? before.data : null);
+        const r = await store.updateCoPage(pick.id, ctx.userId, next, source);
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         if (!r.ok) {
           o.notDone(`The page wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
         const text = `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.`;
-        await o.say(text, `Co replied: ${text}`);
+        if (!(await o.say(text, `Co replied: ${text}`))) {
+          ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
+          return { ok: true, note: "The page is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
+        }
         ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
-        return { ok: true, note: "Same page, same link; the text said what changed. Add nothing else about it." };
+        return { ok: true, note: "Same page, same link; the text said what changed. Send nothing more about it." };
       },
     }),
     takeDownPage: tool({

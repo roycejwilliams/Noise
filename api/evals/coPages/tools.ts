@@ -39,6 +39,7 @@ check("the tool's input becomes a page the schema accepts", Sch.parseCoPageData(
   check("two that fit equally are asked about", P.pickPage(pages, "venue options") === "ambiguous");
   check("none that fits is none", P.pickPage(pages, "the brunch page") === null && P.pickPage([], "anything") === null);
   check("'the page' with one page is that page", (P.pickPage([pages[0]], "the page") as any)?.id === "a");
+  check("review of #148: 'take that page down' with one page is that page", (P.pickPage([pages[0]], "take that page down") as any)?.id === "a");
 }
 
 // ---------------------------------------------------------------- the tools, end to end on a recording database
@@ -54,7 +55,7 @@ const tools: any = P.pageTools(ctx, { say: async (t) => { said.push(t); return t
   const r = await tools.makePage.execute({ ...input, line: "Here's Saturday in the Mission, two dinners side by side." }, {});
   const ins = calls.find((c) => /INSERT INTO co_pages/.test(c.sql));
   check("rule 2: one text, the line and the link, nothing about its contents", r.ok && said.length === 1 && /^Here's Saturday in the Mission, two dinners side by side\.\nhttps:\/\/co\.example\/d\/[A-Za-z0-9_-]{24}$/.test(said[0]) && !/Alder|Mesa|\$85/.test(said[0]), { r, said });
-  check("stored as theirs (owner), with Co told to add nothing about the contents", ins?.params[1] === "owner-a" && /Add nothing about the page's contents/.test(r.note));
+  check("stored as theirs (owner); Co is told that one text is the whole delivery (review of #148: no second text)", ins?.params[1] === "owner-a" && /send nothing more about it, no summary, no second text/.test(r.note));
   said.length = 0;
   const bad = await tools.makePage.execute({ ...input, sections: [{ heading: "Also", blocks: [{ type: "text", text: "Ellis Park is coming too, newly divorced and looking to meet people." }] }], line: "Here it is." }, {});
   check("rule 6: a page that fails the grounding isn't made, and Co is told to give the points in a text", !bad.ok && said.length === 0 && /give them the points in a text/.test(bad.error) && notDone.length === 1, bad);
@@ -65,6 +66,9 @@ const tools: any = P.pageTools(ctx, { say: async (t) => { said.push(t); return t
   const r = await tools.updatePage.execute({ ...input, page: "the Mission page", changed: "swapped Friday dinner for Saturday at Mesa Verde" }, {});
   const upd = calls.find((c) => /UPDATE co_pages SET data/.test(c.sql));
   check("rule 3: the same page (its id, their ownership) and 'Updated the page: what changed', no link, no contents", r.ok && upd?.params[0] === "A".repeat(24) && upd?.params[1] === "owner-a" && said.length === 1 && said[0] === "Updated the page: swapped Friday dinner for Saturday at Mesa Verde.", { r, said });
+  const quiet: any = P.pageTools(ctx, { say: async () => false, notDone: () => {}, source: async () => source });
+  const unsent = await quiet.updatePage.execute({ ...input, page: "mission", changed: "moved it to 8" }, {});
+  check("review of #148: an 'updated' line that didn't send isn't counted as told; Co says it in its reply", unsent.ok && /didn't send: say in your reply/.test(unsent.note) && facts.some((f) => /but the text saying so didn't send/.test(f)), unsent);
   const down = await tools.takeDownPage.execute({ page: "mission" }, {});
   const td = calls.find((c) => /SET taken_down_at = NOW\(\), data = '\{\}'::jsonb/.test(c.sql));
   check("take-down: their own page only, content wiped", down.ok && td?.params[0] === "A".repeat(24) && td?.params[1] === "owner-a");
@@ -72,6 +76,20 @@ const tools: any = P.pageTools(ctx, { say: async (t) => { said.push(t); return t
   check("a page they don't have is never guessed", !none.ok);
 }
 S.useCoPageDb(null);
+
+// ---------------------------------------------------------------- review of #148: images kept, and never a long wait
+{
+  const img = { url: "https://alder.example/hero.jpg", alt: "Alder and Ash, from its own page", sourceUrl: "https://alder.example/" };
+  const before = { title: "T", context: "C", cover: null, sources: [], sections: [{ heading: "Where to eat", image: img, blocks: [{ type: "links", items: [{ name: "Alder and Ash", note: null, url: "https://alder.example/", group: null }] }] }] };
+  const after = { ...before, sections: [{ ...before.sections[0], image: null, blocks: [{ type: "links", items: [{ name: "Alder and Ash", note: "Now Saturday.", url: "https://alder.example/", group: null }] }] }] };
+  const kept = await P.withImages(after, before, 500, async (d: any) => ({ data: d }));
+  check("an edit keeps the image a section had, while it still links that place", kept.sections[0].image?.url === img.url);
+  const moved = { ...after, sections: [{ ...after.sections[0], blocks: [{ type: "links", items: [{ name: "Mesa Verde", note: null, url: "https://mesa.example/", group: null }] }] }] };
+  check("…and drops it when the section no longer links its source", (await P.withImages(moved, before, 500, async (d: any) => ({ data: d }))).sections[0].image === null);
+  const t0 = Date.now();
+  const slow = await P.withImages(after, null, 60, () => new Promise(() => {}));
+  check("a slow image read never holds the page past the deadline: it goes without images", Date.now() - t0 < 1000 && slow.sections[0].image === null, Date.now() - t0);
+}
 
 // ---------------------------------------------------------------- rule 1 and the wiring
 {
