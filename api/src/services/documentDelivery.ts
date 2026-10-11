@@ -23,7 +23,7 @@ export type DocTarget = "pdf_text" | "google_docs";
 export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|\b(?:in|to) (?:my )?(?:google )?drive\b/i;
 // via text_fallback: the PDF couldn't be made or sent, so the content went as text in the thread, and the PDF is to follow
 // (pdfPending, with the failure in error, retried from the receipt: services/deliveryReceipts.ts).
-export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; shared?: boolean; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
+export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; shared?: boolean; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
 
 // The kinds that may become a shared Google Doc, and the optional narrowing list of members (at most two user ids).
 export const SHARED_DOC_KINDS: readonly DocKind[] = ["venue_brief", "partnership_plan", "readout"];
@@ -130,7 +130,7 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   } catch {
     return { ok: false, why: "the Google Doc was made in their Drive, but the link didn't send by text" };
   }
-  return { ok: true, via: "google_docs", filename: name, link: up.link, shared: share.ok };
+  return { ok: true, via: "google_docs", filename: name, link: up.link, driveFileId: up.id, shared: share.ok };
 }
 
 export const DELIVERERS: Record<DocTarget, (doc: Doc, to: DeliverTo, deps: DeliverDeps) => Promise<DeliverResult>> = { pdf_text: pdfByText, google_docs: googleDoc };
@@ -204,7 +204,7 @@ export async function deliverAndRecord(
   for (const ok of r.sentOk) {
     const rec = await store.insert({
         userId: to.userId, docKey, version: sendVersion, title: sendDoc.title, kind: sendDoc.kind ?? null, doc: sendDoc, contentHash: R.contentHash(sendDoc),
-        channel: ok.via, status: ok.pdfPending ? "pdf_pending" : "delivered", line: line ?? sendDoc.title, link: ok.link ?? null,
+        channel: ok.via, status: ok.pdfPending ? "pdf_pending" : "delivered", line: line ?? sendDoc.title, link: ok.link ?? null, driveFileId: ok.driveFileId ?? null,
         taskId: o.taskId ?? null, source: o.source, changeNote: again ? again.changeNote : version > 1 ? (o.changed?.trim() || "updated") : null,
         error: ok.error ?? null, nextRetryAt: ok.pdfPending ? new Date(now.getTime() + PDF_RETRY.firstAfterMs) : null, deliveredAt: now,
       }).catch((err: any) => {
@@ -227,7 +227,7 @@ export async function recordSent(doc: Doc, o: { userId: string; channel: Receipt
   const { version, duplicate } = R.nextVersion(latest, R.contentHash(doc));
   return s.insert({
     userId: o.userId, docKey, version, title: doc.title, kind: doc.kind ?? null, doc, contentHash: R.contentHash(doc), channel: o.channel, status: "delivered",
-    line: o.line ?? doc.title, link: o.link ?? null, taskId: o.taskId ?? null, source: o.source, changeNote: duplicate ? duplicate.changeNote : version > 1 ? "updated" : null,
+    line: o.line ?? doc.title, link: o.link ?? null, driveFileId: null, taskId: o.taskId ?? null, source: o.source, changeNote: duplicate ? duplicate.changeNote : version > 1 ? "updated" : null,
     error: null, nextRetryAt: null, deliveredAt: o.now ?? new Date(),
   });
 }

@@ -2619,6 +2619,8 @@ export async function runMigrations(): Promise<void> {
     // A plan emailed to them is recorded too (channel 'email'): widen the check on tables made before it.
     .then(() => pool.query(`ALTER TABLE document_deliveries DROP CONSTRAINT IF EXISTS document_deliveries_channel_check`))
     .then(() => pool.query(`ALTER TABLE document_deliveries ADD CONSTRAINT document_deliveries_channel_check CHECK (channel IN ('pdf_text','google_docs','text_fallback','email'))`))
+    // A Google Doc Co made keeps its Drive file ID (Google audit, 2026-10-11), so a later edit updates that Doc instead of re-uploading.
+    .then(() => pool.query(`ALTER TABLE document_deliveries ADD COLUMN IF NOT EXISTS drive_file_id TEXT`))
     .catch((err: Error) => console.error("document_deliveries table init failed:", err));
   // Goal lifecycle (2026-10-08, services/goalEdges.ts): a goal is active (no row), done or stale. Stale and done goals stay on file
   // and stop generating searches. A set-aside made from context waits to be told to them (told_at NULL, hints counts replies that
