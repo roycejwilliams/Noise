@@ -22,12 +22,17 @@ const O = OTHER.join("|");
 const ADJ = "(?:(?!(?:the|and|or|a|an|my|our|your|their|his|her|its|this|that|of|at|in|on|for|to|with)\\b)[a-z][\\w'’-]*\\s+){0,2}";
 // "as a …" is a claim only when the word ends the phrase ("as a new dad, you…", "as a mom you…", "as a father of two"), never when
 // it describes a thing ("as a quiet French bistro", "as a great Italian spot"). A hyphen after it is never one ("woman-led").
-const ENDS = "(?![\\w-])(?=\\s*(?:[,.;:!?]|$|you\\b|of\\s+(?:two|three|four|five|\\d)))";
+const ENDS = "(?![\\w-])(?=\\s*(?:[,.;:!?]|$|you\\b|and\\s+(?:a|an)\\s|of\\s+(?:two|three|four|five|\\d)))";
 const NOHYPHEN = "(?![\\w-])";
 const CLAIMS: { re: RegExp; group: number }[] = [
   { re: new RegExp(`\\byou(?:'|’)?re\\s+(?:a\\s+|an\\s+|also\\s+|fellow\\s+|actually\\s+)*(${D})${NOHYPHEN}`, "gi"), group: 1 },
   { re: new RegExp(`\\byou\\s+are\\s+(?:a\\s+|an\\s+|also\\s+|fellow\\s+)*(${D})${NOHYPHEN}`, "gi"), group: 1 },
-  { re: new RegExp(`\\b(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})${ENDS}`, "gi"), group: 1 },
+  // Where "as a …" sits decides it (review of #145): opening a sentence or clause and said to them ("As a French founder, you'd…",
+  // "As a mom who loves jazz, you…"), or ending the phrase; or after "you" ("for you as a new dad"). Mid-sentence after a verb it
+  // describes a place ("pitched as a new Italian", "as a quiet French bistro") and is never a claim about them.
+  { re: new RegExp(`(?<=^|[.!?;:,\\n]\\s*)(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})(?![\\w])(?=[^.!?]*\\byou)`, "gi"), group: 1 },
+  { re: new RegExp(`(?<=^|[.!?;:,\\n]\\s*)(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})${ENDS}`, "gi"), group: 1 },
+  { re: new RegExp(`\\byou\\b[^.!?]{0,40}?\\b(?:as|being)\\s+(?:a|an)\\s+${ADJ}(${D}|${O})${ENDS}`, "gi"), group: 1 },
   { re: new RegExp(`\\b(?:as|being)\\s+(${D}|${O})s${ENDS}`, "gi"), group: 1 },
   // "dads like you", "a new mom like yourself", "for women like you": the same claim, said sideways.
   { re: new RegExp(`\\b(${D}|${O}|women|men)s?\\s+like\\s+(?:you|yourself)\\b`, "gi"), group: 1 },
