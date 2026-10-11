@@ -274,8 +274,9 @@ export function whatChanged(prev: Doc, next: Doc): string {
   const removed = prev.sections.filter((x, i) => !after.has(key(x.heading, i))).map((x, i) => name(x, i));
   const parts: string[] = [];
   if (changed.length) parts.push(`changes to ${list(changed)}`);
-  if (added.length) parts.push(`added ${list(added)}`);
-  if (removed.length) parts.push(`took out ${list(removed)}`);
+  // Never opening with a verb changeLine treats as a whole line ("added", "removed"): it would drop the document's name (review of #143).
+  if (added.length) parts.push(`a new ${list(added)} ${added.length > 1 ? "sections" : "section"}`);
+  if (removed.length) parts.push(`no more ${list(removed)} ${removed.length > 1 ? "sections" : "section"}`);
   if (!parts.length && prev.note !== next.note) parts.push("a new note at the top");
   if (!parts.length && JSON.stringify(prev.suggestions) !== JSON.stringify(next.suggestions)) parts.push("new suggestions from me");
   if (!parts.length && prev.title !== next.title) parts.push(`a new title, ${next.title}`);
