@@ -27,7 +27,7 @@ export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|
 // Doc. shareByLink stays on DeliverTo for a later, explicit yes (a logged answer to "want anyone with the link to edit it?").
 // via text_fallback: the PDF couldn't be made or sent, so the content went as text in the thread, and the PDF is to follow
 // (pdfPending, with the failure in error, retried from the receipt: services/deliveryReceipts.ts).
-export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; shared?: boolean; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
+export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; shared?: boolean; updatedInPlace?: boolean; newDocBecause?: string; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
 
 // The kinds that may become a shared Google Doc, and the optional narrowing list of members (at most two user ids).
 export const SHARED_DOC_KINDS: readonly DocKind[] = ["venue_brief", "partnership_plan", "readout"];
@@ -61,10 +61,13 @@ export type DeliverDeps = {
   googleToken?: (userId: string) => Promise<string | null>;
   uploadDoc?: (token: string, name: string, html: string) => Promise<import("./googleDocs.js").DocsUpload>;
   shareDoc?: (token: string, fileId: string) => Promise<import("./googleDocs.js").DocsShare>;
+  updateDoc?: (token: string, fileId: string, html: string) => Promise<Awaited<ReturnType<typeof import("./googleDocs.js").updateGoogleDoc>>>;
 };
 // line: the one sentence that goes with the attachment (services/speakable.ts deliveryLine). Without one, the title.
 // noFallback: a retry of a PDF that already went as text (deliveryReceipts) must not send the text again.
-export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean };
+// inPlace: a new version of a Google Doc Co already made for them (its Drive file and link, from the receipt): written into that same
+// Doc, so the link stays the same and only the change line goes (Royce, 2026-10-11 rule 3).
+export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean; inPlace?: { fileId: string; link: string } };
 
 const realDeps = async (): Promise<DeliverDeps> => {
   const sendblue = (await import("./sendblue.js")).default;
@@ -78,6 +81,7 @@ const realDeps = async (): Promise<DeliverDeps> => {
     googleToken: async (userId) => (g.googleConfigured() && g.canCreateDocs((await g.isConnected(userId)).scopes) ? g.accessTokenFor(userId).catch(() => null) : null),
     uploadDoc: (token, name, html) => d.uploadGoogleDoc(token, name, html),
     shareDoc: (token, fileId) => d.shareWithLink(token, fileId),
+    updateDoc: (token, fileId, html) => d.updateGoogleDoc(token, fileId, html),
   };
 };
 // The real senders with one part swapped: a plan sends its own rendered sheet (agent/loopTools.ts emailPlan) through the same
@@ -125,16 +129,34 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   const day = dayFor(to);
   const name = docFilename(doc.title, day.toISODate()!).replace(/\.pdf$/, "");
   const { docsHtml } = await import("./googleDocs.js");
-  const up = await deps.uploadDoc(token, name, docsHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") }));
+  const html = docsHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") });
+  // A new version of a Doc Co made: the same Doc, the same link, and only the change line (the link they have still opens it).
+  let newDocBecause: string | undefined;
+  if (to.inPlace && deps.updateDoc) {
+    const upd = await deps.updateDoc(token, to.inPlace.fileId, html).catch(() => ({ ok: false as const, why: "Google didn't answer in time" }));
+    if (upd.ok) {
+      try {
+        await deps.send({ number: to.phone, content: to.line ?? `Updated the ${doc.title}.`, from_number: deps.from });
+      } catch {
+        return { ok: false, why: "the Google Doc was updated in their Drive, but the line saying so didn't send by text" };
+      }
+      return { ok: true, via: "google_docs", filename: name, link: to.inPlace.link, driveFileId: upd.id, shared: false, updatedInPlace: true };
+    }
+    // Their grant or our setup: the same failure a new Doc would hit, said plainly. Gone (deleted, moved out of reach) or anything
+    // else: a new Doc, and the text says why the link changed (never a silent swap, rule 6).
+    if ("cause" in upd && (upd.cause === "reconnect" || upd.cause === "our_config")) return { ok: false, why: upd.why };
+    newDocBecause = "cause" in upd && upd.cause === "gone" ? "The earlier Doc isn't in your Drive anymore, so this is a new one." : "I couldn't update the earlier Doc, so this is a new one.";
+  }
+  const up = await deps.uploadDoc(token, name, html);
   if (!up.ok) return { ok: false, why: up.why };
   const share = !to.shareByLink ? { ok: false as const, why: "they didn't ask to share it" } : deps.shareDoc ? await deps.shareDoc(token, up.id).catch(() => ({ ok: false as const, why: "Google didn't open the link" })) : { ok: false as const, why: "not shared" };
   const who = share.ok ? "Anyone with this link can open and edit it." : "Only you can open it for now; share it from the Doc when you're ready.";
   try {
-    await deps.send({ number: to.phone, content: `${to.line ?? doc.title}\n${up.link}\n${who}`, from_number: deps.from });
+    await deps.send({ number: to.phone, content: `${to.line ?? doc.title}${newDocBecause ? ` ${newDocBecause}` : ""}\n${up.link}\n${who}`, from_number: deps.from });
   } catch {
     return { ok: false, why: "the Google Doc was made in their Drive, but the link didn't send by text" };
   }
-  return { ok: true, via: "google_docs", filename: name, link: up.link, driveFileId: up.id, shared: share.ok };
+  return { ok: true, via: "google_docs", filename: name, link: up.link, driveFileId: up.id, shared: share.ok, newDocBecause };
 }
 
 export const DELIVERERS: Record<DocTarget, (doc: Doc, to: DeliverTo, deps: DeliverDeps) => Promise<DeliverResult>> = { pdf_text: pdfByText, google_docs: googleDoc };
@@ -193,6 +215,8 @@ export async function deliverAndRecord(
     return none(`it's the same document already delivered (doc #${duplicate.id}, version ${duplicate.version}, ${day}); it goes again only when they ask for it again, never on your own, so point them to the one they have; if they want something changed, read it (readDocument) and send the next version`, { duplicate, docKey, version });
   }
   if (prior && !o.changed?.trim()) return none("a new version needs a short note of what changed (changed), for its one line");
+  // Any new version says what changed (Royce, 2026-10-11 rule 4: "never a bare 'I updated your doc'"), not only one made with revises.
+  if (version > 1 && !o.resend && !o.changed?.trim()) return none(`this would be version ${version} of a document they already have (${latest?.title ?? doc.title}); a new version needs a short note of what changed (changed), in a few words they'd recognize, for its one line`);
   // They asked for it again (lost it, can't find it, send it again, redo it with no change): the version they have goes again, as
   // it is. A rewrite of it isn't a new version; only a change they asked for (revises) is.
   // A caller that names what changed (a re-checked brief) is sending a new version when the content differs.
@@ -201,7 +225,11 @@ export async function deliverAndRecord(
   const sendVersion = again ? again.version : version;
   const { deliveredThing } = await import("./speakable.js");
   const line = again ? to.line : version > 1 ? (o.changed?.trim() ? R.changeLine(doc.title, o.changed, doc.kind) : `Here's the updated ${deliveredThing(doc.title, doc.kind)}.`) : to.line;
-  const r = await deliverToTargets(sendDoc, { ...to, line }, { saveTo: o.saveTo, askedForGoogle: o.askedForGoogle }, deps.deliver);
+  // A new version of a Google Doc Co made goes into that same Doc (its file id kept on the receipt since #141).
+  const priorDoc = !again && version > 1 ? (await store.forUser(to.userId, 50).catch(() => [] as Receipt[])).find((x) => x.docKey === docKey && x.channel === "google_docs" && x.driveFileId && x.link) : undefined;
+  const inPlace = priorDoc ? { fileId: priorDoc.driveFileId!, link: priorDoc.link! } : undefined;
+  // They asked for it as a Google Doc the first time: the new version goes to that Doc (they needn't say "Google" again to change it).
+  const r = await deliverToTargets(sendDoc, { ...to, line, inPlace }, { saveTo: inPlace ? "google_doc" : o.saveTo, askedForGoogle: o.askedForGoogle || !!inPlace }, deps.deliver);
   const receipts: Receipt[] = [];
   // It already reached them: a receipt that can't be written is logged, never turned into "it didn't go out" (which would send it
   // again, review of #106).

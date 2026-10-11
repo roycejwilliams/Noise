@@ -823,13 +823,16 @@ export function loopTools(
         const asPdf = sentOk.some((r) => r.via === "pdf_text");
         const asDoc = sentOk.some((r) => r.via === "google_docs");
         const sharedLink = sentOk.some((r) => r.via === "google_docs" && r.shared);
-        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
+        // The same Doc, written in place: the text said only what changed; the link they have still opens it (rule 3, 2026-10-11).
+        const inPlace = sentOk.some((r) => r.via === "google_docs" && r.updatedInPlace);
+        const newDoc = sentOk.find((r) => r.via === "google_docs" && r.newDocBecause)?.newDocBecause;
+        ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (${inPlace ? "updated in place, same link: " : "link texted: "}${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
         await remember({ next: `document sent: ${doc.title}` });
         const extras = `${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}`;
         return {
           ok: true,
           via: sent.via,
-          note: `${asDoc ? `The Google Doc is in their Drive and its link went with its line; ${sharedLink ? "anyone with the link can open and edit it, and the text told them so" : "only they can open it for now, and the text told them so"}. ` : ""}${extras}${extras ? "Say only that, in a few words, nothing else about it." : DELIVERED_NOTE}`,
+          note: `${inPlace ? "The Google Doc they already have was updated in place (same link), and the text said what changed. Add nothing about it. " : asDoc ? `The Google Doc is in their Drive and its link went with its line; ${sharedLink ? "anyone with the link can open and edit it, and the text told them so" : "only they can open it for now, and the text told them so"}. ${newDoc ? `It's a new Doc with a new link, and the text said why ("${newDoc}"). ` : ""}` : ""}${extras}${extras ? "Say only that, in a few words, nothing else about it." : DELIVERED_NOTE}`,
         };
       },
     }),

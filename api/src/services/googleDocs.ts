@@ -71,6 +71,31 @@ export async function uploadGoogleDoc(accessToken: string, name: string, html: s
   }
 }
 
+// A new version of a Doc Co made, written into the same file (Royce, 2026-10-11: "Co edits the page or doc, keeps the same link").
+// drive.file allows it on files Co created. The HTML replaces the content and Drive converts it, as on upload. A file they deleted or
+// moved out of reach answers 404 ("gone"): the caller makes a new Doc and says so.
+export async function updateGoogleDoc(accessToken: string, fileId: string, html: string, fetchImpl: typeof fetch = fetch): Promise<DocsUpload | { ok: false; why: string; cause: "gone" }> {
+  const boundary = `co-${Math.random().toString(36).slice(2)}`;
+  try {
+    const res = await fetchImpl(`https://www.googleapis.com/upload/drive/v3/files/${encodeURIComponent(fileId)}?uploadType=multipart&fields=id,webViewLink`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+      body: `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{}\r\n--${boundary}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n${html}\r\n--${boundary}--`,
+      signal: AbortSignal.timeout(20_000),
+    });
+    const j: any = await res.json().catch(() => ({}));
+    if (res.status === 404) return { ok: false, cause: "gone", why: "the Doc isn't in their Drive anymore" };
+    if (!res.ok || !j.id) {
+      const cause = res.ok ? "other" : googleRefusal(res.status, j);
+      if (cause === "our_config") console.error(`googleDocs: OUR CONFIG, not the member's: the Drive API refused an update (${res.status}): ${String(j?.error?.message ?? "").slice(0, 300)}`);
+      return { ok: false, cause, why: cause === "our_config" ? "a Google setting on Co's side isn't switched on yet; that's ours to fix, not theirs. Tell them it's on our end and we'll fix it, nothing they need to do (never ask them to reconnect)" : cause === "reconnect" ? "Google didn't allow it (they need to reconnect Google and allow Docs)" : "Google didn't take the update" };
+    }
+    return { ok: true, id: String(j.id), link: String(j.webViewLink ?? `https://docs.google.com/document/d/${j.id}/edit`) };
+  } catch {
+    return { ok: false, why: "Google didn't answer in time" };
+  }
+}
+
 // Shared working artifacts (a venue brief, a partnership plan, a readout) are made to be passed to a venue or a partner and edited
 // together, so the Doc is opened to anyone with the link, as an editor, never listed or searchable (allowFileDiscovery false). That is a
 // real tradeoff: whoever holds the link can read and change it. It is used only for those kinds, only for the test pair, and only
