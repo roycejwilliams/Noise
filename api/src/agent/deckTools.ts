@@ -105,15 +105,22 @@ export async function deckDataFrom(
   input: z.infer<typeof DECK_INPUT>,
   taste: { mood?: string; colors?: { background?: string | null; text?: string | null; accent?: string | null }; type?: string | null } | null,
   assets: Map<number, string> = new Map(),
-  was: { slides?: { headline: string; notes?: string }[] } | null = null,
+  was: { slides?: { headline: string; bullets?: string[]; notes?: string }[] } | null = null,
 ): Promise<Record<string, unknown>> {
   const { styleFrom } = await import("../services/coPages/deck.js");
   const style = styleFrom(taste?.mood ?? "minimal", taste?.colors ?? {}, taste?.type ?? undefined);
   const at = (n: number | null | undefined) => (typeof n === "number" ? assets.get(n) ?? null : null);
   // A slide's notes on an edit (review of PR 3): written now, or kept from the slide with the same headline (else the same place)
   // when this version leaves them out; an empty string takes them off. An unrelated edit never drops their notes.
-  const keptNotes = (s: { headline: string }, i: number) => was?.slides?.find((x) => x.headline === s.headline)?.notes ?? was?.slides?.[i]?.notes;
-  const notesFor = (s: { headline: string; notes?: string | null }, i: number) => (typeof s.notes === "string" ? s.notes.trim() : keptNotes(s, i)) || null;
+  // By place only when it's the same slide reworded (it still shares a bullet): a replaced slide never inherits notes about content
+  // that's gone (review of PR 3).
+  const keptNotes = (s: { headline: string; bullets: string[] }, i: number) => {
+    const same = was?.slides?.find((x) => x.headline === s.headline);
+    if (same) return same.notes;
+    const there: any = was?.slides?.[i];
+    return there && (there.bullets ?? []).some((b: string) => s.bullets.includes(b)) ? there.notes : undefined;
+  };
+  const notesFor = (s: { headline: string; bullets: string[]; notes?: string | null }, i: number) => (typeof s.notes === "string" ? s.notes.trim() : keptNotes(s, i)) || null;
   return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s, i) => ({ headline: s.headline, bullets: s.bullets, image: at(s.image), ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}) })), style };
 }
 
