@@ -38,7 +38,7 @@ function render(page: StoredCoPage, v: { shareId?: string }, zone = "America/Los
   const path = v.shareId ? `v/${v.shareId}` : page.id;
   const url = base ? `${base}/d/${path}` : null;
   return isDeckData(page.data)
-    ? renderDeck({ id: page.id, data: page.data as DeckData, updatedAt: page.updatedAt }, { url, zone, assetBase: `${v.shareId ?? page.id}/a/`, showNotes: !v.shareId })
+    ? renderDeck({ id: page.id, data: page.data as DeckData, updatedAt: page.updatedAt }, { url, zone, assetBase: `${v.shareId ?? page.id}/a/`, showNotes: !v.shareId, downloadBase: `${v.shareId ?? page.id}/` })
     : renderCoPage({ ...page, data: page.data as CoPageData }, { url, ogImageUrl: (page.data as CoPageData).cover?.url ?? null, zone, assetBase: `${v.shareId ?? page.id}/a/` });
 }
 
@@ -56,6 +56,31 @@ export function createCoPageRouter(
     if (!asset) return res.status(404).type("text/plain").send("Not found");
     return res.status(200).type(asset.mediaType).send(asset.data);
   };
+  // A deck as a file (services/coPages/deckExport.ts, PR 4): the PDF, or the PowerPoint, from the deck's own data, through the same
+  // link it was opened with. Speaker notes ride in the PowerPoint on their own link only, never a share link's. A page, a taken-down
+  // or expired deck, or a failed render is a plain 404.
+  const sendFile = async (page: StoredCoPage | null, kind: "pdf" | "pptx", shared: boolean, res: any) => {
+    res.set({ "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer" });
+    if (!page || !isDeckData(page.data)) return res.status(404).type("text/plain").send("Not found");
+    const data = page.data as DeckData;
+    const images = new Map<string, { data: Buffer; mediaType: string }>();
+    for (const id of assetIdsIn(data)) {
+      const a = await loadAsset(page.ownerUserId, id).catch(() => null);
+      if (a) images.set(id, a);
+    }
+    const X = await import("../services/coPages/deckExport.js");
+    const file =
+      kind === "pdf"
+        ? await X.deckPdf({ id: page.id, data, updatedAt: page.updatedAt, version: page.version }, images).catch(() => null)
+        : await X.deckPptx({ id: page.id, data, version: page.version }, images, { withNotes: !shared }).catch(() => null);
+    if (!file) return res.status(404).type("text/plain").send("Not found");
+    res.set("Content-Disposition", `attachment; filename="${file.filename}"`);
+    return res.status(200).type(file.contentType).send(file.data);
+  };
+  router.get("/v/:shareId/deck.pdf", async (req, res) => sendFile(await loadShare(String(req.params.shareId ?? "")).catch(() => null), "pdf", true, res));
+  router.get("/v/:shareId/deck.pptx", async (req, res) => sendFile(await loadShare(String(req.params.shareId ?? "")).catch(() => null), "pptx", true, res));
+  router.get("/:id/deck.pdf", async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pdf", false, res));
+  router.get("/:id/deck.pptx", async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pptx", false, res));
   // A share link (store.ts createShareLink): the same artifact, view-only, at its own revocable link. Revoked or unknown: 404.
   router.get("/v/:shareId/a/:assetId", async (req, res) => sendAsset(await loadShare(String(req.params.shareId ?? "")).catch(() => null), String(req.params.assetId ?? ""), res));
   router.get("/v/:shareId", async (req, res) => {

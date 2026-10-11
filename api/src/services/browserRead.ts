@@ -165,7 +165,8 @@ export async function browserPageText(url: string): Promise<string | null> {
 
 // A one-page PDF of HTML Co wrote itself (services/planSheet.ts), or null. No scripts run and the only
 // network it may reach is the font host the page names, so nothing in the page can send anything anywhere.
-export async function renderPdf(html: string): Promise<Buffer | null> {
+// size: a fixed page size ("13.333in" x "7.5in" for a 16:9 deck, PR 4); without it, Letter as before.
+export async function renderPdf(html: string, size?: { width: string; height: string }): Promise<Buffer | null> {
   if (!browserReadEnabled()) return null;
   const release = await slot();
   let context: Awaited<ReturnType<Browser["newContext"]>> | null = null;
@@ -179,13 +180,13 @@ export async function renderPdf(html: string): Promise<Buffer | null> {
       } catch {}
       return host === "fonts.googleapis.com" || host === "fonts.gstatic.com" || route.request().url().startsWith("data:") ? route.continue() : route.abort();
     });
-    const page = await context.newPage();
-    await page.setContent(html, { waitUntil: "load", timeout: BROWSER_LIMITS.pageMs });
+    const pg = await context.newPage();
+    await pg.setContent(html, { waitUntil: "load", timeout: BROWSER_LIMITS.pageMs });
     // Give the web font a few seconds; without it the serif falls back and the sheet still reads. A slow
     // font host never fails the send.
-    await Promise.race([page.evaluate(() => (document as any).fonts?.ready), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
+    await Promise.race([pg.evaluate(() => (document as any).fonts?.ready), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
     // No page range: a long plan flows onto a second page rather than losing steps the calendar still has.
-    const pdf = await page.pdf({ format: "Letter", printBackground: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } });
+    const pdf = await pg.pdf({ ...(size ? { width: size.width, height: size.height } : { format: "Letter" as const }), printBackground: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } });
     return pdf.length > 1_000 ? Buffer.from(pdf) : null;
   } catch (err: any) {
     if (/Executable doesn't exist|Failed to launch|ENOENT/i.test(err?.message ?? "")) failedAt = Date.now();
