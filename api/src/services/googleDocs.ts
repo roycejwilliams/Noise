@@ -71,6 +71,22 @@ export async function uploadGoogleDoc(accessToken: string, name: string, html: s
   }
 }
 
+// When the Doc last changed, so Co never writes over edits made after its own (review of #143). drive.file allows reading the
+// metadata of files Co created. Gone (deleted, or out of reach) is its own answer; null is "couldn't tell".
+export async function googleDocMeta(accessToken: string, fileId: string, fetchImpl: typeof fetch = fetch): Promise<{ modifiedAt: Date } | { gone: true } | null> {
+  try {
+    const res = await fetchImpl(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=modifiedTime,trashed`, { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(10_000) });
+    if (res.status === 404) return { gone: true };
+    if (!res.ok) return null;
+    const j: any = await res.json().catch(() => ({}));
+    if (j.trashed) return { gone: true };
+    const at = new Date(String(j.modifiedTime ?? ""));
+    return Number.isNaN(at.getTime()) ? null : { modifiedAt: at };
+  } catch {
+    return null;
+  }
+}
+
 // A new version of a Doc Co made, written into the same file (Royce, 2026-10-11: "Co edits the page or doc, keeps the same link").
 // drive.file allows it on files Co created. The HTML replaces the content and Drive converts it, as on upload. A file they deleted or
 // moved out of reach answers 404 ("gone"): the caller makes a new Doc and says so.

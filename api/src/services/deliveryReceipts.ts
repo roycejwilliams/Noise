@@ -46,6 +46,8 @@ export type ReceiptStore = {
   get: (userId: string, id: number) => Promise<Receipt | null>;
   forUser: (userId: string, limit?: number) => Promise<Receipt[]>;
   latest: (userId: string, docKey: string) => Promise<Receipt | null>;
+  // The newest Google Doc Co made for this document (its Drive file kept since #141), for writing a new version into it.
+  googleDocFor: (userId: string, docKey: string) => Promise<Receipt | null>;
   // A PDF that followed its text fallback, or one more failed try.
   pdfSent: (id: number, at: Date) => Promise<void>;
   pdfRetry: (id: number, error: string, next: Date | null) => Promise<void>;
@@ -199,6 +201,13 @@ export const pgReceipts: ReceiptStore = {
     const { rows } = await pool.query(`SELECT * FROM document_deliveries WHERE user_id = $1 ORDER BY delivered_at DESC LIMIT $2`, [userId, limit]);
     return rows.map(fromRow);
   },
+  googleDocFor: async (userId, docKey) => {
+    const { rows } = await pool.query(
+      `SELECT * FROM document_deliveries WHERE user_id = $1 AND doc_key = $2 AND channel = 'google_docs' AND drive_file_id IS NOT NULL AND link IS NOT NULL ORDER BY version DESC, delivered_at DESC LIMIT 1`,
+      [userId, docKey],
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  },
   latest: async (userId, docKey) => {
     const { rows } = await pool.query(`SELECT * FROM document_deliveries WHERE user_id = $1 AND doc_key = $2 ORDER BY version DESC, delivered_at DESC LIMIT 1`, [userId, docKey]);
     return rows[0] ? fromRow(rows[0]) : null;
@@ -234,6 +243,7 @@ export function memoryReceipts(): ReceiptStore & { all: Receipt[] } {
     insert: async (r) => { const x = { ...r, id: next++, attempts: r.attempts ?? 0 } as Receipt; all.push(x); return x; },
     get: async (userId, id) => all.find((r) => r.userId === userId && r.id === id) ?? null,
     forUser: async (userId, limit = 20) => all.filter((r) => r.userId === userId).sort((a, b) => b.deliveredAt.getTime() - a.deliveredAt.getTime()).slice(0, limit),
+    googleDocFor: async (userId, docKey) => all.filter((r) => r.userId === userId && r.docKey === docKey && r.channel === "google_docs" && r.driveFileId && r.link).sort((a, b) => b.version - a.version || b.deliveredAt.getTime() - a.deliveredAt.getTime())[0] ?? null,
     latest: async (userId, docKey) => all.filter((r) => r.userId === userId && r.docKey === docKey).sort((a, b) => b.version - a.version || b.deliveredAt.getTime() - a.deliveredAt.getTime())[0] ?? null,
     pdfSent: async (id) => { const r = all.find((x) => x.id === id); if (r) { r.status = "delivered"; r.channel = "pdf_text"; r.nextRetryAt = null; } },
     pdfRetry: async (id, error, nextAt) => { const r = all.find((x) => x.id === id); if (r) { r.attempts++; r.error = error; r.nextRetryAt = nextAt; if (!nextAt) r.status = "pdf_failed"; } },
@@ -243,3 +253,31 @@ export function memoryReceipts(): ReceiptStore & { all: Receipt[] } {
     claim: async (id, now, until) => { const r = all.find((x) => x.id === id && x.status === "pdf_pending" && !!x.nextRetryAt && x.nextRetryAt <= now); if (!r) return false; r.nextRetryAt = until; return true; },
   };
 }
+
+// Pure: what changed between two versions of a document, in a few words they'd recognize (Royce, 2026-10-11 rule 4: "updated the
+// venue brief - new capacity terms, section 2", never a bare "I updated your doc"). For callers that don't name the change
+// themselves (a plan, a re-run brief): the sections whose words changed, by heading, or the note or Co's suggestions.
+export function whatChanged(prev: Doc, next: Doc): string {
+  const key = (h: string | null, i: number) => (h?.trim() ? h.trim().toLowerCase() : `#${i}`);
+  const body = (x: Doc["sections"][number]) => JSON.stringify([x.paragraphs, x.bullets]);
+  const before = new Map(prev.sections.map((x, i) => [key(x.heading, i), x]));
+  const after = new Map(next.sections.map((x, i) => [key(x.heading, i), x]));
+  const name = (x: Doc["sections"][number], i: number) => (x.heading?.trim() ? x.heading.trim() : `section ${i + 1}`);
+  const changed: string[] = [];
+  const added: string[] = [];
+  next.sections.forEach((x, i) => {
+    const was = before.get(key(x.heading, i));
+    if (!was) added.push(name(x, i));
+    else if (body(was) !== body(x)) changed.push(`${name(x, i)} (section ${i + 1})`);
+  });
+  const removed = prev.sections.filter((x, i) => !after.has(key(x.heading, i))).map((x, i) => name(x, i));
+  const parts: string[] = [];
+  if (changed.length) parts.push(`updated ${list(changed)}`);
+  if (added.length) parts.push(`added ${list(added)}`);
+  if (removed.length) parts.push(`took out ${list(removed)}`);
+  if (!parts.length && prev.note !== next.note) parts.push("updated the note at the top");
+  if (!parts.length && JSON.stringify(prev.suggestions) !== JSON.stringify(next.suggestions)) parts.push("updated Co's suggestions");
+  if (!parts.length && prev.title !== next.title) parts.push(`retitled it ${next.title}`);
+  return parts.length ? parts.slice(0, 2).join(", and ") : "updated the wording";
+}
+const list = (xs: string[]) => (xs.length <= 2 ? xs.join(" and ") : `${xs.slice(0, 2).join(", ")} and ${xs.length - 2} more`);

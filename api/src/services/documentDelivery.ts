@@ -62,12 +62,13 @@ export type DeliverDeps = {
   uploadDoc?: (token: string, name: string, html: string) => Promise<import("./googleDocs.js").DocsUpload>;
   shareDoc?: (token: string, fileId: string) => Promise<import("./googleDocs.js").DocsShare>;
   updateDoc?: (token: string, fileId: string, html: string) => Promise<Awaited<ReturnType<typeof import("./googleDocs.js").updateGoogleDoc>>>;
+  docMeta?: (token: string, fileId: string) => Promise<Awaited<ReturnType<typeof import("./googleDocs.js").googleDocMeta>>>;
 };
 // line: the one sentence that goes with the attachment (services/speakable.ts deliveryLine). Without one, the title.
 // noFallback: a retry of a PDF that already went as text (deliveryReceipts) must not send the text again.
 // inPlace: a new version of a Google Doc Co already made for them (its Drive file and link, from the receipt): written into that same
 // Doc, so the link stays the same and only the change line goes (Royce, 2026-10-11 rule 3).
-export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean; inPlace?: { fileId: string; link: string } };
+export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean; inPlace?: { fileId: string; link: string; writtenAt: Date } };
 
 const realDeps = async (): Promise<DeliverDeps> => {
   const sendblue = (await import("./sendblue.js")).default;
@@ -82,6 +83,7 @@ const realDeps = async (): Promise<DeliverDeps> => {
     uploadDoc: (token, name, html) => d.uploadGoogleDoc(token, name, html),
     shareDoc: (token, fileId) => d.shareWithLink(token, fileId),
     updateDoc: (token, fileId, html) => d.updateGoogleDoc(token, fileId, html),
+    docMeta: (token, fileId) => d.googleDocMeta(token, fileId),
   };
 };
 // The real senders with one part swapped: a plan sends its own rendered sheet (agent/loopTools.ts emailPlan) through the same
@@ -132,7 +134,15 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   const html = docsHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") });
   // A new version of a Doc Co made: the same Doc, the same link, and only the change line (the link they have still opens it).
   let newDocBecause: string | undefined;
-  if (to.inPlace && deps.updateDoc) {
+  // Someone changed the Doc after Co last wrote it (they, or whoever they shared it with): Co never writes over their edits. The new
+  // version goes in a new Doc and the text says why (review of #143).
+  const EDIT_SLACK_MS = 2 * 60_000;
+  const meta = to.inPlace && deps.updateDoc && deps.docMeta ? await deps.docMeta(token, to.inPlace.fileId).catch(() => null) : null;
+  const editedSince = meta && "modifiedAt" in meta && to.inPlace ? meta.modifiedAt.getTime() > to.inPlace.writtenAt.getTime() + EDIT_SLACK_MS : false;
+  if (to.inPlace && editedSince) newDocBecause = "The earlier Doc has edits since I made it, so I left it as it is and put this version in a new one.";
+  if (to.inPlace && meta && "gone" in meta) newDocBecause = "The earlier Doc isn't in your Drive anymore, so this is a new one.";
+  if (to.inPlace && deps.updateDoc && deps.docMeta && !meta) newDocBecause = "I couldn't check the earlier Doc, so this is a new one.";
+  if (to.inPlace && deps.updateDoc && !newDocBecause) {
     const upd = await deps.updateDoc(token, to.inPlace.fileId, html).catch(() => ({ ok: false as const, why: "Google didn't answer in time" }));
     if (upd.ok) {
       try {
@@ -140,7 +150,7 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
       } catch {
         return { ok: false, why: "the Google Doc was updated in their Drive, but the line saying so didn't send by text" };
       }
-      return { ok: true, via: "google_docs", filename: name, link: to.inPlace.link, driveFileId: upd.id, shared: false, updatedInPlace: true };
+      return { ok: true, via: "google_docs", filename: name, link: to.inPlace.link, driveFileId: upd.id, updatedInPlace: true };
     }
     // Their grant or our setup: the same failure a new Doc would hit, said plainly. Gone (deleted, moved out of reach) or anything
     // else: a new Doc, and the text says why the link changed (never a silent swap, rule 6).
@@ -187,7 +197,7 @@ export async function deliverToTargets(doc: Doc, to: DeliverTo, o: { saveTo?: "p
 
 // ---------- receipts (services/deliveryReceipts.ts): every delivery is recorded; the same artifact never goes twice
 
-export type RecordedDelivery = TargetsResult & { receipts: Receipt[]; duplicate: Receipt | null; docKey: string; version: number; line: string | undefined };
+export type RecordedDelivery = TargetsResult & { receipts: Receipt[]; duplicate: Receipt | null; docKey: string; version: number; line: string | undefined; docBecamePdf?: boolean };
 export type RecordDeps = { deliver?: typeof deliverDocument; receipts?: ReceiptStore; now?: () => Date; log?: (d: Parameters<typeof recordDecision>[0]) => Promise<unknown> };
 
 // One delivery, recorded: the artifact's identity (a revision keeps the original's), its version, a duplicate refused, the line
@@ -215,8 +225,9 @@ export async function deliverAndRecord(
     return none(`it's the same document already delivered (doc #${duplicate.id}, version ${duplicate.version}, ${day}); it goes again only when they ask for it again, never on your own, so point them to the one they have; if they want something changed, read it (readDocument) and send the next version`, { duplicate, docKey, version });
   }
   if (prior && !o.changed?.trim()) return none("a new version needs a short note of what changed (changed), for its one line");
-  // Any new version says what changed (Royce, 2026-10-11 rule 4: "never a bare 'I updated your doc'"), not only one made with revises.
-  if (version > 1 && !o.resend && !o.changed?.trim()) return none(`this would be version ${version} of a document they already have (${latest?.title ?? doc.title}); a new version needs a short note of what changed (changed), in a few words they'd recognize, for its one line`);
+  // Any new version says what changed (Royce, 2026-10-11 rule 4: "never a bare 'I updated your doc'"). A caller that doesn't name it
+  // (a plan, a re-run brief) gets it worked out from the two versions: the sections that changed, by name and number.
+  const changedNote = o.changed?.trim() || (version > 1 && latest ? R.whatChanged(latest.doc, doc) : "");
   // They asked for it again (lost it, can't find it, send it again, redo it with no change): the version they have goes again, as
   // it is. A rewrite of it isn't a new version; only a change they asked for (revises) is.
   // A caller that names what changed (a re-checked brief) is sending a new version when the content differs.
@@ -224,12 +235,16 @@ export async function deliverAndRecord(
   const sendDoc = again ? again.doc : doc;
   const sendVersion = again ? again.version : version;
   const { deliveredThing } = await import("./speakable.js");
-  const line = again ? to.line : version > 1 ? (o.changed?.trim() ? R.changeLine(doc.title, o.changed, doc.kind) : `Here's the updated ${deliveredThing(doc.title, doc.kind)}.`) : to.line;
+  const line = again ? to.line : version > 1 ? (changedNote ? R.changeLine(doc.title, changedNote, doc.kind) : `Here's the updated ${deliveredThing(doc.title, doc.kind)}.`) : to.line;
   // A new version of a Google Doc Co made goes into that same Doc (its file id kept on the receipt since #141).
-  const priorDoc = !again && version > 1 ? (await store.forUser(to.userId, 50).catch(() => [] as Receipt[])).find((x) => x.docKey === docKey && x.channel === "google_docs" && x.driveFileId && x.link) : undefined;
-  const inPlace = priorDoc ? { fileId: priorDoc.driveFileId!, link: priorDoc.link! } : undefined;
+  const priorDoc = !again && version > 1 ? await store.googleDocFor(to.userId, docKey).catch(() => null) : null;
+  const inPlace = priorDoc ? { fileId: priorDoc.driveFileId!, link: priorDoc.link!, writtenAt: priorDoc.deliveredAt } : undefined;
   // They asked for it as a Google Doc the first time: the new version goes to that Doc (they needn't say "Google" again to change it).
-  const r = await deliverToTargets(sendDoc, { ...to, line, inPlace }, { saveTo: inPlace ? "google_doc" : o.saveTo, askedForGoogle: o.askedForGoogle || !!inPlace }, deps.deliver);
+  const r0 = await deliverToTargets(sendDoc, { ...to, line, inPlace }, { saveTo: inPlace ? "google_doc" : o.saveTo, askedForGoogle: o.askedForGoogle || !!inPlace }, deps.deliver);
+  // The earlier version was a Google Doc but this one went as a PDF (Docs no longer allowed for it, or Google disconnected): Co says so
+  // (rule 6, never a silent downgrade), and never "they asked for a Google Doc" when this time they didn't.
+  const docBecamePdf = !!inPlace && !r0.sentOk.some((x) => x.via === "google_docs") && r0.sentOk.length > 0;
+  const r = inPlace && !o.askedForGoogle ? { ...r0, googleRefused: null, googleMissing: false } : r0;
   const receipts: Receipt[] = [];
   // It already reached them: a receipt that can't be written is logged, never turned into "it didn't go out" (which would send it
   // again, review of #106).
@@ -237,7 +252,7 @@ export async function deliverAndRecord(
     const rec = await store.insert({
         userId: to.userId, docKey, version: sendVersion, title: sendDoc.title, kind: sendDoc.kind ?? null, doc: sendDoc, contentHash: R.contentHash(sendDoc),
         channel: ok.via, status: ok.pdfPending ? "pdf_pending" : "delivered", line: line ?? sendDoc.title, link: ok.link ?? null, driveFileId: ok.driveFileId ?? null,
-        taskId: o.taskId ?? null, source: o.source, changeNote: again ? again.changeNote : version > 1 ? (o.changed?.trim() || "updated") : null,
+        taskId: o.taskId ?? null, source: o.source, changeNote: again ? again.changeNote : version > 1 ? (changedNote || "updated") : null,
         error: ok.error ?? null, nextRetryAt: ok.pdfPending ? new Date(now.getTime() + PDF_RETRY.firstAfterMs) : null, deliveredAt: now,
       }).catch((err: any) => {
         console.error("documentDelivery: the receipt didn't save (it did send):", err?.message ?? err);
@@ -246,7 +261,7 @@ export async function deliverAndRecord(
     if (rec) receipts.push(rec);
     if (ok.pdfPending) await log({ layer: 7, decision: "document.pdf_failed", userId: to.userId, outcome: "skip", action: "sent_as_text", reason: ok.error ?? null, proposal: { title: sendDoc.title, docKey, version: sendVersion, source: o.source } }).catch(() => {});
   }
-  return { ...r, receipts, duplicate: null, docKey, version: sendVersion, line };
+  return { ...r, receipts, duplicate: null, docKey, version: sendVersion, line, docBecamePdf };
 }
 
 // A receipt for a delivery that didn't go through deliverAndRecord's senders (a plan emailed to them): the same identity and

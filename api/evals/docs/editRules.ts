@@ -1,6 +1,8 @@
 // Royce's document rules (2026-10-11), the parts Co's documents didn't meet. Layer 1: fake Google, fake Sendblue, receipts in memory.
 //   Rule 3: a change to a Google Doc Co made goes into that same Doc (same link), and only the change line is texted.
-//   Rule 4: every new version says what changed: never a bare "Here's the updated X".
+//   Rule 4: every new version says what changed: never a bare "Here's the updated X". When the caller doesn't name it (a plan, a
+//           re-run brief), it's worked out from the two versions (review of #143: refusing broke those callers).
+//   Review of #143: never write over edits made in the Doc after Co's; the Doc is found by its document, not a recent-50 scan.
 //   Rule 6: if the same Doc can't be updated (gone), a new one is made and the text says why; a grant or setup problem is said plainly.
 //   npx tsx evals/docs/editRules.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
@@ -34,14 +36,17 @@ const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: 
 }
 
 // ---------------------------------------------------------------- rules 3, 4, 6 through deliverAndRecord
-const run = async (o: { update?: any } = {}) => {
+const run = async (o: { update?: any; meta?: any; token?: any } = {}) => {
   const texts: string[] = [];
   const uploads: string[] = [];
   const updates: string[] = [];
   let n = 0;
+  let tokenCalls = 0;
   const deps: any = {
     render: async () => Buffer.alloc(2000, 1), cache: () => "https://x.test/f.pdf", send: async (m: any) => { texts.push(m.content); return {}; }, from: "+1",
-    googleToken: async () => "tok",
+    // Disconnected later: the first Doc is made, then the token is gone for the revision.
+    googleToken: async () => (o.token !== undefined && tokenCalls++ > 0 ? o.token : "tok"),
+    docMeta: async () => o.meta ?? { modifiedAt: new Date("2026-10-11T17:00:00Z") },
     uploadDoc: async (_t: string, name: string) => { uploads.push(name); n++; return { ok: true, id: `F${n}`, link: `https://docs.google.com/document/d/F${n}/edit` }; },
     shareDoc: async () => ({ ok: true }),
     updateDoc: async (_t: string, id: string) => { updates.push(id); return o.update ?? { ok: true, id, link: `https://docs.google.com/document/d/${id}/edit` }; },
@@ -70,17 +75,45 @@ const run = async (o: { update?: any } = {}) => {
   check("rule 6: a grant problem is said plainly, never swapped for a new Doc silently", r.uploads.length === 1 && r.second.sentOk.length === 0 && /reconnect Google/.test((r.second.results[0] as any).why ?? ""), r.second.results);
 }
 {
-  // Rule 4: a new version without saying what changed is refused, with or without revises; asking for it again still sends.
+  const r = await run({ meta: { modifiedAt: new Date("2026-10-11T19:30:00Z") } });
+  check("review of #143: edits made in the Doc after Co's are never written over: a new Doc, and the text says why", r.updates.length === 0 && r.uploads.length === 2 && /has edits since I made it, so I left it as it is/.test(r.texts[0] ?? ""), r.texts);
+}
+{
+  const r = await run({ meta: { gone: true } });
+  check("a Doc in the trash or gone is found before writing: a new Doc with the reason", r.updates.length === 0 && r.uploads.length === 2 && /isn't in your Drive anymore/.test(r.texts[0] ?? ""));
+}
+{
+  const r = await run({ token: null });
+  const r2 = r.second as any;
+  check("Google disconnected since: the new version goes as a PDF and Co is told to say so (no 'they asked for a Google Doc')", r2.docBecamePdf === true && r2.sentOk[0]?.via === "pdf_text" && r2.googleRefused === null && r2.googleMissing === false, { docBecamePdf: r2.docBecamePdf, via: r2.sentOk[0]?.via, refused: r2.googleRefused });
+}
+{
+  // Rule 4 for callers that don't name the change: worked out from the two versions, specific, never bare.
   const receipts = R.memoryReceipts();
-  const deps: any = { render: async () => Buffer.alloc(2000, 1), cache: () => "https://x.test/f.pdf", send: async () => ({}), from: "+1" };
+  const texts: string[] = [];
+  const deps: any = { render: async () => Buffer.alloc(2000, 1), cache: () => "https://x.test/f.pdf", send: async (m: any) => { texts.push(m.content); return {}; }, from: "+1" };
   const deliver = (d: any, t: any, target: any) => X.deliverDocument(d, t, target, deps);
   await X.deliverAndRecord(v1, to, { askedForGoogle: false, source: "reply" }, { deliver, receipts, log: async () => null });
-  const bare = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "reply" }, { deliver, receipts, log: async () => null });
-  check("rule 4: a new version that doesn't say what changed doesn't go", bare.sentOk.length === 0 && /needs a short note of what changed/.test((bare.results[0] as any).why ?? ""), bare.results);
-  const named = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "reply", changed: "moved it to Saturday" }, { deliver, receipts, log: async () => null });
-  check("rule 4: with what changed, it goes with that line", named.sentOk.length === 1 && named.line === "Moved it to Saturday.");
+  const plan = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "task:1" }, { deliver, receipts, log: async () => null });
+  check("review of #143: a plan or re-run brief without a note still goes, with what changed worked out (section by name and number)", plan.sentOk.length === 1 && plan.line === "Updated The room (section 1).", plan.line);
+  check("and its receipt carries that note", receipts.all.at(-1)?.changeNote === "updated The room (section 1)");
   const again = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "reply", resend: true }, { deliver, receipts, log: async () => null });
   check("asking for it again still sends the version they have", again.sentOk.length === 1);
+  const sec = (h: string, b: string[]) => ({ heading: h, paragraphs: [], bullets: b });
+  const a = { title: "T", note: "", suggestions: [], sections: [sec("Budget", ["$5k"]), sec("Timeline", ["May"]), sec("Room", ["40"])] } as any;
+  check("whatChanged: changed, added and removed sections by name", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "updated Budget (section 1), and added Catering" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "updated Co's suggestions" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "took out Timeline");
+}
+{
+  // The Doc is looked up by its document, however many receipts they have.
+  const receipts = R.memoryReceipts();
+  const base: any = { userId: PAIR[0], version: 1, title: "x", kind: "venue_brief", doc: v1, contentHash: "h", status: "delivered", line: null, taskId: null, source: "t", changeNote: null, error: null, nextRetryAt: null };
+  await receipts.insert({ ...base, docKey: "brief", channel: "google_docs", link: "https://docs.google.com/document/d/OLD/edit", driveFileId: "OLD", deliveredAt: new Date("2026-01-01") });
+  for (let i = 0; i < 80; i++) await receipts.insert({ ...base, docKey: `other-${i}`, channel: "pdf_text", link: null, driveFileId: null, deliveredAt: new Date(`2026-10-0${1 + (i % 9)}`) });
+  const found = await receipts.googleDocFor(PAIR[0], "brief");
+  check("review of #143: the Doc is found by its document even past 50 other receipts", found?.driveFileId === "OLD");
+  check("never another member's Doc", (await receipts.googleDocFor("someone-else", "brief")) === null);
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/services/deliveryReceipts.ts", import.meta.url), "utf8");
+  check("the database lookup is the member's own, this document's, Google Docs with a file", /WHERE user_id = \$1 AND doc_key = \$2 AND channel = 'google_docs' AND drive_file_id IS NOT NULL/.test(src));
 }
 
 console.log(`document edit rules: ${total - failed}/${total} passed`);
