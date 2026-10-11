@@ -86,8 +86,10 @@ Some candidates come with only a name and a date. Judge what the name tells you;
 
 Things they asked for and things you'd bring up yourself clear the same bar. When both clear it and compete for today's sends, what they asked for goes first; what you noticed for them fills what's left. Send at most ${SELECT_LIMITS.maxSends}, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.
 
+When you send more than one, add "set": one line on why these go together today (what they share for this member, or how they differ), in plain words; it's what Co's message opens with. Leave it out for one send or none.
+
 Return ONLY JSON:
-{"verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08","taste":"matches"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."}]}`;
+{"set":"...","verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08","taste":"matches"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."}]}`;
 
 // What the thing is, not a rank: tier numbers read as a quality score (the
 // 2026-10-02 replay rejected things for being "tier 3").
@@ -159,6 +161,19 @@ export function jsonBlocks(text: string): string[] {
 export function tasteFitOf(x: unknown): TasteFit {
   return x === "matches" || x === "clashes" ? x : "neutral";
 }
+// Pure: the pick's "set" line, when it gave one.
+export function parseSet(text: string): string | null {
+  for (let at = text.indexOf("{"); at !== -1; at = text.indexOf("{", at + 1)) {
+    for (const block of jsonBlocks(text.slice(at))) {
+      try {
+        const parsed = JSON.parse(block);
+        if (Array.isArray(parsed?.verdicts)) return typeof parsed.set === "string" && parsed.set.trim() ? parsed.set.trim().slice(0, 300) : null;
+      } catch {}
+    }
+  }
+  return null;
+}
+
 export function parseVerdicts(text: string): Verdict[] | null {
   // From each opening brace in turn, so a stray "{" before the JSON (which
   // never closes) can't hide it.
@@ -262,7 +277,8 @@ export function selectSignature(c: SelectContext, holdsUntil: (string | null)[] 
   return createHash("sha1").update(parts.join("\n")).digest("hex");
 }
 
-export type SelectResult = { judgments: Judgment[]; raw: string; usage: { input: number; cacheRead: number; cacheWrite: number; output: number }; model: string; error?: string };
+// set: the pick's view of the day's sends together (Phase C3: it was never asked for, so the text had nothing to say why these, together).
+export type SelectResult = { judgments: Judgment[]; set?: string | null; raw: string; usage: { input: number; cacheRead: number; cacheWrite: number; output: number }; model: string; error?: string };
 
 export async function selectForMember(c: SelectContext, opts: { model?: string; userId?: string; effort?: "low" | "medium" | "high" } = {}): Promise<SelectResult> {
   const model = opts.model ?? SELECT_MODEL;
@@ -288,7 +304,7 @@ export async function selectForMember(c: SelectContext, opts: { model?: string; 
       output: Number(u.outputTokens ?? 0),
     };
     if (!verdicts) return { judgments: guardVerdicts(c, []), raw: r.text, usage, model, error: "unreadable verdicts" };
-    return { judgments: guardVerdicts(c, verdicts), raw: r.text, usage, model };
+    return { judgments: guardVerdicts(c, verdicts), set: parseSet(r.text), raw: r.text, usage, model };
   } catch (err: any) {
     return { judgments: guardVerdicts(c, []), raw: "", usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, model, error: String(err?.message ?? err) };
   }

@@ -42,7 +42,6 @@ import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { describeFailed, gate, recordDecision, type GateCheck } from "./core.js";
 import { MODELS } from "../models.js";
 import { capitalizeSentences } from "../services/textStyle.js";
-import { offerFollowUp } from "../services/offerFollowUp.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
@@ -1941,9 +1940,89 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     }
   }
 
+  // A find bundle is composed as one thought (harness/bundleComposer.ts, Phase C): the lead, the picks or tiers waiting with it, the
+  // pick's why for each and its view of the set, the record and the thread, in one model call; its own checks inside. A reminder
+  // rides alone and keeps its own draft.
+  const bundled = c.type === "event_offer" && !(c.payload as { reminder?: boolean }).reminder;
+  let composed: import("./bundleComposer.js").Composed | null = null;
+  if (bundled) {
+    const B = await import("./bundleComposer.js");
+    const { prepareOffer } = await import("./proactiveRegistry.js");
+    const sibs: Candidate[] = [];
+    for (const sib of pickSiblingOffers(c, ev.eligible)) {
+      if (needsRelevanceCheck(sib, state.now)) {
+        const r = await stillRelevant(sib, { recentConversation: recentStamped, now: state.now, timezone: person.timezone }).catch(() => null);
+        if (!opts.dryRun) await settleRelevance(sib, r);
+        if (!r) continue;
+        if (!r.relevant) {
+          if (!opts.dryRun) await dropCandidate(registry, sib, "skipped", `stale: ${r.why}`);
+          continue;
+        }
+      }
+      sibs.push(sib);
+    }
+    // Each find made ready before anything is written, so the composer writes for the set that can go (nothing dropped after).
+    const items: import("./bundleComposer.js").BundleItem[] = [];
+    for (const x of [c, ...sibs]) {
+      const prep = await prepareOffer(x, person).catch((err: any) => ({ skip: `couldn't be prepared: ${err?.message ?? err}` }));
+      if ("skip" in prep) {
+        if (x.id === c.id) {
+          if (!opts.dryRun) await dropCandidate(registry, c, "skipped", prep.skip);
+          await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${prep.skip}` });
+          return;
+        }
+        if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "not_ready", reason: prep.skip, proposal: { candidate: x.id } }).catch(() => {});
+        continue;
+      }
+      const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string } }).pick;
+      items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again) });
+    }
+    // The pick's set line only for a bundle of exactly the finds it chose together (review of #135: a set line could describe finds
+    // that didn't make it into the message).
+    const set = B.setFor(items);
+    const live = !!state.lastInboundAt && state.now.getTime() - state.lastInboundAt.getTime() < B.LIVE_MINUTES * 60_000;
+    const mayWait = B.mayWait(items.map((b) => ({ waits: Number((b.candidate.payload as { waits?: number }).waits ?? 0), expiresAt: b.candidate.expiresAt })), state.now);
+    const res = await B.composeBundle({
+      firstName: person.firstName,
+      items,
+      set,
+      // Only the code's own reason (the expiring-find rule): choosePick's free text sees every candidate's summary, which can name
+      // another member, so it never reaches a member-facing prompt (review of #135).
+      leadWhy: picked.source === "code" ? picked.reason : null,
+      memberBlock: known && rules ? memberDraftBlock(known, rules) : null,
+      feeling: feelingText || null,
+      thread: recentStamped,
+      recent,
+      threadLive: live,
+      mayWait,
+    }).catch((err: any): import("./bundleComposer.js").ComposeResult => ({ fail: `the composer failed: ${err?.message ?? err}`, calls: 0, notes: [] }));
+    if ("wait" in res) {
+      // A live conversation about something else: the whole bundle waits an hour rather than landing on top of it (C5), so the next
+      // tick doesn't lead with a sibling and compose again; each wait is counted (B.mayWait caps them and never waits past expiry).
+      const at = new Date(state.now.getTime() + 3_600_000);
+      if (!opts.dryRun) await pool.query(`UPDATE proactive_candidates SET due_at = $2, payload = jsonb_set(payload, '{waits}', to_jsonb(COALESCE((payload->>'waits')::int, 0) + 1)), updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'pending'`, [items.map((b) => b.candidate.id), at]);
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: at.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `waiting on a live conversation: ${res.wait}` });
+      return;
+    }
+    if ("fail" in res) {
+      if (!opts.dryRun) {
+        if (res.leadSkipped) await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
+        else {
+          await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
+          if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${res.fail}`);
+        }
+      }
+      // Logged the way every failed draft is, so the proactive_blocked monitor counts composed bundles too (review of #135).
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `draft skipped: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
+      return;
+    }
+    composed = res;
+    for (const d of res.dropped) if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "composer", reason: d.why, proposal: { candidate: d.item.candidate.id } }).catch(() => {});
+  }
+
   let draft: DraftResult;
   try {
-    draft = await drafting(c.type, () => registry[c.type].draft(c, person));
+    draft = composed ? { messages: composed.messages, text: composed.text, rules: {} } : await drafting(c.type, () => registry[c.type].draft(c, person));
   } catch (err: any) {
     await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
     if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft error: ${err?.message ?? err}`);
@@ -1966,15 +2045,16 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  // Co texts first here, so there's no lowercase style to mirror.
-  draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
+  // Co texts first here, so there's no lowercase style to mirror. (A composed bundle was tidied and checked inside the composer.)
+  if (!composed) draft = { ...draft, text: capitalizeSentences(draft.text), messages: draft.messages.map(capitalizeSentences) };
   // The draft's own rules plus: never a question Co already asked after which
   // they wrote back (harness/repeatAsk.ts).
   const withRepeat = (checks: GateCheck[], text: string): GateCheck[] => {
     const again = repeatQuestionCheck(text, recent);
     return again.pass ? checks : [...checks, again as GateCheck];
   };
-  let draftChecks = withRepeat(checkDraft(draft.text, draft.rules), draft.text);
+  // A composed bundle's checks ran inside the composer: its record says so, with how many calls it took and what was left out.
+  let draftChecks: GateCheck[] = composed ? [{ name: "composer_checks", pass: true, reason: `${composed.calls} call(s)${composed.notes.length ? `; ${composed.notes.join("; ")}` : ""}${composed.dropped.length ? `; ${composed.dropped.length} left out` : ""}` }] : withRepeat(checkDraft(draft.text, draft.rules), draft.text);
   let dg = gate(draftChecks);
   // One rewrite, told what to fix, before the day's text is given up.
   if (!dg.ok) {
@@ -2029,49 +2109,10 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  // Every tier with something goes out together, then one question after the last.
-  let outgoing = draft.messages;
-  const extras: { candidate: Candidate; messages: string[] }[] = [];
-  if (c.type === "event_offer" && !(c.payload as { reminder?: boolean }).reminder) {
-    for (const sib of pickSiblingOffers(c, ev.eligible)) {
-      try {
-        if (needsRelevanceCheck(sib, state.now)) {
-          const r = await stillRelevant(sib, { recentConversation: recentStamped, now: state.now, timezone: person.timezone });
-          if (!opts.dryRun) await settleRelevance(sib, r);
-          if (!r) continue;
-          if (!r.relevant) {
-            if (!opts.dryRun) await dropCandidate(registry, sib, "skipped", `stale: ${r.why}`);
-            continue;
-          }
-        }
-        const d = await drafting(sib.type, () => registry.event_offer.draft(sib, person));
-        if ("skip" in d || "defer" in d) continue;
-        const msgs = d.messages.map(capitalizeSentences);
-        const sibGate = gate(checkDraft(capitalizeSentences(d.text), d.rules));
-        if (!sibGate.ok) {
-          // A sibling offer dropped at its draft is on the record (2026-10-08 sweep review: these drops were silent).
-          if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId: c.userId, outcome: "skip", action: "draft_failed", reason: describeFailed(sibGate.failed), proposal: { candidate: sib.id, tier: (sib.payload as any)?.match?.tier ?? null } }).catch(() => {});
-          continue;
-        }
-        extras.push({ candidate: sib, messages: msgs });
-      } catch (err: any) {
-        console.error("proactive: sibling offer draft failed (non-fatal):", err?.message ?? err);
-      }
-    }
-    // The closing question is Co's own, about what it just sent (2026-09-28:
-    // the fixed "Does anything here catch your eye?" read as a script). The
-    // old pool is the fallback when the written line is late or breaks a rule.
-    const sentNames = [c, ...extras.map((e) => e.candidate)].map((x) => String((x.payload as { match?: { name?: string } }).match?.name ?? "")).filter(Boolean);
-    const { lineInVoice } = await import("../services/voiceLine.js");
-    const stock = offerFollowUp(1 + extras.length);
-    const closing = await lineInVoice({
-      purpose: `End a run of ${sentNames.length === 1 ? "one thing" : `${sentNames.length} things`} you just texted them with one short, natural question asking whether ${sentNames.length === 1 ? "it" : "any of them"} interests them. Only the question, nothing else.`,
-      facts: [`Co just sent them: ${sentNames.join("; ")}.`],
-      examples: [],
-      fallback: stock,
-    }).catch(() => ({ text: stock, written: false }));
-    outgoing = [...draft.messages, ...extras.flatMap((e) => e.messages), /\?\s*$/.test(closing.text) ? closing.text : stock];
-  }
+  // A composed bundle goes out as written: the opening, each find's link and caption, and its closing question, one thought
+  // (harness/bundleComposer.ts). Each included find is ledgered with its own link and caption.
+  const outgoing = draft.messages;
+  const extras: { candidate: Candidate; messages: string[] }[] = composed ? composed.perItem.slice(1) : [];
 
   if (opts.dryRun) {
     console.log(`[dispatch dryRun] would send ${outgoing.length} text(s) for ${c.targetKey} plus ${extras.length} batched:`);
