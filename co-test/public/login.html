@@ -10,7 +10,12 @@
   <div class="login-wrap">
     <div class="login-card">
       <div class="app-name">Co (test)</div>
-      <p id="login-status" class="status-line">Text Co from your phone to sign in.</p>
+      <p id="login-status" class="status-line">Enter your number, then text Co from that phone to sign in.</p>
+
+      <form id="login-phone-form" class="phone-form-row" style="margin-bottom: var(--space-4)">
+        <input id="login-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="Your phone number" aria-label="Your phone number" required />
+        <button id="login-phone-submit" type="submit" class="download-button">Continue</button>
+      </form>
 
       <a id="text-co-button" href="#" class="download-button button-primary login-text-co" aria-disabled="true">Text Co</a>
       <p id="login-waiting" class="phone-waiting hidden">Waiting for your text… <span class="login-spinner">●</span></p>

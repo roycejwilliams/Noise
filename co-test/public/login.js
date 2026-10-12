@@ -5,6 +5,8 @@
   var textCoButton = document.getElementById("text-co-button");
   var waitingEl = document.getElementById("login-waiting");
   var errorEl = document.getElementById("login-error");
+  var phoneForm = document.getElementById("login-phone-form");
+  var phoneInput = document.getElementById("login-phone");
   var POLL_MS = 2e3;
   var pollTimer = null;
   function showError(message) {
@@ -23,10 +25,12 @@
     }
     return false;
   }
+  var phone = "";
   async function prepareCode() {
     errorEl.classList.add("hidden");
     try {
-      const data = await (await fetch("/api/login/start", { method: "POST" })).json();
+      const data = await (await fetch("/api/login/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone }) })).json();
+      if (!data.success && data.error) throw new Error(data.error);
       if (!data.success || !data.text_in_number) throw new Error("Couldn't start sign-in. Refresh to try again.");
       const message = `Hi Co! (test site code: ${data.code})`;
       const separator = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? "&" : "?";
@@ -65,8 +69,14 @@
     waitingEl.classList.remove("hidden");
     statusEl.textContent = "Send the text, then come back here.";
   });
-  (async () => {
-    if (await redirectIfAlreadyLoggedIn()) return;
+  phoneForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    phone = phoneInput.value.trim();
+    if (!phone) return;
     await prepareCode();
+    if (errorEl.classList.contains("hidden")) statusEl.textContent = "Now text Co from that phone.";
+  });
+  (async () => {
+    await redirectIfAlreadyLoggedIn();
   })();
 })();

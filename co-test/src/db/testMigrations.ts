@@ -76,6 +76,11 @@ export function runTestMigrations() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )`,
     )
+    // One tester's answers each (security review, 2026-10-12): rows were keyed by item alone, so every tester saw (and the team
+    // overwrote) one shared answer. Older rows keep user_id NULL and show to nobody; they stay in the table.
+    .then(() => pool.query(`ALTER TABLE checklist_responses ADD COLUMN IF NOT EXISTS user_id UUID`))
+    .then(() => pool.query(`ALTER TABLE checklist_responses DROP CONSTRAINT IF EXISTS checklist_responses_pkey`))
+    .then(() => pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS checklist_responses_user_item ON checklist_responses (user_id, item_key)`))
     .catch((err: Error) => console.error("checklist_responses table init failed:", err));
 
   // Circles pipeline test (matching/Moderator/venue/poll) needs a third
@@ -227,5 +232,7 @@ export function runTestMigrations() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
     )
+    // The number the browser said it would text from; a code only counts from that number (security review, 2026-10-12).
+    .then(() => pool.query(`ALTER TABLE text_login_requests ADD COLUMN IF NOT EXISTS expected_phone TEXT`))
     .catch((err: Error) => console.error("text_login_requests table init failed:", err));
 }
