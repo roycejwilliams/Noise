@@ -700,7 +700,8 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       // this taste's own words: anything else they said about the look is its own line (design:<context>) and stays.
       if (t.type === "design_taste") {
         await must(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
-        if (t.quote) await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND source <> 'reference' AND quote = $2`, [userId, t.quote]);
+        // Compared as both stores keep it: the older taste's quote is whitespace-folded and cut at 200, the signal's cut at 300.
+        if (t.quote) await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND source <> 'reference' AND LEFT(regexp_replace(btrim(quote), '\\s+', ' ', 'g'), 200) = LEFT($2, 200)`, [userId, t.quote]);
       } else await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
       return { ref: item.ref, source: "taste", was: t.text, now: null };
     }

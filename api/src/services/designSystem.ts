@@ -343,8 +343,12 @@ export function withoutReferenceText(words: string, refs: Set<number>): string {
 }
 
 export async function loadSignals(userId: string): Promise<DesignSignal[]> {
+  // The newest signals, and every clear whatever its age (services/whatCoKnows.ts): a clear past the limit must still hold.
   const { rows } = await db.query(
-    `SELECT id, context, source, vals, quote, ref, confirmed, asked_at, created_at, font_notes FROM member_design_signals WHERE owner_user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    `(SELECT id, context, source, vals, quote, ref, confirmed, asked_at, created_at, font_notes FROM member_design_signals WHERE owner_user_id = $1 ORDER BY created_at DESC LIMIT $2)
+     UNION
+     (SELECT id, context, source, vals, quote, ref, confirmed, asked_at, created_at, font_notes FROM member_design_signals WHERE owner_user_id = $1 AND vals ? 'cleared')
+     ORDER BY created_at DESC`,
     [userId, DESIGN_LIMITS.signals],
   );
   return rows.map(rowSignal);
