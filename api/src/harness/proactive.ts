@@ -1301,11 +1301,17 @@ async function loadSends(db: Queryable, userId: string): Promise<SendRecord[]> {
   }));
 }
 
-// Their text arrived within MID_CONVERSATION_MINUTES (the stamp written the moment it arrives, before its turn runs) or a turn for one
-// of their texts hasn't finished (inbound_webhook_handles, bounded so a crashed turn doesn't hold forever).
+// Their stamp (written the moment a text arrives, before its turn runs), Co's last reply to them, and whether a turn for one of their
+// texts hasn't finished (inbound_webhook_handles, bounded so a crashed turn doesn't hold forever).
+// Pure: mid-conversation when their text, or Co's own last reply to them, is within MID_CONVERSATION_MINUTES (the intelligence audit's
+// check-in went 40 seconds after Co's reply), or a turn for one of their texts is still running.
+export function midConversationFrom(o: { now: Date; lastInboundAt: Date | null; lastCoReplyAt: Date | null; turnRunning: boolean }): boolean {
+  const recent = (at: Date | null) => !!at && o.now.getTime() - at.getTime() < MID_CONVERSATION_MINUTES * 60_000 && at.getTime() <= o.now.getTime() + 60_000;
+  return o.turnRunning || recent(o.lastInboundAt) || recent(o.lastCoReplyAt);
+}
 // Can't tell: held a few minutes rather than texting into a conversation (fail safe, requeued).
 async function midConversationNow(db: Queryable, userId: string, now: Date, lastInboundAt: Date | null): Promise<boolean> {
-  if (lastInboundAt && now.getTime() - lastInboundAt.getTime() < MID_CONVERSATION_MINUTES * 60_000) return true;
+  if (midConversationFrom({ now, lastInboundAt, lastCoReplyAt: null, turnRunning: false })) return true;
   return loadMidConversation(db, userId, now).catch(() => true);
 }
 async function loadJoinedAt(db: Queryable, userId: string): Promise<Date | null> {
@@ -1315,12 +1321,16 @@ async function loadJoinedAt(db: Queryable, userId: string): Promise<Date | null>
 async function loadMidConversation(db: Queryable, userId: string, now: Date): Promise<boolean> {
   const { rows } = await db.query(
     `SELECT
-       EXISTS (SELECT 1 FROM phone_debounce d WHERE d.phone = u.phone_number AND d.last_inbound_at > $2::timestamptz - make_interval(mins => $3)) AS recent,
+       (SELECT d.last_inbound_at FROM phone_debounce d WHERE d.phone = u.phone_number) AS stamped_at,
+       (SELECT MAX(m.created_at) FROM co_memories m WHERE m.user_id = u.id AND m.memory_type = 'text_exchange' AND m.content LIKE 'Co replied:%'
+          AND m.created_at > $2::timestamptz - make_interval(mins => $3)) AS co_reply_at,
        EXISTS (SELECT 1 FROM inbound_webhook_handles h WHERE h.finished_at IS NULL AND h.received_at > NOW() - INTERVAL '15 minutes' AND h.payload->>'number' = u.phone_number) AS running
      FROM users u WHERE u.id = $1`,
     [userId, now, MID_CONVERSATION_MINUTES],
   );
-  return !!(rows[0]?.recent || rows[0]?.running);
+  const r = rows[0];
+  if (!r) return false;
+  return midConversationFrom({ now, lastInboundAt: r.stamped_at ? new Date(r.stamped_at) : null, lastCoReplyAt: r.co_reply_at ? new Date(r.co_reply_at) : null, turnRunning: !!r.running });
 }
 
 async function loadLastInbound(db: Queryable, userId: string): Promise<Date | null> {
