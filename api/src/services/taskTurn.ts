@@ -575,6 +575,14 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     const at = await deps.schedule(24, task.planNext ?? "Pick up where I left off.");
     nextAt = at ? new Date(at) : new Date(deps.now().getTime() + 24 * 3_600_000);
   }
+  // A last check that landed outside their hours couldn't tell them: it runs again at their next allowed hour, never 24 hours later
+  // at the same blocked hour (review of the door, 2026-10-12: a zone learned after the check was set kept it blocked every day).
+  if (final && !texts.length && !localHourOk(deps.now(), deps.zone) && deps.scheduleAt) {
+    const open = nextSendable(deps.now(), deps.zone);
+    await deps.scheduleAt(open, "Your last check landed outside their hours: tell them now where it stands.");
+    nextAt = open;
+    did.push(`final check: outside their hours, moved to ${localStamp(open, deps.zone)}`);
+  }
   // Held: whatever the turn scheduled, the next look waits for the hold (review of #129: an hourly retry under a 24h pause ran a
   // task out of wakes undelivered), and a wake that could only be held doesn't count against the task.
   // set inside tell(), which TypeScript doesn't follow; never past the last check before their deadline (re-review of #129)

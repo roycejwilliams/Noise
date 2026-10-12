@@ -309,7 +309,7 @@ export const ABILITIES: Ability[] = [
     can: "In a new member's first conversation, once Co has heard enough, Co gives them their first read, once: what it understood they're after, in one line, and, when Co can text them first, the time it will text them by with what its first look at that turned up.",
     tool: "firstRead",
     limits: { perTurn: 1, perDay: 1 },
-    use: "Give a new member their first read, once, when you've heard enough to say back what they're after. understood: one line of what you understood they're after, only from what they told you. lookFor: the one thing you'll look for first, in their terms. theirWords: their own words it comes from, copied exactly. Call it before sendReply. It schedules your first look and gives you the time you'll text them by, in their zone: say that time, never what you'll find. If it says no time can be promised, don't name one.",
+    use: "Give a new member their first read, once, when you've heard enough to say back what they're after. understood: one line of what you understood they're after, only from what they told you, in their words. lookFor: the one thing you'll look for first, in their own words. A word in either that they never used is refused. theirWords: their own words it comes from, copied exactly. Call it before sendReply. It schedules your first look and gives you the time you'll text them by, in their zone: say that time, never what you'll find. If it says no time can be promised, don't name one.",
   },
   {
     id: "task_update",

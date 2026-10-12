@@ -17,15 +17,17 @@
 //   - one line saying back what it understood they're after, in their terms (never a reading of their character or feelings);
 //   - one real thing for them now, when a search this turn finds something that genuinely fits (the existing search tools and
 //     shareFinds, which only send links from real results);
-//   - what Co will do next and when: a first look at the thing they named, with a time in their own zone ("this evening around 6",
-//     "tomorrow around 10am"). That time is real because the tool opens a task for it (services/coTasks.ts) whose only check is a
+//   - what Co will do next and when: a first look at the thing they named, with a time in their own zone ("today, around 6pm",
+//     "tomorrow, around 10am"), or only "by tomorrow" when their zone isn't known. That time is real because the tool opens a task for it (services/coTasks.ts) whose only check is a
 //     final check, and a task's final check always texts them where it stands, even when nothing real turned up.
 //
 // HOW IT FITS THE ARCHITECTURE:
-//   - Co decides, code guards facts. It is a tool (firstRead) with its registry entry in services/capabilities.ts. Code decides only
-//     when the moment is on offer (doorDecision, pure: a new member, never given before, at least two of their texts since they got
-//     in, never in a heavy moment, while frustrated with Co, or beside a call offer). The tool holds the facts: once ever, new
-//     members only, what Co will look for has to be in their own words, and the time comes from code, never the model's arithmetic.
+//   - Co decides, code guards facts. It is a tool (firstRead) with its registry entry in services/capabilities.ts. The tool is
+//     available while the door is open (doorOpen: a new member, never given before, at least three of their texts since they got
+//     in). The reply is told the moment is there (doorDecision) except in a heavy moment, while they're frustrated with Co, or
+//     beside a call offer; those only withdraw the instruction, the tool stays available and Co decides. The tool holds the facts:
+//     once ever, new members only, what Co will look for and what it says it understood use only words from what they wrote, the
+//     quote is theirs, and the time comes from code, never the model's arithmetic.
 //   - Never claims what didn't happen. With unprompted texts paused (PROACTIVE_PAUSED) a task couldn't text them, so the tool opens
 //     none and tells Co not to name a time. The task's receipt starts "Started task #", so the reply's own "I'll text you this
 //     evening" is covered by it and never opens a second task (services/promises.ts STARTED_WORK).
@@ -42,12 +44,16 @@ import { COLD_START, isNewMember } from "./coldStart.js";
 import { notToTeammate } from "./teamLines.js";
 
 export const DOOR = {
-  // Their texts since they got in before the first read is on offer: the "text is fine" answer, then something real.
-  minTheirTexts: 2,
-  // A first look asked for before this local hour happens this evening; after it, tomorrow morning.
+  // Their texts since they got in before the first read is on offer: the "text is fine" answer, then two real ones.
+  minTheirTexts: 3,
+  // A first look asked for before this local hour happens today at 6pm; after it, tomorrow at 10am.
   eveningCutoffHour: 14,
   eveningHour: 18,
   morningHour: 10,
+  // With no zone known: no clock time is promised ("by tomorrow"), and the look runs at this UTC hour, inside 8am to 9pm in every
+  // mainland US zone (11am Pacific, 2pm Eastern), at least this many hours out.
+  unzonedUtcHour: 18,
+  minLeadHours: 3,
   // What Co will look for and what it understood stay short: they ride on a task and a record, not a document.
   maxLine: 220,
 } as const;
@@ -87,15 +93,42 @@ export function doorInstruction(firstName: string | null | undefined): string {
   return `${who} just got in, and this is your first real conversation. Once you've heard enough to say it back, give them their first read, once, with firstRead. Call firstRead first, then in your reply: one line that says back what you understood they're after, in their terms, only from what they told you, never about their character or feelings. Then, if a search this turn finds one real thing that genuinely fits, share the best one with shareFinds. Then say plainly what you'll do next and when, using the time firstRead gives you. Nothing more after that, no new question. If you haven't heard enough yet, or their message needs a real answer about something else, just answer them and leave this for a later reply. Never announce it as a summary or a profile, and never as a list.`;
 }
 
-// Pure: when the first look happens, in their zone. Before the cutoff it's this evening; after it, tomorrow morning. Always at least
-// a few hours out, so the look has time to run before it reports.
-export function firstLookAt(now: Date, zone: string): { at: Date; words: string; localDate: string } {
+// Pure: when the first look happens. In their zone: before the cutoff it's today at 6pm, after it tomorrow at 10am, with words that
+// are true at any hour (a 1am message hears "today", never "this evening" or "tonight"). With no zone known, no clock time is promised:
+// "by tomorrow", checked at a fixed UTC hour that's daytime across the US. Always a few hours out, so the look has time to run.
+export function firstLookAt(now: Date, zone: string | null): { at: Date; words: string; localDate: string; clock: boolean } {
+  if (!zone) {
+    let at = DateTime.fromJSDate(now).setZone("UTC").set({ hour: DOOR.unzonedUtcHour, minute: 0, second: 0, millisecond: 0 });
+    while (at.toMillis() - now.getTime() < DOOR.minLeadHours * 3_600_000) at = at.plus({ days: 1 });
+    return { at: at.toJSDate(), words: "by tomorrow", localDate: at.toFormat("yyyy-LL-dd"), clock: false };
+  }
   const local = DateTime.fromJSDate(now).setZone(zone);
-  const evening = local.hour < DOOR.eveningCutoffHour;
-  const day = evening ? local : local.plus({ days: 1 });
-  const at = day.set({ hour: evening ? DOOR.eveningHour : DOOR.morningHour, minute: 0, second: 0, millisecond: 0 });
-  const words = evening ? `this evening, around ${DOOR.eveningHour - 12}` : `tomorrow morning, around ${DOOR.morningHour}`;
-  return { at: at.toJSDate(), words: `${words} (${at.toFormat("cccc")})`, localDate: at.toFormat("yyyy-LL-dd") };
+  const today = local.hour < DOOR.eveningCutoffHour;
+  const day = today ? local : local.plus({ days: 1 });
+  const at = day.set({ hour: today ? DOOR.eveningHour : DOOR.morningHour, minute: 0, second: 0, millisecond: 0 });
+  const words = today ? `today, around ${DOOR.eveningHour - 12}pm` : `tomorrow, around ${DOOR.morningHour}am`;
+  return { at: at.toJSDate(), words: `${words} (${at.toFormat("cccc")}, their time)`, localDate: at.toFormat("yyyy-LL-dd"), clock: true };
+}
+
+// Words that frame a playback without claiming anything about them ("you're new and looking for..."). Everything else in what Co
+// says it understood, or will look for, has to be a word they used.
+const FRAMING = new Set(
+  "that this these those with from into about your you're youre they them their what when where which while want wants wanting looking look find finding meet meeting people folks person someone some more most just really here there then like have having been being would could should also start starting first still right very kind sort thing things space room rooms around through over".split(" "),
+);
+const words = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+
+// Pure: the words in a line that aren't in what they wrote (a word counts when they used it or a form of it: "founder" for
+// "founders"). Short words and framing words are skipped.
+export function wordsNotTheirs(line: string, theirText: string): string[] {
+  const theirs = words(theirText);
+  const missing: string[] = [];
+  for (const w of words(line).map((x) => x.replace(/'s$/, ""))) {
+    if (w.length < 4 || FRAMING.has(w)) continue;
+    const stem = w.slice(0, Math.max(4, w.length - 3));
+    const used = theirs.some((t) => t.startsWith(stem) || (t.length >= 4 && w.startsWith(t.slice(0, Math.max(4, t.length - 3)))));
+    if (!used) missing.push(w);
+  }
+  return [...new Set(missing)];
 }
 
 const clean = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
@@ -111,6 +144,10 @@ export function firstReadProblem(i: FirstReadInput, o: { view: DoorView; now: Da
   if (clean(i.understood).length < 8) return "Say what you understood in a few words.";
   if (clean(i.lookFor).length < 3) return "Say what you'll look for, in their terms.";
   if (!o.wordsAreTheirs(clean(i.theirWords), o.theirText)) return "theirWords must be copied exactly from what they wrote. The first look is for something they told you about, not a guess.";
+  const lookMissing = wordsNotTheirs(i.lookFor, o.theirText);
+  if (lookMissing.length) return `lookFor has to be in their terms. They never said: ${lookMissing.slice(0, 5).join(", ")}. Use their own words for what they want.`;
+  const readMissing = wordsNotTheirs(i.understood, o.theirText);
+  if (readMissing.length) return `understood has to be only what they told you. They never said: ${readMissing.slice(0, 5).join(", ")}. Say it back in their terms, adding nothing.`;
   return null;
 }
 
@@ -121,7 +158,7 @@ export function firstLookTask(i: FirstReadInput, look: { at: Date; words: string
     goal: `First look for them: ${lookFor}`,
     theirWords: clean(i.theirWords).slice(0, 300),
     steps: [`Look for ${lookFor}: events, the web, recent posts`, "Text them the best real thing that fits, or plainly what didn't turn up and what you'll try next"],
-    firstPlan: `Look for ${lookFor}, then text them by ${look.words} with the best real thing, or plainly where it stands`,
+    firstPlan: `Look for ${lookFor}, then text them ${look.words} with the best real thing, or plainly where it stands`,
     inHours: Math.max(1, Math.ceil((look.at.getTime() - now.getTime()) / 3_600_000)),
     // Their own day, and the final check at the time Co named: the final check always tells them where it stands.
     deadline: { deadline: look.localDate, finalCheckAt: look.at.toISOString() },
@@ -170,7 +207,7 @@ export async function giveFirstRead(
   o: { userId: string; message: string; dryRun: boolean; now?: Date; paused: boolean },
 ): Promise<FirstReadResult> {
   const now = o.now ?? new Date();
-  const [{ wordsAreTheirs, startTask }, { memberZoneOrFallback, localStamp }] = await Promise.all([import("./coTasks.js"), import("./memberTime.js")]);
+  const [{ wordsAreTheirs, startTask }, { memberZone, localStamp }] = await Promise.all([import("./coTasks.js"), import("./memberTime.js")]);
   const view: DoorView = o.dryRun ? { joinedAt: now, givenAt: null, theirTexts: DOOR.minTheirTexts } : await loadDoor(o.userId);
   const theirText = `${o.message}\n${o.dryRun ? "" : await theirRecentTexts(o.userId).catch(() => "")}`;
   const problem = firstReadProblem(i, { view, now, theirText, wordsAreTheirs });
@@ -193,7 +230,8 @@ export async function giveFirstRead(
     };
   }
 
-  const zone = await memberZoneOrFallback(o.userId);
+  // Their real zone, or none: a fallback zone would turn "6pm" into the wrong hour for someone in New York.
+  const zone = await memberZone(o.userId);
   const look = firstLookAt(now, zone);
   const plan = firstLookTask(i, look, now);
   let taskId: number | null = null;
@@ -203,7 +241,7 @@ export async function giveFirstRead(
     taskId = r.task.id;
   }
   await record({ timed: true, taskId, at: look.at.toISOString(), words: look.words, zone });
-  const stamp = localStamp(look.at, zone);
+  const stamp = look.clock ? localStamp(look.at, zone) : "tomorrow (their time zone isn't known, so no clock time was promised)";
   return {
     ok: true,
     timed: true,
@@ -211,6 +249,8 @@ export async function giveFirstRead(
     at: look.at.toISOString(),
     words: look.words,
     fact: `Started task${taskId ? ` #${taskId}` : ""}: a first look for ${lookFor}. Co will text them by ${stamp} with the best real thing it finds, or plainly what didn't turn up.`,
-    note: `Recorded. Your first look for ${lookFor} is set: you'll text them by ${look.words}, their time, with the best real thing you find or plainly where it stands. Say that time in your own words. Never promise what you'll find.`,
+    note: look.clock
+      ? `Recorded. Your first look for ${lookFor} is set: you'll text them ${look.words}, with the best real thing you find or plainly where it stands. Say that time in your own words. Never promise what you'll find.`
+      : `Recorded. Your first look for ${lookFor} is set: you'll text them by tomorrow with the best real thing you find or plainly where it stands. Their time zone isn't known, so say "by tomorrow" and never a clock time. Never promise what you'll find.`,
   };
 }
