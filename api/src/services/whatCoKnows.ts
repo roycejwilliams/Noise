@@ -13,6 +13,8 @@
 //                      Rebuilt from the last 21 days of their words, at most every 10 minutes while they talk.
 //   member_threads     what's going on in their life (harness/memberThreads.ts), rebuilt with the snapshot.
 //   member_kit         company, role, LinkedIn, from their own words (services/memberKit.ts saveKitFact).
+//   member_design_signals  their design system (services/designSystem.ts): every look signal, folded per context on read. Shown
+//                      as the look and the fonts of their decks and pages per context, and each confirmed reference read.
 //   co_memories        room_taste (services/roomTaste.ts) and design_taste (services/designTaste.ts, decks and pages); also the raw
 //                      conversation (text_exchange, call_transcript, recap) and Co's own notes (co_lesson: team-internal, never shown).
 //   ask_checkins       their open asks (with the intent entries they mirror).
@@ -77,10 +79,11 @@ import { createHash } from "node:crypto";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { safetySignal } from "./safetyText.js";
+import * as designPure from "./designSystem.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "ask" | "avoid" | "file";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -156,7 +159,51 @@ export type RawKnown = {
   tastes: { id: string; type: "room_taste" | "design_taste"; text: string; quote: string | null; inspo?: string | null }[];
   asks: { id: string; text: string }[];
   files: { n: number; sentOn: string }[];
+  // Their design system (member_design_signals), the way decks and pages read it: per context with signals of its own, the look
+  // and the fonts in plain words; and each confirmed reference read Co took the look from.
+  design?: { context: "professional" | "personal"; look: string | null; fonts: string | null }[];
+  designRefs?: { id: string; ref: string }[];
 };
+
+const CONTEXT_WORDS = { professional: "work", personal: "personal" } as const;
+
+// Pure: their design signals, as decks and pages read them (designSystem.ts foldSignals), in plain words. Only a context with signals
+// of its own; a reference read not yet confirmed is not part of it (and isn't shown).
+export function designKnown(rows: any[], now: Date = new Date()): { design: NonNullable<RawKnown["design"]>; designRefs: NonNullable<RawKnown["designRefs"]> } {
+  const D = designPure;
+  const signals = rows.map((r) => ({
+    id: Number(r.id),
+    context: (r.context === "personal" ? "personal" : "professional") as "professional" | "personal",
+    source: String(r.source) as any,
+    values: D.cleanTokens(typeof r.vals === "string" ? JSON.parse(r.vals) : r.vals),
+    quote: r.quote ? String(r.quote) : null,
+    ref: r.ref ? String(r.ref) : null,
+    confirmed: !!r.confirmed,
+    askedAt: null,
+    at: new Date(r.created_at),
+    fontNotes: Array.isArray(r.font_notes) ? r.font_notes.map(String) : [],
+  }));
+  const design: NonNullable<RawKnown["design"]> = [];
+  for (const context of ["professional", "personal"] as const) {
+    const own = signals.filter((x) => x.context === context && (x.source !== "reference" || x.confirmed) && Object.keys(x.values).length);
+    if (!own.length) continue;
+    const f = D.foldSignals(own, context, now);
+    const where = `your ${CONTEXT_WORDS[context]} decks and pages`;
+    const t = f.tokens;
+    const lookParts = [D.colorWords(t), t.mood ? `a ${t.mood} feel` : "", !t.display && t.type ? `${t.type} type` : "", t.density ? ({ airy: "lots of air", balanced: "balanced spacing", dense: "tight and full" } as const)[t.density] : ""].filter(Boolean);
+    const look = f.dontCare ? `for ${where}, you'd rather I choose the look` : lookParts.length ? `the look of ${where}: ${lookParts.join(", ")}` : null;
+    const fam = (x: { family: string } | undefined) => x?.family ?? null;
+    const [hd, bd] = [fam(t.display), fam(t.body)];
+    const fontLine = hd && bd ? (hd === bd ? `${hd} throughout` : `${hd} for headlines, ${bd} for text`) : hd ? `${hd} for headlines` : bd ? `${bd} for text` : "";
+    const fonts = fontLine ? `the fonts in ${where}: ${fontLine}${f.fontNotes.length ? ` (${f.fontNotes.join(" ")})` : ""}` : null;
+    if (look || fonts) design.push({ context, look, fonts });
+  }
+  const designRefs = signals
+    .filter((x) => x.source === "reference" && x.confirmed && x.ref && Object.keys(x.values).length)
+    .slice(0, 6)
+    .map((x) => ({ id: String(x.id), ref: x.ref! }));
+  return { design, designRefs };
+}
 
 const CLAIM_GROUP: Record<string, KnownGroup> = { city: "where", identity: "said", building: "work", role: "work", relationship: "said", preference: "likes", plan: "after", deadline: "after", meeting: "after", exploring: "after", pending_decision: "mind", worry: "mind", mood: "mind", away: "where" };
 
@@ -197,6 +244,12 @@ export function knownItems(r: RawKnown): KnownItem[] {
     // anymore" can take just that out, or point it somewhere else.
     if (t.type === "design_taste" && t.inspo) add(`inspo:${t.id}`, "inspo", "likes", `what your decks and pages take their look from: ${t.inspo}`);
   }
+  // The design system decks and pages read: removal only (a new look or font is noted when they say it, with the deck tools).
+  for (const d of r.design ?? []) {
+    if (d.look) add(`design:${d.context}`, "design", "likes", d.look, null, false);
+    if (d.fonts) add(`designfont:${d.context}`, "designfont", "likes", d.fonts, null, false);
+  }
+  for (const x of r.designRefs ?? []) add(`designref:${x.id}`, "designref", "likes", `a look I took from ${x.ref}, for your decks and pages`, null, false);
   for (const a of r.asks) add(`ask:${a.id}`, "ask", "after", `looking out for: ${a.text}`);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   return out;
@@ -454,7 +507,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     chain = p.catch(() => undefined);
     return p;
   };
-  const [prof, claims, snap, threads, kit, tastes, asks, files, zone] = await Promise.all([
+  const [prof, claims, snap, threads, kit, tastes, asks, files, zone, signals] = await Promise.all([
     q(`SELECT city, long_term_direction, availability_pattern, goals, life_chapters, blockers, activity_preferences, avoid, intent FROM co_profiles WHERE user_id = $1`, [userId]),
     q(`SELECT id, text, provenance, kind, quote, expires_on FROM member_claims WHERE user_id = $1 ORDER BY said_on DESC LIMIT 40`, [userId]),
     q(`SELECT snapshot FROM person_snapshots WHERE user_id = $1`, [userId]),
@@ -468,6 +521,8 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     q(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL ORDER BY last_mentioned_at DESC NULLS LAST, created_at DESC LIMIT 12`, [userId]),
     import("./memberFiles.js").then((m) => m.filesOnFile(userId)).catch(() => [] as { n: number; sentOn: string }[]),
     import("./memberTime.js").then((m) => m.memberZone(userId)).catch(() => null),
+    // Their design system's signals, as decks and pages read them (designSystem.ts loadSignals: the same owner key and limit).
+    q(`SELECT id, context, source, vals, quote, ref, confirmed, created_at, font_notes FROM member_design_signals WHERE owner_user_id = $1 ORDER BY created_at DESC LIMIT 80`, [userId]),
   ]);
   const F = await import("./factLabels.js");
   const { wordsZone } = await import("./memberTime.js");
@@ -489,10 +544,12 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
         return x ? [{ id: String(t.id), type: "room_taste" as const, text: R.roomTasteLine(x), quote: x.quote ?? null }] : [];
       }
       const x = D.parseDesignTaste(String(t.content ?? ""));
-      return x ? [{ id: String(t.id), type: "design_taste" as const, text: D.designTasteLine({ ...x, inspo: null }).replace(/ \(their words: .*\)$/, ""), quote: x.quote || null, inspo: x.inspo }] : [];
+      // Colors in words, never codes ("navy", not "#1F2A44"): this is what the member reads.
+      return x ? [{ id: String(t.id), type: "design_taste" as const, text: D.designTasteLine({ ...x, inspo: null }).replace(/ \(their words: .*\)$/, "").replace(/#[0-9a-f]{6}\b/gi, (h) => designPure.colorName(h) || h), quote: x.quote || null, inspo: x.inspo }] : [];
     }),
     asks: asks.map((a) => ({ id: String(a.ask_id), text: String(a.ask_text ?? "") })).filter((a) => a.text.trim()),
     files,
+    ...designKnown(signals),
   };
 }
 
@@ -638,8 +695,12 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const t = raw.tastes.find((x) => x.id === a);
       if (!t) return { why: "it's no longer on file" };
       // Design taste is one thing (its reader takes the newest), so all of it goes: an older one must not come back in its place.
-      if (t.type === "design_taste") await must(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
-      else await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
+      // The deck tools write the same words as signals in their design system (agent/deckTools.ts knownTaste), which decks and pages
+      // read first: those go too, on this transaction, or the look would stay.
+      if (t.type === "design_taste") {
+        await must(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
+        await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND source <> 'reference'`, [userId]);
+      } else await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
       return { ref: item.ref, source: "taste", was: t.text, now: null };
     }
     case "inspo": {
@@ -654,7 +715,40 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const old = String(j.inspo);
       const next = { ...j, inspo: v ?? null, ...(/pinterest/i.test(old) ? { colors: { background: null, text: null, accent: null } } : {}) };
       await must(`UPDATE co_memories SET content = $3 WHERE id = $1 AND user_id = $2 AND memory_type = 'design_taste'`, [a, userId, JSON.stringify(next)]);
+      // The board's read lives in their design system too (a reference signal, ref_kind 'board'): it stops counting with it.
+      if (/pinterest/i.test(old)) await db.query(`UPDATE member_design_signals SET vals = '{}'::jsonb, ref = NULL, confirmed = true WHERE owner_user_id = $1 AND source = 'reference' AND ref_kind = 'board'`, [userId]);
       return { ref: item.ref, source: "inspo", was: old, now: v };
+    }
+    // Their design system (member_design_signals) and the older saved taste, both on this transaction. A reference read is emptied,
+    // never deleted (as designSystem.ts dismissRead): the row keeps the record that its image's words are not theirs.
+    case "design": {
+      if (a !== "professional" && a !== "personal") return { why: "it's no longer on file" };
+      const gone = await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND source <> 'reference'`, [userId, a]);
+      const refs = await db.query(`UPDATE member_design_signals SET vals = '{}'::jsonb, ref = NULL, confirmed = true WHERE owner_user_id = $1 AND context = $2 AND source = 'reference' AND vals <> '{}'::jsonb`, [userId, a]);
+      // The older taste is read only while no signal of theirs says anything (designSystem.ts loadDesignSystem): with these gone it
+      // would come back in their place.
+      const legacy = await db.query(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
+      // Nothing changed here is still done only when nothing of it is left (an earlier line in this same change, the older taste's,
+      // took it): checked, never assumed.
+      if (!gone.rowCount && !refs.rowCount && !legacy.rowCount) {
+        const { rows } = await db.query(`SELECT 1 FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND vals <> '{}'::jsonb AND (source <> 'reference' OR confirmed) LIMIT 1`, [userId, a]);
+        if (rows.length) throw new NotApplied();
+      }
+      return { ref: item.ref, source: "design", was, now: null };
+    }
+    case "designfont": {
+      if (a !== "professional" && a !== "personal") return { why: "it's no longer on file" };
+      const r = await db.query(`UPDATE member_design_signals SET vals = vals - 'display' - 'body', font_notes = '[]'::jsonb WHERE owner_user_id = $1 AND context = $2 AND (vals ? 'display' OR vals ? 'body')`, [userId, a]);
+      // As above: an earlier line in this change (the whole look) may have taken the fonts with it; only that counts as done.
+      if (!r.rowCount) {
+        const { rows } = await db.query(`SELECT 1 FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND (vals ? 'display' OR vals ? 'body') LIMIT 1`, [userId, a]);
+        if (rows.length) throw new NotApplied();
+      }
+      return { ref: item.ref, source: "designfont", was, now: null };
+    }
+    case "designref": {
+      await must(`UPDATE member_design_signals SET vals = '{}'::jsonb, ref = NULL, confirmed = true WHERE id = $1 AND owner_user_id = $2 AND source = 'reference'`, [a, userId]);
+      return { ref: item.ref, source: "designref", was, now: null };
     }
     case "ask": {
       const old = raw.asks.find((x) => x.id === a)?.text ?? was;
@@ -692,7 +786,7 @@ export function fieldFor(ref: string): string {
   if (kind === "goal") return "goals";
   if (kind === "snapshot") return a === "place" ? "where they are" : a === "work" ? "their work" : a === "wantsNow" ? "what they want now" : a === "weighingOn" ? "what's weighing on them" : "what matters to them in people";
   if (kind === "kit") return `their ${a === "linkedin" ? "LinkedIn" : a}`;
-  return { claim: "what they told Co", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", ask: "what Co looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
+  return { claim: "what they told Co", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Co took from something of theirs", ask: "what Co looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
