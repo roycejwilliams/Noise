@@ -68,7 +68,7 @@ import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
-import { callLine } from "../services/capabilities.js";
+import { callLine, capabilityListInstruction } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -1877,7 +1877,9 @@ export function sendblueRouter(io: Server): Router {
         const reportedIssue = hasText && !oneRead ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
         const feedbackNote = feedbackInstruction(turnRead?.feedback ?? []);
         if (feedbackNote) addInstruction(replyFacts, feedbackNote);
-        if (turnRead?.aboutCo) addInstruction(replyFacts, ABOUT_CO_INSTRUCTION);
+        // An outright "what can you do" gets the whole list, from the registry; the open-work answer is for "what are you".
+        if (turnRead?.asksForList) addInstruction(replyFacts, capabilityListInstruction());
+        else if (turnRead?.aboutCo) addInstruction(replyFacts, ABOUT_CO_INSTRUCTION);
         // What has really reached the team, so "is it noted to the team?" gets
         // a true answer (2026-09-18: Co said feedback "goes straight to the
         // team" when nothing had been saved).

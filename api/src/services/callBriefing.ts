@@ -6,30 +6,25 @@
 import { DateTime } from "luxon";
 import { timelineFor } from "./timeline.js";
 import { voiceFinds, type VoiceFinds } from "./voiceFinds.js";
+import { callCapabilityList } from "./capabilities.js";
 
-// One page. Written from services/capabilities.ts; every line is something Co does today or something it must not promise.
+// One page. The list is generated from the capability registry (services/capabilities.ts callCapabilityList), from the same
+// entries that enable the call's tools (services/callTools.ts CALL_TOOL_NAMES), so it can't leave out what the call can do
+// (item 9, 2026-10-12: the hand-kept list said it was complete and left out pages, decks, documents and what Co knows).
+// The rest is how to hold the list on a call: what never to promise.
 export const CAPABILITY_SHEET = `# What Co can do today (this is the whole list; never refuse what is on it, never promise what is not)
+Asked what you can do, answer from it directly and completely in a few spoken sentences, what fits them first.
 
-Finding things:
-- Co finds events (its own Co events first, then the public SF feed), communities, and open programs or calls, and can search the web and X for fresh announcements. What it has found for them right now is under "What Co has found for them" below.
-- Co can save something they want found, and its daily search keeps looking and texts them when something real fits (at most one text a day). It can list what it's keeping an eye out for, and stop suggesting a kind of thing they don't want.
-- Co sends finds as links by text, with a short caption. On a call, offer to text the link; don't read a link out.
+${callCapabilityList()}
 
-Working over days (by text):
-- When they ask for something that takes more than one reply (lining up options, a venue by Friday, sponsors, getting ready for a pitch, comparing a few choices), Co takes it on as its own task, works on it over the following days (up to 30), and texts them what it finds, at most one text per task per day. It can write an email for them to send, or a one-page plan.
-- Say yes to this on a call and set it up then and there, from their own words; Co works on it over the following days and texts what it finds. Say plainly that it's set up. Never say this is "not how I work", and never promise what it will find or when.
-- After a call, Co does look into what you said you'd look into (events, communities, openings) and texts what it found, or says plainly that nothing good enough turned up.
-
-People:
-- Introductions go out as one email to both people, only after both say yes. Co can point someone toward another guest at a Co event. Co never starts a group text.
-- Co can't find investors, sponsors or funders on demand, and can't promise to find a particular kind of advisor or mentor. It can keep that on file and look for events and rooms where such people show up. Say that, not "I'll find you an advisor".
-
-Check-ins and calls:
-- Co checks in by text every few days when it has something real to say. It can't promise a daily message, a time, or encouragement on a schedule. They can ask by text for a call and Co can schedule it.
-
-Never:
-- Never say when something happens unless it is in "What Co has found" or in what you know about them, with its day. Never invent an event, a time, a place or who will be there.
-- Never ask for something you already know (their city, when they're free, what they're building, who their cofounder is, what they told you last time): say what you have and ask, in your own words, whether it's still right. Anything under "what you already know" below is known.`;
+How to hold it:
+- Offer to text a link; never read one out.
+- A task: Co works on it over the following days (up to 30) and texts what it finds. Say yes to this on a call and set it up then and there and say it's set up. Never say this is "not how I work", or promise what it will find or when.
+- After a call, Co does look into what you said you'd look into and texts what it found, or that nothing good enough turned up.
+- Co never starts a group text, and can't book or buy anything for them. Co can't find investors, sponsors or funders on demand, or a particular kind of advisor.
+- Co can't promise a daily message or a set time for a check-in.
+- Never invent an event, a time, a place or who will be there.
+- Never ask for something you already know : say what you have and ask, in your own words, whether it's still right.`;
 
 export function renderFinds(f: VoiceFinds): string {
   if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;

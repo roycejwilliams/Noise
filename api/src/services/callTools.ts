@@ -14,6 +14,7 @@ import { createConversationTools } from "../agent/conversationTools.js";
 import { guardTools } from "../agent/toolGuard.js";
 import type { CallToolset as BaseToolset } from "./callLlmProxy.js";
 import { mentionsIn } from "./offerGuard.js";
+import { callToolNames } from "./capabilities.js";
 
 // The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step, so on a
 // call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
@@ -30,8 +31,10 @@ const LONG_ON_CALL = new Set(["makeDeck", "updateDeck", "makePage", "updatePage"
 const LONG_ON_CALL_WAIT_MS = 3500;
 const STILL_GOING = Symbol("still going");
 const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
-export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "makeDeck", "updateDeck", "readInspo", "keepArtifact", "shareArtifact", "stopSharing", "resetLink", "deleteImages", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste", "whatCoKnows", "correctWhatCoKnows"] as const;
-export type CallToolName = (typeof CALL_TOOL_NAMES)[number];
+// The call subset is the registry's onCall entries (services/capabilities.ts), the same entries the call briefing's list is
+// written from (services/callBriefing.ts), so what a call can do and what it's told it can do are one list.
+export const CALL_TOOL_NAMES: readonly string[] = callToolNames();
+export type CallToolName = string;
 
 // The turn's bounds (steps, time) are in services/callLlmProxy.ts, where the rounds run.
 export type AnthropicTool = { name: string; description: string; input_schema: unknown };
