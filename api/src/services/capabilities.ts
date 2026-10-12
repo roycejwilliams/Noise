@@ -191,6 +191,13 @@ export const ABILITIES: Ability[] = [
     use: "When they want their own link to stop working (\"I sent my link to the wrong person\", \"make my link private again\", \"reset the link\"). The new link goes as one text with your line. A share link they made is stopSharing instead.",
   },
   {
+    id: "co_artifact_resend_link",
+    can: "If a link to a page or deck Co made doesn't reach them, Co can send it again; they can also ask for the link to one of theirs any time.",
+    tool: "resendLink",
+    limits: { perTurn: 2, perDay: 12 },
+    use: "When a page, deck or share link was made but its text didn't send (the tool says so), call this right away so they have it. Also when they ask for the link to one of their pages or decks again (\"send me the deck link\"): pass which.",
+  },
+  {
     id: "co_artifact_stop_sharing",
     can: "Co can stop a share link from opening, any time they ask; their own link keeps working.",
     tool: "stopSharing",

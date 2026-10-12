@@ -13,7 +13,7 @@ import type { ConversationToolContext } from "./conversationTools.js";
 import { pickPage } from "./pageTools.js";
 import { TASTE_INPUT, imageN } from "./artifactInputs.js";
 export { TASTE_INPUT } from "./artifactInputs.js";
-import { ALSO_ANSWER, withAnswer } from "./linkAnswer.js";
+import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 export const DECK_INPUT = z.object({
@@ -644,7 +644,7 @@ export function deckTools(
           if (!(await o.say(text, `Co replied: ${text}`))) {
             o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
             // made: it exists (toolGuard.ts treats it as done, never as "nothing was made"); only the text didn't go.
-            return { ok: false, made: `the deck "${deckIn.title}" (${made.url})`, url: made.url, error: `The deck is made, but the link didn't send. Tell them plainly and give the link in your reply: ${made.url}` };
+            return unsentLink(ctx, { url: made.url, text, what: `the deck "${deckIn.title}"` });
           }
           ctx.onLinkDelivered?.();
           confirm();
