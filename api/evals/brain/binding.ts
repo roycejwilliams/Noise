@@ -147,6 +147,20 @@ console.error = () => {};
   check("wait: the reply is requeued on the turn's resume path (never dropped)", typeof resumed === "function");
   if (resumed) await (resumed as () => Promise<void>)();
   check("wait: the requeued turn is answered (it runs as act)", systems.length > 0);
+  // The resume is the next attempt: an empty one says the honest give-up line, never a second "give me a minute".
+  let again: null | (() => Promise<void>) = null;
+  const live: string[] = [];
+  const held = replyInput(d, { resumeLater: (r: () => Promise<void>) => { again = r; }, sendCoReply: async (m: any) => { live.push(m.message); return true; } });
+  await runConversationReplyAgent(held, { record: false });
+  let second = false;
+  held.resumeLater = () => { second = true; };
+  if (again) await (again as () => Promise<void>)();
+  const { REPLY_GAVE_UP_NOTE, REPLY_DELAYED_NOTE } = await import("../../src/services/turnFailure.js");
+  check("wait: an empty resumed reply gets the give-up line and schedules no second resume", live.includes(REPLY_GAVE_UP_NOTE) && !live.includes(REPLY_DELAYED_NOTE) && !second);
+  // A turn with no resume path (a replay) can't be held without stranding them: it runs now, as act.
+  systems.length = 0;
+  const replay = await runConversationReplyAgent(replyInput(d), { dryRun: true, record: false });
+  check("wait: with no resume path (a replay) the turn is answered now, not held", systems.length > 0 && replay.sent === true);
 }
 
 // ======== briefings: deliver hands the call its finds; wait hands it none, so the spoken offer guard backs no find
@@ -172,6 +186,9 @@ const NOW = new Date("2026-10-06T04:48:00Z");
   check("veto: the call is handed no finds and the spoken offer is held", !/Haunted Agent Night/.test(held.briefing.findsNow) && /Don't offer an event/.test(held.briefing.findsNow) && spokenAgainst(held.briefing.findsNow)?.kind === "event");
   const loose = await tools(B.judgeText(picture()), { safetyConcern: true }).tools.reactInsteadOfReplying.execute({ reaction: "🥂" }, {});
   check("veto (texts): the safety guard refuses a tapback even when the decision rules none out", loose.ok === false && /They may not be safe/.test(loose.error));
+  const owedLifted = await tools(B.judgeText(picture()), { replyOwed: true }).tools.reactInsteadOfReplying.execute({ reaction: "🥂" }, {});
+  const owedLeave = await tools(B.judgeText(picture()), { replyOwed: true }).tools.leaveItAtReaction.execute({}, {});
+  check("veto (texts): an owed answer refuses a tapback even when the decision rules none out", owedLifted.ok === false && /still owe them an answer/.test(owedLifted.error) && owedLeave.ok === false);
   const again = B.vetoBriefingOffers(held, finds, "privacy", "test");
   check("veto: a veto only ever adds a hold (never back to deliver)", again.kind === "wait" && again.dontSay.filter((r) => r.what === "event_offer").length === 1);
 }
@@ -201,6 +218,19 @@ const NOW = new Date("2026-10-06T04:48:00Z");
   await new Promise((r) => setTimeout(r, 50));
   const slowRows = inserts.filter((p) => p[1] === "brain.briefing");
   check("take time: a slow build logs the fallback the call actually got (wait, no offers)", slowRows.length === 1 && JSON.parse(slowRows[0][5]).source === "fallback" && slowRows[0][4] === "wait" && /Don't offer an event/.test(b.findsNow));
+  // The safety hold is read again when the call takes the briefing (a prebuilt one can be minutes old), and fails closed.
+  inserts.length = 0;
+  pool.query = async (sql: string, params?: any[]) => {
+    if (/INSERT INTO harness_decisions/.test(sql)) inserts.push(params ?? []);
+    if (/safety_hold_until/.test(sql)) return { rows: [{ "?column?": 1 }] };
+    return { rows: [] };
+  };
+  const taken = await CB.takeCallBriefing("held-user", Date.now());
+  await new Promise((r) => setTimeout(r, 50));
+  const heldRows = inserts.filter((p) => p[1] === "brain.briefing");
+  check("safety hold at take time: no finds, and the log names the safety guard", /Don't offer an event/.test(taken.findsNow) && heldRows.length === 1 && JSON.parse(heldRows[0][5]).guards.includes("safety"));
+  pool.query = async () => { throw new Error("db down"); };
+  check("safety hold check fails closed: an error means no offers", (await CB.safetyHoldOrUnknown("u")) === true);
   pool.query = realQuery;
 }
 

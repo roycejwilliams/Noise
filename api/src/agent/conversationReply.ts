@@ -242,19 +242,20 @@ Return ONLY the numbers of the memories that are genuinely relevant to what the 
   }
 }
 
-// The brain said wait (brain/index.ts): hold the send. Logged; retried once, as an answer, when the turn has a resume path.
+// The brain said wait (brain/index.ts): hold the send, logged, and retried once as an answer on the turn's resume path. The retry
+// is the next attempt, so an empty one gets the honest give-up line instead of a second "give me a minute" nothing would follow.
+// Only called when the turn has a resume path (a replayed turn has none, and runs as act rather than holding with no retry).
 async function holdReply(
-  input: ConversationReplyInput,
+  input: ConversationReplyInput & { resumeLater: NonNullable<ConversationReplyInput["resumeLater"]> },
   decision: Decision,
   opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number },
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
-  const resumes = !!input.resumeLater;
   if (!opts.dryRun) {
     const { recordDecision } = await import("../harness/core.js");
-    await recordDecision({ layer: 3, decision: "brain.hold", userId: input.userId, outcome: "skip", action: resumes ? "requeued" : "left_owed", proposal: { why: decision.why, message: input.resolvedContent.slice(0, 200) } }).catch(() => {});
+    await recordDecision({ layer: 3, decision: "brain.hold", userId: input.userId, outcome: "skip", action: "requeued", proposal: { why: decision.why, message: input.resolvedContent.slice(0, 200) } }).catch(() => {});
   }
-  input.resumeLater?.(async () => {
-    await runConversationReplyAgent({ ...input, decision: { ...decision, kind: "act", why: `held earlier (${decision.why}); answered now` } }, opts);
+  input.resumeLater(async () => {
+    await runConversationReplyAgent({ ...input, decision: { ...decision, kind: "act", why: `held earlier (${decision.why}); answered now` } }, { ...opts, attempt: (opts.attempt ?? 1) + 1 });
   });
   return { sent: false, offered: false, replyText: "", grounding: [], toolsCalled: [], move: "quiet" };
 }
@@ -271,11 +272,15 @@ export async function runConversationReplyAgent(
   opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number } = {},
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
   const grounding: GroundingResult[] = [];
-  const decision: Decision = input.decision ?? judgeText({ userId: input.userId, read: null, owed: !!input.replyOwed, safetyConcern: !!input.safetyConcern, clarify: null, turn: null });
+  let decision: Decision = input.decision ?? judgeText({ userId: input.userId, read: null, owed: !!input.replyOwed, safetyConcern: !!input.safetyConcern, clarify: null, turn: null });
   // A wait holds the send: nothing goes out now and no model runs. Never dropped: the reply is retried once through the turn's
   // resume path (the caller's guards: phone lock, nothing newer from them, nothing answered since), answered then, and their
-  // message stays owed meanwhile, so their next text gets it answered too.
-  if (decision.kind === "wait") return holdReply(input, decision, opts);
+  // message stays owed meanwhile. A turn with no resume path (a replayed turn) can't be held without being stranded, so it runs
+  // as act now.
+  if (decision.kind === "wait") {
+    if (input.resumeLater) return holdReply({ ...input, resumeLater: input.resumeLater }, decision, opts);
+    decision = { ...decision, kind: "act", why: `${decision.why}; no way to retry this turn, so answered now` };
+  }
   // The team gets the team-only tools; nobody else ever sees them.
   const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
   // A retry is its own attempt, with its own clock.

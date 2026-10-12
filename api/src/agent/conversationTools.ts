@@ -879,7 +879,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({}),
       execute: async () => {
         if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
-        if (ctx.safetyConcern || wordsDue(ctx) || coAskedQuestion(ctx.lastCoMessage)) return { ok: false, error: "They need words this time. Reply properly." };
+        if (ctx.safetyConcern || ctx.replyOwed || wordsDue(ctx) || coAskedQuestion(ctx.lastCoMessage)) return { ok: false, error: "They need words this time. Reply properly." };
         state.sent = true;
         state.reacted = true;
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: `left at ${ctx.ackSent}`, proposal: { message: ctx.resolvedContent } }).catch(() => {});
@@ -906,8 +906,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("No tapback: they may not be safe, so Co has to reply.");
           return { ok: false, error: "They may not be safe. Reply to them properly." };
         }
-        // The brain's decision rules a tapback out (a safety turn, an owed answer, the list they asked for, an ask).
-        const due = wordsDue(ctx);
+        // An owed answer is a guard too: no decision can lift it. Then what the brain's decision rules out (the list, an ask).
+        const due = ctx.replyOwed ? { why: "Co still owes them an answer from before, so it has to reply", tell: "You still owe them an answer from before. Reply properly instead." } : wordsDue(ctx);
         if (due) {
           notDone(`No tapback: ${due.why}.`);
           return { ok: false, error: due.tell ?? "They need words this time. Reply properly." };
