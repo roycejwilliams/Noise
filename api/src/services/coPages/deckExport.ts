@@ -74,10 +74,10 @@ export async function deckPdf(
         const img = images.get(id);
         return img ? `data:${img.mediaType};base64,${img.data.toString("base64")}` : null;
       },
-  });
-  const pdf = await (render ?? (async (h, s) => (await import("../browserRead.js")).renderPdf(h, s)))(html, { width: "13.333in", height: "7.5in" });
-  if (!pdf) return null;
-  return { data: pdf, contentType: "application/pdf", filename: deckFilename(deck.data.title, "pdf") };
+    });
+    const pdf = await (render ?? (async (h, s) => (await import("../browserRead.js")).renderPdf(h, s)))(html, { width: "13.333in", height: "7.5in" });
+    if (!pdf) return null;
+    return { data: pdf, contentType: "application/pdf", filename: deckFilename(deck.data.title, "pdf") };
   });
 }
 
@@ -122,8 +122,8 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
       if (pic) s.addImage({ data: pic, x: 7.6, y: 1.3, w: 4.9, h: 4.9, sizing: { type: "contain", w: 4.9, h: 4.9 } });
       s.addText(`${i + 2} / ${deck.data.slides.length + 1}`, { x: 11.4, y: 6.8, w: 1.2, h: 0.4, fontFace: face, fontSize: 10, color: hex(st.text), transparency: 45, align: "right" });
       if (o.withNotes && sl.notes) s.addNotes(sl.notes);
-  });
-  const out = (await pptx.write({ outputType: "nodebuffer" })) as Buffer;
-  return { data: Buffer.from(out), contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", filename: deckFilename(deck.data.title, "pptx") };
+    });
+    const out = (await pptx.write({ outputType: "nodebuffer" })) as Buffer;
+    return { data: Buffer.from(out), contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", filename: deckFilename(deck.data.title, "pptx") };
   });
 }
