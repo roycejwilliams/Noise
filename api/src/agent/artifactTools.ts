@@ -9,7 +9,7 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { pickPage } from "./pageTools.js";
-import { ALSO_ANSWER, withAnswer } from "./linkAnswer.js";
+import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
 
 export function artifactTools(ctx: ConversationToolContext, o: { say: (text: string, record: string) => Promise<boolean>; notDone: (what: string) => void }) {
   const S = () => import("../services/coPages/store.js");
@@ -34,9 +34,11 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         if ("error" in got) return { ok: false, error: got.error };
         const page = await (await S()).loadCoPage(got.p.id).catch(() => null);
         if (!page || page.ownerUserId !== ctx.userId) return { ok: false, error: "It's gone (taken down or expired)." };
-        const assets = await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => []);
-        const num = (id: string | null | undefined) => (id ? assets.find((a) => a.id === id)?.n ?? null : null);
         const d: any = page.data;
+        // Every image it places, by the number they know it by (a cleaned logo by its original's), so an edit passes them back.
+        const placed = d.kind === "deck" ? [d.logo, ...(d.slides ?? []).map((s: any) => s.image)] : [d.logo, ...(d.sections ?? []).map((s: any) => s.asset)];
+        const nums = await (await import("../services/memberAssets.js")).assetNumbers(ctx.userId, placed).catch(() => new Map<string, number>());
+        const num = (id: string | null | undefined) => (id ? nums.get(id) ?? null : null);
         if (d.kind === "deck") {
           return {
             ok: true,
@@ -105,7 +107,7 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         const { text, confirm } = await withAnswer(ctx, `${line.trim()}\n${made.url}`, alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone("The share link was made, but it didn't send.");
-          return { ok: false, error: "The share link is made but didn't send. Give it in your reply." };
+          return unsentLink(ctx, { url: made.url, text, what: `a view-only share link to "${got.p.title}"` });
         }
         ctx.onLinkDelivered?.();
         confirm();
@@ -139,12 +141,45 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         const { text, confirm } = await withAnswer(ctx, `${line.trim()}\n${r.url}`, alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone("The link was reset, but the new one didn't send.");
-          return { ok: false, error: "The old link is off and a new one is made, but it didn't send. Give it in your reply." };
+          // The old link is already off: the new one must reach them (resendLink, or the reply).
+          return unsentLink(ctx, { url: r.url, text, what: `a fresh link to "${got.p.title}" (the old one no longer opens)` });
         }
         ctx.onLinkDelivered?.();
         confirm();
         ctx.facts?.add("did_this_turn", `Gave their ${noun((got.p as any).kind)} "${got.p.title}" a fresh link (${r.url}) because they asked: the old link and any share links no longer open.`);
         return { ok: true, note: "Sent as one text. That's the whole delivery." };
+      },
+    }),
+    // A link whose text didn't send goes again (founder's review, 2026-10-12): one made this turn (registered by unsentLink, its own
+    // text as it was), else their own current link to a live page or deck of theirs, so no failed send leaves them without a link.
+    resendLink: tool({
+      description: toolUse("resendLink"),
+      inputSchema: z.object({ which: z.string().optional().describe("Which page or deck: its title or a word from it. Leave it out for the link that just didn't send.") }),
+      execute: async ({ which: ref }) => {
+        const pending = ctx.unsentLinks ?? [];
+        const want = ref?.trim().toLowerCase();
+        const hit = want ? pending.find((u) => u.what.toLowerCase().includes(want)) : pending[pending.length - 1];
+        let url: string;
+        let text: string;
+        let what: string;
+        if (hit) ({ url, text, what } = hit);
+        else {
+          if (!ref) return { ok: false, error: "No link failed to send this turn. Say which page or deck they want the link to." };
+          const got = await pick(ref);
+          if ("error" in got) return { ok: false, error: got.error };
+          url = (await S()).coPageUrl(got.p.id);
+          what = `their ${noun(got.p.kind)} "${got.p.title}"`;
+          text = `Here's the link to ${got.p.title}.\n${url}`;
+        }
+        if (ctx.dryRun) return { ok: true, url, note: "Test run: nothing was sent." };
+        if (!(await o.say(text, `Co replied: ${text}`))) {
+          o.notDone(`The link to ${what} still didn't send (${url}).`);
+          return { ok: false, made: `${what} (${url})`, url, error: `It still didn't send. Give the link in your reply: ${url}` };
+        }
+        if (hit) ctx.unsentLinks = pending.filter((u) => u !== hit);
+        ctx.onLinkDelivered?.();
+        ctx.facts?.add("did_this_turn", `Sent the link to ${what} again (${url}).`);
+        return { ok: true, url, note: "The link went. Send nothing more about it." };
       },
     }),
     stopSharing: tool({

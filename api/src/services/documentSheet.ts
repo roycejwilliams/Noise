@@ -10,7 +10,7 @@ import { fontLinks, fontStack } from "./designFonts.js";
 import { z } from "zod";
 import { EMAIL_COLORS as C, escapeHtml } from "./emailDesign.js";
 import { unsourced } from "./offerGuard.js";
-import { unbackedClaims } from "./documentGrounding.js";
+import { unbackedClaims, type Unbacked } from "./documentGrounding.js";
 
 export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, titleChars: 70, noteChars: 240, headingChars: 70, paragraphChars: 700, bulletChars: 220, totalChars: 6500, minChars: 80, maxParagraphWords: 60, bulletsExpectedAfterChars: 600, maxSuggestions: 5, suggestionChars: 220 };
 
@@ -43,7 +43,7 @@ export const WRITE_DOCUMENT_INPUT = z.object({
     .min(1)
     .max(10)
     .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. ONLY what they said, in their words; your own ideas go in suggestions, never here."),
-  suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation. It appears on the page marked as Co's suggestions, apart from their points. Leave it out when you have none."),
+  suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation, a framing you wrote for them, written out in full. It appears on the page marked as Co's suggestions, apart from their points. Each is the idea itself, never a note about the document or about Co. Leave it out when you have none."),
   kind: z.enum(["venue_brief", "partnership_plan", "readout", "other"]).optional().describe("What it is for: venue_brief (for a venue or space around an event), partnership_plan (working with a partner, sponsor or host), readout (what came of an event, for a host or partner), or other (anything else: their goals, a plan for themselves, a summary). Leave it out for other."),
   saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out: it comes as a PDF in this conversation. Only when they ask for a Google Doc in their own words set google_doc (or both, if they want the PDF too)."),
   revises: z.number().int().optional().describe("Only when they asked to change a document you already delivered: its doc number from \"Documents you've delivered\". Write the whole new version (start from readDocument), and it goes as the next version."),
@@ -54,13 +54,25 @@ export const WRITE_DOCUMENT_INPUT = z.object({
 export type WriteDocumentInput = z.infer<typeof WRITE_DOCUMENT_INPUT>;
 
 // Co writes plain words: no dash for a pause (a comma), no markdown that would print as stray symbols.
+// A line over its limit ends at its last whole sentence or word, never mid-word (2026-10-12: a suggestion went out ending "a typical
+// sponsored pour lo").
+const clip = (t: string, max: number) => {
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  if (end > max * 0.5) return cut.slice(0, end + 1);
+  const sp = cut.lastIndexOf(" ");
+  return sp > max * 0.5 ? cut.slice(0, sp).replace(/[,;:]$/, "") : cut;
+};
 const clean = (s: unknown, max: number) =>
-  String(s ?? "")
-    .replace(/\s*[—–]\s*/g, ", ")
-    .replace(/[*_`#]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+  clip(
+    String(s ?? "")
+      .replace(/\s*[—–]\s*/g, ", ")
+      .replace(/[*_`#]+/g, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+    max,
+  );
 
 // Pure: the document as it will be shown. Empty paragraphs and bullets drop; limits cut, never throw.
 export function resolveDocument(input: DocInput): Doc {
@@ -78,6 +90,9 @@ export function resolveDocument(input: DocInput): Doc {
   return { title: clean(input.title, L.titleChars), note: clean(input.note, L.noteChars), sections, suggestions, kind };
 }
 
+// Their own words asking for a gap to fill in later.
+export const ASKED_FOR_A_SPOT = /\b(?:leave|hold|save|keep|put)\b[^.!?\n]{0,20}\b(?:spot|space|room|blank|gap|placeholder|slot)\b|\bplaceholders?\b|\bfill (?:it |that |this )?in (?:later|myself)\b/i;
+
 export const docText = (d: Doc): string => [d.title, d.note, ...d.sections.flatMap((s) => [s.heading ?? "", ...s.paragraphs, ...s.bullets]), ...d.suggestions].filter(Boolean).join("\n");
 // Their points only: what must rest on their own words.
 export const memberParts = (d: Doc): string[] => d.sections.filter((s) => !s.research).flatMap((s) => [...s.paragraphs, ...s.bullets]);
@@ -86,7 +101,10 @@ const sentencesOf = (t: string) => (t.match(/[^.!?\n]+[.!?]*/g) ?? []).map((s) =
 // Pure: what is wrong with a document, in words Co can act on.
 //   theirs: everything they said (their texts and calls). Their points must rest on it, claim by claim.
 //   read:   what Co read this turn. Only Co's own suggestions may lean on it, for an event or a place (never for a claim about them).
-export function documentProblems(doc: Doc, source: { theirs: string; read?: string }): string[] {
+//   o.backed: claims a judge read as their own words, rephrased (services/documentClaims.ts): not refused for wording. Their numbers
+//             and names are still checked here, whatever the judge said.
+//   o.judgedOut: lines the word check passed that a judge read as adding a claim, with why.
+export function documentProblems(doc: Doc, source: { theirs: string; read?: string }, o: { backed?: ReadonlySet<string>; judgedOut?: ReadonlyMap<string, string> } = {}): string[] {
   const L = DOC_LIMITS;
   const out: string[] = [];
   if (doc.title.length < 3) out.push("it needs a title");
@@ -94,7 +112,11 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
   const body = docText(doc);
   if (body.length < L.minChars) out.push("it is too thin to be a document: say what they need written up");
   if (body.length > L.totalChars) out.push(`it is too long (${body.length} characters; ${L.totalChars} at most): cut it to what matters`);
+  // A bracketed gap ("[Example to drop in: ...]") is a placeholder too: one goes out only when they asked for a spot to fill in
+  // themselves ("leave a spot for the example"), never on Co's own and never a document of gaps (2026-10-12).
+  const gaps = body.match(/\[[^\]\n]{2,}\]/g) ?? [];
   if (/\b(lorem ipsum|tbd|to be determined|xxx)\b|\[(?:insert|your)/i.test(body)) out.push("it has a placeholder in it");
+  else if (gaps.length && !(gaps.length === 1 && ASKED_FOR_A_SPOT.test(source.theirs))) out.push(`it has ${gaps.length > 1 ? `${gaps.length} placeholders` : "a placeholder"} in it (a bracketed gap): leave the missing piece out and write the point as it stands, or ask them for it${gaps.length > 1 ? "; at most one spot, and only one they asked for" : ""}`);
   // Scannable: a record, not a chat. Points go in bullets; a paragraph is a few sentences, not a block.
   const long = doc.sections.flatMap((x) => x.paragraphs).find((x) => x.split(/\s+/).length > L.maxParagraphWords);
   if (long) out.push(`a paragraph runs ${long.split(/\s+/).length} words ("${long.slice(0, 40)}..."): put its points in bullets and keep paragraphs to two or three sentences`);
@@ -110,10 +132,25 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
     if (bad.length) out.push(`the suggestion "${s.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // And every claim in their sections rests on their words, close together: Co's own reasoning is a suggestion, not their point.
-  for (const u of unbackedClaims(memberParts(doc), source.theirs).slice(0, 4)) {
-    out.push(`"${u.text.slice(0, 90)}" isn't something they said (their words never put ${u.missing.slice(0, 4).join(", ")} together): rewrite it from their own words, or move it to suggestions`);
+  for (const u of unbackedClaims(memberParts(doc), source.theirs, { strict: true }).filter((x) => x.hard.length || !o.backed?.has(x.text)).slice(0, 4)) {
+    out.push(claimProblem(u));
   }
+  // Lines the word check passed but a judge read as adding a claim (documentClaims.ts).
+  for (const [text, why] of o.judgedOut ?? []) out.push(`"${text.slice(0, 90)}" isn't something they said (${why}): rewrite it from their own words, or move it to suggestions`);
+  // Bare fragments are not a document (2026-10-12: after refusals, the last try was bullets that only repeated their headings, "QR
+  // table cards." under "QR table cards"). A point says something its heading doesn't.
+  const plain = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\b(a|an|the)\b/g, " ").replace(/\s+/g, " ").trim();
+  const echoes = doc.sections.filter((x) => !x.research && x.heading).flatMap((x) => x.bullets.filter((b) => plain(b) === plain(x.heading!)));
+  if (echoes.length >= 2) out.push(`its points only repeat their headings ("${echoes[0].slice(0, 40)}"): write each bullet as a short line that says what they told you about it, or leave the section out`);
   return out.slice(0, 7);
+}
+
+// The line Co gets for a claim of theirs that isn't backed (documentProblems). Shared so a judged claim drops exactly its line.
+export function claimProblem(u: Unbacked): string {
+  // A number or a name they never gave is said as one, so the fix is plain: leave it out (2026-10-12: "never put 4 together" for a
+  // count of the four things they listed, twice).
+  if (u.hard.length) return `"${u.text.slice(0, 90)}" isn't something they said: it has ${u.hard.slice(0, 3).join(", ")}, which they never gave. Leave that out (or ask them), or move the line to suggestions`;
+  return `"${u.text.slice(0, 90)}" isn't something they said (their words never put ${u.missing.slice(0, 4).join(", ")} together): rewrite it from their own words, or move it to suggestions`;
 }
 
 // ---------------------------------------------------------------- the file's name

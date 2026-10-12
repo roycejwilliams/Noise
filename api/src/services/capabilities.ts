@@ -191,6 +191,13 @@ export const ABILITIES: Ability[] = [
     use: "When they want their own link to stop working (\"I sent my link to the wrong person\", \"make my link private again\", \"reset the link\"). The new link goes as one text with your line. A share link they made is stopSharing instead.",
   },
   {
+    id: "co_artifact_resend_link",
+    can: "If a link to a page or deck Co made doesn't reach them, Co can send it again; they can also ask for the link to one of theirs any time.",
+    tool: "resendLink",
+    limits: { perTurn: 2, perDay: 12 },
+    use: "When a page, deck or share link was made but its text didn't send (the tool says so), call this right away so they have it. Also when they ask for the link to one of their pages or decks again (\"send me the deck link\"): pass which.",
+  },
+  {
     id: "co_artifact_stop_sharing",
     can: "Co can stop a share link from opening, any time they ask; their own link keeps working.",
     tool: "stopSharing",
@@ -219,14 +226,14 @@ export const ABILITIES: Ability[] = [
     can: "Co can read a public Pinterest board they send for the look of a deck or page (its pins and colors). A board that needs a Pinterest login, Co can't open, and says so.",
     tool: "readInspo",
     limits: { perTurn: 2, perDay: 10 },
-    use: "When they send a Pinterest board link for the look (\"this is the vibe\", or with a deck or page ask). Read it: its look comes from its pins' own pictures. For a deck, call makeDeck next: it hands back the one confirm line to send, and the deck is built when they answer (readConfirmed). For a page, build with taste from what you read. If it can't be read, say plainly it needs a login or isn't public, and ask them to describe the look or pick a look by name; never guess.",
+    use: "When they send a Pinterest board link for the look (\"this is the vibe\", or with a deck or page ask). Read it: its look comes from its pins' own pictures. For a deck, call makeDeck next: it hands back the one confirm line to send, and the deck is built when they answer (readConfirmed). For a deck you already made, the board's look can only change the whole deck (updateDeck with taste), never one slide. For a page, build with taste from what you read. If it can't be read, say plainly it needs a login or isn't public, and ask them to describe the look or pick a look by name; never guess.",
   },
   {
     id: "co_deck_update",
-    can: "Co can change a deck it made for them; the link stays the same.",
+    can: "Co can change a deck it made for them; the link stays the same. A deck has one look for every slide: its colors and type change for the whole deck, never for one slide.",
     tool: "updateDeck",
     limits: { perTurn: 3 },
-    use: "When they ask for a change to a deck you made (\"slide 3 is weak\", \"make it darker\"), write the whole new version with updateDeck and say in a few words what changed. Never send the deck again or summarize it.",
+    use: "When they ask for a change to a deck you made (\"slide 3 is weak\", \"make it darker\"), write the whole new version with updateDeck and say in a few words what changed. Never send the deck again or summarize it. A new slide goes before the closing ask or call to action unless they say where. A deck has one look: never offer colors or a style for one slide only; if they want a board's or image's look on just one slide, say plainly the look applies to the whole deck and ask whether to change the whole deck or keep it as is. If a change does only part of what they asked, name the part it doesn't do in notDone.",
   },
   {
     id: "write_document",

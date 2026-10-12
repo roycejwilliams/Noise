@@ -34,12 +34,15 @@ const GLUE = new Set([
 ]);
 const words = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
 // First five letters: "matching", "matches" and "match" are one word; "funds" and "funded" too.
-const stem = (w: string) => w.replace(/'s$/, "").slice(0, 5);
+// A contraction's tail is not part of the word: "RSVP'd" is "RSVP", "chef's" is "chef" (2026-10-12: "at RSVP" was refused when they
+// wrote "when they RSVP'd").
+const bare = (w: string) => w.replace(/'(?:s|d|ll|re|ve)$/, "");
+const stem = (w: string) => bare(w).slice(0, 5);
 // The same people, said any of these ways ("40 guests" backs "40 people").
 const SAME: Record<string, string> = Object.fromEntries(["person", "persons", "people", "peoples", "ppl", "guest", "guests", "folks", "attendees", "attendee", "heads", "pax"].map((w) => [w, "people"]));
 // A plural or a tense, folded: "bars"/"bar", "parties"/"party", "hosted"/"hosting"/"hosts"/"host", "invited"/"invite", "planned"/"plan".
 function fold(w0: string): string {
-  let w = w0.replace(/'s$/, "").replace(/'/g, "");
+  let w = bare(w0).replace(/'/g, "");
   if (SAME[w]) return SAME[w];
   if (w.length > 4 && w.endsWith("ies")) w = `${w.slice(0, -3)}y`;
   else if (w.length > 4 && /(?:sh|ch|x|ss|z)es$/.test(w)) w = w.slice(0, -2);
@@ -107,7 +110,8 @@ export function sourceWindows(source: string): SourceWindows {
   return { windows, text: source, all: new Set(words(source).flatMap(keys)), values: numberValues(source) };
 }
 
-export type Unbacked = { text: string; share: number; missing: string[] };
+// hard: the numbers and names in it they never gave. Those are facts, refused in code whatever a judge says (documentClaims.ts).
+export type Unbacked = { text: string; share: number; missing: string[]; hard: string[] };
 
 // Names and places: a capitalized word that doesn't open the line ("Harbor Hall", "Dallas", "Noor"), or a short all-caps one ("SF").
 const namesIn = (sentence: string) =>
@@ -116,11 +120,29 @@ const namesIn = (sentence: string) =>
     .map((m) => m[1].toLowerCase().replace(/'s$/, ""))
     .filter((w) => w.length >= 2 && !GLUE.has(w) && !isNumberWord(w));
 
+// Counts said as words (review of this branch, 2026-10-12): "a second dinner", "twice the rate", "half the table". Each must be a word
+// they said. "Both" is too often just "you both" to refuse in code: a line with it they never said goes to the judge (partlyBacked).
+const QUANTITY: Record<string, number | null> = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7, eighth: 8, ninth: 9, tenth: 10, twice: 2, double: 2, doubled: 2, half: 0.5, several: null };
+// A capital opening a line is usually just the start of a sentence (unknownOpeners).
+const STARTERS = new Set(("every each one some most many all no not our their your his her its this that these those there here it it's they we you he she i "
+  + "a an the and but so if when while after before since until once now then also still just only even both either neither "
+  + "what why how who where which proof format partnership partner launch dinner dinners guests guest people members member seating seats seat table "
+  + "pairings pairing wine host hosts chef chefs ask next step steps goal goals plan plans why how where").split(/\s+/).filter(Boolean));
+
+export type SupportOptions = { strict?: boolean };
+
 // Pure: how much of a sentence rests on one stretch of what they said.
-export function support(sentence: string, src: SourceWindows): Unbacked | null {
+//   o.strict (documents): counts said as words ("both", "twice", "a second dinner") are held as numbers.
+export function support(sentence: string, src: SourceWindows, o: SupportOptions = {}): Unbacked | null {
   const ws = words(sentence);
   // Every number, by value, must be one they gave.
   const missingNums = [...new Set(numberValues(sentence).filter((v) => !src.values.some((x) => Math.abs(x - v) < 1e-9)).map(String))];
+  if (o.strict) {
+    for (const w of new Set(ws)) {
+      if (!(w in QUANTITY) || has(src.all, w)) continue;
+      missingNums.push(w);
+    }
+  }
   // Every name or place must be one they said, anywhere.
   const missingNames = [...new Set(namesIn(sentence).filter((n) => !has(src.all, n)))];
   const distinct = [...new Set(ws.filter((w) => w.length >= 5 && !STOP.has(w) && !/\d/.test(w) && !isNumberWord(w)))];
@@ -138,7 +160,7 @@ export function support(sentence: string, src: SourceWindows): Unbacked | null {
   const share = need.length ? best / need.length : 1;
   const wordsFail = judgedLong ? share < GROUNDING.minShare : share < 1;
   if (missingNums.length || missingNames.length || wordsFail) {
-    return { text: sentence, share, missing: [...missingNums, ...missingNames, ...(wordsFail ? bestMissing : [])].filter((x, i, a) => a.indexOf(x) === i).slice(0, 6) };
+    return { text: sentence, share, missing: [...missingNums, ...missingNames, ...(wordsFail ? bestMissing : [])].filter((x, i, a) => a.indexOf(x) === i).slice(0, 6), hard: [...missingNums, ...missingNames] };
   }
   return null;
 }
@@ -147,12 +169,43 @@ export function support(sentence: string, src: SourceWindows): Unbacked | null {
 const sentencesOf = (t: string) => (t.match(/(?:[^.!?\n]|\.(?=\d))+[.!?]*/g) ?? []).map((s) => s.trim()).filter(Boolean);
 
 // Pure: the member's sections, sentence by sentence and bullet by bullet, against what they said. (Suggestions are not passed in.)
-export function unbackedClaims(parts: string[], source: string): Unbacked[] {
+export function unbackedClaims(parts: string[], source: string, o: SupportOptions = {}): Unbacked[] {
   const src = sourceWindows(source);
   const out: Unbacked[] = [];
   for (const p of parts) for (const s of sentencesOf(p)) {
-    const u = support(s, src);
+    const u = support(s, src, o);
     if (u) out.push(u);
+  }
+  return out;
+}
+
+// Pure: the word opening a line, when it is capitalized, never in their words and not an ordinary starter: it may be a name ("Pelletier
+// pours for every dinner"). Ordinary words open lines too ("Reserved for...", "Open: ..."), so these go to the judge, never refused
+// on the capital alone; only when the judge can't run is the line held (documentClaims.ts).
+export function unknownOpeners(parts: string[], source: string): { line: string; word: string }[] {
+  const all = sourceWindows(source).all;
+  const out: { line: string; word: string }[] = [];
+  for (const p of parts) for (const s of sentencesOf(p)) {
+    const opener = s.replace(/[’‘]/g, "'").match(/^\W*([A-Z][A-Za-z']+)/)?.[1];
+    const w = opener?.toLowerCase().replace(/'s$/, "");
+    if (w && w.length >= 3 && !GLUE.has(w) && !STARTERS.has(w) && !isNumberWord(w) && !(w in QUANTITY) && !has(all, w)) out.push({ line: s, word: opener! });
+  }
+  return out;
+}
+
+// Pure: long lines the word check let through with some of their words not theirs (most, but not all, of them sit together in what
+// they said). Those are where a claim of Co's own hides in their vocabulary ("The importer saw sales go up after the last dinner"),
+// so a judge reads them (documentClaims.ts).
+export function partlyBacked(parts: string[], source: string, o: SupportOptions = {}): string[] {
+  const src = sourceWindows(source);
+  const out: string[] = [];
+  for (const p of parts) for (const s of sentencesOf(p)) {
+    if (support(s, src, o)) continue;
+    // Every word that carries meaning, short ones too ("came back", "sales go up"): the long-line check only weighs longer words.
+    const meaning = [...new Set(words(s).filter((w) => w.length >= 2 && !GLUE.has(w) && !/\d/.test(w) && !isNumberWord(w)))];
+    if (!meaning.length) continue;
+    const best = Math.max(0, ...src.windows.map((w) => meaning.filter((d) => has(w, d)).length));
+    if (best < meaning.length) out.push(s);
   }
   return out;
 }

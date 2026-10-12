@@ -496,7 +496,7 @@ export async function sendDocumentForTask(
   const { resolveDocument, documentProblems } = await import("./documentSheet.js");
   const doc = resolveDocument(input);
   const theirs = [await deps.theirWords(o.userId).catch(() => ""), o.taskTheirWords].join("\n");
-  const problems = documentProblems(doc, { theirs, read: o.read });
+  const problems = await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs, read: o.read }, documentProblems(doc, { theirs, read: o.read }));
   if (problems.length) return { ok: false, problems, why: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try once more: their points only in their own words; your plan, ideas and recommendations go in suggestions.` };
   // Their quiet hours hold it to their 8am, unless they asked for it right away, in their own words.
   const { askedForImmediate, nextDeliveryTime } = await import("./memberTime.js");
@@ -547,7 +547,10 @@ export async function loadTheirWords(userId: string): Promise<string> {
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
+  // Oldest first (the newest 120): one stable order, so a claim that spans two of their texts reads in the order they said it, and
+  // the verdict doesn't turn on which messages sit next to which (2026-10-12).
   return rows
+    .reverse()
     .map((r: any) =>
       r.memory_type === "call_transcript"
         ? String(r.content).split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, "")).join(" ")

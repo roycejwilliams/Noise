@@ -8,7 +8,7 @@ import { z } from "zod";
 import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
-import { ALSO_ANSWER, withAnswer } from "./linkAnswer.js";
+import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
 import { TASTE_INPUT, imageN } from "./artifactInputs.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
@@ -145,7 +145,7 @@ export function pageTools(
         const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
-          return { ok: false, error: "The page is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
+          return unsentLink(ctx, { url: made.url, text, what: `the page "${input.title}"` });
         }
         ctx.onLinkDelivered?.();
         confirm();

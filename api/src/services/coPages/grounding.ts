@@ -79,6 +79,9 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
   ];
   const out: string[] = [];
   for (const l of lines) {
+    // A bracketed gap is a live placeholder on a shareable link (2026-10-12: "[Example seat to drop in: who sat where...]" went to
+    // the importer). It never ships: ask them for the missing piece, or make the slide the point without it.
+    if (/\[[^\]\n]{2,}\]/.test(l.text)) out.push(`${l.where}: "${l.text.slice(0, 70)}" is a placeholder, and a deck never ships one: ask them for the missing piece, or write the slide as the point itself without the example`);
     const bad = unsourced(l.text, corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }

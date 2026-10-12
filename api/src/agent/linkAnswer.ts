@@ -13,6 +13,14 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 
+// A link that was made but whose text didn't send: registered for resendLink (agent/artifactTools.ts) and put in the turn's facts with
+// its URL, so the link can go again by the tool or in Co's reply. The tool's result carries made and url (agent/toolGuard.ts).
+export function unsentLink(ctx: ConversationToolContext, u: { url: string; text: string; what: string }): { ok: false; made: string; url: string; error: string } {
+  (ctx.unsentLinks ??= []).push(u);
+  ctx.facts?.add("did_this_turn", `Made ${u.what}, at ${u.url}, but the text with the link didn't send. It exists; send it again with resendLink, or give the link in your reply.`);
+  return { ok: false, made: `${u.what} (${u.url})`, url: u.url, error: `${u.what[0].toUpperCase()}${u.what.slice(1)} is made, but the text with its link didn't send. Send it again now with resendLink, or give the link in your reply: ${u.url}` };
+}
+
 export const ALSO_ANSWER = z
   .string()
   .nullable()
