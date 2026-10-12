@@ -787,8 +787,8 @@ export async function scoreMatchedGroup(
   // Co's read of which asks are about people (services/peopleAsks.ts), for the whole room in one call; each person's frame
   // below reads it from the cache.
   {
-    const { readPeopleAsks } = await import("./peopleAsks.js");
-    const texts = [...new Set(matched.flatMap((g) => (Array.isArray(g.intent) ? (g.intent as any[]) : []).filter((e) => isOpenAsk(e)).map((e) => String(e.text))))];
+    const { readPeopleAsks, askLine } = await import("./peopleAsks.js");
+    const texts = [...new Set(matched.flatMap((g) => (Array.isArray(g.intent) ? (g.intent as any[]) : []).filter((e) => isOpenAsk(e)).map(askLine)))];
     if (texts.length) await readPeopleAsks(texts).catch(() => []);
   }
   for (const person of matched) {

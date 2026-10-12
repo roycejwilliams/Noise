@@ -37,12 +37,15 @@ export function dedupeAsks<T extends AskLike>(asks: T[]): T[] {
   return out.reverse();
 }
 
+// An ask as the read sees it: its direction and its words ("can offer: ..." reads differently from "looking for: ...").
+export const askLine = (a: AskLike) => `${a.type === "offering" ? "can offer" : "looking for"}: ${String(a.text ?? "").slice(0, 300)}`;
+
 export function peopleAskPrompt(texts: string[]): string {
   return `A member of a private club has these open asks with Co, one per line:
-${texts.map((t, i) => `${i}. "${t.slice(0, 300)}"`).join("\n")}
+${texts.map((t, i) => `${i}. "${t}"`).join("\n")}
 
 For each, two judgments.
-people: true when another member they could meet in a room could meet it: a person or kind of person to meet, hire, work with, learn from, invest in, be helped by, befriend, or something the member offers people (their work, their skills, a check, a job). false for an errand or a thing: a place, a restaurant, a product, a booking, tickets, a plan, a recommendation, research, something for Co to do.
+people: true when another member they could meet in a room could meet it: a person or kind of person to meet, hire, work with, learn from, invest in, be helped by, befriend, or something the member offers people (their work, their skills, a check, a job), including the clients, customers, bookings or hires they want from people. false for an errand or a thing: a place, a restaurant, a product, a booking, tickets, a plan, a recommendation, research, something for Co to do.
 personal: true when it's about their health, money troubles, legal matters, family or relationship matters, or anything a stranger shouldn't hear about.
 
 Return ONLY JSON: {"asks": [{"index": 0, "people": true, "personal": false}, ...]}`;
@@ -106,7 +109,7 @@ export async function readPeopleAsks(texts: string[]): Promise<(PeopleRead | nul
 export async function peopleAsksOf<T extends AskLike>(asks: T[]): Promise<T[]> {
   const unique = dedupeAsks(asks);
   if (!unique.length) return [];
-  const reads = await readPeopleAsks(unique.map((a) => String(a.text)));
+  const reads = await readPeopleAsks(unique.map(askLine));
   return unique.filter((_, i) => reads[i]?.people !== false);
 }
 
@@ -115,6 +118,6 @@ export async function peopleAsksOf<T extends AskLike>(asks: T[]): Promise<T[]> {
 export async function shareableCandidates<T extends AskLike>(asks: T[]): Promise<T[]> {
   const unique = dedupeAsks(asks);
   if (!unique.length) return [];
-  const reads = await readPeopleAsks(unique.map((a) => String(a.text)));
+  const reads = await readPeopleAsks(unique.map(askLine));
   return unique.filter((_, i) => reads[i]?.people === true && reads[i]?.personal === false);
 }

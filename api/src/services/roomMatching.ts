@@ -377,6 +377,25 @@ export async function notePairAnswer(eventId: string, x: string, y: string, answ
   return next;
 }
 
+// The one send of a pair's intro email: "claimed" (this call sends it), "taken" (another call already has), or "none" (no
+// pair row: the caller goes on as before, guarded by its other checks).
+export async function claimIntroSend(eventId: string, x: string, y: string): Promise<"claimed" | "taken" | "none"> {
+  const { a, b } = orderPair(x, y);
+  const won = await pool
+    .query(`UPDATE co_pairs SET intro_sent_at = NOW(), updated_at = NOW() WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND intro_sent_at IS NULL RETURNING id`, [eventId, a, b])
+    .catch(() => null);
+  if (!won) return "none";
+  if (won.rows.length) return "claimed";
+  const { rows } = await pool.query(`SELECT 1 FROM co_pairs WHERE event_id = $1 AND a_id = $2 AND b_id = $3`, [eventId, a, b]).catch(() => ({ rows: [] as any[] }));
+  return rows.length ? "taken" : "none";
+}
+
+// A claimed send that didn't go: the pair is free for a retry (retryHeldIntros reads intro_sent_at IS NULL).
+export async function releaseIntroClaim(eventId: string, x: string, y: string): Promise<void> {
+  const { a, b } = orderPair(x, y);
+  await pool.query(`UPDATE co_pairs SET intro_sent_at = NULL, updated_at = NOW() WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND state <> 'intro_sent'`, [eventId, a, b]).catch(() => {});
+}
+
 export async function notePairIntroSent(eventId: string, x: string, y: string): Promise<void> {
   const { a, b } = orderPair(x, y);
   await pool

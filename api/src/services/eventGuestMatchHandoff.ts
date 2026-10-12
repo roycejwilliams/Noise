@@ -331,9 +331,14 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
     await RM.noteIntroHeld(eventId, a.user_id, b.user_id, paused);
     return false;
   }
-  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes), pauseCheck, onceCheck], { eventId, b: b.user_id }))) return false;
+  // Only one call sends it (live run 2026-10-12: both said yes at the same moment, each turn saw the other's yes, and the email
+  // went twice). The claim is the pair's intro_sent_at, taken atomically before the send and given back if the send fails.
+  const claim = aYes && bYes && !paused && !sentBefore ? await RM.claimIntroSend(eventId, a.user_id, b.user_id) : "ok";
+  const claimCheck = claim === "taken" ? { name: "intro_claim", pass: false, reason: "another reply is already sending this intro" } : { name: "intro_claim", pass: true };
+  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes), pauseCheck, onceCheck, claimCheck], { eventId, b: b.user_id }))) return false;
   // No email on file for one of them: nothing to retry.
   if (!a.email || !b.email) {
+    if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
     await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "missing email", true);
     return false;
   }
@@ -358,6 +363,7 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
+      if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
       await RM.noteIntroFailed(eventId, a.user_id, b.user_id, String(err?.message ?? err).slice(0, 120));
       return false;
     }
