@@ -19,7 +19,7 @@
 //   eval    — evals/reply/run.ts
 import type { GoalStateRow } from "../services/goalEdges.js";
 import type { MemberKnowledge, MemberRules, Restraint } from "../services/memberKnowledge.js";
-import { dateSpan, renderLive } from "../services/factLabels.js";
+import { dateSpan, KINDS, renderLive, type Kind } from "../services/factLabels.js";
 import { arcLine, LENS_RULE } from "../services/goalJourney.js";
 import { isNewMember, steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
 import { doorDecision, doorInstruction, doorOpen, type DoorView } from "../services/theDoor.js";
@@ -539,7 +539,8 @@ export function dateConflictFact(message: string, k: Pick<MemberKnowledge, "clai
   const to = DateTime.fromISO(asked.end, { zone }).plus({ days: 1 }).toISODate()!;
   const fmt = (d: string) => DateTime.fromISO(d, { zone }).toFormat("ccc LLL d, yyyy");
   const near = k.claims.flatMap((c) => {
-    if (!c.text.trim()) return [];
+    // Only what is still going on (an ephemeral claim inside its lifetime): who they are (a city, a role) is never a date to check.
+    if (!c.text.trim() || KINDS[c.kind as Kind]?.lifetime !== "ephemeral" || (c.expiresOn && c.expiresOn <= today)) return [];
     const s = dateSpan(`${c.text} ${c.quote ?? ""}`, c.saidOn.slice(0, 10), zone);
     if (!s || s.end < from || s.start > to) return [];
     const when = s.start === s.end ? fmt(s.start) : `${fmt(s.start)} to ${fmt(s.end)}`;

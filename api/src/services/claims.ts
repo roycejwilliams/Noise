@@ -208,13 +208,19 @@ export function renderRecap(claims: Claim[], now: Date, zone: string | null = ZO
 // record services/whatCoKnows.ts writes) so the nightly refresh doesn't propose it back from their older words.
 
 // Pure: the held claims a correction overturns: they say the old value and not the new one (whatCoKnows.ts correctedSays, which
-// reads a one-word value like a city only where it's used as a place). Where they live only ever touches a city claim: "Flying to
-// Austin for SXSW" is not where they live.
+// reads a one-word value like a city only where it's used as a place), and they are the same KIND of thing the corrected field is.
+// Where they live only ever touches a claim about where THEY live ("lives in", "based in", "moved to"): never a trip ("Flying to
+// Austin"), family ("parents live in Austin"), an office or where they grew up. A removed activity touches only a preference
+// ("hiking" removed leaves the plan "Hiking Mt Tam Saturday"). A field with no kind here retires nothing.
+const KINDS_FOR_FIELD: Record<string, string[]> = { city: ["city"], activity_preferences: ["preference"], goals: ["building"], long_term_direction: ["building"], blockers: ["worry"] };
+const LIVES_HERE = /\b(i|they|he|she|[A-Z][a-z]+)\b[^.;]{0,20}\b(live|lives|living|lived|based|moved|moving|relocated|relocating|reside|resides|home is)\b/i;
+const NOT_THEIR_HOME = /\b(parents?|mom|dad|mother|father|sister|brother|in-laws?|grandparents?|cousins?)\b[^.;]{0,15}\b(live|lives|living|lived|based|moved|is|are)\b|\b(office|hq|headquarter\w*|company|team|studio|grew up|hometown|born|raised|childhood)\b/i;
 export function claimOverturnedBy<X extends { field: string; old: string; new: string | null }>(c: { kind?: string; text: string }, corrections: X[], correctedSays: (old: string, now: string, line: string) => boolean, covers: (old: string, text: string) => boolean): X | null {
   return corrections.find((x) => {
     const old = String(x.old ?? "").trim();
     if (!old) return false;
-    if (x.field === "city" && c.kind !== "city") return false;
+    if (!(KINDS_FOR_FIELD[x.field] ?? []).includes(String(c.kind ?? ""))) return false;
+    if (x.field === "city" && (!LIVES_HERE.test(c.text) || NOT_THEIR_HOME.test(c.text))) return false;
     return x.new ? correctedSays(old, x.new, c.text) : covers(old, c.text);
   }) ?? null;
 }

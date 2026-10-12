@@ -9,7 +9,7 @@ import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
 import { getTimezoneForCity } from "./geocoding.js";
-import { stateForPhone } from "./areaCodes.js";
+import { regionFor } from "./areaCodes.js";
 import { humanTime, readLink, REREAD_AFTER_MS, VOLATILE_AFTER_MS, savedRead, type LinkRead } from "./linkReader.js";
 import { lineInVoice } from "./voiceLine.js";
 
@@ -60,7 +60,7 @@ async function tell(row: Row, change: Change): Promise<boolean> {
     mustInclude: [],
     fallback: stock,
   }).catch(() => ({ text: stock, written: false }));
-  const timezone = row.city ? await getTimezoneForCity(row.city, { region: stateForPhone(row.phone_number) }).catch(() => null) : null;
+  const timezone = row.city ? await getTimezoneForCity(row.city, { region: regionFor({ city: row.city, phone: row.phone_number }) }).catch(() => null) : null;
   const sent = await sendExemptWhenAllowed({
     userId: row.user_id,
     phoneNumber: row.phone_number,

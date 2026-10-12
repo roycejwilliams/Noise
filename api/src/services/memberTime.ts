@@ -67,10 +67,17 @@ export async function memberZone(userId: string, deps: { db?: Db; lookup?: (city
       // Before the column migration has run: the city alone.
       .catch(() => db.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]));
     if (!rows[0]) return null;
-    // Their state, read only when a lookup is needed; a failed read is no bias.
+    // Their state, read only when a lookup is needed; a failed read is no bias. What they said or have on file (their city, their
+    // snapshot's place, a city claim) wins; the phone's area code is only a guess (services/areaCodes.ts regionFor).
     const regionOf = async () => {
-      const { rows: u } = await db.query(`SELECT phone_number FROM users WHERE id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-      return u[0]?.phone_number ? (await import("./areaCodes.js")).stateForPhone(u[0].phone_number) : null;
+      const q = (sql: string) => db.query(sql, [userId]).then((r) => r.rows).catch(() => [] as any[]);
+      const [u, snap, claims] = await Promise.all([
+        q(`SELECT phone_number FROM users WHERE id = $1`),
+        q(`SELECT snapshot->>'place' AS place FROM person_snapshots WHERE user_id = $1`),
+        q(`SELECT text FROM member_claims WHERE user_id = $1 AND kind = 'city' ORDER BY confirmed_on DESC LIMIT 3`),
+      ]);
+      const { regionFor } = await import("./areaCodes.js");
+      return regionFor({ city: rows[0].city, places: [snap[0]?.place, ...claims.map((c: any) => c.text)], phone: u[0]?.phone_number });
     };
     const r = await zoneFromProfile(rows[0], deps.lookup ?? (async (city: string) => lookupCity(city, await regionOf())));
     if (r.store) {

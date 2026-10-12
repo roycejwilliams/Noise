@@ -143,9 +143,9 @@ async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
     if (!res.ok) return null;
     const data: any = await res.json();
     const results: any[] = Array.isArray(data?.results) ? data.results : [];
-    const hit = region
-      ? results.find((r) => String(r.admin1 ?? "").toLowerCase() === region || String(r.country ?? "").toLowerCase() === region)
-      : results.find((r) => r.country_code === "US") ?? results[0];
+    // In the region asked for; else the first US hit; else the first hit (a bias, never a reason to find nothing).
+    const inRegion = region ? results.find((r) => String(r.admin1 ?? "").toLowerCase() === region || String(r.country ?? "").toLowerCase() === region) : undefined;
+    const hit = inRegion ?? results.find((r) => r.country_code === "US") ?? results[0];
     if (typeof hit?.latitude !== "number" || typeof hit?.longitude !== "number") return null;
     await pool
       .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [city, hit.latitude, hit.longitude])

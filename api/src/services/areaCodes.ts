@@ -1,3 +1,6 @@
+// The area code is a GUESS about where someone lives (people keep their numbers when they move: a 617 number may live in San
+// Francisco). It is used only when nothing they said or have on file names a state or a metro (regionFor).
+//
 // The US state a phone number's area code belongs to (2026-10-12 intelligence audit: bare city names geocoded to the wrong place,
 // Cambridge to England and Medford to Oregon for members texting from 617). Used only to bias a bare city name toward the member's
 // own state when nothing better is known (services/geocoding.ts); a wrong or missing entry just means no bias. Overlays included.
@@ -72,3 +75,30 @@ export const STATE_NAMES: Record<string, string> = {
   OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania", RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee", TX: "Texas",
   UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington", WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming",
 };
+
+// Metros whose name alone says the state (the club's cities and the big ones), for a profile or snapshot that names one.
+const METROS: [RegExp, string][] = [
+  [/\b(san francisco|sf|bay area|oakland|berkeley|palo alto|san jose|silicon valley|los angeles|san diego|sacramento)\b/i, "CA"], [/\bLA\b/, "CA"],
+  [/\b(new york|nyc|manhattan|brooklyn|queens|bronx)\b/i, "NY"],
+  [/\b(boston|greater boston|kendall square|back bay|south end)\b/i, "MA"],
+  [/\b(chicago)\b/i, "IL"], [/\b(seattle)\b/i, "WA"], [/\b(austin|houston|dallas)\b/i, "TX"], [/\b(miami)\b/i, "FL"],
+  [/\b(atlanta)\b/i, "GA"], [/\b(denver)\b/i, "CO"], [/\b(philadelphia|philly)\b/i, "PA"], [/\b(washington,? d\.?c\.?|dc)\b/i, "DC"],
+];
+
+// Pure: a state named in some text: a code after a comma or at the end ("Cambridge, MA", "Cambridge MA"), a state's full name, or a
+// metro whose name says the state. Null when it names none.
+export function stateIn(text: string | null | undefined): string | null {
+  const t = String(text ?? "");
+  if (!t.trim()) return null;
+  const code = t.match(/(?:,\s*|\s)([A-Z]{2})\b(?!\w)/g)?.map((m) => m.replace(/[,\s]/g, "")).find((c) => c in STATE_NAMES);
+  if (code) return code;
+  const full = Object.entries(STATE_NAMES).find(([, n]) => new RegExp(`\\b${n}\\b`, "i").test(t));
+  if (full) return full[0];
+  return METROS.find(([re]) => re.test(t))?.[1] ?? null;
+}
+
+// Pure: the region to read a bare city in. What they said or have on file wins (the city itself, then other places they named:
+// their snapshot's place, a city claim); the phone's area code is only the last guess.
+export function regionFor(o: { city?: string | null; places?: (string | null | undefined)[]; phone?: string | null }): string | null {
+  return stateIn(o.city) ?? (o.places ?? []).map(stateIn).find(Boolean) ?? stateForPhone(o.phone);
+}
