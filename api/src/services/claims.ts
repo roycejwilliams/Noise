@@ -152,7 +152,11 @@ export async function refreshClaims(userId: string, now = new Date(), deps: { pr
     const held = await heldClaimsStrict(userId, client);
     const sources = theirWordsOf(exchanges, zone);
     const proposed = sources.length ? await (deps.propose ?? proposeClaims)(sources, held, today) : [];
-    const merged = mergeClaims(held, finishClaims(proposed, sources, today, zone), zone);
+    // What they corrected or removed (services/whatCoKnows.ts) isn't proposed back from their older words. Read outside the
+    // transaction: a failed read here holds nothing back rather than aborting the refresh.
+    const forgotten = await import("./whatCoKnows.js").then((W) => W.forgottenRows(userId).then((rows) => ({ W, rows }))).catch(() => null);
+    const fresh = finishClaims(proposed, sources, today, zone).filter((c) => !forgotten?.W.forgets(c.text, forgotten.rows, "claim"));
+    const merged = mergeClaims(held, fresh, zone);
     await client.query(`DELETE FROM member_claims WHERE user_id = $1`, [userId]);
     for (const c of merged) {
       // What has expired is dropped here, not carried: the table holds only claims still inside their lifetime.

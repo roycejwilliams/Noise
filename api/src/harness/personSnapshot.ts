@@ -324,6 +324,9 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
         reason: problems.length && !unresolved.length ? `${problems.length} problem(s) fixed on the rebuild` : null,
       });
     }
+    // What they corrected or removed (services/whatCoKnows.ts) stays that way: a rebuild from their older words never brings it back.
+    const forgotten = await import("../services/whatCoKnows.js").then((W) => W.forgottenRows(userId).then((rows) => ({ W, rows }))).catch(() => null);
+    if (forgotten?.rows.length) snapshot = forgotten.W.forgetInSnapshot(snapshot, forgotten.rows);
     await pool.query(
       `INSERT INTO person_snapshots (user_id, snapshot, updated_at) VALUES ($1, $2, NOW())
        ON CONFLICT (user_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW()`,

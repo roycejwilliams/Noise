@@ -1536,6 +1536,9 @@ export function sendblueRouter(io: Server): Router {
           // them; their intro history stays (services/memberSafeMemories.ts).
           const candidates = await memberSafe(user.id, memoriesResult.rows.filter((m: any) => m.content));
           introRecordFacts = introFacts(memoriesResult.rows);
+          // A memory that says something they had removed (services/whatCoKnows.ts) is left out too.
+          const removedRows = await import("../services/whatCoKnows.js").then(async (W) => ({ W, rows: (await W.forgottenRows(user.id)).filter((r) => r.removed) })).catch(() => null);
+          if (removedRows?.rows.length) candidates.splice(0, candidates.length, ...candidates.filter((c) => !removedRows.W.forgets(c, removedRows.rows, "their_words")));
           return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
         })().catch(() => "");
         const routeInput = {

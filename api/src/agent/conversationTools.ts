@@ -382,6 +382,62 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // What Co knows about them, shown in plain words, and corrected or removed at the source (services/whatCoKnows.ts).
+    whatCoKnows: tool({
+      description: toolUse("whatCoKnows"),
+      inputSchema: z.object({}),
+      execute: async () => {
+        const W = await import("../services/whatCoKnows.js");
+        // Fails closed: if another member's details can't be stripped, nothing is shown.
+        const got = await W.whatCoKnows(ctx.userId).catch((err: any) => {
+          console.error("whatCoKnows: read failed (non-fatal):", err?.message ?? err);
+          return null;
+        });
+        if (!got) {
+          notDone("What Co knows about them couldn't be read just now.");
+          return { ok: false, error: "Couldn't read it right now. Say so plainly and offer to try again in a bit." };
+        }
+        ctx.facts?.add("known", W.knownFact(got.view));
+        return {
+          ok: true,
+          groups: got.view.groups.map((g) => ({ title: g.title, lines: g.lines.map((l) => ({ refs: l.refs, text: l.text, theirWords: l.theirWords, canCorrect: l.canCorrect })) })),
+          note: "Lines starting 'my read:' are your own read of them, so say so. canCorrect false: it can be removed, not reworded. Never show refs.",
+        };
+      },
+    }),
+    correctWhatCoKnows: tool({
+      description: toolUse("correctWhatCoKnows"),
+      inputSchema: z.object({
+        changes: z
+          .array(
+            z.object({
+              refs: z.array(z.string()).min(1).describe("The refs of every line from whatCoKnows that says this thing."),
+              action: z.enum(["correct", "remove"]),
+              now: z.string().optional().describe("correct only: what's true now, short, in their words (\"Oakland\")."),
+            }),
+          )
+          .min(1)
+          .max(6),
+      }),
+      execute: async (input: any) => {
+        const { changes } = input as { changes: { refs: string[]; action: "correct" | "remove"; now?: string }[] };
+        if (ctx.dryRun) return { ok: true, applied: [], note: "(dry run) nothing changed." };
+        const W = await import("../services/whatCoKnows.js");
+        const r = await W.applyKnowledgeChanges(ctx.userId, changes, { message: ctx.resolvedContent, theirWords: String(input?.theirYes ?? ctx.resolvedContent) });
+        for (const a of r.applied) {
+          ctx.facts?.add("did_this_turn", a.now == null ? `Removed from what Co knows about them, everywhere Co uses it: "${a.was.slice(0, 120)}".` : `Corrected what Co knows about them, everywhere Co uses it: "${a.was.slice(0, 80)}" is now "${a.now.slice(0, 80)}".`);
+        }
+        if (!r.applied.length) notDone("Nothing Co knows about them was changed.");
+        return {
+          ok: r.ok,
+          ...(r.ok ? {} : { error: r.refused.map((x) => x.why).join("; ") || "nothing matched" }),
+          changed: r.applied.map((a) => ({ was: a.was, now: a.now })),
+          refused: r.refused,
+          stillSays: r.alsoSays.map((l) => ({ refs: l.refs, text: l.text })),
+        };
+      },
+    }),
+
     // Co's own multi-day work (services/coTasks.ts): Co writes the plan and when to look next.
     startTask: tool({
       description: toolUse("startTask"),

@@ -79,6 +79,9 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_profile_corrections_user ON profile_corrections (user_id, corrected_at DESC)`))
+    // What they corrected or removed through Co itself (services/whatCoKnows.ts, 2026-10-12): which item it was, and whether it was
+    // removed. The rebuilds (snapshot, claims, threads, profile extraction) read these to never put it back.
+    .then(() => pool.query(`ALTER TABLE profile_corrections ADD COLUMN IF NOT EXISTS item_ref TEXT, ADD COLUMN IF NOT EXISTS removed BOOLEAN NOT NULL DEFAULT false`))
     .catch((err: Error) => console.error("profile_corrections table init failed:", err));
 
   // Who is at a Co event (2026-09-23, services/eventPresence.ts): when Co

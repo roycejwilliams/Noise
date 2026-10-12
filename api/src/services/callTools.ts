@@ -30,7 +30,7 @@ const LONG_ON_CALL = new Set(["makeDeck", "updateDeck", "makePage", "updatePage"
 const LONG_ON_CALL_WAIT_MS = 3500;
 const STILL_GOING = Symbol("still going");
 const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
-export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "makeDeck", "updateDeck", "readInspo", "keepArtifact", "shareArtifact", "stopSharing", "resetLink", "deleteImages", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
+export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "makeDeck", "updateDeck", "readInspo", "keepArtifact", "shareArtifact", "stopSharing", "resetLink", "deleteImages", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste", "whatCoKnows", "correctWhatCoKnows"] as const;
 export type CallToolName = (typeof CALL_TOOL_NAMES)[number];
 
 // The turn's bounds (steps, time) are in services/callLlmProxy.ts, where the rounds run.
