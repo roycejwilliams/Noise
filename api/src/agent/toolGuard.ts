@@ -48,6 +48,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
   // refused documents, "Already done this turn" read as done, and Co described a document that didn't exist).
   const refusedThisTurn = new Map<string, number>();
   const doneThisTurn = new Set<string>();
+  // Made but not sent (a deck, page or link whose text didn't go): it exists. The tool says so with made, and it is never counted as
+  // a refusal (review of this branch: "nothing was made" after a deck that was made).
+  const madeThisTurn = new Map<string, string>();
   for (const [name, t] of Object.entries(tools)) {
     if (UNGUARDED.has(name)) continue;
     const ability = (ctx.abilityFor ?? abilityForTool)(name);
@@ -85,6 +88,14 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       const used = usedThisTurn.get(name) ?? 0;
       if (limits.perTurn && used >= limits.perTurn) {
         const refused = refusedThisTurn.get(name) ?? 0;
+        const madeUnsent = madeThisTurn.get(name);
+        if (madeUnsent) {
+          return refuse(
+            "limited",
+            `${name} wasn't run again: it already made ${madeUnsent} this turn, but that didn't send.`,
+            `Already done this turn: ${madeUnsent} exists, but the text with it didn't send. Don't make it again; give it in your reply.`,
+          );
+        }
         if (refused && !doneThisTurn.has(name)) {
           return refuse(
             "limited",
@@ -119,16 +130,20 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       usedThisTurn.set(name, used + 1);
       const result = await run(input, options);
       const failed = !!result && typeof result === "object" && result.ok === false;
+      const made = failed && typeof result.made === "string" && result.made.trim() ? String(result.made) : null;
       // A refused attempt doesn't use up the turn's allowance, once: the tool's own refusal says "fix these and try again once"
       // (2026-10-08 call test: a document refused for one unbacked line was then refused again as "already done this turn").
-      if (failed) refusedThisTurn.set(name, (refusedThisTurn.get(name) ?? 0) + 1);
+      if (made) madeThisTurn.set(name, made);
+      if (failed && !made) refusedThisTurn.set(name, (refusedThisTurn.get(name) ?? 0) + 1);
       else doneThisTurn.add(name);
-      if (failed && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
-      if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
-      await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200) } : {});
+      // A free retry only for a refusal: something made is never made twice.
+      if (failed && !made && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
+      if (made) ctx.notDone(`${name} made ${made}, but the text with it didn't send.`);
+      else if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
+      await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : {});
       // Co's record of what it did for them (services/coFacts.ts). Only
       // Co's own tools: an extension's team tools act for the team.
-      if (!failed && !ctx.dryRun && !ctx.abilityFor) await recordToolAction(ctx.userId, name, input);
+      if ((!failed || made) && !ctx.dryRun && !ctx.abilityFor) await recordToolAction(ctx.userId, name, input);
       return result;
     };
   }

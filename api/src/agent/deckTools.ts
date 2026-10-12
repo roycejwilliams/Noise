@@ -205,7 +205,7 @@ export async function deckDataFrom(
 // A deck that closed on its ask still closes on it after a change (2026-10-12: a slide added on request landed after "The ask", so the
 // importer's deck no longer ended on what it asks for). New slides go just before a closing ask or call to action, unless their own
 // words put it at the end. Pure: the slides in their new order.
-const CLOSING = /\b(?:the |our |one |my )?ask\b|\bnext steps?\b|\bcall to action\b|\bwhat we(?:'re| are) asking\b|\blet'?s (?:talk|build|do this|work)\b|\bjoin us\b|\bget in touch\b|\bwork with us\b|\bhow to (?:join|start)\b/i;
+const CLOSING = /^\s*(?:the |our |one |my )?ask\b|\bwhat we(?:'re| are) asking\b|\bnext steps?\b|\bcall to action\b|\blet'?s (?:talk|build|do this|work)\b|\bjoin us\b|\bget in touch\b|\bwork with us\b|\bhow to (?:join|start)\b/i;
 const AT_THE_END = /\b(?:at the (?:very )?end|(?:the )?(?:last|final) slide|after the (?:ask|close|closing)|end (?:it |the deck )?(?:on|with) (?:this|that|the new|it))\b/i;
 export function keepClosingLast<T extends { headline: string }>(was: { headline: string }[], next: T[], theirWords: string): T[] {
   const close = was[was.length - 1];
@@ -643,7 +643,8 @@ export function deckTools(
           const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}\n${made.url}`, input.alsoAnswer);
           if (!(await o.say(text, `Co replied: ${text}`))) {
             o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
-            return { ok: false, error: "The deck is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
+            // made: it exists (toolGuard.ts treats it as done, never as "nothing was made"); only the text didn't go.
+            return { ok: false, made: `the deck "${deckIn.title}" (${made.url})`, url: made.url, error: `The deck is made, but the link didn't send. Tell them plainly and give the link in your reply: ${made.url}` };
           }
           ctx.onLinkDelivered?.();
           confirm();

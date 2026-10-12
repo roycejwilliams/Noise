@@ -12,7 +12,7 @@ import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { documentProblems, memberParts, type Doc } from "./documentSheet.js";
-import { unbackedClaims } from "./documentGrounding.js";
+import { partlyBacked, unbackedClaims, unknownOpeners } from "./documentGrounding.js";
 
 export type Judge = (prompt: string) => Promise<string>;
 export const haikuJudge: Judge = async (prompt) =>
@@ -56,15 +56,19 @@ ${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}
 Return ONLY JSON: {"backed": [<numbers of the lines that PASS>], "fails": [{"n": <line number>, "why": "<what it adds, in a few words>"}]}.`;
 }
 
-// The lines a judge read as theirs, or null when it couldn't run. Tried twice.
-export async function backedLines(lines: string[], theirWords: string, judge: Judge = haikuJudge): Promise<Set<string> | null> {
-  if (!lines.length) return new Set();
+// The judge's read: the lines it read as theirs, and why each other line fails. Null when it couldn't run. Tried twice.
+export type Verdict = { backed: Set<string>; why: Map<string, string> };
+export async function judgeLines(lines: string[], theirWords: string, judge: Judge = haikuJudge): Promise<Verdict | null> {
+  if (!lines.length) return { backed: new Set(), why: new Map() };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const out = parseModelJson<{ backed?: unknown[]; fails?: { n?: number }[] }>(await judge(documentClaimsPrompt(lines, theirWords)));
+      const out = parseModelJson<{ backed?: unknown[]; fails?: { n?: number; why?: string }[] }>(await judge(documentClaimsPrompt(lines, theirWords)));
       if (!Array.isArray(out?.backed)) continue;
-      const failed = new Set((out.fails ?? []).map((f) => f?.n));
-      return new Set(out.backed.filter((n): n is number => typeof n === "number" && n >= 1 && n <= lines.length && !failed.has(n)).map((n) => lines[n - 1]));
+      const ok = (n: unknown): n is number => typeof n === "number" && n >= 1 && n <= lines.length;
+      const fails = (out.fails ?? []).filter((f) => ok(f?.n));
+      const failed = new Set(fails.map((f) => f.n));
+      const why = new Map(fails.map((f) => [lines[f.n! - 1], String(f.why ?? "").slice(0, 120) || "it adds something they never said"]));
+      return { backed: new Set(out.backed.filter((n): n is number => ok(n) && !failed.has(n)).map((n) => lines[n - 1])), why };
     } catch {
       continue;
     }
@@ -72,14 +76,21 @@ export async function backedLines(lines: string[], theirWords: string, judge: Ju
   return null;
 }
 
-// What is wrong with a document, with paraphrase of their own words let through: documentProblems, then a judge for the lines the
-// word check couldn't place (numbers and names they never gave are never sent to it). No judge call when nothing needs one.
-// problems: documentProblems(doc, source) already run by the caller.
+// What is wrong with a document, with paraphrase of their own words let through: documentProblems, then one judge call for the lines
+// the word check couldn't place, and for long lines it passed with some words not theirs (where a claim of Co's own can hide in their
+// vocabulary). Numbers and names they never gave are never sent to it. Fail safe: if the judge can't run, the word check's verdict
+// stands. problems: documentProblems(doc, source) already run by the caller.
 export async function judgedDocumentProblems(doc: Doc, source: { theirs: string; read?: string }, problems: string[] = documentProblems(doc, source), judge: Judge = haikuJudge): Promise<string[]> {
-  if (!problems.length) return problems;
-  const soft = unbackedClaims(memberParts(doc), source.theirs).filter((u) => !u.hard.length).map((u) => u.text);
-  if (!soft.length) return problems;
-  const backed = await backedLines([...new Set(soft)], source.theirs, judge);
-  if (!backed) return problems;
-  return documentProblems(doc, source, { backed });
+  const parts = memberParts(doc);
+  const soft = unbackedClaims(parts, source.theirs, { strict: true }).filter((u) => !u.hard.length).map((u) => u.text);
+  const partial = partlyBacked(parts, source.theirs, { strict: true });
+  // A line opening on a capitalized word they never used may open on a name: the judge reads it, and without a judge it's held.
+  const openers = unknownOpeners(parts, source.theirs);
+  const judged = [...new Set([...partial, ...openers.map((x) => x.line)])];
+  const lines = [...new Set([...soft, ...judged])];
+  if (!lines.length) return problems;
+  const v = await judgeLines(lines, source.theirs, judge);
+  if (!v) return [...problems, ...openers.filter((x) => !problems.some((p) => p.includes(x.line.slice(0, 60)))).map((x) => `"${x.line.slice(0, 90)}" opens on ${x.word}, which they never said: if it's a name, leave it out or ask them`)].slice(0, 7);
+  const judgedOut = new Map(judged.filter((l) => !v.backed.has(l)).map((l) => [l, v.why.get(l) ?? "it adds something they never said"] as [string, string]));
+  return documentProblems(doc, source, { backed: v.backed, judgedOut });
 }

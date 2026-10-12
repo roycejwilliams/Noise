@@ -103,7 +103,8 @@ const sentencesOf = (t: string) => (t.match(/[^.!?\n]+[.!?]*/g) ?? []).map((s) =
 //   read:   what Co read this turn. Only Co's own suggestions may lean on it, for an event or a place (never for a claim about them).
 //   o.backed: claims a judge read as their own words, rephrased (services/documentClaims.ts): not refused for wording. Their numbers
 //             and names are still checked here, whatever the judge said.
-export function documentProblems(doc: Doc, source: { theirs: string; read?: string }, o: { backed?: ReadonlySet<string> } = {}): string[] {
+//   o.judgedOut: lines the word check passed that a judge read as adding a claim, with why.
+export function documentProblems(doc: Doc, source: { theirs: string; read?: string }, o: { backed?: ReadonlySet<string>; judgedOut?: ReadonlyMap<string, string> } = {}): string[] {
   const L = DOC_LIMITS;
   const out: string[] = [];
   if (doc.title.length < 3) out.push("it needs a title");
@@ -131,9 +132,11 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
     if (bad.length) out.push(`the suggestion "${s.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // And every claim in their sections rests on their words, close together: Co's own reasoning is a suggestion, not their point.
-  for (const u of unbackedClaims(memberParts(doc), source.theirs).filter((x) => x.hard.length || !o.backed?.has(x.text)).slice(0, 4)) {
+  for (const u of unbackedClaims(memberParts(doc), source.theirs, { strict: true }).filter((x) => x.hard.length || !o.backed?.has(x.text)).slice(0, 4)) {
     out.push(claimProblem(u));
   }
+  // Lines the word check passed but a judge read as adding a claim (documentClaims.ts).
+  for (const [text, why] of o.judgedOut ?? []) out.push(`"${text.slice(0, 90)}" isn't something they said (${why}): rewrite it from their own words, or move it to suggestions`);
   // Bare fragments are not a document (2026-10-12: after refusals, the last try was bullets that only repeated their headings, "QR
   // table cards." under "QR table cards"). A point says something its heading doesn't.
   const plain = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\b(a|an|the)\b/g, " ").replace(/\s+/g, " ").trim();

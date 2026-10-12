@@ -145,7 +145,7 @@ export function pageTools(
         const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
-          return { ok: false, error: "The page is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
+          return { ok: false, made: `the page "${input.title}" (${made.url})`, url: made.url, error: `The page is made, but the link didn't send. Tell them plainly and give the link in your reply: ${made.url}` };
         }
         ctx.onLinkDelivered?.();
         confirm();

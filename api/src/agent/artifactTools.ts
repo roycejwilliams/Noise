@@ -105,7 +105,7 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         const { text, confirm } = await withAnswer(ctx, `${line.trim()}\n${made.url}`, alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone("The share link was made, but it didn't send.");
-          return { ok: false, error: "The share link is made but didn't send. Give it in your reply." };
+          return { ok: false, made: `a view-only share link (${made.url})`, url: made.url, error: `The share link is made but didn't send. Give it in your reply: ${made.url}` };
         }
         ctx.onLinkDelivered?.();
         confirm();
@@ -139,7 +139,7 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         const { text, confirm } = await withAnswer(ctx, `${line.trim()}\n${r.url}`, alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone("The link was reset, but the new one didn't send.");
-          return { ok: false, error: "The old link is off and a new one is made, but it didn't send. Give it in your reply." };
+          return { ok: false, made: `a fresh link, with the old one turned off (${r.url})`, url: r.url, error: `The old link is off and a new one is made, but it didn't send. Give it in your reply: ${r.url}` };
         }
         ctx.onLinkDelivered?.();
         confirm();
