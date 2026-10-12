@@ -12,6 +12,7 @@ import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
 import { galleryEmail } from "./emailDesign.js";
+import { recordDecision } from "../harness/core.js";
 
 // This person's timezone, for the hours check on a reply-triggered direct
 // ask (code review, 2026-09-17 — see sendExemptWhenAllowed).
@@ -102,6 +103,7 @@ export async function findPendingMatchNudge(userId: string): Promise<PendingMatc
          SELECT 1 FROM event_guest_match_opt_ins o
          WHERE o.event_id = n.event_id AND o.person_id = n.person_id AND o.candidate_id = n.candidate_id
        )
+       AND NOT EXISTS (SELECT 1 FROM event_room_closures c WHERE c.event_id = n.event_id AND c.closed_at IS NOT NULL)
      ORDER BY n.sent_at DESC LIMIT 1`,
     [userId, MATCH_NUDGE_REPLY_EXPIRY_DAYS],
   );
@@ -141,6 +143,8 @@ export async function recordOptIn(
     )
     .catch((err: any) => console.error("recordOptIn: insert failed (non-fatal):", err?.message ?? err));
   await (await import("./inRoomOffers.js")).answerOffer(eventId, personId, candidateId, status === "interested" ? "yes" : "no").catch(() => {});
+  // The pair record (services/roomMatching.ts): one answer per side; a no declines the pair for good.
+  await (await import("./roomMatching.js")).notePairAnswer(eventId, personId, candidateId, status === "interested" ? "yes" : "no").catch(() => {});
   await writeMemory(
     personId,
     "event_guest_match_optin",
@@ -187,8 +191,20 @@ async function maybeAskCandidateDirectly(
   asker: MatchNudgeCandidate,
 ): Promise<void> {
   const O = await import("./inRoomOffers.js");
+  const RM = await import("./roomMatching.js");
   // Already asked (or already answered) about this person, from either path.
   if ((await hasPendingOrAnsweredNudge(eventId, candidate.user_id, asker.user_id)) || (await O.offeredAbout(eventId, candidate.user_id, asker.user_id))) return;
+  // The pair record: never asked twice, never after a decline at any event, never once the room's asks expired. The asker
+  // is never told why (their answer from Co is the same either way).
+  if (await RM.mayAsk(eventId, candidate.user_id, asker.user_id, "eventGuestMatchHandoff.directAsk")) return;
+  // The emergency pause: the asker was already told Co would check, so the ask isn't dropped. It waits in deferred_sends
+  // (which holds it while the pause is on) and goes once the pause lifts, if the event and the pair are still valid then.
+  const paused = await RM.matchingPause(eventId);
+  // The line Co wrote for THIS person when it judged the pair (only theirs; it rests on the asker's shareable ask).
+  const pair = await RM.pairRow(eventId, candidate.user_id, asker.user_id);
+  const { a } = RM.orderPair(candidate.user_id, asker.user_id);
+  const valueLine = pair?.value_verdict === "strong" ? RM.usableLine(a === candidate.user_id ? pair.value_line_a : pair.value_line_b) : "";
+  const askerSide = await RM.gatherValueSide(asker.user_id);
   // An ask held for their morning (services/deferredSends.ts) opens its offer only once it reaches them, so a held ask
   // counts here too: the same one is already asked, and any other is their open question.
   const D = await import("./deferredSends.js");
@@ -208,6 +224,8 @@ async function maybeAskCandidateDirectly(
       decision: "eventGuestMatchHandoff.directAsk",
       recipientId: candidate.user_id,
       otherUserIds: [asker.user_id],
+      // The asker's private words (private asks, profile, notes) never reach the person being asked.
+      extraDraftChecks: (d) => [RM.checkNoPrivateQuote(d, askerSide.privateTexts, askerSide.shared, "no_private_quote", [eventName, askerFirstName, candidate.first_name])],
       preChecks: [
         askerOptedIn
           ? { name: "asker_opted_in", pass: true }
@@ -226,7 +244,7 @@ async function maybeAskCandidateDirectly(
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details.${valueLine ? ` Why it could be worth it for ${candidate.first_name}, in your own words (say nothing else about ${askerFirstName}): ${valueLine}` : ""} Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
       return cleanCoMessage(text.trim());
     },
@@ -242,15 +260,21 @@ async function maybeAskCandidateDirectly(
   // offer is written once the ask actually reaches them (afterDirectAskSent,
   // now or at their 8am): opened while it was only queued, a "yes" they
   // texted about something else before the morning bound to the asker.
-  const result = await sendExemptWhenAllowed({
+  const send = {
     userId: candidate.user_id,
     phoneNumber: candidate.phone_number,
-    type: "direct_ask",
+    type: "direct_ask" as const,
     targetKey: directAskKey(eventId, candidate.user_id, asker.user_id),
     messages: [message],
     timezone: await timezoneFor(candidate.user_id),
-    after: { kind: "event_direct_ask", payload: { eventId, eventName, candidateId: candidate.user_id, askerId: asker.user_id } },
-  });
+    after: { kind: "event_direct_ask" as const, payload: { eventId, eventName, candidateId: candidate.user_id, askerId: asker.user_id } },
+  };
+  if (paused) {
+    const q = await D.enqueueDeferredSend({ ...send, dueAt: new Date() }).catch((err: any) => ({ queued: false, reason: String(err?.message ?? err) }));
+    await recordDecision({ layer: 6, decision: "match.pause", userId: candidate.user_id, outcome: "skip", action: "eventGuestMatchHandoff.directAsk.held", proposal: { eventId, askerId: asker.user_id, queued: q.queued }, reason: paused }).catch(() => {});
+    return;
+  }
+  const result = await sendExemptWhenAllowed(send);
   if (!result.sent && !result.queued) {
     console.error(`maybeAskCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
   }
@@ -266,6 +290,7 @@ export async function afterDirectAskSent(p: { eventId: string; eventName: string
   await O.openOffer({ eventId: p.eventId, eventName: p.eventName, personId: p.candidateId, kind: "direct_ask", candidateId: p.askerId, askerId: p.askerId }).catch((err: any) =>
     console.error("maybeAskCandidateDirectly: opening the offer failed (non-fatal):", err?.message ?? err),
   );
+  await (await import("./roomMatching.js")).notePairAsked(p.eventId, p.candidateId, p.askerId).catch(() => {});
 }
 
 // The introduction itself (Royce, 2026-09-07). One email, both people as
@@ -279,7 +304,25 @@ export async function afterDirectAskSent(p: { eventId: string; eventName: string
 // bolting an unrelated template onto it).
 async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<boolean> {
   const { a: aYes, b: bYes } = await bothOptedIn(eventId, a.user_id, b.user_id);
-  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes)], { eventId, b: b.user_id }))) return false;
+  const RM = await import("./roomMatching.js");
+  // The emergency pause holds the email (the pair stays both_yes); services/roomMatching.ts retryHeldIntros sends it once
+  // the pause lifts. Nothing is said to either member about the hold.
+  const paused = await RM.matchingPause(eventId);
+  const pauseCheck = paused ? { name: "matching_not_paused", pass: false, reason: paused } : { name: "matching_not_paused", pass: true };
+  // Already introduced (the pair record): never a second email.
+  const sentBefore = (await RM.pairRows(a.user_id, b.user_id)).some((r) => r.intro_sent_at);
+  const onceCheck = sentBefore ? { name: "intro_once", pass: false, reason: "already introduced" } : { name: "intro_once", pass: true };
+  // Held by the pause: marked once on the pair (logged once), sent by retryHeldIntros when it lifts.
+  if (paused && aYes && bYes && !sentBefore) {
+    await RM.noteIntroHeld(eventId, a.user_id, b.user_id, paused);
+    return false;
+  }
+  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes), pauseCheck, onceCheck], { eventId, b: b.user_id }))) return false;
+  // No email on file for one of them: nothing to retry.
+  if (!a.email || !b.email) {
+    await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "missing email", true);
+    return false;
+  }
 
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = galleryEmail({
@@ -301,6 +344,7 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
+      await RM.noteIntroFailed(eventId, a.user_id, b.user_id, String(err?.message ?? err).slice(0, 120));
       return false;
     }
   }
@@ -308,7 +352,19 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
   await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
   await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "event_intro")).catch(() => {});
+  await RM.notePairIntroSent(eventId, a.user_id, b.user_id);
   return true;
+}
+
+// An intro email the pause held (services/roomMatching.ts retryHeldIntros): both yeses are read fresh again inside.
+export async function sendHeldIntro(eventId: string, aId: string, bId: string): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[aId, bId]]);
+  const a = rows.find((r: any) => r.user_id === aId);
+  const b = rows.find((r: any) => r.user_id === bId);
+  if (!a || !b) return false;
+  const { eventTiming } = await import("./roomMatching.js");
+  const name = (await eventTiming(eventId).catch(() => null))?.name ?? "the event";
+  return sendIntroEmail(eventId, name, a, b);
 }
 
 export type ResolvedEventGuest = { eventId: string; eventName: string; target: MatchNudgeCandidate } | { needsDetail: true } | { error: string };
@@ -366,6 +422,10 @@ export async function requestIntroToNamedGuest(
   requester: MatchNudgeCandidate,
   target: MatchNudgeCandidate,
 ): Promise<boolean> {
+  // Their own request, not Co's suggestion: the pair is theirs (origin 'member'), not blocked on Co's taste, and logged.
+  const RM = await import("./roomMatching.js");
+  await RM.notePairMemberRequested(eventId, requester.user_id, target.user_id);
+  await recordDecision({ layer: 6, decision: "match.valueLines", userId: requester.user_id, outcome: "act", action: "member_requested", proposal: { eventId, targetId: target.user_id }, reason: "a member asked for this intro by name; the value gate applies to Co's own suggestions" }).catch(() => {});
   await recordOptIn(eventId, requester.user_id, requester.first_name, target.user_id, target.first_name, "interested");
 
   if (await hasReciprocalOptIn(eventId, requester.user_id, target.user_id)) {
@@ -436,16 +496,25 @@ export async function handleAdditiveReply(
     await sendNextQueued(person.user_id);
     return { revealed: null };
   }
-  const [{ inRoomPool, MATCH_NUDGE_MIN_SCORE }, { rankingFor }, { gateShareReason }] = await Promise.all([import("./eventScoring.js"), import("./eventBrief.js"), import("../harness/matchGate.js")]);
-  const [room, ranking] = await Promise.all([inRoomPool(eventId).catch(() => []), rankingFor(eventId, person.user_id)]);
-  const here = new Map(room.map((g) => [g.user_id, g]));
-  const options = ranking.filter((r) => candidateIds.includes(r.candidate_id) && here.has(r.candidate_id) && r.shareReason && r.score >= MATCH_NUDGE_MIN_SCORE).sort((a, b) => b.score - a.score);
+  const [{ MATCH_NUDGE_MIN_SCORE }, { rankingFor }, { gateShareReason }, RM] = await Promise.all([import("./eventScoring.js"), import("./eventBrief.js"), import("../harness/matchGate.js"), import("./roomMatching.js")]);
+  // The emergency pause: nobody is named.
+  if (await RM.matchingPause(eventId)) return { revealed: null };
+  // Still in the room right now (services/roomMatching.ts inRoomNow), both of them.
+  const [room, ranking] = await Promise.all([RM.inRoomNow(eventId).catch(() => ({ open: false, people: [] as any[] })), rankingFor(eventId, person.user_id)]);
+  const here = new Map(room.people.map((g: any) => [g.user_id, g]));
+  const options = room.open && here.has(person.user_id) ? ranking.filter((r) => candidateIds.includes(r.candidate_id) && here.has(r.candidate_id) && r.shareReason && r.score >= MATCH_NUDGE_MIN_SCORE).sort((a, b) => b.score - a.score) : [];
   for (const r of options) {
     if (!(await gateShareReason(person.user_id, r.candidate_id, r.shareReason, "eventGuestMatchHandoff.additiveReveal"))) continue;
+    if (await RM.mayAsk(eventId, person.user_id, r.candidate_id, "eventGuestMatchHandoff.additiveReveal")) continue;
+    const v = await RM.valueGate(eventId, eventName, person.user_id, r.candidate_id, "eventGuestMatchHandoff.additiveReveal", { allow: [eventName] });
+    if (!v.ok) continue;
+    const line = v.lineFor(person.user_id);
+    if (!line) continue;
     const who = here.get(r.candidate_id)!;
     await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: who.user_id });
-    await writeMemory(person.user_id, "event_guest_match_nudge", `Told ${person.first_name} that ${who.first_name} also got to "${eventName}" and is worth meeting: ${r.shareReason}`);
-    return { revealed: { first_name: who.first_name, shareReason: r.shareReason! } };
+    await RM.notePairAsked(eventId, person.user_id, who.user_id);
+    await writeMemory(person.user_id, "event_guest_match_nudge", `Told ${person.first_name} that ${who.first_name} also got to "${eventName}" and is worth meeting: ${line}`);
+    return { revealed: { first_name: who.first_name, shareReason: line } };
   }
   await sendNextQueued(person.user_id);
   return { revealed: null };

@@ -16,6 +16,7 @@ import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
 import { CO_EMAIL_FROM } from "./emailFrom.js";
 import { galleryEmail } from "./emailDesign.js";
+import { recordDecision } from "../harness/core.js";
 
 // Model policy (Royce, 2026-09-14): Haiku for the yes/no reply reads (code
 // acts on them only through the consent checks); Sonnet 5 for drafts that
@@ -151,6 +152,8 @@ export async function attemptNetworkSurfacing(
   _phoneNumber: string,
   askId: string,
 ): Promise<{ queued: boolean }> {
+  // The matching kill switch (services/roomMatching.ts, all-events scope): no new network suggestion while it's on.
+  if (await (await import("./roomMatching.js")).matchingPause(null)) return { queued: false };
   let pending = await dropStaleFront(userId, await getBacklog(userId, askId));
   if (!pending.length) {
     pending = await dropStaleFront(userId, await findFreshCandidates(userId, askId));
@@ -312,7 +315,8 @@ export async function resolveNetworkTeaseReply(
   // through" (2026-10-03: this said "say so briefly and honestly" and a "Sure"
   // got "Sorry for the false start."). harness/discretion.ts.
   const cantReveal = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.", { neutral: true });
-  if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
+  // The matching kill switch (all events) blocks it the same way: nobody is named while it's on, same neutral answer.
+  if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal")) || (await (await import("./roomMatching.js")).matchingPause(null))) return cantReveal;
 
   // The stored reveal was drafted under the other person's consent at the time;
   // if that changed since the tease, it's drafted again (the gate above covers
@@ -375,9 +379,30 @@ export async function findPendingNetworkIntroOffer(userId: string): Promise<Pend
 
 // Returns whether the email actually went out, so Co never says it did when
 // it didn't (Resend reports failures in the result, not by throwing).
-async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<boolean> {
+// Held by the matching pause: the pair goes back to both_interested (it isn't introduced yet), marked held once (logged
+// once), and retryHeldNetworkIntros sends it when the pause lifts.
+async function holdNetworkIntro(a: MatchNudgeCandidate, b: MatchNudgeCandidate, why: string): Promise<void> {
+  const [x, y] = a.user_id < b.user_id ? [a.user_id, b.user_id] : [b.user_id, a.user_id];
+  const { rows } = await pool
+    .query(
+      `UPDATE network_introductions SET status = 'both_interested', introduced_at = NULL, email_held_at = COALESCE(email_held_at, NOW())
+       WHERE person_a_id = $1 AND person_b_id = $2 AND email_sent_at IS NULL RETURNING (email_held_at = NOW()) AS first`,
+      [x, y],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  if (rows[0]?.first) await recordDecision({ layer: 6, decision: "match.pause", userId: a.user_id, outcome: "skip", action: "networkIntroEmail.held", proposal: { b: b.user_id }, reason: why }).catch(() => {});
+}
+
+// "sent", "held" (the pause; it goes when the pause lifts) or "failed".
+async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<"sent" | "held" | "failed"> {
   const [aYes, bYes] = await Promise.all([networkOptedIn(a.user_id, b.user_id), networkOptedIn(b.user_id, a.user_id)]);
-  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return false;
+  // The matching kill switch (all events) holds the email instead of dropping it; Co never says it went.
+  const paused = await (await import("./roomMatching.js")).matchingPause(null);
+  if (paused && aYes && bYes) {
+    await holdNetworkIntro(a, b, paused);
+    return "held";
+  }
+  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return "failed";
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = galleryEmail({
     preview: `Co thinks you two should meet.`,
@@ -402,13 +427,69 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);
-      return false;
+      return "failed";
     }
   }
+  const [x, y] = a.user_id < b.user_id ? [a.user_id, b.user_id] : [b.user_id, a.user_id];
+  await pool.query(`UPDATE network_introductions SET email_sent_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2`, [x, y]).catch(() => {});
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent a network intro email connecting ${a.first_name} and ${b.first_name}: ${matchReason}`);
   // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
   await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "network_intro")).catch(() => {});
-  return true;
+  return "sent";
+}
+
+// "Did it help?" for the intro itself: a follow-up for both people about five days out, delivered through the same
+// next-morning debrief as events (tier 0 marks an intro; services/outcomes.ts records the answer).
+async function scheduleIntroFollowUps(pairs: (readonly [string, string])[]): Promise<void> {
+  const followupDate = new Date(Date.now() + 4 * 24 * 3600_000).toISOString().slice(0, 10);
+  for (const [uid, otherName] of pairs) {
+    await pool
+      .query(
+        `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at)
+         SELECT $1::uuid, $2::text, 0, $3::text, $4::jsonb, NOW() + INTERVAL '5 days'
+         WHERE NOT EXISTS (SELECT 1 FROM recommendation_outcome_followups WHERE user_id = $1 AND lower(match_name) = lower($3))`,
+        [uid, "an intro Co made", `your intro to ${otherName}`, JSON.stringify({ kind: "intro", event_date: followupDate })],
+      )
+      .catch((err: any) => console.error("network intro: follow-up schedule failed (non-fatal):", err?.message ?? err));
+  }
+}
+
+// Network intro emails the matching pause held: sent once it lifts, with the same limits as in-room ones (both still
+// active, both still yes, at most INTRO_MAX_ATTEMPTS tries, within INTRO_RETRY_MAX_AGE_MS of the hold), oldest first,
+// every limit in the WHERE clause.
+export async function retryHeldNetworkIntros(now = new Date()): Promise<number> {
+  const RM = await import("./roomMatching.js");
+  if (await RM.matchingPause(null)) return 0;
+  const { rows } = await pool.query(retryHeldNetworkIntrosSql(RM.INTRO_MAX_ATTEMPTS, RM.INTRO_RETRY_MAX_AGE_MS)).catch(() => ({ rows: [] as any[] }));
+  let sent = 0;
+  for (const r of rows) {
+    // The same claim as a live yes: only the call that marks it introduced sends.
+    const claimed = await pool.query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2 AND status = 'both_interested' RETURNING 1`, [r.person_a_id, r.person_b_id]).catch(() => ({ rows: [] as any[] }));
+    if (!claimed.rows.length) continue;
+    const { rows: us } = await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[r.person_a_id, r.person_b_id]]);
+    const a = us.find((u: any) => u.user_id === r.person_a_id);
+    const b = us.find((u: any) => u.user_id === r.person_b_id);
+    const result = a && b ? await sendNetworkIntroEmail(a, b, r.match_reason) : "failed";
+    if (result === "sent") {
+      sent++;
+      await scheduleIntroFollowUps([[a.user_id, b.first_name], [b.user_id, a.first_name]] as const);
+    } else if (result === "failed") {
+      await pool.query(`UPDATE network_introductions SET status = 'both_interested', introduced_at = NULL, email_attempts = email_attempts + 1 WHERE person_a_id = $1 AND person_b_id = $2`, [r.person_a_id, r.person_b_id]).catch(() => {});
+    }
+  }
+  return sent;
+}
+
+// Pure, for the checks: the held-email query, every limit in the WHERE clause, oldest first.
+export function retryHeldNetworkIntrosSql(maxAttempts: number, maxAgeMs: number): string {
+  return `SELECT n.person_a_id, n.person_b_id, n.match_reason FROM network_introductions n
+       JOIN users ua ON ua.id = n.person_a_id JOIN users ub ON ub.id = n.person_b_id
+       WHERE n.status = 'both_interested' AND n.email_held_at IS NOT NULL AND n.email_sent_at IS NULL
+         AND n.email_attempts < ${maxAttempts}
+         AND n.email_held_at > NOW() - INTERVAL '${maxAgeMs / 86_400_000} days'
+         AND ua.archived_at IS NULL AND ub.archived_at IS NULL AND NOT coalesce(ua.sms_opted_out, false) AND NOT coalesce(ub.sms_opted_out, false)
+       ORDER BY n.email_held_at ASC
+       LIMIT 20`;
 }
 
 export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: MatchNudgeCandidate, matchReason: string, askId: string | null): Promise<void> {
@@ -454,15 +535,22 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
   // stashed while queued, a text of theirs before the morning would bind to an
   // ask they never saw.
   const after = { candidateId: candidate.user_id, askerId: asker.user_id, askerFirstName: asker.first_name, askerPhone: asker.phone_number, askerEmail: asker.email, matchReason, askId };
-  const result = await sendExemptWhenAllowed({
+  const send = {
     userId: candidate.user_id,
     phoneNumber: candidate.phone_number,
-    type: "direct_ask",
+    type: "direct_ask" as const,
     targetKey: `network_direct_ask:${[candidate.user_id, asker.user_id].sort().join(":")}`,
     messages: [message],
     timezone: await timezoneFor(candidate.user_id),
-    after: { kind: "network_intro_ask", payload: after },
-  });
+    after: { kind: "network_intro_ask" as const, payload: after },
+  };
+  // The matching kill switch: the asker was told Co would check, so the ask waits in deferred_sends (held while the
+  // pause is on) instead of being dropped.
+  if (await (await import("./roomMatching.js")).matchingPause(null)) {
+    await (await import("./deferredSends.js")).enqueueDeferredSend({ ...send, dueAt: new Date() }).catch((err: any) => console.error("askCandidateDirectly: holding the ask failed (non-fatal):", err?.message ?? err));
+    return;
+  }
+  const result = await sendExemptWhenAllowed(send);
   if (!result.sent && !result.queued) {
     console.error(`askCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
   }
@@ -546,23 +634,13 @@ export async function resolveNetworkIntroReply(
       email: pending.candidate.email,
     };
     const emailed = await sendNetworkIntroEmail(person, candidateInfo, pending.candidate.match_reason);
-    if (!emailed) {
+    if (emailed === "held") {
+      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them hasn't gone out yet; Co will send it. Tell them plainly that both of you are in and the intro email is coming. Don't say it was sent, and don't say when.`;
+    }
+    if (emailed !== "sent") {
       return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them failed to send. Tell them plainly that both of you are in, but the intro email didn't go through yet. Don't say it was sent.`;
     }
-    // "Did it help?" for the intro itself: a follow-up for both people about
-    // five days out, delivered through the same next-morning debrief as events
-    // (tier 0 marks an intro; services/outcomes.ts records the answer).
-    const followupDate = new Date(Date.now() + 4 * 24 * 3600_000).toISOString().slice(0, 10);
-    for (const [uid, otherName] of [[person.user_id, pending.candidate.first_name], [pending.candidate.candidate_id, person.first_name]] as const) {
-      await pool
-        .query(
-          `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at)
-           SELECT $1::uuid, $2::text, 0, $3::text, $4::jsonb, NOW() + INTERVAL '5 days'
-           WHERE NOT EXISTS (SELECT 1 FROM recommendation_outcome_followups WHERE user_id = $1 AND lower(match_name) = lower($3))`,
-          [uid, "an intro Co made", `your intro to ${otherName}`, JSON.stringify({ kind: "intro", event_date: followupDate })],
-        )
-        .catch((err: any) => console.error("resolveNetworkIntroReply: intro follow-up schedule failed (non-fatal):", err?.message ?? err));
-    }
+    await scheduleIntroFollowUps([[person.user_id, pending.candidate.first_name], [pending.candidate.candidate_id, person.first_name]] as const);
     return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too — you've already sent a real intro email to both of them. Acknowledge warmly and briefly, don't repeat the email content back.`;
   }
 

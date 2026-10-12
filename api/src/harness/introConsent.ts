@@ -172,6 +172,21 @@ export function withEnd<T extends { start_at: string; end_at: string | null; tim
   return { ...timing, end_at: effectiveEnd(timing) };
 }
 
+// THE phase of a Co event's room (2026-10-12, services/roomMatching.ts): every reader that asks "is the room on" reads
+// this, with the same end (effectiveEnd). before: not started. open: matching and nudges may go. closing: its last 30
+// minutes, people are still there but nothing new starts. over: past its end, or closed by the end-of-night job
+// (closedAt), whichever comes first.
+export type RoomPhase = "before" | "open" | "closing" | "over";
+export function roomPhase(timing: { start_at: string; end_at: string | null; timezone?: string | null }, now: Date, closedAt: Date | null = null): RoomPhase {
+  if (closedAt && closedAt.getTime() <= now.getTime()) return "over";
+  const t = now.getTime();
+  const end = new Date(effectiveEnd(timing)).getTime();
+  if (t < new Date(timing.start_at).getTime()) return "before";
+  if (t > end) return "over";
+  if (t > end - MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000) return "closing";
+  return "open";
+}
+
 export function checkEventWindow(
   timing: { start_at: string; end_at: string | null; timezone?: string | null } | null,
   now: Date,
@@ -185,11 +200,9 @@ export function checkEventWindow(
       ? { name, pass: true, reason: "not a live event (no timing to check)" }
       : { name, pass: false, reason: "no event start/end time on file" };
   }
-  const t = now.getTime();
-  if (t < new Date(timing.start_at).getTime()) return { name, pass: false, reason: "event hasn't started" };
-  if (t > new Date(effectiveEnd(timing)).getTime() - MATCH_NUDGE_END_CUTOFF_MINUTES * 60_000) {
-    return { name, pass: false, reason: "event is over or in its last 30 minutes" };
-  }
+  const phase = roomPhase(timing, now);
+  if (phase === "before") return { name, pass: false, reason: "event hasn't started" };
+  if (phase !== "open") return { name, pass: false, reason: "event is over or in its last 30 minutes" };
   return { name, pass: true };
 }
 

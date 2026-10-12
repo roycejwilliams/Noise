@@ -5,7 +5,7 @@ import pool from "../db/db.js";
 import { matchablePhone } from "../utils/phone.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
-import { getActiveAsks, getActiveOfferingAsk, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk } from "./matching.js";
+import { getActiveOfferingAsk, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk, shareableAsks } from "./matching.js";
 import { goalTexts } from "./goalJourney.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import { scheduleUnmatchedFollowUp } from "./eventUnmatchedFollowUp.js";
@@ -16,6 +16,7 @@ import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn, withEnd } from "../harness/introConsent.js";
 import { gateShareReason } from "../harness/matchGate.js";
+import { recordDecision } from "../harness/core.js";
 import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
 
@@ -100,11 +101,13 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
 //   - a current member: not archived, not opted out of texts;
 //   - and not someone who told Co they can't make it (event_presence.not_going_at).
 // guests: the event's Luma guest list when the caller already has it.
+// This is the roster (who is in the room while it's on). Whether someone is in it RIGHT NOW (the room open, not left, not
+// closed for the night) is services/roomMatching.ts inRoomNow, which every live reader uses on top of this.
 export async function inRoomPool(eventId: string, guests?: LumaGuest[]): Promise<ScorableGuest[]> {
   const { mergeWalkinsIntoGuestPool } = await import("./eventWalkinCheckin.js");
-  const list = guests ?? (await getEventGuestList(eventId));
+  const { isTestEvent } = await import("./roomMatching.js");
   const [registered, walkins] = await Promise.all([
-    matchGuestsToUsers(list.filter((g) => g.approval_status === "approved")),
+    isTestEvent(eventId) && !guests ? testEventGuests(eventId) : (async () => matchGuestsToUsers((guests ?? (await getEventGuestList(eventId))).filter((g) => g.approval_status === "approved")))(),
     mergeWalkinsIntoGuestPool(eventId),
   ]);
   const ids = [...new Set([...registered, ...walkins].map((g) => g.user_id))];
@@ -114,6 +117,20 @@ export async function inRoomPool(eventId: string, guests?: LumaGuest[]): Promise
   const notGoing = (id: string) => Boolean(presence.get(id)?.not_going_at);
   const arrived = (id: string) => Boolean(presence.get(id)?.arrived_at);
   return dedupeByUserId([...registered.filter((g) => !notGoing(g.user_id)), ...walkins.filter((g) => arrived(g.user_id) && !notGoing(g.user_id))]);
+}
+
+// A fictional test event's guests (co_test_events, co-test only; services/testNumbers.ts): the same profile rows as a
+// Luma guest list gives, never a Luma call.
+async function testEventGuests(eventId: string): Promise<ScorableGuest[]> {
+  const { testNumbersEnabled } = await import("./testNumbers.js");
+  if (!testNumbersEnabled()) return [];
+  const { rows } = await pool.query(
+    `SELECT cp.user_id, u.first_name, u.phone_number, u.email, cp.city, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
+     FROM co_test_events e JOIN users u ON u.id = ANY(e.guest_user_ids) JOIN co_profiles cp ON cp.user_id = u.id
+     WHERE e.api_id = $1 AND coalesce(u.sms_opted_out, false) = false AND u.archived_at IS NULL`,
+    [eventId],
+  );
+  return rows;
 }
 
 // A person could plausibly show up in both sources in the same pass — a
@@ -371,16 +388,42 @@ async function maybeSendMatchNudge(
   const oneNudgeCheck = checkOneNudgePerEvent(await wasAlreadyNudgedForMatch(eventId, person.user_id));
   if (!oneNudgeCheck.pass) return false;
   if (!(await gateShareReason(person.user_id, candidate.user_id, top.shareReason, "eventScoring.matchNudge"))) return false;
+  // The pair record (services/roomMatching.ts): never ask the same person twice about the same pair, never a pair either
+  // side declined at any event, never a pair already introduced or blocked.
+  const RM = await import("./roomMatching.js");
+  if (await RM.mayAsk(eventId, person.user_id, candidate.user_id, "eventScoring.matchNudge")) return false;
+  // The emergency pause, before anything is judged or claimed.
+  if (await RM.matchingPause(eventId)) return false;
 
   const candidateOptedIn = await eventOptedIn(eventId, candidate.user_id, person.user_id);
+  // Only what the candidate marked shareable counts as "what they told Co" for the consent checks (2026-10-12): their
+  // private asks are not a group a draft may describe.
+  const candidateShared = shareableAsks(candidate.intent).map((a) => String(a.text));
   const draftFacts = {
     otherFirstName: candidate.first_name,
     otherOptedIn: candidateOptedIn,
     recipientOptedIn: false,
     recipientFirstName: person.first_name,
-    otherStatedAsks: getActiveAsks(candidate.intent),
+    otherStatedAsks: candidateShared,
     otherPhone: candidate.phone_number,
     otherEmail: candidate.email,
+  };
+  // The candidate's private words (private asks, profile, notes, owner-only facts) never appear in this text.
+  const candidateSide = await RM.gatherValueSide(candidate.user_id);
+  // Words any text may carry whoever said them: the event's name, its venue, the two first names.
+  const venue = (await RM.eventTiming(eventId).catch(() => null))?.venue ?? null;
+  const allow = [eventName, ...(venue ? [venue] : []), person.first_name, candidate.first_name];
+  const noPrivateQuote = (d: string) => [RM.checkNoPrivateQuote(d, candidateSide.privateTexts, candidateSide.shared, "no_private_quote", allow)];
+  // Taste first: the one line on why this person gets value from the candidate. Set once the gate passes.
+  let valueLine = "";
+  const passValueGate = async (): Promise<boolean> => {
+    // Not ok: blocked (stored, logged) or a failed read (logged, tried again next pass). Either way the caller's loop moves
+    // on to this person's next candidate.
+    const v = await RM.valueGate(eventId, eventName, person.user_id, candidate.user_id, opts.honestLowConfidence ? "eventScoring.unmatchedPair" : "eventScoring.matchNudge", { allow });
+    if (!v.ok) return false;
+    // This person's own line; empty only when the candidate shared nothing, and then there's no nudge (nothing true to say).
+    valueLine = v.lineFor(person.user_id);
+    return Boolean(valueLine);
   };
   const draftFn = async (feedback: string | null) => {
     const { text } = await generateText({
@@ -390,7 +433,8 @@ async function maybeSendMatchNudge(
         recipientFirstName: person.first_name,
         otherFirstName: candidate.first_name,
         eventName,
-        shareReason: top.shareReason!,
+        // The value line Co wrote for this person (it rests on the candidate's shareable ask, checked in code).
+        shareReason: valueLine || top.shareReason!,
         feedback,
       }),
     });
@@ -415,6 +459,14 @@ async function maybeSendMatchNudge(
       console.log(`[eventScoring dryRun] would nudge ${person.user_id} about ${candidate.user_id} at ${eventId} (score ${top.score})`);
       return false;
     }
+    // Both of them in the room right now (services/roomMatching.ts inRoomNow): nobody who left is nudged or pointed to.
+    const room = await RM.inRoomNow(eventId, { timing: eventTiming });
+    const here = new Set(room.people.map((p) => p.user_id));
+    if (!room.open || !here.has(person.user_id) || !here.has(candidate.user_id)) {
+      await recordDecision({ layer: 6, decision: "match.room", userId: person.user_id, outcome: "skip", action: "eventScoring.matchNudge", proposal: { eventId, candidateId: candidate.user_id }, checks: [{ name: "both_in_room_now", pass: false, reason: !room.open ? `room is ${room.phase ?? "unknown"}` : !here.has(person.user_id) ? "recipient isn't in the room now" : "candidate isn't in the room now" }] }).catch(() => {});
+      return false;
+    }
+    if (!(await passValueGate())) return false;
 
     // Claim atomically before drafting (code review, 2026-09-17): the
     // scoring debounce only coalesces webhooks that arrive within its 15s
@@ -428,7 +480,7 @@ async function maybeSendMatchNudge(
       return false;
     }
 
-    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id] }, draftFn);
+    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote }, draftFn);
     if (!message) {
       await releaseMatchNudgeClaim(eventId, person.user_id); // free it up so a later pass can retry
       return false;
@@ -455,6 +507,7 @@ async function maybeSendMatchNudge(
     await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
     // The question they now have open about this one person (services/inRoomOffers.ts): their reply binds to it.
     await (await import("./inRoomOffers.js")).openOffer({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: candidate.user_id }).catch((err: any) => console.error("eventScoring: opening the nudge offer failed (non-fatal):", err?.message ?? err));
+    await RM.notePairAsked(eventId, person.user_id, candidate.user_id);
     // No markMatchNudgeSent call needed here — the claim above already
     // wrote the row with the final candidate_id/score.
     await writeMemory(
@@ -464,8 +517,8 @@ async function maybeSendMatchNudge(
         ? // Only this person's own state: this memory is read back into
           // their future replies, so it must not carry anything about the
           // other person's night (2026-09-22).
-          `Suggested ${person.first_name} say hi to ${candidate.first_name} at "${eventName}" as a low-key hello, since nothing stood out as a strong match for ${person.first_name}: ${top.shareReason}`
-        : `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${top.shareReason}`,
+          `Suggested ${person.first_name} say hi to ${candidate.first_name} at "${eventName}" as a low-key hello, since nothing stood out as a strong match for ${person.first_name}: ${valueLine || top.shareReason}`
+        : `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${valueLine || top.shareReason}`,
     );
     // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
     // the actual text sent, so recentConversation (routes/sendblue.ts, which
@@ -497,6 +550,7 @@ async function maybeSendMatchNudge(
     return false;
   }
 
+  if (!(await passValueGate())) return false;
   // An event Co doesn't run (2026-09-23): unlike a Co event, where every
   // guest knows members are in the room, telling someone "Sam is going"
   // shares Sam's plans without Sam's yes. So this heads-up names no one; the
@@ -514,12 +568,18 @@ async function maybeSendMatchNudge(
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft" },
-        prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: top.shareReason!, feedback }),
+        prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: valueLine || top.shareReason!, feedback }),
       });
       return cleanCoMessage(text.trim());
     },
   );
   if (!message) return false;
+  // The candidate's private words never ride along (checked here too, after the consent loop).
+  const priv = noPrivateQuote(message)[0];
+  if (!priv.pass) {
+    await recordDecision({ layer: 6, decision: "intro.consent", userId: person.user_id, outcome: "skip", action: "eventScoring.anonymousHeadsUp", checks: [priv], reason: priv.reason }).catch(() => {});
+    return false;
+  }
 
   const payload: EventMatchNudgePayload = {
     eventId,
@@ -562,6 +622,16 @@ async function maybeSendAdditiveOffer(
   opts: { dryRun?: boolean },
 ): Promise<boolean> {
   if (!newCandidates.length) return false;
+  if (eventTiming) {
+    const RM = await import("./roomMatching.js");
+    const room = await RM.inRoomNow(eventId, { timing: eventTiming });
+    const here = new Set(room.people.map((p) => p.user_id));
+    if (!here.has(person.user_id)) return false;
+    const fresh: ScorableGuest[] = [];
+    for (const c of newCandidates) if (here.has(c.user_id) && !(await RM.mayAsk(eventId, person.user_id, c.user_id, "eventScoring.additiveOffer"))) fresh.push(c);
+    newCandidates = fresh;
+    if (!newCandidates.length) return false;
+  }
   // This is strictly the in-room "more people just checked in" follow-up to
   // an already-sent live nudge, so it only makes sense with real event
   // timing to be in-room for. Without it (code review, 2026-09-17: same
@@ -680,11 +750,24 @@ export async function scoreMatchedGroup(
     return { scoredCount: 0, solicitedCount: 0, matchedCount: matched.length };
   }
 
+  // The emergency pause (services/roomMatching.ts): no scoring, no asks, no nudges for this event while it's on.
+  if (!opts.dryRun) {
+    const paused = await (await import("./roomMatching.js")).matchingPause(eventId);
+    if (paused) {
+      console.log(`eventScoring: ${eventId} not scored: ${paused}`);
+      return { scoredCount: 0, solicitedCount: 0, matchedCount: matched.length };
+    }
+  }
   let scoredCount = 0;
   let solicitedCount = 0;
   // Everyone's wants and offers current before the room is scored
   // (services/peopleGraph.ts). A dry run reads only what's already there.
   if (!opts.dryRun) await refreshRoom(matched.map((m) => m.user_id)).catch(() => {});
+  // Matching reads only asks a member marked shareable (Royce, 2026-10-12): a private ask is neither anyone's frame nor
+  // anything the scorer sees about a candidate. Goals stay the frame for someone with no shareable ask.
+  const { matchableIntent } = await import("./roomMatching.js");
+  const room = matched.map((g) => ({ ...g, intent: matchableIntent(g.intent) }));
+  matched = room;
   for (const person of matched) {
     const others = matched.filter((m) => m.user_id !== person.user_id);
     // Goals are the frame for who is worth meeting; asks write the specific reason (a candidate's own ask is the share reason). Someone with only
@@ -833,9 +916,13 @@ export async function scoreGuestListForEvent(
     return { scoredCount: 0, solicitedCount: 0, matchedCount: 0 };
   }
 
+  // One reader of an event's timing (services/roomMatching.ts eventTiming), test events included; Luma's guest list for Co's
+  // own events, the test roster for a fictional one.
+  const RM = await import("./roomMatching.js");
+  const test = RM.isTestEvent(eventId);
   const [guests, details] = await Promise.all([
-    getEventGuestList(eventId),
-    getEventDetails(eventId).catch(() => null),
+    test ? Promise.resolve(undefined) : getEventGuestList(eventId),
+    test ? RM.eventTiming(eventId).then((t) => (t ? ({ ...t, location: null, url: null } as LumaEventDetail) : null)) : getEventDetails(eventId).catch(() => null),
   ]);
   const resolvedName = await resolveEventName(eventId, eventName, details);
   // Two sources feed the same guest pool now: Luma's real guest list, and
@@ -851,6 +938,8 @@ export async function scoreGuestListForEvent(
   });
   // A missing end_at gets the end of that evening (introConsent.ts effectiveEnd), so the window and wrap-up still close.
   const eventTiming = details ? withEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null }) : null;
+  // The durable end-of-night job for this room (services/roomMatching.ts runRoomCloses).
+  if (!opts.dryRun) await RM.scheduleRoomClose(eventId, resolvedName, eventTiming).catch(() => {});
 
   // End-of-night check-in (Notion V1 board row 8) — gated on registration
   // (matched, above) + the event's real end_at, not a Luma check-in signal

@@ -1743,6 +1743,8 @@ export const MAX_IN_ROOM_SENDS_PER_EVENT = 3;
 // released, and a later pass sends it once the pause lifts.
 export async function inRoomSendAllowed(userId: string, eventId: string): Promise<boolean> {
   if (proactivePaused()) return false;
+  // The matching kill switch, global or this event (services/roomMatching.ts), read fresh.
+  if (await (await import("../services/roomMatching.js")).matchingPause(eventId)) return false;
   // Counted per event, exactly: a prefix match let three texts at evt-1234 use up the limit at evt-12.
   const { rows } = await pool.query(`SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'`, [userId]);
   return rows.filter((r: any) => inRoomKeyEvent(String(r.target_key)) === eventId).length < MAX_IN_ROOM_SENDS_PER_EVENT;

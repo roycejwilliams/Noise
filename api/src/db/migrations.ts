@@ -2799,6 +2799,103 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("member_state_nudges table init failed:", err));
+  // Matching, taste-first (services/roomMatching.ts, 2026-10-12). co_pairs: one record per pair per event, a_id < b_id,
+  // its whole lifecycle (suggested, asked each side, answers, both yes, intro sent, met and each side's own outcome,
+  // declined, blocked by the value-line gate, expired at the end of the night) and the value lines Co wrote for each side.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_pairs (
+        id BIGSERIAL PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        a_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        b_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        state TEXT NOT NULL DEFAULT 'suggested' CHECK (state IN ('suggested','asked','both_yes','intro_sent','met','declined','blocked','expired')),
+        origin TEXT NOT NULL DEFAULT 'co' CHECK (origin IN ('co','member')),
+        asked_a_at TIMESTAMPTZ,
+        asked_b_at TIMESTAMPTZ,
+        a_answer TEXT CHECK (a_answer IN ('yes','no')),
+        a_answered_at TIMESTAMPTZ,
+        b_answer TEXT CHECK (b_answer IN ('yes','no')),
+        b_answered_at TIMESTAMPTZ,
+        both_yes_at TIMESTAMPTZ,
+        intro_sent_at TIMESTAMPTZ,
+        declined_at TIMESTAMPTZ,
+        met_at TIMESTAMPTZ,
+        a_outcome TEXT,
+        a_outcome_note TEXT,
+        b_outcome TEXT,
+        b_outcome_note TEXT,
+        outcome_at TIMESTAMPTZ,
+        expired_at TIMESTAMPTZ,
+        value_line_a TEXT,
+        value_line_b TEXT,
+        value_verdict TEXT CHECK (value_verdict IN ('strong','weak')),
+        value_why TEXT,
+        value_judged_at TIMESTAMPTZ,
+        blocked_reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (a_id < b_id),
+        UNIQUE (event_id, a_id, b_id)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_pairs_pair_idx ON co_pairs (a_id, b_id)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS co_pairs_waiting_idx ON co_pairs (event_id, state)`))
+    .catch((err: Error) => console.error("co_pairs table init failed:", err));
+  // The matching kill switch: scope 'all' or one event's id. Read fresh on every check; never a feature toggle.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS matching_pauses (
+        scope TEXT PRIMARY KEY,
+        paused BOOLEAN NOT NULL DEFAULT true,
+        reason TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("matching_pauses table init failed:", err));
+  // The end of the night: one durable row per event, due at its end plus a buffer, claimed once by the cron.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_room_closures (
+        event_id TEXT PRIMARY KEY,
+        event_name TEXT,
+        ends_at TIMESTAMPTZ NOT NULL,
+        due_at TIMESTAMPTZ NOT NULL,
+        claimed_at TIMESTAMPTZ,
+        closed_at TIMESTAMPTZ,
+        expired_offers INTEGER,
+        expired_pairs INTEGER,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS event_room_closures_due_idx ON event_room_closures (due_at) WHERE closed_at IS NULL`))
+    .catch((err: Error) => console.error("event_room_closures table init failed:", err));
+  // Intro emails: held by the matching pause (sent when it lifts) or failed (a few bounded retries). And every decline
+  // already on record joins its pair, so a declined pair is never suggested again (idempotent backfill).
+  await pool
+    .query(`ALTER TABLE co_pairs ADD COLUMN IF NOT EXISTS intro_held_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS intro_attempts INTEGER NOT NULL DEFAULT 0`)
+    .then(() =>
+      pool.query(
+        `INSERT INTO co_pairs (event_id, a_id, b_id, origin, state, declined_at, a_answer, a_answered_at, b_answer, b_answered_at)
+         SELECT o.event_id, LEAST(o.person_id, o.candidate_id), GREATEST(o.person_id, o.candidate_id), 'co', 'declined', o.decided_at,
+                CASE WHEN o.person_id < o.candidate_id THEN 'no' END, CASE WHEN o.person_id < o.candidate_id THEN o.decided_at END,
+                CASE WHEN o.person_id > o.candidate_id THEN 'no' END, CASE WHEN o.person_id > o.candidate_id THEN o.decided_at END
+         FROM event_guest_match_opt_ins o
+         WHERE o.status = 'declined' AND o.person_id <> o.candidate_id
+         ON CONFLICT (event_id, a_id, b_id) DO UPDATE SET state = 'declined', declined_at = COALESCE(co_pairs.declined_at, EXCLUDED.declined_at), updated_at = NOW()
+           WHERE co_pairs.declined_at IS NULL AND co_pairs.intro_sent_at IS NULL`,
+      ),
+    )
+    .catch((err: Error) => console.error("co_pairs intro columns / decline backfill failed:", err));
+  // Network intro emails held by the matching pause (services/networkIntroNudge.ts retryHeldNetworkIntros).
+  await pool
+    .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_held_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_attempts INTEGER NOT NULL DEFAULT 0`)
+    .catch((err: Error) => console.error("network_introductions held-email columns failed:", err));
+  // An in-room question still open when the room closes expires instead of binding a "yes" days later.
+  await pool
+    .query(`ALTER TABLE event_match_offers DROP CONSTRAINT IF EXISTS event_match_offers_status_check`)
+    .then(() => pool.query(`ALTER TABLE event_match_offers ADD CONSTRAINT event_match_offers_status_check CHECK (status IN ('queued', 'open', 'answered', 'expired'))`))
+    .catch((err: Error) => console.error("event_match_offers expired status failed:", err));
   // Restraint counts from the first kind-tagged send (services/kindRestraint.ts loadKindHistory): this keeps that lookup an index read.
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)

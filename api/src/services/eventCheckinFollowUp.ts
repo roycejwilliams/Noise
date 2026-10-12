@@ -1,6 +1,5 @@
 import pool from "../db/db.js";
 import { memberZone } from "./memberTime.js";
-import { getEventDetails } from "./luma.js";
 import { enqueueDebrief, type NamedOutcome } from "./recommendationOutcome.js";
 import type { ScorableGuest } from "./eventScoring.js";
 
@@ -77,8 +76,9 @@ export async function detectAndScheduleCheckins(
   // schedule against, so this cycle is skipped rather than guessing one;
   // a later guest.updated for the same event (Luma backfilling end_at,
   // say) gets another chance via ON CONFLICT DO NOTHING below.
-  const details = await getEventDetails(eventId).catch((err: any) => {
-    console.error(`detectAndScheduleCheckins: getEventDetails failed for ${eventId} (non-fatal):`, err?.message ?? err);
+  // The one reader of an event's timing (services/roomMatching.ts eventTiming), test events included.
+  const details = await (await import("./roomMatching.js")).eventTiming(eventId).catch((err: any) => {
+    console.error(`detectAndScheduleCheckins: reading the event's timing failed for ${eventId} (non-fatal):`, err?.message ?? err);
     return null;
   });
   if (!details) return;

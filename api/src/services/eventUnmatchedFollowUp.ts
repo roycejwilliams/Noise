@@ -1,7 +1,6 @@
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
-import { getEventDetails } from "./luma.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
 import { MODELS } from "../models.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
@@ -9,7 +8,7 @@ import { writeMemory } from "./memory.js";
 import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { draftWithConsent } from "../harness/introConsent.js";
 import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
-import { inRoomPool, wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
+import { wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
 
 // "No one should feel left out" (Royce, 2026-09-22). Two things, both
 // scoped to people the real scoring pass (eventScoring.ts's
@@ -144,13 +143,15 @@ async function processOneEvent(eventId: string, eventName: string): Promise<void
   const dueUserIds = new Set<string>(dueRows.map((r) => r.user_id));
   if (!dueUserIds.size) return;
 
-  const details = await getEventDetails(eventId).catch(() => null);
+  const RM = await import("./roomMatching.js");
+  const details = await RM.eventTiming(eventId).catch(() => null);
   const eventTiming = details ? withEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null }) : null;
 
-  // Re-fetch the current guest list — it can have grown since this was
-  // scheduled (a late walk-in), and a person due here may already have a
+  // Who is in the room right now (services/roomMatching.ts inRoomNow): the current roster (it can have grown since this
+  // was scheduled), minus anyone who left; nobody at all once the room is closed. A person due here may already have a
   // real match from a scoring pass that ran after scheduling but before now.
-  const matched = (await inRoomPool(eventId).catch(() => [] as ScorableGuest[])).filter((p) => dueUserIds.has(p.user_id));
+  const room = await RM.inRoomNow(eventId, { timing: eventTiming }).catch(() => ({ people: [] as ScorableGuest[] }));
+  const matched = room.people.filter((p) => dueUserIds.has(p.user_id));
 
   const stillUnmatched: ScorableGuest[] = [];
   for (const person of matched) {

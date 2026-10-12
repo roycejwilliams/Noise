@@ -25,6 +25,7 @@ import { listCalendarEvents, getEventGuestList, type LumaEvent } from "./luma.js
 import { recordInRoomSend } from "../harness/proactive.js";
 import { geocodeVenue, type GeoPoint } from "./geocoding.js";
 import { recordDecision, type GateCheck } from "../harness/core.js";
+import { effectiveEnd } from "../harness/introConsent.js";
 
 // ---------------------------------------------------------------- rules (pure)
 
@@ -83,9 +84,12 @@ export function nextPresence(prev: PresenceState, near: boolean, now: Date): { s
   return { state: s, change: null };
 }
 
-export function isWatchWindow(event: { start_at: string; end_at: string | null }, now: Date): boolean {
+// The event's end is always introConsent.effectiveEnd (the one end every in-room reader uses, 2026-10-12).
+const endOf = (e: { start_at: string; end_at: string | null; timezone?: string | null }) => new Date(effectiveEnd(e)).getTime();
+
+export function isWatchWindow(event: { start_at: string; end_at: string | null; timezone?: string | null }, now: Date): boolean {
   const start = new Date(event.start_at).getTime();
-  const end = event.end_at ? new Date(event.end_at).getTime() : start + 6 * 3_600_000;
+  const end = endOf(event);
   return now.getTime() >= start - WATCH_BEFORE_START_MS && now.getTime() <= end;
 }
 
@@ -388,8 +392,7 @@ export async function arrivedByText(userId: string, message: string, now = new D
 export async function recordTextArrival(userId: string, now = new Date()): Promise<{ eventApiId: string; eventName: string; isNew: boolean } | null> {
   const open = (await events()).filter((e) => {
     const start = new Date(e.start_at).getTime();
-    const end = e.end_at ? new Date(e.end_at).getTime() : start + 6 * 3_600_000;
-    return now.getTime() >= start - 3 * 3_600_000 && now.getTime() <= end;
+    return now.getTime() >= start - 3 * 3_600_000 && now.getTime() <= endOf(e);
   });
   const theirs: LumaEvent[] = [];
   for (const e of open) {
@@ -409,8 +412,7 @@ export async function recordTextArrival(userId: string, now = new Date()): Promi
 export async function todayEventFor(userId: string, now = new Date()): Promise<{ eventApiId: string; name: string; startAt: string; timezone: string | null } | null> {
   const on = (await events()).filter((e) => {
     const start = new Date(e.start_at).getTime();
-    const end = e.end_at ? new Date(e.end_at).getTime() : start + 6 * 3_600_000;
-    return now.getTime() >= start - 6 * 3_600_000 && now.getTime() <= end;
+    return now.getTime() >= start - 6 * 3_600_000 && now.getTime() <= endOf(e);
   });
   const theirs: LumaEvent[] = [];
   for (const e of on) if ((await eventMembers(e.api_id)).some((m) => m.user_id === userId)) theirs.push(e);
