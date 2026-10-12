@@ -335,7 +335,11 @@ export async function applyThreadProposal(
     if (!lines.length) return;
     parsed = parsed ?? {};
     const zone = await zoneFor(userId);
-    const { opened, closed, checks } = gateThreadChanges(parsed.open ?? [], parsed.close ?? [], onFile, lines, zone);
+    const gated = gateThreadChanges(parsed.open ?? [], parsed.close ?? [], onFile, lines, zone);
+    const { closed, checks } = gated;
+    // A thread they had removed (services/whatCoKnows.ts) isn't opened again from their older words.
+    const forgotten = await import("../services/whatCoKnows.js").then((W) => W.forgottenRows(userId).then((rows) => ({ W, rows }))).catch(() => null);
+    const opened = gated.opened.filter((o) => !forgotten?.W.forgets(o.text, forgotten.rows, "thread"));
 
     for (const c of closed) {
       await pool.query(

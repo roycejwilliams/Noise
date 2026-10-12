@@ -152,6 +152,8 @@ export type MemberKnowledge = {
   exchanges: Fact<Exchange>[];
   person: Fact<{ text: string }> | null;
   limits: Fact<Limits> | null;
+  // How many things they asked Co to remove (services/whatCoKnows.ts), never what they were: read with exchanges or corrections.
+  removedCount?: number;
 };
 
 export const KNOWLEDGE_SECTIONS = ["goals", "asks", "delivered", "carrying", "lessons", "corrections", "preferences", "claims", "restraint", "exchanges", "person", "limits"] as const;
@@ -217,6 +219,9 @@ export type KnowledgeDeps = {
   restraint: (userId: string, now: Date) => Promise<RawRestraint>;
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
   person: (userId: string) => Promise<string>;
+  // What they corrected or removed through Co (services/whatCoKnows.ts, the live guards): exchanges that say a removed thing are left
+  // out, and ones that still say a corrected-away value carry the correction inline. Optional, so stubs without it work.
+  forgotten?: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
 };
 
 const rows = (sql: string, args: unknown[]) => pool.query(sql, args).then((r) => r.rows as any[]);
@@ -270,7 +275,10 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     (await rows(`SELECT content, created_at FROM co_memories WHERE user_id = $1 AND memory_type = 'co_lesson' ORDER BY created_at DESC LIMIT 6`, [userId])).map((r) => ({ text: String(r.content), at: new Date(r.created_at) })),
   corrections: async (userId, o) =>
     (await rows(
-      `SELECT field, old_value, new_value, corrected_at FROM profile_corrections WHERE user_id = $1 AND ($2::int IS NULL OR corrected_at > NOW() - make_interval(days => $2::int)) ORDER BY corrected_at DESC LIMIT $3`,
+      // A removal (services/whatCoKnows.ts) isn't a correction anyone reads: what they had removed is never put back in front of Co,
+      // not even as "was X". Only the rebuild guards read it (forgottenRows). Read through to_jsonb so a database without the column
+      // yet still reads every correction.
+      `SELECT field, old_value, new_value, corrected_at FROM profile_corrections pc WHERE user_id = $1 AND (to_jsonb(pc)->>'removed') IS DISTINCT FROM 'true' AND ($2::int IS NULL OR corrected_at > NOW() - make_interval(days => $2::int)) ORDER BY corrected_at DESC LIMIT $3`,
       [userId, o.days, o.limit],
     )) as CorrectionRow[],
   limits: async (userId) => {
@@ -296,7 +304,13 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     const at = (await rows(`SELECT MAX(created_at) AS at FROM suggestion_outcomes WHERE user_id = $1 AND result <> 'no_signal'`, [userId]))[0]?.at;
     return { text, at: at ? new Date(at) : new Date() };
   },
-  claims: async (userId, now, zone) => (await import("./claims.js")).liveClaims(userId, now, zone),
+  // Backstop: a claim a live guard says was removed or corrected away (services/whatCoKnows.ts) is never read, even if a row of it
+  // is still in the table (review of 3108dcf).
+  claims: async (userId, now, zone) => {
+    const [claims, W] = await Promise.all([(await import("./claims.js")).liveClaims(userId, now, zone), import("./whatCoKnows.js")]);
+    const rows = await W.forgottenRows(userId).catch(() => []);
+    return rows.length ? claims.filter((c) => !W.forgets(c.text, rows, "claim")) : claims;
+  },
   restraint: async (userId, now) => {
     const [state, safetyHold, emotional, kinds, inbound] = await Promise.all([
       rows(`SELECT hold_until, space_until FROM proactive_user_state WHERE user_id = $1`, [userId]).then((r) => r[0] ?? null),
@@ -350,6 +364,7 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     const P = await import("./personModel.js");
     return P.renderPersonModel(await P.personModelParts(userId));
   },
+  forgotten: async (userId) => (await import("./whatCoKnows.js")).forgottenRows(userId),
 };
 
 // ---------------------------------------------------------------- pure builders
@@ -659,6 +674,12 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     skip("person", "person model", () => d.person(userId), ""),
     skip("limits", "limits", () => d.limits(userId), null as (Limits & { at: Date | null }) | null),
   ]);
+  // The raw exchanges read through the live guards (services/whatCoKnows.ts guardText): a line saying something they removed is left
+  // out; one still saying what they corrected away keeps its words with the correction inline. Every reader of exchanges (calls,
+  // tasks, follow-ups, dispatch, the sweep) gets the same lines.
+  const guards = (on("exchanges") || on("corrections")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId), []) : [];
+  const removed = guards.filter((r) => r.removed);
+  const W = guards.length ? await import("./whatCoKnows.js") : null;
 
   if (on("goals")) k.goals = goalsOf(profile, states);
   if (on("asks")) k.asks = asks.filter((a) => a.text.trim()).map((a) => ({ id: a.id, text: a.text.trim(), kind: a.kind === "help" ? "help" : "find", verifiedAt: latest(a.createdAt, a.lastMentionedAt) }));
@@ -672,7 +693,8 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   ];
   if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, saidOn: String(c.saidOn).slice(0, 10), verifiedAt: latest(c.confirmedOn, c.saidOn) }));
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
-  if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
+  if (removed.length) k.removedCount = removed.length;
+  if (on("exchanges")) k.exchanges = exchanges.flatMap((e) => { const content = W ? W.guardText(e.content, guards) : e.content; return content === null ? [] : [{ ...e, content }]; }).map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
   if (on("limits") && limits) k.limits = { avoid: limits.avoid, availability: limits.availability, verifiedAt: latest(limits.at) };
 

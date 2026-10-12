@@ -49,6 +49,20 @@ function memberOnCall(key: string, userId: string, fresh = false): Promise<Membe
   return m;
 }
 
+// What they corrected or removed (services/whatCoKnows.ts live guards), per call: read at most every 20 seconds, and again right after
+// a tool acts, so a change made by text during the call, or by a tool on it, reaches the next turn.
+const guardCache = new Map<string, { at: number; rows: Promise<import("../services/whatCoKnows.js").ForgottenRow[]> }>();
+const GUARD_CACHE_MS = 20_000;
+function liveGuardsFor(key: string, userId: string, fresh = false) {
+  const now = Date.now();
+  for (const [k, v] of guardCache) if (now - v.at > GUARD_CACHE_MS) guardCache.delete(k);
+  const hit = guardCache.get(key);
+  if (hit && !fresh) return hit.rows;
+  const rows = import("../services/whatCoKnows.js").then((W) => W.forgottenRows(userId)).catch(() => []);
+  guardCache.set(key, { at: now, rows });
+  return rows;
+}
+
 export const proxyAuthorized = (header: string | undefined, secret = process.env.CALL_LLM_PROXY_SECRET): boolean => {
   if (!secret || !header) return false;
   const given = Buffer.from(header.replace(/^Bearer\s+/i, ""));
@@ -114,8 +128,9 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
         toolRuns++;
         if (!t.timedOut && (t.result as any)?.ok !== false) toolOk++;
         console.log(`co/el/llm: tool ${t.name} ${t.timedOut ? "still running at the budget" : (t.result as any)?.ok === false ? "not done" : "done"} in ${t.ms}ms`);
-        // What the tool changed (a task, a loop) is read fresh for the next turn.
+        // What the tool changed (a task, a loop, what Co knows about them) is read fresh for the next turn.
         if (userId) memberOnCall(callKey, userId, true).catch(() => {});
+        if (userId) void liveGuardsFor(callKey, userId, true);
       },
       onDropped: (s, why) => {
         dropped++;
@@ -123,6 +138,11 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       },
       onFirstText: (t) => { timing = t; },
     };
+    // The call's instructions through the live guards, every turn (services/whatCoKnows.ts guardCallMessages).
+    if (userId) {
+      const rows = await liveGuardsFor(callKey, userId);
+      if (rows.length) body.messages = (await import("../services/whatCoKnows.js")).guardCallMessages(body.messages, rows);
+    }
     const gen = runCallLlm(body, deps);
     const write = (c: OaiChunk) => res.write(`data: ${JSON.stringify(c)}\n\n`);
     try {

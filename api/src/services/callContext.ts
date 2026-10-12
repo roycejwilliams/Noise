@@ -176,6 +176,8 @@ async function loadContextParts(userId: string, include: readonly KnowledgeSecti
   // same strip, so another member's details never reach a call or reply.
   const rawPicture = snapshot ? (await import("./personModel.js")).renderPersonModel({ ...snapshot, did: [] }) : renderSnapshot(null);
   const picture = rawPicture ? ((await memberSafe(userId, [{ content: rawPicture, memory_type: "person_model" }], names))[0] ?? "") : rawPicture;
+  // The recap through the live guards (services/whatCoKnows.ts): a line on something they removed is out, a corrected one says so.
+  if (safeRecap[0]) safeRecap[0] = await import("./whatCoKnows.js").then(async (W) => W.guardBlock(String(safeRecap[0]), await W.forgottenRows(userId))).catch(() => String(safeRecap[0]));
   const recapAt = recapResult.rows[0]?.created_at ? new Date(recapResult.rows[0].created_at) : null;
   const profile = profileResult.rows[0] ?? null;
   return {

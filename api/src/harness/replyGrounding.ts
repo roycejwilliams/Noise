@@ -450,6 +450,8 @@ export function addMemberKnowledge(rf: ReplyFacts, k: MemberKnowledge | null | u
     addInstruction(rf, `${rules.quietHours} A follow-up or a delivery you set up lands outside those hours, never inside them.`);
   }
   if (!k) return;
+  // What they had removed is never named here (services/whatCoKnows.ts); the older texts in the thread may still say it.
+  if (k.removedCount) addInstruction(rf, "They've asked you to forget some things they told you, and those are gone from what you know. If an earlier message in this conversation says something they asked you to forget, leave it out: never bring it up, use it or hint at it.");
   for (const p of k.preferences) if (p.text.trim()) addFact(rf, "known", p.text);
   const corrections = k.corrections.filter((c) => c.field.trim() && (c.was.trim() || c.now?.trim()));
   if (corrections.length) {

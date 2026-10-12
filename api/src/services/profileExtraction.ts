@@ -867,6 +867,12 @@ export async function storeProfile(
       : Promise.resolve([] as Correction[]),
     recentlyCorrected(user_id),
   ]);
+  // What they corrected or removed through Co itself (services/whatCoKnows.ts): a profile item stays corrected for good, not 90
+  // days, and a specific thing they had removed from anywhere (a claim, the snapshot) can't come back as a profile item either.
+  const W = await import("./whatCoKnows.js");
+  const forgotten = await W.forgottenRows(user_id).catch(() => [] as import("./whatCoKnows.js").ForgottenRow[]);
+  pastCorrections = [...pastCorrections, ...forgotten.filter((r) => /^(profile|goal):/.test(r.ref)).map((r) => ({ field: r.field, old_value: r.old, new_value: r.now }))];
+  const removedElsewhere = forgotten.filter((r) => r.removed && !/^(profile|goal):/.test(r.ref));
 
   // Layer 4 gate: every model value is checked against allowed enums and
   // ranges before it can reach the upsert.
@@ -933,7 +939,7 @@ export async function storeProfile(
     corrections,
   );
   const keep = (field: string, list: string[] | string | null | undefined) =>
-    (Array.isArray(list) ? list : []).filter((x) => !wasCorrectedAway(field, x));
+    (Array.isArray(list) ? list : []).filter((x) => !wasCorrectedAway(field, x) && !W.forgets(x, removedElsewhere, "profile_field"));
   const safeChapters = keep("life_chapters", corrected.life_chapters);
   const goals = keep("goals", corrected.goals);
   const blockers = keep("blockers", corrected.blockers);

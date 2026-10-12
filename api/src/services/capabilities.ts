@@ -498,6 +498,22 @@ export const ABILITIES: Ability[] = [
   },
   { id: "media", can: "Co can read photos and screenshots they send, and listens to voice memos." },
   { id: "corrections", can: 'When something Co has about them is wrong, they can just say so ("I moved to Oakland", "I\'m not a founder"). Co updates it and remembers what changed and when.' },
+  // What Co knows about them, shown and correctable (services/whatCoKnows.ts, 2026-10-12).
+  {
+    id: "what_co_knows",
+    can: "Co can tell them what it knows about them, in plain words, whenever they ask, and they can correct or remove any of it.",
+    tool: "whatCoKnows",
+    limits: { perTurn: 1 },
+    use: "Read everything Co knows about them, grouped, with their own words where Co has them. Call it when they ask what you know about them, what you have on them or what you remember about them, and before you correct or remove something they say is wrong or want forgotten (it gives each item's refs). Then tell them in plain language, short, grouped the way it comes back, in their own words where it gives them, saying 'you' not 'they'; leave out the refs, and end by saying they can correct or remove anything. Only what it returns: never add to it from the conversation.",
+  },
+  {
+    id: "correct_what_co_knows",
+    can: "When something Co knows about them is wrong, or they want it gone, Co corrects or removes it right away, everywhere Co uses it: texts, calls, what it looks for and picks, and their pages and decks.",
+    tool: "correctWhatCoKnows",
+    limits: { perTurn: 2, perDay: 20 },
+    confirm: "their_yes",
+    use: "Correct or remove what Co knows about them when they say something on file is wrong (\"I moved to Oakland\") or want something forgotten (\"forget the divorce stuff\", \"remove that\"). Pass the refs from whatCoKnows for every line that says the same thing (where they live can be in more than one line), the action, and for a correction what's true now in their words. A removal takes it out for good; it isn't a note. If the result lists lines that still say it, fix those too if they're the same thing. Then tell them plainly what changed, in a line, without announcing a process.",
+  },
   {
     id: "check_ins",
     can: 'Co texts first, not only when they text: a check-in every few days about what they\'re in the middle of (and something it\'s still getting to know about them, when their words lead there), "how did it go" after a plan with a date has happened, a debrief after an event they went to, and follow-ups on things it\'s looking for. So when they ask whether Co notices or checks in, the answer is yes, and Co can say how.',
