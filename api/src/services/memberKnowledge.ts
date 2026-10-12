@@ -219,7 +219,8 @@ export type KnowledgeDeps = {
   restraint: (userId: string, now: Date) => Promise<RawRestraint>;
   exchanges: (userId: string, o: { limit: number; days: number }) => Promise<{ content: string; at: Date }[]>;
   person: (userId: string) => Promise<string>;
-  // What they had removed through Co (services/whatCoKnows.ts): exchanges that say it are left out. Optional, so stubs without it work.
+  // What they corrected or removed through Co (services/whatCoKnows.ts, the live guards): exchanges that say a removed thing are left
+  // out, and ones that still say a corrected-away value carry the correction inline. Optional, so stubs without it work.
   forgotten?: (userId: string) => Promise<import("./whatCoKnows.js").ForgottenRow[]>;
 };
 
@@ -363,7 +364,7 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     const P = await import("./personModel.js");
     return P.renderPersonModel(await P.personModelParts(userId));
   },
-  forgotten: async (userId) => (await (await import("./whatCoKnows.js")).forgottenRows(userId)).filter((r) => r.removed),
+  forgotten: async (userId) => (await import("./whatCoKnows.js")).forgottenRows(userId),
 };
 
 // ---------------------------------------------------------------- pure builders
@@ -673,9 +674,12 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
     skip("person", "person model", () => d.person(userId), ""),
     skip("limits", "limits", () => d.limits(userId), null as (Limits & { at: Date | null }) | null),
   ]);
-  // A removed thing never comes back through the raw exchanges either (services/whatCoKnows.ts): the lines that say it are left out.
-  const removed = (on("exchanges") || on("corrections")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId), []) : [];
-  const W = removed.length ? await import("./whatCoKnows.js") : null;
+  // The raw exchanges read through the live guards (services/whatCoKnows.ts guardText): a line saying something they removed is left
+  // out; one still saying what they corrected away keeps its words with the correction inline. Every reader of exchanges (calls,
+  // tasks, follow-ups, dispatch, the sweep) gets the same lines.
+  const guards = (on("exchanges") || on("corrections")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId), []) : [];
+  const removed = guards.filter((r) => r.removed);
+  const W = guards.length ? await import("./whatCoKnows.js") : null;
 
   if (on("goals")) k.goals = goalsOf(profile, states);
   if (on("asks")) k.asks = asks.filter((a) => a.text.trim()).map((a) => ({ id: a.id, text: a.text.trim(), kind: a.kind === "help" ? "help" : "find", verifiedAt: latest(a.createdAt, a.lastMentionedAt) }));
@@ -690,7 +694,7 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   if (on("claims")) k.claims = claims.map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, expiresOn: c.expiresOn, saidOn: String(c.saidOn).slice(0, 10), verifiedAt: latest(c.confirmedOn, c.saidOn) }));
   if (on("restraint") && restraint) k.restraint = restraintOf(restraint, now);
   if (removed.length) k.removedCount = removed.length;
-  if (on("exchanges")) k.exchanges = exchanges.map(exchangeOf).filter((x): x is Fact<Exchange> => !!x && !W?.forgets(x.text, removed, "their_words")).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
+  if (on("exchanges")) k.exchanges = exchanges.flatMap((e) => { const content = W ? W.guardText(e.content, guards) : e.content; return content === null ? [] : [{ ...e, content }]; }).map(exchangeOf).filter((x): x is Fact<Exchange> => !!x).sort((a, b) => a.verifiedAt.localeCompare(b.verifiedAt)).slice(-(opts.exchanges ?? EXCHANGE_DEFAULTS.limit));
   if (on("person") && person.trim()) k.person = { text: person, verifiedAt: now.toISOString() };
   if (on("limits") && limits) k.limits = { avoid: limits.avoid, availability: limits.availability, verifiedAt: latest(limits.at) };
 

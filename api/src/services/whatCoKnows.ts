@@ -59,17 +59,27 @@
 //   6. Every change goes to the decision log (harness_decisions: knowledge.correct / knowledge.remove / knowledge.change_refused),
 //      besides the tool guard's own tool.correctWhatCoKnows receipt.
 //
-// What it doesn't reach yet: the reply's own recent thread (the last 20 texts, raw, as the conversation itself), the call context's
-// "what they told you in the last two days" and recent texts when the old words don't match a removal closely, Co's lessons and
-// research notes (team-internal, never shown), Pinterest boards behind deck taste, and a call already in progress (it keeps the
-// context it started with; the next call reads the change).
+//   7. The raw words read through the same guards (guardText / guardRows / guardBlock): the reply's last 20 texts, memberKnowledge's
+//      exchanges (calls' "last two days" and recent texts, tasks, follow-ups, dispatch, the sweep), the reply's memory search, the
+//      call's recap. A line saying something removed is dropped; a line still saying a corrected-away value keeps its words with
+//      "[since corrected: ...]" inline; their ask to forget keeps only that it was asked.
+//   8. A live call: every turn of an ElevenLabs call comes through Co's own call brain endpoint (routes/callLlm.ts) with the whole
+//      prompt, so the call's instructions are read through the guards each turn (guardCallMessages, re-read every 20 seconds and
+//      right after a tool acts). A change made by text during the call, or by a tool on it, reaches its next turn.
+//   9. What's queued on what changed (cancelQueued, on the change's transaction): proactive candidates, open tasks and look-outs,
+//      network backlogs and deferred sends tied to the ask, goal or thread, or whose own words say it. A removal cancels; a
+//      correction sends it back to be re-checked. Each one is logged (knowledge.cancel_queued).
+//
+// What it still doesn't reach: the words already spoken on a live call (the call's own transcript so far is the conversation, as
+// it happens; ElevenLabs sends it each turn and Co doesn't rewrite what was said), and Co's lessons and research notes
+// (team-internal, never shown).
 import { createHash } from "node:crypto";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "ask" | "avoid" | "file";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "ask" | "avoid" | "file";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -90,7 +100,7 @@ export type KnownView = { groups: { group: KnownGroup; title: string; lines: Kno
 
 export type Change = { refs: string[]; action: "correct" | "remove"; now?: string | null };
 export type Applied = { ref: string; source: KnownSource; was: string; now: string | null };
-export type ChangeResult = { ok: boolean; applied: Applied[]; refused: { ref: string; why: string }[]; alsoSays: KnownLine[] };
+export type ChangeResult = { ok: boolean; applied: Applied[]; refused: { ref: string; why: string }[]; alsoSays: KnownLine[]; cancelled?: Cancelled[] };
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -121,6 +131,20 @@ export function covers(old: string, text: string): boolean {
 }
 
 const CHAPTER_WORDS: Record<string, string> = { new_to_city: "new to the city", building_solo: "building something on your own", career_pivot: "changing careers", starting_over: "starting over" };
+const CHAPTER_HINTS: Record<string, RegExp> = {
+  new_to_city: /\b(new (?:to|in) (?:the )?(?:city|town|area)|just moved|recently moved|new here)\b/i,
+  building_solo: /\b(building|solo|on my own|by myself|own (?:company|thing|business)|founder|indie)\b/i,
+  career_pivot: /\b(career|pivot|changing (?:jobs|careers|fields)|switching|new field)\b/i,
+  starting_over: /\b(starting over|fresh start|start(?:ing)? again|rebuild(?:ing)?|new chapter)\b/i,
+};
+// Pure: the life chapter a correction's words name (a key or its plain words), or null when it names none or more than one.
+export function chapterFor(now: string): string | null {
+  const t = squash(now.replace(/_/g, " "));
+  const exact = Object.entries(CHAPTER_WORDS).find(([k, w]) => t === k.replace(/_/g, " ") || t === squash(w));
+  if (exact) return exact[0];
+  const hits = Object.keys(CHAPTER_HINTS).filter((k) => CHAPTER_HINTS[k].test(now));
+  return hits.length === 1 ? hits[0] : null;
+}
 
 export type RawKnown = {
   profile: { city: string | null; long_term_direction: string | null; availability_pattern: string | null; goals: string[]; life_chapters: string[]; blockers: string[]; activity_preferences: string[]; avoid: string[]; intent: any[] } | null;
@@ -128,7 +152,7 @@ export type RawKnown = {
   snapshot: { work: string | null; place: string | null; wantsNow: string[]; weighingOn: string[]; valuesInPeople: string[] } | null;
   threads: { id: string; text: string; quote: string | null }[];
   kit: { key: string; value: string }[];
-  tastes: { id: string; type: "room_taste" | "design_taste"; text: string; quote: string | null }[];
+  tastes: { id: string; type: "room_taste" | "design_taste"; text: string; quote: string | null; inspo?: string | null }[];
   asks: { id: string; text: string }[];
   files: { n: number; sentOn: string }[];
 };
@@ -149,7 +173,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
     add("profile:availability_pattern", "profile", "where", p.availability_pattern);
     add("profile:long_term_direction", "profile", "after", p.long_term_direction);
     for (const g of p.goals) add(`profile:goals:${hashOf(g)}`, "profile", "after", g);
-    for (const c of p.life_chapters) add(`profile:life_chapters:${hashOf(c)}`, "profile", "where", CHAPTER_WORDS[c] ?? c.replace(/_/g, " "), null, false);
+    for (const c of p.life_chapters) add(`profile:life_chapters:${hashOf(c)}`, "profile", "where", CHAPTER_WORDS[c] ?? c.replace(/_/g, " "));
     for (const b of p.blockers) add(`profile:blockers:${hashOf(b)}`, "profile", "mind", b);
     for (const a of p.activity_preferences) add(`profile:activity_preferences:${hashOf(a)}`, "profile", "likes", a);
     for (const a of p.avoid) add(`avoid:${hashOf(a)}`, "avoid", "likes", `not for you: ${a}`, null, false);
@@ -166,7 +190,12 @@ export function knownItems(r: RawKnown): KnownItem[] {
   }
   for (const t of r.threads) add(`thread:${t.id}`, "thread", "mind", t.text, t.quote);
   for (const k of r.kit) add(`kit:${k.key}`, "kit", "work", `${k.key === "linkedin" ? "LinkedIn" : k.key}: ${k.value}`);
-  for (const t of r.tastes) add(`taste:${t.id}`, "taste", "likes", t.text, t.quote, false);
+  for (const t of r.tastes) {
+    add(`taste:${t.id}`, "taste", "likes", t.text, t.quote, false);
+    // What their decks and pages take their look from (a Pinterest board, sites, brands): its own line, so "don't use that board
+    // anymore" can take just that out, or point it somewhere else.
+    if (t.type === "design_taste" && t.inspo) add(`inspo:${t.id}`, "inspo", "likes", `what your decks and pages take their look from: ${t.inspo}`);
+  }
   for (const a of r.asks) add(`ask:${a.id}`, "ask", "after", `looking out for: ${a.text}`);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   return out;
@@ -263,7 +292,7 @@ const GUARDED_BY: Record<Guarded, string[]> = {
   their_words: [],
 };
 const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:"];
-const plainOf = (t: string) => t.replace(/^(my read|looking out for|not for you): /, "");
+const plainOf = (t: string) => t.replace(/^(my read|looking out for|not for you|what your decks and pages take their look from): /, "");
 
 // Pure: the row that says this text is gone (or changed), if any. rows: live guards (forgottenRows / liveGuards).
 export function forgets(text: string, rows: ForgottenRow[], what: Guarded, opts: { ownOnly?: boolean } = {}): ForgottenRow | null {
@@ -293,20 +322,78 @@ export function forgetInSnapshot<T extends { work: string | null; place: string 
   return { ...s, work: one(s.work, "snapshot:work"), place: one(s.place, "snapshot:place"), wantsNow: list(s.wantsNow), weighingOn: list(s.weighingOn), valuesInPeople: list(s.valuesInPeople) };
 }
 
+// ---------------------------------------------------------------- the raw words (their texts, Co's lines, call transcripts, recaps)
+
+// Pure: one raw line as a reader may see it. A line that says something they removed (a live removal guard covers it, scored
+// against the removed text, the same strictness as every other guard) is dropped; a line that still says what they corrected away
+// keeps its words, so the conversation still reads, with the correction inline ("[since corrected: Oakland]"). Their own ask to
+// forget something keeps only that it was asked, never the thing. Unrelated lines are returned as they are.
+export function guardText(text: string, rows: ForgottenRow[]): string | null {
+  if (!rows.length || !text.trim()) return text;
+  const removed = rows.filter((r) => r.removed);
+  if (removed.length && forgets(text, removed, "their_words")) return null;
+  // "please forget the divorce stuff": the ask stays (Co should know it was asked and done), its subject doesn't.
+  const own = text.match(/^\s*(User\b[^:\n]{0,40}:\s*)([\s\S]*)$/i);
+  if (own && removalAsked(own[2], null) && removed.some((r) => words(plainOf(r.old)).some((w) => w.length >= 4 && new Set(words(own[2]).map(stem)).has(stem(w))))) return `${own[1]}(asked Co to forget something they'd told it; done)`;
+  const notes: string[] = [];
+  for (const r of rows) {
+    if (!r.now || !words(plainOf(r.old)).length) continue;
+    if (!covers(plainOf(r.old), text) || covers(r.now, text)) continue;
+    const now = r.now.replace(/^[a-z]+: /, "").slice(0, 80);
+    if (!notes.some((n) => squash(n) === squash(now))) notes.push(now);
+  }
+  return notes.length ? `${text} [since corrected: ${notes.slice(0, 2).join("; ")}]` : text;
+}
+
+// Pure: every line of a block through guardText (a recap, a call's system prompt), lines it drops left out.
+export function guardBlock(text: string, rows: ForgottenRow[]): string {
+  if (!rows.length) return text;
+  return text.split("\n").map((l) => guardText(l, rows)).filter((l): l is string => l !== null).join("\n");
+}
+
+// Rows of raw words (co_memories content) for a reader: each through guardText, dropped ones left out. A failed guard read leaves
+// them as they were (the reader worked that way before).
+export async function guardRows<T extends { content: string }>(userId: string, rows: T[], q?: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> }): Promise<T[]> {
+  const g = await forgottenRows(userId, q).catch(() => [] as ForgottenRow[]);
+  if (!g.length) return rows;
+  return rows.flatMap((r) => {
+    const content = guardText(String(r.content ?? ""), g);
+    return content === null ? [] : [{ ...r, content }];
+  });
+}
+
+// Pure: a live call's instructions through the guards (routes/callLlm.ts). Every turn of an ElevenLabs call comes through Co's own
+// call brain endpoint with the whole prompt, so a correction or removal made during the call (by a tool on it, or by text) reaches
+// the very next turn: the context it started with is read through the same guards. The call's own spoken turns are left as they
+// are (they're this conversation, as it happens).
+export function guardCallMessages<M extends { role: string; content?: unknown }>(messages: M[], rows: ForgottenRow[]): M[] {
+  if (!rows.length) return messages;
+  return messages.map((m) => {
+    if (m.role !== "system" && m.role !== "developer") return m;
+    if (typeof m.content === "string") return { ...m, content: guardBlock(m.content, rows) };
+    if (Array.isArray(m.content)) return { ...m, content: m.content.map((p: any) => (p && typeof p.text === "string" ? { ...p, text: guardBlock(p.text, rows) } : p)) };
+    return m;
+  });
+}
+
 // Their words asking to remove or forget something, or saying it's wrong (like memberFiles.ts DELETE_ASK), or a plain yes to Co's
 // own offer to remove it. A removal can't be undone, so the tool guard's "their words are in the message" isn't enough on its own
 // (review of ac5474a: "what do you know" passed it).
 const OBJ = "(?:that|it|this|those|these|the|my|about|everything|all|what)";
 export const REMOVE_ASK = new RegExp(
   "\\b(?:remove|delete|erase|wipe|scrub|get rid of|" +
-    `(?<!don'?t |do not |never )forget ${OBJ}|drop ${OBJ}|` +
+    `(?<!(?:don'?t|do not|never|did you|do you|didn'?t you|have you|you'?ll|you will|you'?d|i'?ll|i will|i'?d|i|we'?ll|we|to) )forget ${OBJ}|drop ${OBJ}|` +
     "take (?:that|it|this|those) (?:off|out|down)|(?:that'?s|that is|it'?s|its) (?:wrong|not true|not right|outdated)|not true|no longer true|isn'?t true|isn'?t right|" +
     "don'?t (?:want|need) (?:that|it|this|those) (?:on file|kept|saved|anymore)|stop (?:remembering|holding|keeping))\\b",
   "i",
 );
 const PLAIN_YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|do it|go ahead|yes please|please do|definitely|absolutely)[.!]*$/i;
+// A question about what happened ("did you forget what I told you?", "have you removed it?") is not an ask; "can you forget that?" is.
+const ASKED_WHETHER = /^\s*(?:did|didn'?t|have|haven'?t|has|do|does|is|are|was|were|why|when|how come)\b[^.!]*\?\s*$/i;
 export function removalAsked(message: string, lastCoMessage: string | null | undefined): boolean {
-  if (REMOVE_ASK.test(message.replace(/[’‘]/g, "'"))) return true;
+  const m = message.replace(/[’‘]/g, "'");
+  if (ASKED_WHETHER.test(m)) return false;
+  if (REMOVE_ASK.test(m)) return true;
   const co = String(lastCoMessage ?? "");
   return PLAIN_YES.test(message.trim()) && /\b(remove|forget|delete|take (?:it|that) off|drop)\b/i.test(co) && /\?\s*$/.test(co.trim());
 }
@@ -314,7 +401,13 @@ export function removalAsked(message: string, lastCoMessage: string | null | und
 // ---------------------------------------------------------------- reading
 
 export async function readKnown(userId: string, db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<RawKnown> {
-  const q = (sql: string, args: unknown[]) => db.query(sql, args).then((r) => r.rows as any[]);
+  // One at a time: on a transaction's client, queries can't overlap (pg); on the pool it costs nothing that matters here.
+  let chain: Promise<unknown> = Promise.resolve();
+  const q = (sql: string, args: unknown[]) => {
+    const p = chain.then(() => db.query(sql, args)).then((r) => r.rows as any[]);
+    chain = p.catch(() => undefined);
+    return p;
+  };
   const [prof, claims, snap, threads, kit, tastes, asks, files, zone] = await Promise.all([
     q(`SELECT city, long_term_direction, availability_pattern, goals, life_chapters, blockers, activity_preferences, avoid, intent FROM co_profiles WHERE user_id = $1`, [userId]),
     q(`SELECT id, text, provenance, kind, quote, expires_on FROM member_claims WHERE user_id = $1 ORDER BY said_on DESC LIMIT 40`, [userId]),
@@ -350,7 +443,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
         return x ? [{ id: String(t.id), type: "room_taste" as const, text: R.roomTasteLine(x), quote: x.quote ?? null }] : [];
       }
       const x = D.parseDesignTaste(String(t.content ?? ""));
-      return x ? [{ id: String(t.id), type: "design_taste" as const, text: D.designTasteLine(x).replace(/ \(their words: .*\)$/, ""), quote: x.quote || null }] : [];
+      return x ? [{ id: String(t.id), type: "design_taste" as const, text: D.designTasteLine({ ...x, inspo: null }).replace(/ \(their words: .*\)$/, ""), quote: x.quote || null, inspo: x.inspo }] : [];
     }),
     asks: asks.map((a) => ({ id: String(a.ask_id), text: String(a.ask_text ?? "") })).filter((a) => a.text.trim()),
     files,
@@ -428,10 +521,13 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const list: string[] = ((raw.profile as any)?.[field] ?? []) as string[];
       const old = list.find((x) => hashOf(x) === b);
       if (!old) return { why: "it's no longer on file" };
+      // A life chapter is one of four (profileWrite.ts ALLOWED_LIFE_CHAPTERS): the new one is the chapter their words name.
+      const val = field === "life_chapters" && v ? chapterFor(v) : v;
+      if (field === "life_chapters" && v && !val) return { why: `a life chapter is one of: ${Object.values(CHAPTER_WORDS).join(", ")}; ask which fits, or remove it` };
       const next = list.filter((x) => x !== old);
-      if (v && !next.includes(v)) next.unshift(v);
+      if (val && !next.includes(val)) next.unshift(val);
       await must(`UPDATE co_profiles SET ${field} = $2, updated_at = NOW() WHERE user_id = $1`, [userId, next]);
-      return { ref: item.ref, source: "profile", was: old, now: v };
+      return field === "life_chapters" ? { ref: item.ref, source: "profile", was: CHAPTER_WORDS[old] ?? old, now: val ? CHAPTER_WORDS[val] : null } : { ref: item.ref, source: "profile", was: old, now: v };
     }
     case "goal": {
       // Out of the intent list entirely on a removal (a "removed" status would still read as a set-aside goal in memberKnowledge).
@@ -491,6 +587,20 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       else await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
       return { ref: item.ref, source: "taste", was: t.text, now: null };
     }
+    case "inspo": {
+      // Only the inspiration changes; the rest of their look stays. A board's colors came from the board (deckTools.ts readInspo),
+      // so taking a Pinterest board out takes its colors with it: decks and pages stop reading it altogether.
+      const { rows } = await db.query(`SELECT content FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'design_taste'`, [a, userId]);
+      let j: any = null;
+      try {
+        j = JSON.parse(String(rows[0]?.content ?? ""));
+      } catch {}
+      if (!j?.inspo) return { why: "it's no longer on file" };
+      const old = String(j.inspo);
+      const next = { ...j, inspo: v ?? null, ...(/pinterest/i.test(old) ? { colors: { background: null, text: null, accent: null } } : {}) };
+      await must(`UPDATE co_memories SET content = $3 WHERE id = $1 AND user_id = $2 AND memory_type = 'design_taste'`, [a, userId, JSON.stringify(next)]);
+      return { ref: item.ref, source: "inspo", was: old, now: v };
+    }
     case "ask": {
       const old = raw.asks.find((x) => x.id === a)?.text ?? was;
       if (v) {
@@ -527,7 +637,7 @@ export function fieldFor(ref: string): string {
   if (kind === "goal") return "goals";
   if (kind === "snapshot") return a === "place" ? "where they are" : a === "work" ? "their work" : a === "wantsNow" ? "what they want now" : a === "weighingOn" ? "what's weighing on them" : "what matters to them in people";
   if (kind === "kit") return `their ${a === "linkedin" ? "LinkedIn" : a}`;
-  return { claim: "what they told Co", thread: "what's going on for them", taste: "their taste", ask: "what Co looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
+  return { claim: "what they told Co", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", ask: "what Co looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
@@ -541,6 +651,7 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   const refused: ChangeResult["refused"] = [];
   const changedRefs = new Set<string>();
   const removing = changes.some((c) => c.action === "remove");
+  const cancelled: Cancelled[] = [];
   const asked = !removing || removalAsked(o.message, o.lastCoMessage);
   // Files go after the transaction (only memberFiles.ts touches their table), and only once everything else held.
   const fileRemovals: { item: KnownItem }[] = [];
@@ -604,6 +715,11 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
         decisions.push({ layer: 3, decision: r.now == null ? "knowledge.remove" : "knowledge.correct", userId, outcome: "act", action: r.source, proposal: { ref, was: was.slice(0, 240), now: r.now, theirWords: clean(o.theirWords).slice(0, 300) }, checks: [{ name: "their_words_in_message", pass: true }, ...(removing ? [{ name: "removal_asked", pass: true }] : []), ...(now ? [{ name: "new_value_backed", pass: true }] : [])] });
       }
     }
+    // What was queued on what changed, on the same transaction (logged below, each one).
+    for (const c of await cancelQueued(client, userId, applied)) {
+      cancelled.push(c);
+      decisions.push({ layer: 3, decision: "knowledge.cancel_queued", userId, outcome: "act", action: `${c.kind}:${c.action}`, proposal: { id: c.id, what: clean(c.what).slice(0, 160), because: c.because } });
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -629,7 +745,85 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   if (applied.length) void refreshDerived(userId, applied).catch((err: any) => console.error("whatCoKnows: refreshing derived copies failed (non-fatal):", err?.message ?? err));
   // What else still says it, from the fresh read (stripped like the view).
   const after = await whatCoKnows(userId).catch(() => null);
-  return { ok: applied.length > 0, applied, refused, alsoSays: after ? stillSaying(after.view, applied, changedRefs) : [] };
+  return { ok: applied.length > 0, applied, refused, alsoSays: after ? stillSaying(after.view, applied, changedRefs) : [], cancelled: cancelled.map((c) => ({ ...c, what: clean(c.what) })) };
+}
+
+// ---------------------------------------------------------------- what's queued on what changed
+
+// One queued thing a change took out of line (or sent back to be re-checked), for the decision log.
+export type Cancelled = { kind: "candidate" | "task" | "deferred_send" | "backlog"; id: string; what: string; action: "cancelled" | "recheck"; because: string };
+
+// Pure: whether a queued item's own text says what changed. A removal: the removed text's own words, specific removals only (two
+// or more real words, not a place, a role or a label), as every guard. A correction: any kind, since a re-check only sends the item
+// back to be judged again with what's true now, never drops it.
+export function queuedSays(text: string, a: Applied): boolean {
+  const old = plainOf(a.was);
+  if (!words(old).length) return false;
+  if (a.now == null) return words(old).length >= 2 && !OWN_KIND_ONLY.some((p) => a.ref.startsWith(p)) && covers(old, text);
+  return covers(old, text) && !covers(a.now, text);
+}
+
+// What's waiting to go out or be worked on that rests on an item they just removed or corrected: proactive candidates (offers for
+// an ask, a goal's check-in, a thread's follow-up, an ask check-in), Co's open tasks and look-outs for that ask, the network backlog
+// for it, and deferred sends. Tied by id first (the ask, the goal, the thread), then by the item's own words. A removal cancels; a
+// correction sends it back to be re-checked ("recheck:" is a failed attempt to the working set, services/workingSet.ts, so a find
+// re-enters and is judged again with what's true now). Runs on the change's own transaction.
+export async function cancelQueued(db: Db, userId: string, applied: Applied[]): Promise<Cancelled[]> {
+  const out: Cancelled[] = [];
+  if (!applied.length) return out;
+  // One after another: this runs on the change's transaction client.
+  const cands = (await db.query(`SELECT id, type, target_key, summary, payload::text AS payload FROM proactive_candidates WHERE user_id = $1 AND status = 'pending'`, [userId])).rows;
+  const tasks = (await db.query(`SELECT id, goal, target_key FROM co_tasks WHERE user_id = $1 AND status = 'open'`, [userId])).rows;
+  const sends = (await db.query(`SELECT id, type, target_key, messages::text AS messages, after_payload::text AS after FROM deferred_sends WHERE user_id = $1 AND status = 'queued'`, [userId])).rows;
+  const done = new Set<string>();
+  for (const a of applied) {
+    const [kind, id] = a.ref.split(":");
+    const removing = a.now == null;
+    const because = `${removing ? "removed" : "corrected"} at their request: ${fieldFor(a.ref)}`;
+    const tied = (key: string, payload: string) =>
+      (kind === "ask" && (key.startsWith(`ask_checkin:${id}:`) || payload.includes(`"askId": "${id}"`) || payload.includes(`"askId":"${id}"`))) ||
+      (kind === "goal" && (payload.includes(`"goalId": "${id}"`) || payload.includes(`"goalId":"${id}"`))) ||
+      (kind === "thread" && (key === `thread:${id}` || key.startsWith(`companion:thread:${id}:`)));
+    for (const c of cands) {
+      const k = `c${c.id}`;
+      if (done.has(k)) continue;
+      if (!tied(String(c.target_key), String(c.payload)) && !queuedSays(`${c.summary}\n${c.payload}`, a)) continue;
+      done.add(k);
+      const action = removing ? "cancelled" : "recheck";
+      const r = await db.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $3, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'pending'`, [c.id, userId, `${action === "recheck" ? "recheck: " : ""}${because}`.slice(0, 300)]);
+      if (r.rowCount) out.push({ kind: "candidate", id: String(c.id), what: `${c.type}: ${String(c.summary).slice(0, 120)}`, action, because });
+    }
+    for (const t of tasks) {
+      const k = `t${t.id}`;
+      if (done.has(k)) continue;
+      const byId = kind === "ask" && String(t.target_key ?? "").startsWith(`ask_checkin:${id}`);
+      if (!byId && !queuedSays(String(t.goal), a)) continue;
+      done.add(k);
+      if (removing) {
+        const r = await db.query(`UPDATE co_tasks SET status = 'dropped', outcome = $3, closed_at = NOW(), next_check_at = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'open'`, [t.id, userId, because.slice(0, 300)]);
+        if (r.rowCount) out.push({ kind: "task", id: String(t.id), what: String(t.goal).slice(0, 120), action: "cancelled", because });
+      } else {
+        // A task keeps going, with what's true now written on it, so its next step works from that.
+        const note = JSON.stringify([{ at: new Date().toISOString(), text: `They corrected ${fieldFor(a.ref)}: now "${String(a.now).slice(0, 120)}". Work from that.` }]);
+        const r = await db.query(`UPDATE co_tasks SET notes = COALESCE(notes, '[]'::jsonb) || $3::jsonb, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'open'`, [t.id, userId, note]);
+        if (r.rowCount) out.push({ kind: "task", id: String(t.id), what: String(t.goal).slice(0, 120), action: "recheck", because });
+      }
+    }
+    for (const d of sends) {
+      const k = `d${d.id}`;
+      if (done.has(k)) continue;
+      if (!tied(String(d.target_key ?? ""), String(d.after ?? "")) && !queuedSays(String(d.messages), a)) continue;
+      done.add(k);
+      // A queued text that rests on what changed doesn't go: it said the old thing.
+      const r = await db.query(`UPDATE deferred_sends SET status = 'skipped', error = $3 WHERE id = $1 AND user_id = $2 AND status = 'queued'`, [d.id, userId, because.slice(0, 300)]);
+      if (r.rowCount) out.push({ kind: "deferred_send", id: String(d.id), what: `${d.type}`, action: "cancelled", because });
+    }
+    if (kind === "ask") {
+      const r = await db.query(`UPDATE network_backlogs SET items = '[]'::jsonb, updated_at = NOW() WHERE user_id = $1 AND ask_id = $2 AND jsonb_array_length(items) > 0`, [userId, id]);
+      if (r.rowCount) out.push({ kind: "backlog", id, what: "people lined up for this ask", action: removing ? "cancelled" : "recheck", because });
+    }
+  }
+  return out;
 }
 
 // Derived copies: goal embeddings, the people graph, the day's picks. In the background: the reply never waits on it.

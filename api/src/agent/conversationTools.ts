@@ -434,6 +434,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           changed: r.applied.map((a) => ({ was: a.was, now: a.now })),
           refused: r.refused,
           stillSays: r.alsoSays.map((l) => ({ refs: l.refs, text: l.text })),
+          // What was waiting on it and was taken out of line (cancelled) or sent back to be judged again (recheck). No need to list it.
+          queuedStopped: (r.cancelled ?? []).map((c) => ({ what: c.what, action: c.action })),
         };
       },
     }),

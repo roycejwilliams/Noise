@@ -32,7 +32,8 @@ export function askLifeState(r: { resolved_at: unknown; closed_reason?: string |
 // re-enters the working set.
 export function isFailedAttempt(skipReason: string | null | undefined): boolean {
   // A queue window that ended unsent on an undated find is not a decision either (Phase B, B2: services/sendCheck.ts WINDOW_ENDED).
-  return /^(?:draft failed|send failed|send_failed|draft_failed|send error|window ended unsent)/i.test(String(skipReason ?? "").trim());
+  // "recheck:": what it rested on was corrected (services/whatCoKnows.ts cancelQueued): judged again with what's true now.
+  return /^(?:draft failed|send failed|send_failed|draft_failed|send error|window ended unsent|recheck:)/i.test(String(skipReason ?? "").trim());
 }
 // Pure: do these finished rows for one thing decide it? Any row that isn't a failed attempt does; failed attempts alone don't.
 export function decidedByRows(rows: { skip_reason?: string | null }[]): boolean {
