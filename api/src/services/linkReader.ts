@@ -355,7 +355,8 @@ export async function readPage(url: string): Promise<LinkRead> {
     if (text.length < 200 && !structured) {
       return { ...base, finalUrl: got.finalUrl, status: /log ?in|sign ?in/i.test(text) ? "login_required" : "no_content", why: /log ?in|sign ?in/i.test(text) ? "the page needs a login" : "the page has nothing useful to read" };
     }
-    const read = await modelRead(got.finalUrl, text);
+    // A failed model read still leaves the page's own text: Co reads the excerpt rather than hearing it couldn't read the page.
+    const read = await modelRead(got.finalUrl, text).catch(() => ({ fields: {} as Partial<Record<FieldName, Field>>, summary: null }));
     // Structured data wins where both have a field: it's the site's own record.
     const fields = { ...read.fields, ...(structured ?? {}) };
     return { ...base, finalUrl: got.finalUrl, status: "ok", why: null, fields, summary: read.summary, source: structured ? "structured" : "model", excerpt: text.slice(0, EXCERPT_MAX) };
