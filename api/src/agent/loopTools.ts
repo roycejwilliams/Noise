@@ -9,6 +9,7 @@ import { writeMemory } from "../services/memory.js";
 import { pageTools } from "./pageTools.js";
 import { deckTools } from "./deckTools.js";
 import { artifactTools } from "./artifactTools.js";
+import { owedAnswerNote } from "./linkAnswer.js";
 import { recordDecision } from "../harness/core.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
@@ -264,11 +265,13 @@ export function loopTools(
     state.sent = true;
     state.linkDelivered = true;
   };
+  // An answer meant to ride with a link that didn't go: the tool's note says so, not "you're done" (agent/linkAnswer.ts).
   const pages = pageTools(ctx, { say, notDone, source: pageSource });
   // Decks (agent/deckTools.ts): the same pipeline and grounding as pages.
   const decks = deckTools(ctx, { say, notDone, source: pageSource });
   // Keep, renew and share links, for pages and decks alike (agent/artifactTools.ts).
   const artifacts = artifactTools(ctx, { say, notDone });
+  for (const t of [pages, decks, artifacts]) owedAnswerNote(ctx, t);
 
   return {
     ...pages,
