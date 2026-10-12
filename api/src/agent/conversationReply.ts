@@ -12,6 +12,7 @@ import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
+import { judgeText, ruledOut, type Decision } from "../brain/index.js";
 import { deliveryFallback, REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE, REPLY_PARTIAL_NOTE } from "../services/turnFailure.js";
 
 // How Co listens, the part of the call guide that carries over to text,
@@ -58,6 +59,9 @@ export type ConversationReplyInput = {
   lastReaction?: string | null;
   // Their message may mean they aren't safe (services/safety.ts).
   safetyConcern?: boolean;
+  // The brain's decision for this text (brain/index.ts planTextReply). It binds: a wait holds the send, and what it rules out
+  // (dontSay) is enforced here and in the tools. Without one (tests, old callers) it is judged from replyOwed and safetyConcern.
+  decision?: Decision | null;
   // The one picture of this turn (services/turnContext.ts).
   turn?: TurnContext | null;
   userId: string;
@@ -238,6 +242,23 @@ Return ONLY the numbers of the memories that are genuinely relevant to what the 
   }
 }
 
+// The brain said wait (brain/index.ts): hold the send. Logged; retried once, as an answer, when the turn has a resume path.
+async function holdReply(
+  input: ConversationReplyInput,
+  decision: Decision,
+  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number },
+): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
+  const resumes = !!input.resumeLater;
+  if (!opts.dryRun) {
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 3, decision: "brain.hold", userId: input.userId, outcome: "skip", action: resumes ? "requeued" : "left_owed", proposal: { why: decision.why, message: input.resolvedContent.slice(0, 200) } }).catch(() => {});
+  }
+  input.resumeLater?.(async () => {
+    await runConversationReplyAgent({ ...input, decision: { ...decision, kind: "act", why: `held earlier (${decision.why}); answered now` } }, opts);
+  });
+  return { sent: false, offered: false, replyText: "", grounding: [], toolsCalled: [], move: "quiet" };
+}
+
 // Co Loop Stage 1, agentized: replaces the hardcoded shouldOfferCall/
 // usingTopicNudge branching with a tool-calling loop that decides the reply
 // and topic-nudge gesture. Whether a call offer went out is NOT
@@ -250,6 +271,11 @@ export async function runConversationReplyAgent(
   opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number } = {},
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
   const grounding: GroundingResult[] = [];
+  const decision: Decision = input.decision ?? judgeText({ userId: input.userId, read: null, owed: !!input.replyOwed, safetyConcern: !!input.safetyConcern, clarify: null, turn: null });
+  // A wait holds the send: nothing goes out now and no model runs. Never dropped: the reply is retried once through the turn's
+  // resume path (the caller's guards: phone lock, nothing newer from them, nothing answered since), answered then, and their
+  // message stays owed meanwhile, so their next text gets it answered too.
+  if (decision.kind === "wait") return holdReply(input, decision, opts);
   // The team gets the team-only tools; nobody else ever sees them.
   const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
   // A retry is its own attempt, with its own clock.
@@ -275,6 +301,7 @@ export async function runConversationReplyAgent(
     consult: input.consult,
     replyOwed: input.replyOwed ?? false,
     safetyConcern: input.safetyConcern ?? false,
+    decision,
     turn: input.turn ?? null,
     firstName: input.firstName ?? null,
     lastCoMessage: lastCoLine(input.recentConversation),
@@ -324,6 +351,8 @@ export async function runConversationReplyAgent(
   const callOfferEligible =
     !input.hasPendingOffer &&
     !input.recentOfferBurstActive &&
+    // The brain's ask is this reply's one question: no call offer beside it.
+    !ruledOut(decision, "call_offer") &&
     (input.callAction === "would_benefit" || input.isThinProfileFirstMessage);
 
   // One question a reply (services/coldStart.ts): a reply that offers a call, or answers a safety concern, never also steers.
@@ -332,6 +361,11 @@ export async function runConversationReplyAgent(
   // The same for a new member's first read (services/theDoor.ts): never beside a call offer or a safety concern.
   if (input.safetyConcern) withdrawDoorMoment(input.facts, "a safety concern this turn");
   else if (callOfferEligible) withdrawDoorMoment(input.facts, "this reply offers a call");
+  // What the brain's decision rules out (brain/index.ts dontSay): the steer and the first read beside its ask or a safety turn.
+  const noSteer = ruledOut(decision, "steer");
+  if (noSteer) withdrawColdStartSteer(input.facts, noSteer.why);
+  const noFirstRead = ruledOut(decision, "first_read");
+  if (noFirstRead) withdrawDoorMoment(input.facts, noFirstRead.why);
 
   const lastCoMessage = lastCoLine(input.recentConversation);
 

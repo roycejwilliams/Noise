@@ -99,6 +99,9 @@ export type ConversationToolContext = {
   turn?: TurnContext | null;
   firstName?: string | null;
   replyOwed?: boolean;
+  // The brain's decision for this turn (brain/index.ts). What it rules out binds the tools here (a tapback can't stand in for a reply).
+  // Without one (calls, tests), the turn's own flags above stand in for it.
+  decision?: import("../brain/index.js").Decision | null;
   lastCoMessage?: string | null;
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
@@ -109,6 +112,14 @@ export type ConversationToolContext = {
   // after a "looking" line, the way the first search result always was.
   threadNext?: () => void;
 };
+
+// Whether this turn needs words, not a reaction: the brain's decision when there is one (its tapback rule), else the turn's flags.
+function wordsDue(ctx: Pick<ConversationToolContext, "decision" | "safetyConcern" | "replyOwed">): { why: string; tell?: string } | null {
+  if (ctx.decision) return ctx.decision.dontSay.find((r) => r.what === "tapback") ?? null;
+  if (ctx.safetyConcern) return { why: "they may not be safe, so Co has to reply", tell: "They may not be safe. Reply to them properly." };
+  if (ctx.replyOwed) return { why: "Co still owes them an answer from before, so it has to reply", tell: "You still owe them an answer from before. Reply properly instead." };
+  return null;
+}
 
 // Side-effecting tools are bound to server-known context (userId,
 // phoneNumber, the two hard call-offer gates) rather than letting the model
@@ -868,7 +879,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({}),
       execute: async () => {
         if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
-        if (ctx.safetyConcern || ctx.replyOwed || coAskedQuestion(ctx.lastCoMessage)) return { ok: false, error: "They need words this time. Reply properly." };
+        if (ctx.safetyConcern || wordsDue(ctx) || coAskedQuestion(ctx.lastCoMessage)) return { ok: false, error: "They need words this time. Reply properly." };
         state.sent = true;
         state.reacted = true;
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: `left at ${ctx.ackSent}`, proposal: { message: ctx.resolvedContent } }).catch(() => {});
@@ -890,13 +901,16 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (ctx.lastReaction && sameReaction(ctx.lastReaction, reaction)) {
           return { ok: false, error: `Your last reaction to them was ${ctx.lastReaction}. Pick a different one that fits this message, or reply with a short text.` };
         }
+        // The safety guard, whatever the decision said: their words this turn, or Co flagged it mid-turn.
         if (ctx.safetyConcern || state.safetyFlagged) {
           notDone("No tapback: they may not be safe, so Co has to reply.");
           return { ok: false, error: "They may not be safe. Reply to them properly." };
         }
-        if (ctx.replyOwed) {
-          notDone("No tapback: Co still owes them an answer from before, so it has to reply.");
-          return { ok: false, error: "You still owe them an answer from before. Reply properly instead." };
+        // The brain's decision rules a tapback out (a safety turn, an owed answer, the list they asked for, an ask).
+        const due = wordsDue(ctx);
+        if (due) {
+          notDone(`No tapback: ${due.why}.`);
+          return { ok: false, error: due.tell ?? "They need words this time. Reply properly." };
         }
         if (coAskedQuestion(ctx.lastCoMessage)) {
           notDone("No tapback: Co had just asked them something, so their message is an answer.");

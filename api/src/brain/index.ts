@@ -52,9 +52,16 @@
 // routes/sendblue.ts; the owed-answer and crisis lines stay there for now, read by the brain as state (owed, safetyConcern).
 // Call briefings (cutover 2) own what a call may offer and how it reads the clock (judgeBriefing); services/callBriefing.ts gathers
 // the clock and the finds and keeps the fallback a slow or failed build falls to (a guard: never a pause, never a guessed offer).
+// Decisions bind (2026-10-12, the founder: "a 'wait' actually holds the send, a 'don't say this' actually blocks it"). A Decision is
+// not advice: the acting code reads it. `kind` wait holds the send (texts: nothing goes out now, the reply is retried later through
+// the turn's resume path, and the message stays owed until answered). `dontSay` lists what the decision rules out, each enforced
+// where it acts: a tapback can't stand in for a reply (agent/conversationTools.ts), no call offer, cold-start steer or first read
+// beside the brain's one question (agent/conversationReply.ts), and no event offered on a call (the briefing hands the call no
+// finds, so services/offerGuard.ts has nothing to back one). Guards keep their veto after the brain and the brain can never undo
+// one: a guard can only add a hold or a don't-say (vetoBriefingOffers), never remove one.
 import { recordDecision } from "../harness/core.js";
 import { addInstruction, type ReplyFacts } from "../harness/replyGrounding.js";
-import { capabilityListInstruction, capabilityMenu, type Surface } from "../services/capabilities.js";
+import { capabilityListInstruction, type Surface } from "../services/capabilities.js";
 import { ABOUT_CO_INSTRUCTION, feedbackInstruction, type TurnRead } from "../services/readTurn.js";
 import type { TurnContext } from "../services/turnContext.js";
 import type { VoiceFinds } from "../services/voiceFinds.js";
@@ -74,6 +81,15 @@ export const GUARDS = {
 } as const;
 export type GuardName = keyof typeof GUARDS;
 
+// What a decision rules out on its surface, each enforced by the code that acts:
+//   tapback      a reaction alone can't answer this turn: leaveItAtReaction and reactInsteadOfReplying refuse (`tell` is the refusal)
+//   call_offer   no call offer in this reply (agent/conversationReply.ts callOfferEligible)
+//   steer        the cold-start steering question is withdrawn (replyGrounding withdrawColdStartSteer)
+//   first_read   a new member's first read is withdrawn (replyGrounding withdrawDoorMoment)
+//   event_offer  the call is handed no finds: its findsNow is the don't-offer line, so the spoken offer guard backs no find
+export type DontSay = "tapback" | "call_offer" | "steer" | "first_read" | "event_offer";
+export type Rule = { what: DontSay; why: string; tell?: string };
+
 export type Decision = {
   surface: Surface;
   kind: DecisionKind;
@@ -81,7 +97,14 @@ export type Decision = {
   // What the surface's model drafts from, in order.
   instructions: string[];
   guards: GuardName[];
+  // What this decision rules out (bound, see DontSay).
+  dontSay: Rule[];
 };
+
+// The rule a decision sets for one thing, or null when it doesn't rule it out.
+export function ruledOut(d: Pick<Decision, "dontSay"> | null | undefined, what: DontSay): Rule | null {
+  return d?.dontSay.find((r) => r.what === what) ?? null;
+}
 
 // ---------- Text replies (cutover 1)
 export type TextPicture = {
@@ -123,7 +146,20 @@ export function judgeText(p: TextPicture): Decision {
             ? "they just walked in with no ask on file"
           : "answer what they said and act on it";
   const guards: GuardName[] = ["grounding", "tool_limits", "privacy", ...(p.safetyConcern ? (["safety"] as const) : [])];
-  return { surface: "text", kind, why, instructions, guards };
+  // What it rules out. A safety turn and an owed answer keep the lines Co was already held to; the list and an ask are new.
+  const dontSay: Rule[] = [];
+  const tapback = (why: string, tell: string) => dontSay.push({ what: "tapback", why, tell });
+  if (p.safetyConcern) {
+    tapback("they may not be safe, so Co has to reply", "They may not be safe. Reply to them properly.");
+    dontSay.push({ what: "steer", why: "a safety concern this turn" }, { what: "first_read", why: "a safety concern this turn" });
+  } else if (p.owed) tapback("Co still owes them an answer from before, so it has to reply", "You still owe them an answer from before. Reply properly instead.");
+  else if (kind === "deliver") tapback("they asked what Co can do, so a reaction can't answer it", "They asked what you can do. A reaction can't answer that; reply with it.");
+  if (kind === "ask") {
+    tapback("this turn asks them something, so it needs words", "This turn asks them something, and a reaction can't ask it. Reply with the question.");
+    // One question a reply: the ask is it, so nothing else that asks something goes beside it.
+    dontSay.push({ what: "call_offer", why: "this reply's one question is the ask" }, { what: "steer", why: "this reply asks them something" }, { what: "first_read", why: "this reply asks them something" });
+  }
+  return { surface: "text", kind, why, instructions, guards, dontSay };
 }
 
 // The text path's cutover: the brain's plan goes into the reply's facts (the old assembly around it is unchanged), and the
@@ -131,7 +167,7 @@ export function judgeText(p: TextPicture): Decision {
 export function planTextReply(p: TextPicture, facts: ReplyFacts): Decision {
   const d = judgeText(p);
   for (const i of d.instructions) addInstruction(facts, i);
-  recordDecision({ layer: 3, decision: "brain.text", userId: p.userId, outcome: d.kind === "ask" ? "ask" : d.kind === "wait" ? "skip" : "act", action: d.kind, proposal: { why: d.why, instructions: d.instructions.length, guards: d.guards, tasks: p.turn?.tasks?.length ?? 0, eventToday: !!p.turn?.todayEvent } }).catch(() => {});
+  recordDecision({ layer: 3, decision: "brain.text", userId: p.userId, outcome: d.kind === "ask" ? "ask" : d.kind === "wait" ? "skip" : "act", action: d.kind, proposal: { why: d.why, instructions: d.instructions.length, guards: d.guards, dontSay: d.dontSay.map((r) => r.what), tasks: p.turn?.tasks?.length ?? 0, eventToday: !!p.turn?.todayEvent } }).catch(() => {});
   return d;
 }
 
@@ -144,8 +180,12 @@ export type BriefingPicture = {
   // Their local time and what's ahead (services/timeline.ts), or null when it didn't load.
   clock: { fact: string; note?: string | null } | null;
   finds: VoiceFinds;
+  // Guards that veto offers on this call, applied after the brain judges (e.g. a safety hold: services/safety.ts).
+  vetoes?: { guard: GuardName; why: string }[];
 };
 export type CallBriefing = { rightNow: string; findsNow: string };
+// The briefing that was built, or the fallback a slow or failed build falls to (a guard: never a pause, never a guessed offer).
+export type BriefingDecision = Decision & { briefing: CallBriefing; source: "built" | "fallback" };
 
 export function renderFinds(f: VoiceFinds): string {
   if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;
@@ -153,31 +193,60 @@ export function renderFinds(f: VoiceFinds): string {
   return `${f.note}\nLooking for: ${f.lookingFor}\n${lines.join("\n")}`.slice(0, 2400);
 }
 
+const pacificClock = (now: Date) => `It is ${DateTime.fromJSDate(now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`;
+
+// The finds the call is handed follow the decision: only a "deliver" with no event_offer rule hands any over.
+function findsFor(d: Pick<Decision, "dontSay">, finds: VoiceFinds): string {
+  const held = ruledOut(d, "event_offer");
+  return held ? renderFinds(finds.available ? { available: false, reason: held.why } : finds) : renderFinds(finds);
+}
+
 // Pure: what the call may offer and how it reads the clock. Something on file is delivered; nothing means wait (no event offered).
-export function judgeBriefing(p: BriefingPicture): Decision & { briefing: CallBriefing } {
+export function judgeBriefing(p: BriefingPicture): BriefingDecision {
   const rightNow = p.clock
     ? `${p.clock.fact}${p.clock.note ? ` ${p.clock.note}` : ""} "Tonight" and "today" mean the hours left before they sleep; an event is only "tonight" if its start below says today.`
-    : `It is ${DateTime.fromJSDate(p.now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`;
-  const findsNow = renderFinds(p.finds);
+    : pacificClock(p.now);
   const offering = p.finds.available && p.finds.items.length > 0;
-  return {
+  const why = offering ? "Co has finds on file for them that the call can offer" : "nothing on file to offer, so the call offers no event";
+  const dontSay: Rule[] = offering ? [] : [{ what: "event_offer", why: p.finds.available ? "nothing on file to offer" : p.finds.reason }];
+  const findsNow = findsFor({ dontSay }, p.finds);
+  const judged: BriefingDecision = {
     surface: "call",
     kind: offering ? "deliver" : "wait",
-    why: offering ? "Co has finds on file for them that the call can offer" : "nothing on file to offer, so the call offers no event",
+    why,
     instructions: [rightNow, findsNow],
     guards: ["grounding", "privacy"],
+    dontSay,
     briefing: { rightNow, findsNow },
+    source: "built",
+  };
+  return (p.vetoes ?? []).reduce((d, v) => vetoBriefingOffers(d, p.finds, v.guard, v.why), judged);
+}
+
+// A guard's veto after the brain: the call offers nothing. It only ever adds the hold; nothing here can lift one.
+export function vetoBriefingOffers(d: BriefingDecision, finds: VoiceFinds, guard: GuardName, why: string): BriefingDecision {
+  const dontSay: Rule[] = ruledOut(d, "event_offer") ? d.dontSay : [...d.dontSay, { what: "event_offer", why }];
+  const findsNow = findsFor({ dontSay }, finds);
+  return {
+    ...d,
+    kind: "wait",
+    why: d.kind === "wait" ? d.why : `${why} (the ${guard} guard holds the offers)`,
+    guards: d.guards.includes(guard) ? d.guards : [...d.guards, guard],
+    dontSay,
+    instructions: [d.briefing.rightNow, findsNow],
+    briefing: { rightNow: d.briefing.rightNow, findsNow },
   };
 }
 
-// The briefing's cutover: judged, then logged without waiting (the call never pauses on the log).
-export function planCallBriefing(p: BriefingPicture): CallBriefing {
-  const d = judgeBriefing(p);
-  recordDecision({ layer: 3, decision: "brain.briefing", userId: p.userId, outcome: d.kind === "wait" ? "skip" : "act", action: d.kind, proposal: { why: d.why, guards: d.guards, finds: p.finds.available ? p.finds.items.length : 0, clock: !!p.clock } }).catch(() => {});
-  return d.briefing;
+// What a call gets when the briefing isn't ready in time or failed: the Pacific clock and no offers.
+export function fallbackBriefing(now: Date, why: string): BriefingDecision {
+  const rightNow = pacificClock(now);
+  const findsNow = "Nothing to offer right now. Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.";
+  return { surface: "call", kind: "wait", why, instructions: [rightNow, findsNow], guards: ["grounding", "privacy"], dontSay: [{ what: "event_offer", why }], briefing: { rightNow, findsNow }, source: "fallback" };
 }
 
-// What Co can do on a surface, from the registry (the brain's first input source).
-export function capabilitiesFor(surface: Surface) {
-  return capabilityMenu(surface);
+// Logged when the call takes its briefing (services/callBriefing.ts takeCallBriefing), with what the call actually got: the built
+// briefing or the fallback. A briefing built for a call that never connects is never logged. Never waits.
+export function logBriefing(userId: string, d: BriefingDecision): void {
+  recordDecision({ layer: 3, decision: "brain.briefing", userId, outcome: d.kind === "wait" ? "skip" : "act", action: d.kind, proposal: { why: d.why, source: d.source, guards: d.guards, dontSay: d.dontSay.map((r) => r.what), offered: !ruledOut(d, "event_offer") } }).catch(() => {});
 }
