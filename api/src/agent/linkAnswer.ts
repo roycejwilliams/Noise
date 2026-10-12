@@ -25,6 +25,12 @@ export const ALSO_ANSWER = z
 export async function withAnswer(ctx: ConversationToolContext, text: string, answer: string | null | undefined): Promise<{ text: string; confirm: () => void }> {
   const a = answer?.trim();
   const checked = a && ctx.checkAnswer ? (await ctx.checkAnswer(a).catch(() => "")).trim() : "";
+  // An answer the check cut down to a fragment is dropped whole, never sent (live, 2026-10-11: "On the builder community." went out
+  // after a deck's link). Co is told it didn't go, so it can answer plainly instead.
+  if (a && checked && isFragment(a, checked)) {
+    ctx.facts?.add("not_done", `Your answer to the other thing they asked didn't pass the check and wasn't sent: "${a.slice(0, 120)}"`);
+    return { text, confirm: () => {} };
+  }
   if (!checked) return { text, confirm: () => {} };
   return {
     text: `${text}\n\n${checked}`,
@@ -33,6 +39,15 @@ export async function withAnswer(ctx: ConversationToolContext, text: string, ans
       ctx.noteAnswerSent?.(checked);
     },
   };
+}
+
+// Pure: whether the check cut the answer down to a piece of itself: four words or fewer, under half its words, or no longer ending as a sentence when it
+// did before. An answer the check left as it was is never a fragment, however short ("Yes, book it.", "Friday at 8 works").
+export function isFragment(original: string, checked: string): boolean {
+  if (checked.trim() === original.trim()) return false;
+  const words = (x: string) => (x.match(/\S+/g) ?? []).length;
+  const ends = (x: string) => /[.?!"')]$/.test(x.trim());
+  return words(checked) <= 4 || words(checked) < words(original) * 0.5 || (ends(original) && !ends(checked));
 }
 
 export type Judge = (prompt: string) => Promise<string>;

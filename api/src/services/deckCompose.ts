@@ -12,8 +12,9 @@ export type Composer = (prompt: string) => Promise<string>;
 const sonnet: Composer = async (prompt) =>
   (await generateText({ model: anthropic(MODELS.sonnet), experimental_telemetry: { isEnabled: true, functionId: "deck.compose" }, prompt, abortSignal: AbortSignal.timeout(60_000) })).text;
 
-const RULES = `Rules for every line:
-- Only what they said: rephrase, tighten and sharpen their own words, but never add a plan, number, customer, market, result, timeline or quality they didn't state. Never a name or place they didn't say.
+const RULES = `Rules:
+- Elaborate: a full, rich deck (6 to 10 content slides, 2 to 4 strong bullets each) beats a bare one. A pitch deck's job is rhetoric: positioning, framing, contrasts, taglines and a clear stance are yours to write, and when they ask you to work out the positioning, write it.
+- Never a hard fact they didn't give: no partnership, deal, customer or user count, number, price, date, named event, award, or named person or company stated as fact. If a line leans on one, write the stance instead ("Built for live rooms", not "Partnering with X").
 - Plain words: no markdown, no links, no em dashes, no exclamation points. Headline at most 90 characters, each bullet at most 160, 1 to 5 bullets a slide, 2 to 15 slides.
 - Numbers they spoke as words ("fourteen", "eighty nine dollars", "six hundred K") are written as figures ("14", "$89", "$600k").`;
 

@@ -651,6 +651,8 @@ export function loopTools(
         }
         const way = byEmail && byText ? "by email and by text" : byEmail ? "by email" : "by text";
         if (ctx.dryRun) {
+          // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+          ctx.onLinkDelivered?.();
           ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${way}.`);
           return { ok: true, note: "Test run: nothing was sent." };
         }
@@ -713,6 +715,9 @@ export function loopTools(
         await remember({ next: `plan sent: ${plan.title}` });
         const emailOnly = went.length === 1 && went[0] === "email";
         const extras = `${noEmailFallback ? "They have no email on file, so it went by text: say so, in a few words. " : ""}${downgraded ? "They hadn't asked for email, so it went by text; if they want it by email too, they can say so. " : ""}${duplicateWhy && emailed ? "It was already theirs by text, so only the email went. " : ""}${went.length < (byEmail && byText ? 2 : 1) && !duplicateWhy ? "One of the two didn't go out: say which. " : ""}`;
+        // A plan whose text carried its line is the turn's delivery, like a page's link: no leftover text or fallback line after it. When
+        // Co still owes a line (email only, or something to explain), the delivery gate stays open so that line goes.
+        if (!emailOnly && !extras) ctx.onLinkDelivered?.();
         return {
           ok: true,
           via: went,
@@ -817,6 +822,8 @@ export function loopTools(
           return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try again once, or tell them plainly what you couldn't back and give them the points in a text.` };
         }
         if (ctx.dryRun) {
+          // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+          ctx.onLinkDelivered?.();
           ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}", as a PDF in this conversation.`);
           return { ok: true, note: "Test run: nothing was sent." };
         }
@@ -860,6 +867,9 @@ export function loopTools(
         ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (${inPlace ? `updated in place, same link: ${sent.link}` : `link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"}`})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
         await remember({ next: `document sent: ${doc.title}` });
         const extras = `${rd.docBecamePdf ? "The earlier version was a Google Doc, but this one couldn't go to Google, so it went as a PDF, and the text said so. " : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}`;
+        // A document whose text carried its line is the turn's delivery: no leftover text after it. When Co still owes a line (a Google
+        // Doc that became a PDF, connecting Google), the delivery gate stays open so that line goes.
+        if (!extras) ctx.onLinkDelivered?.();
         return {
           ok: true,
           via: sent.via,
