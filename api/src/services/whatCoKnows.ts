@@ -185,7 +185,7 @@ export function designKnown(rows: any[], now: Date = new Date()): { design: NonN
   }));
   const design: NonNullable<RawKnown["design"]> = [];
   for (const context of ["professional", "personal"] as const) {
-    const own = signals.filter((x) => x.context === context && (x.source !== "reference" || x.confirmed) && Object.keys(x.values).length);
+    const own = signals.filter((x) => x.context === context && (x.source !== "reference" || x.confirmed) && Object.keys(x.values).some((k) => k !== "cleared"));
     if (!own.length) continue;
     const f = D.foldSignals(own, context, now);
     const where = `your ${CONTEXT_WORDS[context]} decks and pages`;
@@ -695,11 +695,12 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const t = raw.tastes.find((x) => x.id === a);
       if (!t) return { why: "it's no longer on file" };
       // Design taste is one thing (its reader takes the newest), so all of it goes: an older one must not come back in its place.
-      // The deck tools write the same words as signals in their design system (agent/deckTools.ts knownTaste), which decks and pages
-      // read first: those go too, on this transaction, or the look would stay.
+      // The deck tools write the same words as a signal in their design system (agent/deckTools.ts knownTaste, the same quote), which
+      // decks and pages read first: that signal goes too, on this transaction, or the look would stay. Only the signals saved from
+      // this taste's own words: anything else they said about the look is its own line (design:<context>) and stays.
       if (t.type === "design_taste") {
         await must(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
-        await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND source <> 'reference'`, [userId]);
+        if (t.quote) await db.query(`DELETE FROM member_design_signals WHERE owner_user_id = $1 AND source <> 'reference' AND quote = $2`, [userId, t.quote]);
       } else await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
       return { ref: item.ref, source: "taste", was: t.text, now: null };
     }
@@ -728,10 +729,12 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       // The older taste is read only while no signal of theirs says anything (designSystem.ts loadDesignSystem): with these gone it
       // would come back in their place.
       const legacy = await db.query(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
+      // The clear itself, recorded: decks for this context don't fill the look in from the other context (designSystem.ts foldSignals).
+      await db.query(`INSERT INTO member_design_signals (owner_user_id, context, source, vals, confirmed) VALUES ($1, $2, 'stated', $3, true)`, [userId, a, JSON.stringify({ cleared: designPure.TOKEN_FIELDS })]);
       // Nothing changed here is still done only when nothing of it is left (an earlier line in this same change, the older taste's,
       // took it): checked, never assumed.
       if (!gone.rowCount && !refs.rowCount && !legacy.rowCount) {
-        const { rows } = await db.query(`SELECT 1 FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND vals <> '{}'::jsonb AND (source <> 'reference' OR confirmed) LIMIT 1`, [userId, a]);
+        const { rows } = await db.query(`SELECT 1 FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND vals <> '{}'::jsonb AND NOT (vals ? 'cleared') AND (source <> 'reference' OR confirmed) LIMIT 1`, [userId, a]);
         if (rows.length) throw new NotApplied();
       }
       return { ref: item.ref, source: "design", was, now: null };
@@ -739,6 +742,8 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     case "designfont": {
       if (a !== "professional" && a !== "personal") return { why: "it's no longer on file" };
       const r = await db.query(`UPDATE member_design_signals SET vals = vals - 'display' - 'body', font_notes = '[]'::jsonb WHERE owner_user_id = $1 AND context = $2 AND (vals ? 'display' OR vals ? 'body')`, [userId, a]);
+      // Recorded as a clear of the fonts here, so the other context's fonts don't fill in (designSystem.ts foldSignals).
+      await db.query(`INSERT INTO member_design_signals (owner_user_id, context, source, vals, confirmed) VALUES ($1, $2, 'stated', $3, true)`, [userId, a, JSON.stringify({ cleared: ["display", "body"] })]);
       // As above: an earlier line in this change (the whole look) may have taken the fonts with it; only that counts as done.
       if (!r.rowCount) {
         const { rows } = await db.query(`SELECT 1 FROM member_design_signals WHERE owner_user_id = $1 AND context = $2 AND (vals ? 'display' OR vals ? 'body') LIMIT 1`, [userId, a]);

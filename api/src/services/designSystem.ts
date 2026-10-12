@@ -73,7 +73,7 @@ export type DesignSignal = {
   id?: number;
   context: DesignContext;
   source: SignalSource;
-  values: Tokens & { dontCare?: boolean };
+  values: Tokens & { dontCare?: boolean; cleared?: TokenField[] };
   quote: string | null;
   ref: string | null;
   confirmed: boolean;
@@ -100,9 +100,9 @@ const WEIGHT: Record<SignalSource, number> = { correction: 3, stated: 2, referen
 const HEX = /^#[0-9a-f]{6}$/i;
 
 // Pure: only well-formed tokens survive (hex colors, open fonts, known moods, densities and layouts).
-export function cleanTokens(v: unknown): Tokens & { dontCare?: boolean } {
+export function cleanTokens(v: unknown): Tokens & { dontCare?: boolean; cleared?: TokenField[] } {
   const x = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
-  const out: Tokens & { dontCare?: boolean } = {};
+  const out: Tokens & { dontCare?: boolean; cleared?: TokenField[] } = {};
   for (const k of ["background", "text", "accent", "accent2"] as const) if (typeof x[k] === "string" && HEX.test((x[k] as string).trim())) out[k] = (x[k] as string).trim().toUpperCase();
   if (typeof x.gradient === "boolean") out.gradient = x.gradient;
   if (validFont(x.display)) out.display = { family: x.display.family, source: x.display.source, kind: x.display.kind };
@@ -113,6 +113,11 @@ export function cleanTokens(v: unknown): Tokens & { dontCare?: boolean } {
   if (ex.titleLayout) out.titleLayout = ex.titleLayout;
   if (DECK_MOODS.includes(x.mood as DeckMood)) out.mood = x.mood as DeckMood;
   if (x.dontCare === true) out.dontCare = true;
+  // A clear (services/whatCoKnows.ts): the member removed these tokens for this context; carries no token of its own.
+  if (Array.isArray(x.cleared)) {
+    const c = x.cleared.filter((f): f is TokenField => (TOKEN_FIELDS as readonly string[]).includes(f as string));
+    if (c.length) out.cleared = [...new Set(c)];
+  }
   return out;
 }
 
@@ -130,8 +135,10 @@ export function foldSignals(signals: DesignSignal[], context: DesignContext, now
   for (const f of TOKEN_FIELDS) {
     const has = usable.filter((s) => s.values[f] !== undefined);
     for (const s of has) answered.add(f);
-    // This context first; the other only for a token this context never had.
-    const cands = has.some((s) => s.context === context) ? has.filter((s) => s.context === context) : has;
+    // This context first; the other only for a token this context never had, and never for one the member cleared here (a clear
+    // in this context, services/whatCoKnows.ts: "remove my work look" must not hand work decks the personal look).
+    const clearedHere = signals.some((s) => s.context === context && s.values.cleared?.includes(f));
+    const cands = has.some((s) => s.context === context) || clearedHere ? has.filter((s) => s.context === context) : has;
     // Ties go to the newer signal.
     const best = cands.sort((a, b) => score(b) - score(a) || b.at.getTime() - a.at.getTime())[0];
     if (best) {
