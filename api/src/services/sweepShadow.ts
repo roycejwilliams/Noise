@@ -338,7 +338,7 @@ export function applyFailed(a: ApplyReport): string | null {
   return null;
 }
 
-async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null, report: ApplyReport): Promise<void> {
+export async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null, report: ApplyReport): Promise<void> {
   let plan: ReturnType<typeof planPicks> | null = null;
   try {
     if (!pickerLive() || !(await pickerUserIds()).includes(userId)) return;
@@ -388,9 +388,17 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
       console.error("picker: queueing a pick failed:", msg);
       // One pick erroring fails the day too: its retry queues what's missing, and what did queue merges into its own row.
       report.error ??= `queueing ${String(q.match?.name ?? "")} failed: ${msg}`;
-      return false;
+      return `error: ${msg}`;
     });
-    if (ok) report.queued.push(String(q.match?.name ?? ""));
+    // Why a chosen pick didn't queue, on the record: already decided, past, already exists, or the error.
+    if (ok === "queued") report.queued.push(String(q.match?.name ?? ""));
+    else report.notQueued.push({ name: String(q.match?.name ?? ""), why: ok });
+  }
+  // A chosen pick with no backlog copy to queue: one already waiting in the queue is queued; anything else is said, never silent.
+  const planned = new Set(plan.queue.map((x) => shadowKey(String(x.match?.name ?? ""), dateOf(x.match))));
+  for (const j of judgments.filter((x) => x.verdict === "send" && !planned.has(x.key))) {
+    if (waiting.some((w) => w.key === j.key)) report.queued.push(j.name);
+    else report.notQueued.push({ name: j.name, why: "error: not in the backlog or the queue" });
   }
   return plan;
 }
