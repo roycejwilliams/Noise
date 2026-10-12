@@ -4,6 +4,8 @@ import { z } from "zod";
 import { tool } from "ai";
 import { memberMoOn, memberMoTools, situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
 import { guardTools } from "./toolGuard.js";
+import { doorOpen } from "../services/theDoor.js";
+import { proactivePaused } from "../services/proactivePause.js";
 import { sendLimiter } from "../services/sendLimiter.js";
 import sendblue, { cleanCoMessage, sendReaction } from "../services/sendblue.js";
 import { coAskedQuestion } from "../services/conversationClose.js";
@@ -497,6 +499,26 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt ? localStamp(r.task.nextCheckAt, zone) : "soon"}: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Co's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt ? localStamp(r.task.finalCheckAt, zone) : "the day before"}.` : ""}`);
         return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt };
+      },
+    }),
+    // The door (services/theDoor.ts): a new member's first read, once. Code holds the facts (once, new members, their own words,
+    // a time from code that a task keeps); Co decides when and says it.
+    firstRead: tool({
+      description: toolUse("firstRead"),
+      inputSchema: z.object({
+        understood: z.string().describe("One line: what you understood they're after, only from what they told you."),
+        lookFor: z.string().describe("The one thing you'll look for first, in their terms, in a few words."),
+        theirWords: z.string().describe("Their own words it comes from, copied exactly from what they wrote."),
+      }),
+      execute: async ({ understood, lookFor, theirWords }) => {
+        const { giveFirstRead } = await import("../services/theDoor.js");
+        const r = await giveFirstRead({ understood, lookFor, theirWords }, { userId: ctx.userId, message: ctx.resolvedContent, dryRun: ctx.dryRun, paused: proactivePaused() });
+        if (!r.ok) {
+          notDone(`No first read was recorded: ${r.error}`);
+          return { ok: false, error: r.error };
+        }
+        ctx.facts?.add("did_this_turn", r.fact);
+        return r.timed ? { ok: true, textThemBy: r.words, note: r.note } : { ok: true, note: r.note };
       },
     }),
     updateTask: tool({
@@ -1396,7 +1418,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // Tools that can't apply this turn aren't offered (capabilities.ts situations).
   if (ctx.turn) {
     const t = ctx.turn;
-    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent });
+    const s = situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: ctx.resolvedContent, openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false });
     for (const name of toolsOutOfSituation(s)) delete (tools as Record<string, unknown>)[name];
   }
 

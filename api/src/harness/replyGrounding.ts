@@ -22,6 +22,7 @@ import type { MemberKnowledge, MemberRules, Restraint } from "../services/member
 import { renderLive } from "../services/factLabels.js";
 import { arcLine, LENS_RULE } from "../services/goalJourney.js";
 import { steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
+import { doorDecision, doorInstruction, doorOpen, type DoorView } from "../services/theDoor.js";
 import { docOfferLines, type OfferKind } from "../services/documentOffer.js";
 import { findSection } from "../services/deliveryReceipts.js";
 import { driftLine } from "../services/receiptDrift.js";
@@ -113,8 +114,29 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // goalSetAside: a goal Co set aside from context that they haven't heard about yet (services/goalEdges.ts); the reply may raise it.
 // coldStart: set for a member with fewer than two findable interests on file (services/coldStart.ts): whether this reply was offered
 // a steering question, and why or why not; recorded after the reply goes out (agent/conversationReply.ts).
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null };
+// door: a new member's first read (services/theDoor.ts): whether this reply was offered the moment, and why or why not.
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null };
 export type ColdStartFacts = { offered: boolean; why: string; seeds: SeedCount; instruction: string | null };
+export type DoorFacts = { offered: boolean; why: string; instruction: string | null };
+
+// Pure: the first-read moment on this reply's facts (services/theDoor.ts doorDecision), with its instruction when it's on offer.
+// Nothing at all once the door has closed for them (given, or no longer new).
+export function addDoorMoment(rf: ReplyFacts, view: DoorView, o: { firstName?: string | null; emotional: EmotionalContext | null | undefined; otherQuestion?: string | null; now?: Date }): DoorFacts | null {
+  const d = doorDecision({ view, now: o.now, heavy: heavyMoment(o.emotional), frustrated: !!o.emotional?.withCo?.frustrated, otherQuestion: o.otherQuestion ?? null });
+  if (!d.offer && !doorOpen(view, o.now).open) return null;
+  const instruction = d.offer ? doorInstruction(o.firstName) : null;
+  if (instruction) addInstruction(rf, instruction);
+  rf.door = { offered: d.offer, why: d.why, instruction };
+  return rf.door;
+}
+
+// Pure: take the moment back off a reply that turned out to have something else to offer (a call), before it drafts.
+export function withdrawDoorMoment(rf: ReplyFacts, why: string): void {
+  const d = rf.door;
+  if (!d?.offered) return;
+  rf.instructions = rf.instructions.filter((i) => i !== d.instruction);
+  rf.door = { offered: false, why, instruction: null };
+}
 
 // Pure: the cold-start state on this reply's facts, with the steering instruction when it's on offer (services/coldStart.ts
 // steerDecision: never in a heavy moment or while frustrated with Co, never two replies in a row, never beside another question).
@@ -191,7 +213,7 @@ export async function gatherReplyFacts(
   opts: { pendingDescriptions?: string[]; context?: string; turn?: TurnContext } = {},
 ): Promise<ReplyFacts> {
   const t = opts.turn;
-  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent }) : undefined);
+  const rf = baseReplyFacts(t ? situationFor({ kitFields: Object.keys(t.kit ?? {}).length, message: t.message ?? "", openTasks: t.tasks?.length ?? 0, eventToday: !!t.todayEvent, doorOpen: t.door ? doorOpen(t.door).open : false }) : undefined);
   for (const d of opts.pendingDescriptions ?? []) addFact(rf, "pending", `Waiting to hear back: ${d}`);
   // What Co knows about them from the one member-knowledge layer, with the member-level rules (addMemberKnowledge): their taste
   // (what's landed with them), what they corrected, restraint, quiet hours, delivery shape. Without the layer (no turn), taste is read
@@ -409,6 +431,8 @@ export async function gatherReplyFacts(
   // Cold start (services/coldStart.ts): fewer than two findable interests on file, so a reply may ask one easy question that lets them
   // name something Co could find. New members and existing ones alike, only in a natural exchange, never as outreach.
   if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
+  // The door (services/theDoor.ts): a new member's first read, once, when Co has heard enough to say it back.
+  if (opts.turn?.door) addDoorMoment(rf, opts.turn.door, { firstName: opts.turn.knowledge?.identity.firstName ?? null, emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
   // answers, whatever earlier messages said (2026-09-27: after two earlier

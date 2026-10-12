@@ -9,7 +9,7 @@ import { CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { CO_CORE, CO_LISTENING } from "../services/coCore.js";
 import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
-import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer } from "../harness/replyGrounding.js";
+import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE } from "../services/turnFailure.js";
@@ -324,6 +324,9 @@ export async function runConversationReplyAgent(
   // One question a reply (services/coldStart.ts): a reply that offers a call, or answers a safety concern, never also steers.
   if (input.safetyConcern) withdrawColdStartSteer(input.facts, "a safety concern this turn");
   else if (callOfferEligible) withdrawColdStartSteer(input.facts, "this reply offers a call");
+  // The same for a new member's first read (services/theDoor.ts): never beside a call offer or a safety concern.
+  if (input.safetyConcern) withdrawDoorMoment(input.facts, "a safety concern this turn");
+  else if (callOfferEligible) withdrawDoorMoment(input.facts, "this reply offers a call");
 
   const lastCoMessage = lastCoLine(input.recentConversation);
 
