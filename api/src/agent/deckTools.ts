@@ -70,7 +70,7 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: {
   const { recordDecision } = await import("../harness/core.js");
   if (fails === null) {
     await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "check_unavailable", proposal: { lines: lines.length } }).catch(() => {});
-    return null;
+    return "The check that every line is theirs couldn't run just now, so nothing was made. Say plainly it didn't go through and you'll try again in a moment.";
   }
   if (!fails.length) return null;
   await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "invented", proposal: { fails } }).catch(() => {});
@@ -212,9 +212,10 @@ export function deckTools(
     }),
     makeDeck: tool({
       description: toolUse("makeDeck"),
-      inputSchema: DECK_INPUT.extend({
+      inputSchema: DECK_INPUT.partial({ title: true, subtitle: true, slides: true }).extend({
+        brief: z.string().nullable().optional().describe("Instead of slides (on a call, always): what deck they want, in their words. It's written from what they said, with the same checks."),
         taste: TASTE_INPUT,
-        line: line("The one line that goes with the link, saying what you made (\"Here's the pitch deck for Northlight.\")."),
+        line: line("The one line that goes with the link, saying what you made (\"Here's the pitch deck for Northlight.\").").nullable().optional(),
         alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input) => {
@@ -234,46 +235,69 @@ export function deckTools(
           };
         }
         const source = await deckSource(ctx, (await o.source()).read, null);
-        const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck: [] });
-        if ("error" in ids) return { ok: false, error: ids.error };
-        const store = await S();
-        const data = await deckDataFrom(input, t.taste, ids.map);
-        const checked = store.checkPage(data, source);
-        if (!checked.ok) {
-          o.notDone(`No deck made: ${checked.problems.slice(0, 3).join("; ")}.`);
-          return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these (only what they told you or you read) and try once more, or give them the points in a text and say the deck isn't there yet.` };
+        // Given a brief instead of slides (PR 6, how a call makes a deck): written from their words (services/deckCompose.ts), then
+        // the very same checks; a refused version is written once more with the refusal in hand.
+        const composing = !input.slides?.length;
+        if (composing && !input.brief?.trim()) return { ok: false, error: "Write the slides, or pass a brief of what they want." };
+        if (!composing && (!input.title?.trim() || !input.subtitle?.trim())) return { ok: false, error: "With slides, give the deck a title and a subtitle too." };
+        let refused: string | null = null;
+        for (let attempt = 0; ; attempt++) {
+          // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
+          const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
+          let deckIn: any = input;
+          if (composing) {
+            if (ctx.dryRun) return { ok: true, note: "Test run: nothing was written or sent." };
+            const C = await import("../services/deckCompose.js");
+            const out = await C.compose<any>(C.newDeckPrompt(source.theirs, input.brief!, null, refused));
+            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides });
+            if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
+            deckIn = { ...input, ...parsed.data };
+          }
+          const ids = await assetIds(ctx.userId, deckIn, !!ctx.dryRun, { words: source.theirs, onDeck: [] });
+          if ("error" in ids) return { ok: false, error: ids.error };
+          const store = await S();
+          const data = await deckDataFrom(deckIn, t.taste, ids.map);
+          const checked = store.checkPage(data, source);
+          if (!checked.ok) {
+            if (retry(checked.problems.slice(0, 4).join("; "))) continue;
+            o.notDone(`No deck made: ${checked.problems.slice(0, 3).join("; ")}.`);
+            return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these (only what they told you or you read) and try once more, or give them the points in a text and say the deck isn't there yet.` };
+          }
+          const invented = await inventedClaims(ctx, checked.data, source, null);
+          if (invented) {
+            if (retry(invented)) continue;
+            o.notDone("No deck made: some lines added claims they never made.");
+            return { ok: false, error: `Not made. ${invented}` };
+          }
+          if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent.", style: (checked.data as any).style };
+          const made = await store.createCoPage(checked.data, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
+          if (!made.ok) {
+            o.notDone("The deck wasn't made.");
+            return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
+          }
+          const lineText = input.line?.trim() || `Here's the ${deckIn.title} deck.`;
+          const { text, confirm } = await withAnswer(ctx, `${lineText}\n${made.url}`, input.alsoAnswer);
+          if (!(await o.say(text, `Co replied: ${text}`))) {
+            o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
+            return { ok: false, error: "The deck is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
+          }
+          ctx.onLinkDelivered?.();
+          confirm();
+          ctx.facts?.add("did_this_turn", `Made them a deck, "${deckIn.title}", ${deckIn.slides.length + 1} slides, and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
+          return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here." };
         }
-        const invented = await inventedClaims(ctx, checked.data, source, null);
-        if (invented) {
-          o.notDone("No deck made: some lines added claims they never made.");
-          return { ok: false, error: `Not made. ${invented}` };
-        }
-        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent.", style: (checked.data as any).style };
-        const made = await store.createCoPage(checked.data, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
-        if (!made.ok) {
-          o.notDone("The deck wasn't made.");
-          return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
-        }
-        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
-        if (!(await o.say(text, `Co replied: ${text}`))) {
-          o.notDone(`The deck "${input.title}" was made, but its link didn't send.`);
-          return { ok: false, error: "The deck is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
-        }
-        ctx.onLinkDelivered?.();
-        confirm();
-        ctx.facts?.add("did_this_turn", `Made them a deck, "${input.title}", ${input.slides.length + 1} slides, and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-        return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here." };
       },
     }),
     updateDeck: tool({
       description: toolUse("updateDeck"),
-      inputSchema: DECK_INPUT.extend({
+      inputSchema: DECK_INPUT.partial({ title: true, subtitle: true, slides: true }).extend({
         deck: z.string().describe("Which of their decks: its title, or a word from it."),
         taste: TASTE_INPUT,
-        changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\")."),
+        changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\"). On a call, leave the slides out and this is the change to make: the new version is written from the deck and what they said."),
         alsoAnswer: ALSO_ANSWER,
       }),
-      execute: async (input) => {
+      execute: async (input0) => {
+        let input: any = input0;
         const store = await S();
         const pick = pickPage(await decks(), input.deck);
         if (pick === "ambiguous") return { ok: false, error: "More than one of their decks fits. Ask which one by its title." };
@@ -292,19 +316,53 @@ export function deckTools(
         const lines = was ? [was.title, was.subtitle, ...was.slides.flatMap((x: any) => [x.headline, ...x.bullets, ...(x.notes ? [x.notes] : [])])].join("\n") : "";
         const source = await deckSource(ctx, (await o.source()).read, { id: pick.id, lines });
         const onDeck = was ? [was.logo, ...was.slides.map((x: any) => x.image)].filter(Boolean) : [];
-        const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
-        if ("error" in ids) return { ok: false, error: ids.error };
-        const next = await deckDataFrom(input, taste, ids.map, was);
-        const invented = await inventedClaims(ctx, next, source, was);
-        if (invented) {
-          o.notDone("The deck wasn't changed: some lines added claims they never made.");
-          return { ok: false, error: `Not changed. ${invented}` };
-        }
-        const r = await store.updateCoPage(pick.id, ctx.userId, next, source);
-        if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
-        if (!r.ok) {
-          o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
-          return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
+        // Only the change, no slides (PR 6, how a call changes a deck): the new version is written from the deck and their words,
+        // through the same checks; a refused version is written once more with the refusal in hand.
+        const composing = !input0.slides?.length;
+        if (composing && !was) return { ok: false, error: "That deck can't be opened to change it." };
+        let refused: string | null = null;
+        let r: any = null;
+        for (let attempt = 0; ; attempt++) {
+          // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
+          const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
+          if (composing) {
+            if (ctx.dryRun) return { ok: true, note: "Test run: nothing was changed." };
+            const C = await import("../services/deckCompose.js");
+            const out = await C.compose<any>(C.changeDeckPrompt(source.theirs, { title: was.title, subtitle: was.subtitle, slides: was.slides.map((x: any) => ({ headline: x.headline, bullets: x.bullets, ...(x.notes ? { notes: x.notes } : {}) })) }, input0.changed, refused));
+            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? was.title, subtitle: out?.subtitle ?? was.subtitle, slides: (out?.slides ?? []).map((x: any) => ({ headline: x.headline, bullets: x.bullets, ...(x.notes ? { notes: x.notes } : {}) })) });
+            if (!parsed.success) return { ok: false, error: "The change couldn't be written. Say so plainly." };
+            input = { ...input0, ...parsed.data, changed: String(out?.changed ?? input0.changed).slice(0, 140) };
+          }
+          const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
+          if ("error" in ids) return { ok: false, error: ids.error };
+          const next: any = await deckDataFrom(input, taste, ids.map, was);
+          // A change written from the deck keeps its pictures (review of PR 6): the logo, and each slide's image by headline, else
+          // by place, unless this version named its own.
+          if (composing && was) {
+            if (next.logo == null && input0.logo == null) next.logo = was.logo ?? null;
+            next.slides = next.slides.map((sl: any, k: number) => {
+              if (sl.image) return sl;
+              const same = was.slides.find((x: any) => x.headline === sl.headline);
+              const there = was.slides[k];
+              // By place only when it's the same slide reworded (it still shares a bullet), as notes do.
+              const from = same ?? (there && (there.bullets ?? []).some((b: string) => sl.bullets.includes(b)) ? there : null);
+              return { ...sl, image: from?.image ?? null };
+            });
+          }
+          const invented = await inventedClaims(ctx, next, source, was);
+          if (invented) {
+            if (retry(invented)) continue;
+            o.notDone("The deck wasn't changed: some lines added claims they never made.");
+            return { ok: false, error: `Not changed. ${invented}` };
+          }
+          r = await store.updateCoPage(pick.id, ctx.userId, next, source);
+          if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
+          if (!r.ok) {
+            if (retry(r.problems.slice(0, 4).join("; "))) continue;
+            o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
+            return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
+          }
+          break;
         }
         const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {

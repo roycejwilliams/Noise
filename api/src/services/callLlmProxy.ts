@@ -41,6 +41,7 @@ export type CallToolset = {
 // agent (1, as Hume ran it), no default thinking.
 export const CALL_LLM_MODEL = process.env.CALL_LLM_MODEL ?? "claude-sonnet-4-6";
 const DEFAULT_MAX_TOKENS = 500;
+export const CALL_TOOL_MAX_TOKENS = 1000;
 
 type OaiContent = string | { type?: string; text?: string }[] | null | undefined;
 // A sentence that is a goodbye: a sign-off, not a thank-you or an answer.
@@ -441,6 +442,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const budgetMs = deps.toolBudgetMs ?? CALL_TOOL_BUDGET_MS;
   let req = toAnthropic(b, undefined, [drained ? DRAINED_NOTE : "", co?.note ?? ""].filter(Boolean).join("\n\n") || undefined);
   if (co) {
+    // Co's own tools can take a longer input than a spoken line (a page; PR 6: at 500 a deck's input was cut off mid-write,
+    // stop_reason max_tokens). Decks pass a brief on a call, so a little room is enough; spoken lines stay short by the call's rules.
+    req.max_tokens = Math.max(req.max_tokens, CALL_TOOL_MAX_TOKENS);
     const theirs = new Set((req.tools ?? []).map((t) => t.name));
     req.tools = [...(req.tools ?? []), ...co.defs.filter((d) => !theirs.has(d.name))];
     // This turn's note goes after their words, past the cache breakpoint: the cached prefix (system and the call so far) is untouched.

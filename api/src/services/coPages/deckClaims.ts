@@ -2,8 +2,8 @@
 // claim about them or their business: no plans, numbers, outcomes or statements they didn't make. "Expand the same playbook to new
 // cities" fails; tightening their own words passes. Which is which is a judgment about meaning (a word-for-word check refused
 // "Built for independent wellness studios"), so one small model call judges every line against their words for this deck.
-// The names, numbers and places check (grounding.ts deckProblems) runs regardless. If this check can't run, the deck still goes,
-// with that check alone, and the miss is logged.
+// The names, numbers and places check (grounding.ts deckProblems) runs regardless. If this check can't run (twice), the deck isn't
+// made and Co says so: a deck never ships unchecked (PR 6, after a call where failing open let invented lines through).
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../../models.js";
@@ -32,16 +32,20 @@ Return ONLY JSON: {"fails": [{"n": <line number>, "why": "<the claim they didn't
 }
 
 // The lines that add a claim, or null when the check couldn't run.
+// Tried twice before giving up (PR 6: on a call the check timed out and, failing open, let "no free tier, no trials" onto a deck).
 export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku): Promise<{ line: string; why: string }[] | null> {
   if (!lines.length) return [];
-  try {
-    const out = parseModelJson<{ fails?: { n?: number; why?: string }[] }>(await judge(claimsPrompt(lines, theirWords)));
-    return (out.fails ?? [])
-      .filter((f) => typeof f?.n === "number" && f.n >= 1 && f.n <= lines.length)
-      .map((f) => ({ line: lines[f.n! - 1], why: String(f.why ?? "").slice(0, 120) }));
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const out = parseModelJson<{ fails?: { n?: number; why?: string }[] }>(await judge(claimsPrompt(lines, theirWords)));
+      return (out.fails ?? [])
+        .filter((f) => typeof f?.n === "number" && f.n >= 1 && f.n <= lines.length)
+        .map((f) => ({ line: lines[f.n! - 1], why: String(f.why ?? "").slice(0, 120) }));
+    } catch {
+      continue;
+    }
   }
+  return null;
 }
 
 // Pure: every line of a deck the check reads (the title is a name; the subtitle, headlines and bullets are claims).

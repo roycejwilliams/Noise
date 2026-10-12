@@ -50,6 +50,9 @@ export type ConversationToolContext = {
   // Set by loopTools for this turn: a page's, deck's or share link just went out, and that text is the turn's whole answer
   // (rule 2). The page, deck and share tools call it after the link sends.
   onLinkDelivered?: () => void;
+  // On a call (services/callTools.ts): a page's, deck's or share link still goes to their texts while they talk (PR 6). Everything
+  // else on a call is spoken; only a text carrying one of their own /d/ links goes this way.
+  sendLinkText?: (text: string) => Promise<boolean>;
   // The reply's own fact check and brand guard, for an answer that rides with a link (agent/linkAnswer.ts). Set per turn below.
   checkAnswer?: (draft: string) => Promise<string>;
   // An answer that rode with a link went out: it counts as part of this turn's reply (the call-offer check reads lastReplyText).

@@ -186,7 +186,10 @@ export function loopTools(
       state.sentMessages.push(text);
       return true;
     }
-    const ok = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: text, asVoice: false });
+    // On a call, a text with one of their own page or deck links, or the "Updated the deck/page:" line for one, goes to their texts
+    // (PR 6), as it would by text; nothing else is texted mid-call.
+    const linkOnCall = ctx.sendLinkText && (/\/d\/(v\/)?[A-Za-z0-9_-]{24}\b/.test(text) || /^Updated the (deck|page): /.test(text));
+    const ok = linkOnCall ? await ctx.sendLinkText!(text) : await ctx.sendCoReply({ phone: ctx.phoneNumber, message: text, asVoice: false });
     if (ok === false) return false;
     // Delivered is delivered: the log write failing doesn't unsend it (2026-10-01 code review).
     state.sentMessages.push(text);
