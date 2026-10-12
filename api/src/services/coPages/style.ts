@@ -51,20 +51,44 @@ export function contrast(a: string, b: string): number {
   return (x + 0.05) / (y + 0.05);
 }
 
-// Pure: a style from a mood and the colors they named (any may be missing or bad). Body text must read on the background (4.5:1);
-// the accent only needs to be seen (2:1 against the background, else the mood's accent).
-export function styleFrom(mood: unknown, colors: { background?: unknown; text?: unknown; accent?: unknown } = {}, type?: unknown): DeckStyle {
-  const m: DeckMood = DECK_MOODS.includes(mood as DeckMood) ? (mood as DeckMood) : "minimal";
-  const base = MOOD_STYLES[m];
-  const pick = (v: unknown, d: string) => (typeof v === "string" && HEX.test(v.trim()) ? v.trim().toUpperCase() : d);
-  const background = pick(colors.background, base.background);
-  let text = pick(colors.text, base.text);
-  if (contrast(text, background) < 4.5) text = contrast(base.text, background) >= 4.5 ? base.text : contrast("#111111", background) >= contrast("#FFFFFF", background) ? "#111111" : "#FFFFFF";
-  let accent = pick(colors.accent, base.accent);
-  if (contrast(accent, background) < 2) accent = text;
-  return { mood: m, background, text, accent, type: type === "serif" || type === "sans" ? type : base.type };
+// Pure: a hex as Co keeps it: six digits, upper case, with the "#" (a model sometimes drops it: "1F4F4A"). Null when it isn't one.
+export function normalHex(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim();
+  const h = /^[0-9a-f]{6}$/i.test(t) ? `#${t}` : t;
+  return HEX.test(h) ? h.toUpperCase() : null;
+}
+// Pure: a color moved toward black (amount < 0) or white (amount > 0).
+function towards(hex: string, amount: number): string {
+  const to = amount < 0 ? 0 : 255;
+  const t = Math.abs(amount);
+  return `#${[1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) + (to - parseInt(hex.slice(i, i + 2), 16)) * t).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
 }
 
+// Pure: a style from a mood and the colors they named (any may be missing or bad). Body text must read on the background (4.5:1);
+// the accent must be seen on it (2:1). Their accent is never swapped out (design audit, 2026-10-12: a corrected dark teal on a dark
+// ground was replaced by the cream text color, so the deck lost the teal they asked for): when it doesn't stand off the ground, the
+// ground moves, the least it has to, and the text is re-inked for the new ground. field: the accent runs as a gradient field (with
+// its own ink, inkOn), never as a mark on the paper, so it needs no contrast with the ground and the ground stays theirs.
+export function styleFrom(mood: unknown, colors: { background?: unknown; text?: unknown; accent?: unknown } = {}, type?: unknown, o: { field?: boolean } = {}): DeckStyle {
+  const m: DeckMood = DECK_MOODS.includes(mood as DeckMood) ? (mood as DeckMood) : "minimal";
+  const base = MOOD_STYLES[m];
+  const accent = normalHex(colors.accent) ?? base.accent;
+  let background = normalHex(colors.background) ?? base.background;
+  if (!o.field && contrast(accent, background) < 2) background = groundFor(accent, background);
+  let text = normalHex(colors.text) ?? base.text;
+  if (contrast(text, background) < 4.5) text = contrast(base.text, background) >= 4.5 ? base.text : contrast("#111111", background) >= contrast("#FFFFFF", background) ? "#111111" : "#FFFFFF";
+  return { mood: m, background, text, accent, type: type === "serif" || type === "sans" ? type : base.type };
+}
+// Pure: the ground nearest to the one given that an accent stands off (2:1): moved toward black or white, whichever gets there in the
+// smaller step (a dark ground goes darker, or lighter when the accent is itself dark).
+export function groundFor(accent: string, ground: string): string {
+  for (let t = 0.05; t <= 1.0001; t += 0.05) {
+    const opts = [towards(ground, -t), towards(ground, t)].filter((g) => contrast(accent, g) >= 2);
+    if (opts.length) return opts.sort((a, b) => contrast(accent, b) - contrast(accent, a))[0];
+  }
+  return contrast(accent, "#FFFFFF") >= contrast(accent, "#000000") ? "#FFFFFF" : "#000000";
+}
 
 // Pure: the extras, each kept only when it is well formed (hex, an open font, a known density or layout); anything else is dropped,
 // so nothing but a color or a font name Co checked reaches the CSS.
@@ -73,7 +97,8 @@ export function extrasFrom(x: Record<string, unknown> | null | undefined): Style
   const out: StyleExtras = {};
   if (validFont(x.display)) out.display = { family: x.display.family, source: x.display.source, kind: x.display.kind };
   if (validFont(x.body)) out.body = { family: x.body.family, source: x.body.source, kind: x.body.kind };
-  if (typeof x.accent2 === "string" && HEX.test(x.accent2.trim())) out.accent2 = x.accent2.trim().toUpperCase();
+  const a2 = normalHex(x.accent2);
+  if (a2) out.accent2 = a2;
   if (x.gradient === true && out.accent2) out.gradient = true;
   if (DENSITIES.includes(x.density as Density)) out.density = x.density as Density;
   if (TITLE_LAYOUTS.includes(x.titleLayout as TitleLayout)) out.titleLayout = x.titleLayout as TitleLayout;

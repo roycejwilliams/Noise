@@ -312,7 +312,8 @@ async function imageMetaFor(userId: string, assetId: string, kind: "logo" | "pho
   const R = await import("../services/designRead.js");
   const px = await R.readPixels(img.data, img.mediaType);
   if (!px) return null;
-  const q = R.qualityOf(px, kind);
+  // A picture fills the split layout's box: its shape is checked against it, so a tall portrait is shown whole, not cropped hard.
+  const q = R.qualityOf(px, kind, kind === "photo" ? R.SPLIT_BOX : null);
   const big = px.colors.filter((c) => c.share > 0.015);
   const meta = { fit: q.placement, ground: px.transparent ? null : px.ground, ink: px.ink, mono: !px.transparent && !px.gradient && big.length <= 2 && !!px.ink, note: q.note };
   metaCache.set(key, meta);
@@ -332,6 +333,18 @@ async function cleanedLogo(userId: string, assetId: string, fromN: number): Prom
   const out = await R.trimImage(img.data, img.mediaType);
   if (!out) return null;
   return A.keepDerivedAsset(userId, fromN, out, "image/png").catch(() => null);
+}
+
+// Design QA for a deck with its own images (services/designQa.ts qaDeck): fixes what code can and measures again, at 1280 and on a phone.
+async function deckQa(userId: string, data: any) {
+  const Q = await import("../services/designQa.js");
+  const A = await import("../services/memberAssets.js");
+  const imgs = new Map<string, { data: Buffer; mediaType: string }>();
+  for (const id of (await import("../services/coPages/deck.js")).deckAssetIds(data)) {
+    const im = await A.loadAssetFor(userId, id).catch(() => null);
+    if (im) imgs.set(id, im);
+  }
+  return Q.qaDeck(data, imgs, { screenshot: false });
 }
 
 export function deckTools(
@@ -365,7 +378,7 @@ export function deckTools(
   const placedThisTurn = new Map<string, { id: string; meta: any; note: string | null }>();
   // The design for this deck from their design system (services/designSystem.ts): a reference read waiting on its confirm comes
   // first (that line is the one question), then the one taste ask when the system has nothing at all, else the filled look.
-  type Design = { filled: import("../services/designSystem.js").Filled; refs: string[]; fontNotes: string[]; confirmed: string | null };
+  type Design = { filled: import("../services/designSystem.js").Filled; refs: string[]; fontNotes: string[]; confirmed: string | null; words: string };
   const designFor = async (said: z.infer<typeof TASTE_INPUT>, d: { context: "professional" | "personal"; audience: string | null; hasLogo: boolean; readConfirmed?: boolean | null }): Promise<Design | { ask: "taste" } | { ask: "confirm"; line: string } | { error: string }> => {
     const S = await import("../services/designSystem.js");
     const t = await tasteFor(said, d.context);
@@ -396,7 +409,7 @@ export function deckTools(
     }
     if ("ask" in t && t.ask && !ds.answered.size && !ds.dontCare) return { ask: "taste" };
     const filled = S.fillDesign(ds, { audience: d.audience, hasLogo: d.hasLogo });
-    return { filled, refs: ds.references, fontNotes: [...("fontNotes" in t && t.fontNotes ? t.fontNotes : []), ...ds.fontNotes].slice(0, 1), confirmed: confirmed ?? confirmedThisTurn };
+    return { filled, refs: ds.references, fontNotes: [...("fontNotes" in t && t.fontNotes ? t.fontNotes : []), ...ds.fontNotes].slice(0, 1), confirmed: confirmed ?? confirmedThisTurn, words: [said?.quote ?? "", ...(ds.quotes ?? [])].join(" ") };
   };
 
   return {
@@ -468,9 +481,21 @@ export function deckTools(
         image: z.number().int().positive().describe("Their image number (\"their image #2\" in what they sent). Only one of theirs."),
         what: z.enum(["logo", "inspiration", "screenshot"]).describe("logo: their own logo (its colors join their look; it goes on the title slide as itself). inspiration or screenshot: a look they want to follow."),
         context: z.enum(["professional", "personal"]).optional().describe("Professional (work, investors, clients) or personal (friends, family, a party). Leave it out for professional."),
+        answer: z.enum(["yes", "no"]).optional().describe("Only when they answered the confirm line about a look you read and no deck is asked for yet: yes saves it as their look, no drops it (then pass what they want instead as taste on the next deck or page). Leave it out to read an image."),
       }),
-      execute: async ({ image, what, context }) => {
+      execute: async ({ image, what, context, answer }) => {
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was read." };
+        if (answer) {
+          // Their answer to the confirm line, with no deck waiting (design audit: "Yes exactly" to a read look had nowhere to go).
+          const D = await import("../services/designSystem.js");
+          const ds = await D.loadDesignSystem(ctx.userId, context ?? "professional");
+          const asked = ds.pending.filter((p) => p.id && p.askedAt);
+          if (!asked.length) return { ok: false, error: "No look Co read is waiting on their answer." };
+          for (const p of asked) await (answer === "yes" ? D.confirmRead(ctx.userId, p.id!) : D.dismissRead(ctx.userId, p.id!)).catch(() => {});
+          const line = D.confirmLine(D.foldSignals(asked.map((p) => ({ ...p, confirmed: true })), ds.context).tokens).replace(/, right\?$/, "");
+          ctx.facts?.add("did_this_turn", answer === "yes" ? `Saved the look Co read from their image as their look for what Co makes them: ${line}.` : "Dropped the look Co read from their image, as they said no to it.");
+          return { ok: true, note: answer === "yes" ? `Saved as their look (${line}). Say so in a few words; nothing is built until they ask for something.` : "Dropped. Ask nothing more about it unless they say what they want instead." };
+        }
         const A = await import("../services/memberAssets.js");
         const mine = (await A.listAssets(ctx.userId).catch(() => [])).find((a) => a.n === image);
         if (!mine) return { ok: false, error: `They have no image #${image}. Use one of theirs, or ask them to send it.` };
@@ -491,6 +516,12 @@ export function deckTools(
         const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref, confirmed: false, fontNotes: r.fontNote ? [r.fontNote] : [], assetN: image, refKind: what });
         if (id) readThisTurn.add(id);
         const confirm = D.confirmLine(tokens, { weight: what === "logo" ? null : r.vision?.weight });
+        // The confirm line goes out this turn, so the read is marked asked now (design audit: a confirm Co sent itself left the read
+        // unmarked, and makeDeck asked the same line again two turns later), and the ask counts for build turns.
+        if (id && confirm) {
+          await D.markReadAsked(ctx.userId, id).catch(() => {});
+          await (await T()).recordTasteAsked(ctx.userId).catch(() => {});
+        }
         const { recordDecision } = await import("../harness/core.js");
         await recordDecision({ layer: 3, decision: "design.read", userId: ctx.userId, outcome: "act", action: what, proposal: { tokens, quality: r.quality, vision: r.vision } }).catch(() => {});
         // What Co measured is known; any words in the image are not (they're part of the picture).
@@ -503,7 +534,7 @@ export function deckTools(
           fontNote: r.fontNote,
           confirmLine: confirm || null,
           note: confirm
-            ? `Before building from it, the one question is this confirm line, in one text: "${confirm}" (you may add the one thing missing about content). Call makeDeck now and it hands this back to send; build when they answer.`
+            ? `Nothing is saved or built from it until they answer. The one question is this confirm line, in one text: "${confirm}" (if they asked for a deck, you may add the one thing missing about its content; nothing else). Never say the look is saved or applied before they answer. When they answer: with a deck asked for, makeDeck with readConfirmed; with none, readReference with answer.`
             : "Nothing to confirm from it; build from their words.",
         };
       },
@@ -636,13 +667,7 @@ export function deckTools(
           // Design QA before it goes (services/designQa.ts): rendered, screenshotted, measured; what code can fix is fixed and measured
           // again. A slide carrying more than one idea goes back once (rewritten on a brief, to Co otherwise).
           const Q = await import("../services/designQa.js");
-          const A = await import("../services/memberAssets.js");
-          const imgs = new Map<string, { data: Buffer; mediaType: string }>();
-          for (const id of (await import("../services/coPages/deck.js")).deckAssetIds(checked.data as any)) {
-            const im = await A.loadAssetFor(ctx.userId, id).catch(() => null);
-            if (im) imgs.set(id, im);
-          }
-          const qa = await Q.qaDeck(checked.data, imgs, { screenshot: false });
+          const qa = await deckQa(ctx.userId, checked.data);
           const ideas = qa.final.findings.filter((f) => f.fix === "co");
           if (ideas.length && !qaBounced) {
             qaBounced = true;
@@ -659,11 +684,15 @@ export function deckTools(
           }
           // Co's choices, in one line with the link (fill and state).
           const DS = await import("../services/designSystem.js");
-          const choices = DS.choicesLine(design.filled, { refs: design.refs, fontNote: design.fontNotes[0] ?? null });
-          await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: (toStore as any).style?.titleLayout ?? null, tokens: (toStore as any).style, qa: { ran: qa.final.ran, findings: qa.final.findings, fixed: qa.fixed, first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
+          // The look said is the one stored (design audit: the line must never describe a look the deck doesn't have), in their color words.
+          const choices = DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words });
+          const turns = await DS.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
+          await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: (toStore as any).style?.titleLayout ?? null, tokens: (toStore as any).style, qa: { ran: qa.final.ran, findings: qa.final.findings, fixed: qa.fixed, first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null, turnsToBuild: turns }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
           const lineText = input.line?.trim() || `Here's the ${deckIn.title} deck.`;
           ctx.facts?.add("known", `The deck's look, as Co chose it: ${choices}`);
-          const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}\n${made.url}`, input.alsoAnswer);
+          // What QA found and code couldn't fix is said, in one line (never shipped silently).
+          const short = Q.qaShortfall(qa.final.findings);
+          const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
           if (!(await o.say(text, `Co replied: ${text}`))) {
             o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
             // made: it exists (toolGuard.ts treats it as done, never as "nothing was made"); only the text didn't go.
@@ -689,7 +718,7 @@ export function deckTools(
       inputSchema: DECK_INPUT.partial({ title: true, subtitle: true, slides: true }).extend({
         deck: z.string().describe("Which of their decks: its title, or a word from it."),
         taste: TASTE_INPUT,
-        changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\"). On a call, leave the slides out and this is the change to make: the new version is written from the deck and what they said."),
+        changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\"). On a call, leave the slides out and this is the change to make: the new version is written from the deck and what they said. When the look changed, don't name colors or fonts here: the look as applied follows in code."),
         removeImages: z.array(z.union([z.literal("logo"), z.number().int().min(2)])).optional().describe("Only when they asked to take a picture off: the slide numbers (2 and up) or \"logo\". A picture you just leave out stays where it is."),
         notDone: line("Only when this version doesn't do all they asked: the part it doesn't do and why, in a few words (\"the board's colors, since a deck has one look for every slide\"). It goes in the same text as what changed, so they never read \"updated\" as all of it.").optional(),
         alsoAnswer: ALSO_ANSWER,
@@ -731,6 +760,7 @@ export function deckTools(
         let refused: string | null = null;
         let r: any = null;
         let reread = false;
+        let updateQa: any = null;
         for (let attempt = 0; ; attempt++) {
           // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
           const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
@@ -798,6 +828,14 @@ export function deckTools(
             return { ok: false, error: `Not changed. ${invented}` };
           }
           const self = await selfIfAboutCo(ctx, next);
+          // Design QA on a change too (design audit: a corrected look went out with type that didn't read on its field).
+          if (!ctx.dryRun) {
+            const q = await deckQa(ctx.userId, next).catch(() => null);
+            if (q) {
+              Object.assign(next, q.data);
+              updateQa = q;
+            }
+          }
           r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source, { expectVersion: was ? before?.version : null });
           if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
           // Another change landed while this one was written (concurrency audit, 2026-10-12): never written over. A change written
@@ -829,7 +867,20 @@ export function deckTools(
         // What it couldn't do goes in the same line (2026-10-12: "Updated the deck" after a promised one-slide look that a deck can't have).
         const partial = String(input0.notDone ?? "").trim().replace(/[.\s]+$/, "");
         // A reset that landed meanwhile moved it to a fresh link (store.ts): the change went there, and the new link goes with the line.
-        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${partial ? ` One part I couldn't do: ${partial}.` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
+        // A change to the look is said from the deck as stored, never from what was asked (design audit: "switched to the dark teal into
+        // coral gradient" over a deck that had no teal). What QA couldn't fix is said in one line.
+        let lookLine = "";
+        if (input.taste && !ctx.dryRun) {
+          const stored = await store.loadCoPage(r.moved?.id ?? pick.id).catch(() => null);
+          const st = (stored?.data as any)?.style;
+          if (st) {
+            const DS = await import("../services/designSystem.js");
+            lookLine = ` The look now: ${DS.choicesLine({ style: st }, { words: input.taste.quote })}`;
+            ctx.facts?.add("known", `The deck's look as it now stands:${lookLine.replace(" The look now:", "")}`);
+          }
+        }
+        const short = updateQa ? (await import("../services/designQa.js")).qaShortfall(updateQa.final.findings) : null;
+        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${partial ? ` One part I couldn't do: ${partial}.` : ""}${lookLine}${short ? ` ${short}` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };

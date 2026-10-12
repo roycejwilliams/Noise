@@ -46,10 +46,11 @@
 //   in the tool's result so Co can mention it in a few words.
 //
 // METRICS (artifact_design_log + view artifact_design_metrics, designMetrics below; npm run metrics:design)
-//   Every artifact made logs its medium, layout, tokens and QA; every change logs "revised". First-shot acceptance = made and never
-//   revised within 48 hours; keeps = co_pages.kept; shares = co_page_shares. Queryable per medium.
+//   Every artifact made logs its medium, layout, tokens, QA and the member turns it took from their ask; every change logs "revised".
+//   First-shot acceptance = no QA finding left standing, built within one member turn of the ask, and no correction or revision within
+//   48 hours (isFirstShot, the view); keeps = co_pages.kept; shares = co_page_shares. Queryable per medium.
 import pool from "../db/db.js";
-import { DECK_MOODS, MOOD_STYLES, contrast, extrasFrom, styleFrom, type DeckMood, type DeckStyle, type Density, type TitleLayout } from "./coPages/style.js";
+import { DECK_MOODS, MOOD_STYLES, contrast, extrasFrom, normalHex, styleFrom, type DeckMood, type DeckStyle, type Density, type TitleLayout } from "./coPages/style.js";
 import { DEFAULT_FONTS, validFont, type FontChoice } from "./designFonts.js";
 
 export type DesignContext = "professional" | "personal";
@@ -92,6 +93,8 @@ export type DesignSystem = {
   // Reference reads waiting on their confirm, newest first.
   pending: DesignSignal[];
   fontNotes: string[];
+  // Their own words behind the tokens that won (the quotes of those signals), so the colors are named the way they named them.
+  quotes?: string[];
 };
 
 export const DESIGN_LIMITS = { halfLifeDays: 60, otherContext: 0.5, pendingHours: 12, signals: 80 } as const;
@@ -103,7 +106,11 @@ const HEX = /^#[0-9a-f]{6}$/i;
 export function cleanTokens(v: unknown): Tokens & { dontCare?: boolean; cleared?: TokenField[] } {
   const x = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
   const out: Tokens & { dontCare?: boolean; cleared?: TokenField[] } = {};
-  for (const k of ["background", "text", "accent", "accent2"] as const) if (typeof x[k] === "string" && HEX.test((x[k] as string).trim())) out[k] = (x[k] as string).trim().toUpperCase();
+  // "1F4F4A" without its "#" is still their color (design audit: a vibe's four colors were all dropped for the missing "#").
+  for (const k of ["background", "text", "accent", "accent2"] as const) {
+    const h = normalHex(x[k]);
+    if (h) out[k] = h;
+  }
   if (typeof x.gradient === "boolean") out.gradient = x.gradient;
   if (validFont(x.display)) out.display = { family: x.display.family, source: x.display.source, kind: x.display.kind };
   if (validFont(x.body)) out.body = { family: x.body.family, source: x.body.source, kind: x.body.kind };
@@ -154,7 +161,8 @@ export function foldSignals(signals: DesignSignal[], context: DesignContext, now
   const won = [...new Set(Object.values(winner))] as DesignSignal[];
   const references = [...new Set(won.filter((s) => s.source === "reference" && s.ref).sort((a, b) => b.at.getTime() - a.at.getTime()).map((s) => s.ref!))].slice(0, 5);
   const fontNotes = [...new Set([winner.display, winner.body].filter((s): s is DesignSignal => !!s).flatMap((s) => s.fontNotes ?? []))].slice(0, 2);
-  return { context, tokens, from, answered: dontCare ? new Set(TOKEN_FIELDS) : answered, dontCare, references, pending, fontNotes };
+  const quotes = [...new Set(won.map((s) => s.quote).filter((q): q is string => !!q))].slice(0, 6);
+  return { context, tokens, from, answered: dontCare ? new Set(TOKEN_FIELDS) : answered, dontCare, references, pending, fontNotes, quotes };
 }
 
 // ---------------------------------------------------------------- fill and state
@@ -191,7 +199,7 @@ export function fillDesign(ds: Pick<DesignSystem, "tokens" | "context" | "dontCa
   const mark = (f: TokenField, mine: boolean) => (chosen[f] = mine ? "yours" : "default");
   const mood: DeckMood = t.mood ?? (ds.dontCare ? "minimal" : t.gradient ? "bold" : t.type === "serif" ? "editorial" : "minimal");
   mark("mood", !!t.mood);
-  const base = styleFrom(mood, { background: t.background, text: t.text, accent: t.accent }, t.type ?? t.display?.kind);
+  const base = styleFrom(mood, { background: t.background, text: t.text, accent: t.accent }, t.type ?? t.display?.kind, { field: !!t.gradient });
   for (const f of ["background", "text", "accent", "type"] as const) mark(f, t[f] !== undefined && (base as any)[f] === (t as any)[f]);
   const pair = MOOD_FONTS[mood];
   // Their type family wins over the mood's pairing: a serif look never gets a sans display face.
@@ -207,7 +215,9 @@ export function fillDesign(ds: Pick<DesignSystem, "tokens" | "context" | "dontCa
   mark("accent2", !!t.accent2);
   const density = t.density ?? audienceDensity(o.audience);
   mark("density", !!t.density);
-  const loud = mood === "bold" || mood === "playful" || mood === "dark";
+  // A full color field opens only a loud look or a gradient; a dark or luxe one opens quietly on its own paper (design audit: "black,
+  // gold, quiet expensive" opened on a full mustard field).
+  const loud = mood === "bold" || mood === "playful";
   const titleLayout: TitleLayout = t.titleLayout ?? (gradient || loud ? "field" : o.hasLogo && mood === "minimal" ? "centered" : "editorial");
   mark("titleLayout", !!t.titleLayout);
   const style: DeckStyle = { ...base, display, body, density, titleLayout, ...(accent2 ? { accent2 } : {}), ...(gradient ? { gradient: true } : {}) };
@@ -228,7 +238,8 @@ const NAMED: [string, string][] = [
   ["navy", "#14284B"], ["midnight blue", "#0F1A33"], ["cobalt", "#1F4FD1"], ["blue", "#2F6FDF"], ["sky blue", "#8EC5F0"], ["powder blue", "#C8DCEB"],
   ["teal", "#138C8C"], ["deep teal", "#0B4F55"], ["turquoise", "#2EC4C0"], ["mint", "#A7E3C6"], ["sage", "#9DAF8E"], ["green", "#2E9B4F"], ["deep green", "#0E4A2C"],
   ["forest green", "#1F4D2B"], ["emerald", "#0F8A5F"], ["lime", "#B5D82C"], ["olive", "#6B6E2B"], ["chartreuse", "#D4E157"],
-  ["yellow", "#F2D22E"], ["mustard", "#C9A227"], ["gold", "#B8913F"], ["amber", "#E59B1C"], ["orange", "#F26A1B"], ["terracotta", "#C0623F"], ["rust", "#A0441E"],
+  ["yellow", "#F2D22E"], ["mustard", "#C9A227"], ["gold", "#C5A15A"], ["antique gold", "#A8864D"], ["champagne", "#E3CFA5"], ["amber", "#E59B1C"], ["orange", "#F26A1B"],
+  ["coral", "#F08064"], ["salmon", "#F4A08A"], ["peach", "#F7C3A3"], ["terracotta", "#C0623F"], ["rust", "#A0441E"],
   ["red", "#D62E2E"], ["crimson", "#A3122A"], ["burgundy", "#6D1A2B"], ["maroon", "#5A1F2A"], ["pink", "#F28CB1"], ["blush", "#F1C9C5"], ["rose", "#C9577A"],
   ["magenta", "#C2187A"], ["purple", "#6A3FB5"], ["plum", "#5B2A4F"], ["lavender", "#BBA9E0"],
 ];
@@ -240,25 +251,37 @@ const lab = (hex: string) => {
   const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
   return [116 * f(Y) - 16, 500 * (f(X) - f(Y)), 200 * (f(Y) - f(Z))];
 };
-export function colorName(hex: string): string {
+const labDist = (x: string, y: string) => {
+  const a = lab(x), b = lab(y);
+  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+};
+// words: their own words about the look. A color they named that this one is close to is said their way ("gold", not "mustard";
+// design audit, 2026-10-12), else the nearest name.
+export function colorName(hex: string, words?: string | null): string {
   if (!HEX.test(hex)) return "";
-  const a = lab(hex);
-  return NAMED.map(([n, h]) => {
-    const b = lab(h);
-    return { n, d: Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) };
-  }).sort((x, y) => x.d - y.d)[0].n;
+  const said = words ? theirColorWords(words) : [];
+  const near = said.map((n) => ({ n, d: labDist(hex, NAMED.find((x) => x[0] === n)![1]) })).filter((x) => x.d <= 30).sort((x, y) => x.d - y.d)[0];
+  if (near) return near.n;
+  return NAMED.map(([n, h]) => ({ n, d: labDist(hex, h) })).sort((x, y) => x.d - y.d)[0].n;
+}
+// Pure: the color names that appear in their words, longest first ("deep teal" before "teal").
+export function theirColorWords(words: string): string[] {
+  const w = ` ${words.toLowerCase().replace(/[^a-z\s-]/g, " ").replace(/\s+/g, " ")} `;
+  return NAMED.map(([n]) => n).filter((n) => w.includes(` ${n} `)).sort((a, b) => b.length - a.length);
 }
 const isNeutral = (hex: string) => /^(black|charcoal|white|off-white|ivory|cream|grey|stone)$/.test(colorName(hex));
 
-// Pure: the colors in a few words: "deep green into teal", "navy and gold", "black on cream".
-export function colorWords(t: Tokens): string {
+// Pure: the colors in a few words: "deep green into teal", "navy and gold", "black on cream". words: their own words about the look,
+// so a color they named is said their way.
+export function colorWords(t: Tokens, words?: string | null): string {
   const bg = t.background, ink = t.text, acc = t.accent, acc2 = t.accent2;
-  if (t.gradient && acc && acc2) return `${colorName(acc)} into ${colorName(acc2)}`;
-  const named = [bg && !isNeutral(bg) ? bg : null, acc, acc2].filter((x): x is string => !!x).map(colorName);
+  const name = (h: string) => colorName(h, words);
+  if (t.gradient && acc && acc2) return `${name(acc)} into ${name(acc2)}`;
+  const named = [bg && !isNeutral(bg) ? bg : null, acc, acc2].filter((x): x is string => !!x).map(name);
   const uniq = [...new Set(named)];
   if (uniq.length >= 2) return `${uniq[0]} and ${uniq[1]}`;
-  if (uniq.length === 1 && bg) return `${uniq[0]} on ${colorName(bg)}`;
-  if (ink && bg) return `${colorName(ink)} on ${colorName(bg)}`;
+  if (uniq.length === 1 && bg) return `${uniq[0]} on ${name(bg)}`;
+  if (ink && bg) return `${name(ink)} on ${name(bg)}`;
   return uniq[0] ?? "";
 }
 const AIR: Record<Density, string> = { airy: "lots of air", balanced: "balanced spacing", dense: "tight and full" };
@@ -271,18 +294,20 @@ const typeWords = (t: Tokens, weight?: string | null) => {
 
 // Pure: the confirm-the-read line, before Co builds from a reference it just read: "Deep green into teal, bold sans headlines, lots
 // of air, right?" Only what was measured or read; nothing else.
-export function confirmLine(t: Tokens, o: { weight?: string | null } = {}): string {
-  const parts = [colorWords(t), typeWords(t, o.weight), t.density ? AIR[t.density] : ""].filter(Boolean);
+export function confirmLine(t: Tokens, o: { weight?: string | null; words?: string | null } = {}): string {
+  const parts = [colorWords(t, o.words), typeWords(t, o.weight), t.density ? AIR[t.density] : ""].filter(Boolean);
   if (!parts.length) return "";
   const s = parts.join(", ");
   return `${s[0].toUpperCase()}${s.slice(1)}, right?`;
 }
 
 // Pure: Co's choices in one line, said with the link: "Set in Fraunces and Inter, deep green into teal, lots of air, from your logo."
-export function choicesLine(f: Filled, o: { refs?: string[]; fontNote?: string | null } = {}): string {
+// Built from the style as it was stored and applied (design audit: Co said "teal into coral" over a deck that had none), never from
+// what was asked for. words: their own words about the look.
+export function choicesLine(f: Pick<Filled, "style">, o: { refs?: string[]; fontNote?: string | null; words?: string | null } = {}): string {
   const st = f.style;
   const fonts = st.display && st.body ? (st.display.family === st.body.family ? `Set in ${st.display.family}` : `Set in ${st.display.family} and ${st.body.family}`) : `Set in ${st.type}`;
-  const colors = colorWords({ background: st.background, text: st.text, accent: st.accent, accent2: st.accent2, gradient: st.gradient });
+  const colors = colorWords({ background: st.background, text: st.text, accent: st.accent, accent2: st.accent2, gradient: st.gradient }, o.words);
   const air = st.density ? AIR[st.density] : "";
   const from = o.refs?.length ? `from ${o.refs.slice(0, 2).join(" and ")}` : "";
   const line = [fonts, colors, air, from].filter(Boolean).join(", ");
@@ -387,22 +412,65 @@ export async function confirmRead(userId: string, id: number): Promise<void> {
 // ---------------------------------------------------------------- metrics
 
 export type Medium = "deck" | "page" | "doc";
-export async function logArtifactDesign(e: { ownerUserId: string; pageId?: string | null; medium: Medium; event: "made" | "revised"; layout?: string | null; tokens?: unknown; qa?: unknown; confirmLine?: string | null; choices?: string | null; audience?: string | null }): Promise<void> {
+// turnsToBuild: the member's turns between their ask and the build (0: built on the turn they asked; a confirm answered and built is 1).
+export async function logArtifactDesign(e: { ownerUserId: string; pageId?: string | null; medium: Medium; event: "made" | "revised"; layout?: string | null; tokens?: unknown; qa?: unknown; confirmLine?: string | null; choices?: string | null; audience?: string | null; turnsToBuild?: number | null }): Promise<void> {
   await db.query(
-    `INSERT INTO artifact_design_log (owner_user_id, page_id, medium, event, layout, tokens, qa, confirm_line, choices, audience) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [e.ownerUserId, e.pageId ?? null, e.medium, e.event, e.layout ?? null, JSON.stringify(e.tokens ?? {}), JSON.stringify(e.qa ?? {}), e.confirmLine ?? null, e.choices ?? null, e.audience ? e.audience.slice(0, 120) : null],
+    `INSERT INTO artifact_design_log (owner_user_id, page_id, medium, event, layout, tokens, qa, confirm_line, choices, audience, turns_to_build) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+    [e.ownerUserId, e.pageId ?? null, e.medium, e.event, e.layout ?? null, JSON.stringify(e.tokens ?? {}), JSON.stringify(e.qa ?? {}), e.confirmLine ?? null, e.choices ?? null, e.audience ? e.audience.slice(0, 120) : null, typeof e.turnsToBuild === "number" ? e.turnsToBuild : null],
   );
 }
 
-// First-shot acceptance, keeps and shares per medium over the last `days` (artifacts made at least 48 hours ago count for first shot).
-export async function designMetrics(days = 30): Promise<{ medium: string; made: number; settled: number; firstShot: number; firstShotRate: number | null; kept: number; shared: number; qaFindings: number }[]> {
+// The member's turns from the ask to this build: counted from the first time Co asked before building (the taste question or the
+// confirm-the-read line, services/designTaste.ts recordTasteAsked) since their last artifact, in the last 12 hours. No ask: 0.
+// current: this turn's words, counted when the turn's own line isn't logged yet.
+export async function turnsToBuild(userId: string, current: string): Promise<number> {
+  const { rows } = await db.query(
+    `SELECT MIN(created_at) AS asked FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste_asked' AND created_at > NOW() - INTERVAL '12 hours'
+        AND created_at > COALESCE((SELECT MAX(created_at) FROM artifact_design_log WHERE owner_user_id = $1 AND event = 'made'), 'epoch')`,
+    [userId],
+  );
+  const asked = rows[0]?.asked;
+  if (!asked) return 0;
+  // Their talk with a teammate (services/teamLines.ts) isn't a turn with Co.
+  const { notToTeammate } = await import("./teamLines.js");
+  const { rows: said } = await db.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > $2`, [userId, asked]);
+  const lines = said.map((r) => String(r.content));
+  const now = current.trim().slice(0, 60);
+  return lines.length + (now && !lines.some((l) => l.includes(now)) ? 1 : 0);
+}
+
+// Pure: first-shot acceptance for one artifact (design audit: the old view counted only "revised" events, so silence, a build that took
+// four turns and unfixed QA findings all read as first shot). It is first shot only when nothing QA found was left standing, it was
+// built within one member turn of their ask, and no correction or revision came within 48 hours.
+export function isFirstShot(a: { qaUnresolved: number; turnsToBuild: number | null; corrections: number }): boolean {
+  return a.qaUnresolved === 0 && (a.turnsToBuild ?? 0) <= 1 && a.corrections === 0;
+}
+
+// First-shot acceptance, keeps and shares per medium over the last `days` (artifacts made at least 48 hours ago count for first shot),
+// with the build turns and corrections behind it.
+export async function designMetrics(days = 30): Promise<{ medium: string; made: number; settled: number; firstShot: number; firstShotRate: number | null; kept: number; shared: number; qaFindings: number; qaUnresolved: number; slowBuilds: number; corrected: number }[]> {
   const { rows } = await db.query(
     `SELECT medium, COUNT(*)::int AS made, COUNT(*) FILTER (WHERE settled)::int AS settled, COUNT(*) FILTER (WHERE settled AND first_shot)::int AS first_shot,
-            COUNT(*) FILTER (WHERE kept)::int AS kept, COUNT(*) FILTER (WHERE shares > 0)::int AS shared, COALESCE(SUM(qa_findings), 0)::int AS qa_findings
+            COUNT(*) FILTER (WHERE kept)::int AS kept, COUNT(*) FILTER (WHERE shares > 0)::int AS shared, COALESCE(SUM(qa_findings), 0)::int AS qa_findings,
+            COUNT(*) FILTER (WHERE qa_unresolved > 0)::int AS qa_unresolved, COUNT(*) FILTER (WHERE COALESCE(turns_to_build, 0) > 1)::int AS slow_builds, COUNT(*) FILTER (WHERE corrections > 0)::int AS corrected
        FROM artifact_design_metrics WHERE made_at > NOW() - make_interval(days => $1) GROUP BY medium ORDER BY medium`,
     [days],
   );
-  return rows.map((r) => ({ medium: String(r.medium), made: r.made, settled: r.settled, firstShot: r.first_shot, firstShotRate: r.settled ? Math.round((r.first_shot / r.settled) * 100) / 100 : null, kept: r.kept, shared: r.shared, qaFindings: r.qa_findings }));
+  return rows.map((r) => ({ medium: String(r.medium), made: r.made, settled: r.settled, firstShot: r.first_shot, firstShotRate: r.settled ? Math.round((r.first_shot / r.settled) * 100) / 100 : null, kept: r.kept, shared: r.shared, qaFindings: r.qa_findings, qaUnresolved: r.qa_unresolved, slowBuilds: r.slow_builds, corrected: r.corrected }));
+}
+
+// The pending confirm-the-read, said to Co at the start of the next turn (design audit: "Yes, that's right." got "Good, burgundy and
+// white it is." and no deck, and the same confirm was asked again two turns later). Null when nothing waits on their answer.
+export async function pendingLookInstruction(userId: string, now: Date = new Date()): Promise<string | null> {
+  const { rows } = await db.query(
+    `SELECT id, context, vals, asked_at, created_at, quote FROM member_design_signals WHERE owner_user_id = $1 AND source = 'reference' AND confirmed = false AND asked_at IS NOT NULL AND created_at > $2 ORDER BY created_at DESC LIMIT 3`,
+    [userId, new Date(now.getTime() - DESIGN_LIMITS.pendingHours * 3600_000)],
+  );
+  if (!rows.length) return null;
+  const tokens = cleanTokens(typeof rows[0].vals === "string" ? JSON.parse(rows[0].vals) : rows[0].vals);
+  const line = confirmLine(tokens);
+  if (!line) return null;
+  return `You asked them to confirm the look you read from their image ("${line}") and nothing is built from it until they answer. If what they just said answers it (a yes, or a change), act on it in this turn: if they asked for a deck, call makeDeck now with readConfirmed (true for a yes; false, with taste, for a change) and build it; if no deck is asked for yet, call readReference with answer set to their reply. Don't ask the confirm line again when they've answered it. If they didn't answer it, carry on with what they said (makeDeck says what to do if they asked for a deck).`;
 }
 
 // Pure: contrast is part of the check readers lean on (re-exported so QA and the renderers share one formula).

@@ -298,7 +298,7 @@ export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } 
     if (st && (["background", "text", "accent"] as const).some((k) => typeof st[k] !== "string" || !hex.test(String(st[k])))) problems.push("style colors must be six-digit hex");
     // The design system's tokens (fonts, a second color, density), each checked (style.ts checkExtras).
     const extras = st ? checkExtras(st, problems) : {};
-    if (st && !problems.length) style = { ...styleFrom(st.mood, { background: st.background, text: st.text, accent: st.accent }, st.type), ...extras };
+    if (st && !problems.length) style = { ...styleFrom(st.mood, { background: st.background, text: st.text, accent: st.accent }, st.type, { field: !!extras.gradient }), ...extras };
   }
   if (o.logo !== undefined && o.logo !== null && (typeof o.logo !== "string" || !ASSET_ID_RE.test(o.logo))) problems.push("logo must be one of their saved images");
   const logo = typeof o.logo === "string" && ASSET_ID_RE.test(o.logo) ? o.logo : null;

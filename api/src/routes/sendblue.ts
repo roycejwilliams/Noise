@@ -1690,6 +1690,13 @@ export function sendblueRouter(io: Server): Router {
           context: `${resolvedContent}\n${inlineTarget ? `${inlineTarget.text}\n` : ""}${recentConversation.split("\n").filter((l) => l.startsWith("Co replied:")).slice(-3).join("\n")}`,
           pendingDescriptions: openItems.filter((i) => i.id !== resolvedItem?.item.id).map((i) => i.description),
         });
+        // A look Co read from their image waits on their yes before anything is built from it (services/designSystem.ts): said to Co
+        // so a "yes" builds in this turn instead of getting only an acknowledgment (design audit, 2026-10-12).
+        const pendingLook = await (await import("../services/designSystem.js")).pendingLookInstruction(user.id).catch(() => null);
+        if (pendingLook) addInstruction(replyFacts, pendingLook);
+        // A photo sent as the look they want is read before anything is said about using it (design audit: a "this is the vibe" image
+        // was never read, and Co said it was saved as their look).
+        if (imageForVision && photoAssetN) addInstruction(replyFacts, `If they sent this photo as the look they want for what you make them (a vibe, a style, "make it look like this"), read it with readReference (their image #${photoAssetN}) in this turn before saying anything about using it. Never say a look is saved or applied unless a tool did it this turn.`);
         if (owed?.afterFailure) {
           addInstruction(replyFacts, `Their message before this one ("${owed.text.slice(0, 400)}") never got a real answer: something broke on your side. Answer it in this reply along with what they just said. Don't make them repeat it, and don't apologize again beyond a word.`);
         }
