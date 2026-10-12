@@ -7,7 +7,7 @@
 // Every text field is plain text: one line, length-capped, no markdown, no HTML, no links. Links live only in the fields made for
 // them (a comparison option's url, a link item's url, a source), and only as plain https. This file is the only gate: the store
 // refuses anything that hasn't passed it, and the page re-checks what it loads.
-import { styleFrom, type DeckStyle } from "./style.js";
+import { STYLE_KEYS, checkExtras, styleFrom, type DeckStyle } from "./style.js";
 
 export type TextBlock = { type: "text"; text: string };
 // lead: a short label in front of the line (a time on an itinerary, a day on a week view): "7:00 PM", "Thu".
@@ -293,10 +293,12 @@ export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } 
   // Their look and logo: the style re-derived through the deck's own gate (hex only, contrast checked), the logo an asset id only.
   let style: DeckStyle | null = null;
   if (o.style !== undefined && o.style !== null) {
-    const st = obj(o.style, "style", ["mood", "background", "text", "accent", "type"], problems);
+    const st = obj(o.style, "style", STYLE_KEYS, problems);
     const hex = /^#[0-9a-f]{6}$/i;
     if (st && (["background", "text", "accent"] as const).some((k) => typeof st[k] !== "string" || !hex.test(String(st[k])))) problems.push("style colors must be six-digit hex");
-    if (st && !problems.length) style = styleFrom(st.mood, { background: st.background, text: st.text, accent: st.accent }, st.type);
+    // The design system's tokens (fonts, a second color, density), each checked (style.ts checkExtras).
+    const extras = st ? checkExtras(st, problems) : {};
+    if (st && !problems.length) style = { ...styleFrom(st.mood, { background: st.background, text: st.text, accent: st.accent }, st.type), ...extras };
   }
   if (o.logo !== undefined && o.logo !== null && (typeof o.logo !== "string" || !ASSET_ID_RE.test(o.logo))) problems.push("logo must be one of their saved images");
   const logo = typeof o.logo === "string" && ASSET_ID_RE.test(o.logo) ? o.logo : null;

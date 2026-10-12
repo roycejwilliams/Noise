@@ -15,11 +15,13 @@ const sonnet: Composer = async (prompt) =>
 const RULES = `Rules:
 - Elaborate: a full, rich deck (6 to 10 content slides, 2 to 4 strong bullets each) beats a bare one. A pitch deck's job is rhetoric: positioning, framing, contrasts, taglines and a clear stance are yours to write, and when they ask you to work out the positioning, write it.
 - Never a hard fact they didn't give: no partnership, deal, customer or user count, number, price, date, named event, award, or named person or company stated as fact. If a line leans on one, write the stance instead ("Built for live rooms", not "Partnering with X").
-- Plain words: no markdown, no links, no em dashes, no exclamation points. Headline at most 90 characters, each bullet at most 160, 1 to 5 bullets a slide, 2 to 15 slides.
-- Numbers they spoke as words ("fourteen", "eighty nine dollars", "six hundred K") are written as figures ("14", "$89", "$600k").`;
+- Plain words: no markdown, no links, no em dashes, no exclamation points. Headline at most 90 characters, each bullet at most 160, 1 to 4 bullets a slide, 2 to 15 slides.
+- Numbers they spoke as words ("fourteen", "eighty nine dollars", "six hundred K") are written as figures ("14", "$89", "$600k").
+- Headlines in sentence case: the first word and real names capitalized, every other word lowercase ("Why Co wins against parties"). Never Title Case, never all lowercase.
+- One idea per slide: a headline that says the point, then at most 4 short bullets (under 20 words each) that back it. A slide with a single strong line is a statement: give it one bullet. Two to four short parallel points read as a grid.`;
 
 // Pure: the prompt for a new deck.
-export function newDeckPrompt(callWords: string, request: string, look: string | null, refused: string | null): string {
+export function newDeckPrompt(callWords: string, request: string, look: string | null, refused: string | null, audience: string | null = null): string {
   return `A member asked Co for a slide deck. Write it as JSON.
 
 What they said (their texts, or the call):
@@ -28,7 +30,7 @@ ${callWords.slice(-8000)}
 """
 
 What they asked for: ${request}
-${look ? `The look they described: ${look}\n` : ""}${refused ? `\nA first version was refused for this, so fix it: ${refused}\n` : ""}
+${audience ? `Who it's for: ${audience}. Pitch the framing and the order of the slides to them.\n` : ""}${look ? `The look they described: ${look}\n` : ""}${refused ? `\nA first version was refused for this, so fix it: ${refused}\n` : ""}
 ${RULES}
 ${look ? `- From the look, also choose: mood (one of minimal, bold, warm, dark, playful, editorial, classic), and background, text and accent as six-digit hex colors that match what they described (text must read on the background), and type (serif or sans).\n` : ""}
 Return ONLY JSON: {"title": "...", "subtitle": "...", "slides": [{"headline": "...", "bullets": ["..."]}]${look ? `, "look": {"mood": "...", "background": "#......", "text": "#......", "accent": "#......", "type": "serif|sans"}` : ""}}

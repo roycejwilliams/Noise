@@ -54,7 +54,7 @@ export async function keepAsset(userId: string, data: Buffer, mediaType: string,
 // Their images, newest first: numbers and what each shows (never the bytes).
 export async function listAssets(userId: string): Promise<MemberAsset[]> {
   const { rows } = await db.query(
-    `SELECT id, n, media_type, description, created_at FROM member_assets WHERE owner_user_id = $1 AND wiped_at IS NULL ORDER BY created_at DESC LIMIT $2`,
+    `SELECT id, n, media_type, description, created_at FROM member_assets WHERE owner_user_id = $1 AND wiped_at IS NULL AND n > 0 ORDER BY created_at DESC LIMIT $2`,
     [userId, ASSET_LIMITS.list],
   );
   return rows.map((r) => ({ id: String(r.id), n: Number(r.n), mediaType: String(r.media_type), description: r.description ? String(r.description) : null, at: new Date(r.created_at) }));
@@ -97,8 +97,31 @@ export async function wipeUnusedAssets(): Promise<number> {
 // page or deck that placed one shows it no more.
 export async function deleteAssets(userId: string, numbers: number[] | null): Promise<number> {
   const { rowCount } = await db.query(
-    `UPDATE member_assets SET bytes = NULL, description = NULL, wiped_at = NOW() WHERE owner_user_id = $1 AND wiped_at IS NULL AND ($2::int[] IS NULL OR n = ANY($2::int[]))`,
+    `UPDATE member_assets SET bytes = NULL, description = NULL, wiped_at = NOW() WHERE owner_user_id = $1 AND wiped_at IS NULL AND ($2::int[] IS NULL OR n = ANY($2::int[]) OR -n = ANY($2::int[]))`,
     [userId, numbers && numbers.length ? numbers : null],
   );
   return rowCount ?? 0;
+}
+
+// A cleaned-up copy Co made of one of their images (a logo cut to its content, services/designRead.ts trimImage). It's theirs like the
+// original but never one of their numbered images: it's kept as number -N for their image #N, so it's never listed, offered or
+// counted, and deleting #N deletes it too (deleteAssets). The same copy again is the same asset.
+export async function keepDerivedAsset(userId: string, fromN: number, data: Buffer, mediaType: string): Promise<string | null> {
+  if (!TYPES.has(mediaType) || data.length > ASSET_LIMITS.bytes || !(fromN > 0)) return null;
+  const sha = createHash("sha256").update(data).digest("hex");
+  const { rows } = await db.query(`SELECT id, sha256, wiped_at FROM member_assets WHERE owner_user_id = $1 AND n = $2`, [userId, -fromN]);
+  // Their image #N never changes, so neither does its copy: a live one is reused as it is (a deck placing it keeps working).
+  if (rows[0] && !rows[0].wiped_at) return String(rows[0].id);
+  const id = randomBytes(18).toString("base64url");
+  if (rows[0]) {
+    await db.query(`UPDATE member_assets SET id = $3, bytes = $4, media_type = $5, sha256 = $6, wiped_at = NULL, created_at = NOW(), last_used_at = NOW(), description = $7 WHERE owner_user_id = $1 AND n = $2`, [userId, -fromN, id, data, mediaType, sha, `A cleaned-up copy of their image #${fromN}`]);
+  } else {
+    await db.query(`INSERT INTO member_assets (id, owner_user_id, n, media_type, bytes, description, sha256) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [id, userId, -fromN, mediaType, data, `A cleaned-up copy of their image #${fromN}`, sha]);
+  }
+  return id;
+}
+// The cleaned-up copy of their image #N, if Co made one and it's still there.
+export async function derivedAssetId(userId: string, fromN: number): Promise<string | null> {
+  const { rows } = await db.query(`SELECT id FROM member_assets WHERE owner_user_id = $1 AND n = $2 AND wiped_at IS NULL`, [userId, -fromN]);
+  return rows[0] ? String(rows[0].id) : null;
 }

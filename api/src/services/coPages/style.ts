@@ -1,9 +1,32 @@
 // A member's look as data (2026-10-11): a mood, three colors and a type family. Shared by every artifact that takes their taste:
 // decks (deck.ts) and pages (schema.ts, template.ts). Colors are six-digit hex only and text is contrast-checked, so nothing but a
 // readable color can reach the CSS.
+import { validFont, type FontChoice } from "../designFonts.js";
 export const DECK_MOODS = ["minimal", "bold", "warm", "dark", "playful", "editorial", "classic"] as const;
 export type DeckMood = (typeof DECK_MOODS)[number];
-export type DeckStyle = { mood: DeckMood; background: string; text: string; accent: string; type: "serif" | "sans" };
+// The richer tokens from a member's design system (services/designSystem.ts), all optional so a style stored before them still
+// reads: their fonts (open fonts only, designFonts.ts), a second color, whether the accent runs as a gradient into it, how much air
+// the layouts leave, and which designed title layout opens a deck.
+export const DENSITIES = ["airy", "balanced", "dense"] as const;
+export type Density = (typeof DENSITIES)[number];
+export const TITLE_LAYOUTS = ["field", "editorial", "centered"] as const;
+export type TitleLayout = (typeof TITLE_LAYOUTS)[number];
+export type DeckStyle = {
+  mood: DeckMood;
+  background: string;
+  text: string;
+  accent: string;
+  type: "serif" | "sans";
+  display?: FontChoice;
+  body?: FontChoice;
+  accent2?: string;
+  gradient?: boolean;
+  density?: Density;
+  titleLayout?: TitleLayout;
+  // Whose look this is, professional or personal (services/designSystem.ts), so a change to it reads the same context.
+  context?: "professional" | "personal";
+};
+export type StyleExtras = Pick<DeckStyle, "display" | "body" | "accent2" | "gradient" | "density" | "titleLayout" | "context">;
 
 // Each mood's own pairing: the default when they named no colors, and the fallback when theirs wouldn't read. "minimal" is the
 // default when they don't care (Royce: "If they don't care, default to clean and minimal").
@@ -42,3 +65,35 @@ export function styleFrom(mood: unknown, colors: { background?: unknown; text?: 
   return { mood: m, background, text, accent, type: type === "serif" || type === "sans" ? type : base.type };
 }
 
+
+// Pure: the extras, each kept only when it is well formed (hex, an open font, a known density or layout); anything else is dropped,
+// so nothing but a color or a font name Co checked reaches the CSS.
+export function extrasFrom(x: Record<string, unknown> | null | undefined): StyleExtras {
+  if (!x) return {};
+  const out: StyleExtras = {};
+  if (validFont(x.display)) out.display = { family: x.display.family, source: x.display.source, kind: x.display.kind };
+  if (validFont(x.body)) out.body = { family: x.body.family, source: x.body.source, kind: x.body.kind };
+  if (typeof x.accent2 === "string" && HEX.test(x.accent2.trim())) out.accent2 = x.accent2.trim().toUpperCase();
+  if (x.gradient === true && out.accent2) out.gradient = true;
+  if (DENSITIES.includes(x.density as Density)) out.density = x.density as Density;
+  if (TITLE_LAYOUTS.includes(x.titleLayout as TitleLayout)) out.titleLayout = x.titleLayout as TitleLayout;
+  if (x.context === "professional" || x.context === "personal") out.context = x.context;
+  return out;
+}
+export const STYLE_KEYS = ["mood", "background", "text", "accent", "type", "display", "body", "accent2", "gradient", "density", "titleLayout", "context"] as const;
+
+// Pure: the ink that reads on every stop of a field (a solid color or both ends of a gradient), at least 4.5:1 when one does.
+export function inkOn(stops: string[], prefer: string[]): string {
+  const ok = (c: string) => stops.every((s) => contrast(c, s) >= 4.5);
+  for (const c of [...prefer, "#FFFFFF", "#111111"]) if (HEX.test(c) && ok(c)) return c.toUpperCase();
+  // None reads on every stop: the one that reads best on the worst stop.
+  return ["#FFFFFF", "#111111"].sort((a, b) => Math.min(...stops.map((s) => contrast(b, s))) - Math.min(...stops.map((s) => contrast(a, s))))[0];
+}
+
+// The gate's half for the extras (deck.ts and schema.ts): each one present must be well formed, else it's refused by name.
+export function checkExtras(st: Record<string, unknown>, problems: string[]): StyleExtras {
+  const got = extrasFrom(st);
+  for (const k of ["display", "body", "accent2", "density", "titleLayout", "context"] as const) if (st[k] !== undefined && st[k] !== null && got[k] === undefined) problems.push(`style.${k} isn't one Co can use`);
+  if (st.gradient !== undefined && st.gradient !== false && !got.gradient) problems.push("style.gradient needs a second color (accent2)");
+  return got;
+}

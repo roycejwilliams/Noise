@@ -101,7 +101,14 @@ export function pageTools(
     if ("error" in t) return t;
     const { styleFrom } = await import("../services/coPages/style.js");
     // "Don't mind" keeps Co's own page design (review of PR 2): only a taste they described or picked restyles a page.
-    const style = t.taste && !t.taste.dontCare ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : t.taste?.dontCare ? null : (was?.style ?? null);
+    let style: unknown = t.taste && !t.taste.dontCare ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : t.taste?.dontCare ? null : (was?.style ?? null);
+    // Their design system (services/designSystem.ts) fills the rest: their fonts, a gradient, density. Only when they have one and
+    // didn't say they don't mind; otherwise the page keeps Co's own design, as before.
+    if (style && !ctx.dryRun) {
+      const DS = await import("../services/designSystem.js");
+      const ds = await DS.loadDesignSystem(ctx.userId, "personal").catch(() => null);
+      if (ds && ds.answered.size && !ds.dontCare) style = DS.fillDesign(ds, {}).style;
+    }
     const onPage = was ? [was.logo, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
     const placed = (n: unknown) => (typeof n === "number" && n > 0 ? n : null);
     const ids = await D.assetIdsFor(ctx.userId, [placed(input.logo), ...input.sections.map((x: any) => placed(x.picture))], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
@@ -125,11 +132,16 @@ export function pageTools(
         }
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent." };
         const imaged = await withImages(checked.data);
+        // Design QA before it goes (services/designQa.ts): measured at laptop width, findings logged with the page.
+        const Q = await import("../services/designQa.js");
+        const { renderCoPage } = await import("../services/coPages/template.js");
+        const qa = await Q.runQa(renderCoPage({ id: "q".repeat(24), data: imaged, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null }), "page", imaged, { screenshot: false }).catch(() => null);
         const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
         }
+        await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: (imaged as any).style ? "cover-band" : "co", tokens: (imaged as any).style ?? null, qa: qa ? { ran: qa.ran, findings: qa.findings } : { ran: false } }).catch(() => {});
         const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
@@ -138,7 +150,7 @@ export function pageTools(
         ctx.onLinkDelivered?.();
         confirm();
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-        return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
+        return { ok: true, url: made.url, ...(qa ? { qa: Q.qaSummary(qa) } : {}), note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),
     updatePage: tool({
@@ -168,6 +180,7 @@ export function pageTools(
           o.notDone(`The page wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
+        if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: pick.id, medium: "page", event: "revised" }).catch(() => {});
         const { text, confirm } = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);

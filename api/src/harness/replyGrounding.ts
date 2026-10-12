@@ -249,7 +249,16 @@ export async function gatherReplyFacts(
     )
     .then((r) => r.rows.length > 0)
     .catch(() => false);
-  if (deckAsked) addInstruction(rf, "You already asked your one question about the deck they want. If this message answers it or still wants the deck, build it now with makeDeck from what you have (pass a brief if you don't have slides): no more questions first. If they haven't said anything about the look, it's clean and minimal.");
+  // The confirm-the-read line (services/designSystem.ts): Co read the look of an image of theirs and asked them to confirm it. Their
+  // answer settles it, and the deck is built from it now.
+  const readAsked = deckAsked
+    ? await import("../services/designSystem.js").then((m) => m.loadDesignSystem(userId, "professional")).then((ds) => ds.pending.filter((p) => p.askedAt)).catch(() => [])
+    : [];
+  if (readAsked.length) {
+    const { confirmLine, foldSignals } = await import("../services/designSystem.js");
+    const line = confirmLine(foldSignals(readAsked.map((p) => ({ ...p, confirmed: true })), readAsked[0].context).tokens);
+    addInstruction(rf, `You checked the look you read from their image with them ("${line}"). This message answers it: build the deck now with makeDeck, readConfirmed true if they agreed (false if they didn't, with taste for what they want), and a brief from everything they told you about the deck. No more questions first; anything you asked about the content that they didn't answer, write the deck without.`);
+  } else if (deckAsked) addInstruction(rf, "You already asked your one question about the deck they want. If this message answers it or still wants the deck, build it now with makeDeck from what you have (pass a brief if you don't have slides): no more questions first. If they haven't said anything about the look, it's clean and minimal.");
   // They're asking for a deck and Co hasn't asked its one question yet: the deck tool decides whether a question is needed and asks
   // it, so Co doesn't stack its own first (replay: "what's it for?", then "what's it about?", then the look).
   else if (DECK_ASK.test(theirMessage)) addInstruction(rf, "If they're asking you to make a deck (not just talking about one), call makeDeck in this turn with what you have (pass a brief if you don't have slides); don't ask them anything yourself first. If something is missing, makeDeck asks the one question, covering the look and the content together.");
