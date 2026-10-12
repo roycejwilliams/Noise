@@ -26,23 +26,31 @@ export type PixelRead = {
   transparent: boolean;
 };
 export type VisionRead = { kind: "logo" | "screenshot" | "photo" | "board" | "other"; type: "serif" | "sans" | null; weight: "light" | "regular" | "bold" | "black" | null; font: string | null; density: Density | null; mood: DeckMood | null; look: string | null };
-export type Quality = { lowRes: boolean; cropped: boolean; placement: "full" | "small" | "plate"; note: string | null };
+export type Quality = { lowRes: boolean; cropped: boolean; placement: "full" | "small" | "plate"; note: string | null; shapeMismatch?: boolean };
 export type ReferenceRead = { pixels: PixelRead; vision: VisionRead | null; tokens: Tokens; fontNote: string | null; quality: Quality; confirm: string };
+// The box a slide's picture fills (deck.ts split layout: 44% of a 16:9 slide, full height), as width over height.
+export const SPLIT_BOX = (0.44 * 16) / 9;
 
 // Pure: the pixel read's quality for placing the image. A logo under 240px on its long side, or a picture under 900px, is placed
-// small (never stretched); a logo whose mark touches its edges is put on a plate in its own ground color (cleaned up).
-export function qualityOf(p: Pick<PixelRead, "width" | "height" | "touches" | "transparent">, kind: VisionRead["kind"] | null): Quality {
+// small (never stretched); a logo whose mark touches its edges is put on a plate in its own ground color (cleaned up). box: the shape
+// of the box a picture fills (width over height); a picture whose shape is more than 1.5x off it would be cropped hard (design audit:
+// a tall portrait in the split lost its subject's head), so it's shown whole on a plate instead.
+export function qualityOf(p: Pick<PixelRead, "width" | "height" | "touches" | "transparent">, kind: VisionRead["kind"] | null, box?: number | null): Quality {
   const long = Math.max(p.width, p.height);
   const logo = kind === "logo";
   const lowRes = logo ? long < 240 : long < 900;
   const cropped = logo && !p.transparent && p.touches.length >= 1;
-  const placement: Quality["placement"] = cropped ? "plate" : lowRes ? "small" : "full";
+  const aspect = p.width / Math.max(1, p.height);
+  const shapeMismatch = !logo && !!box && Math.max(aspect / box, box / aspect) > 1.5;
+  const placement: Quality["placement"] = cropped || (shapeMismatch && !lowRes) ? "plate" : lowRes ? "small" : "full";
   const note = cropped
     ? "The logo is cropped right to its edges, so it sits on a plate of its own background color with room around it."
     : lowRes
       ? `The image is small (${p.width}x${p.height}), so it's placed small rather than stretched.`
-      : null;
-  return { lowRes, cropped, placement, note };
+      : shapeMismatch
+        ? "The picture's shape doesn't fit its slide, so it's shown whole rather than cropped."
+        : null;
+  return { lowRes, cropped, placement, note, shapeMismatch };
 }
 
 // Pure: the tokens a read gives. Colors come only from pixels; type, weight, density and mood from the vision read.
@@ -154,20 +162,29 @@ async function measure(dataUrl: string): Promise<PixelRead> {
   // Ink: the biggest merged color that is far from the ground.
   const ink = merged.find((m) => Math.hypot(m.rgb[0] - ground[0], m.rgb[1] - ground[1], m.rgb[2] - ground[2]) > 80);
   // Gradient: the mean of the first and last fifth along each axis, each fifth fairly even, the ends clearly apart.
-  // Lettering on the field (its ink) is left out, so the field's own two ends are what's measured.
-  const inkRgb = ink ? ink.rgb : null;
+  // Lettering on the field (its ink) is left out, so the field's own two ends are what's measured. Only a small color can be
+  // lettering: on a full-bleed gradient the "ink" found above can be one end of the field itself (design audit: a teal-to-coral
+  // image read as no gradient, its whole teal end left out as lettering). And when leaving it out leaves too little of a region, the
+  // region is measured whole.
+  const inkShare = ink ? ink.n / Math.max(1, opaque) : 0;
+  const inkRgb = ink && inkShare < 0.12 ? ink.rgb : null;
   const mean = (x0: number, x1: number, y0: number, y1: number) => {
-    let r = 0, g = 0, b = 0, n = 0;
+    let r = 0, g = 0, b = 0, n = 0, R = 0, G = 0, B2 = 0, N = 0;
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
       const i = at(x, y);
       if (d[i + 3] < 128) continue;
+      R += d[i];
+      G += d[i + 1];
+      B2 += d[i + 2];
+      N++;
       if (inkRgb && Math.hypot(d[i] - inkRgb[0], d[i + 1] - inkRgb[1], d[i + 2] - inkRgb[2]) < 90) continue;
       r += d[i];
       g += d[i + 1];
       b += d[i + 2];
       n++;
     }
-    return n ? [r / n, g / n, b / n] : [0, 0, 0];
+    if (n && n >= N * 0.25) return [r / n, g / n, b / n];
+    return N ? [R / N, G / N, B2 / N] : [0, 0, 0];
   };
   const dist = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
   const fw = Math.max(1, Math.round(w / 5)), fh = Math.max(1, Math.round(h / 5));
