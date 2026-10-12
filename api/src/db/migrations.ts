@@ -2705,8 +2705,8 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS member_design_signals_owner ON member_design_signals (owner_user_id, created_at DESC)`))
     // The image a reference read came from (2026-10-12): its words are data for the look, never the member's own words (deck source).
     .then(() => pool.query(`ALTER TABLE member_design_signals ADD COLUMN IF NOT EXISTS asset_n INT`))
-    // Docs are keyed by their delivery key; a deck's or page's context rides with its log row, so a change keeps it.
-    .then(() => pool.query(`ALTER TABLE artifact_design_log ADD COLUMN IF NOT EXISTS context TEXT`).catch(() => {}))
+    // What kind of reference it was (logo, inspiration, screenshot): a logo's words are their brand; the others' words are not theirs.
+    .then(() => pool.query(`ALTER TABLE member_design_signals ADD COLUMN IF NOT EXISTS ref_kind TEXT`))
     // What each artifact was made with and what its design QA found, and every later change: first-shot acceptance, keeps and shares
     // are read from it with co_pages and co_page_shares (view artifact_design_metrics).
     .then(() =>
@@ -2726,6 +2726,7 @@ export async function runMigrations(): Promise<void> {
       )`),
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS artifact_design_log_page ON artifact_design_log (page_id, created_at)`))
+    .then(() => pool.query(`ALTER TABLE artifact_design_log ADD COLUMN IF NOT EXISTS context TEXT`))
     .then(() =>
       pool.query(`CREATE OR REPLACE VIEW artifact_design_metrics AS
         SELECT m.id, m.owner_user_id, m.page_id, m.medium, m.layout, m.created_at AS made_at,

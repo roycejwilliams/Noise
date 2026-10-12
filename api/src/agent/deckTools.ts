@@ -327,8 +327,11 @@ export function deckTools(
     // are made of. Public boards only: a board that needs a login (or is gone) is said plainly, never guessed at.
     readInspo: tool({
       description: toolUse("readInspo"),
-      inputSchema: z.object({ url: z.string().describe("The Pinterest board link exactly as they sent it.") }),
-      execute: async ({ url }) => {
+      inputSchema: z.object({
+        url: z.string().describe("The Pinterest board link exactly as they sent it."),
+        context: z.enum(["professional", "personal"]).optional().describe("Professional (work, investors, clients) or personal (friends, family, a party), for what they want it for. Leave it out for professional."),
+      }),
+      execute: async ({ url, context }) => {
         if (!(ctx.resolvedContent ?? "").includes(url.trim()) && !String(ctx.turn?.message ?? "").includes(url.trim())) {
           const recent = await o.source().then((s) => s.theirs).catch(() => "");
           if (!recent.includes(url.trim())) return { ok: false, error: "Only a board link they sent you." };
@@ -360,7 +363,7 @@ export function deckTools(
         if (!tokens.mood && r.tone === "dark") tokens.mood = "dark";
         let confirmLine: string | null = null;
         if (Object.keys(tokens).length && !ctx.dryRun) {
-          const id = await D.recordSignal(ctx.userId, { context: "professional", source: "reference", values: tokens, ref: "your Pinterest board", confirmed: false }).catch(() => null);
+          const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref: "your Pinterest board", confirmed: false, refKind: "board" }).catch(() => null);
           if (id) readThisTurn.add(id);
           confirmLine = D.confirmLine(tokens) || null;
           if (confirmLine) ctx.facts?.add("known", `Co read the look of their Pinterest board from its pins: ${confirmLine.replace(/, right\?$/, "")}.`);
@@ -408,7 +411,7 @@ export function deckTools(
           if (tokens.accent && /^(black|charcoal|white|off-white|ivory|cream|grey|stone|slate)$/.test(D.colorName(tokens.accent))) delete tokens.accent;
         }
         const ref = what === "logo" ? "your logo" : "the image you sent";
-        const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref, confirmed: false, fontNotes: r.fontNote ? [r.fontNote] : [], assetN: image });
+        const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref, confirmed: false, fontNotes: r.fontNote ? [r.fontNote] : [], assetN: image, refKind: what });
         if (id) readThisTurn.add(id);
         const confirm = D.confirmLine(tokens, { weight: what === "logo" ? null : r.vision?.weight });
         const { recordDecision } = await import("../harness/core.js");

@@ -305,24 +305,25 @@ const rowSignal = (r: any): DesignSignal => ({
 });
 
 // assetN: the member's image number a reference read came from, so what's written in that image is never read as their words.
-export async function recordSignal(userId: string, s: { context: DesignContext; source: SignalSource; values: Tokens & { dontCare?: boolean }; quote?: string | null; ref?: string | null; confirmed?: boolean; fontNotes?: string[]; assetN?: number | null }): Promise<number | null> {
+export async function recordSignal(userId: string, s: { context: DesignContext; source: SignalSource; values: Tokens & { dontCare?: boolean }; quote?: string | null; ref?: string | null; confirmed?: boolean; fontNotes?: string[]; assetN?: number | null; refKind?: "logo" | "inspiration" | "screenshot" | "board" | null }): Promise<number | null> {
   const values = cleanTokens(s.values);
   if (!Object.keys(values).length) return null;
   const { rows } = await db.query(
-    `INSERT INTO member_design_signals (owner_user_id, context, source, vals, quote, ref, confirmed, font_notes, asset_n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+    `INSERT INTO member_design_signals (owner_user_id, context, source, vals, quote, ref, confirmed, font_notes, asset_n, ref_kind) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
     // A ref is Co's own label for a reference it read ("your logo"); a stated taste's inspiration is in their quote, in their voice.
-    [userId, s.context, s.source, JSON.stringify(values), s.quote ? s.quote.slice(0, 300) : null, s.ref && s.source === "reference" ? s.ref.slice(0, 120) : null, s.source === "reference" ? !!s.confirmed : true, JSON.stringify((s.fontNotes ?? []).slice(0, 3)), s.assetN ?? null],
+    [userId, s.context, s.source, JSON.stringify(values), s.quote ? s.quote.slice(0, 300) : null, s.ref && s.source === "reference" ? s.ref.slice(0, 120) : null, s.source === "reference" ? !!s.confirmed : true, JSON.stringify((s.fontNotes ?? []).slice(0, 3)), s.assetN ?? null, s.refKind ?? null],
   );
   return rows[0] ? Number(rows[0].id) : null;
 }
 
 // ---------------------------------------------------------------- reference text is data for the look, never their words
 
-// The image numbers of theirs Co read as a look reference (readReference): what those images say is a stranger's text or a design's
-// copy, never something the member said. A photo they sent as content (a menu to summarize) was never read as a reference, so its
+// The image numbers of theirs Co read as an inspiration or a screenshot (readReference): what those images say is a stranger's text or
+// a design's copy, never something the member said. Their own logo is different: its words are their brand, so it's never listed here
+// (review of the design system PR: "Northlight Studio" on their logo was refused as a name they never gave). A photo they sent as content (a menu to summarize) was never read as a reference, so its
 // description stays theirs: the line is drawn by what Co did with the image, which is what they asked for, not by its words.
 export async function referenceImageNumbers(userId: string): Promise<Set<number>> {
-  const { rows } = await db.query(`SELECT DISTINCT asset_n FROM member_design_signals WHERE owner_user_id = $1 AND source = 'reference' AND asset_n IS NOT NULL`, [userId]);
+  const { rows } = await db.query(`SELECT DISTINCT asset_n FROM member_design_signals WHERE owner_user_id = $1 AND source = 'reference' AND asset_n IS NOT NULL AND ref_kind IN ('inspiration', 'screenshot')`, [userId]);
   return new Set(rows.map((r) => Number(r.asset_n)));
 }
 // Pure: their words with every reference image's description taken out. The photo line the texting route records looks like
