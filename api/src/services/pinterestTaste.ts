@@ -31,31 +31,47 @@ export function boardPath(raw: string): string | null {
     return null;
   }
   if (!PIN_HOST.test(u.hostname)) return null;
-  const parts = u.pathname.split("/").filter(Boolean);
-  if (parts.length < 2 || NOT_BOARD.has(parts[0].toLowerCase())) return null;
-  const ok = (s: string) => /^[A-Za-z0-9_.-]{1,80}$/.test(s);
-  return ok(parts[0]) && ok(parts[1]) && !/\.rss$/i.test(parts[1]) ? `${parts[0]}/${parts[1]}` : null;
+  const parts = u.pathname.split("/").filter(Boolean).map((p) => {
+    try {
+      return decodeURIComponent(p);
+    } catch {
+      return "";
+    }
+  });
+  // A profile's own tabs ("_saved", "_created") aren't boards (review of PR 5).
+  if (parts.length < 2 || NOT_BOARD.has(parts[0].toLowerCase()) || parts[1].startsWith("_")) return null;
+  // Letters in any alphabet (a board can be named in Japanese or Spanish), digits and _ . - only; re-encoded for the fetch.
+  const ok = (s: string) => /^[\p{L}\p{N}_.-]{1,80}$/u.test(s);
+  return ok(parts[0]) && ok(parts[1]) && !/\.rss$/i.test(parts[1]) ? `${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}` : null;
 }
-export const isPinterestLink = (raw: string): boolean => {
-  try {
-    const h = new URL(raw.trim()).hostname;
-    return PIN_HOST.test(h) || /^pin\.it$/i.test(h);
-  } catch {
-    return false;
-  }
-};
 
-const decode = (s: string) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim();
+// Entities first (numeric too), then tags, so "&lt;img&gt;" never survives as text; &amp; last so "&amp;lt;" isn't decoded twice.
+const decode = (s: string) =>
+  s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+// Pure: a pin title as data for the look, never as instructions: links gone, at most 60 characters.
+export const pinTitle = (s: string): string => s.replace(/\bhttps?:\/\/\S+|\bwww\.\S+/gi, "").replace(/\s+/g, " ").trim().slice(0, 60);
 
 // Pure: the feed's board name, description and pin titles (up to 25), or null when it isn't a feed with pins.
 export function parseBoardRss(xml: string): { board: string; description: string | null; pins: string[] } | null {
-  const channel = xml.match(/<channel>([\s\S]*?)<item>/i)?.[1] ?? "";
-  const board = decode(channel.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? "");
+  const head = xml.match(/<channel>([\s\S]*?)(<item>|<\/channel>)/i)?.[1] ?? "";
+  const board = decode(head.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? "");
   const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map((m) => m[1]);
-  if (!board || !items.length) return null;
-  const description = decode(channel.match(/<description>([\s\S]*?)<\/description>/i)?.[1] ?? "") || null;
+  // A public board with no pins yet is still a board (review of PR 5): only no channel at all isn't one.
+  if (!board) return null;
+  const description = decode(head.match(/<description>([\s\S]*?)<\/description>/i)?.[1] ?? "") || null;
   const pins = items
-    .map((it) => decode(it.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? "") || decode(it.match(/<description>([\s\S]*?)<\/description>/i)?.[1] ?? "").slice(0, 120))
+    .map((it) => pinTitle(decode(it.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? "") || decode(it.match(/<description>([\s\S]*?)<\/description>/i)?.[1] ?? "")))
     .filter(Boolean)
     .slice(0, 25);
   return { board: board.slice(0, 120), description: description?.slice(0, 300) ?? null, pins };
@@ -95,7 +111,11 @@ export async function readBoard(raw: string, deps: PinDeps = realDeps): Promise<
   const base = `https://www.pinterest.com/${path}`;
   const rss = await deps.fetch(`${base}.rss`).catch(() => ({ error: "unreachable" }));
   if ("error" in rss) return { readable: false, why: "unreachable" };
-  const feed = rss.status === 200 ? parseBoardRss(rss.body) : null;
+  // Only Pinterest's own "not found" means it can't be opened without a login (or is gone); throttling or an error on their side is
+  // "didn't answer", never "your board is private" (review of PR 5).
+  if (rss.status === 404 || (rss.status === 200 && /^\s*Board not found/i.test(rss.body))) return { readable: false, why: "needs_login_or_gone" };
+  if (rss.status !== 200) return { readable: false, why: "unreachable" };
+  const feed = parseBoardRss(rss.body);
   if (!feed) return { readable: false, why: "needs_login_or_gone" };
   // The board page is large (about 1.4 MB, its pins' colors near the end): a slow or cut-short read is tried once more before the
   // look goes without colors (live run, PR 5: one read of the same board came back without them).
