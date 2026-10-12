@@ -33,20 +33,22 @@ export async function draftCompanionCheckin(
   story?: CompanionStory | null,
   advice?: CompanionAdvice | null,
   heavy?: CompanionHeavy | null,
+  // What Co is working on for them (harness/memberThreads.ts ownedWorkFor): never handed back to them as a question.
+  ownedWork: string[] = [],
 ): Promise<{ text: string; rules: OutputRules } | null> {
   if (heavy) return draftFromHeavy(firstName, heavy);
   if (advice) return draftFromAdvice(firstName, advice);
   if (story) return draftFromStory(firstName, story);
   if (thread) return draftFromThread(firstName, recap, thread, item ?? null);
-  if (curious) return draftFromCuriosity(firstName, recap, curious);
+  if (curious) return draftFromCuriosity(firstName, recap, curious, ownedWork);
   const text = await draftProactive({
     functionId: "agent.companionCheckin",
     firstName,
-    facts: (() => { const r = splitRecap(recap.slice(0, 3000)); return { live_things_they_said_about_themselves: r.theySaid || null, recap_of_what_you_know_about_them: r.coRead || null }; })(),
+    facts: (() => { const r = splitRecap(recap.slice(0, 3000)); return { live_things_they_said_about_themselves: r.theySaid || null, recap_of_what_you_know_about_them: r.coRead || null, work_you_owe_them: ownedWork.length ? ownedWork.join("; ") : null }; })(),
     // The "barely knows them" case (2026-09-22): a member who stopped after
     // giving their name and email has no open thread, so this always
     // returned SKIP and they never heard from Co again.
-    task: `Find ONE specific open thread in the recap: something they were in the middle of, deciding, or looking forward to, that they'd plausibly have news about now. Write a short text that names that exact thing and asks how it went or where it landed. No next steps, nothing operational. If the recap has no specific open thread like that, return SKIP; a generic "thinking of you" is never acceptable.
+    task: `Find ONE specific open thread in the recap: something they were in the middle of, deciding, or looking forward to, that they'd plausibly have news about now. Write a short text that names that exact thing and asks how it went or where it landed. No next steps, nothing operational. If the recap has no specific open thread like that, return SKIP; a generic "thinking of you" is never acceptable. Never ask them about anything in work_you_owe_them: that is yours to deliver, not theirs to report on; leave it to its own message.
 
 One exception: if the recap shows Co barely knows them yet (little beyond joining and their name), don't SKIP. Write one short, warm, low-pressure text that picks up where things actually left off (the last thing Co asked, if the recap says) and invites them to share what's on their plate these days. No events, no offers, no pitch, no promise of anything Co will do.`,
   });
@@ -118,7 +120,7 @@ async function draftFromStory(firstName: string, story: CompanionStory): Promise
 // if the conversation leads them there").
 export type CompanionCurious = { topic: string; about: string; theirWords: string };
 
-async function draftFromCuriosity(firstName: string, recap: string, curious: CompanionCurious): Promise<{ text: string; rules: OutputRules } | null> {
+async function draftFromCuriosity(firstName: string, recap: string, curious: CompanionCurious, ownedWork: string[] = []): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
     functionId: "agent.companionCheckin",
     firstName,
@@ -128,8 +130,9 @@ async function draftFromCuriosity(firstName: string, recap: string, curious: Com
       ways_co_can_help: "search now for events, communities or opportunities for something they want; point them to people worth meeting at Co events; a quick call to think something through",
       what_co_cannot_do: "find sponsors, investors or funders themselves (only events where they show up); promise to keep watching or keep an eye out",
       recap_for_background_only: recap.slice(0, 1500),
+      work_you_owe_them: ownedWork.length ? ownedWork.join("; ") : null,
     },
-    task: `Text them first, like a friend who was paying attention. Look for one specific thing THEY said in your recent texts that naturally leads somewhere: either toward something_co_is_still_figuring_out_about_them, or toward one concrete way Co could help with it (only from ways_co_can_help, never what_co_cannot_do). Pick it up in their terms and ask one short, warm question, or offer that one way to help as a question. It has to feel like the next step of that conversation, never an interview question out of nowhere. If nothing they said leads there, return SKIP.`,
+    task: `Text them first, like a friend who was paying attention. Look for one specific thing THEY said in your recent texts that naturally leads somewhere: either toward something_co_is_still_figuring_out_about_them, or toward one concrete way Co could help with it (only from ways_co_can_help, never what_co_cannot_do). Pick it up in their terms and ask one short, warm question, or offer that one way to help as a question. It has to feel like the next step of that conversation, never an interview question out of nowhere. If nothing they said leads there, return SKIP. Never ask them about anything in work_you_owe_them: that is yours to deliver, not theirs to report on; leave it to its own message.`,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 240 } };

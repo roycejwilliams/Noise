@@ -15,7 +15,8 @@
 // produce the newer facts.
 import { goalEntries } from "./profileWrite.js";
 import { notToTeammate } from "../services/teamLines.js";
-import { localStamp, memberZone } from "../services/memberTime.js";
+import { localStamp, memberZone, wordsZone } from "../services/memberTime.js";
+import { DateTime } from "luxon";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
@@ -50,8 +51,10 @@ export type SnapshotInputs = {
 // Rebuilt at most this often while they're actively talking.
 const REBUILD_MIN_INTERVAL_MS = 10 * 60 * 1000;
 
-export function snapshotPrompt(input: SnapshotInputs): string {
+export function snapshotPrompt(input: SnapshotInputs, now: Date = new Date()): string {
+  // Today's date, with the year: the stamps on their words carry none, and a picture once came back dated 2025 (2026-10-12 audit).
   return `Keep Co's short, current picture of ${input.firstName}. Rebuild it from what they've actually said.
+Today is ${DateTime.fromJSDate(now).setZone(wordsZone(input.zone ?? null)).toFormat("cccc, LLLL d, yyyy")}.
 
 ${input.previous ? `Your previous picture (may be out of date):\n${JSON.stringify(input.previous, null, 2)}` : "No previous picture."}
 
@@ -77,6 +80,14 @@ Rules:
 
 Return ONLY JSON:
 {"work": "what they do and at what stage, or null", "place": "where they are, or null", "wantsNow": [], "weighingOn": [], "valuesInPeople": [], "worked": [], "didntWork": [], "asOf": "the timestamp of the newest statement you used"}`;
+}
+
+// Pure: the newest statement's time (statements carry UTC minutes, "YYYY-MM-DDTHH:MM"), as an ISO instant, or null.
+export function newestStatementAt(statements: { at: string }[]): string | null {
+  const at = statements.map((s) => s.at).filter(Boolean).sort().pop();
+  if (!at) return null;
+  const d = new Date(/Z$|[+-]\d{2}:?\d{2}$/.test(at) ? at : `${at.length === 16 ? `${at}:00` : at}Z`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 export function parseSnapshot(text: string): PersonSnapshot | null {
@@ -364,6 +375,8 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     // What they corrected or removed (services/whatCoKnows.ts) stays that way: a rebuild from their older words never brings it back.
     const forgotten = await import("../services/whatCoKnows.js").then((W) => W.forgottenRows(userId).then((rows) => ({ W, rows }))).catch(() => null);
     if (forgotten?.rows.length) snapshot = forgotten.W.forgetInSnapshot(snapshot, forgotten.rows);
+    // asOf is a fact the record already has: the newest statement it was built from (never the model's word for the date).
+    snapshot = { ...snapshot, asOf: newestStatementAt(input.recentStatements) ?? new Date().toISOString() };
     const wrote = await pool.query(
       `INSERT INTO person_snapshots (user_id, snapshot, updated_at, built_from) VALUES ($1, $2, NOW(), $3)
        ON CONFLICT (user_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW(), built_from = EXCLUDED.built_from

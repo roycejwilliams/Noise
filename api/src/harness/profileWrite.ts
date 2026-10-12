@@ -263,6 +263,10 @@ export function gateResolutions(
 // ---- extracted profile values ------------------------------------------------
 
 export const ALLOWED_LIFE_CHAPTERS = ["new_to_city", "building_solo", "career_pivot", "starting_over"];
+// What each chapter means, and that their own stated facts always win over an inference (2026-10-12 intelligence audit: a founder
+// who named his cofounder was marked building_solo, and a photographer who moved here 5 years ago was marked new_to_city). One rule
+// for every reader that proposes chapters (services/profileExtraction.ts, turnLearning.ts, callLearning.ts).
+export const LIFE_CHAPTERS_RULE = `life_chapters, only when their own words support it: new_to_city = they moved to where they live within about the last year (someone who moved years ago is not new); building_solo = building something of their own WITHOUT a cofounder or business partner (anyone who named a cofounder or partner in it is not solo); career_pivot = changing careers or fields now; starting_over = rebuilding after a major ending. A chapter must never contradict a fact they stated (a cofounder they named, how long they've lived somewhere): their stated facts win over any inference. When unsure, leave it out.`;
 export const ALLOWED_CONNECTION_STYLES = ["small_group", "medium_group", "large_social"];
 const MAX_LIST_ITEMS = 25;
 const MAX_ITEM_CHARS = 200;

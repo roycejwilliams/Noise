@@ -119,6 +119,9 @@ For each thing worth keeping, write one claim:
 - "kind": one of ${MODEL_KINDS.join(", ")}.
   Enduring (who they are): identity, building, relationship (cofounder, partner), city, role, preference.
   Ephemeral (expires): plan, deadline, meeting, mood, exploring, worry, pending_decision.
+  Something they named a date or a stretch of time for (a wedding, a trip, a move, a visit, a raise) is its own "plan" claim that
+  keeps their date words in "text" exactly as they wrote them ("June 12 2027", "Oct 28 to Nov 6", "Thanksgiving week"), even when a
+  relationship or role claim says the rest: the date is what lets Co check a plan against it.
 - "said_on": the date of the message holding the quote (YYYY-MM-DD).
 A test prompt, a hypothetical, advice they asked for about a made-up situation, or something Co said is NOT a claim about them. Never write a date or a day of the week into "text" unless they wrote it; do not turn a plan into a fact about the present. Skip anything you are not sure they said.
 
@@ -196,4 +199,55 @@ export function renderRecap(claims: Claim[], now: Date, zone: string | null = ZO
     sec("What is going on right now (they said it, and it is still inside its lifetime):", r.theySaid),
     sec("Co's read (inference: orientation only, never state it back as something they told you):", r.coInferred),
   ].filter(Boolean).join("\n\n");
+}
+
+// ---------- a correction reaches the claims in the same turn (2026-10-12 intelligence audit: "I don't live in Austin" fixed the
+// profile and the time zone at once, but the claim "He lives in Austin, Texas." stayed live until the nightly refresh)
+// The turn learning (services/profileExtraction.ts) records what they corrected as field / old / new. Any held claim that still
+// says the old value is retired now, and a guard row is written for it (profile_corrections with item_ref claim:<id>, the same
+// record services/whatCoKnows.ts writes) so the nightly refresh doesn't propose it back from their older words.
+
+// Pure: the held claims a correction overturns: they say the old value and not the new one (whatCoKnows.ts correctedSays, which
+// reads a one-word value like a city only where it's used as a place). Where they live only ever touches a city claim: "Flying to
+// Austin for SXSW" is not where they live.
+export function claimOverturnedBy<X extends { field: string; old: string; new: string | null }>(c: { kind?: string; text: string }, corrections: X[], correctedSays: (old: string, now: string, line: string) => boolean, covers: (old: string, text: string) => boolean): X | null {
+  return corrections.find((x) => {
+    const old = String(x.old ?? "").trim();
+    if (!old) return false;
+    if (x.field === "city" && c.kind !== "city") return false;
+    return x.new ? correctedSays(old, x.new, c.text) : covers(old, c.text);
+  }) ?? null;
+}
+export function claimsOverturned<C extends { kind?: string; text: string }>(claims: C[], corrections: { field: string; old: string; new: string | null }[], correctedSays: (old: string, now: string, line: string) => boolean, covers: (old: string, text: string) => boolean): C[] {
+  return claims.filter((c) => !!claimOverturnedBy(c, corrections, correctedSays, covers));
+}
+
+// Retires the claims this turn's corrections overturn, under the claims lock. Returns how many. Never throws.
+export async function retireCorrectedClaims(userId: string, corrections: { field: string; old: string; new: string | null; quote?: string | null }[], db: { connect: () => Promise<any> } = pool): Promise<number> {
+  if (!corrections.length) return 0;
+  const client = await db.connect().catch(() => null);
+  if (!client) return 0;
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('member_claims:' || $1))`, [userId]);
+    const { rows } = await client.query(`SELECT id, kind, text, quote FROM member_claims WHERE user_id = $1`, [userId]);
+    const W = await import("./whatCoKnows.js");
+    const gone = claimsOverturned(rows as { id: string; kind: string; text: string; quote: string | null }[], corrections, W.correctedSays, W.covers);
+    for (const c of gone) {
+      const x = claimOverturnedBy(c, corrections, W.correctedSays, W.covers)!;
+      await client.query(`DELETE FROM member_claims WHERE id = $1 AND user_id = $2`, [c.id, userId]);
+      await client.query(
+        `INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote, item_ref, removed) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [userId, W.fieldFor(`claim:${c.id}`), c.text, x.new, String(x.quote ?? "").slice(0, 300), `claim:${c.id}`, x.new == null],
+      );
+    }
+    await client.query("COMMIT");
+    return gone.length;
+  } catch (err: any) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("claims: retiring corrected claims failed (non-fatal; the nightly refresh still guards):", err?.message ?? err);
+    return 0;
+  } finally {
+    client.release();
+  }
 }

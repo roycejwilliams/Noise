@@ -15,6 +15,7 @@ import {
   decideAskWrite,
   echoesCoNotMember,
   gateCorrections,
+  LIFE_CHAPTERS_RULE,
   LIST_FIELDS,
   mightBeCorrection,
   type Correction,
@@ -135,7 +136,7 @@ export async function extractPsychographicProfile(
         Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
 
         {
-          "life_chapters": [], // array of applicable values from: new_to_city, building_solo, career_pivot, starting_over
+          "life_chapters": [], // array of values from: new_to_city, building_solo, career_pivot, starting_over. ${LIFE_CHAPTERS_RULE}
           "social_energy": null, // number 0-100 (0 = very introverted/quiet preference, 100 = very extroverted/high energy), or null if the person's own words didn't give a real signal this call — never guess a number
           "connection_style": "", // one of: small_group, medium_group, large_social
           "activity_preferences": [], // array of activities they mentioned or implied enjoying
@@ -962,6 +963,8 @@ export async function storeProfile(
         [user_id, corrections.map((c) => c.field), corrections.map((c) => c.old), corrections.map((c) => c.new), corrections.map((c) => c.quote)],
       )
       .catch((err: any) => console.error("profile_corrections write failed (non-fatal):", err?.message ?? err));
+    // And the claims that still say what they corrected, now, not at the nightly refresh (services/claims.ts).
+    await import("./claims.js").then((C) => C.retireCorrectedClaims(user_id, corrections)).catch(() => 0);
   }
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,

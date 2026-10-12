@@ -19,7 +19,7 @@
 //   eval    — evals/reply/run.ts
 import type { GoalStateRow } from "../services/goalEdges.js";
 import type { MemberKnowledge, MemberRules, Restraint } from "../services/memberKnowledge.js";
-import { renderLive } from "../services/factLabels.js";
+import { dateSpan, renderLive } from "../services/factLabels.js";
 import { arcLine, LENS_RULE } from "../services/goalJourney.js";
 import { isNewMember, steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
 import { doorDecision, doorInstruction, doorOpen, type DoorView } from "../services/theDoor.js";
@@ -523,6 +523,31 @@ export function heldClaimsFrom(k: MemberKnowledge | null | undefined, now: Date 
   if (!k) return null;
   const zone = k.identity.timeZone;
   return renderLive(k.claims.filter((c) => c.text.trim()).map((c) => ({ text: c.text, provenance: c.provenance, kind: c.kind, quote: c.quote, saidOn: c.verifiedAt.slice(0, 10), confirmedOn: c.verifiedAt.slice(0, 10), expiresOn: c.expiresOn })), now, zone);
+}
+
+// Pure: when their message names a date or a stretch of time, what they've told Co that is dated around it, as one fact Co checks
+// the date against (2026-10-12 intelligence audit: Co planned a Nov 14 dinner while she flies to Toronto that day, and a "first week
+// of November" lunch while he's in Paris; both were in the claims, in a long list, unchecked). Facts only: Co decides what a clash
+// means and whether to say it. null when the message names no date or nothing held is dated near it.
+export function dateConflictFact(message: string, k: Pick<MemberKnowledge, "claims" | "identity"> | null | undefined, now: Date = new Date()): string | null {
+  if (!k || !message.trim()) return null;
+  const zone = wordsZone(k.identity.timeZone);
+  const today = DateTime.fromJSDate(now).setZone(zone).toISODate()!;
+  const asked = dateSpan(message, today, zone);
+  if (!asked) return null;
+  const from = DateTime.fromISO(asked.start, { zone }).minus({ days: 1 }).toISODate()!;
+  const to = DateTime.fromISO(asked.end, { zone }).plus({ days: 1 }).toISODate()!;
+  const fmt = (d: string) => DateTime.fromISO(d, { zone }).toFormat("ccc LLL d, yyyy");
+  const near = k.claims.flatMap((c) => {
+    if (!c.text.trim()) return [];
+    const s = dateSpan(`${c.text} ${c.quote ?? ""}`, c.saidOn.slice(0, 10), zone);
+    if (!s || s.end < from || s.start > to) return [];
+    const when = s.start === s.end ? fmt(s.start) : `${fmt(s.start)} to ${fmt(s.end)}`;
+    return [`${c.text} (${when}; ${c.provenance === "user_said" ? "they said it" : "your read, not their words"})`];
+  });
+  if (!near.length) return null;
+  const span = asked.start === asked.end ? fmt(asked.start) : `${fmt(asked.start)} to ${fmt(asked.end)}`;
+  return `Date check: their message is about ${span}. What they've told you that is dated around then: ${near.slice(0, 5).join("; ")}. Before you plan, suggest or agree to anything for that date, check it against these: if one clashes (they're away, busy or traveling then), say so plainly and ask, rather than planning around it.`;
 }
 
 // Pure: today's date in the member's own zone, naming the zone (the fallback zone, said as such, when theirs isn't known).
