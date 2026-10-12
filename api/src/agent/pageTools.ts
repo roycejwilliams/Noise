@@ -52,12 +52,13 @@ export async function qaImageSrc(userId: string, data: any): Promise<(ref: { ass
     const im = await A.loadAssetFor(userId, id).catch(() => null);
     if (im) map.set(`a:${id}`, `data:${im.mediaType};base64,${im.data.toString("base64")}`);
   }
+  // Through the link reader's guard (services/linkReader.ts safeFetch: public hosts only, every redirect checked, size capped while
+  // reading), never a plain fetch.
+  const { safeFetch } = await import("../services/linkReader.js");
   for (const u of [data.cover?.url, ...(data.sections ?? []).map((x: any) => x.image?.url)].filter((x): x is string => typeof x === "string" && /^https:\/\//.test(x))) {
-    const r = await fetch(u, { signal: AbortSignal.timeout(5000) }).catch(() => null);
-    const type = r?.headers.get("content-type") ?? "";
-    if (!r?.ok || !/^image\//.test(type)) continue;
-    const b = Buffer.from(await r.arrayBuffer().catch(() => new ArrayBuffer(0)));
-    if (b.length && b.length < 4_000_000) map.set(`u:${u}`, `data:${type.split(";")[0]};base64,${b.toString("base64")}`);
+    const r = await safeFetch(u, { binary: true }).catch(() => null);
+    if (!r || "error" in r || r.status !== 200 || !/^image\//.test(r.contentType) || !r.bytes?.length) continue;
+    map.set(`u:${u}`, `data:${r.contentType.split(";")[0]};base64,${r.bytes.toString("base64")}`);
   }
   return (ref) => (ref.asset ? map.get(`a:${ref.asset}`) ?? null : ref.url ? map.get(`u:${ref.url}`) ?? null : null);
 }
@@ -76,7 +77,10 @@ export function pageDataFrom(input: PageInput, extras?: { style: unknown | null;
   };
   const at = (n: number | null | undefined) => (typeof n === "number" ? extras?.assets.get(n) ?? null : null);
   const was = extras?.was ?? null;
-  const keptPicture = (heading: string) => (was?.sections ?? []).find((x: any) => x.heading === heading && x.asset)?.asset ?? null;
+  // By heading, ignoring case: headings are set in sentence case (pageWords), so an older page's "The Day" is this version's "The day"
+  // (review: an unrelated edit dropped the picture).
+  const same = (a: unknown, b: string) => String(a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+  const keptPicture = (heading: string) => (was?.sections ?? []).find((x: any) => same(x.heading, heading) && x.asset)?.asset ?? null;
   const sections = input.sections.map((s) => {
     const asset = s.picture === 0 ? null : typeof s.picture === "number" ? at(s.picture) : keptPicture(s.heading);
     return { heading: s.heading, blocks: s.blocks.map(norm), image: null, ...(asset ? { asset } : {}) };
@@ -189,6 +193,8 @@ export function pageTools(
         const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc }), { screenshot: false }).catch(() => null);
         const fixedOk = qa?.fixed.length ? store.checkPage(qa.data, source) : null;
         const imaged = fixedOk?.ok ? fixedOk.data : imaged0;
+        // What ships is what's said: the unfixed page goes with what QA first found (review).
+        const shipped = qa ? (!qa.fixed.length || fixedOk?.ok ? qa.final : qa.first) : null;
         const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
           o.notDone("The page wasn't made.");
@@ -196,8 +202,8 @@ export function pageTools(
         }
         const DSm = await import("../services/designSystem.js");
         const turns = await DSm.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
-        await DSm.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: (imaged as any).style ? "cover-band" : "co", tokens: (imaged as any).style ?? null, qa: qa ? { ran: qa.final.ran, findings: qa.final.findings, fixed: qa.fixed, first: qa.first.findings.length } : { ran: false }, turnsToBuild: turns }).catch(() => {});
-        const short = qa ? Q.qaShortfall(qa.final.findings) : null;
+        await DSm.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: (imaged as any).style ? "cover-band" : "co", tokens: (imaged as any).style ?? null, qa: qa && shipped ? { ran: shipped.ran, findings: shipped.findings, fixed: fixedOk?.ok ? qa.fixed : [], first: qa.first.findings.length } : { ran: false }, turnsToBuild: turns }).catch(() => {});
+        const short = shipped ? Q.qaShortfall(shipped.findings) : null;
         const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
@@ -206,7 +212,7 @@ export function pageTools(
         ctx.onLinkDelivered?.();
         confirm();
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-        return { ok: true, url: made.url, ...(qa ? { qa: Q.qaSummary(qa.final) } : {}), note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
+        return { ok: true, url: made.url, ...(shipped ? { qa: Q.qaSummary(shipped) } : {}), note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),
     updatePage: tool({
