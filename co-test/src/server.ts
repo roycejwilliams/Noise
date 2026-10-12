@@ -32,6 +32,7 @@ import { createCoPageRouter } from "../../api/src/routes/coPage.js";
 import { registerJobs } from "../../api/src/jobs/index.js";
 import { installGracefulShutdown, trackRequests } from "../../api/src/services/shutdown.js";
 import { authLimiter, limiter } from "../../api/src/middleware/rateLimiter.js";
+import { servesHtmlPage } from "./middleware/staticGuard.js";
 
 // A fresh Railway Postgres has none of brew_dev's tables yet — runMigrations()
 // (imported unchanged from api/) only ever does ALTER TABLE / CREATE TABLE IF
@@ -101,6 +102,7 @@ async function main() {
   // /plan-file, /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
   app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
   app.use("/api/login/start", authLimiter);
+  app.use("/api/login/confirm", authLimiter);
 
   // Serves Co's vCard so Sendblue can attach it to the real onboarding
   // "intro" text (see api/src/routes/sendblue.ts's identity_captured/
@@ -185,7 +187,8 @@ async function main() {
   // pages above must only ever be reachable through the gated routes — a
   // bare static mount would also serve e.g. /call.html directly by literal
   // filename, walking straight around requireTesterLoginPage.
-  app.use((req, res, next) => (req.path.endsWith(".html") ? res.status(404).end() : next()));
+  // Judged on the decoded path, the way express.static reads it (security review, 2026-10-12: /phone.htm%6c got through).
+  app.use((req, res, next) => (servesHtmlPage(req.path) ? res.status(404).end() : next()));
   app.use(express.static(publicDir));
 
   // Every cron (event surfacing sweep, ask check-ins, memory compaction,

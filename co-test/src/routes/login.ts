@@ -1,39 +1,56 @@
 import express, { Request, Response, NextFunction } from "express";
-import { checkTextLogin, logoutTester, resetOwnData, startTextLogin, verifyTesterSession } from "../services/testerAuth.js";
+import { checkTextLogin, confirmTextLogin, logoutTester, resetOwnData, startTextLogin, verifyTesterSession } from "../services/testerAuth.js";
 import { COOKIE_NAME } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
 
-const COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax" as const,
-  maxAge: 30 * 24 * 60 * 60 * 1000,
-};
+// Secure whenever the page was served over https (security review, 2026-10-12: it keyed on NODE_ENV, which co-test never sets).
+// req.secure reads X-Forwarded-Proto behind Railway's proxy (server.ts sets trust proxy).
+export function cookieOptions(req: Pick<Request, "secure">) {
+  return {
+    httpOnly: true,
+    secure: req.secure || process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  };
+}
 
 const PENDING_COOKIE = "co_test_login_pending";
 
-// POST /api/login/start — a fresh sign-in code for the "Text Co" button.
-router.post("/start", async (_req: Request, res: Response, next: NextFunction) => {
+// POST /api/login/start {phone} — a fresh sign-in code for the "Text Co" button, good only from that phone.
+router.post("/start", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { token, code, textInNumber } = await startTextLogin();
-    res.cookie(PENDING_COOKIE, token, { ...COOKIE_OPTIONS, maxAge: 15 * 60 * 1000 });
+    const started = await startTextLogin((req.body as { phone?: unknown } | undefined)?.phone);
+    if ("error" in started) return res.status(400).json({ success: false, error: started.error });
+    const { token, code, textInNumber } = started;
+    res.cookie(PENDING_COOKIE, token, { ...cookieOptions(req), maxAge: 15 * 60 * 1000 });
     return res.status(200).json({ success: true, code, text_in_number: textInNumber });
   } catch (error) {
     next(error);
   }
 });
 
-// GET /api/login/check — polled by the login page until the text arrives.
+// GET /api/login/check — polled by the login page until the text arrives and Co has texted back the one-time code.
 router.get("/check", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const token = req.cookies?.[PENDING_COOKIE];
     if (!token) return res.status(200).json({ success: true, status: "expired" });
     const result = await checkTextLogin(token);
+    return res.status(200).json({ success: true, status: result.status });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/login/confirm {code} — the code Co texted, typed into the browser that started the sign-in.
+router.post("/confirm", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const token = req.cookies?.[PENDING_COOKIE];
+    if (!token) return res.status(200).json({ success: true, status: "expired" });
+    const result = await confirmTextLogin(token, (req.body as { code?: unknown } | undefined)?.code);
     if (result.status === "signed_in") {
       res.clearCookie(PENDING_COOKIE);
-      res.cookie(COOKIE_NAME, result.sessionToken, COOKIE_OPTIONS);
-      return res.status(200).json({ success: true, status: "signed_in" });
+      res.cookie(COOKIE_NAME, result.sessionToken, cookieOptions(req));
     }
     return res.status(200).json({ success: true, status: result.status });
   } catch (error) {

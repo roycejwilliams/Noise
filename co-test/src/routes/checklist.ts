@@ -59,12 +59,13 @@ async function computeAuto(userId: string): Promise<Record<string, { computed: b
 }
 
 // GET /api/checklist — the catalog, with auto items computed for whoever is
-// signed in and manual items from checklist_responses.
+// signed in and manual items from checklist_responses: the tester's own
+// answers only (security review, 2026-10-12: it showed every tester's).
 router.get("/", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const testerId = (req as any).testerId as string;
     const [manualResult, auto] = await Promise.all([
-      pool.query(`SELECT item_key, value, filled_in, updated_at FROM checklist_responses`),
+      pool.query(`SELECT item_key, value, filled_in, updated_at FROM checklist_responses WHERE user_id = $1`, [testerId]),
       computeAuto(testerId),
     ]);
     const manualByKey = new Map(manualResult.rows.map((r: any) => [r.item_key, r]));
@@ -103,10 +104,10 @@ router.post("/:item_key", requireTeam, async (req: Request, res: Response, next:
     }
 
     await pool.query(
-      `INSERT INTO checklist_responses (item_key, value, filled_in, updated_at)
-       VALUES ($1, $2, true, NOW())
-       ON CONFLICT (item_key) DO UPDATE SET value = EXCLUDED.value, filled_in = true, updated_at = NOW()`,
-      [req.params.item_key, value.trim()],
+      `INSERT INTO checklist_responses (user_id, item_key, value, filled_in, updated_at)
+       VALUES ($1, $2, $3, true, NOW())
+       ON CONFLICT (user_id, item_key) DO UPDATE SET value = EXCLUDED.value, filled_in = true, updated_at = NOW()`,
+      [(req as any).testerId, req.params.item_key, value.trim()],
     );
 
     return res.status(200).json({ success: true });

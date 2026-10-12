@@ -45,6 +45,9 @@ export function requireOwnOrTeam(param: string) {
   };
 }
 
+// Whether the signed-in tester is on the team; false on any error.
+export const isTeamFor = (testerId: string | undefined): Promise<boolean> => (testerId ? defaultIsTeam(testerId).catch(() => false) : Promise.resolve(false));
+
 // Team-only routes (shared tooling, not one member's own data).
 export async function requireTeam(req: Request, res: Response, next: NextFunction) {
   if (await defaultIsTeam((req as any).testerId).catch(() => false)) return next();

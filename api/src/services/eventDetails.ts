@@ -104,6 +104,27 @@ export function parseLumaEventPage(html: string): EventDetails | null {
 const DETAIL_TTL_MS = 60 * 60 * 1000;
 const FAILED_DETAIL_TTL_MS = 2 * 60 * 1000;
 
+// Redirects followed by hand, each hop checked (security review, 2026-10-12: redirect "follow" let any hop land anywhere): a
+// public http(s) address only, the same check the link reader makes. null when a hop is refused or there are too many.
+const MAX_HOPS = 5;
+export async function hopAllowed(url: string, isPublic?: (host: string) => Promise<boolean>): Promise<boolean> {
+  const { urlAllowed, hostIsPublic } = await import("./linkReader.js");
+  const u = urlAllowed(url);
+  if (!u) return false;
+  return (isPublic ?? hostIsPublic)(u.hostname.replace(/^\[|\]$/g, "")).catch(() => false);
+}
+export async function fetchCheckedHops(url: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch, isPublic?: (host: string) => Promise<boolean>): Promise<Response | null> {
+  let next = url;
+  for (let hop = 0; hop <= MAX_HOPS; hop++) {
+    if (!(await hopAllowed(next, isPublic))) return null;
+    const res = await fetchImpl(next, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "manual", signal });
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    if (!location) return res;
+    next = new URL(location, next).toString();
+  }
+  return null;
+}
+
 // maxAgeMs: how old a cached successful read may be. A cached search result
 // re-checks availability with a short one, since sold-out status changes.
 export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: number } = {}): Promise<EventDetails | null> {
@@ -116,8 +137,8 @@ export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: numb
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PAGE_TIMEOUT_MS);
     try {
-      const res = await fetch(key, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow", signal: controller.signal });
-      if (res.ok) details = parseLumaEventPage(await res.text());
+      const res = await fetchCheckedHops(key, controller.signal);
+      if (res?.ok) details = parseLumaEventPage(await res.text());
     } finally {
       clearTimeout(timer);
     }

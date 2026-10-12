@@ -12,9 +12,39 @@ import {
   storeTranscriptMemory,
 } from "../../../api/src/services/profileExtraction.js";
 import { buildContextSummary } from "../../../api/src/services/callContext.js";
-import { mayReach, requireOwnOrTeam, requireTeam, requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
+import rateLimit from "express-rate-limit";
+import { isTeamFor, mayReach, requireOwnOrTeam, requireTeam, requireTesterLoginApi } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
+
+// Model-spend routes (security review, 2026-10-12): any signed-in tester could send up to 2MB a call to the model, as often as
+// they liked. Now a size cap on what's sent and a per-tester limit on how often.
+export const MODEL_ROUTE_LIMITS = { maxBodyChars: 200_000, maxTranscriptChars: 60_000, perTesterPer10Min: 20 };
+export const modelRouteLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: MODEL_ROUTE_LIMITS.perTesterPer10Min,
+  keyGenerator: (req) => `tester:${(req as any).testerId}`,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  statusCode: 429,
+  message: { success: false, error: "Too many requests, try again in a few minutes." },
+});
+// Pure: why a model-route body is refused for size, or null.
+export function modelBodyTooBig(body: unknown): string | null {
+  const transcript = (body as { transcript?: unknown } | null)?.transcript;
+  if (typeof transcript === "string" && transcript.length > MODEL_ROUTE_LIMITS.maxTranscriptChars) return "Transcript is too long.";
+  let size = 0;
+  try {
+    size = JSON.stringify(body ?? {}).length;
+  } catch {
+    return "Request is too large.";
+  }
+  return size > MODEL_ROUTE_LIMITS.maxBodyChars ? "Request is too large." : null;
+}
+function capModelBody(req: Request, res: Response, next: NextFunction) {
+  const why = modelBodyTooBig(req.body);
+  return why ? res.status(413).json({ success: false, error: why }) : next();
+}
 
 // Entirely the tester-facing tool — gated on the phone-verified tool-access
 // login from routes/login.ts (see requireTesterLogin.ts).
@@ -63,8 +93,9 @@ router.post("/session/:sessionId/tag", requireOwnOrTeam("sessionId"), async (req
 });
 
 // GET /api/prompt: Co's call prompt, read from api/prompts/co-system-prompt.md
-// (the source of truth for the ElevenLabs agent and the text persona).
-router.get("/prompt", async (_req: Request, res: Response, next: NextFunction) => {
+// (the source of truth for the ElevenLabs agent and the text persona). Team
+// only (security review, 2026-10-12): it's Co's whole system prompt.
+router.get("/prompt", requireTeam, async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const prompt = await getCoPersonaPrompt();
     if (!prompt) return res.status(200).json({ success: false, error: "prompts/co-system-prompt.md not found" });
@@ -89,7 +120,7 @@ router.get("/prompt", async (_req: Request, res: Response, next: NextFunction) =
 // tool result, unchanged. covered_topics and latency_ms are sandbox-only
 // observability, for the side panel, never spoken by Co and never part of
 // what EVI's model sees.
-router.post("/assess-coverage", async (req: Request, res: Response, next: NextFunction) => {
+router.post("/assess-coverage", modelRouteLimiter, capModelBody, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { transcript, user_id } = req.body as { transcript?: string; user_id?: string };
     if (user_id && !(await mayReach((req as any).testerId, user_id))) return res.status(404).json({ success: false, error: "Session not found." });
@@ -106,12 +137,26 @@ router.post("/assess-coverage", async (req: Request, res: Response, next: NextFu
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// A synthetic row made by POST /api/session (its email and fake +1000 number), not a member.
+export const DASHBOARD_SESSION_EMAIL = /^co-test-[0-9a-f]{8}@copatible\.test$/;
+async function isDashboardSession(userId: string): Promise<boolean> {
+  if (!UUID_RE.test(userId)) return false;
+  const row = (await pool.query(`SELECT email, phone_number FROM users WHERE id = $1`, [userId])).rows[0];
+  return !!row && DASHBOARD_SESSION_EMAIL.test(String(row.email ?? "")) && /^\+1000/.test(String(row.phone_number ?? ""));
+}
+
 // POST /api/extract — runs the same extraction pipeline the Hume webhook and
 // typed-intake use (api/src/services/profileExtraction.ts), writes to
 // co_profiles/co_memories on THIS service's DATABASE_URL, and stores the full
 // combined result as a co_memories 'recap' row so the results page can reload
 // it later by session ID instead of relying on in-memory state.
-router.post("/extract", async (req: Request, res: Response, next: NextFunction) => {
+//
+// Only ever on a dashboard test session (POST /api/session's synthetic row),
+// never a member (security review, 2026-10-12): it overwrote parts of the
+// profile and wrote a recap Co reads into its context (callContext.ts), from
+// whatever transcript the browser sent. A member's id is refused before any
+// model call.
+router.post("/extract", modelRouteLimiter, capModelBody, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { user_id, transcript, messages, coverage_history } = req.body as {
       user_id?: string;
@@ -123,6 +168,9 @@ router.post("/extract", async (req: Request, res: Response, next: NextFunction) 
       return res.status(400).json({ success: false, error: "Missing user_id or transcript." });
     }
     if (!(await mayReach((req as any).testerId, user_id))) return res.status(404).json({ success: false, error: "Session not found." });
+    if (!(await isDashboardSession(user_id))) {
+      return res.status(409).json({ success: false, error: "Extraction only runs on dashboard test sessions, never a member's profile." });
+    }
 
     await storeTranscriptMemory(user_id, transcript);
     const { raw, extracted } = await extractPsychographicProfile(transcript);
@@ -188,12 +236,18 @@ router.get("/session/:sessionId/results", requireOwnOrTeam("sessionId"), async (
     // "User said: X" / "Co replied: Y" strings (see webhooks.ts's
     // /sendblue/webhook) — parsed back into a clean role/content list here
     // rather than changing the storage format everywhere else that reads it.
-    const threadResult = await pool.query(
-      `SELECT content, created_at FROM co_memories
-       WHERE user_id = $1 AND memory_type = 'text_exchange'
-       ORDER BY created_at ASC`,
-      [sessionId],
-    );
+    // Team only (security review, 2026-10-12): a whole text history is the
+    // most a stolen dashboard login could take, so a member's own results
+    // page shows the recap without it.
+    const team = await isTeamFor((req as any).testerId);
+    const threadResult = team
+      ? await pool.query(
+          `SELECT content, created_at FROM co_memories
+           WHERE user_id = $1 AND memory_type = 'text_exchange'
+           ORDER BY created_at ASC`,
+          [sessionId],
+        )
+      : { rows: [] as any[] };
     const imessage_thread = threadResult.rows.map((r: any) => {
       const isCo = r.content.startsWith("Co replied: ");
       const content = isCo ? r.content.slice("Co replied: ".length) : r.content.replace(/^User said: /, "");

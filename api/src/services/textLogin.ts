@@ -1,5 +1,4 @@
 import pool from "../db/db.js";
-import { findOrCreateUserByPhone } from "./identity.js";
 
 // Text-to-sign-in for the co-test site (test.copatible.com). The login page
 // opens iMessage prefilled with "Hi Co! (test site code: ABC12)". When that
@@ -10,6 +9,12 @@ import { findOrCreateUserByPhone } from "./identity.js";
 // text_login_requests only exists in co-test's database (co-test's
 // testMigrations.ts); in production this regex never matches a real text,
 // and a missing table is caught.
+//
+// A code only counts from the number the browser typed when it asked for it
+// (security review, 2026-10-12: any phone could claim any code, so a member
+// talked into texting someone else's code signed that person in as them).
+// Claiming never creates a users row: the normal text pipeline handles a
+// new number, invite gate and all.
 const CODE_RE = /\(?\s*test site code:?\s*([A-Z0-9]{5})\s*\)?/i;
 
 // Per-phone claim rate limit (2026-09-17) — a faked/compromised webhook call
@@ -48,19 +53,14 @@ export async function claimTextLogin(phoneNumber: string, content: string): Prom
       console.error(`claimTextLogin: rate limited ${phoneNumber} after too many code attempts.`);
       return content.replace(CODE_RE, " ").replace(/\s+/g, " ").trim() || "Hi Co!";
     }
-    // Single-use and expiry-bound in one atomic statement — code claimed by
-    // whichever phone's text lands first, before it expires, and never
-    // again after (verified_at IS NULL guards both a repeat claim by the
-    // same phone and a claim by a different phone once it's already taken).
-    const { rows } = await pool.query(
+    // Single-use, expiry-bound and bound to the number the browser typed, in
+    // one atomic statement: claimed only by a text from that number, before
+    // it expires, and never again after.
+    await pool.query(
       `UPDATE text_login_requests SET phone_number = $1, verified_at = NOW()
-       WHERE code = $2 AND verified_at IS NULL AND expires_at > NOW()
-       RETURNING code`,
+       WHERE code = $2 AND expected_phone = $1 AND verified_at IS NULL AND expires_at > NOW()`,
       [phoneNumber, m[1].toUpperCase()],
     );
-    // Created here, before the normal pipeline runs, so the browser's poll
-    // and the webhook both find the same row instead of racing to create one.
-    if (rows[0]) await findOrCreateUserByPhone(phoneNumber);
   } catch (err: any) {
     console.error("claimTextLogin failed (non-fatal):", err?.message ?? err);
   }
