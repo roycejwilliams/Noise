@@ -2731,12 +2731,12 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE artifact_design_log ADD COLUMN IF NOT EXISTS turns_to_build INT`))
     // First shot (design audit, 2026-10-12: the view said ~90% where a design critic said 38%): no QA finding left standing (the
     // check's own font trouble aside), built within one member turn of the ask, and no correction or revision within 48 hours. A
-    // correction is a design signal they gave as one (member_design_signals source 'correction') in that window. New columns go last so
-    // the view replaces in place.
+    // correction is a design signal they gave as one (member_design_signals source 'correction') in that window. An artifact whose QA
+    // never ran is unknown (first_shot NULL), never first shot. New columns go last so the view replaces in place.
     .then(() =>
       pool.query(`CREATE OR REPLACE VIEW artifact_design_metrics AS
         SELECT x.id, x.owner_user_id, x.page_id, x.medium, x.layout, x.made_at, x.settled,
-               (x.qa_unresolved = 0 AND COALESCE(x.turns_to_build, 0) <= 1 AND x.corrections = 0) AS first_shot,
+               CASE WHEN NOT x.qa_ran THEN NULL ELSE (x.qa_unresolved = 0 AND COALESCE(x.turns_to_build, 0) <= 1 AND x.corrections = 0) END AS first_shot,
                x.kept, x.shares, x.qa_findings, x.turns_to_build, x.corrections, x.qa_unresolved
           FROM (
             SELECT m.id, m.owner_user_id, m.page_id, m.medium, m.layout, m.created_at AS made_at,
@@ -2745,6 +2745,7 @@ export async function runMigrations(): Promise<void> {
                    (SELECT COUNT(*) FROM co_page_shares s WHERE s.page_id = m.page_id)::int AS shares,
                    COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(m.qa->'findings') = 'array' THEN m.qa->'findings' ELSE '[]'::jsonb END), 0) AS qa_findings,
                    m.turns_to_build,
+                   COALESCE(m.qa->>'ran', 'false') = 'true' AS qa_ran,
                    ((SELECT COUNT(*) FROM artifact_design_log r WHERE r.event = 'revised' AND r.page_id = m.page_id AND r.created_at < m.created_at + INTERVAL '48 hours')
                     + (SELECT COUNT(*) FROM member_design_signals c WHERE c.owner_user_id = m.owner_user_id AND c.source = 'correction' AND c.created_at > m.created_at AND c.created_at < m.created_at + INTERVAL '48 hours'))::int AS corrections,
                    (SELECT COUNT(*) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.qa->'findings') = 'array' THEN m.qa->'findings' ELSE '[]'::jsonb END) f WHERE f->>'rule' IS DISTINCT FROM 'render')::int AS qa_unresolved
