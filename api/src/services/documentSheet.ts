@@ -170,7 +170,8 @@ export function docFilename(title: string, dateIso: string): string {
 
 // ---------------------------------------------------------------- the page
 
-// Short documents get more air and larger type, long ones tighter, so any length looks intended.
+// Short documents get more air and larger type, long ones tighter, so any length looks intended. Body text is never under 10pt
+// (13.33px), dense included (design audit, 2026-10-12: dense set it at 8.5pt).
 export type Density = "airy" | "standard" | "dense";
 // How much page a document takes, in lines: each paragraph and bullet by its length (about 62 characters a line in the points column),
 // a few lines of room for each section and for the suggestions block. Characters alone ignored the room headings and bullets take.
@@ -188,7 +189,7 @@ export function docDensity(doc: Doc): Density {
 // Only plain characters reach the page margin boxes (CSS strings): no quote, backslash or control character can end the string.
 const cssText = (s: string, max: number) => s.replace(/[^A-Za-z0-9 ,.'&:-]/g, "").trim().slice(0, max);
 
-export const PAPER = { paper: "#F6F2EA", ink: "#241418", body: "#3C2F33", soft: "#6E6159", muted: "#968A80", line: "#DDD5C8", gold: "#B79B74" } as const;
+export const PAPER = { paper: "#F6F2EA", ink: "#241418", body: "#3C2F33", soft: "#6E6159", muted: "#73675F", line: "#DDD5C8", gold: "#B79B74" } as const;
 const SERIF = "'Fraunces', Georgia, 'Times New Roman', serif";
 const SANS = "'Instrument Sans', -apple-system, 'Helvetica Neue', Arial, sans-serif";
 
@@ -204,7 +205,7 @@ export function documentHtml(doc: Doc, o: { firstName: string; date: string; loo
   const paper = look && lightPaper ? look.background : PAPER.paper;
   const ink = look && lightPaper ? look.text : PAPER.ink;
   const C = look
-    ? { ...PAPER, paper, ink, body: ink, gold: contrast(look.accent, paper) >= 3 ? look.accent : ink, line: `${ink}26`, soft: `${ink}B3`, muted: `${ink}8C` }
+    ? { ...PAPER, paper, ink, body: ink, gold: contrast(look.accent, paper) >= 3 ? look.accent : ink, line: `${ink}26`, soft: `${ink}B3`, muted: `${ink}B3` }
     : PAPER;
   const SER = look?.display ? fontStack(look.display) : SERIF;
   const SAN = look?.body ? fontStack(look.body) : SANS;
@@ -225,8 +226,8 @@ export function documentHtml(doc: Doc, o: { firstName: string; date: string; loo
 html, body { margin: 0; padding: 0; background: ${C.paper}; }
 body { color: ${C.body}; font-family: ${SANS}; -webkit-print-color-adjust: exact; print-color-adjust: exact; counter-reset: sec; }
 body.airy { --title: 52px; --text: 14.5px; --lead: 16.5px; --pad: 34px; --h2: 23px; }
-body.standard { --title: 40px; --text: 13px; --lead: 14.5px; --pad: 22px; --h2: 19px; }
-body.dense { --title: 31px; --text: 11.3px; --lead: 12.5px; --pad: 13px; --h2: 16px; }
+body.standard { --title: 40px; --text: 13.5px; --lead: 15px; --pad: 22px; --h2: 19px; }
+body.dense { --title: 31px; --text: 13.4px; --lead: 14.5px; --pad: 13px; --h2: 16.5px; }
 .mast { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 12px; border-bottom: 1px solid ${C.ink}; }
 .mark { font-family: ${SERIF}; font-weight: 400; font-size: 24px; line-height: 1; letter-spacing: 0.01em; color: ${C.ink}; }
 .date { font-size: 8.5px; font-weight: 500; letter-spacing: 0.2em; text-transform: uppercase; color: ${C.soft}; }

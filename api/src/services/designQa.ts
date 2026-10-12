@@ -11,17 +11,23 @@
 // blocks); docs and PDFs print type (body at least 10pt, line length) and page breaks (no heading stranded at the foot of a page).
 // The browser loads only the font hosts and data: URLs. Findings come back with whether code can fix them ("auto") or Co must
 // ("co"); the caller applies the fixes, measures again, and logs what was found.
-import { contrast } from "./coPages/style.js";
+import { contrast, inkOn } from "./coPages/style.js";
 
 export type QaMedium = "deck" | "page" | "doc";
-export type QaFinding = { rule: "type_scale" | "spacing" | "contrast" | "overflow" | "orphan" | "image" | "one_idea" | "scannability" | "print_type" | "page_break" | "render"; where: string; detail: string; fix: "auto" | "co" | "none"; slide?: number };
-export type QaResult = { ran: boolean; findings: QaFinding[]; screenshot: Buffer | null; measured: number };
+// contrast findings carry what was measured (the ink, its ground, the ratio it needs), so code can re-ink or move a gradient end.
+export type QaFinding = { rule: "type_scale" | "spacing" | "contrast" | "overflow" | "orphan" | "image" | "one_idea" | "scannability" | "print_type" | "page_break" | "render"; where: string; detail: string; fix: "auto" | "co" | "none"; slide?: number; role?: string; color?: string; alpha?: number; ground?: string[]; need?: number; view?: "phone" };
+export type QaResult = { ran: boolean; findings: QaFinding[]; screenshot: Buffer | null; measured: number; phone?: Buffer | null };
 
-type TextM = { role: string; size: number; color: string; ground: string[]; slide: number | null; rect: [number, number, number, number]; frame: [number, number, number, number] | null; orphan: boolean; chars: number; words: number };
-type ImgM = { natural: [number, number]; shown: [number, number]; slide: number | null; logo: boolean; edge: boolean };
+// alpha: how much of the text's own color shows (its opacity and its ancestors', times the color's own alpha); it's blended onto its
+// ground before contrast is measured (design audit: a subtitle at 0.25 opacity measured as fully opaque).
+type TextM = { role: string; size: number; color: string; alpha?: number; ground: string[]; slide: number | null; rect: [number, number, number, number]; frame: [number, number, number, number] | null; orphan: boolean; chars: number; words: number };
+// crop: the share of the picture that shows when it's cropped to fill a box of another shape (object-fit cover), and whether the
+// shapes are more than 1.5x apart.
+type ImgM = { natural: [number, number]; shown: [number, number]; slide: number | null; logo: boolean; edge: boolean; crop?: { shown: number; mismatch: boolean } };
 type FrameM = { slide: number | null; overflow: boolean; layout: string | null };
 type HeadM = { top: number; text: string };
-export type Measure = { texts: TextM[]; imgs: ImgM[]; frames: FrameM[]; heads: HeadM[]; pageHeight: number; fontsLoaded: boolean };
+// secs: a document's sections in order (where each starts and how tall it is), to lay the printed pages out the way print does.
+export type Measure = { texts: TextM[]; imgs: ImgM[]; frames: FrameM[]; heads: HeadM[]; pageHeight: number; fontsLoaded: boolean; secs?: { top: number; height: number; head: string }[]; unloaded?: number };
 
 // In the page. Reads data-qa-* markers the renderers put on frames, text and images; anything unmarked is measured by tag.
 function measureInPage(medium: string): Measure {
@@ -71,15 +77,28 @@ function measureInPage(medium: string): Measure {
     const n = f?.getAttribute("data-qa-slide");
     return n ? Number(n) : f ? 1 : null;
   };
-  const textEls = [...document.querySelectorAll(medium === "deck" ? "[data-qa-text]" : "h1, h2, h3, p, li, dd, .ln, .lnote")].filter((el) => (el.textContent ?? "").trim());
+  // Labels too (index numbers, the foot line and slide numbers, small capitals): they're read, so they're measured (design audit).
+  const LABELS = ".num, .gl, .asof, .f dt, .meta, .date, .for, h3";
+  const textEls = [...document.querySelectorAll(medium === "deck" ? "[data-qa-text]" : `h1, h2, h3, p, li, dd, .ln, .lnote, ${LABELS}`)].filter((el) => (el.textContent ?? "").trim() && (el as HTMLElement).offsetParent !== null);
+  const alphaOf = (el: Element): number => {
+    const m = getComputedStyle(el).color.match(/rgba?\(([^)]+)\)/);
+    const parts = m ? m[1].split(/[ ,/]+/).filter(Boolean) : [];
+    let a = parts.length >= 4 ? Number(parts[3]) : 1;
+    for (let n: Element | null = el; n; n = n.parentElement) a *= Number(getComputedStyle(n).opacity || 1);
+    return Math.round(a * 100) / 100;
+  };
   const texts: TextM[] = textEls.map((el) => {
     const cs = getComputedStyle(el);
-    const role = el.getAttribute("data-qa-text") ?? (/^H[1-3]$/.test(el.tagName) ? el.tagName.toLowerCase() : "body");
+    const role = el.getAttribute("data-qa-text") ?? (el.matches(LABELS) ? "label" : /^H[1-2]$/.test(el.tagName) ? el.tagName.toLowerCase() : "body");
     const f = frameOf(el);
     const words = (el.textContent ?? "").trim().split(/\s+/).length;
-    return { role, size: parseFloat(cs.fontSize), color: rgb(cs.color), ground: groundOf(el), slide: slideOf(el), rect: rectOf(el), frame: f ? rectOf(f) : null, orphan: /^h[12]$/.test(role) ? orphanOf(el) : false, chars: (el.textContent ?? "").length, words };
+    return { role, size: parseFloat(cs.fontSize), color: rgb(cs.color), alpha: alphaOf(el), ground: groundOf(el), slide: slideOf(el), rect: rectOf(el), frame: f ? rectOf(f) : null, orphan: /^h[12]$/.test(role) ? orphanOf(el) : false, chars: (el.textContent ?? "").length, words };
   });
-  const imgs: ImgM[] = [...document.querySelectorAll("img")].map((im) => {
+  // An image that didn't load (a host the check can't reach) isn't measured as a 1x1 picture (design audit: every photo page read
+  // "1280x its pixels"); it's counted apart.
+  const allImgs = [...document.querySelectorAll("img")];
+  const unloaded = allImgs.filter((im) => !im.naturalWidth).length;
+  const imgs: ImgM[] = allImgs.filter((im) => im.naturalWidth > 0).map((im) => {
     const r = im.getBoundingClientRect();
     const f = frameOf(im);
     const fr = f?.getBoundingClientRect();
@@ -88,7 +107,10 @@ function measureInPage(medium: string): Measure {
     const fit = getComputedStyle(im).objectFit;
     const nw = im.naturalWidth || 1, nh = im.naturalHeight || 1;
     const k = fit === "contain" || fit === "scale-down" ? Math.min(r.width / nw, r.height / nh) : fit === "cover" ? Math.max(r.width / nw, r.height / nh) : r.width / nw;
-    return { natural: [nw, nh], shown: [nw * k, nh * k], slide: slideOf(im), logo: /\blogo\b/.test(im.className), edge: edge && /\blogo\b/.test(im.className) };
+    const shownShare = fit === "cover" && r.width && r.height ? Math.min(r.width / (nw * k), r.height / (nh * k)) : 1;
+    const ia = nw / nh, ba = r.width / Math.max(1, r.height);
+    const crop = fit === "cover" ? { shown: Math.round(shownShare * 100) / 100, mismatch: Math.max(ia / ba, ba / ia) > 1.5 } : undefined;
+    return { natural: [nw, nh], shown: [nw * k, nh * k], slide: slideOf(im), logo: /\blogo\b/.test(im.className), edge: edge && /\blogo\b/.test(im.className), ...(crop ? { crop } : {}) };
   });
   const frameM: FrameM[] = frames.map((f) => {
     const fr = f.getBoundingClientRect();
@@ -101,26 +123,58 @@ function measureInPage(medium: string): Measure {
   });
   const heads = [...document.querySelectorAll("h2, h3")].map((h) => ({ top: h.getBoundingClientRect().top + scrollY, text: (h.textContent ?? "").slice(0, 60) }));
   const fontsLoaded = [...(document as any).fonts].some((f: any) => f.status === "loaded");
-  return { texts, imgs, frames: frameM, heads, pageHeight: document.documentElement.scrollHeight, fontsLoaded };
+  const secs = medium === "doc" ? [...document.querySelectorAll("section.sec")].map((sec) => ({ top: sec.getBoundingClientRect().top + scrollY, height: sec.getBoundingClientRect().height, head: (sec.querySelector("h2")?.textContent ?? "").slice(0, 60) })) : undefined;
+  return { texts, imgs, frames: frameM, heads, pageHeight: document.documentElement.scrollHeight, fontsLoaded, ...(secs ? { secs } : {}), unloaded };
+}
+
+// Pure: a color at an alpha over a ground, as the eye sees it.
+export function blend(color: string, ground: string, alpha: number): string {
+  if (alpha >= 0.999) return color;
+  const ch = (h: string, i: number) => parseInt(h.slice(i, i + 2), 16);
+  return `#${[1, 3, 5].map((i) => Math.round(ch(color, i) * alpha + ch(ground, i) * (1 - alpha)).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+}
+
+// Pure: where each document heading lands once printed. Sections don't break inside (documentSheet.ts), so one that doesn't fit what's
+// left of a page moves whole to the next; one taller than a page starts where it is and runs on. A heading is stranded when its section
+// starts in the last 14% of a page and runs past it.
+export function strandedHeads(secs: { top: number; height: number; head: string }[], pageH: number): string[] {
+  const out: string[] = [];
+  let shift = 0;
+  for (const s of secs) {
+    let top = s.top + shift;
+    const into = top % pageH;
+    if (into + s.height > pageH && s.height <= pageH) {
+      shift += pageH - into;
+      top += pageH - into;
+      continue;
+    }
+    if (s.head && into > pageH * 0.86 && into + s.height > pageH) out.push(s.head);
+  }
+  return out;
 }
 
 // Pure: the findings from a measure, per medium. Type limits are in CSS px at the size QA renders at (decks 1280 wide).
-export function qaFindings(m: Measure, medium: QaMedium, o: { printPageHeightPx?: number } = {}): QaFinding[] {
+// phone: the 390px pass (decks and pages): the type floors are a phone's (body 15px, labels 11px); contrast and layout were measured at
+// full size, so only type, overflow and images are read here.
+export function qaFindings(m: Measure, medium: QaMedium, o: { printPageHeightPx?: number; phone?: boolean } = {}): QaFinding[] {
   const out: QaFinding[] = [];
-  const where = (t: { slide: number | null }) => (t.slide ? `slide ${t.slide}` : "the page");
+  const where = (t: { slide: number | null }) => `${t.slide ? `slide ${t.slide}` : "the page"}${o.phone ? " on a phone" : ""}`;
   // Overflow.
   for (const f of m.frames) if (f.overflow) out.push({ rule: "overflow", where: `slide ${f.slide}`, detail: "text runs past the slide", fix: "auto", slide: f.slide ?? undefined });
-  // Contrast: on every stop of its ground.
-  for (const t of m.texts) {
-    const worst = Math.min(...t.ground.map((g) => contrast(t.color, g)));
-    const need = t.size >= 24 ? 3 : 4.5;
-    if (worst < need) out.push({ rule: "contrast", where: where(t), detail: `${t.role} ${t.color} on ${t.ground.join(" to ")} is ${worst.toFixed(1)}:1 (needs ${need}:1)`, fix: "auto", slide: t.slide ?? undefined });
-  }
+  // Contrast: on every stop of its ground, with its opacity blended in.
+  if (!o.phone)
+    for (const t of m.texts) {
+      const a = t.alpha ?? 1;
+      const worst = Math.min(...t.ground.map((g) => contrast(blend(t.color, g, a), g)));
+      const need = t.size >= 24 ? 3 : 4.5;
+      if (worst < need) out.push({ rule: "contrast", where: where(t), detail: `${t.role === "label" ? "label" : t.role} ${t.color}${a < 1 ? ` at ${Math.round(a * 100)}% opacity` : ""} on ${t.ground.join(" to ")} is ${worst.toFixed(1)}:1 (needs ${need}:1)`, fix: "auto", slide: t.slide ?? undefined, role: t.role, color: t.color, alpha: a, ground: t.ground, need });
+    }
   // Orphans.
   for (const t of m.texts) if (t.orphan) out.push({ rule: "orphan", where: where(t), detail: `the ${t.role} ends on one word alone`, fix: "auto", slide: t.slide ?? undefined });
   // Spacing: text inside a 3.5% safe margin of its frame.
   for (const t of m.texts) {
-    if (!t.frame) continue;
+    // Labels are left out: the foot line lives in the slide's bottom margin by design.
+    if (!t.frame || o.phone || t.role === "label") continue;
     const [fx, fy, fw, fh] = t.frame;
     const [x, y, w, h] = t.rect;
     const pad = fw * 0.035;
@@ -131,24 +185,33 @@ export function qaFindings(m: Measure, medium: QaMedium, o: { printPageHeightPx?
   // Type scale.
   const bySlide = new Map<string, TextM[]>();
   for (const t of m.texts) bySlide.set(String(t.slide), [...(bySlide.get(String(t.slide)) ?? []), t]);
-  const minBody = medium === "deck" ? 18 : medium === "page" ? 14 : 13.3;
+  const minBody = o.phone ? 15 : medium === "deck" ? 18 : medium === "page" ? 14 : 13.3;
+  // Labels (slide numbers, the foot line, small capitals) read at 11px at least, everywhere.
+  // (Print labels, a document's small capitals, are judged by contrast only: their size is set for paper.)
+  for (const t of m.texts)
+    if (medium !== "doc" && t.role === "label" && t.size < 11 - 0.05) {
+      out.push({ rule: "type_scale", where: where(t), detail: `a label at ${t.size.toFixed(1)}px is under 11px`, fix: "auto", slide: t.slide ?? undefined, role: "label", view: o.phone ? "phone" : undefined });
+      break;
+    }
   for (const [, ts] of bySlide) {
     const head = Math.max(0, ...ts.filter((t) => /^h[12]$/.test(t.role)).map((t) => t.size));
     const bodies = ts.filter((t) => t.role === "body").map((t) => t.size);
     const body = bodies.length ? Math.max(...bodies) : 0;
     const ratio = medium === "deck" ? 1.6 : 1.25;
-    if (head && body && head / body < ratio) out.push({ rule: "type_scale", where: where(ts[0]), detail: `headline ${head.toFixed(0)}px over body ${body.toFixed(0)}px is a flat scale (${(head / body).toFixed(2)}x, wants ${ratio}x)`, fix: "auto", slide: ts[0].slide ?? undefined });
-    for (const b of bodies) if (b < minBody) {
-      out.push({ rule: medium === "doc" ? "print_type" : "type_scale", where: where(ts[0]), detail: `body type at ${b.toFixed(1)}px is under ${minBody}px`, fix: "auto", slide: ts[0].slide ?? undefined });
+    if (head && body && head / body < ratio && !o.phone) out.push({ rule: "type_scale", where: where(ts[0]), detail: `headline ${head.toFixed(0)}px over body ${body.toFixed(0)}px is a flat scale (${(head / body).toFixed(2)}x, wants ${ratio}x)`, fix: "auto", slide: ts[0].slide ?? undefined });
+    for (const b of bodies) if (b < minBody - 0.05) {
+      out.push({ rule: medium === "doc" ? "print_type" : "type_scale", where: where(ts[0]), detail: `body type at ${b.toFixed(1)}px is under ${minBody}px`, fix: "auto", slide: ts[0].slide ?? undefined, view: o.phone ? "phone" : undefined });
       break;
     }
   }
-  const sizes = new Set(m.texts.map((t) => Math.round(t.size)));
-  if (sizes.size > 8) out.push({ rule: "type_scale", where: "the whole thing", detail: `${sizes.size} type sizes in play; a scale wants five or six`, fix: "none" });
+  const sizes = new Set(m.texts.filter((t) => t.role !== "label").map((t) => Math.round(t.size)));
+  if (sizes.size > 8 && !o.phone) out.push({ rule: "type_scale", where: "the whole thing", detail: `${sizes.size} type sizes in play; a scale wants five or six`, fix: "none" });
   // Images.
   for (const im of m.imgs) {
     const up = Math.max(im.shown[0] / im.natural[0], im.shown[1] / im.natural[1]);
-    if (up > 1.35) out.push({ rule: "image", where: where(im), detail: `an image shown at ${up.toFixed(1)}x its own pixels (${im.natural[0]}x${im.natural[1]}) will look soft`, fix: "auto", slide: im.slide ?? undefined });
+    // The finding names the logo (design audit: the title slide's tiny logo was found and never fixed, its finding didn't say "logo").
+    if (up > 1.35) out.push({ rule: "image", where: where(im), detail: `${im.logo ? "the logo" : "an image"} shown at ${up.toFixed(1)}x its own pixels (${im.natural[0]}x${im.natural[1]}) will look soft`, fix: "auto", slide: im.slide ?? undefined, role: im.logo ? "logo" : "image" });
+    if (im.crop?.mismatch && !im.logo) out.push({ rule: "image", where: where(im), detail: `the picture is cropped to ${Math.round(im.crop.shown * 100)}% of it: its shape is far from its box's`, fix: "auto", slide: im.slide ?? undefined, role: "crop" });
     if (im.edge) out.push({ rule: "image", where: where(im), detail: "the logo touches the edge of its frame", fix: "auto", slide: im.slide ?? undefined });
   }
   // Docs: print line length and page breaks.
@@ -161,10 +224,12 @@ export function qaFindings(m: Measure, medium: QaMedium, o: { printPageHeightPx?
       }
     }
     const ph = o.printPageHeightPx ?? 0;
-    if (ph) for (const h of m.heads) {
-      const into = h.top % ph;
-      if (into > ph * 0.86) out.push({ rule: "page_break", where: `"${h.text}"`, detail: "a heading sits at the foot of a page, apart from what it heads", fix: "auto" });
-    }
+    if (ph && m.secs) for (const h of strandedHeads(m.secs, ph)) out.push({ rule: "page_break", where: `"${h}"`, detail: "a heading sits at the foot of a page, apart from what it heads", fix: "auto" });
+    else if (ph)
+      for (const h of m.heads) {
+        const into = h.top % ph;
+        if (into > ph * 0.86) out.push({ rule: "page_break", where: `"${h.text}"`, detail: "a heading sits at the foot of a page, apart from what it heads", fix: "auto" });
+      }
   }
   if (!m.fontsLoaded) out.push({ rule: "render", where: "fonts", detail: "the web fonts didn't load, so it rendered in the fallback faces", fix: "none" });
   return dedupe(out);
@@ -199,18 +264,24 @@ export function contentFindings(medium: QaMedium, data: any): QaFinding[] {
   return out;
 }
 
-const VIEW: Record<QaMedium, { width: number; height: number }> = { deck: { width: 1280, height: 720 }, page: { width: 1280, height: 900 }, doc: { width: 816, height: 1056 } };
+// A document is measured at its printed content width (Letter less the 1in side margins: 6.5in, 624px) and its printed page height
+// (11in less the 0.8in and 0.95in margins: 888px), so line lengths and where headings fall are what print gives (design audit: the
+// 816px render missed a heading stranded at a page foot).
+export const DOC_CONTENT = { width: 624, pageHeight: 888 } as const;
+const VIEW: Record<QaMedium, { width: number; height: number }> = { deck: { width: 1280, height: 720 }, page: { width: 1280, height: 900 }, doc: { width: DOC_CONTENT.width, height: 1056 } };
+export const PHONE_VIEW = { width: 390, height: 844 } as const;
 
 // Renders the HTML, screenshots it and measures it. Null measure when Chrome isn't there (the caller sends without QA and says so in
 // its log, never that QA passed).
-export async function qaRender(html: string, medium: QaMedium, o: { width?: number; screenshot?: boolean } = {}): Promise<{ measure: Measure; screenshot: Buffer | null } | null> {
+// phone: rendered at 390px as a phone shows it (a deck's slides as the phone layout, not the 1280x720 frame).
+export async function qaRender(html: string, medium: QaMedium, o: { width?: number; screenshot?: boolean; phone?: boolean } = {}): Promise<{ measure: Measure; screenshot: Buffer | null } | null> {
   const B = await import("./browserRead.js");
   if (!B.browserReadEnabled()) return null;
   const release = await B.browserSlot();
   let context: any = null;
   try {
     const browser = await B.sharedBrowser();
-    const view = { ...VIEW[medium], ...(o.width ? { width: o.width } : {}) };
+    const view = o.phone ? { ...PHONE_VIEW } : { ...VIEW[medium], ...(o.width ? { width: o.width } : {}) };
     context = await browser.newContext({ javaScriptEnabled: true, viewport: view, deviceScaleFactor: 1 });
     await context.route("**/*", (route: any) => {
       const u = route.request().url();
@@ -222,7 +293,7 @@ export async function qaRender(html: string, medium: QaMedium, o: { width?: numb
     });
     const pg = await context.newPage();
     // Decks are measured one slide to the screen, as print lays them out.
-    const doc = medium === "deck" ? html.replace("</style>", ".slide{min-height:0!important;height:720px;padding:0!important}.frame{width:1280px!important;height:720px!important;aspect-ratio:auto!important;border-radius:0!important;box-shadow:none!important}.dl{display:none}.notes{display:none}</style>") : html;
+    const doc = medium === "deck" && !o.phone ? html.replace("</style>", ".slide{min-height:0!important;height:720px;padding:0!important}.frame{width:1280px!important;height:720px!important;aspect-ratio:auto!important;border-radius:0!important;box-shadow:none!important}.dl{display:none}.notes{display:none}</style>") : html;
     await pg.setContent(doc, { waitUntil: "load", timeout: 15_000 });
     if (medium === "doc") await pg.emulateMedia({ media: "print" });
     await Promise.race([pg.evaluate("document.fonts && document.fonts.ready"), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
@@ -240,12 +311,47 @@ export async function qaRender(html: string, medium: QaMedium, o: { width?: numb
 }
 
 // The whole check for one medium: content rules, then the render's measures. Letter at 96 dpi less the doc's margins is one page.
-export async function runQa(html: string, medium: QaMedium, data: unknown, o: { screenshot?: boolean } = {}): Promise<QaResult> {
+// phone: also measure at 390px (decks and pages); its findings join the rest, each saying "on a phone".
+export async function runQa(html: string, medium: QaMedium, data: unknown, o: { screenshot?: boolean; phone?: boolean } = {}): Promise<QaResult> {
   const content = contentFindings(medium, data);
-  const r = await qaRender(html, medium, o);
+  const r = await qaRender(html, medium, o.phone ? { ...o, phone: false } : o);
   if (!r) return { ran: false, findings: content, screenshot: null, measured: 0 };
-  const findings = [...content, ...qaFindings(r.measure, medium, medium === "doc" ? { printPageHeightPx: 1056 - 1.75 * 96 } : {})];
-  return { ran: true, findings, screenshot: r.screenshot, measured: r.measure.texts.length + r.measure.imgs.length };
+  const findings = [...content, ...qaFindings(r.measure, medium, medium === "doc" ? { printPageHeightPx: DOC_CONTENT.pageHeight } : {})];
+  let phone: Buffer | null = null;
+  if (o.phone && medium !== "doc") {
+    const p = await qaRender(html, medium, { ...o, phone: true });
+    if (p) {
+      findings.push(...qaFindings(p.measure, medium, { phone: true }).filter((f) => f.rule !== "orphan" || medium === "page"));
+      phone = p.screenshot;
+    }
+  }
+  return { ran: true, findings: dedupe(findings), screenshot: r.screenshot, measured: r.measure.texts.length + r.measure.imgs.length, phone };
+}
+
+// Pure: the findings that still stand once code has done what it can: everything but the check's own trouble (fonts the QA browser
+// couldn't load). First-shot acceptance counts these (designSystem.ts metrics).
+export const unresolved = (fs: QaFinding[]) => fs.filter((f) => f.rule !== "render");
+
+// Pure: one plain line for the delivery text when something still isn't right after the fixes (design audit: QA found contrast and blur
+// and the deck went out silently). Null when nothing is left.
+export function qaShortfall(fs: QaFinding[]): string | null {
+  const left = unresolved(fs).filter((f) => f.fix !== "co");
+  if (!left.length) return null;
+  const say = (f: QaFinding): string => {
+    const at = f.where.replace(/^the whole thing$/, "the deck");
+    if (f.rule === "contrast") return f.role === "label" ? `the small labels on ${at} are harder to read than they should be` : `the text on ${at} is harder to read than it should be`;
+    if (f.rule === "overflow" || f.rule === "spacing") return `${at} is crowded`;
+    if (f.rule === "image") return f.role === "crop" ? `the picture on ${at} is cropped tight` : `${f.role === "logo" ? "the logo" : "a picture"} on ${at} is softer than it should be`;
+    if (f.rule === "type_scale" || f.rule === "print_type") return `the type on ${at} is smaller or flatter than it should be`;
+    if (f.rule === "page_break") return `a heading lands at the foot of a page`;
+    if (f.rule === "orphan") return `a headline on ${at} ends on a word alone`;
+    return `${at}: ${f.detail}`;
+  };
+  const items = [...new Set(left.map(say))];
+  const n = items.length;
+  const head = n === 1 ? "One thing I couldn't fix yet" : `${n > 3 ? "A few" : n === 2 ? "Two" : "Three"} things I couldn't fix yet`;
+  const list = items.slice(0, 3);
+  return `${head}: ${list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0]}.`;
 }
 
 // Pure: the findings in a few words for a log or Co's tool result.
@@ -255,39 +361,195 @@ export function qaSummary(r: QaResult): string {
   return `Design QA: ${r.findings.slice(0, 6).map((f) => `${f.where}: ${f.detail}`).join("; ")}.`;
 }
 
-// Pure: the fixes code makes on a deck from its findings: a slide that ran over or crowds its margin steps its type down; an image
-// shown past its pixels is placed small; a logo touching its frame goes on a plate. What changed is returned in plain words.
+// Pure: a color moved toward black (amount < 0) or white (amount > 0).
+function towards(hex: string, amount: number): string {
+  const to = amount < 0 ? 0 : 255;
+  const t = Math.abs(amount);
+  return `#${[1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) + (to - parseInt(hex.slice(i, i + 2), 16)) * t).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+}
+// Pure: a color's HSL lightness moved by an amount (-1..1), its hue and saturation kept.
+function lighter(hex: string, amount: number): string {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h /= 6;
+  }
+  const L = Math.min(1, Math.max(0, l + amount));
+  const q = L < 0.5 ? L * (1 + s) : L + s - L * s, p = 2 * L - q;
+  const f = (t: number) => {
+    t = (t + 1) % 1;
+    return t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p;
+  };
+  const out = s === 0 ? [L, L, L] : [f(h + 1 / 3), f(h), f(h - 1 / 3)];
+  return `#${out.map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+}
+// Pure: a color shaded toward black or white, whichever reads, until it reaches the ratio on a ground.
+// alpha: the share of the color that shows (its opacity), so the blended color is what has to read.
+export function inkFor(color: string, ground: string, min: number, alpha = 1): string {
+  const reads = (c: string) => contrast(blend(c, ground, alpha), ground) >= min;
+  if (reads(color)) return color;
+  const dark = contrast("#000000", ground) > contrast("#FFFFFF", ground);
+  for (let t = 0.05; t <= 1.0001; t += 0.05) {
+    const c = towards(color, dark ? -t : t);
+    if (reads(c)) return c;
+  }
+  return dark ? "#000000" : "#FFFFFF";
+}
+// Pure: a field (a color or both ends of a gradient) its ink reads on at the ratio asked: only the end that fails moves, the least it
+// has to, away from the ink, in lightness only (its hue and saturation kept, so a coral deepens as a coral rather than browning toward
+// black). Null when nothing within reach works.
+export function fieldFor(stops: string[], prefer: string[], need: number, alpha = 1): { stops: string[]; ink: string } | null {
+  let best: { stops: string[]; ink: string; cost: number } | null = null;
+  for (const ink of [...new Set([...prefer, "#FFFFFF", "#111111"])]) {
+    let cost = 0;
+    const reads = (g: string) => contrast(blend(ink, g, alpha), g) >= need;
+    const next = stops.map((st) => {
+      if (reads(st)) return st;
+      const away = contrast(ink, "#000000") > contrast(ink, "#FFFFFF") ? -1 : 1;
+      for (let t = 0.02; t <= 0.6001; t += 0.02) {
+        const c = lighter(st, away * t);
+        if (reads(c)) {
+          cost += t;
+          return c;
+        }
+      }
+      cost += 99;
+      return st;
+    });
+    // The renderer picks the field's ink the same way (deck.ts fieldInk), so it must land on this one.
+    if (cost < 99 && inkOn(next, prefer) === ink.toUpperCase() && (!best || cost < best.cost)) best = { stops: next, ink, cost };
+  }
+  return best ? { stops: best.stops, ink: best.ink } : null;
+}
+
+// Pure: the fixes code makes on a deck from its findings, in plain words:
+//   - type that ran over or crowds its margin steps down (tight, tighter, tightest; never under the type floor), and a slide still over
+//     after the last step is split in two;
+//   - text that doesn't read is re-inked on paper, and on a color field the gradient end it fails moves until it reads;
+//   - a picture shown past its pixels is placed small (the logo on the title slide too, at its own pixels), a picture cropped hard is
+//     shown whole on a plate, a logo touching its frame goes on a plate.
 export function applyDeckFixes(data: any, findings: QaFinding[]): { data: any; fixed: string[] } {
   const next = JSON.parse(JSON.stringify(data));
   const fixed: string[] = [];
+  const STEPS = ["tight", "tighter", "tightest"];
+  const split: number[] = [];
+  const stepped = new Set<number>();
+  const st = next.style ?? {};
+  // What the findings measured against: the look as it came in (each fix below moves the copy).
+  const text0 = st.text;
+  const stops0 = st.gradient && st.accent2 ? [st.accent, st.accent2] : [st.accent];
   for (const f of findings) {
     if (f.fix !== "auto") continue;
     const sl = f.slide && f.slide >= 2 ? next.slides[f.slide - 2] : null;
-    if ((f.rule === "overflow" || f.rule === "spacing" || f.rule === "orphan") && sl && sl.fit !== "tight") {
-      sl.fit = "tight";
-      fixed.push(`slide ${f.slide}: type stepped down a size (${f.rule})`);
-    } else if (f.rule === "image" && /logo/.test(f.detail) && next.logo) {
+    if ((f.rule === "overflow" || f.rule === "spacing") && sl && f.view !== "phone") {
+      if (stepped.has(f.slide!)) continue;
+      stepped.add(f.slide!);
+      const at = STEPS.indexOf(sl.fit ?? "");
+      if (at < STEPS.length - 1) {
+        sl.fit = STEPS[at + 1];
+        fixed.push(`slide ${f.slide}: type stepped down a size (${f.rule})`);
+      } else if (sl.bullets.length >= 2) split.push(f.slide! - 2);
+    } else if (f.rule === "contrast" && f.color && f.ground?.length && f.need) {
+      const stops = st.gradient && st.accent2 ? [st.accent, st.accent2] : [st.accent];
+      const onField = f.ground.length > 1 ? f.ground.every((g, i) => g === stops0[i]) : f.ground[0] !== st.background && f.ground[0] === stops0[0];
+      if (!onField && f.ground[0] === st.background && f.color === text0) {
+        const ink = inkFor(st.text, st.background, f.need, f.alpha ?? 1);
+        if (ink !== st.text) {
+          st.text = ink;
+          fixed.push("the text is re-inked so it reads on the paper");
+        }
+      } else if (onField && st.accent) {
+        const got = fieldFor(stops, [st.text, st.background], f.need, f.alpha ?? 1);
+        if (got && got.stops.some((x, i) => x !== stops[i])) {
+          st.accent = got.stops[0];
+          if (got.stops[1]) st.accent2 = got.stops[1];
+          fixed.push(`the color field is deepened a little so its ${got.ink === "#FFFFFF" ? "white" : "dark"} type reads`);
+        }
+      }
+    } else if (f.rule === "image" && f.role === "logo" && next.logo) {
+      const m = next.logoMeta ?? { fit: "full", ground: null, ink: null, mono: false };
+      // A logo on its plate keeps the plate (it was cropped to its edges); the finding then stands and is said.
+      if (m.fit !== "small" && m.fit !== "plate") {
+        next.logoMeta = { ...m, fit: "small" };
+        fixed.push("the logo is drawn at its own size so it stays sharp");
+      }
+    } else if (f.rule === "image" && /touches the edge/.test(f.detail) && next.logo) {
       next.logoMeta = { ...(next.logoMeta ?? { ground: null, ink: null, mono: false }), fit: "plate" };
       fixed.push("the logo now sits on a plate with room around it");
-    } else if (f.rule === "image" && sl?.image && sl.imageMeta?.fit !== "small") {
+    } else if (f.rule === "image" && f.role === "crop" && sl?.image && sl.imageMeta?.fit !== "plate" && sl.imageMeta?.fit !== "small") {
+      sl.imageMeta = { ...(sl.imageMeta ?? { ground: null, ink: null, mono: false }), fit: "plate" };
+      fixed.push(`slide ${f.slide}: the picture is shown whole instead of cropped`);
+    } else if (f.rule === "image" && sl?.image && f.role !== "crop" && sl.imageMeta?.fit !== "small") {
       sl.imageMeta = { ...(sl.imageMeta ?? { ground: null, ink: null, mono: false }), fit: "small" };
       fixed.push(`slide ${f.slide}: the image is placed small instead of stretched`);
     }
   }
+  // Split last first, so earlier indexes hold. The same headline carries on; its picture and notes stay with the first half.
+  for (const i of [...new Set(split)].sort((a, b) => b - a)) {
+    const sl = next.slides[i];
+    const half = Math.ceil(sl.bullets.length / 2);
+    const a = { ...sl, bullets: sl.bullets.slice(0, half), fit: "tight" };
+    const b: any = { headline: sl.headline, bullets: sl.bullets.slice(half), image: null, fit: "tight" };
+    next.slides.splice(i, 1, a, b);
+    fixed.push(`slide ${i + 2}: split in two so it fits`);
+  }
+  next.slides = next.slides.slice(0, 15);
   return { data: next, fixed: [...new Set(fixed)] };
 }
 
-// A deck's QA: render with its own images inlined, check, fix what code can, check once more. The findings left are what's logged.
-export async function qaDeck(data: any, images: Map<string, { data: Buffer; mediaType: string }>, o: { screenshot?: boolean } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
+// A deck's QA: render with its own images inlined, check, fix what code can, and measure again until nothing more can be fixed (six
+// rounds at most: three steps down and a split, twice over); then the phone pass. The findings left are what's logged, and said in one line with the link (qaShortfall).
+export async function qaDeck(data: any, images: Map<string, { data: Buffer; mediaType: string }>, o: { screenshot?: boolean; phone?: boolean } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
   const { renderDeck } = await import("./coPages/deck.js");
   const html = (d: any) => renderDeck({ id: "q".repeat(24), data: d, updatedAt: new Date() }, { url: null, showNotes: false, imageSrc: (id) => {
     const im = images.get(id);
     return im ? `data:${im.mediaType};base64,${im.data.toString("base64")}` : null;
   } });
-  const first = await runQa(html(data), "deck", data, o);
+  const first = await runQa(html(data), "deck", data, { ...o, phone: false });
   if (!first.ran) return { data, first, final: first, fixed: [] };
-  const { data: fixedData, fixed } = applyDeckFixes(data, first.findings);
+  let cur = data;
+  let last = first;
+  const fixed: string[] = [];
+  for (let round = 0; round < 6; round++) {
+    const r = applyDeckFixes(cur, last.findings);
+    if (!r.fixed.length) break;
+    cur = r.data;
+    fixed.push(...r.fixed);
+    last = await runQa(html(cur), "deck", cur, { ...o, phone: false });
+    if (!last.ran) break;
+  }
+  const phone = o.phone === false ? null : await runQa(html(cur), "deck", cur, { ...o, phone: true });
+  const final: QaResult = phone?.ran ? { ...last, findings: dedupe([...last.findings, ...phone.findings.filter((f) => f.view === "phone" || /on a phone/.test(f.where))]), phone: phone.phone } : last;
+  return { data: cur, first, final, fixed: [...new Set(fixed)] };
+}
+
+// A page's QA, at laptop and phone width, with its images inlined (imageSrc) so they're really measured. What code can fix on a page
+// is fixed: text that doesn't read is re-inked (its style), and measured again. Headlines never end on one word (template.ts).
+export async function qaPage(data: any, render: (d: any) => string, o: { screenshot?: boolean } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
+  const first = await runQa(render(data), "page", data, { ...o, phone: true });
+  if (!first.ran) return { data, first, final: first, fixed: [] };
+  const fixed: string[] = [];
+  const next = JSON.parse(JSON.stringify(data));
+  const st = next.style;
+  if (st) {
+    const text0 = st.text;
+    for (const f of first.findings) {
+      if (f.rule !== "contrast" || !f.color || !f.ground?.length) continue;
+      if (f.ground[0] === st.background && f.color === text0) {
+        const ink = inkFor(st.text, st.background, f.need ?? 4.5, f.alpha ?? 1);
+        if (ink !== st.text) {
+          st.text = ink;
+          fixed.push("the text is re-inked so it reads on the paper");
+        }
+      }
+    }
+  }
   if (!fixed.length) return { data, first, final: first, fixed };
-  const final = await runQa(html(fixedData), "deck", fixedData, o);
-  return { data: fixedData, first, final, fixed };
+  const final = await runQa(render(next), "page", next, { ...o, phone: true });
+  return { data: next, first, final, fixed: [...new Set(fixed)] };
 }

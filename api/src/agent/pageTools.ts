@@ -24,12 +24,43 @@ const BLOCK = z.union([
 ]);
 export const PAGE_INPUT = z.object({
   title: line("The page's headline."),
-  context: line("The line under it: when, where, for whom."),
+  context: line("The line under it: when, where, for whom. Written to them (\"Your Saturday\", or no pronoun), never \"their\" about the person reading it."),
   sections: z.array(z.object({ heading: line("The section's heading."), blocks: z.array(BLOCK).min(1), picture: imageN("A picture of theirs for this section (their space, their product). On a change, 0 takes this section's picture off; leave it out to keep it.") })).min(1),
   sources: z.array(z.object({ label: line("What the source is."), url: z.string() })).optional().describe("Pages you read that back what's on the page."),
   logo: imageN("Their logo, on the cover. On a change, 0 takes it off; leave it out to keep it."),
 });
 export type PageInput = z.infer<typeof PAGE_INPUT>;
+
+// Pure: the words of a page as it's set (design audit, 2026-10-12): section headings in sentence case with their names kept as they
+// write them (grounding.ts headlineCase), and the line under the title said to the member, never "Their Saturday plan" about the person
+// reading it.
+export async function pageWords<T extends { context: string; sections: { heading: string }[] }>(input: T, theirWords: string): Promise<T> {
+  const { headlineCase, COMMON } = await import("../services/coPages/grounding.js");
+  const context = input.context.replace(/^Their\b/, "Your");
+  // A short heading with one capitalized common word after the first ("The Day") is title case too; a name they wrote stays.
+  const sentence = (h: string) =>
+    h.split(/(\s+)/).map((w, i) => (i > 0 && /^[A-Z][a-z]+$/.test(w) && COMMON.has(w.toLowerCase()) && !new RegExp(`\\b${w}\\b`).test(theirWords) ? w.toLowerCase() : w)).join("");
+  return { ...input, context, sections: input.sections.map((s) => ({ ...s, heading: sentence(headlineCase(s.heading, theirWords)) })) };
+}
+
+// The page's pictures as data for design QA (their own images by id, a section's found image by its address, fetched once, small and
+// image-only), so the check measures the real pictures, never a broken 1x1 (design audit).
+export async function qaImageSrc(userId: string, data: any): Promise<(ref: { asset?: string; url?: string }) => string | null> {
+  const map = new Map<string, string>();
+  const A = await import("../services/memberAssets.js");
+  for (const id of [data.logo, ...(data.sections ?? []).map((x: any) => x.asset)].filter(Boolean)) {
+    const im = await A.loadAssetFor(userId, id).catch(() => null);
+    if (im) map.set(`a:${id}`, `data:${im.mediaType};base64,${im.data.toString("base64")}`);
+  }
+  for (const u of [data.cover?.url, ...(data.sections ?? []).map((x: any) => x.image?.url)].filter((x): x is string => typeof x === "string" && /^https:\/\//.test(x))) {
+    const r = await fetch(u, { signal: AbortSignal.timeout(5000) }).catch(() => null);
+    const type = r?.headers.get("content-type") ?? "";
+    if (!r?.ok || !/^image\//.test(type)) continue;
+    const b = Buffer.from(await r.arrayBuffer().catch(() => new ArrayBuffer(0)));
+    if (b.length && b.length < 4_000_000) map.set(`u:${u}`, `data:${type.split(";")[0]};base64,${b.toString("base64")}`);
+  }
+  return (ref) => (ref.asset ? map.get(`a:${ref.asset}`) ?? null : ref.url ? map.get(`u:${ref.url}`) ?? null : null);
+}
 
 // Pure: the tool's input as the page's data (images are filled in by code, once, from the page's own entities).
 // extras (2026-10-11, PR 2): their look and their images, resolved by the tool (their taste, their own image ids). Without them, Co's
@@ -137,9 +168,10 @@ export function pageTools(
         taste: TASTE_INPUT,
         designContext: z.enum(["professional", "personal"]).optional().describe("Whose look this page takes: professional (work, clients, a venue) or personal (their own plans, friends, family), for what the page is for. Leave it out for a personal plan; a change keeps the page's own."),
       }),
-      execute: async (input) => {
+      execute: async (input0) => {
         const store = await S();
         const source = await o.source();
+        const input = await pageWords(input0, source.theirs);
         const look = await lookFor(input, null, source.theirs);
         if ("error" in look) return { ok: false, error: look.error };
         const checked = store.checkPage(pageDataFrom(input, look), source);
@@ -148,18 +180,25 @@ export function pageTools(
           return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these and try once more, or give them the points in a text and say the page isn't there yet.` };
         }
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent." };
-        const imaged = await withImages(checked.data);
-        // Design QA before it goes (services/designQa.ts): measured at laptop width, findings logged with the page.
+        const imaged0 = await withImages(checked.data);
+        // Design QA before it goes (services/designQa.ts): measured at laptop and phone width with its real pictures; what code can fix
+        // is fixed and measured again, what's left is logged and said in one line with the link.
         const Q = await import("../services/designQa.js");
         const { renderCoPage } = await import("../services/coPages/template.js");
-        const qa = await Q.runQa(renderCoPage({ id: "q".repeat(24), data: imaged, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null }), "page", imaged, { screenshot: false }).catch(() => null);
+        const imageSrc = await qaImageSrc(ctx.userId, imaged0).catch(() => undefined);
+        const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc }), { screenshot: false }).catch(() => null);
+        const fixedOk = qa?.fixed.length ? store.checkPage(qa.data, source) : null;
+        const imaged = fixedOk?.ok ? fixedOk.data : imaged0;
         const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
         }
-        await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: (imaged as any).style ? "cover-band" : "co", tokens: (imaged as any).style ?? null, qa: qa ? { ran: qa.ran, findings: qa.findings } : { ran: false } }).catch(() => {});
-        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}\n${made.url}`, input.alsoAnswer);
+        const DSm = await import("../services/designSystem.js");
+        const turns = await DSm.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
+        await DSm.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: (imaged as any).style ? "cover-band" : "co", tokens: (imaged as any).style ?? null, qa: qa ? { ran: qa.final.ran, findings: qa.final.findings, fixed: qa.fixed, first: qa.first.findings.length } : { ran: false }, turnsToBuild: turns }).catch(() => {});
+        const short = qa ? Q.qaShortfall(qa.final.findings) : null;
+        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
           return unsentLink(ctx, { url: made.url, text, what: `the page "${input.title}"` });
@@ -167,7 +206,7 @@ export function pageTools(
         ctx.onLinkDelivered?.();
         confirm();
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-        return { ok: true, url: made.url, ...(qa ? { qa: Q.qaSummary(qa) } : {}), note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
+        return { ok: true, url: made.url, ...(qa ? { qa: Q.qaSummary(qa.final) } : {}), note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),
     updatePage: tool({
@@ -179,8 +218,9 @@ export function pageTools(
         taste: TASTE_INPUT,
         designContext: z.enum(["professional", "personal"]).optional().describe("Whose look this page takes: professional (work, clients, a venue) or personal (their own plans, friends, family), for what the page is for. Leave it out for a personal plan; a change keeps the page's own."),
       }),
-      execute: async (input) => {
+      execute: async (input0) => {
         const store = await S();
+        const input = await pageWords(input0, (await o.source()).theirs);
         // Pages only: a deck is changed with updateDeck (agent/deckTools.ts).
         const pick = pickPage((await pages()).filter((p: any) => p.kind !== "deck"), input.page);
         if (pick === "ambiguous") return { ok: false, error: "More than one of their pages fits. Ask which one by its title." };
