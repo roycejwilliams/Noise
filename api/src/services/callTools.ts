@@ -208,7 +208,8 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
       .send({ number: i.member.phone, content: text, from_number: from } as any)
       .then(() => true)
       .catch(() => false);
-    if (ok && !/\/d\//.test(text)) await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`, [i.userId, `Co replied: ${text}`]).catch(() => {});
+    // A page's or deck's own texts (its link, its "Updated the …:" line) are logged by the tool that sent them (agent/loopTools.ts).
+    if (ok && !/\/d\//.test(text) && !/^Updated the (deck|page): /.test(text)) await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`, [i.userId, `Co replied: ${text}`]).catch(() => {});
     return ok;
   };
   const did: string[] = [];
@@ -281,16 +282,24 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
         const startedAt = Date.now();
         const what = name.endsWith("Deck") ? "deck" : "page";
         // The next turn must know it's on its way (review of PR 6: unseen, "and add our pricing" made a second deck).
-        mem.did.push(`A ${what} they asked for is being made right now and will arrive in their texts in a minute or two. Don't make it again; a change to it waits until it has arrived.`);
+        const making = `A ${what} they asked for is being made right now and will arrive in their texts in a minute or two. Don't make it again; a change to it waits until it has arrived.`;
+        mem.did.push(making);
+        // Once it's done, either way, that note gives way to what happened (review of PR 6).
+        const settled = (line: string | null) => {
+          const k = mem.did.indexOf(making);
+          if (k >= 0) mem.did.splice(k, 1, ...(line ? [line] : []));
+          else if (line) mem.did.push(line);
+        };
         work
           .then(async (r: any) => {
             if (r?.ok !== false) {
               mem.okAt = { ...(mem.okAt ?? {}), [what]: Date.now() };
+              settled(`The ${what} they asked for on this call is done and in their texts.`);
               return;
             }
             // Not made (a line it couldn't back, say): the next turn of this call learns why and makes it again, as a text turn
             // would. Only if no other one of the same kind goes through in the next few minutes do they get one honest text, once.
-            mem.did.push(`The ${what} you started on this call didn't go through and isn't in their texts: ${String(r?.error ?? "").replace(/\s+/g, " ").slice(0, 300)} Make it again now from only what they said.`);
+            settled(`The ${what} you started on this call didn't go through and isn't in their texts: ${String(r?.error ?? "").replace(/\s+/g, " ").slice(0, 300)} Make it again now from only what they said.`);
             await recordDecision({ layer: 3, decision: "call.background_tool", userId: i.userId, outcome: "skip", action: "failed", proposal: { tool: name, error: String(r?.error ?? "").slice(0, 200) } }).catch(() => {});
             setTimeout(() => {
               if ((mem.okAt?.[what] ?? 0) > startedAt || mem.failTextSent) return;

@@ -340,7 +340,14 @@ export function deckTools(
           // by place, unless this version named its own.
           if (composing && was) {
             if (next.logo == null && input0.logo == null) next.logo = was.logo ?? null;
-            next.slides = next.slides.map((sl: any, k: number) => (sl.image ? sl : { ...sl, image: (was.slides.find((x: any) => x.headline === sl.headline) ?? was.slides[k])?.image ?? null }));
+            next.slides = next.slides.map((sl: any, k: number) => {
+              if (sl.image) return sl;
+              const same = was.slides.find((x: any) => x.headline === sl.headline);
+              const there = was.slides[k];
+              // By place only when it's the same slide reworded (it still shares a bullet), as notes do.
+              const from = same ?? (there && (there.bullets ?? []).some((b: string) => sl.bullets.includes(b)) ? there : null);
+              return { ...sl, image: from?.image ?? null };
+            });
           }
           const invented = await inventedClaims(ctx, next, source, was);
           if (invented) {
