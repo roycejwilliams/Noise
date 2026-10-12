@@ -738,18 +738,18 @@ export function abilityForTool(tool: string): Ability | undefined {
 // Co says them in its own voice.
 export type Surface = "text" | "call";
 type MenuGroup = "Finding things" | "Working on something over days" | "Making things" | "People" | "Being there";
-type MenuLine = { group: MenuGroup; main: string; text: string | null; call?: string | "by text" | null };
+type MenuLine = { group: MenuGroup; main: string; text: string | null; call?: string | "by text" | null; byTextOnCall?: string };
 const MENU: MenuLine[] = [
   { group: "Finding things", main: "search_events", text: "find events for the days they ask about, Co's own first", call: "find events for the days they ask about, Co's own first" },
   { group: "Finding things", main: "web_search", text: "search the web and X for venues, vendors, programs and people" },
-  { group: "Finding things", main: "save_ask", text: "keep watch for what they want found and text when something fits; list it, or stop suggesting a kind of thing" },
+  { group: "Finding things", main: "save_ask", text: "keep watch for what they want found and text when something fits; list it, or stop suggesting a kind of thing", byTextOnCall: "keep watch for what they want found and text when something fits, and list it" },
   { group: "Finding things", main: "steer_away", text: null, call: "stop suggesting a kind of thing they don't want" },
   { group: "Finding things", main: "list_sent", text: "recap what it sent and resend a link" },
   { group: "Working on something over days", main: "task_start", text: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds", call: "take on something that needs more than one reply as its own task" },
   { group: "Working on something over days", main: "research_brief", text: "research venues for an event and send a brief of the options", call: "research venues for an event and send a brief" },
   { group: "Working on something over days", main: "draft_email", text: "write an email for them to send themselves" },
   { group: "Working on something over days", main: "email_plan", text: "plan a day, a night or a trip as a one-page sheet" },
-  { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone they're connected to through Co, or remind them to follow up" : "remind them to follow up on something"; } },
+  { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone Co introduced them to, or remind them to follow up" : "remind them to follow up on something"; } },
   { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", call: "make a private page (a plan, options side by side) and change it or take it down" },
   { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", call: "make a slide deck from their taste or a Pinterest board, and change it" },
   { group: "Making things", main: "co_artifact_share", text: "share a view-only link to a page or deck, stop it, or keep it for good", call: "share a view-only link to a page or deck, stop it, or keep it for good" },
@@ -758,12 +758,12 @@ const MENU: MenuLine[] = [
   { group: "People", main: "introductions", text: "introduce them to someone by one email, after both say yes" },
   { group: "People", main: "outside_events", text: "give a heads-up when another member is going to the same outside event" },
   { group: "People", main: "invites", text: "send invite links for friends (5 each)" },
-  { group: "People", main: "mo_member_optin", text: "with their yes, have Mo look outside the club for people who could help" },
+  { group: "People", main: "mo_member_optin", text: "with their yes, have Mo find people outside the club who could help" },
   { group: "Being there", main: "calls", text: "talk anything through; call them now or at a set time, and take their calls", call: "talk anything through, as long as they like" },
   { group: "Being there", main: "check_ins", text: "check in every few days, and ask how things went" },
   { group: "Being there", main: "media", text: "read photos and screenshots, and listen to voice memos", call: null },
-  { group: "Being there", main: "what_co_knows", text: "say what it knows about them, and correct or remove any of it", call: "say what it knows about them, and correct or remove any of it" },
-  { group: "Being there", main: "google", get text() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Google to see when they're busy and which emails await a reply" : null; } },
+  { group: "Being there", main: "what_co_knows", text: "say what it knows about them, and correct or remove it", call: "say what it knows about them, and correct or remove it" },
+  { group: "Being there", main: "google", get text() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Google to see when they're busy and which emails await replies" : null; } },
   { group: "Being there", main: "team_feedback", text: "pass feedback to the team", call: null },
 ];
 // What Co can't do, for a complete answer (the LIMITS above say it in full).
@@ -782,7 +782,7 @@ export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; li
   const callWords = (m: MenuLine) => (m.call === undefined ? "by text" : m.call);
   return {
     here: MENU.filter((m) => { const w = callWords(m); return w !== null && w !== "by text" && live(m, "call"); }).map((m) => ({ group: m.group, line: callWords(m) as string, main: m.main })),
-    byText: MENU.filter((m) => callWords(m) === "by text" && m.text && live(m, "text")).map((m) => m.text!),
+    byText: MENU.filter((m) => callWords(m) === "by text" && m.text && live(m, "text")).map((m) => m.byTextOnCall ?? m.text!),
   };
 }
 // The menu's own check: every ability it names is an entry above (pure; the capability probe runs it).
