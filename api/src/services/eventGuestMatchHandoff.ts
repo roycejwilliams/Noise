@@ -359,7 +359,8 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       const resend = new Resend(process.env.RESEND_API_KEY);
       // Co cc'd (Royce, 2026-09-07: "Co would need to be the driver of the
       // email") — visibly present so a reply-all naturally includes it.
-      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
+      // One email per pair per event, even if a stale claim is ever taken again after a send went out (Resend keeps the key 24h).
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
       if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
@@ -368,11 +369,12 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       return false;
     }
   }
+  // The send is confirmed first: from here the claim is spent and the pair reads as introduced.
+  await RM.notePairIntroSent(eventId, a.user_id, b.user_id);
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
   await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "event_intro")).catch(() => {});
-  await RM.notePairIntroSent(eventId, a.user_id, b.user_id);
   return true;
 }
 

@@ -378,11 +378,21 @@ export async function notePairAnswer(eventId: string, x: string, y: string, answ
 }
 
 // The one send of a pair's intro email: "claimed" (this call sends it), "taken" (another call already has), or "none" (no
-// pair row: the caller goes on as before, guarded by its other checks).
+// pair row: the caller goes on as before, guarded by its other checks). The claim (intro_claimed_at) is separate from the
+// send (intro_sent_at, written only once the email went), so a server that dies between the two leaves an unconfirmed
+// claim, which goes stale after INTRO_CLAIM_STALE_MINUTES and is taken again (retryHeldIntros). A second send of the same
+// intro is also refused by the email provider itself (the send carries an idempotency key per pair and event).
+export const INTRO_CLAIM_STALE_MINUTES = 15;
 export async function claimIntroSend(eventId: string, x: string, y: string): Promise<"claimed" | "taken" | "none"> {
   const { a, b } = orderPair(x, y);
   const won = await pool
-    .query(`UPDATE co_pairs SET intro_sent_at = NOW(), updated_at = NOW() WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND intro_sent_at IS NULL RETURNING id`, [eventId, a, b])
+    .query(
+      `UPDATE co_pairs SET intro_claimed_at = NOW(), updated_at = NOW()
+       WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND intro_sent_at IS NULL
+         AND (intro_claimed_at IS NULL OR intro_claimed_at < NOW() - INTERVAL '${INTRO_CLAIM_STALE_MINUTES} minutes')
+       RETURNING id`,
+      [eventId, a, b],
+    )
     .catch(() => null);
   if (!won) return "none";
   if (won.rows.length) return "claimed";
@@ -393,7 +403,7 @@ export async function claimIntroSend(eventId: string, x: string, y: string): Pro
 // A claimed send that didn't go: the pair is free for a retry (retryHeldIntros reads intro_sent_at IS NULL).
 export async function releaseIntroClaim(eventId: string, x: string, y: string): Promise<void> {
   const { a, b } = orderPair(x, y);
-  await pool.query(`UPDATE co_pairs SET intro_sent_at = NULL, updated_at = NOW() WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND state <> 'intro_sent'`, [eventId, a, b]).catch(() => {});
+  await pool.query(`UPDATE co_pairs SET intro_claimed_at = NULL, updated_at = NOW() WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND intro_sent_at IS NULL`, [eventId, a, b]).catch(() => {});
 }
 
 export async function notePairIntroSent(eventId: string, x: string, y: string): Promise<void> {
@@ -473,7 +483,7 @@ ${mine.length ? mine.join("\n") : "- (nothing on file)"}
 All Co may say about ${other.firstName}, what ${other.firstName} said Co may tell people they meet: ${other.shared.map((t, i) => `${other.kinds?.[i] === "offering" ? "can offer" : "looking for"} "${t}"`).join("; ")}
 
 Write one sentence to ${reader.firstName}: the concrete reason meeting ${other.firstName} is worth it for ${reader.firstName}, resting on what ${other.firstName} shared, in close to their own words. Say nothing else about ${other.firstName}. Speak as Co straight to them ("you", and "I" for Co, never "Co thinks"): plain, warm, composed, the way a friend who knows both would put it. No em dashes, no exclamation points, no titles or labels for anyone.
-Then judge it honestly: would a friend who knows ${reader.firstName} make this introduction for ${reader.firstName}'s sake? "strong" only for a specific reason ${reader.firstName} gets value. "weak" when the reason is generic (similar interests, both in tech, good to know, would get along), a stretch, or one-sided.
+Then judge it honestly: would a friend who knows ${reader.firstName} make this introduction for ${reader.firstName}'s sake? A friend makes it when what ${other.firstName} shared plainly meets something ${reader.firstName} needs or offers, even if it doesn't spell out every detail ${reader.firstName} cares about (a style, a place, a timeline, a title): what ${other.firstName} shared is a few words on purpose, and the two of them can sort out the details once they meet. "strong" for a specific reason ${reader.firstName} gets value, a direct need-and-offer fit included. "weak" when the reason is generic (similar interests, both like food, both in tech, good to know, would get along), when nothing ${other.firstName} shared bears on what ${reader.firstName} wants or offers, or when ${other.firstName}'s words openly rule it out. Sharing a general interest (both into food, tech, running, meeting people) is generic, never a need-and-offer fit, unless ${other.firstName} can give ${reader.firstName} something specific. A missing detail is not a mismatch.
 Return ONLY JSON: {"line": "...", "verdict": "strong" or "weak", "why": "a few words"}`;
 }
 
@@ -802,10 +812,12 @@ export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
 // to send (intro_attempts). Pure: whether it's worth trying again now.
 export const INTRO_MAX_ATTEMPTS = 3;
 export const INTRO_RETRY_MAX_AGE_MS = 3 * 86_400_000;
-export function introRetryDue(p: { both_yes_at: Date | null; intro_held_at: Date | null; intro_attempts: number | null }, now: Date): boolean {
+export function introRetryDue(p: { both_yes_at: Date | null; intro_held_at: Date | null; intro_attempts: number | null; intro_claimed_at?: Date | null }, now: Date): boolean {
   if (!p.both_yes_at || now.getTime() - new Date(p.both_yes_at).getTime() > INTRO_RETRY_MAX_AGE_MS) return false;
   const attempts = p.intro_attempts ?? 0;
-  return attempts < INTRO_MAX_ATTEMPTS && (Boolean(p.intro_held_at) || attempts > 0);
+  // A claim no send ever confirmed (the server died in between), once it's stale.
+  const staleClaim = Boolean(p.intro_claimed_at) && now.getTime() - new Date(p.intro_claimed_at!).getTime() >= INTRO_CLAIM_STALE_MINUTES * 60_000;
+  return attempts < INTRO_MAX_ATTEMPTS && (Boolean(p.intro_held_at) || attempts > 0 || staleClaim);
 }
 
 // Held by the pause: marked once (and logged once), so the cron doesn't log it every five minutes.
@@ -828,10 +840,10 @@ export async function noteIntroFailed(eventId: string, x: string, y: string, why
 
 // Every limit is in the WHERE clause, oldest first, so rows past their cap or their age can never fill the batch and
 // starve a real held email (2026-10-12 re-review). introRetryDue stays as the same rule in code, for the checks.
-export const RETRY_HELD_INTROS_SQL = `SELECT p.event_id, p.a_id, p.b_id, p.both_yes_at, p.intro_held_at, p.intro_attempts FROM co_pairs p
+export const RETRY_HELD_INTROS_SQL = `SELECT p.event_id, p.a_id, p.b_id, p.both_yes_at, p.intro_held_at, p.intro_attempts, p.intro_claimed_at FROM co_pairs p
        JOIN users ua ON ua.id = p.a_id JOIN users ub ON ub.id = p.b_id
        WHERE p.state = 'both_yes' AND p.intro_sent_at IS NULL
-         AND (p.intro_held_at IS NOT NULL OR COALESCE(p.intro_attempts, 0) > 0)
+         AND (p.intro_held_at IS NOT NULL OR COALESCE(p.intro_attempts, 0) > 0 OR p.intro_claimed_at < NOW() - INTERVAL '${INTRO_CLAIM_STALE_MINUTES} minutes')
          AND COALESCE(p.intro_attempts, 0) < ${INTRO_MAX_ATTEMPTS}
          AND p.both_yes_at > NOW() - INTERVAL '${INTRO_RETRY_MAX_AGE_MS / 86_400_000} days'
          AND ua.archived_at IS NULL AND ub.archived_at IS NULL AND NOT coalesce(ua.sms_opted_out, false) AND NOT coalesce(ub.sms_opted_out, false)
