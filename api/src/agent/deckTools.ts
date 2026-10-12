@@ -66,7 +66,8 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: {
   const C = await import("../services/coPages/deckClaims.js");
   const had = new Set(before ? C.deckClaimLines(before) : []);
   const lines = C.deckClaimLines(data).filter((l) => !had.has(l));
-  const fails = await C.inventedLines(lines, [source.words, source.read].filter(Boolean).join("\n"));
+  const self = await selfIfAboutCo(ctx, data);
+  const fails = await C.inventedLines(lines, [source.words, source.read].filter(Boolean).join("\n"), undefined, self);
   const { recordDecision } = await import("../harness/core.js");
   if (fails === null) {
     await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "check_unavailable", proposal: { lines: lines.length } }).catch(() => {});
@@ -74,7 +75,17 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: {
   }
   if (!fails.length) return null;
   await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "invented", proposal: { fails } }).catch(() => {});
-  return `These lines add claims they never made: ${fails.map((f) => `"${f.line}" (${f.why})`).join(" | ")}. Sharpen what they said instead, or leave it out; if it matters, ask them. Then try once more.`;
+  return `These lines state a hard fact they never gave: ${fails.map((f) => `"${f.line}" (${f.why})`).join(" | ")}. Rewrite just those lines safer (the stance, not the fact: "Built for live rooms" instead of "Partnering with X") and keep every slide full; never strip the deck to bare lines. Then try once more. If it still can't be made, tell them plainly in one text that the deck isn't made, which fact you couldn't back, and ask them to confirm it.`;
+}
+
+// A deck the team makes about Co itself (Royce, 2026-10-11): what Co knows about itself counts as fact. The team only, and only when
+// the deck is about Co (its title, subtitle or brief names Co).
+async function selfIfAboutCo(ctx: ConversationToolContext, data: any): Promise<string> {
+  const about = `${data?.title ?? ""} ${data?.subtitle ?? ""} ${data?.brief ?? ""}`;
+  if (!/\bCo\b|CoPatible/.test(about)) return "";
+  const { isTeamMember } = await import("../services/extensions.js");
+  if (!(await isTeamMember(ctx.userId).catch(() => false))) return "";
+  return (await import("../services/coPages/deckClaims.js")).coSelfKnowledge();
 }
 
 // Their image numbers to asset ids (services/memberAssets.ts): only their own saved images, and only ones sent for this deck (in its
@@ -248,16 +259,27 @@ export function deckTools(
           if (composing) {
             if (ctx.dryRun) return { ok: true, note: "Test run: nothing was written or sent." };
             const C = await import("../services/deckCompose.js");
-            const out = await C.compose<any>(C.newDeckPrompt(source.theirs, input.brief!, null, refused));
+            const selfForBrief = await selfIfAboutCo(ctx, { brief: input.brief, title: input.title });
+            const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.theirs}\n\nWhat Co is and does (the deck is about Co; these are facts):\n${selfForBrief}` : source.theirs, input.brief!, null, refused));
             const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides });
             if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
             deckIn = { ...input, ...parsed.data };
+          }
+          // "Use our logo" and one image that reads as a logo, sent for this deck: it goes on the title slide (replay, 2026-10-11:
+          // the logo they sent was left off).
+          if (deckIn.logo == null && /\blogo\b/i.test(source.words) && !ctx.dryRun) {
+            const since = Date.now() - DECK_WINDOW_HOURS * 3600_000;
+            const logos = (await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => [])).filter((a) => a.at.getTime() > since && /\blogo\b|wordmark/i.test(a.description ?? ""));
+            if (logos.length === 1) deckIn = { ...deckIn, logo: logos[0].n };
           }
           const ids = await assetIds(ctx.userId, deckIn, !!ctx.dryRun, { words: source.theirs, onDeck: [] });
           if ("error" in ids) return { ok: false, error: ids.error };
           const store = await S();
           const data = await deckDataFrom(deckIn, t.taste, ids.map);
-          const checked = store.checkPage(data, source);
+          // A team deck about Co: what Co knows about itself backs its names and facts too.
+          const self = await selfIfAboutCo(ctx, { ...deckIn, brief: input.brief });
+          const backed = self ? { ...source, read: `${source.read}\n${self}` } : source;
+          const checked = store.checkPage(data, backed);
           if (!checked.ok) {
             if (retry(checked.problems.slice(0, 4).join("; "))) continue;
             o.notDone(`No deck made: ${checked.problems.slice(0, 3).join("; ")}.`);
@@ -270,7 +292,7 @@ export function deckTools(
             return { ok: false, error: `Not made. ${invented}` };
           }
           if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent.", style: (checked.data as any).style };
-          const made = await store.createCoPage(checked.data, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
+          const made = await store.createCoPage(checked.data, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
           if (!made.ok) {
             o.notDone("The deck wasn't made.");
             return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
@@ -355,7 +377,8 @@ export function deckTools(
             o.notDone("The deck wasn't changed: some lines added claims they never made.");
             return { ok: false, error: `Not changed. ${invented}` };
           }
-          r = await store.updateCoPage(pick.id, ctx.userId, next, source);
+          const self = await selfIfAboutCo(ctx, next);
+          r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source);
           if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
           if (!r.ok) {
             if (retry(r.problems.slice(0, 4).join("; "))) continue;

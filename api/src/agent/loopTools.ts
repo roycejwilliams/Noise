@@ -651,6 +651,8 @@ export function loopTools(
         }
         const way = byEmail && byText ? "by email and by text" : byEmail ? "by email" : "by text";
         if (ctx.dryRun) {
+          // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+          ctx.onLinkDelivered?.();
           ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${way}.`);
           return { ok: true, note: "Test run: nothing was sent." };
         }
@@ -708,6 +710,8 @@ export function loopTools(
         if (!went.length) return { ok: false, error: "The plan didn't go out. Give them the plan in a text now." };
         await recordDecision({ layer: 3, decision: "loop.emailPlan", userId: ctx.userId, outcome: "act", action: plan.title, proposal: { steps: plan.steps.length, via: went, calendar: went.includes("email") && !!files?.calendar, pdfPending } }).catch(() => {});
         const gone = went.length === 2 ? "by email and by text" : went[0] === "email" ? "by email" : "by text";
+        // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Sent them a plan, "${plan.title}", as a one-page sheet ${gone}${went.includes("email") && files?.calendar ? ", with a calendar hold for each time in the email" : ""}${line ? `, with the line "${line}"` : ""}.`);
         if (pdfPending) ctx.facts?.add("did_this_turn", `The sheet for "${plan.title}" couldn't be made, so the plan went as text in this conversation, saying the PDF version will follow (it's retried on its own).`);
         await remember({ next: `plan sent: ${plan.title}` });
@@ -817,6 +821,8 @@ export function loopTools(
           return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try again once, or tell them plainly what you couldn't back and give them the points in a text.` };
         }
         if (ctx.dryRun) {
+          // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+          ctx.onLinkDelivered?.();
           ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}", as a PDF in this conversation.`);
           return { ok: true, note: "Test run: nothing was sent." };
         }
@@ -857,6 +863,8 @@ export function loopTools(
         // The same Doc, written in place: the text said only what changed; the link they have still opens it (rule 3, 2026-10-11).
         const inPlace = sentOk.some((r) => r.via === "google_docs" && r.updatedInPlace);
         const newDoc = sentOk.find((r) => r.via === "google_docs" && r.newDocBecause)?.newDocBecause;
+        // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (${inPlace ? `updated in place, same link: ${sent.link}` : `link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"}`})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
         await remember({ next: `document sent: ${doc.title}` });
         const extras = `${rd.docBecamePdf ? "The earlier version was a Google Doc, but this one couldn't go to Google, so it went as a PDF, and the text said so. " : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}`;
@@ -916,6 +924,8 @@ export function loopTools(
         }
         const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
         if (ctx.dryRun) {
+          // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+          ctx.onLinkDelivered?.();
           ctx.facts?.add("did_this_turn", `Sent them a document made from their file #${file.n}.`);
           return { ok: true, note: "Test run: nothing was drafted or sent." };
         }
@@ -947,6 +957,8 @@ export function loopTools(
         await logDeliveredPlan(`Co replied: ${line}`);
         state.sentMessages.push(line);
         await recordDecision({ layer: 3, decision: "loop.writeFromFile", userId: ctx.userId, outcome: "act", action: `file #${file.n}`, proposal: { via, kind: doc.kind } }).catch(() => {});
+        // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
+        ctx.onLinkDelivered?.();
         ctx.facts?.add("did_this_turn", `Sent them a document made from their file #${file.n}${sentOk.some((r) => r.via === "google_docs") ? ", as a Google Doc in their own Drive" : ""}${sentOk.some((r) => r.via === "pdf_text") ? ", as a PDF in this conversation" : ""}.`);
         await remember({ next: `document sent from their file #${file.n}` });
         return {
