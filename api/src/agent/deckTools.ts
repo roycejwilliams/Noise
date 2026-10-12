@@ -24,7 +24,8 @@ export const DECK_INPUT = z.object({
     .array(
       z.object({
         headline: line("The slide's one point."),
-        bullets: z.array(line("A short supporting point.")).min(1).max(5),
+        // Four at most: one idea a slide, the same bar design QA holds (services/designQa.ts contentFindings).
+        bullets: z.array(line("A short supporting point.")).min(1).max(4),
         image: imageN("A picture for this slide (a product shot, the team, the space)."),
         layout: z.enum(["statement", "points", "grid", "split"]).optional().describe("Only if you want a particular designed layout: statement (one big line), points (headline left, points right), grid (2 to 4 short parallel points as columns), split (with its picture). Leave it out and it's chosen from the slide's shape."),
         notes: z.string().nullable().optional().describe("Speaker notes for this slide: what to say out loud, from what they told you, in plain words. Write them only when they asked for speaker notes, on the slides they named (all of them if they said so). On a change, leave it out to keep the slide's notes as they are; an empty string takes them off."),
@@ -75,6 +76,13 @@ async function referenceCopyProblem(ctx: ConversationToolContext, data: any, wor
   const lines = [data.title, data.subtitle, ...(data.slides ?? []).flatMap((s: any) => [s.headline, ...(s.bullets ?? [])])].filter(Boolean);
   const copied = D.referenceCopies(lines, texts, words);
   return copied.length ? `These lines copy words from an image they sent only for its look: ${copied.map((l) => `"${l}"`).join(" | ")}. That image's words are never deck content; write those lines from what they told you.` : null;
+}
+
+// Headlines as the writer wrote them, checked for names nobody gave before casing (grounding.ts headlineNameProblems). Null when clean.
+async function headlineNames(slides: { headline: string }[] | undefined, theirs: string, read: string): Promise<string | null> {
+  const { headlineNameProblems } = await import("../services/coPages/grounding.js");
+  const out = (slides ?? []).map((s, i) => headlineNameProblems(s.headline, `${theirs}\n${read}`, `slide ${i + 2} headline`)).filter(Boolean);
+  return out.length ? out.slice(0, 3).join("; ") : null;
 }
 
 // Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
@@ -234,17 +242,19 @@ async function imageMetaFor(userId: string, assetId: string, kind: "logo" | "pho
   return meta;
 }
 
-// A logo lost in a big empty square, cut to its content with room around it and kept as a new image of theirs (owner-only, like the
-// original), so it reads at the size a slide gives it. The original stays as it is.
-async function cleanedLogo(userId: string, assetId: string): Promise<string | null> {
+// A logo lost in a big empty square, cut to its content with room around it and kept as their image's cleaned-up copy (owner-only,
+// never one of their numbered images, deleted with the original: memberAssets.ts keepDerivedAsset), so it reads at the size a slide
+// gives it. The original stays as it is.
+async function cleanedLogo(userId: string, assetId: string, fromN: number): Promise<string | null> {
   const A = await import("../services/memberAssets.js");
+  const have = await A.derivedAssetId(userId, fromN).catch(() => null);
+  if (have) return have;
   const img = await A.loadAssetFor(userId, assetId).catch(() => null);
   if (!img) return null;
   const R = await import("../services/designRead.js");
   const out = await R.trimImage(img.data, img.mediaType);
   if (!out) return null;
-  const kept = await A.keepAsset(userId, out, "image/png", "Their logo, cut to its content by Co for a deck").catch(() => null);
-  return kept?.ok ? kept.id : null;
+  return A.keepDerivedAsset(userId, fromN, out, "image/png").catch(() => null);
 }
 
 export function deckTools(
@@ -271,6 +281,11 @@ export function deckTools(
   const readThisTurn = new Set<number>();
   // The read they confirmed this turn, kept for the log when the deck goes on a later call of the turn.
   let confirmedThisTurn: string | null = null;
+  // Design QA sends a deck back once a turn at most (review: a per-call flag let Co loop to the tool's limit with no deck). The next
+  // call ships with whatever findings are left, logged.
+  let qaBounced = false;
+  // Image placement worked out once a turn: a bounce never re-reads pixels or re-trims the logo.
+  const placedThisTurn = new Map<string, { id: string; meta: any; note: string | null }>();
   // The design for this deck from their design system (services/designSystem.ts): a reference read waiting on its confirm comes
   // first (that line is the one question), then the one taste ask when the system has nothing at all, else the filled look.
   type Design = { filled: import("../services/designSystem.js").Filled; refs: string[]; fontNotes: string[]; confirmed: string | null };
@@ -458,7 +473,6 @@ export function deckTools(
         if (composing && !input.brief?.trim()) return { ok: false, error: "Write the slides, or pass a brief of what they want." };
         if (!composing && (!input.title?.trim() || !input.subtitle?.trim())) return { ok: false, error: "With slides, give the deck a title and a subtitle too." };
         let refused: string | null = null;
-        let qaReturned = false;
         for (let attempt = 0; ; attempt++) {
           // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
           const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
@@ -482,19 +496,31 @@ export function deckTools(
           const ids = await assetIds(ctx.userId, deckIn, !!ctx.dryRun, { words: source.theirs, onDeck: [] });
           if ("error" in ids) return { ok: false, error: ids.error };
           const store = await S();
-          const data: any = await deckDataFrom(deckIn, null, ids.map, null, { style: design.filled.style, theirWords: source.theirs });
+          // The name check on the headlines as written, before they're put in sentence case (grounding.ts headlineNameProblems).
+          const named = await headlineNames(deckIn.slides, source.theirs, `${source.read}\n${await selfIfAboutCo(ctx, { ...deckIn, brief: input.brief })}`);
+          if (named) {
+            if (retry(named)) continue;
+            o.notDone(`No deck made: ${named}.`);
+            return { ok: false, error: `Not made: ${named}. Fix it (only what they told you or you read) and try once more.` };
+          }
+          const data: any = await deckDataFrom(deckIn, null, ids.map, null, { style: { ...design.filled.style, context }, theirWords: source.theirs });
           // Images placed by their own pixels: a logo lost in empty space is cut to its content, a low-res picture placed small, a
           // logo cropped to its edges put on a plate (bad inputs are handled, then said in a few words).
           const placed: string[] = [];
           if (!ctx.dryRun) {
             if (data.logo) {
-              const clean = await cleanedLogo(ctx.userId, data.logo).catch(() => null);
-              if (clean) data.logo = clean;
-              const m = await imageMetaFor(ctx.userId, data.logo, "logo").catch(() => null);
-              if (m) {
-                data.logoMeta = { fit: m.fit, ground: m.ground, ink: m.ink, mono: m.mono };
-                if (m.note) placed.push(m.note);
+              const key = `logo:${data.logo}`;
+              let got = placedThisTurn.get(key);
+              if (!got) {
+                const clean = typeof deckIn.logo === "number" ? await cleanedLogo(ctx.userId, data.logo, deckIn.logo).catch(() => null) : null;
+                const id = clean ?? data.logo;
+                const m = await imageMetaFor(ctx.userId, id, "logo").catch(() => null);
+                got = { id, meta: m ? { fit: m.fit, ground: m.ground, ink: m.ink, mono: m.mono } : null, note: m?.note ?? null };
+                placedThisTurn.set(key, got);
               }
+              data.logo = got.id;
+              if (got.meta) data.logoMeta = got.meta;
+              if (got.note) placed.push(got.note);
             }
             for (const sl of data.slides) {
               if (!sl.image) continue;
@@ -538,8 +564,8 @@ export function deckTools(
           }
           const qa = await Q.qaDeck(checked.data, imgs, { screenshot: false });
           const ideas = qa.final.findings.filter((f) => f.fix === "co");
-          if (ideas.length && !qaReturned) {
-            qaReturned = true;
+          if (ideas.length && !qaBounced) {
+            qaBounced = true;
             const why = `Design QA: ${ideas.slice(0, 4).map((f) => `${f.where}: ${f.detail}`).join("; ")}`;
             if (retry(why)) continue;
             if (!composing) return { ok: false, error: `Not made yet. ${why}. Rewrite those slides (split one into two, or cut to the one idea) and call makeDeck once more.` };
@@ -598,14 +624,16 @@ export function deckTools(
         // The deck's whole look (fonts, gradient, density included) stays unless they said something new; then it's refilled from
         // their design system, where what they just said (a correction outweighs) is now the newest signal.
         let restyle: unknown = kept ?? undefined;
+        // The deck's own context, kept on its style when it was made (older decks: professional).
+        const deckContext: "professional" | "personal" = kept?.context === "personal" ? "personal" : "professional";
         if (input.taste) {
-          const t = await tasteFor(input.taste);
+          const t = await tasteFor(input.taste, deckContext);
           if ("error" in t) return { ok: false, error: t.error };
           if ("taste" in t && t.taste) taste = t.taste;
           if (!ctx.dryRun) {
             const DS = await import("../services/designSystem.js");
-            const ds = await DS.loadDesignSystem(ctx.userId, "professional");
-            restyle = DS.fillDesign(ds, { hasLogo: !!(before?.data as any)?.logo }).style;
+            const ds = await DS.loadDesignSystem(ctx.userId, deckContext);
+            restyle = { ...DS.fillDesign(ds, { hasLogo: !!(before?.data as any)?.logo }).style, context: deckContext };
           } else restyle = undefined;
         }
         // What's on the deck now went out to them and stands; the edit may also use what they said since it was made.
@@ -632,8 +660,19 @@ export function deckTools(
           }
           const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
           if ("error" in ids) return { ok: false, error: ids.error };
+          const named = await headlineNames(input.slides, source.theirs, source.read);
+          if (named) {
+            if (retry(named)) continue;
+            o.notDone(`The deck wasn't changed: ${named}.`);
+            return { ok: false, error: `Not changed: ${named}. Fix it and try once more.` };
+          }
           const next: any = await deckDataFrom(input, taste, ids.map, was, { style: restyle, theirWords: source.theirs });
-          // Image placement carries over from the deck as it was.
+          // Image placement carries over from the deck as it was. The logo they name by number is the original; the deck shows its
+          // cleaned-up copy, so the copy is kept (review: comparing the two ids dropped it).
+          if (was?.logo && typeof input.logo === "number" && next.logo !== was.logo && !ctx.dryRun) {
+            const copy = await (await import("../services/memberAssets.js")).derivedAssetId(ctx.userId, input.logo).catch(() => null);
+            if (copy === was.logo) next.logo = was.logo;
+          }
           if (was?.logoMeta && next.logo === was.logo) next.logoMeta = was.logoMeta;
           for (const sl of next.slides) {
             const w = was?.slides?.find((x: any) => x.image && x.image === sl.image);

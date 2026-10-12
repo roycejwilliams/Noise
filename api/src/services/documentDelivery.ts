@@ -65,14 +65,48 @@ export type DeliverDeps = {
   docMeta?: (token: string, fileId: string) => Promise<Awaited<ReturnType<typeof import("./googleDocs.js").googleDocMeta>>>;
   // Their design system's look for the PDF (services/designSystem.ts), and the shared design QA before it goes (services/designQa.ts).
   // Left out (tests), the PDF is Co's own design and goes unmeasured.
-  look?: (userId: string) => Promise<import("./coPages/style.js").DeckStyle | null>;
-  qa?: (html: string, doc: Doc, userId: string) => Promise<void>;
+  look?: (userId: string, doc: Doc) => Promise<import("./coPages/style.js").DeckStyle | null>;
+  // Returns the HTML to print: fixed where QA could fix it (a heading left at a page's foot starts the next page), else as it was.
+  qa?: (html: string, doc: Doc, userId: string) => Promise<string | null>;
 };
 // line: the one sentence that goes with the attachment (services/speakable.ts deliveryLine). Without one, the title.
 // noFallback: a retry of a PDF that already went as text (deliveryReceipts) must not send the text again.
 // inPlace: a new version of a Google Doc Co already made for them (its Drive file and link, from the receipt): written into that same
 // Doc, so the link stays the same and only the change line goes (Royce, 2026-10-11 rule 3).
 export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean; inPlace?: { fileId: string; link: string; writtenAt: Date } };
+
+// Design QA for a document (services/designQa.ts), bounded to 10 seconds: the printed pages are rendered and measured; a heading left
+// at the foot of a page is moved to start the next one, and the pages are measured once more. The findings wait here for the delivery
+// record (deliverAndRecord logs them with the document's key).
+export const DOC_QA_MS = 10_000;
+const lastDocQa = new Map<string, { at: number; qa: unknown }>();
+export function takeDocQa(userId: string): unknown | null {
+  const hit = lastDocQa.get(userId);
+  lastDocQa.delete(userId);
+  return hit && Date.now() - hit.at < 120_000 ? hit.qa : null;
+}
+// Pure: CSS that starts each named section on a new page (sections are the document's <section class="sec"> elements, in order).
+export function pageBreakFix(doc: Doc, headings: string[]): string {
+  const idx = headings.map((h) => doc.sections.findIndex((s) => (s.heading ?? "").trim().slice(0, 60) === h.trim().slice(0, 60))).filter((i) => i >= 0);
+  return [...new Set(idx)].map((i) => `section.sec:nth-of-type(${i + 1}){break-before:page}`).join("");
+}
+async function docQa(html: string, doc: Doc, userId: string): Promise<string | null> {
+  const run = async () => {
+    const Q = await import("./designQa.js");
+    const first = await Q.runQa(html, "doc", doc, { screenshot: false });
+    const stranded = first.findings.filter((f) => f.rule === "page_break").map((f) => f.where.replace(/^"|"$/g, ""));
+    const fix = pageBreakFix(doc, stranded);
+    let out = html;
+    let final = first;
+    if (fix) {
+      out = html.replace("</style>", `${fix}</style>`);
+      final = await Q.runQa(out, "doc", doc, { screenshot: false });
+    }
+    lastDocQa.set(userId, { at: Date.now(), qa: { ran: final.ran, findings: final.findings, first: first.findings.length, fixed: fix ? stranded.map((h) => `"${h}" starts a new page`) : [] } });
+    return out;
+  };
+  return Promise.race([run(), new Promise<null>((r) => setTimeout(() => r(null), DOC_QA_MS))]);
+}
 
 const realDeps = async (): Promise<DeliverDeps> => {
   const sendblue = (await import("./sendblue.js")).default;
@@ -88,16 +122,13 @@ const realDeps = async (): Promise<DeliverDeps> => {
     shareDoc: (token, fileId) => d.shareWithLink(token, fileId),
     updateDoc: (token, fileId, html) => d.updateGoogleDoc(token, fileId, html),
     docMeta: (token, fileId) => d.googleDocMeta(token, fileId),
-    look: async (userId) => {
+    look: async (userId, doc) => {
       const DS = await import("./designSystem.js");
-      const ds = await DS.loadDesignSystem(userId, "professional");
+      // A venue brief, a partnership plan or a readout is work; anything else (their goals, a plan for themselves) is personal.
+      const ds = await DS.loadDesignSystem(userId, doc.kind && doc.kind !== "other" ? "professional" : "personal");
       return ds.answered.size && !ds.dontCare ? DS.fillDesign(ds, {}).style : null;
     },
-    qa: async (html, doc, userId) => {
-      const Q = await import("./designQa.js");
-      const r = await Q.runQa(html, "doc", doc, { screenshot: false });
-      await (await import("./designSystem.js")).logArtifactDesign({ ownerUserId: userId, medium: "doc", event: "made", layout: "letter", qa: { ran: r.ran, findings: r.findings } });
-    },
+    qa: (html, doc, userId) => docQa(html, doc, userId),
   };
 };
 // The real senders with one part swapped: a plan sends its own rendered sheet (agent/loopTools.ts emailPlan) through the same
@@ -124,10 +155,10 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
     }
     return { ok: true, via: "text_fallback", filename, pdfPending: true, error };
   };
-  const look = deps.look ? await deps.look(to.userId).catch(() => null) : null;
-  const html = documentHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy"), look });
-  // Measured before it goes; a QA that can't run never holds the PDF.
-  if (deps.qa) await deps.qa(html, doc, to.userId).catch((err: any) => console.error("doc design QA failed (non-fatal):", err?.message ?? err));
+  const look = deps.look ? await deps.look(to.userId, doc).catch(() => null) : null;
+  const html0 = documentHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy"), look });
+  // Measured before it goes, and fixed where it can be; a QA that can't run (or runs long) never holds the PDF.
+  const html = (deps.qa ? await deps.qa(html0, doc, to.userId).catch((err: any) => (console.error("doc design QA failed (non-fatal):", err?.message ?? err), null)) : null) ?? html0;
   const pdf = await deps.render(html).catch(() => null);
   if (!pdf) return fallback("the PDF couldn't be made");
   try {
@@ -262,6 +293,12 @@ export async function deliverAndRecord(
   const inPlace = priorDoc ? { fileId: priorDoc.driveFileId!, link: priorDoc.link!, writtenAt: priorDoc.deliveredAt } : undefined;
   // They asked for it as a Google Doc the first time: the new version goes to that Doc (they needn't say "Google" again to change it).
   const r0 = await deliverToTargets(sendDoc, { ...to, line, inPlace }, { saveTo: inPlace ? "google_doc" : o.saveTo, askedForGoogle: o.askedForGoogle || !!inPlace }, deps.deliver);
+  // Design metrics (services/designSystem.ts): a document is keyed by its delivery key, so its first version is "made" and every
+  // change after it "revised"; first-shot acceptance reads the two. A resend of the same version isn't either. Real deliveries only.
+  if (!deps.receipts && !again && r0.sentOk.length) {
+    const DS = await import("./designSystem.js");
+    await DS.logArtifactDesign({ ownerUserId: to.userId, pageId: `doc:${docKey}`.slice(0, 200), medium: "doc", event: version > 1 ? "revised" : "made", layout: "letter", qa: takeDocQa(to.userId) ?? { ran: false } }).catch(() => {});
+  }
   // The earlier version was a Google Doc but this one went as a PDF (Docs no longer allowed for it, or Google disconnected): Co says so
   // (rule 6, never a silent downgrade), and never "they asked for a Google Doc" when this time they didn't.
   const docBecamePdf = !!inPlace && !r0.sentOk.some((x) => x.via === "google_docs") && r0.sentOk.length > 0;

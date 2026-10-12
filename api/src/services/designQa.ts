@@ -180,7 +180,8 @@ export function contentFindings(medium: QaMedium, data: any): QaFinding[] {
       const n = i + 2;
       const total = words(s.headline) + (s.bullets ?? []).reduce((a: number, b: string) => a + words(b), 0);
       if ((s.bullets ?? []).length > 4) out.push({ rule: "one_idea", where: `slide ${n}`, detail: `${s.bullets.length} points on one slide; keep it to the one idea and at most 4 points, or split it`, fix: "co", slide: n });
-      else if (total > 70) out.push({ rule: "one_idea", where: `slide ${n}`, detail: `${total} words on one slide; cut it to the one idea (under 70 words)`, fix: "co", slide: n });
+      // The schema allows 4 points of up to 160 characters (about 110 words with the headline): QA asks for less only past that.
+      else if (total > 110) out.push({ rule: "one_idea", where: `slide ${n}`, detail: `${total} words on one slide; cut it to the one idea (under 110 words)`, fix: "co", slide: n });
       if (words(s.headline) > 14) out.push({ rule: "one_idea", where: `slide ${n}`, detail: "the headline is a paragraph; say the one point in under 14 words", fix: "co", slide: n });
     });
   }

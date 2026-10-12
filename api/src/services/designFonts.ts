@@ -73,7 +73,7 @@ export function resolveFont(asked: string, kindHint: "serif" | "sans" = "sans", 
   const cand = titleCase(raw);
   if (cand && FAMILY_RE.test(cand) && unknownOnGoogle(cand)) return { family: cand, source: "google", kind: kindHint, asked: raw, note: null };
   const fb = DEFAULT_FONTS[kindHint];
-  return { ...fb, asked: raw, note: raw ? `${titleCase(raw)} isn't a font Co can load, so it's set in ${fb.family}.` : null };
+  return { ...fb, asked: raw, note: raw ? `${titleCase(raw)} isn't one I can load, so it's set in ${fb.family}.` : null };
 }
 
 // Whether Google Fonts serves a family (checked once per name, cached). Network: a reply path only, never layer 1.

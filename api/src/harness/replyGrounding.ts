@@ -256,7 +256,7 @@ export async function gatherReplyFacts(
     : [];
   if (readAsked.length) {
     const { confirmLine, foldSignals } = await import("../services/designSystem.js");
-    const line = confirmLine(foldSignals(readAsked.map((p) => ({ ...p, confirmed: true })), "professional").tokens);
+    const line = confirmLine(foldSignals(readAsked.map((p) => ({ ...p, confirmed: true })), readAsked[0].context).tokens);
     addInstruction(rf, `You checked the look you read from their image with them ("${line}"). This message answers it: build the deck now with makeDeck, readConfirmed true if they agreed (false if they didn't, with taste for what they want), and a brief from everything they told you about the deck. No more questions first; anything you asked about the content that they didn't answer, write the deck without.`);
   } else if (deckAsked) addInstruction(rf, "You already asked your one question about the deck they want. If this message answers it or still wants the deck, build it now with makeDeck from what you have (pass a brief if you don't have slides): no more questions first. If they haven't said anything about the look, it's clean and minimal.");
   // They're asking for a deck and Co hasn't asked its one question yet: the deck tool decides whether a question is needed and asks

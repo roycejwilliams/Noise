@@ -123,6 +123,9 @@ export function foldSignals(signals: DesignSignal[], context: DesignContext, now
   const usable = signals.filter((s) => s.source !== "reference" || s.confirmed);
   const tokens: Tokens = {};
   const from: DesignSystem["from"] = {};
+  // The signal each token came from: references and font notes are said only for what actually won (review: a turned-down read
+  // still said "from your logo", and a corrected font kept its old note).
+  const winner: Partial<Record<TokenField, DesignSignal>> = {};
   const answered = new Set<TokenField>();
   for (const f of TOKEN_FIELDS) {
     const has = usable.filter((s) => s.values[f] !== undefined);
@@ -134,14 +137,16 @@ export function foldSignals(signals: DesignSignal[], context: DesignContext, now
     if (best) {
       (tokens as any)[f] = best.values[f];
       from[f] = best.source;
+      winner[f] = best;
     }
   }
   // "Don't care" counts only when nothing newer in this context says otherwise.
   const latest = [...usable].filter((s) => s.context === context || !usable.some((u) => u.context === context)).sort((a, b) => b.at.getTime() - a.at.getTime())[0];
   const dontCare = !!latest?.values.dontCare && Object.keys(tokens).length === 0;
   const pending = signals.filter((s) => s.source === "reference" && !s.confirmed).sort((a, b) => b.at.getTime() - a.at.getTime());
-  const references = [...new Set(usable.filter((s) => s.ref).sort((a, b) => b.at.getTime() - a.at.getTime()).map((s) => s.ref!))].slice(0, 5);
-  const fontNotes = [...new Set(usable.filter((s) => s.fontNotes?.length && (s.values.display || s.values.body)).flatMap((s) => s.fontNotes!))].slice(0, 2);
+  const won = [...new Set(Object.values(winner))] as DesignSignal[];
+  const references = [...new Set(won.filter((s) => s.source === "reference" && s.ref).sort((a, b) => b.at.getTime() - a.at.getTime()).map((s) => s.ref!))].slice(0, 5);
+  const fontNotes = [...new Set([winner.display, winner.body].filter((s): s is DesignSignal => !!s).flatMap((s) => s.fontNotes ?? []))].slice(0, 2);
   return { context, tokens, from, answered: dontCare ? new Set(TOKEN_FIELDS) : answered, dontCare, references, pending, fontNotes };
 }
 
@@ -305,7 +310,8 @@ export async function recordSignal(userId: string, s: { context: DesignContext; 
   if (!Object.keys(values).length) return null;
   const { rows } = await db.query(
     `INSERT INTO member_design_signals (owner_user_id, context, source, vals, quote, ref, confirmed, font_notes, asset_n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-    [userId, s.context, s.source, JSON.stringify(values), s.quote ? s.quote.slice(0, 300) : null, s.ref ? s.ref.slice(0, 120) : null, s.source === "reference" ? !!s.confirmed : true, JSON.stringify((s.fontNotes ?? []).slice(0, 3)), s.assetN ?? null],
+    // A ref is Co's own label for a reference it read ("your logo"); a stated taste's inspiration is in their quote, in their voice.
+    [userId, s.context, s.source, JSON.stringify(values), s.quote ? s.quote.slice(0, 300) : null, s.ref && s.source === "reference" ? s.ref.slice(0, 120) : null, s.source === "reference" ? !!s.confirmed : true, JSON.stringify((s.fontNotes ?? []).slice(0, 3)), s.assetN ?? null],
   );
   return rows[0] ? Number(rows[0].id) : null;
 }
@@ -339,11 +345,14 @@ export async function loadSignals(userId: string): Promise<DesignSignal[]> {
 // Their design system for a context. The older saved taste (designTaste.ts) reads as a stated signal in both contexts.
 export async function loadDesignSystem(userId: string, context: DesignContext, now: Date = new Date()): Promise<DesignSystem> {
   const signals = await loadSignals(userId).catch(() => [] as DesignSignal[]);
-  const legacy = await (await import("./designTaste.js")).loadDesignTaste(userId).catch(() => null);
+  // The older saved taste only until they've said something about the look in the new system (it has no context, so it reads once,
+  // as this context's, never as two signals; review of the design system PR). Reference reads alone don't replace it.
+  const said = signals.some((s) => s.source !== "reference");
+  const legacy = said ? null : await (await import("./designTaste.js")).loadDesignTaste(userId).catch(() => null);
   if (legacy) {
     const t = legacy.taste;
     const values = cleanTokens({ mood: t.dontCare ? undefined : t.mood, background: t.colors.background, text: t.colors.text, accent: t.colors.accent, type: t.type, dontCare: t.dontCare });
-    for (const c of ["professional", "personal"] as const) signals.push({ context: c, source: "stated", values, quote: t.quote, ref: t.inspo, confirmed: true, askedAt: null, at: legacy.at });
+    signals.push({ context, source: "stated", values, quote: t.quote, ref: null, confirmed: true, askedAt: null, at: legacy.at });
   }
   // Pending reads expire: an unanswered confirm from yesterday never blocks today's deck.
   const fresh = signals.filter((s) => s.source !== "reference" || s.confirmed || now.getTime() - s.at.getTime() < DESIGN_LIMITS.pendingHours * 3600_000);
@@ -356,7 +365,7 @@ export async function markReadAsked(userId: string, id: number): Promise<void> {
 }
 // They said no to it: the read carries nothing from now on (the row stays, as the record that it was read and turned down).
 export async function dismissRead(userId: string, id: number): Promise<void> {
-  await db.query(`UPDATE member_design_signals SET confirmed = true, vals = '{}'::jsonb WHERE id = $1 AND owner_user_id = $2 AND source = 'reference'`, [id, userId]);
+  await db.query(`UPDATE member_design_signals SET confirmed = true, vals = '{}'::jsonb, ref = NULL WHERE id = $1 AND owner_user_id = $2 AND source = 'reference'`, [id, userId]);
 }
 // They answered it: the read is part of their design system from now on.
 export async function confirmRead(userId: string, id: number): Promise<void> {

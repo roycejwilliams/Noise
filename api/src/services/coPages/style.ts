@@ -23,8 +23,10 @@ export type DeckStyle = {
   gradient?: boolean;
   density?: Density;
   titleLayout?: TitleLayout;
+  // Whose look this is, professional or personal (services/designSystem.ts), so a change to it reads the same context.
+  context?: "professional" | "personal";
 };
-export type StyleExtras = Pick<DeckStyle, "display" | "body" | "accent2" | "gradient" | "density" | "titleLayout">;
+export type StyleExtras = Pick<DeckStyle, "display" | "body" | "accent2" | "gradient" | "density" | "titleLayout" | "context">;
 
 // Each mood's own pairing: the default when they named no colors, and the fallback when theirs wouldn't read. "minimal" is the
 // default when they don't care (Royce: "If they don't care, default to clean and minimal").
@@ -75,9 +77,10 @@ export function extrasFrom(x: Record<string, unknown> | null | undefined): Style
   if (x.gradient === true && out.accent2) out.gradient = true;
   if (DENSITIES.includes(x.density as Density)) out.density = x.density as Density;
   if (TITLE_LAYOUTS.includes(x.titleLayout as TitleLayout)) out.titleLayout = x.titleLayout as TitleLayout;
+  if (x.context === "professional" || x.context === "personal") out.context = x.context;
   return out;
 }
-export const STYLE_KEYS = ["mood", "background", "text", "accent", "type", "display", "body", "accent2", "gradient", "density", "titleLayout"] as const;
+export const STYLE_KEYS = ["mood", "background", "text", "accent", "type", "display", "body", "accent2", "gradient", "density", "titleLayout", "context"] as const;
 
 // Pure: the ink that reads on every stop of a field (a solid color or both ends of a gradient), at least 4.5:1 when one does.
 export function inkOn(stops: string[], prefer: string[]): string {
@@ -90,7 +93,7 @@ export function inkOn(stops: string[], prefer: string[]): string {
 // The gate's half for the extras (deck.ts and schema.ts): each one present must be well formed, else it's refused by name.
 export function checkExtras(st: Record<string, unknown>, problems: string[]): StyleExtras {
   const got = extrasFrom(st);
-  for (const k of ["display", "body", "accent2", "density", "titleLayout"] as const) if (st[k] !== undefined && st[k] !== null && got[k] === undefined) problems.push(`style.${k} isn't one Co can use`);
+  for (const k of ["display", "body", "accent2", "density", "titleLayout", "context"] as const) if (st[k] !== undefined && st[k] !== null && got[k] === undefined) problems.push(`style.${k} isn't one Co can use`);
   if (st.gradient !== undefined && st.gradient !== false && !got.gradient) problems.push("style.gradient needs a second color (accent2)");
   return got;
 }
