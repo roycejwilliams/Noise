@@ -8,6 +8,8 @@
 // runs its dark photographs; and a centered serif sign-off. Built from Co's own brand only (services/emailDesign.ts EMAIL_COLORS,
 // the approved Figma email set): Fraunces and Satoshi, ink, maroon, gold, cream. No photographs: the page carries no images. Inline
 // CSS, no scripts. The footer ("Made by Co", as of) is how Co travels when the page is shared with non-members.
+// Design audit (2026-10-12): without a cover photo the band is a slim strip (with their logo, a short band for it), never an empty
+// half screen, and the title is said once, in the opening, its last two words held together.
 import { EMAIL_COLORS, escapeHtml } from "../emailDesign.js";
 import type { Block, CoPageData, ComparisonOption, LinkItem } from "./schema.js";
 import { contrast, inkOn, type DeckStyle } from "./style.js";
@@ -112,7 +114,9 @@ const CREAM = C.cream;
 // onto it: their background is the paper, their text the ink, their accent the cover and the small accents, and the dark band is
 // their text color with their background on it (contrast already checked by styleFrom).
 export type Palette = { paper: string; body: string; ink: string; muted: string; soft: string; line: string; gold: string; maroon: string; band: string; bandText: string; bandSoft: string; bandLine: string; coverTop: string; coverBottom: string; coverText: string; serif: string; sans: string };
-export const CO_PALETTE: Palette = { paper: CREAM, body: C.body, ink: C.ink, muted: C.muted, soft: C.soft, line: C.line, gold: C.gold, maroon: C.maroon, band: INK_BAND, bandText: CREAM, bandSoft: "#E9E3DA", bandLine: "rgba(239,236,230,0.16)", coverTop: COVER_TOP, coverBottom: COVER_BOTTOM, coverText: CREAM, serif: SERIF, sans: SANS };
+// Labels in muted and the section numbers read at 4.5:1 on the cream (design audit: Co's own muted and gold labels sat near 3:1).
+const CO_LABELS = `.num{color:${C.maroon}}.band .num{color:#E9E3DA}`;
+export const CO_PALETTE: Palette = { paper: CREAM, body: C.body, ink: C.ink, muted: "#6E6159", soft: C.soft, line: C.line, gold: C.gold, maroon: C.maroon, band: INK_BAND, bandText: CREAM, bandSoft: "#E9E3DA", bandLine: "rgba(239,236,230,0.16)", coverTop: COVER_TOP, coverBottom: COVER_BOTTOM, coverText: CREAM, serif: SERIF, sans: SANS };
 // Pure: a hex color a share of the way toward another (0 = a, 1 = b).
 function mix(a: string, b: string, t: number): string {
   const ch = (h: string, i: number) => parseInt(h.slice(i, i + 2), 16);
@@ -137,7 +141,8 @@ export function paletteFor(st: DeckStyle | null | undefined): Palette {
   // other with an ink that reads on both.
   const grad = st.gradient && st.accent2 ? [st.accent, st.accent2] : null;
   return {
-    paper: st.background, body: st.text, ink: st.text, muted: `${st.text}99`, soft: `${st.text}BF`, line: `${st.text}26`, gold: st.accent, maroon: st.accent,
+    // muted at 75% of their ink: small labels in it read at 4.5:1 (design audit: 60% left them near 2:1).
+    paper: st.background, body: st.text, ink: st.text, muted: `${st.text}BF`, soft: `${st.text}BF`, line: `${st.text}26`, gold: st.accent, maroon: st.accent,
     band, bandText, bandSoft: `${bandText}E6`, bandLine: `${bandText}29`,
     coverTop: grad ? grad[0] : coverBg, coverBottom: grad ? grad[1] : coverBg, coverText: grad ? inkOn(grad, [st.text, st.background]) : coverText,
     serif: st.display ? fontStack(st.display) : st.type === "sans" ? SANS : SERIF, sans: st.body ? fontStack(st.body) : sans,
@@ -149,7 +154,10 @@ function readableAccents(st: DeckStyle): string {
   const p = paletteFor(st);
   const onBand = contrast(st.accent, p.band) >= 3 ? st.accent : p.bandText;
   const onPaper = contrast(st.accent, st.background) >= 3 ? st.accent : st.text;
-  return `.band .lead{color:${onBand}}.band .b li::before{background:${onBand}}.band .num{color:${onBand}}h1,.gl,section:not(.band) .lead,.on{color:${onPaper}}.num{color:${onPaper}}`;
+  // Small labels (section numbers, group labels) at 4.5:1; large type (the title, leads) at 3:1.
+  const labBand = contrast(st.accent, p.band) >= 4.5 ? st.accent : p.bandText;
+  const labPaper = contrast(st.accent, st.background) >= 4.5 ? st.accent : st.text;
+  return `.band .lead{color:${onBand}}.band .b li::before{background:${onBand}}.band .num{color:${labBand}}h1,section:not(.band) .lead,.on{color:${onPaper}}.gl,.num{color:${labPaper}}`;
 }
 function pageCss(t: Palette): string {
   return `
@@ -158,24 +166,25 @@ html{-webkit-text-size-adjust:100%;color-scheme:light}
 body{margin:0;background:${t.paper};color:${t.body};font-family:${t.sans};font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
 .cover{min-height:min(58vh,520px);min-height:min(58svh,520px);background:linear-gradient(180deg,${t.coverTop},${t.coverBottom});display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px;position:relative;text-align:center}
 .cover-mark{position:absolute;top:22px;left:22px;font-family:${t.serif};font-size:20px;color:${t.coverText};opacity:0.9}
-.cover-title{font-size:13px;letter-spacing:0.38em;text-transform:uppercase;color:${t.coverText};line-height:1.9;max-width:320px;font-weight:500}
+.cover.slim{min-height:0;height:64px;padding:0}
+.cover.logo-only{min-height:220px}
 .cover.photo{background-size:cover;background-position:center;min-height:min(72vh,640px);min-height:min(72svh,640px)}
-.cover-credit{position:absolute;bottom:14px;right:18px;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:${t.coverText};opacity:0.75}
+.cover-credit{position:absolute;bottom:14px;right:18px;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:${t.coverText};opacity:0.75}
 .bleed{margin:24px 0 0;padding:0}
 .bleed img{display:block;width:100%;height:62vw;max-height:560px;object-fit:cover}
-.bleed figcaption{max-width:720px;margin:0 auto;padding:8px 22px 0;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:${t.muted}}
+.bleed figcaption{max-width:720px;margin:0 auto;padding:8px 22px 0;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:${t.muted}}
 section.after-img{padding-top:36px}
 section.band.after-img{margin-top:0}
-.meta{display:flex;justify-content:space-between;padding:12px 22px;font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase;color:${t.muted}}
+.meta{display:flex;justify-content:space-between;padding:12px 22px;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:${t.muted}}
 main{display:block}
 .inner{max-width:720px;margin:0 auto;padding:0 22px}
 .open{max-width:720px;margin:0 auto;padding:44px 22px 8px;display:grid;gap:18px}
-h1{font-family:${t.serif};font-weight:300;font-size:34px;line-height:1.1;letter-spacing:-0.015em;color:${t.maroon};margin:0}
+h1{font-family:${t.serif};font-weight:300;font-size:34px;line-height:1.1;letter-spacing:-0.015em;color:${t.maroon};margin:0;text-wrap:balance}
 .ctx{margin:0;font-family:${t.serif};font-style:italic;font-size:19px;line-height:1.35;color:${t.ink}}
 section{padding:56px 0}
 section.band{background:${t.band};color:${t.bandText};margin:24px 0}
-.num{font-size:10.5px;letter-spacing:0.18em;text-transform:uppercase;color:${t.gold};font-weight:500}
-h2{font-family:${t.serif};font-weight:300;font-size:28px;line-height:1.15;color:${t.ink};margin:10px 0 20px;letter-spacing:-0.01em}
+.num{font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:${t.gold};font-weight:500}
+h2{font-family:${t.serif};font-weight:300;font-size:28px;line-height:1.15;color:${t.ink};margin:10px 0 20px;letter-spacing:-0.01em;text-wrap:balance}
 .band h2{color:${t.bandText}}
 .t{margin:0 0 18px;font-size:16.5px}
 .band .t{color:${t.bandSoft}}
@@ -195,30 +204,29 @@ section:not(.band) .lead{color:${t.maroon}}
 .opt h4{font-family:${t.serif};font-weight:300;font-size:26px;line-height:1.15;color:${t.ink};margin:0 0 14px}
 .opt dl{margin:0}
 .f{padding:9px 0;border-top:1px solid ${t.line}}
-.f dt{font-size:10px;letter-spacing:0.16em;text-transform:uppercase;color:${t.muted};line-height:1.4}
+.f dt{font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:${t.muted};line-height:1.4}
 .f dd{margin:3px 0 0;color:${t.ink};font-size:15px;line-height:1.45}
 .on{font-family:${t.serif};font-style:italic;font-size:16px;line-height:1.5;color:${t.maroon};margin:14px 0 0}
 .ol{display:inline-block;margin-top:12px;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:${t.muted};text-decoration:none;border-bottom:1px solid ${t.gold}}
 .grp{margin:4px 0 30px}
-.gl{font-size:10.5px;letter-spacing:0.18em;text-transform:uppercase;color:${t.maroon};margin:0 0 8px;font-weight:500}
+.gl{font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:${t.maroon};margin:0 0 8px;font-weight:500}
 .lk{list-style:none;margin:0;padding:0}
 .lk li{padding:6px 0 12px}
 .ln{display:inline;font-family:${t.serif};font-weight:300;font-size:32px;line-height:1.15;color:${t.ink};text-decoration:none;letter-spacing:-0.01em}
 a.ln:hover{color:${t.maroon}}
 .lnote{display:block;margin-top:4px;font-size:14px;line-height:1.55;color:${t.soft};max-width:440px}
 .src{margin-top:16px;padding-top:24px;border-top:1px solid ${t.line}}
-.src h3{font-size:10.5px;letter-spacing:0.18em;text-transform:uppercase;color:${t.muted};font-weight:500;margin:0 0 10px}
+.src h3{font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:${t.muted};font-weight:500;margin:0 0 10px}
 .src ol{margin:0;padding:0 0 0 18px;color:${t.muted};font-size:13px;line-height:1.7}
 .src a{color:${t.soft};text-decoration:none;border-bottom:1px solid ${t.line}}
 .src .h{color:${t.muted}}
 footer{margin:72px auto 0;padding:56px 22px 48px;text-align:center;border-top:1px solid ${t.line};max-width:720px}
 .sign{font-family:${t.serif};font-weight:300;font-size:26px;line-height:1.25;color:${t.ink}}
 .monogram{margin:22px auto 0;font-family:${t.serif};font-size:18px;color:${t.maroon}}
-footer .asof{display:block;margin-top:10px;font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase;color:${t.muted}}
+footer .asof{display:block;margin-top:10px;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:${t.muted}}
 @media (min-width:720px){
-  .cover{min-height:min(64vh,620px)}
   .cover.photo{min-height:min(76vh,720px)}
-  .cover-title{font-size:14px}
+  .cover.logo-only{min-height:260px}
   .open{grid-template-columns:1fr 1fr;gap:40px;padding-top:64px;align-items:start}
   .ctx{text-align:right}
   h1{font-size:40px}
@@ -235,7 +243,11 @@ export const STYLE = pageCss(CO_PALETTE);
 
 // assetBase: where this view serves the member's own images (their logo, a section's picture), relative to the page's address, as
 // for a deck ("<id>/a/" for their link, "<share id>/a/" for a share link).
-export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageUrl: string | null; zone?: string | null; assetBase?: string }): string {
+// Pure: the last two words of a headline kept together (escaped text in, escaped text out), so it never ends on one word alone.
+const keepLastTwo = (escaped: string) => escaped.replace(/\s+(\S+)\s*$/, "&nbsp;$1");
+
+// imageSrc: where an image's bytes come from instead of its address (design QA inlines them, so it measures the real pictures).
+export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageUrl: string | null; zone?: string | null; assetBase?: string; imageSrc?: (ref: { asset?: string; url?: string }) => string | null }): string {
   const d = page.data;
   const desc = ogDescription(d);
   const og = [
@@ -255,8 +267,12 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
   // the page. Decided from the data's shape, never asked of the model.
   const dark = (sec: CoPageData["sections"][number]) => sec.blocks.some((b) => b.type === "bullets" && b.items.some((x) => x.lead));
   const base = o.assetBase ?? `${page.id}/a/`;
+  const assetSrc = (id: string) => o.imageSrc?.({ asset: id }) ?? `${base}${id}`;
+  const urlSrc = (u: string) => o.imageSrc?.({ url: u }) ?? u;
+  // Eager when inlined for the check (lazy images below the fold never load in a screenshot).
+  const loading = o.imageSrc ? "eager" : "lazy";
   const sections = d.sections
-    .map((s, i) => `${s.asset ? `<figure class="bleed"><img src="${e(`${base}${s.asset}`)}" alt="${e(s.heading)}" loading="lazy" decoding="async"></figure>` : s.image ? `<figure class="bleed"><img src="${e(s.image.url)}" alt="${e(s.image.alt)}" loading="lazy" decoding="async"><figcaption>From ${e(hostOf(s.image.sourceUrl))}</figcaption></figure>` : ""}<section class="${dark(s) ? "band" : ""}${s.image || s.asset ? " after-img" : ""}"><div class="inner"><div class="num">${two(i + 1)}</div><h2>${e(s.heading)}</h2>${s.blocks.map(renderBlock).join("")}</div></section>`)
+    .map((s, i) => `${s.asset ? `<figure class="bleed"><img src="${e(assetSrc(s.asset))}" alt="${e(s.heading)}" loading="${loading}" decoding="async"></figure>` : s.image ? `<figure class="bleed"><img src="${e(urlSrc(s.image.url))}" alt="${e(s.image.alt)}" loading="${loading}" decoding="async"><figcaption>From ${e(hostOf(s.image.sourceUrl))}</figcaption></figure>` : ""}<section class="${dark(s) ? "band" : ""}${s.image || s.asset ? " after-img" : ""}"><div class="inner"><div class="num">${two(i + 1)}</div><h2>${keepLastTwo(e(s.heading))}</h2>${s.blocks.map(renderBlock).join("")}</div></section>`)
     .join("");
   const sources = d.sources.length
     ? `<div class="src"><h3>Sources</h3><ol>${d.sources.map((s) => `<li><a href="${e(s.url)}" rel="noopener noreferrer">${e(s.label)}</a> <span class="h">${e(hostOf(s.url))}</span></li>`).join("")}</ol></div>`
@@ -273,12 +289,12 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
 ${og}
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400&display=swap" rel="stylesheet">
 <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500&display=swap" rel="stylesheet">${d.style ? fontLinks([d.style.display, d.style.body].filter((f): f is NonNullable<typeof f> => !!f)).map((h) => `\n<link href="${e(h)}" rel="stylesheet">`).join("") : ""}
-<style>${d.style ? pageCss(paletteFor(d.style)) + readableAccents(d.style) : STYLE}${d.logo ? ".cover-logo{display:block;height:64px;width:auto;max-width:50%;object-fit:contain;margin:0 auto 18px}" : ""}</style>
+<style>${d.style ? pageCss(paletteFor(d.style)) + readableAccents(d.style) : STYLE + CO_LABELS}${d.logo ? ".cover-logo{display:block;height:64px;width:auto;max-width:50%;object-fit:contain;margin:0 auto 18px}" : ""}</style>
 </head>
 <body>
-<div class="cover${d.cover ? " photo" : ""}"${d.cover ? ` style="background-image:linear-gradient(180deg,rgba(38,19,24,0.25),rgba(38,19,24,0.55)),url('${e(d.cover.url)}')" role="img" aria-label="${e(d.cover.alt)}"` : ""}><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(`${base}${d.logo}`)}" alt="${e(d.title)}" decoding="async">` : ""}<div class="cover-title">${e(d.title)}</div>${d.cover ? `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` : ""}</div>
+<div class="cover${d.cover ? " photo" : d.logo ? " logo-only" : " slim"}"${d.cover ? ` style="background-image:linear-gradient(180deg,rgba(38,19,24,0.25),rgba(38,19,24,0.55)),url('${e(urlSrc(d.cover.url))}')" role="img" aria-label="${e(d.cover.alt)}"` : ""}><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${d.cover ? `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` : ""}</div>
 <main>
-<header class="open"><h1>${e(d.title)}</h1><p class="ctx">${e(d.context)}</p></header>
+<header class="open"><h1>${keepLastTwo(e(d.title))}</h1><p class="ctx">${e(d.context)}</p></header>
 ${sections}
 <div class="inner">${sources}</div>
 <footer><div class="sign">Made by Co</div><span class="asof">As of ${e(asOfLine(page.updatedAt, o.zone ?? null))}</span></footer>
