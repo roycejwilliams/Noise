@@ -57,16 +57,37 @@ ${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}
 Return ONLY JSON: {"fails": [{"n": <line number>, "why": "<the hard fact they didn't give, in a few words>"}]}. Empty list when every line passes.`;
 }
 
+// Pure: the judge's answer read strictly, or null when it isn't one. A "fails" list is required (a missing one is not "nothing
+// failed"), and every entry must name a real line by its whole number: an answer pointing past the deck, or at no line, is an
+// answer the check can't trust, so it isn't read as a pass for the lines it skipped.
+export function parseClaimFails(text: string, lineCount: number): { n: number; why: string }[] | null {
+  let out: unknown;
+  try {
+    out = parseModelJson<unknown>(text);
+  } catch {
+    return null;
+  }
+  const fails = (out as { fails?: unknown } | null)?.fails;
+  if (!Array.isArray(fails)) return null;
+  const read: { n: number; why: string }[] = [];
+  for (const f of fails) {
+    const n = (f as { n?: unknown } | null)?.n;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > lineCount) return null;
+    read.push({ n, why: String((f as { why?: unknown }).why ?? "").slice(0, 120) });
+  }
+  return read;
+}
+
 // The lines that add a claim, or null when the check couldn't run.
 // Tried twice before giving up (PR 6: on a call the check timed out and, failing open, let "no free tier, no trials" onto a deck).
+// An answer that doesn't read (parseClaimFails) counts as the check not running: tried again, then null, and the caller makes nothing.
 export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = ""): Promise<{ line: string; why: string }[] | null> {
   if (!lines.length) return [];
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const out = parseModelJson<{ fails?: { n?: number; why?: string }[] }>(await judge(claimsPrompt(lines, theirWords, self, thread)));
-      return (out.fails ?? [])
-        .filter((f) => typeof f?.n === "number" && f.n >= 1 && f.n <= lines.length)
-        .map((f) => ({ line: lines[f.n! - 1], why: String(f.why ?? "").slice(0, 120) }));
+      const fails = parseClaimFails(await judge(claimsPrompt(lines, theirWords, self, thread)), lines.length);
+      if (!fails) continue;
+      return fails.map((f) => ({ line: lines[f.n - 1], why: f.why }));
     } catch {
       continue;
     }
