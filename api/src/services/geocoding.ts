@@ -72,10 +72,14 @@ export async function geocodeCity(city: string, bias?: GeoBias | null): Promise<
     // being enabled on the same key/project doesn't imply Geocoding is too,
     // they're separately toggled). Confirmed working against this key
     // immediately after enabling.
-    const response = await client.geocode({
+    const ask = (address: string) => client.geocode({
       // region: a US bias for a name with nothing else to go on (the club is in the US).
-      params: { address: trimmed, region: "us", key: process.env.GOOGLE_PLACES_API_KEY! },
+      params: { address, region: "us", key: process.env.GOOGLE_PLACES_API_KEY! },
     });
+    let response = await ask(trimmed);
+    // No such place in that state ("Newark, MA" came back as a nearby town): the name as given, never a guess near the bias.
+    const given = String(city ?? "").trim();
+    if (response.data.results?.[0]?.partial_match && given && given !== trimmed) response = await ask(given);
     const location = response.data.results?.[0]?.geometry?.location;
     if (!location) return openMeteoGeocode(trimmed);
 
