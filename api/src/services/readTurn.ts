@@ -65,6 +65,10 @@ export type TurnRead = {
   aboutSent: string | null;
   // They're asking what Co is, what it does, or how to describe it (2026-10-01).
   aboutCo: boolean;
+  // They asked outright for the list of what Co can do ("what can you do", "what are all the things you can help with"):
+  // answered directly and completely from the registry (services/capabilities.ts capabilityListInstruction), never
+  // turned into where their open work stands (item 9, 2026-10-12).
+  asksForList?: boolean;
   // The emoji Co reacts to their message with right away, to show what it's
   // about to do (Royce, 2026-09-29, from Instinct); null for most messages.
   ack: string | null;
@@ -110,8 +114,9 @@ ${priorContext ? `What was already known about them before this conversation: ${
 "emotion": does the latest message carry a real feeling Co should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. Ignore plain logistics, greetings and tone you aren't confident about; most messages have none. If none, null; else {"emotion": "one or two words", "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what it's about, only from what they said", "target": "co" when it's about Co itself (what Co found or didn't, its suggestions, replies, speed or mistakes, like "you keep finding nothing" or "that's not what I asked"), else "life"}.
 "seeking": "solving" only if you're genuinely confident they want a real answer or help deciding right now, not just to be heard (weighing options out loud, stuck on a decision, clearly past venting); ordinary sharing, updates and venting are "none", far more often than not.
 "feedback": each distinct piece of feedback about how Co works or should work in general, the kind of thing the team would change (how it searches, what it sends, how it texts), or anything they ask Co to pass to the team, as one clear sentence the team could act on. Not a correction or disagreement about something Co said in this conversation (a fact, a person, an opinion, how Co described itself): Co just gets that right in its reply, and filing it would turn an ordinary correction into a complaint. [] if none.
-"ack": whether Co should react to their message with an emoji before replying, the way a friend sometimes does. A reaction is communication: it says something about their specific message, so most messages get null, and a follow-up to something they just asked ("well a couple", "go ahead", "anything else?") gets null. Read the emotional register first: sad, frustrated, relieved and celebrating each call for something different, and on bad news or something sad, react only if it says you're with them, never "❤️" or "😂", which read as liking it. Then match the moment: an emoji about what they said beats a generic one (✈️ when they've landed, 🥟 for the dumplings they're eating). Co's usual language, so they learn what it means: "🥂" good news or a win; "❤️" something personal and good that matters to them; "😂" when they're genuinely funny; "👀" something to look at or find; "✍️" something to write; "🤝" something agreed or handed to Co; "🫡" a correction or an instruction taken; "🔥" real news that's genuinely big for them; "👍" a plain okay, never on bad news. Vary it: never the same one as Co's last reaction, and never a generic one when a specific one fits: if nothing fits this exact message, null. Grown and understated, Co is the host of a private club: never rockets, raised hands or confetti.
+"ack": whether Co should react to their message with an emoji before replying, the way a friend sometimes does. A reaction is communication: it says something about their specific message, so most messages get null, and a follow-up to something they just asked ("well a couple", "go ahead", "anything else?") gets null. Read the emotional register first: sad, frustrated, relieved and celebrating each call for something different, and on bad news or something sad, react only if it says you're with them, never "❤️" or "😂", which read as liking it. Then match the moment: an emoji about what they said beats a generic one (✈️ when they've landed, 🥟 for the dumplings they're eating). Co's usual language, so they learn what it means: "🥂" good news or a win; "❤️" something personal and good that matters to them; "😂" when they're genuinely funny; "👀" something to look at or find; "✍️" something to write; "🤝" something agreed or handed to Co; "🫡" a correction or an instruction taken; "🔥" real news that's genuinely big for them; "👍" a plain okay, never on bad news. Vary it: never the same one as Co's last reaction, and never a generic one when a specific one fits: if nothing fits this exact message, null. Grown and understated, the way a private club is: never rockets, raised hands or confetti.
 "about_co": true if they're asking what Co is, what Co does or can do for them, how proactive Co is, or how to describe Co (to them, a friend, an investor); otherwise false.
+"asks_for_list": true only if they ask outright for the list of what Co can do or help with ("what can you do", "what are all the things you can help with", "what else can you do"); false when they ask what Co is, how to describe it, or about something specific.
 "about_sent": if this message is about one specific thing in "Things Co sent them recently" (asking about it, reacting to it), its name exactly as listed; otherwise null.
 "covered_now": topic keys (from the list below) they addressed in this conversation itself, not just in what was known before; [] if none.
 "missing": topic keys not yet covered, counting what was already known.
@@ -158,6 +163,7 @@ export function parseTurnRead(obj: any, sentNames: string[]): Omit<TurnRead, "la
     feedback: (Array.isArray(obj?.feedback) ? obj.feedback : []).filter((f: any) => typeof f === "string" && f.trim()).slice(0, 4).map((f: string) => f.trim().slice(0, 300)),
     aboutSent,
     aboutCo: obj?.about_co === true,
+    asksForList: obj?.asks_for_list === true,
     ack: mode === "small_talk" ? null : parseAck(obj?.ack),
     coverage: Array.isArray(obj?.missing) ? { missing_topics: topicList(obj.missing), fresh_topics: topicList(obj?.covered_now), ready_to_summarize: false } : null,
   };
@@ -187,6 +193,7 @@ export async function readTurn(
 // earlier reply said (2026-10-01: after Co called its moat "not event
 // facilitation", it kept saying so). The bad reply isn't quoted; quoted bad
 // examples get copied.
+// Not for an outright request for the list of what Co can do: that one gets the whole list (capabilityListInstruction).
 export const ABOUT_CO_INSTRUCTION = "They're asking what you are or what you'll do for them. If they have something open with you (a search, a task, a goal in your notes), your first words are where it stands: what you've found, what's unconfirmed, and your next move. Start with the goal by name, the way \"Your venue search: ...\" does, not with a rating of yourself; the state is the proof. Otherwise one sentence at most, in fresh words, about something concrete you'd do for them; let what you do show the rest. Never say you get to know them the way a person would, or anything close to it. If an earlier reply in this conversation put it differently, that reply was wrong; don't repeat it.";
 
 // Their feedback, as a reminder for Co to save each piece (the tool decides; nothing is vetoed).

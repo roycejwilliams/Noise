@@ -38,6 +38,11 @@ export type Ability = {
   // Only for the team (users.mo_approver): left out of the sheet and the tool
   // map for everyone else, so a member never hears of it (services/extensions.ts).
   teamOnly?: boolean;
+  // Also runs on a phone call (services/callTools.ts takes its call toolset from these entries, so the call
+  // briefing's list and the tools enabled on a call are the same list). Every tool runs by text.
+  onCall?: true;
+  // An ability without a tool that also works on a call (talking itself). Tool abilities use onCall.
+  surfaces?: Surface[];
 };
 
 // Co's calling line is a different number from the one it texts from
@@ -86,6 +91,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "search_events",
     can: "Co can look up events itself: its own Co events and the public event feed for a city, for the days they asked about, then judge which fit.",
+    onCall: true,
     tool: "searchEvents",
     limits: { perTurn: 3 },
     use: "Look up events in a place and time window: Co's own events first, then the public Luma feed. Use it when they want something to go to (\"anything this weekend?\", \"AI events Thursday\"). Put `when` in their own words (\"this weekend\", \"Oct 10\") so the dates come out right, and `city` when they named one. You get back real events with their details, closest to what you asked first, plus openings (programs, grants, open calls) Co's daily search already found and checked for them; nothing is sent. They're candidates, not answers: judge each against what they asked and who they are, and share only the ones that genuinely fit. The public feed is a short curated list (often a few events a day), so when it comes back thin, try webSearch for the same thing before telling them nothing's on.",
@@ -136,6 +142,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_page",
     can: "Co can make them a page: a plan with a few parts, options side by side, or a set of places with their links, at a private link only they get. It can change it in conversation (same link) and take it down when they ask.",
+    onCall: true,
     tool: "makePage",
     limits: { perTurn: 1, perDay: 4 },
     use: "You pick the format, never them (never ask \"a page or a PDF?\"): one fact or a short answer is a text; a plan with several parts, options to compare, or a set of places with links is a page (makePage); a file to download, print or attach is a PDF (writeDocument); a Google Doc only when they ask for one. A page goes as ONE text, your line saying what you made plus its link, and nothing about its contents in the chat: the page holds them. If their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link. Build it only from what they told you and what you read for them. It takes their look the way a deck does: their saved taste applies on its own, or pass taste when they describe the look now (their exact words); never ask about taste for a page. Images they sent are their image #N in what you see (the number is only for your tools; never say it to them): their logo on the cover, a picture of theirs in the section it belongs to, only their own. They name images by what they show ('the studio photo', 'take the logo off'); match that to the description and pass its number, or 0 to take one off.",
@@ -143,6 +150,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_page_update",
     can: "Co can change a page it made for them; the link stays the same.",
+    onCall: true,
     tool: "updatePage",
     limits: { perTurn: 1 },
     use: "When they ask for a change to a page you made (\"swap the Friday dinner\"), write the whole new version with updatePage and say in a few words what changed. Never send the page again or summarize it.",
@@ -150,6 +158,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_page_take_down",
     can: "Co can take down a page it made for them; the link stops opening and what was on it is deleted.",
+    onCall: true,
     tool: "takeDownPage",
     limits: { perTurn: 2 },
     use: "When they ask you to take a page or a deck down or delete it, take it down and say so in a few words. \"Stop sharing it\" is stopSharing when it has a share link; it doesn't take their own copy down.",
@@ -165,6 +174,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_artifact_keep",
     can: "Co can keep a page or deck it made for them: for good when they say \"keep this\", or 90 more days when they say \"renew\". Otherwise they last 90 days from their last change, and Co tells them before one they've been using expires.",
+    onCall: true,
     tool: "keepArtifact",
     limits: { perTurn: 2 },
     use: "When they say keep it (for good) or renew it (90 more days), including a one-word reply to Co's expiry notice. Say in a few words how long it now stays.",
@@ -172,6 +182,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_artifact_share",
     can: "When they ask, Co can make a separate view-only link to a page or deck they can send to someone (an investor, a cofounder), and stop it any time they say; their own link stays theirs.",
+    onCall: true,
     tool: "shareArtifact",
     limits: { perTurn: 1, perDay: 6 },
     use: "Only when they explicitly ask to share or send it to someone, in this message. Never offer or make one on your own. Copy their asking words exactly. The link goes as one text with your line.",
@@ -179,6 +190,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_images_delete",
     can: "Co keeps the photos they text (for their decks and pages) and deletes them whenever they ask: all of them or by number.",
+    onCall: true,
     tool: "deleteImages",
     limits: { perTurn: 2 },
     use: "When they ask you to delete or forget the photos or images they sent (all, or specific ones they describe, like \"the photo of my ID\"): match what they describe to the images you see and pass those numbers. Say in a few words they're gone, by what they showed, never by number.",
@@ -186,6 +198,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_artifact_reset_link",
     can: "If they forwarded their own link to a page or deck and want it back, Co can give them a fresh link; the old one and any share links stop opening.",
+    onCall: true,
     tool: "resetLink",
     limits: { perTurn: 1, perDay: 4 },
     use: "When they want their own link to stop working (\"I sent my link to the wrong person\", \"make my link private again\", \"reset the link\"). The new link goes as one text with your line. A share link they made is stopSharing instead.",
@@ -200,6 +213,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_artifact_stop_sharing",
     can: "Co can stop a share link from opening, any time they ask; their own link keeps working.",
+    onCall: true,
     tool: "stopSharing",
     limits: { perTurn: 2 },
     use: "When they ask to stop sharing, unshare, or turn off the link they sent someone. Say in a few words the shared link no longer opens and theirs still does.",
@@ -208,6 +222,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_deck",
     can: "Co can make them a slide deck (a pitch deck, a talk, a plan to present): a title slide and slides of a headline and a few points, at a private link only they get, designed from their own taste. It can change it in conversation (same link) and take it down when they ask.",
+    onCall: true,
     tool: "makeDeck",
     // Three a turn and eight a day: a refused line is rewritten, never the reason a deck can't be made (live, 2026-10-11: Royce's
     // "descriptive slide deck" hit the old limit of 3 after refusals and got a non-answer).
@@ -224,6 +239,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_inspo_pinterest",
     can: "Co can read a public Pinterest board they send for the look of a deck or page (its pins and colors). A board that needs a Pinterest login, Co can't open, and says so.",
+    onCall: true,
     tool: "readInspo",
     limits: { perTurn: 2, perDay: 10 },
     use: "When they send a Pinterest board link for the look (\"this is the vibe\", or with a deck or page ask). Read it: its look comes from its pins' own pictures. For a deck, call makeDeck next: it hands back the one confirm line to send, and the deck is built when they answer (readConfirmed). For a deck you already made, the board's look can only change the whole deck (updateDeck with taste), never one slide. For a page, build with taste from what you read. If it can't be read, say plainly it needs a login or isn't public, and ask them to describe the look or pick a look by name; never guess.",
@@ -231,6 +247,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "co_deck_update",
     can: "Co can change a deck it made for them; the link stays the same. A deck has one look for every slide: its colors and type change for the whole deck, never for one slide.",
+    onCall: true,
     tool: "updateDeck",
     limits: { perTurn: 3 },
     use: "When they ask for a change to a deck you made (\"slide 3 is weak\", \"make it darker\"), write the whole new version with updateDeck and say in a few words what changed. Never send the deck again or summarize it. A new slide goes before the closing ask or call to action unless they say where. A deck has one look: never offer colors or a style for one slide only; if they want a board's or image's look on just one slide, say plainly the look applies to the whole deck and ask whether to change the whole deck or keep it as is. If a change does only part of what they asked, name the part it doesn't do in notDone.",
@@ -238,6 +255,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "write_document",
     can: "Co can write them a document, a titled page with headings and bullets (where they and a cofounder are landing, a summary of a conversation, a plan for a goal), and send it as a PDF in this conversation (asked for it again, the same version goes again; asked for a change, the next version goes with one line saying what changed; never again on Co's own), or, for a venue brief, a partnership plan or an event readout, when they ask for a Google Doc and have connected Google with Docs allowed (open to a few members for now), save it as an editable Google Doc in their own Drive and text the link. The Doc is theirs alone; they share it from the Doc themselves. It only writes it when they ask or say yes to Co's offer, and it goes only to them. Co can't make spreadsheets or slides as a document (a slide deck is makeDeck), and can't send it to anyone else for them.",
+    onCall: true,
     tool: "writeDocument",
     // 8 a day (was 3, 2026-10-08): a fourth explicit "send it again" was refused as "already done today". The receipts are the guard
     // against sending the same artifact twice (deliveryReceipts.ts); this only bounds how many new documents go in a day.
@@ -255,6 +273,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "research_brief",
     can: "When they ask Co to find venues for an event (\"find venues for my launch\", \"what are my options for a dinner for 40\") or say yes to that offer, Co researches them in the background and sends a venue brief as a document: each option with its rate, minimum, capacity and, for a date they gave, whether it's open, every line with its source link and when it was checked, and anything it couldn't confirm shown as unknown. Options are held to a high-end bar, built from what Co knows about them (city, size, date, budget, and what they liked or passed on before), and ordered by what they've said yes and no to. It comes as a PDF, or as a Google Doc when they ask for one and it's open to them. Asked again, it re-checks every option before re-sending.",
+    onCall: true,
     tool: "researchBrief",
     limits: { perTurn: 1, perDay: 2 },
     confirm: "their_yes",
@@ -263,6 +282,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "find_reaction",
     can: "When they react to an option from a brief Co sent (\"the second one looks great\", \"not that one\", \"nothing like that please\"), Co notes it, and it shapes which options Co puts first next time.",
+    onCall: true,
     tool: "findReaction",
     limits: { perTurn: 6, perDay: 30 },
     use: "They reacted to an option from a brief you sent them: call this once per option they named, with its number or name, yes / no / not_like_that, and what they said. Only for an option you actually sent; never say you noted it. It hands back that option's sourced details and the next step: on a yes, carry it toward the booking yourself (offer to draft the inquiry, then follow it to an answer as a task), resting only on those details.",
@@ -285,6 +305,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "offer_document",
     can: "When someone is stuck, vague or circling on their team or a goal, Co can offer, once, to put it together as a document for them.",
+    onCall: true,
     tool: "offerDocument",
     limits: { perTurn: 1, perDay: 1 },
     use: "Call this when you are about to offer to write something up as a document for them (they seem stuck, vague or circling on their team or a goal, and you were given the moment). It checks the moment is allowed and records that you offered, so you never offer twice. Then make the offer yourself, in your own words, as one light line that fits what they just said (something like asking if they'd want you to put it together in a doc for them); don't use a stock phrase, and don't write the document until they say yes. If it says not now, don't offer.",
@@ -292,6 +313,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "working_notes",
     can: "Co keeps working notes for what it's finding for them across texts, so a new detail picks up where the last text left off.",
+    onCall: true,
     tool: "updateNotes",
     limits: { perTurn: 3 },
     use: "Update your working notes for what you're finding for them: what they want, the constraints (place, date, headcount, budget, hours), the shortlist, what they picked, contacts, and what's next. Do it when something changes, so the next text picks up where this one left off instead of starting over. Code also saves the basics from each search, so you don't need to copy those.",
@@ -299,6 +321,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "open_loops",
     can: "Co tracks everything it's carrying for them as an open loop with where it stands (waiting on a reply, something unconfirmed, a decision that's theirs), and comes back when one of them moves.",
+    onCall: true,
     tool: "updateLoop",
     limits: { perTurn: 3 },
     use: "Set where one of their open loops stands when it changes: waiting_on_reply (you or they are waiting to hear from someone), unconfirmed (a price, date or availability you haven't confirmed), decision_needed (the next step is their call), done, or dropped (they let it go). Add the detail in a few words, so what you report when they ask how things are going is true. A loop that moves is a reason to speak.",
@@ -313,6 +336,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "task_start",
     can: "When they ask for something that takes more than one reply (a venue by Friday, sponsors lined up, getting ready for a pitch, a few options compared), Co takes it on as its own task: it writes the steps, works on it on its own over the following days, texts them when there's something real, and decides when to look again. Co can truthfully say when it'll get back to them.",
+    onCall: true,
     tool: "startTask",
     limits: { perTurn: 1, perDay: 3 },
     use: "Take on something that needs work over more than this one reply: when they ask you to do it (a goal they've stated with a date, like a venue by Friday, counts: they've asked you to get it done), or you offer and they say yes. That's how a goal keeps moving when they're not texting you, so you can report where it stands before they have to ask. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly what you'll do and when you'll get back to them, but never what you'll find or a result you can't be sure of (“I'll look through venues and text you Thursday”, not “I'll get you real options by Friday”). For a search that just needs repeating, saveAsk is enough. A question about how something is going (\"any updates on the venue?\") isn't a new task: your open tasks are in what you know, so answer from them. Explicit watch language in their message right now (\"let me know when...\", \"keep an eye out for X\", \"tell me if...\", or a yes to your offer to watch) is a look-out: startTask with lookout: true, never saveAsk; what you send for it is something they asked for.",
@@ -329,6 +353,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "task_update",
     can: "Co keeps its tasks current as they tell it things: a step done, a new detail, a change of plan or timing.",
+    onCall: true,
     tool: "updateTask",
     limits: { perTurn: 2 },
     use: "When they tell you something about one of your open tasks (a detail, a decision, 'push it to next week', 'I found one myself'), write it on the task and, if it changes when you should look next, set that.",
@@ -336,6 +361,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "task_close",
     can: "Co closes a task when it's done or they don't need it anymore.",
+    onCall: true,
     tool: "closeTask",
     limits: { perTurn: 2 },
     use: "Close one of your open tasks when it's done or they say they no longer need it. Then say so plainly.",
@@ -438,6 +464,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "room_taste",
     can: "Co remembers what kind of room they've said they want, or don't, and ranks what it picks for them by it.",
+    onCall: true,
     tool: "noteRoomTaste",
     limits: { perTurn: 1, perDay: 3 },
     use: "When they tell you what kind of room, gathering or crowd they want or are tired of (\"everything feels performative\", \"a room where I can drop my guard\", \"smaller, no pitching\"), note it in their words: what they want and what they don't. It changes what Co picks for them from now on. About rooms in general, not one thing Co sent (that's noteReaction); and never passing it to the team instead of noting it.",
@@ -452,6 +479,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "second_contact",
     can: "Co remembers whether people it introduced them to became real connections: whether they saw or talked with each other again.",
+    onCall: true,
     tool: "noteMetAgain",
     limits: { perTurn: 2 },
     use: "When they tell you they saw or talked with someone you introduced them to again (\"grabbed coffee with Noor again\", \"Ellis and I have a call next week\"), or that they haven't or won't, record it with that person's first name. Their side only: never ask what the other person said, and never tell the other person. Then reply as usual.",
@@ -472,6 +500,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "steer_away",
     can: "Co can stop suggesting a whole kind of thing they don't want, and start again when they change their mind.",
+    onCall: true,
     tool: "steerAwayFrom",
     limits: { perTurn: 2 },
     use: 'When they say they don\'t want a KIND of thing anymore ("no more hackathons", "stop sending me crypto stuff", "I\'m not into big conferences"), save it so Co stops suggesting that kind of thing everywhere. Also use it with undo=true when they say they\'re open to that kind of thing again. Not for turning down one specific event.',
@@ -511,7 +540,7 @@ export const ABILITIES: Ability[] = [
     use: "Send the latest list of what's new in Co (new features, changes), when they ask what's new with Co, what changed, or for updates on Co itself. The list changes as the team ships, so you can't know what's on it without sending it: check it rather than saying nothing's new. Not for news about their own life or an event. It goes out verbatim as its own text.",
   },
   // Handled by their own steps for now.
-  { id: "calls", confirm: "irreversible", can: `Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co: ${callLine()} What Co can't do is call other people for them. So when listing what Co can't do, say it can't call other people for them; calling them is something it does.` },
+  { id: "calls", confirm: "irreversible", surfaces: ["text", "call"], can: `Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co: ${callLine()} What Co can't do is call other people for them. So when listing what Co can't do, say it can't call other people for them; calling them is something it does.` },
   {
     id: "invites",
     can: "Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. Co can text them an invite link to forward.",
@@ -532,6 +561,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "what_co_knows",
     can: "Co can tell them what it knows about them, in plain words, whenever they ask, and they can correct or remove any of it.",
+    onCall: true,
     tool: "whatCoKnows",
     limits: { perTurn: 1 },
     use: "Read everything Co knows about them, grouped, with their own words where Co has them. Call it when they ask what you know about them, what you have on them or what you remember about them, and before you correct or remove something they say is wrong or want forgotten (it gives each item's refs). Then tell them in plain language, short, grouped the way it comes back, in their own words where it gives them, saying 'you' not 'they'; leave out the refs, and end by saying they can correct or remove anything. Only what it returns: never add to it from the conversation.",
@@ -539,6 +569,7 @@ export const ABILITIES: Ability[] = [
   {
     id: "correct_what_co_knows",
     can: "When something Co knows about them is wrong, or they want it gone, Co corrects or removes it right away, everywhere Co uses it: texts, calls, what it looks for and picks, and their pages and decks.",
+    onCall: true,
     tool: "correctWhatCoKnows",
     limits: { perTurn: 2, perDay: 20 },
     confirm: "their_yes",
@@ -607,11 +638,11 @@ export const ABILITIES: Ability[] = [
     get can() {
       return process.env.CO_RELAY === "on"
         ? "Co can pass a message, in their own words, to someone they're already connected to through Co (introduced after both said yes), at most once a day per person. Anything that person sends back comes only if they ask Co to send it. Co can also remind them at a set time to follow up on something they promised someone. Co never contacts anyone on its own, can't reach people they aren't connected to, never says whether someone is a member, and never starts a group text."
-        : "Co can't pass messages to other people or other members yet; anything for someone else has to come from them. Co can remind them later to follow up on something.";
+        : "Co can't pass messages to other people or other members yet; anything for someone else has to come from them. Co can remind them to follow up on something.";
     },
     tool: "followUp",
     limits: { perTurn: 1, perDay: 3 },
-    use: "Only when they ask you to pass something to a specific person, or to remind them later to follow up on something. relay: pass their exact words (copied from what they texted) to the person they named; never add anything about them or anyone else, and never relay unless they asked. From the other side, when someone who got a message from them asks you to send something back, relay that in their own words too. remind_me: a reminder to them at the day and time they gave. Then say plainly what happened, using the tool's note.",
+    use: "Only when they ask you to pass something to a specific person, or to remind them to follow up on something. relay: pass their exact words (copied from what they texted) to the person they named; never add anything about them or anyone else, and never relay unless they asked. From the other side, when someone who got a message from them asks you to send something back, relay that in their own words too. remind_me: a reminder to them at the day and time they gave. Then say plainly what happened, using the tool's note.",
   },  // Google Calendar and Gmail, read-only (services/googleAuth.ts,
   // services/googleData.ts, 2026-09-28). Off until the Google client exists,
   // and what Co says it can do follows that.
@@ -696,4 +727,88 @@ export function toolUse(tool: string): string {
 
 export function abilityForTool(tool: string): Ability | undefined {
   return ABILITIES.find((a) => a.tool === tool);
+}
+
+// ---------- The list a member hears (item 9, 2026-10-12: the call briefing kept its own "complete" list that left out decks,
+// pages, documents and what Co knows while the call had those tools, and coVoice turned "what can you do" into open-work
+// status). One list, from the entries above. Each line has a main ability and shows on a surface only while that ability is
+// live there (a tool that runs on a call has onCall; everything runs by text), so every line on a call is doable on that
+// call. A line has its own wording per surface: `call` is what it says on a call, "by text" (the default) lists it as
+// something Co does in their texts, and null leaves it off a call. Lines are what Co can do, in plain words, about "them";
+// Co says them in its own voice.
+export type Surface = "text" | "call";
+type MenuGroup = "Finding things" | "Working on something over days" | "Making things" | "People" | "Being there";
+type MenuLine = { group: MenuGroup; main: string; text: string | null; call?: string | "by text" | null; byTextOnCall?: string };
+const MENU: MenuLine[] = [
+  { group: "Finding things", main: "search_events", text: "find events for the days they ask about, Co's own first", call: "find events for the days they ask about, Co's own first" },
+  { group: "Finding things", main: "web_search", text: "search the web and X for venues, vendors, programs and people" },
+  { group: "Finding things", main: "save_ask", text: "keep watch for what they want found and text when something fits; list it, or stop suggesting a kind of thing", byTextOnCall: "keep watch for what they want found and text when something fits, and list it" },
+  { group: "Finding things", main: "steer_away", text: null, call: "stop suggesting a kind of thing they don't want" },
+  { group: "Finding things", main: "list_sent", text: "recap what it sent and resend a link" },
+  { group: "Working on something over days", main: "task_start", text: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds", call: "take on something that needs more than one reply as its own task" },
+  { group: "Working on something over days", main: "research_brief", text: "research venues for an event and send a brief of the options", call: "research venues for an event and send a brief" },
+  { group: "Working on something over days", main: "draft_email", text: "write an email for them to send themselves" },
+  { group: "Working on something over days", main: "email_plan", text: "plan a day, a night or a trip as a one-page sheet" },
+  { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone Co introduced them to, or remind them to follow up" : "remind them to follow up on something"; } },
+  { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", call: "make a private page (a plan, options side by side) and change it or take it down" },
+  { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", call: "make a slide deck from their taste or a Pinterest board, and change it" },
+  { group: "Making things", main: "co_artifact_share", text: "share a view-only link to a page or deck, stop it, or keep it for good", call: "share a view-only link to a page or deck, stop it, or keep it for good" },
+  { group: "Making things", main: "write_document", text: "write a document (a plan, a summary, a write-up from a PDF they sent) and send it", call: "write a document (a plan or a summary) and send it" },
+  { group: "People", main: "co_events", text: "at Co events, tell them who's worth meeting and why" },
+  { group: "People", main: "introductions", text: "introduce them to someone by one email, after both say yes" },
+  { group: "People", main: "outside_events", text: "give a heads-up when another member is going to the same outside event" },
+  { group: "People", main: "invites", text: "send invite links for friends (5 each)" },
+  { group: "People", main: "mo_member_optin", text: "with their yes, have Mo find people outside the club who could help" },
+  { group: "Being there", main: "calls", text: "talk anything through; call them now or at a set time, and take their calls", call: "talk anything through, as long as they like" },
+  { group: "Being there", main: "check_ins", text: "check in every few days, and ask how things went" },
+  { group: "Being there", main: "media", text: "read photos and screenshots, and listen to voice memos", call: null },
+  { group: "Being there", main: "what_co_knows", text: "say what it knows about them, and correct or remove it", call: "say what it knows about them, and correct or remove it" },
+  { group: "Being there", main: "google", get text() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Google to see when they're busy and which emails await replies" : null; } },
+  { group: "Being there", main: "team_feedback", text: "pass feedback to the team", call: null },
+];
+// What Co can't do, for a complete answer (the LIMITS above say it in full).
+const CANNOT = "book, buy or register them for things, find investors or sponsors on demand, contact people for them, or start a group text";
+
+const memberAbility = (a: Ability) => !a.teamOnly && (!isMemberMoAbility(a) || memberMoOn());
+export const liveOn = (a: Ability, surface: Surface) => memberAbility(a) && (surface === "text" || a.onCall === true || !!a.surfaces?.includes("call"));
+
+// The member's list for a surface. On a call, `here` is what this call can do (each line's main ability is live on the call)
+// and `byText` is what Co does in their texts, offered and never done on the line. A line that's text-only by nature (photos,
+// feedback) is left off a call.
+export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; line: string; main: string }[]; byText: string[] } {
+  const byId = new Map(ABILITIES.map((a) => [a.id, a]));
+  const live = (m: MenuLine, s: Surface) => { const a = byId.get(m.main); return !!a && liveOn(a, s); };
+  if (surface === "text") return { here: MENU.filter((m) => m.text && live(m, "text")).map((m) => ({ group: m.group, line: m.text!, main: m.main })), byText: [] };
+  const callWords = (m: MenuLine) => (m.call === undefined ? "by text" : m.call);
+  return {
+    here: MENU.filter((m) => { const w = callWords(m); return w !== null && w !== "by text" && live(m, "call"); }).map((m) => ({ group: m.group, line: callWords(m) as string, main: m.main })),
+    byText: MENU.filter((m) => callWords(m) === "by text" && m.text && live(m, "text")).map((m) => m.byTextOnCall ?? m.text!),
+  };
+}
+// The menu's own check: every ability it names is an entry above (pure; the capability probe runs it).
+export function menuUnknownIds(): string[] {
+  const ids = new Set(ABILITIES.map((a) => a.id));
+  return MENU.map((m) => m.main).filter((id) => !ids.has(id));
+}
+
+// The tools that run on a call, from the entries (services/callTools.ts).
+export function callToolNames(): string[] {
+  return ABILITIES.filter((a) => a.onCall && a.tool && !a.teamOnly).map((a) => a.tool!);
+}
+
+const grouped = (here: { group: MenuGroup; line: string }[]) => {
+  const groups = [...new Set(here.map((h) => h.group))];
+  return groups.map((g) => `${g}:\n${here.filter((h) => h.group === g).map((h) => `- ${h.line}`).join("\n")}`).join("\n");
+};
+
+// By text: they asked outright for the list ("what can you do", "what are all the things you can help with"). Answered
+// directly and completely, never turned into where their open work stands (that's for "what are you", services/readTurn.ts).
+export function capabilityListInstruction(): string {
+  return `They asked for the list of what you can do. Answer that directly and completely, from this list and nothing else, in your own words and first person, grouped the way it is here, a short line each; the one or two that fit what they're after can come first. This is the one reply that can run longer than a few sentences. Don't turn it into where their open work stands, don't cut it to one sentence, and don't pitch or rate yourself. End with what you can't do, in one line: ${CANNOT}.\n${grouped(capabilityMenu("text").here)}`;
+}
+
+// On a call: the list the call briefing carries (services/callBriefing.ts), from the same entries as the call's tools.
+export function callCapabilityList(): string {
+  const m = capabilityMenu("call");
+  return `On this call:\n${m.here.map((h) => `- ${h.line}`).join("\n")}\n\nIn their texts, not on this call (offer it; never do it on the line):\n${m.byText.map((l) => `- ${l}`).join("\n")}`;
 }
