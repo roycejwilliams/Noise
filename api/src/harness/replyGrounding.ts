@@ -1477,10 +1477,16 @@ export function stripUnsupported(draft: string, failed: GateCheck[], opts: { all
   });
   // A sentence that leans on the one just cut goes with it ("The doc isn't made yet. What would unblock it is..." 2026-10-12): it
   // would read orphaned.
-  for (let i = 1; i < sentences.length; i++) if (!kept[i - 1] && kept[i] && LEANS_ON_PREVIOUS.test(sentences[i])) kept[i] = false;
-  return sentences.filter((_, i) => kept[i]).join("").trim();
+  // Only one that clearly points back at it, never a question or a caring line, and never when that would leave nothing.
+  const withDependents = [...kept];
+  for (let i = 1; i < sentences.length; i++) if (!withDependents[i - 1] && withDependents[i] && leansOnPrevious(sentences[i])) withDependents[i] = false;
+  const out = sentences.filter((_, i) => withDependents[i]).join("").trim();
+  return out || sentences.filter((_, i) => kept[i]).join("").trim();
 }
-export const LEANS_ON_PREVIOUS = /^\s*(?:that|this|these|those|it|its|it'?s|which|so|then|but|also|and|because|once|until|what would|what'?s left|the rest|instead|otherwise)\b/i;
+export const LEANS_ON_PREVIOUS = /^\s*(?:what would (?:unblock|fix|change|speed up|help with) (?:it|that|this)|once (?:it|that|this)(?:'s|’s| is| goes| lands)|until (?:it|that|this)\b|the rest\b|otherwise\b)/i;
+export function leansOnPrevious(sentence: string): boolean {
+  return !/\?\s*["')\]]*\s*$/.test(sentence) && LEANS_ON_PREVIOUS.test(sentence);
+}
 
 // A model rewrite is only kept if code confirms it adds nothing new
 // (2026-09-28, Royce: "Rewrites only remove"): a rewrite flipped Co's pick
