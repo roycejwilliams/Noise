@@ -431,6 +431,11 @@ export async function gatherReplyFacts(
   // Cold start (services/coldStart.ts): fewer than two findable interests on file, so a reply may ask one easy question that lets them
   // name something Co could find. New members and existing ones alike, only in a natural exchange, never as outreach.
   if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
+  // Where they live, when nothing on file says (2026-10-12, the door rerun: "moved here" plus the club being in San Francisco
+  // became "around SF" in a reply and "in SF" in a task). The drafter and the claim read both see it as unknown, never assumed.
+  if (opts.turn && !String(opts.turn.knowledge?.identity.city ?? opts.turn.profile?.city ?? "").trim()) {
+    addFact(rf, "unknown", "Where they live: they haven't said, and it isn't on file. The club being in San Francisco doesn't make it their city. Don't name a city or area as theirs or as where you'll look for them; ask if it matters.");
+  }
   // The door (services/theDoor.ts): a new member's first read, once, when Co has heard enough to say it back.
   if (opts.turn?.door) addDoorMoment(rf, opts.turn.door, { firstName: opts.turn.knowledge?.identity.firstName ?? null, emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
   for (const line of ledger.lines) addFact(rf, "did_before", line);

@@ -33,6 +33,10 @@
 //     evening" is covered by it and never opens a second task (services/promises.ts STARTED_WORK).
 //   - No feature switch: the tool exists exactly while the door is open for that member (a Situation in capabilities.ts), the same
 //     way task tools exist only with an open task. No group chats, nothing sent to anyone else.
+//   - Said, not just recorded: the first read counts as given only once a text that went out says it back (settleFirstRead after
+//     the reply). A reply that drops it leaves the door open for the next one, which reuses the same first-look task.
+//   - Their words only: what Co will look for and what it says it understood can't add words they never used, short names
+//     included (SF, NYC, AI). With no city on file, the reply's facts say so (harness/replyGrounding.ts).
 //   - One member only: every read and write is scoped to their own user id.
 //
 // WHAT IT DOESN'T DO, ON PURPOSE: it doesn't rewrite the approved onboarding lines (evals pin them, and the gate and intake already
@@ -115,20 +119,41 @@ export function firstLookAt(now: Date, zone: string | null): { at: Date; words: 
 const FRAMING = new Set(
   "that this these those with from into about your you're youre they them their what when where which while want wants wanting looking look find finding meet meeting people folks person someone some more most just really here there then like have having been being would could should also start starting first still right very kind sort thing things space room rooms around through over you've you'd you'll it's i'll after outside before near".split(" "),
 );
-const words = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+const norm = (t: string) => t.replace(/[’‘]/g, "'").replace(/[^A-Za-z0-9' ]+/g, " ");
+const words = (t: string) => norm(t).toLowerCase().split(/\s+/).filter(Boolean);
+// Short tokens that name something: an acronym (SF, NYC, AI), or a capitalized word that doesn't start a sentence (LA in "around
+// LA"). Short lowercase words are function words and are skipped.
+const namesSomething = (token: string, sentenceStart: boolean) => /[A-Z].*[A-Z]/.test(token) || (/^[A-Z]/.test(token) && !sentenceStart);
+
+// Pure: one word is in a list of words, counting forms of it ("founder" for "founders"). Short words only match whole.
+function sameWordIn(w: string, theirs: string[]): boolean {
+  if (w.length < 4) return theirs.includes(w);
+  const stem = w.slice(0, Math.max(4, w.length - 3));
+  return theirs.some((t) => t.startsWith(stem) || (t.length >= 4 && w.startsWith(t.slice(0, Math.max(4, t.length - 3)))));
+}
+
+// Pure: the words in a line that count as content: 4+ letters and not framing, plus short names (SF, NYC, AI), lowercased.
+function contentWords(line: string): string[] {
+  const out: string[] = [];
+  const raw = line.replace(/[’‘]/g, "'");
+  const re = /[A-Za-z0-9']+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw))) {
+    const token = m[0].replace(/'s$/i, "");
+    const w = token.toLowerCase();
+    const before = raw.slice(0, m.index).trimEnd();
+    const sentenceStart = !before || /[.!?:;]$/.test(before);
+    if (FRAMING.has(w)) continue;
+    if (w.length < 4 ? token.length >= 2 && namesSomething(token, sentenceStart) : true) out.push(w);
+  }
+  return [...new Set(out)];
+}
 
 // Pure: the words in a line that aren't in what they wrote (a word counts when they used it or a form of it: "founder" for
-// "founders"). Short words and framing words are skipped.
+// "founders"). Short lowercase words and framing words are skipped; short names (SF, LA, AI) are not.
 export function wordsNotTheirs(line: string, theirText: string): string[] {
   const theirs = words(theirText);
-  const missing: string[] = [];
-  for (const w of words(line).map((x) => x.replace(/'s$/, ""))) {
-    if (w.length < 4 || FRAMING.has(w)) continue;
-    const stem = w.slice(0, Math.max(4, w.length - 3));
-    const used = theirs.some((t) => t.startsWith(stem) || (t.length >= 4 && w.startsWith(t.slice(0, Math.max(4, t.length - 3)))));
-    if (!used) missing.push(w);
-  }
-  return [...new Set(missing)];
+  return contentWords(line).filter((w) => !sameWordIn(w, theirs));
 }
 
 const clean = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
@@ -200,61 +225,95 @@ export async function theirRecentTexts(userId: string, limit = 12): Promise<stri
   return rows.map((r: any) => String(r.content)).join("\n");
 }
 
+// What a given first read carries until a sent text shows it was said (settleFirstRead).
+export type FirstReadPending = { understood: string; lookFor: string; timed: boolean; taskId: number | null; at: string | null; words: string | null; zone: string | null };
+
 export type FirstReadResult =
-  | { ok: true; timed: true; taskId: number | null; at: string; words: string; fact: string; note: string }
-  | { ok: true; timed: false; fact: string; note: string }
+  | { ok: true; timed: boolean; pending: FirstReadPending; fact: string; note: string }
   | { ok: false; error: string };
 
-// The first read: recorded once, and its first look scheduled as a task when a task could really text them.
+const FIRST_LOOK_GOAL = "First look for them:";
+
+// The first read. Its first look is scheduled as a task when a task could really text them; it counts as given only once a sent
+// text carries the playback (settleFirstRead), so a reply that drops it leaves the door open, and a second call reuses the task
+// instead of opening another.
 export async function giveFirstRead(
   i: FirstReadInput,
   o: { userId: string; message: string; dryRun: boolean; now?: Date; paused: boolean },
 ): Promise<FirstReadResult> {
   const now = o.now ?? new Date();
-  const [{ wordsAreTheirs, startTask }, { memberZone, localStamp }] = await Promise.all([import("./coTasks.js"), import("./memberTime.js")]);
+  const [{ wordsAreTheirs, startTask, openTasks }, { memberZone, localStamp }] = await Promise.all([import("./coTasks.js"), import("./memberTime.js")]);
   const view: DoorView = o.dryRun ? { joinedAt: now, givenAt: null, theirTexts: DOOR.minTheirTexts } : await loadDoor(o.userId);
   const theirText = `${o.message}\n${o.dryRun ? "" : await theirRecentTexts(o.userId).catch(() => "")}`;
   const problem = firstReadProblem(i, { view, now, theirText, wordsAreTheirs });
   if (problem) return { ok: false, error: problem };
+  const understood = clean(i.understood).slice(0, DOOR.maxLine);
   const lookFor = clean(i.lookFor).slice(0, 160);
-  const record = async (proposal: Record<string, unknown>) => {
-    if (o.dryRun) return;
-    const { recordDecision } = await import("../harness/core.js");
-    await recordDecision({ layer: 3, decision: "door.first_read", userId: o.userId, outcome: "act", action: proposal.timed ? "timed" : "untimed", proposal: { understood: clean(i.understood).slice(0, DOOR.maxLine), lookFor, ...proposal } });
-  };
+  const playback = `Open your text with one line that says back what you understood, close to this and in your own voice: "${understood}".`;
 
   // Nothing Co starts on its own can reach them right now, so no time is promised.
   if (o.paused) {
-    await record({ timed: false, why: "unprompted texts are paused" });
     return {
       ok: true,
       timed: false,
-      fact: `Gave them their first read: what Co understood (${clean(i.understood).slice(0, 160)}). No first look was scheduled.`,
-      note: `Recorded. Co can't text them first right now, so don't name a time or promise a later text. Say back what you understood, share one real find if you have it, and tell them plainly they can ask you about ${lookFor} any time.`,
+      pending: { understood, lookFor, timed: false, taskId: null, at: null, words: null, zone: null },
+      fact: `First read: Co is saying back what it understood (${understood.slice(0, 160)}). No first look was scheduled.`,
+      note: `${playback} Co can't text them first right now, so don't name a time or promise a later text. Tell them plainly they can ask you about ${lookFor} any time.`,
     };
   }
 
   // Their real zone, or none: a fallback zone would turn "6pm" into the wrong hour for someone in New York.
   const zone = await memberZone(o.userId);
-  const look = firstLookAt(now, zone);
-  const plan = firstLookTask(i, look, now);
+  // A first look already set by an earlier call whose playback never went out: keep it, never a second task.
+  const existing = o.dryRun ? null : (await openTasks(o.userId).catch(() => [])).find((t) => t.goal.startsWith(FIRST_LOOK_GOAL) && t.finalCheckAt);
+  let look: { at: Date; words: string; clock: boolean };
   let taskId: number | null = null;
-  if (!o.dryRun) {
-    const r = await startTask({ userId: o.userId, goal: plan.goal, theirWords: plan.theirWords, steps: plan.steps, firstPlan: plan.firstPlan, inHours: plan.inHours, deadline: plan.deadline, source: "promise" });
-    if (!r.ok) return { ok: false, error: `The first look couldn't be scheduled (${r.why}). Say back what you understood, but don't name a time or promise a later text.` };
-    taskId = r.task.id;
+  if (existing) {
+    look = { at: new Date(existing.finalCheckAt!), words: zone ? localStamp(existing.finalCheckAt!, zone) : "by tomorrow", clock: !!zone };
+    taskId = existing.id;
+  } else {
+    const l = firstLookAt(now, zone);
+    look = l;
+    if (!o.dryRun) {
+      const plan = firstLookTask(i, l, now);
+      const r = await startTask({ userId: o.userId, goal: plan.goal, theirWords: plan.theirWords, steps: plan.steps, firstPlan: plan.firstPlan, inHours: plan.inHours, deadline: plan.deadline, source: "promise" });
+      if (!r.ok) return { ok: false, error: `The first look couldn't be scheduled (${r.why}). Say back what you understood, but don't name a time or promise a later text.` };
+      taskId = r.task.id;
+    }
   }
-  await record({ timed: true, taskId, at: look.at.toISOString(), words: look.words, zone });
   const stamp = look.clock ? localStamp(look.at, zone) : "tomorrow (their time zone isn't known, so no clock time was promised)";
   return {
     ok: true,
     timed: true,
-    taskId,
-    at: look.at.toISOString(),
-    words: look.words,
+    pending: { understood, lookFor, timed: true, taskId, at: look.at.toISOString(), words: look.words, zone },
     fact: `Started task${taskId ? ` #${taskId}` : ""}: a first look for ${lookFor}. Co will text them by ${stamp} with the best real thing it finds, or plainly what didn't turn up.`,
     note: look.clock
-      ? `Recorded. Your first look for ${lookFor} is set: you'll text them ${look.words}, with the best real thing you find or plainly where it stands. Say that time in your own words. Never promise what you'll find.`
-      : `Recorded. Your first look for ${lookFor} is set: you'll text them by tomorrow with the best real thing you find or plainly where it stands. Their time zone isn't known, so say "by tomorrow" and never a clock time. Never promise what you'll find.`,
+      ? `${playback} Then say you'll text them ${look.words} with the best real thing you find or plainly where it stands, in your own words. Never promise what you'll find.`
+      : `${playback} Then say you'll text them by tomorrow with the best real thing you find or plainly where it stands. Their time zone isn't known, so say "by tomorrow" and never a clock time. Never promise what you'll find.`,
   };
+}
+
+// Pure: whether a sent text carries the playback: most of what Co said it understood (its own words, not framing) is in it.
+export function playbackCarried(understood: string, sent: string): boolean {
+  const mine = contentWords(understood);
+  if (!mine.length) return false;
+  const hit = mine.filter((w) => sameWordIn(w, words(sent))).length;
+  return hit >= Math.min(2, mine.length) && hit / mine.length >= 0.6;
+}
+
+// After the reply went out: the first read is given only when a sent text says it back. Otherwise the door stays open and the
+// next reply may try again (its task is reused). Bookkeeping, never a gate on the text.
+export async function settleFirstRead(userId: string, p: FirstReadPending, sent: string): Promise<boolean> {
+  const carried = playbackCarried(p.understood, sent);
+  const { recordDecision } = await import("../harness/core.js");
+  await recordDecision({
+    layer: 3,
+    decision: carried ? "door.first_read" : "door.first_read_unsaid",
+    userId,
+    outcome: carried ? "act" : "skip",
+    action: carried ? (p.timed ? "timed" : "untimed") : "playback_not_in_text",
+    reason: carried ? null : "the text that went out didn't say back what Co understood; the door stays open",
+    proposal: { ...p, sent: sent.slice(0, 400) },
+  });
+  return carried;
 }

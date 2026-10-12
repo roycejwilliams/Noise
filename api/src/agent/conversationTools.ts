@@ -97,6 +97,8 @@ export type ConversationToolContext = {
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
   facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done", text: string) => void; text: () => string };
+  // A first read this turn (services/theDoor.ts): held until the reply goes out, then counted as given only if a sent text says it back.
+  onFirstRead?: (pending: import("../services/theDoor.js").FirstReadPending) => void;
   // Thread the next text under theirs too (routes/sendblue.ts): the first find
   // after a "looking" line, the way the first search result always was.
   threadNext?: () => void;
@@ -518,7 +520,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: r.error };
         }
         ctx.facts?.add("did_this_turn", r.fact);
-        return r.timed ? { ok: true, textThemBy: r.words, note: r.note } : { ok: true, note: r.note };
+        ctx.onFirstRead?.(r.pending);
+        return r.timed ? { ok: true, textThemBy: r.pending.words, note: r.note } : { ok: true, note: r.note };
       },
     }),
     updateTask: tool({
