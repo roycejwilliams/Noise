@@ -471,6 +471,8 @@ async function scheduleIntroFollowUps(pairs: (readonly [string, string])[]): Pro
 // INTRO_RETRY_MAX_AGE_MS of the hold or claim), oldest first, every limit in the WHERE clause.
 export async function retryHeldNetworkIntros(now = new Date()): Promise<number> {
   const RM = await import("./roomMatching.js");
+  // Before the pause check (a long pause is how a claim outlives the key): stranded claims are marked and logged.
+  await markStrandedNetworkIntros().catch((err: any) => console.error("network intro: marking stranded claims failed (non-fatal):", err?.message ?? err));
   if (await RM.matchingPause(null)) return 0;
   const { rows } = await pool.query(retryHeldNetworkIntrosSql(RM.INTRO_MAX_ATTEMPTS, RM.INTRO_RETRY_MAX_AGE_MS)).catch(() => ({ rows: [] as any[] }));
   let sent = 0;
@@ -505,17 +507,41 @@ export async function retryHeldNetworkIntros(now = new Date()): Promise<number> 
 export const NETWORK_CLAIM_STALE_MINUTES = 15;
 export const NETWORK_RETAKE_MAX_HOURS = 23;
 
-// Pure: what a later yes is told about an intro already claimed. "Sent" only when the send was recorded.
-export function alreadyIntroducedLine(firstName: string, sent: boolean): string {
-  return sent
-    ? `\nThey said yes to ${firstName} again; the two of them were already introduced by email. Acknowledge briefly, don't send or promise another intro.`
-    : `\nThey said yes to ${firstName}; both of them are in and the intro email is on its way. Tell them plainly the intro email is coming. Don't say it was sent, and don't say when. Don't promise another.`;
+// What's known about a claimed intro's email: sent (recorded), pending (claimed, still inside the key's life, so a retake can
+// finish it), or unknown (claimed, never recorded, past the key's life: it may or may not have gone, and resending could send twice).
+export type NetworkEmailState = "sent" | "pending" | "unknown";
+export function networkEmailState(r: { email_sent?: unknown; email_outcome?: unknown } | null | undefined): NetworkEmailState {
+  if (r?.email_sent === true) return "sent";
+  return r?.email_outcome === "unknown" ? "unknown" : "pending";
 }
 
-// Whether the pair's intro email is recorded as sent (a failed read is "not yet": never said as sent on a guess).
-async function networkEmailSent(x: string, y: string): Promise<boolean> {
-  const { rows } = await pool.query(`SELECT email_sent_at IS NOT NULL AS sent FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [x, y]).catch(() => ({ rows: [] as any[] }));
-  return rows[0]?.sent === true;
+// Pure: what a later yes is told about an intro already claimed. "Sent" only when the send was recorded; "coming" only while a
+// retake can still finish it; past that, plainly that Co can't confirm it, with no promise.
+export function alreadyIntroducedLine(firstName: string, state: NetworkEmailState): string {
+  if (state === "sent") return `\nThey said yes to ${firstName} again; the two of them were already introduced by email. Acknowledge briefly, don't send or promise another intro.`;
+  if (state === "unknown") return `\nThey said yes to ${firstName}; both of them are in, but Co can't confirm the intro email went through. Tell them plainly it may not have reached them, and to tell you if they don't have it. Don't say it was sent, and don't promise it's coming.`;
+  return `\nThey said yes to ${firstName}; both of them are in and the intro email is on its way. Tell them plainly the intro email is coming. Don't say it was sent, and don't say when. Don't promise another.`;
+}
+
+async function networkEmailSent(x: string, y: string): Promise<NetworkEmailState> {
+  const { rows } = await pool.query(`SELECT email_sent_at IS NOT NULL AS email_sent, email_outcome FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [x, y]).catch(() => ({ rows: [] as any[] }));
+  // A failed read is "can't confirm": never said as sent or coming on a guess.
+  return rows[0] ? networkEmailState(rows[0]) : "unknown";
+}
+
+// Claims no send confirmed, past the key's life (a crash, then a pause that outlasted it): never retaken (that could send twice),
+// so marked unknown, once, and logged.
+export const STRANDED_NETWORK_INTROS_SQL = `UPDATE network_introductions SET email_outcome = 'unknown'
+       WHERE status = 'introduced' AND email_sent_at IS NULL AND email_outcome IS NULL
+         AND email_claimed_at <= NOW() - INTERVAL '${NETWORK_RETAKE_MAX_HOURS} hours'
+       RETURNING person_a_id, person_b_id, email_claimed_at`;
+async function markStrandedNetworkIntros(): Promise<number> {
+  const { rows } = await pool.query(STRANDED_NETWORK_INTROS_SQL);
+  for (const r of rows) {
+    console.error(`network intro: claim from ${new Date(r.email_claimed_at).toISOString()} never confirmed and past the send key's life (${r.person_a_id}, ${r.person_b_id}); outcome unknown`);
+    await recordDecision({ layer: 6, decision: "match.introEmail", userId: r.person_a_id, outcome: "skip", action: "outcome_unknown", proposal: { a: r.person_a_id, b: r.person_b_id }, reason: "claim never confirmed, past the idempotency key's life; not retaken" }).catch(() => {});
+  }
+  return rows.length;
 }
 
 // The send's record, retried: true once email_sent_at is written.
@@ -687,12 +713,12 @@ export async function resolveNetworkIntroReply(
        ${interestedCol} = COALESCE(network_introductions.${interestedCol}, NOW()),
        status = CASE WHEN network_introductions.status IN ('introduced', 'declined') THEN network_introductions.status
                      WHEN network_introductions.${otherInterestedCol} IS NOT NULL THEN 'both_interested' ELSE $3 END
-     RETURNING status, ${otherInterestedCol} IS NOT NULL AS both_interested, email_sent_at IS NOT NULL AS email_sent, match_reason`,
+     RETURNING status, ${otherInterestedCol} IS NOT NULL AS both_interested, email_sent_at IS NOT NULL AS email_sent, email_outcome, match_reason`,
     [aId, bId, initialStatus, pending.candidate.match_reason, pending.askId],
   );
   const bothInterested = rows[0]?.both_interested === true;
   // Already introduced (a repeated reply, a retried turn): no second intro. Said as sent only when the send was recorded.
-  if (rows[0]?.status === "introduced") return alreadyIntroducedLine(pending.candidate.first_name, rows[0]?.email_sent === true);
+  if (rows[0]?.status === "introduced") return alreadyIntroducedLine(pending.candidate.first_name, networkEmailState(rows[0]));
   // The body comes from the pair's stored reason (the first one written), the same one a retry reads: one body per key.
   const storedReason = String(rows[0]?.match_reason ?? pending.candidate.match_reason);
 

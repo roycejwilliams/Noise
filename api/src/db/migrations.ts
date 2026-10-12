@@ -2894,7 +2894,7 @@ export async function runMigrations(): Promise<void> {
   // The network intro email's claim (services/networkIntroNudge.ts): taken with 'introduced' before the send, so a claim no send
   // confirmed (the server died in between) is told apart from an intro made before email_sent_at existed, and only it is retaken.
   await pool
-    .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_claimed_at TIMESTAMPTZ`)
+    .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_claimed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_outcome TEXT`)
     .catch((err: Error) => console.error("network_introductions email claim column failed:", err));
   // An in-room question still open when the room closes expires instead of binding a "yes" days later.
   await pool
