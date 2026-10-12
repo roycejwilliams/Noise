@@ -484,6 +484,14 @@ function fakeAnthropic(init: any): Response {
       });
     return anthropicText(JSON.stringify({ results }));
   }
+  // The value-line judge (services/roomMatching.ts valueGate, one call per side): strong, the line naming the other
+  // member's first shared ask in the same form the share reason used to take.
+  if (prompt.startsWith("Co is a friend to every member of a private club")) {
+    W.llmCalls.push({ kind: "valueLine", prompt });
+    const shared = [...(prompt.match(/said Co may tell people they meet: ([^\n]*)/)?.[1] ?? "").matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+    if (!shared.length) return anthropicText(JSON.stringify({ line: "", verdict: "weak", why: "nothing shared" }));
+    return anthropicText(JSON.stringify({ line: `what they've said they can offer: "${shared[0]}"`, verdict: "strong", why: "stub" }));
+  }
   if (prompt.includes("Is this message a consent violation?")) {
     W.llmCalls.push({ kind: "consent", prompt });
     const msg = prompt.match(/Message: "([\s\S]*?)"\n\nIs this message/)?.[1] ?? "";
