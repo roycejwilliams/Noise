@@ -18,7 +18,7 @@ import { BetaAbstractBrowserToolset20260801, ToolError, type BetaBrowserNavigate
 import type { BetaBrowserFindInput, BetaBrowserGetPageTextInput, BetaBrowserLeftClickInput, BetaBrowserNavigateInput, BetaBrowserReadPageInput, BetaBrowserScreenshotInput, BetaBrowserScrollInput, BetaBrowserWaitInput } from "@anthropic-ai/sdk/resources/beta";
 import type { BrowserContext, Page } from "playwright-core";
 import { MODELS } from "../models.js";
-import { browserSlot, privateHost, sharedBrowser } from "./browserRead.js";
+import { browserSlot, privateHost, publicHostChecker, requestAllowed, sharedBrowser } from "./browserRead.js";
 
 export const SDK_READER = { model: MODELS.sonnet, maxTokensPerTurn: 2048, maxTurns: 9, inputTokenCap: 150_000, outputTokenCap: 12_000, pageTextChars: 10_000 };
 export const SDK_READER_HOSTS = ["peerspace.com"];
@@ -157,7 +157,7 @@ export function parseFacts(text: string): VenueFacts | null {
 }
 
 // One listing, read by Claude through the SDK browser toolset. when: the date and time to check, in plain words.
-export async function readVenueWithSdk(url: string, when: string, client = new Anthropic()): Promise<SdkReadResult> {
+export async function readVenueWithSdk(url: string, when: string, client = new Anthropic(), publicHost = publicHostChecker()): Promise<SdkReadResult> {
   const started = Date.now();
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const release = await browserSlot();
@@ -170,14 +170,12 @@ export async function readVenueWithSdk(url: string, when: string, client = new A
   try {
     const b = await sharedBrowser();
     context = await b.newContext({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", locale: "en-US", viewport: { width: 1280, height: 900 } });
-    // The read-only guarantee: nothing but GET/HEAD leaves, nothing private, no fonts or media.
-    await context.route("**/*", (route) => {
+    // The read-only guarantee: nothing but GET/HEAD leaves, https only, nothing that resolves to a private address (security
+    // review, 2026-10-12: names are resolved, for every request the page makes), no fonts or media.
+    await context.route("**/*", async (route) => {
       const req = route.request();
-      let host = "";
-      try {
-        host = new URL(req.url()).hostname;
-      } catch {}
-      if (!/^https?:/.test(req.url()) || privateHost(host) || !["GET", "HEAD"].includes(req.method()) || ["font", "media"].includes(req.resourceType())) return route.abort();
+      if (!["GET", "HEAD"].includes(req.method()) || ["font", "media"].includes(req.resourceType())) return route.abort();
+      if (!(await requestAllowed(req.url(), publicHost))) return route.abort();
       return route.continue();
     });
     const page = await context.newPage();

@@ -19,7 +19,7 @@ import { BetaAbstractBrowserToolset20260801, ToolError, type BetaBrowserNavigate
 import type { BetaBrowserFindInput, BetaBrowserFormInputInput, BetaBrowserGetPageTextInput, BetaBrowserKeyInput, BetaBrowserLeftClickInput, BetaBrowserNavigateInput, BetaBrowserReadPageInput, BetaBrowserScreenshotInput, BetaBrowserScrollInput, BetaBrowserScrollToInput, BetaBrowserWaitInput, BetaBrowserZoomInput } from "@anthropic-ai/sdk/resources/beta";
 import type { BrowserContext, CDPSession, Page } from "playwright-core";
 import { MODELS } from "../models.js";
-import { browserSlot, privateHost, sharedBrowser } from "./browserRead.js";
+import { browserSlot, privateHost, publicHostChecker, requestAllowed, sharedBrowser } from "./browserRead.js";
 
 export const GENERAL_READER = { model: MODELS.haiku, maxTokensPerTurn: 1500, maxTurns: 14, inputTokenCap: 120_000, outputTokenCap: 10_000, pageTextChars: 12_000, treeLines: 220, viewport: { width: 1280, height: 800 } };
 export const BLOCKED_SITES = ["linkedin.com", "x.com", "twitter.com", "facebook.com", "instagram.com", "tiktok.com", "threads.net"];
@@ -263,7 +263,7 @@ export function groundAnswers(raw: string, fields: AskedField[], seen: string): 
 }
 
 // One page, read by Claude through the SDK browser toolset, for the fields asked. Background only.
-export async function readWithSdk(url: string, fields: AskedField[], client = new Anthropic()): Promise<GeneralReadResult> {
+export async function readWithSdk(url: string, fields: AskedField[], client = new Anthropic(), publicHost = publicHostChecker()): Promise<GeneralReadResult> {
   const started = Date.now();
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const trace: string[] = [];
@@ -271,7 +271,8 @@ export async function readWithSdk(url: string, fields: AskedField[], client = ne
   let stopped: string | null = null;
   let last = "";
   const host = hostOf(url);
-  if (!host || blockedHost(host) || privateHost(host) || !url.startsWith("https://")) {
+  // Names are resolved too (security review, 2026-10-12): a public-looking name that points at a private address is refused.
+  if (!host || blockedHost(host) || privateHost(host) || !url.startsWith("https://") || !(await publicHost(host))) {
     return { answers: Object.fromEntries(fields.map((f) => [f.key, { value: null, evidence: "" }])), dropped: [], pageText: "", usage, turns, ms: 0, stopped: "blocked site", trace };
   }
   let site = siteOf(host);
@@ -281,11 +282,13 @@ export async function readWithSdk(url: string, fields: AskedField[], client = ne
   try {
     const b = await sharedBrowser();
     context = await b.newContext({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", locale: "en-US", viewport: GENERAL_READER.viewport });
-    // The read-only guarantee: nothing but GET/HEAD leaves; no social site, nothing private, no media streams.
-    await context.route("**/*", (route) => {
+    // The read-only guarantee: nothing but GET/HEAD leaves; https only, no social site, nothing that resolves to a private
+    // address (every request the page makes, not just the page itself), no media streams.
+    await context.route("**/*", async (route) => {
       const req = route.request();
       const h = hostOf(req.url());
-      if (!/^https?:/.test(req.url()) || privateHost(h) || blockedHost(h) || !["GET", "HEAD"].includes(req.method()) || req.resourceType() === "media") return route.abort();
+      if (blockedHost(h) || !["GET", "HEAD"].includes(req.method()) || req.resourceType() === "media") return route.abort();
+      if (!(await requestAllowed(req.url(), publicHost))) return route.abort();
       return route.continue();
     });
     const page = await context.newPage();
@@ -294,7 +297,7 @@ export async function readWithSdk(url: string, fields: AskedField[], client = ne
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => {});
     await page.waitForTimeout(2_000);
     const landed = hostOf(page.url());
-    if (!landed || blockedHost(landed) || privateHost(landed) || !page.url().startsWith("https://")) {
+    if (!landed || blockedHost(landed) || privateHost(landed) || !page.url().startsWith("https://") || !(await publicHost(landed))) {
       stopped = "blocked site";
       throw new Error("the start page landed somewhere it can't be read");
     }

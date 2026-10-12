@@ -25,6 +25,29 @@ export function privateHost(hostname: string): boolean {
   return a === 10 || a === 127 || a === 0 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
 }
 
+// A host check that resolves names too (security review, 2026-10-12: 127.0.0.1.nip.io reached localhost through a reader that
+// only checked the name). One per browser context, cached per host; anything that fails to resolve counts as private.
+export function publicHostChecker(isPublic?: (host: string) => Promise<boolean>): (host: string) => Promise<boolean> {
+  const resolved = new Map<string, Promise<boolean>>();
+  return (host: string) => {
+    const h = host.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+    if (!h || privateHost(h)) return Promise.resolve(false);
+    if (!resolved.has(h)) resolved.set(h, (isPublic ? isPublic(h) : import("./linkReader.js").then((m) => m.hostIsPublic(h))).catch(() => false));
+    return resolved.get(h)!;
+  };
+}
+
+// Whether a request the page makes may leave the browser: https only, to a host that resolves to public addresses.
+export async function requestAllowed(url: string, publicHost: (host: string) => Promise<boolean>): Promise<boolean> {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  return u.protocol === "https:" && (await publicHost(u.hostname));
+}
+
 function chromiumPath(): string | undefined {
   if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
   // Alpine's package (Dockerfile); elsewhere Playwright's own download.
