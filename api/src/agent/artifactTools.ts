@@ -34,9 +34,11 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         if ("error" in got) return { ok: false, error: got.error };
         const page = await (await S()).loadCoPage(got.p.id).catch(() => null);
         if (!page || page.ownerUserId !== ctx.userId) return { ok: false, error: "It's gone (taken down or expired)." };
-        const assets = await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => []);
-        const num = (id: string | null | undefined) => (id ? assets.find((a) => a.id === id)?.n ?? null : null);
         const d: any = page.data;
+        // Every image it places, by the number they know it by (a cleaned logo by its original's), so an edit passes them back.
+        const placed = d.kind === "deck" ? [d.logo, ...(d.slides ?? []).map((s: any) => s.image)] : [d.logo, ...(d.sections ?? []).map((s: any) => s.asset)];
+        const nums = await (await import("../services/memberAssets.js")).assetNumbers(ctx.userId, placed).catch(() => new Map<string, number>());
+        const num = (id: string | null | undefined) => (id ? nums.get(id) ?? null : null);
         if (d.kind === "deck") {
           return {
             ok: true,

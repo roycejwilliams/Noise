@@ -66,6 +66,16 @@ export async function listAssets(userId: string): Promise<MemberAsset[]> {
   return rows.map((r) => ({ id: String(r.id), n: Number(r.n), mediaType: String(r.media_type), description: r.description ? String(r.description) : null, at: new Date(r.created_at) }));
 }
 
+// The number they know each of these ids by, theirs and still here. A cleaned-up copy (a logo the design system cleaned, stored as -n)
+// is shown by its original's number, so an edit that passes it back keeps the copy (agent/deckTools.ts). Founder's review, 2026-10-12:
+// copies mapped to nothing and a deck edit dropped its logo.
+export async function assetNumbers(userId: string, ids: (string | null | undefined)[]): Promise<Map<string, number>> {
+  const want = [...new Set(ids.filter((i): i is string => !!i && ASSET_ID.test(i)))];
+  if (!want.length) return new Map();
+  const { rows } = await db.query(`SELECT id, n FROM member_assets WHERE owner_user_id = $1 AND id = ANY($2::text[]) AND wiped_at IS NULL`, [userId, want]);
+  return new Map(rows.map((r) => [String(r.id), Math.abs(Number(r.n))]));
+}
+
 // Which of these ids are theirs and still here. An artifact may place only these.
 export async function ownedAssetIds(userId: string, ids: string[]): Promise<Set<string>> {
   const want = [...new Set(ids.filter((i) => ASSET_ID.test(i)))];

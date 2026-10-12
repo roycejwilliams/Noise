@@ -220,6 +220,29 @@ export function keepClosingLast<T extends { headline: string }>(was: { headline:
   return [...next.slice(0, at), ...after, next[at]];
 }
 
+// The pictures on a deck after an edit (founder's review, 2026-10-12: edits dropped images). A picture the new version names stays as
+// named; one it leaves out (omitted) is kept from the slide it was on, matched by headline, else by place when it's the same slide
+// reworded; one they asked to take off (0, or removeImages) goes. Pure: the deck's new logo and slide images.
+export function carryImages(
+  next: { logo: string | null; slides: { headline: string; bullets: string[]; image: string | null }[] },
+  was: { logo?: string | null; slides: { headline: string; bullets?: string[]; image?: string | null }[] } | null,
+  raw: { logo?: number | null; slides?: ({ image?: number | null } | undefined)[] },
+  removed: (number | "logo")[] = [],
+): { logo: string | null; images: (string | null)[] } {
+  const gone = new Set(removed);
+  const logo = raw.logo === 0 || gone.has("logo") ? null : next.logo ?? (raw.logo == null ? was?.logo ?? null : null);
+  const images = next.slides.map((sl, k) => {
+    const asked = raw.slides?.[k]?.image;
+    if (asked === 0 || gone.has(k + 2)) return null;
+    if (sl.image || asked != null || !was) return sl.image;
+    const same = was.slides.find((x) => x.headline.toLowerCase() === sl.headline.toLowerCase());
+    const there = was.slides[k];
+    const from = same ?? (there && (there.bullets ?? []).some((b) => sl.bullets.includes(b)) ? there : null);
+    return from?.image ?? null;
+  });
+  return { logo, images };
+}
+
 // Their taste, with no asking: what they said about the look now (their exact words, checked, then saved as member knowledge and as a
 // signal in their design system, services/designSystem.ts), else what's saved, else null. Decks add the one ask on top (tasteFor);
 // pages never ask and use Co's own design without a taste.
@@ -667,6 +690,7 @@ export function deckTools(
         deck: z.string().describe("Which of their decks: its title, or a word from it."),
         taste: TASTE_INPUT,
         changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\"). On a call, leave the slides out and this is the change to make: the new version is written from the deck and what they said."),
+        removeImages: z.array(z.union([z.literal("logo"), z.number().int().min(2)])).optional().describe("Only when they asked to take a picture off: the slide numbers (2 and up) or \"logo\". A picture you just leave out stays where it is."),
         notDone: line("Only when this version doesn't do all they asked: the part it doesn't do and why, in a few words (\"the board's colors, since a deck has one look for every slide\"). It goes in the same text as what changed, so they never read \"updated\" as all of it.").optional(),
         alsoAnswer: ALSO_ANSWER,
       }),
@@ -736,23 +760,30 @@ export function deckTools(
             const copy = await (await import("../services/memberAssets.js")).derivedAssetId(ctx.userId, input.logo).catch(() => null);
             if (copy === was.logo) next.logo = was.logo;
           }
+          // Every edit keeps its pictures, composed or written in full (review of PR 6; founder's review, 2026-10-12): left out is
+          // kept, taken off (0 or removeImages) goes. A kept picture they've since deleted is dropped, never sent to be refused.
+          if (was) {
+            const c = carryImages(next, was, { logo: input0.logo, slides: composing ? [] : input.slides }, input0.removeImages ?? []);
+            next.logo = c.logo;
+            next.slides = next.slides.map((sl: any, k: number) => {
+              const image = c.images[k];
+              // A split kept its picture back: its layout comes back with it (deckDataFrom drops a split it saw without one).
+              const same = !sl.layout && image ? was.slides.find((x: any) => x.image === image && x.layout === "split") : null;
+              return { ...sl, image, ...(same ? { layout: "split" } : {}) };
+            });
+            if (!ctx.dryRun) {
+              const ids = [next.logo, ...next.slides.map((sl: any) => sl.image)].filter((x): x is string => !!x);
+              const live = await (await import("../services/memberAssets.js")).ownedAssetIds(ctx.userId, ids).catch(() => null);
+              if (live) {
+                if (next.logo && !live.has(next.logo)) next.logo = null;
+                next.slides = next.slides.map((sl: any) => (sl.image && !live.has(sl.image) ? { ...sl, image: null } : sl));
+              }
+            }
+          }
           if (was?.logoMeta && next.logo === was.logo) next.logoMeta = was.logoMeta;
           for (const sl of next.slides) {
             const w = was?.slides?.find((x: any) => x.image && x.image === sl.image);
             if (w?.imageMeta) sl.imageMeta = w.imageMeta;
-          }
-          // A change written from the deck keeps its pictures (review of PR 6): the logo, and each slide's image by headline, else
-          // by place, unless this version named its own.
-          if (composing && was) {
-            if (next.logo == null && input0.logo == null) next.logo = was.logo ?? null;
-            next.slides = next.slides.map((sl: any, k: number) => {
-              if (sl.image) return sl;
-              const same = was.slides.find((x: any) => x.headline === sl.headline);
-              const there = was.slides[k];
-              // By place only when it's the same slide reworded (it still shares a bullet), as notes do.
-              const from = same ?? (there && (there.bullets ?? []).some((b: string) => sl.bullets.includes(b)) ? there : null);
-              return { ...sl, image: from?.image ?? null };
-            });
           }
           const copied = await referenceCopyProblem(ctx, next, source.words);
           if (copied) {
