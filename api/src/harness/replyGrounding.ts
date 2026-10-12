@@ -115,7 +115,7 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // coldStart: set for a member with fewer than two findable interests on file (services/coldStart.ts): whether this reply was offered
 // a steering question, and why or why not; recorded after the reply goes out (agent/conversationReply.ts).
 // door: a new member's first read (services/theDoor.ts): whether this reply was offered the moment, and why or why not.
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null };
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string> };
 export type ColdStartFacts = { offered: boolean; why: string; seeds: SeedCount; instruction: string | null };
 export type DoorFacts = { offered: boolean; why: string; instruction: string | null };
 
@@ -1035,7 +1035,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // "It hasn't come through on my end" is about the file they sent, not Co's machinery: allowed when their file record says nothing
   // readable arrived (services/inboundFile.ts, 2026-10-10 rows 10405/10410), the same fact that backs it in claimChecks below.
   const nothingReadable = recordSaysNothingReadable(rf.facts);
-  const narrated = narratesInternalState(draft, { allow: (sentence) => nothingReadable && arrivalDenial(sentence) });
+  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) });
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Co's own state instead of what they get (${narrated})` });
   // A stored spot count, time or price said as current when every fact behind it is marked stale (Phase B, B3, services/asOf.ts):
   // say it as of its read, or it's cut. The sentence is quoted so stripUnsupported cuts exactly it.
@@ -1078,9 +1078,11 @@ function doneOnRecord(facts: Fact[]): boolean {
 // ownership word is ever asked about. Fails closed: no answer means the claim gets the normal check.
 export const MAY_ADMIT = /\b(never|nothing|not|no|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|isn'?t|won'?t|can'?t|cannot|sorry|my fault|my mistake|my bad|on me)\b/i;
 export type AdmissionJudge = (prompt: string) => Promise<string>;
+// A one-word read: well under the claim check's cap, so it can't stall a reply.
+const ADMISSION_TIMEOUT_MS = 8_000;
 const haikuAdmission: AdmissionJudge = async (prompt) =>
   // Sized for the answer; Haiku 5.x's thinking room is added at the fetch layer (thinkingRoom.ts).
-  (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 40, abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS), experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.admission" }, prompt })).text;
+  (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 40, abortSignal: AbortSignal.timeout(ADMISSION_TIMEOUT_MS), experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.admission" }, prompt })).text;
 // Pure: the question.
 export function admissionPrompt(claim: string): string {
   return `Co, a texting companion, is about to send this line:
@@ -1104,9 +1106,24 @@ export async function judgeAdmission(claim: string, judge: AdmissionJudge = haik
     return null;
   }
 }
+// A sentence the narration rule would cut that is only an honest admission ("The doc isn't made yet"), judged the same way and
+// kept, unless the record says the thing was done (2026-10-12 documents run: the true line was cut and its follow-on read orphaned).
+const sentenceKey = (s: string) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+export function admittedSentence(rf: ReplyFacts, sentence: string): boolean {
+  return !!rf.admitted?.has(sentenceKey(sentence));
+}
+export async function admitNarratedSentences(draft: string, rf: ReplyFacts, judge?: AdmissionJudge): Promise<void> {
+  if (doneOnRecord(rf.facts)) return;
+  const sentences = draft.replace(/[’‘]/g, "'").split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+  const asks = sentences.filter((s) => MAY_ADMIT.test(s) && narratesInternalState(s));
+  await Promise.all(asks.map(async (s) => {
+    if ((await judgeAdmission(s, judge)) === true) (rf.admitted ??= new Set()).add(sentenceKey(s));
+  }));
+}
+
 // The past_action claims that might be admissions, judged; only a true answer is in the map.
 export async function admissionsFor(claims: Claim[], judge?: AdmissionJudge): Promise<Map<string, boolean>> {
-  const asks = [...new Set(claims.filter((c) => c.type === "past_action" && MAY_ADMIT.test(c.text)).map((c) => c.text))];
+  const asks = [...new Set(claims.filter((c) => (c.type === "past_action" || c.type === "detail") && MAY_ADMIT.test(c.text)).map((c) => c.text))];
   const out = new Map<string, boolean>();
   await Promise.all(asks.map(async (t) => { if ((await judgeAdmission(t, judge)) === true) out.set(t, true); }));
   return out;
@@ -1206,7 +1223,7 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     // An honest admission it didn't happen is never cut as a false past action (2026-10-12 four-artifact test: "it never sent, and
     // that's on me" was cut while the doc truly never sent). Nothing on record says it happened: kept. Something does: the model's
     // read decides, without needing a fact to cite for an absence.
-    if (c.type === "past_action" && admissions.get(c.text) === true && (!doneOnRecord(rf.facts) || pass)) {
+    if ((c.type === "past_action" || c.type === "detail") && admissions.get(c.text) === true && (!doneOnRecord(rf.facts) || pass)) {
       return { name: `claim_${c.type}`, pass: true, reason: `${reason} (an admission it didn't happen${pass ? "" : ", and nothing on record says it did"})` };
     }
     if (!pass && c.type === "past_action" && savedForTeamThisTurn && TEAM_PASS.test(c.text) && !TEAM_PASS_PLUS.test(c.text)) {
@@ -1433,7 +1450,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[], opts: { all
   // in place, so the quoted text never matched a sentence below and an
   // unsupported promise could go out marked "stripped" while still present).
   const bad = failed.map((f) => norm((f.reason ?? "").replace(/^[a-z_]+: "|"(\s*\([^)]*\))?$/g, "").replace(/^(link|phone number|time) /, "")));
-  const keep = sentences.filter((s) => {
+  const kept = sentences.map((s) => {
     const ns = norm(s);
     if (failed.some((f) => f.name === "no_call_placed_claim") && /(calling|ringing|dialing) you|i'?m (calling|ringing|dialing)/i.test(s)) return false;
     if (failed.some((f) => f.name === "no_crowd_claim") && crowdClaim(s)) return false;
@@ -1458,8 +1475,12 @@ export function stripUnsupported(draft: string, failed: GateCheck[], opts: { all
     if (failed.some((f) => f.name === "claim_read_failed") && needsClaimCheck(s)) return false;
     return !bad.some((b) => b.length >= 6 && (ns.includes(b) || b.includes(ns.replace(/[.!?]+$/, ""))));
   });
-  return keep.join("").trim();
+  // A sentence that leans on the one just cut goes with it ("The doc isn't made yet. What would unblock it is..." 2026-10-12): it
+  // would read orphaned.
+  for (let i = 1; i < sentences.length; i++) if (!kept[i - 1] && kept[i] && LEANS_ON_PREVIOUS.test(sentences[i])) kept[i] = false;
+  return sentences.filter((_, i) => kept[i]).join("").trim();
 }
+export const LEANS_ON_PREVIOUS = /^\s*(?:that|this|these|those|it|its|it'?s|which|so|then|but|also|and|because|once|until|what would|what'?s left|the rest|instead|otherwise)\b/i;
 
 // A model rewrite is only kept if code confirms it adds nothing new
 // (2026-09-28, Royce: "Rewrites only remove"): a rewrite flipped Co's pick
@@ -1611,6 +1632,11 @@ const CLAIM_SHAPED = [
   // startup name saved" went out unchecked while their memories named both).
   CO_DENIES_HAVING,
   CLAIMS_ON_FILE,
+  // Co saying what it did to an artifact, or what one contains (2026-10-12 documents run: "I left the example section open... I put
+  // the frame and the closing ask in" went out unchecked about a document that didn't exist).
+  /\b(?:i|i'?ve|i have|i just|i already)\s+(?:just\s+|already\s+)?(?:left|put|kept|added|included|built|wrote|written|set up|made|drafted|filled in|laid out|structured|organized|framed)\b/i,
+  /\b(?:the|your|this|that|my)\s+(?:doc|document|deck|page|pdf|draft|brief|sheet|plan|slides?|outline|proposal|one-pager|section|template)\b[^.?!]{0,50}\b(?:has|have|includes?|covers?|contains?|opens? with|ends? with|lays out|walks through|starts with|leads with|closes with|is (?:built|set up|structured))\b/i,
+  /\b(?:it|each slide|every section|the first|the last)\s+(?:covers|includes|contains|opens with|ends with|lays out|walks through)\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {
@@ -1621,6 +1647,7 @@ export function needsClaimCheck(draft: string): boolean {
 // review): a single bad JSON response or a transient failure used to send
 // the draft "unchecked," with only the cheap regex checks behind it.
 async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model?: string): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
+  await admitNarratedSentences(draft, rf);
   const code = codeChecks(draft, rf, src);
   if (!needsClaimCheck(draft)) return { checks: [...code, { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1693,7 +1720,7 @@ export async function groundReply(
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
     // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
-    const allowArrival = { allow: (sentence: string) => recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence) };
+    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) };
     let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);
