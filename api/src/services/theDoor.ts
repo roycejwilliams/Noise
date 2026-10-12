@@ -427,7 +427,7 @@ export async function settleFirstRead(userId: string, p: FirstReadPending, sent:
     } else if (d.task.kind === "co_initiated") {
       // No promise went out: the look is Co's own, paced and capped like any text Co starts, with no last check owed to them.
       await pool
-        .query(`UPDATE co_tasks SET source = 'lookout', followup = COALESCE(followup, '{}'::jsonb) || '{"lookoutOrigin":"co"}'::jsonb, final_check_at = NULL, deadline = NULL, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, id])
+        .query(`UPDATE co_tasks SET source = 'lookout', followup = COALESCE(followup, '{}'::jsonb) || '{"lookoutOrigin":"co","lookoutFrom":"first_read"}'::jsonb, final_check_at = NULL, deadline = NULL, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, id])
         .catch(() => {});
     }
   }
