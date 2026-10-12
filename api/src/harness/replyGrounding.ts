@@ -21,7 +21,7 @@ import type { GoalStateRow } from "../services/goalEdges.js";
 import type { MemberKnowledge, MemberRules, Restraint } from "../services/memberKnowledge.js";
 import { renderLive } from "../services/factLabels.js";
 import { arcLine, LENS_RULE } from "../services/goalJourney.js";
-import { steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
+import { isNewMember, steerDecision, steerInstruction, type ColdStartView, type SeedCount } from "../services/coldStart.js";
 import { doorDecision, doorInstruction, doorOpen, type DoorView } from "../services/theDoor.js";
 import { docOfferLines, type OfferKind } from "../services/documentOffer.js";
 import { findSection } from "../services/deliveryReceipts.js";
@@ -128,6 +128,13 @@ export function addDoorMoment(rf: ReplyFacts, view: DoorView, o: { firstName?: s
   if (instruction) addInstruction(rf, instruction);
   rf.door = { offered: d.offer, why: d.why, instruction };
   return rf.door;
+}
+
+// Pure: for a new member with no city on file, the line that keeps the club's city from becoming theirs. A city they named in their
+// own texts still counts ("I'm in Oakland, find me a run club" uses Oakland); nothing for anyone else.
+export function unknownCityFact(o: { city?: string | null; joinedAt?: Date | null; now?: Date }): string | null {
+  if (String(o.city ?? "").trim() || !isNewMember(o.joinedAt ?? null, o.now ?? new Date())) return null;
+  return "No city on file for them. Use only a city they named in their own texts; the club's city isn't theirs.";
 }
 
 // Pure: take the moment back off a reply that turned out to have something else to offer (a call), before it drafts.
@@ -433,8 +440,9 @@ export async function gatherReplyFacts(
   if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
   // Where they live, when nothing on file says (2026-10-12, the door rerun: "moved here" plus the club being in San Francisco
   // became "around SF" in a reply and "in SF" in a task). The drafter and the claim read both see it as unknown, never assumed.
-  if (opts.turn && !String(opts.turn.knowledge?.identity.city ?? opts.turn.profile?.city ?? "").trim()) {
-    addFact(rf, "unknown", "Where they live: they haven't said, and it isn't on file. The club being in San Francisco doesn't make it their city. Don't name a city or area as theirs or as where you'll look for them; ask if it matters.");
+  {
+    const cityLine = unknownCityFact({ city: opts.turn?.knowledge?.identity.city ?? opts.turn?.profile?.city ?? null, joinedAt: opts.turn?.door?.joinedAt ?? null });
+    if (opts.turn && cityLine) addFact(rf, "unknown", cityLine);
   }
   // The door (services/theDoor.ts): a new member's first read, once, when Co has heard enough to say it back.
   if (opts.turn?.door) addDoorMoment(rf, opts.turn.door, { firstName: opts.turn.knowledge?.identity.firstName ?? null, emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });

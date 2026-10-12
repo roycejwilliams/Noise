@@ -58,6 +58,8 @@ export const DOOR = {
   // mainland US zone (11am Pacific, 2pm Eastern), at least this many hours out.
   unzonedUtcHour: 18,
   minLeadHours: 3,
+  // A first look is reused only while its time is at least this far ahead, so the time Co says is never already past.
+  reuseMarginMin: 30,
   // What Co will look for and what it understood stay short: they ride on a task and a record, not a document.
   maxLine: 220,
 } as const;
@@ -242,7 +244,7 @@ export async function giveFirstRead(
   o: { userId: string; message: string; dryRun: boolean; now?: Date; paused: boolean },
 ): Promise<FirstReadResult> {
   const now = o.now ?? new Date();
-  const [{ wordsAreTheirs, startTask, openTasks }, { memberZone, localStamp }] = await Promise.all([import("./coTasks.js"), import("./memberTime.js")]);
+  const [{ wordsAreTheirs, startTask }, { memberZone, localStamp }] = await Promise.all([import("./coTasks.js"), import("./memberTime.js")]);
   const view: DoorView = o.dryRun ? { joinedAt: now, givenAt: null, theirTexts: DOOR.minTheirTexts } : await loadDoor(o.userId);
   const theirText = `${o.message}\n${o.dryRun ? "" : await theirRecentTexts(o.userId).catch(() => "")}`;
   const problem = firstReadProblem(i, { view, now, theirText, wordsAreTheirs });
@@ -264,8 +266,19 @@ export async function giveFirstRead(
 
   // Their real zone, or none: a fallback zone would turn "6pm" into the wrong hour for someone in New York.
   const zone = await memberZone(o.userId);
-  // A first look already set by an earlier call whose playback never went out: keep it, never a second task.
-  const existing = o.dryRun ? null : (await openTasks(o.userId).catch(() => [])).find((t) => t.goal.startsWith(FIRST_LOOK_GOAL) && t.finalCheckAt);
+  // A first look set by an earlier call (its text never went out): kept only while it's still ahead and hasn't reported; one whose
+  // time passed unreported is dropped and a fresh one starts. One that already reported closes the door (lookDecision).
+  const firstLooks = o.dryRun ? [] : await firstLookTasks(o.userId);
+  const d = lookDecision(firstLooks, now);
+  if (d.kind === "closed") {
+    await closeDoor(o.userId, d.why);
+    return { ok: false, error: "Your first look already reported to them, so there's no first read to give now. Just answer them." };
+  }
+  if (d.kind === "fresh" && d.drop) {
+    const { closeTask } = await import("./coTasks.js");
+    await closeTask(o.userId, d.drop, "dropped", "Its time passed before the first read went out; a fresh first look replaces it.").catch(() => {});
+  }
+  const existing = d.kind === "reuse" ? d.task : null;
   let look: { at: Date; words: string; clock: boolean };
   let taskId: number | null = null;
   if (existing) {
@@ -293,6 +306,31 @@ export async function giveFirstRead(
   };
 }
 
+export type FirstLookRow = { id: number; status: string; finalCheckAt: string | null; finalTold: boolean };
+
+// Pure: what to do with first-look tasks already on file. Reuse one still ahead and unreported (with a margin, so the time Co says
+// is never already past); close the door when one already reported; otherwise start fresh, dropping one whose time passed unreported.
+export function lookDecision(rows: FirstLookRow[], now: Date): { kind: "reuse"; task: FirstLookRow } | { kind: "closed"; why: string } | { kind: "fresh"; drop: number | null } {
+  if (rows.some((t) => t.finalTold)) return { kind: "closed", why: "the first look already reported to them" };
+  const open = rows.filter((t) => t.status === "open" && t.finalCheckAt);
+  const ahead = open.find((t) => new Date(t.finalCheckAt!).getTime() - now.getTime() > DOOR.reuseMarginMin * 60_000);
+  if (ahead) return { kind: "reuse", task: ahead };
+  return { kind: "fresh", drop: open[0]?.id ?? null };
+}
+
+async function firstLookTasks(userId: string): Promise<FirstLookRow[]> {
+  const { rows } = await pool.query(
+    `SELECT id, status, final_check_at, final_told FROM co_tasks WHERE user_id = $1 AND goal LIKE $2 ORDER BY id DESC LIMIT 5`,
+    [userId, `${FIRST_LOOK_GOAL}%`],
+  );
+  return rows.map((r: any) => ({ id: Number(r.id), status: String(r.status), finalCheckAt: r.final_check_at ? new Date(r.final_check_at).toISOString() : null, finalTold: !!r.final_told }));
+}
+
+async function closeDoor(userId: string, why: string): Promise<void> {
+  const { recordDecision } = await import("../harness/core.js");
+  await recordDecision({ layer: 3, decision: "door.first_read", userId, outcome: "act", action: "closed", reason: why });
+}
+
 // Pure: whether a sent text carries the playback: most of what Co said it understood (its own words, not framing) is in it.
 export function playbackCarried(understood: string, sent: string): boolean {
   const mine = contentWords(understood);
@@ -301,19 +339,47 @@ export function playbackCarried(understood: string, sent: string): boolean {
   return hit >= Math.min(2, mine.length) && hit / mine.length >= 0.6;
 }
 
-// After the reply went out: the first read is given only when a sent text says it back. Otherwise the door stays open and the
-// next reply may try again (its task is reused). Bookkeeping, never a gate on the text.
+// Pure: whether a sent text carries the first look's promise: a later text to them, at the time Co was given.
+export function promiseCarried(p: Pick<FirstReadPending, "timed" | "words">, sent: string): boolean {
+  if (!p.timed || !p.words) return false;
+  const t = sent.toLowerCase();
+  if (!/\b(text|tell|hear from|get back to|send)\b/.test(t)) return false;
+  const when = p.words.toLowerCase();
+  const hour = when.match(/\b(\d{1,2})(?::\d\d)?\s*(am|pm)\b/);
+  const day = when.match(/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/);
+  return (!!hour && new RegExp(`\\b${hour[1]}(?::\\d\\d)?\\s*(${hour[2]}|o'?clock)?\\b`).test(t) && /\b(today|tonight|tomorrow|this (evening|afternoon)|mon|tue|wed|thu|fri|sat|sun)/.test(t)) || (!!day && t.includes(day[1]));
+}
+
+// Pure: what a turn's sent text did with its first read. Given when it said the playback back or the promise with its time (the
+// heart of it reached them, in whatever words); unsaid otherwise, once; a second unsaid turn closes the door anyway, so a member
+// never gets a third try or a second full first read.
+export function settleDecision(p: FirstReadPending, sent: string, priorUnsaid: number): { given: boolean; action: string; dropTask: boolean } {
+  if (playbackCarried(p.understood, sent)) return { given: true, action: p.timed ? "timed" : "untimed", dropTask: false };
+  if (promiseCarried(p, sent)) return { given: true, action: "promise_only", dropTask: false };
+  // The promise never went out: its task must not text them as if it had.
+  return { given: priorUnsaid >= 1, action: priorUnsaid >= 1 ? "closed_after_retry" : "unsaid", dropTask: true };
+}
+
+// After the reply went out: bookkeeping, never a gate on the text.
 export async function settleFirstRead(userId: string, p: FirstReadPending, sent: string): Promise<boolean> {
-  const carried = playbackCarried(p.understood, sent);
+  const prior = await pool
+    .query(`SELECT count(*)::int AS n FROM harness_decisions WHERE user_id = $1 AND decision = 'door.first_read_unsaid'`, [userId])
+    .then((r) => Number(r.rows[0]?.n ?? 0))
+    .catch(() => 0);
+  const d = settleDecision(p, sent, prior);
+  if (d.dropTask && p.taskId) {
+    const { closeTask } = await import("./coTasks.js");
+    await closeTask(userId, p.taskId, "dropped", "The first look's promise never went out in a text.").catch(() => {});
+  }
   const { recordDecision } = await import("../harness/core.js");
   await recordDecision({
     layer: 3,
-    decision: carried ? "door.first_read" : "door.first_read_unsaid",
+    decision: d.given ? "door.first_read" : "door.first_read_unsaid",
     userId,
-    outcome: carried ? "act" : "skip",
-    action: carried ? (p.timed ? "timed" : "untimed") : "playback_not_in_text",
-    reason: carried ? null : "the text that went out didn't say back what Co understood; the door stays open",
+    outcome: d.given ? "act" : "skip",
+    action: d.action,
+    reason: d.given ? null : "the text that went out carried neither the playback nor the promise; the door stays open for one more try",
     proposal: { ...p, sent: sent.slice(0, 400) },
   });
-  return carried;
+  return d.given;
 }
