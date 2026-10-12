@@ -41,10 +41,13 @@ export async function withAnswer(ctx: ConversationToolContext, text: string, ans
   };
 }
 
-// Pure: whether what survived the check is only a piece of the answer: under half its words, under four words, or not a sentence.
+// Pure: whether the check cut the answer down to a piece of itself: under half its words, or no longer ending as a sentence when it
+// did before. An answer the check left as it was is never a fragment, however short ("Yes, book it.", "Friday at 8 works").
 export function isFragment(original: string, checked: string): boolean {
+  if (checked.trim() === original.trim()) return false;
   const words = (x: string) => (x.match(/\S+/g) ?? []).length;
-  return words(checked) < 4 || words(checked) < words(original) * 0.5 || !/[.?!"')]$/.test(checked.trim());
+  const ends = (x: string) => /[.?!"')]$/.test(x.trim());
+  return words(checked) < words(original) * 0.5 || (ends(original) && !ends(checked));
 }
 
 export type Judge = (prompt: string) => Promise<string>;

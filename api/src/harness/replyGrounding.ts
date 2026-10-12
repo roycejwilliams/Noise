@@ -173,10 +173,11 @@ export function baseReplyFacts(situation?: Situation): ReplyFacts {
 // Gathers the facts that don't depend on what happened earlier in this turn.
 // Branch-specific facts (a link just sent, a call that failed) are added by
 // routes/sendblue.ts as it acts.
-// They're asking for a deck, slides or a presentation.
-export const DECK_ASK = /\b(pitch )?deck\b|\bslides?\b|\bpresentation\b|\bslideshow\b/i;
+// They're asking for a deck, slides or a presentation: a request word before the noun, so "my presentation went badly" or "she
+// slides into DMs" isn't an ask.
+export const DECK_ASK = /\b(make|build|put together|throw together|draft|design|create|need|want|would love|would like|can you|could you|help me with|do)\b[^.?!\n]{0,40}\b(pitch deck|deck|slides|presentation|slideshow)\b/i;
 // They asked Co to research, look up or look into someone or something.
-export const RESEARCH_ASK = /\b(do (some )?research|research (on|into)?|look (up|into)|dig (into|up)|find out (about|who|what)|check out who)\b/i;
+export const RESEARCH_ASK = /\b(do (some )?research|research (on|into)|look (up|into)|dig (into|up)|find out (about|who|what)|check out who)\b/i;
 export const RESEARCH_RULE =
   "They asked you to research something. Search the web for it first (webSearch), in this turn, before you say or suggest anything about it. Use only what the search actually found. If it found nothing solid, say that plainly, and offer no lines, positioning or claims built on it.";
 
@@ -202,7 +203,9 @@ export async function gatherReplyFacts(
   }
   // "Do research on X" (Royce, 2026-10-11: Co offered a positioning line "from" Jeremy Toce without ever searching): search first,
   // and say nothing about X until it's back; nothing found is said plainly, with no lines built on it.
-  const theirMessage = String(opts.turn?.message ?? opts.context ?? "");
+  // Only the member's own message: the rest of the context carries Co's lines too ("want me to look into it?"), so without a turn
+  // it's the context's first line, which is their message.
+  const theirMessage = String(opts.turn?.message ?? (opts.context ?? "").split("\n")[0]);
   if (RESEARCH_ASK.test(theirMessage)) addInstruction(rf, RESEARCH_RULE);
   // One question at most before a deck (Royce, 2026-10-11): once Co asked its one question about a deck they want, and no deck has
   // gone since, this reply builds it (replay: Co asked a second "what's the pitch about?" instead).
@@ -217,7 +220,7 @@ export async function gatherReplyFacts(
     )
     .then((r) => r.rows.length > 0)
     .catch(() => false);
-  if (deckAsked) addInstruction(rf, "You already asked your one question about the deck they want. Build it now with makeDeck from what you have (pass a brief if you don't have slides): no more questions first. If they haven't said anything about the look, it's clean and minimal.");
+  if (deckAsked) addInstruction(rf, "You already asked your one question about the deck they want. If this message answers it or still wants the deck, build it now with makeDeck from what you have (pass a brief if you don't have slides): no more questions first. If they haven't said anything about the look, it's clean and minimal.");
   // They're asking for a deck and Co hasn't asked its one question yet: the deck tool decides whether a question is needed and asks
   // it, so Co doesn't stack its own first (replay: "what's it for?", then "what's it about?", then the look).
   else if (DECK_ASK.test(theirMessage)) addInstruction(rf, "They're asking for a deck. Call makeDeck in this turn with what you have (pass a brief if you don't have slides); don't ask them anything yourself first. If something is missing, makeDeck asks the one question, covering the look and the content together.");
