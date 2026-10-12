@@ -16,6 +16,7 @@ import { loadBrief, saveBrief, type SearchIntent } from "../services/searchInten
 import { numbersBacked, placesBacked, unbackedClaims } from "../services/taskWeb.js";
 import { captionNumbersBacked } from "../services/sendCheck.js";
 import { LOOP_BUDGET } from "./loop.js";
+import { identityDropped } from "../services/guardDrops.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import pool from "../db/db.js";
@@ -367,7 +368,7 @@ export function loopTools(
         const seenUrls = new Set<string>();
         // Jev reads each fact against its passage (services/factCheck.ts); a "no" is dropped.
         const { checkVerified } = await import("../services/factCheck.js");
-        const read = await checkVerified(all.flatMap((x) => x.kept).filter((k) => !seenUrls.has(k.url) && seenUrls.add(k.url))).catch(() => ({ kept: all.flatMap((x) => x.kept), droppedFacts: [] as string[] }));
+        const read = await checkVerified(all.flatMap((x) => x.kept).filter((k) => !seenUrls.has(k.url) && seenUrls.add(k.url)), { where: "reply.web_search", userId: ctx.dryRun ? null : ctx.userId }).catch(() => ({ kept: all.flatMap((x) => x.kept), droppedFacts: [] as string[] }));
         // Budget and headcount from the notes, and the total for their night, worked out in code.
         const notes = await loadBrief(ctx.userId).catch(() => null);
         const { fitsConstraints, priceEstimate } = await import("../services/searchIntent.js");
@@ -516,6 +517,7 @@ export function loopTools(
           // Says who they are only from what they've told Co (services/identityGuard.ts).
           const known = `${theirWords()} ${JSON.stringify({ goals: ctx.turn?.profile?.goals ?? null, city: ctx.turn?.profile?.city ?? null })} ${f.name} ${usableFacts(f)}`;
           if ((stripUngroundedIdentity(it.caption, known) ?? "").trim() !== it.caption.trim()) {
+            identityDropped(it.caption, null, "reply.find_caption", ctx.userId);
             refused.push(`${f.name}: the caption says who they are beyond what they've told you; rewrite it without that`);
             continue;
           }
@@ -810,7 +812,10 @@ export function loopTools(
       }),
       execute: async (input) => {
         await seeded();
-        const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
+        const { resolveDocument, documentProblems, docText } = await import("../services/documentSheet.js");
+        // What the document says, as part of its receipt, so Co describing what it just sent is backed (2026-10-12 audit, row 9061:
+        // "Covers what Co actually does..." was cut right after the PDF went).
+        const covers = (d: Parameters<typeof docText>[0]) => ctx.facts?.add("did_this_turn", `What "${d.title}" says (it went to them this turn): ${docText(d).replace(/\s+/g, " ").slice(0, 1200)}`);
         const { deliverAndRecord, asksToResend, loadTheirWords, captionFor } = await import("../services/documentDelivery.js");
         const { recordDocumentWritten } = await import("../services/documentOffer.js");
         const doc = resolveDocument(input);
@@ -828,6 +833,7 @@ export function loopTools(
           // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
           ctx.onLinkDelivered?.();
           ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}", as a PDF in this conversation.`);
+          covers(doc);
           return { ok: true, note: "Test run: nothing was sent." };
         }
         const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [ctx.userId]).catch(() => ({ rows: [] as any[] }));
@@ -868,6 +874,7 @@ export function loopTools(
         const inPlace = sentOk.some((r) => r.via === "google_docs" && r.updatedInPlace);
         const newDoc = sentOk.find((r) => r.via === "google_docs" && r.newDocBecause)?.newDocBecause;
         ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (${inPlace ? `updated in place, same link: ${sent.link}` : `link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"}`})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
+        covers(doc);
         await remember({ next: `document sent: ${doc.title}` });
         const extras = `${rd.docBecamePdf ? "The earlier version was a Google Doc, but this one couldn't go to Google, so it went as a PDF, and the text said so. " : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}`;
         // A document whose text carried its line is the turn's delivery: no leftover text after it. When Co still owes a line (a Google
@@ -918,7 +925,10 @@ export function loopTools(
       }),
       execute: async (input) => {
         const F = await import("../services/memberFiles.js");
-        const { resolveDocument, documentProblems } = await import("../services/documentSheet.js");
+        const { resolveDocument, documentProblems, docText } = await import("../services/documentSheet.js");
+        // What the document says, as part of its receipt, so Co describing what it just sent is backed (2026-10-12 audit, row 9061:
+        // "Covers what Co actually does..." was cut right after the PDF went).
+        const covers = (d: Parameters<typeof docText>[0]) => ctx.facts?.add("did_this_turn", `What "${d.title}" says (it went to them this turn): ${docText(d).replace(/\s+/g, " ").slice(0, 1200)}`);
         const { docTargets, loadTheirWords } = await import("../services/documentDelivery.js");
         const deliverDocument = F.fileSteps.deliver;
         // Only this member's own file, by their own number.

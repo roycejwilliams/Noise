@@ -41,7 +41,7 @@ export const DECK_INPUT = z.object({
 // checked (grounding.ts deckProblems: every name, number and place) only against what they said in this deck's conversation: their
 // texts in the last 12 hours, plus, on an edit, what's already on the deck (approved when it went out), and pages Co read this turn. Their older texts, calls, notes and the people graph aren't in it, so none of it can land.
 export const DECK_WINDOW_HOURS = 12;
-async function deckSource(ctx: ConversationToolContext, read: string, deck: { id: string; lines: string } | null): Promise<{ theirs: string; read: string; words: string }> {
+async function deckSource(ctx: ConversationToolContext, read: string, deck: { id: string; lines: string } | null): Promise<{ theirs: string; read: string; words: string; thread: string }> {
   const { notToTeammate } = await import("../services/teamLines.js");
   const pool = (await import("../db/db.js")).default;
   const rows = ctx.dryRun
@@ -62,7 +62,23 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
   const { withoutReferenceText } = await import("../services/designSystem.js");
   const words = withoutReferenceText([ctx.resolvedContent, ctx.isVoice ? String(ctx.turn?.message ?? "") : "", ...rows].filter(Boolean).join("\n"), refs);
   const theirs = [words, deck?.lines ?? ""].filter(Boolean).join("\n");
-  return { theirs, read, words };
+  // thread: only the Co text directly before their latest message, and that message (deckClaims.ts approvalPair), so a line Co
+  // proposed that they then approved ("Ok create the doc") counts for the claim check; the judge reads whether they approved it,
+  // and Co's lines stay out of words.
+  const recent = ctx.dryRun
+    ? []
+    : await pool
+        .query(
+          `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE 'Co replied:%') AND ${notToTeammate()}
+             AND created_at > NOW() - make_interval(hours => $2)
+           ORDER BY created_at DESC LIMIT 8`,
+          [ctx.userId, DECK_WINDOW_HOURS],
+        )
+        .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "Them: ").replace(/^Co replied:\s*/i, "Co: ")).reverse())
+        .catch(() => [] as string[]);
+  if (ctx.resolvedContent && recent[recent.length - 1] !== `Them: ${ctx.resolvedContent}`) recent.push(`Them: ${ctx.resolvedContent}`);
+  const { approvalPair } = await import("../services/coPages/deckClaims.js");
+  return { theirs, read, words, thread: approvalPair(recent) };
 }
 
 // A line copied from a reference image's own words (what's written on an inspiration image or a site screenshot) is never deck
@@ -87,13 +103,13 @@ async function headlineNames(slides: { headline: string }[] | undefined, theirs:
 
 // Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
 // deck and what Co read. An error message when a line adds a claim; null when it passes or the check couldn't run (logged).
-async function inventedClaims(ctx: ConversationToolContext, data: any, source: { words: string; read: string }, before: any | null): Promise<string | null> {
+async function inventedClaims(ctx: ConversationToolContext, data: any, source: { words: string; read: string; thread?: string }, before: any | null): Promise<string | null> {
   if (ctx.dryRun || ctx.stubSearch) return null;
   const C = await import("../services/coPages/deckClaims.js");
   const had = new Set(before ? C.deckClaimLines(before) : []);
   const lines = C.deckClaimLines(data).filter((l) => !had.has(l));
   const self = await selfIfAboutCo(ctx, data);
-  const fails = await C.inventedLines(lines, [source.words, source.read].filter(Boolean).join("\n"), undefined, self);
+  const fails = await C.inventedLines(lines, [source.words, source.read].filter(Boolean).join("\n"), undefined, self, source.thread ?? "");
   const { recordDecision } = await import("../harness/core.js");
   if (fails === null) {
     await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "check_unavailable", proposal: { lines: lines.length } }).catch(() => {});

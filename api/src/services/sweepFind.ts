@@ -237,7 +237,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
           return { ok: false, error: "Web search failed just now; nothing came back." };
         }
         const { checkVerified } = await import("./factCheck.js");
-        const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? [])).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
+        const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? []), { where: "sweep.web_search", userId: c.userId }).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
         run.forEach((q, i) => ledger.ran("web", q, all[i]?.kept?.length ?? 0));
         const queryOf = new Map<string, string>();
         run.forEach((q, i) => { for (const k of all[i]?.kept ?? []) if (!queryOf.has(k.url)) queryOf.set(k.url, q); });

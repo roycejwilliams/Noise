@@ -21,6 +21,7 @@ import { generateText } from "ai";
 import { DateTime } from "luxon";
 import { MODELS } from "../models.js";
 import { IDENTITY_RULE, stripUngroundedIdentity } from "./identityGuard.js";
+import { identityDropped } from "./guardDrops.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { availabilityConflict } from "./availability.js";
 
@@ -325,6 +326,7 @@ function finishFit(p: RawFit, match: EnrichedMatch, person: PersonForFit, pictur
   if (typeof p.why !== "string" || !p.why.trim()) return null;
   // Never claim who they are beyond what Co was given about them (services/identityGuard.ts).
   const cleanWhy = stripUngroundedIdentity(p.why, `${picture}\n${person.askText ?? ""}\n${person.latestText ?? ""}\n${(person.goals ?? []).join(" ")}\n${person.city ?? ""}`);
+  identityDropped(p.why, cleanWhy, "event_fit", person.userId);
   if (!cleanWhy) return null;
   const why = cleanWhy.trim();
   // A kind they ruled out is enforced here, not left to the model's other

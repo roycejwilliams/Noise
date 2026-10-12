@@ -184,7 +184,7 @@ export async function prepareOffer(c: Candidate, person: Person): Promise<Prepar
   const fresh = await (await import("../services/sendCheck.js")).checkBeforeSend(c, person.timezone);
   if (!("ok" in fresh)) return fresh;
   const when = offerable(readDates(itemDays(p.match, person.timezone), localToday(person.timezone)));
-  if (!when.ok) return { skip: `not offered: ${when.why}` };
+  if (!when.ok) return { skip: (await import("../services/guardDrops.js")).dateDropped(c.userId, "proactive.offer", `not offered: ${when.why}`) };
   const { gatherDots, findDots, whyContext } = await import("../services/connectDots.js");
   const known = await gatherDots(c.userId);
   const dots = p.reminder ? [] : (await findDots({ ...known, now: `Co is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (${p.fromProfile ? `Co noticed it for them from where they're headed, not an ask: ${p.askText}` : `it came up for their ask: "${p.askText}"`})` })).map((d) => d.link);

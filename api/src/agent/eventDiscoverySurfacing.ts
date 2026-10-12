@@ -5,6 +5,7 @@ import { draftAgain, draftProactive, nameTokens, type Facts, type OutputRules } 
 import { renderEventDetails } from "../services/eventDetails.js";
 import { stripClosingQuestion } from "../services/offerFollowUp.js";
 import { IDENTITY_RULE, stripUngroundedIdentity } from "../services/identityGuard.js";
+import { identityDropped } from "../services/guardDrops.js";
 import { isShortNotice } from "../services/eventSurfacingSweep.js";
 import { audienceSayings, audienceTokens, isGroupAimed } from "../services/eventAudience.js";
 
@@ -173,6 +174,7 @@ export async function draftEventReveal(
   const finish = (text: string | null): string | null => {
     if (!text) return null;
     const grounded = stripUngroundedIdentity(text, item.grounding);
+    identityDropped(text, grounded, "event_reveal");
     return grounded ? stripClosingQuestion(grounded) : null;
   };
   let body = finish(await draft());

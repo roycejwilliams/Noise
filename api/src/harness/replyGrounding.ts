@@ -115,7 +115,7 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // coldStart: set for a member with fewer than two findable interests on file (services/coldStart.ts): whether this reply was offered
 // a steering question, and why or why not; recorded after the reply goes out (agent/conversationReply.ts).
 // door: a new member's first read (services/theDoor.ts): whether this reply was offered the moment, and why or why not.
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null };
+export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string> };
 export type ColdStartFacts = { offered: boolean; why: string; seeds: SeedCount; instruction: string | null };
 export type DoorFacts = { offered: boolean; why: string; instruction: string | null };
 
@@ -1035,7 +1035,7 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // "It hasn't come through on my end" is about the file they sent, not Co's machinery: allowed when their file record says nothing
   // readable arrived (services/inboundFile.ts, 2026-10-10 rows 10405/10410), the same fact that backs it in claimChecks below.
   const nothingReadable = recordSaysNothingReadable(rf.facts);
-  const narrated = narratesInternalState(draft, { allow: (sentence) => nothingReadable && arrivalDenial(sentence) });
+  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) });
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Co's own state instead of what they get (${narrated})` });
   // A stored spot count, time or price said as current when every fact behind it is marked stale (Phase B, B3, services/asOf.ts):
   // say it as of its read, or it's cut. The sentence is quoted so stripUnsupported cuts exactly it.
@@ -1053,9 +1053,86 @@ function extractJson(text: string): any {
   }
 }
 
+// This turn's receipts, listed again for the claim check so a paraphrase of what a tool just did is read as backed (2026-10-12
+// audit: "passed along to the team" was cut 1s after saveFeedbackForTeam saved it).
+// Only what happened: a receipt saying something didn't (no call scheduled, a failed send) is never listed here, so it can't back a
+// claim that it did (2026-10-12 review).
+export function receiptsForCheck(rf: ReplyFacts): string {
+  return rf.facts.filter((f) => f.kind === "did_this_turn" && !NEGATIVE_RECEIPT.test(f.text)).map((f) => `[${f.id}] ${f.text}`).join("\n");
+}
+// A failure is its own kind (not_done). Only a did_this_turn receipt that leads with the failure is one too ("No call was scheduled",
+// "Trying X failed", "...didn't send"); a word inside a real receipt ("it isn't listed anywhere", "Nothing was sent to a@b.com" on a
+// draft) never makes it negative (2026-10-12 review).
+export const NEGATIVE_RECEIPT = /^\s*No\b|^\s*Trying\b.*\bfailed\b|\bdidn'?t send\b/i;
+
+// Co saying something it tried did NOT happen ("You're right, it never sent, and that's on me", "that didn't go through"). Never
+// something arriving to Co ("nothing's come through on my end"): that's the file record's to back (arrivalDenial).
+export const ADMITS_NOT_DONE = /\b(never|nothing|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|not)\b[^.?!]{0,30}\b(sen[dt]|go(ne)? through|went( out| through)?|sav(e|ed)|happen(ed)?|made|ma[dk]e it|work(ed)?|deliver(ed)?|pass(ed)?|reach(ed)?|call(ed)?|book(ed)?)\b/i;
+// Something on record (not a receipt that it failed) says Co sent or did a thing; then an admission is left to the model's read.
+function doneOnRecord(facts: Fact[]): boolean {
+  return facts.some((f) => f.kind !== "not_done" && f.kind !== "hint" && /\b(sent|delivered|texted|emailed|went out|saved|made them)\b/i.test(f.text) && !NEGATIVE_RECEIPT.test(f.text));
+}
+
+// An admission and nothing else is a judgment about meaning, so a small model reads it (2026-10-12 review: clause regexes let
+// "I never sent it because Jordan already has your number" through). The cheap pre-filter: only a claim with a negation or an
+// ownership word is ever asked about. Fails closed: no answer means the claim gets the normal check.
+export const MAY_ADMIT = /\b(never|nothing|not|no|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|isn'?t|won'?t|can'?t|cannot|sorry|my fault|my mistake|my bad|on me)\b/i;
+export type AdmissionJudge = (prompt: string) => Promise<string>;
+// A one-word read: well under the claim check's cap, so it can't stall a reply.
+const ADMISSION_TIMEOUT_MS = 8_000;
+const haikuAdmission: AdmissionJudge = async (prompt) =>
+  // Sized for the answer; Haiku 5.x's thinking room is added at the fetch layer (thinkingRoom.ts).
+  (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 40, abortSignal: AbortSignal.timeout(ADMISSION_TIMEOUT_MS), experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.admission" }, prompt })).text;
+// Pure: the question.
+export function admissionPrompt(claim: string): string {
+  return `Co, a texting companion, is about to send this line:
+"${claim}"
+
+Does this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Co or another person) beyond Co admitting that something did NOT happen (including that it tried and couldn't: "I couldn't reach them"), or owning a mistake ("that's on me", "sorry", "you're right")? A reason or an aside that states a fact ("because Jordan already has your number", "since Ellis got it first") counts as asserting something.
+
+Return ONLY JSON: {"onlyAdmission": true} if the line only admits something didn't happen and/or owns it, else {"onlyAdmission": false}.`;
+}
+const admissionCache = new Map<string, boolean>();
+export async function judgeAdmission(claim: string, judge: AdmissionJudge = haikuAdmission): Promise<boolean | null> {
+  const key = claim.trim();
+  if (admissionCache.has(key)) return admissionCache.get(key)!;
+  try {
+    const out = parseModelJson<{ onlyAdmission?: unknown }>(await judge(admissionPrompt(key)));
+    if (typeof out?.onlyAdmission !== "boolean") return null;
+    if (admissionCache.size > 500) admissionCache.clear();
+    admissionCache.set(key, out.onlyAdmission);
+    return out.onlyAdmission;
+  } catch {
+    return null;
+  }
+}
+// A sentence the narration rule would cut that is only an honest admission ("The doc isn't made yet"), judged the same way and
+// kept, unless the record says the thing was done (2026-10-12 documents run: the true line was cut and its follow-on read orphaned).
+const sentenceKey = (s: string) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+export function admittedSentence(rf: ReplyFacts, sentence: string): boolean {
+  return !!rf.admitted?.has(sentenceKey(sentence));
+}
+export async function admitNarratedSentences(draft: string, rf: ReplyFacts, judge?: AdmissionJudge): Promise<void> {
+  if (doneOnRecord(rf.facts)) return;
+  const sentences = draft.replace(/[’‘]/g, "'").split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+  const asks = sentences.filter((s) => MAY_ADMIT.test(s) && narratesInternalState(s));
+  await Promise.all(asks.map(async (s) => {
+    if ((await judgeAdmission(s, judge)) === true) (rf.admitted ??= new Set()).add(sentenceKey(s));
+  }));
+}
+
+// The past_action claims that might be admissions, judged; only a true answer is in the map.
+export async function admissionsFor(claims: Claim[], judge?: AdmissionJudge): Promise<Map<string, boolean>> {
+  const asks = [...new Set(claims.filter((c) => (c.type === "past_action" || c.type === "detail") && MAY_ADMIT.test(c.text)).map((c) => c.text))];
+  const out = new Map<string, boolean>();
+  await Promise.all(asks.map(async (t) => { if ((await judgeAdmission(t, judge)) === true) out.set(t, true); }));
+  return out;
+}
+
 async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources, model: string = LAYER3_MODELS.grounding): Promise<{ claims: Claim[]; latencyMs: number } | null> {
   const started = Date.now();
   const facts = rf.facts.filter((f) => f.kind !== "hint").map((f) => `[${f.id}] ${f.text}`).join("\n");
+  const receipts = receiptsForCheck(rf);
   const { text } = await generateText({
     model: anthropic(model),
     maxOutputTokens: 2000,
@@ -1083,15 +1160,16 @@ Never claims (don't list these):
 - The member's own words and choices from this conversation, restated or built on ("you already called the daytonaio night your pick", "since you said you're in"). The member is never "another person".
 - Opinions, feelings, questions (an offer asked as a question, "Want me to look now?", is a question), encouragement, and how Co will talk ("I'll keep it short").
 - Saying yes to what they just asked ("Happy to.", "Sure.", "Glad to help.", "Let's do it."): that's agreeing, not a capability. Inviting them to send or share something ("Send it over", "Walk me through the key slides") is a request, not a claim.
+- What Co's own draft, prompt, plan or advice should do for them ("That should give you clean, reusable drafts"): that's advice about Co's own work, not a prediction about the world.
 - Advice and possibilities: general know-how about how things usually go ("personal invites beat a mass email"); what kind of people events like this tend to draw; where this could take them ("could be a good place to find the dependable builder people you're after"); a plan or schedule Co proposes for them; a conclusion reasoned from the sources ("if Oct 10 is under 30 days out, the permit may not clear").
 
 Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Co about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
 
-Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. What they've told Co before (their own words, below) can support member_life; what Co knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Co is never part of their own life. Never count something as supported because it's plausible.
+Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. Saying Co did NOT do something ("it never sent, and that's on me", "that didn't go through") is supported when no FACT shows it happened; mark it supported with no factId. A FACT listed under DONE THIS TURN is something that really happened this turn, what Co's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. Their own texts in this conversation are a source for their own life and plans, said back in Co's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day ("today's meeting" backs "later today" for it, never "tonight"); quote their words. What they've told Co before (their own words, below) can support member_life; what Co knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Co is never part of their own life. Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
-
+${receipts ? `\nDONE THIS TURN (what Co's own tools really did in this turn; each is also a FACT above, cite its id):\n${receipts}\n` : ""}
 Conversation so far:
 ${src.recentConversation || "(none)"}
 ${src.sentThisTurn?.length ? `\nCo already sent this turn:\n${src.sentThisTurn.join("\n")}\n` : ""}${src.contextSummary ? `\nWhat Co knows about them:\n${src.contextSummary}\n` : ""}${theirOwnWords(src.recentMemories) ? `\nWhat they've told Co before (their own words from older conversations):\n${theirOwnWords(src.recentMemories)}\n` : ""}
@@ -1116,12 +1194,19 @@ Return ONLY JSON: {"claims": [{"text": "exact words from the message", "type": "
   return { claims, latencyMs: Date.now() - started };
 }
 
+// Co saying it passed something to the team ("Noted, and passed along to the team", "flagged it for the team", "the team has it").
+export const TEAM_PASS = /\b(pass(ed|ing)?|sen[dt]|shar(ed|ing)|flagg(ed|ing)|forward(ed|ing)|not(ed|ing)|sav(ed|ing)|log(ged|ging)|g(o|oes|one) (straight )?)\b[^.?!]{0,30}\b(to|for|with) the team\b|\bthe team (has|got|will see) (it|that|this)\b/i;
+
+// More than the pass-along ("and they'll fix it by Friday"): a promise, a day or a fix still needs its own source.
+export const TEAM_PASS_PLUS = /\b(will|won'?t|going to|gonna|fix(es|ed|ing)?|today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|soon|by \w+)\b|\w['’]ll\b|\d/i;
+
 // A model's "supported" only counts if its citation checks out in code.
-export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): GateCheck[] {
+export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources, admissions: Map<string, boolean> = new Map()): GateCheck[] {
   // A hint (model-written read) is never support, even when cited.
   const factIds = new Set(rf.facts.filter((f) => f.kind !== "hint").map((f) => f.id));
   const hintIds = new Set(rf.facts.filter((f) => f.kind === "hint").map((f) => f.id));
   const nothingReadable = recordSaysNothingReadable(rf.facts);
+  const savedForTeamThisTurn = rf.facts.some((f) => f.kind === "did_this_turn" && /^Saved for the team:/.test(f.text));
   return claims.map((c) => {
     const sources = sourceText(rf, src, c.type);
     let pass = c.supported;
@@ -1131,6 +1216,19 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     if (!pass && c.type === "capability" && WILLING.test(c.text.trim())) {
       pass = true;
       reason += " (agreeing to what they asked, not a capability)";
+      return { name: `claim_${c.type}`, pass, reason };
+    }
+    // Passing it to the team, right after saveFeedbackForTeam saved it this turn: the receipt is the fact, whatever the model cited
+    // (2026-10-12 audit, row 10175). Never the other way: no receipt, no pass.
+    // An honest admission it didn't happen is never cut as a false past action (2026-10-12 four-artifact test: "it never sent, and
+    // that's on me" was cut while the doc truly never sent). Nothing on record says it happened: kept. Something does: the model's
+    // read decides, without needing a fact to cite for an absence.
+    if ((c.type === "past_action" || c.type === "detail") && admissions.get(c.text) === true && (!doneOnRecord(rf.facts) || pass)) {
+      return { name: `claim_${c.type}`, pass: true, reason: `${reason} (an admission it didn't happen${pass ? "" : ", and nothing on record says it did"})` };
+    }
+    if (!pass && c.type === "past_action" && savedForTeamThisTurn && TEAM_PASS.test(c.text) && !TEAM_PASS_PLUS.test(c.text)) {
+      pass = true;
+      reason += " (saved for the team this turn)";
       return { name: `claim_${c.type}`, pass, reason };
     }
     // "It hasn't come through on my end": true when their file record says nothing readable arrived (services/inboundFile.ts),
@@ -1352,7 +1450,7 @@ export function stripUnsupported(draft: string, failed: GateCheck[], opts: { all
   // in place, so the quoted text never matched a sentence below and an
   // unsupported promise could go out marked "stripped" while still present).
   const bad = failed.map((f) => norm((f.reason ?? "").replace(/^[a-z_]+: "|"(\s*\([^)]*\))?$/g, "").replace(/^(link|phone number|time) /, "")));
-  const keep = sentences.filter((s) => {
+  const kept = sentences.map((s) => {
     const ns = norm(s);
     if (failed.some((f) => f.name === "no_call_placed_claim") && /(calling|ringing|dialing) you|i'?m (calling|ringing|dialing)/i.test(s)) return false;
     if (failed.some((f) => f.name === "no_crowd_claim") && crowdClaim(s)) return false;
@@ -1377,7 +1475,17 @@ export function stripUnsupported(draft: string, failed: GateCheck[], opts: { all
     if (failed.some((f) => f.name === "claim_read_failed") && needsClaimCheck(s)) return false;
     return !bad.some((b) => b.length >= 6 && (ns.includes(b) || b.includes(ns.replace(/[.!?]+$/, ""))));
   });
-  return keep.join("").trim();
+  // A sentence that leans on the one just cut goes with it ("The doc isn't made yet. What would unblock it is..." 2026-10-12): it
+  // would read orphaned.
+  // Only one that clearly points back at it, never a question or a caring line, and never when that would leave nothing.
+  const withDependents = [...kept];
+  for (let i = 1; i < sentences.length; i++) if (!withDependents[i - 1] && withDependents[i] && leansOnPrevious(sentences[i])) withDependents[i] = false;
+  const out = sentences.filter((_, i) => withDependents[i]).join("").trim();
+  return out || sentences.filter((_, i) => kept[i]).join("").trim();
+}
+export const LEANS_ON_PREVIOUS = /^\s*(?:what would (?:unblock|fix|change|speed up|help with) (?:it|that|this)|once (?:it|that|this)(?:'s|’s| is| goes| lands)|until (?:it|that|this)\b|the rest\b|otherwise\b)/i;
+export function leansOnPrevious(sentence: string): boolean {
+  return !/\?\s*["')\]]*\s*$/.test(sentence) && LEANS_ON_PREVIOUS.test(sentence);
 }
 
 // A model rewrite is only kept if code confirms it adds nothing new
@@ -1530,6 +1638,11 @@ const CLAIM_SHAPED = [
   // startup name saved" went out unchecked while their memories named both).
   CO_DENIES_HAVING,
   CLAIMS_ON_FILE,
+  // Co saying what it did to an artifact, or what one contains (2026-10-12 documents run: "I left the example section open... I put
+  // the frame and the closing ask in" went out unchecked about a document that didn't exist).
+  /\b(?:i|i'?ve|i have|i just|i already)\s+(?:just\s+|already\s+)?(?:left|put|kept|added|included|built|wrote|written|set up|made|drafted|filled in|laid out|structured|organized|framed)\b/i,
+  /\b(?:the|your|this|that|my)\s+(?:doc|document|deck|page|pdf|draft|brief|sheet|plan|slides?|outline|proposal|one-pager|section|template)\b[^.?!]{0,50}\b(?:has|have|includes?|covers?|contains?|opens? with|ends? with|lays out|walks through|starts with|leads with|closes with|is (?:built|set up|structured))\b/i,
+  /\b(?:it|each slide|every section|the first|the last)\s+(?:covers|includes|contains|opens with|ends with|lays out|walks through)\b/i,
 ];
 
 export function needsClaimCheck(draft: string): boolean {
@@ -1540,12 +1653,13 @@ export function needsClaimCheck(draft: string): boolean {
 // review): a single bad JSON response or a transient failure used to send
 // the draft "unchecked," with only the cheap regex checks behind it.
 async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model?: string): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
+  await admitNarratedSentences(draft, rf);
   const code = codeChecks(draft, rf, src);
   if (!needsClaimCheck(draft)) return { checks: [...code, { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const extracted = await extractClaims(draft, rf, src, model);
-      if (extracted) return { checks: [...code, ...claimChecks(extracted.claims, rf, src)], modelOk: true, ms: extracted.latencyMs };
+      if (extracted) return { checks: [...code, ...claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims))], modelOk: true, ms: extracted.latencyMs };
       console.error(`replyGrounding: claim check returned unusable JSON on attempt ${attempt}${attempt === 1 ? ", retrying once" : ""}`);
     } catch (err: any) {
       console.error(`replyGrounding: claim check failed on attempt ${attempt}${attempt === 1 ? ", retrying once" : " (non-fatal, giving up)"}:`, err?.message ?? err);
@@ -1559,7 +1673,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
 export async function claimChecksOnly(draft: string, rf: ReplyFacts, src: GroundingSources, opts: { force?: boolean } = {}): Promise<GateCheck[]> {
   if (!opts.force && !needsClaimCheck(draft)) return [];
   const extracted = await extractClaims(draft, rf, src).catch(() => null);
-  return extracted ? claimChecks(extracted.claims, rf, src) : [];
+  return extracted ? claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims)) : [];
 }
 
 // True when the claim read never came back for a draft that's claim-shaped
@@ -1612,7 +1726,7 @@ export async function groundReply(
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
     // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
-    const allowArrival = { allow: (sentence: string) => recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence) };
+    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) };
     let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);
@@ -1691,6 +1805,12 @@ export async function groundReply(
     recordDecision({ layer: 3, decision: "promise.dropped", userId: opts.userId, outcome: "skip", action: `task:${promiseTaskId}`, reason: "the promise was not in the final text" }).catch(() => {});
   }
 
+  // Promises and "I can"s held back, as their own typed row (services/guardDrops.ts): counted, no text.
+  const overpromised = result.outcome !== "as_drafted" ? result.checks.filter((c) => !c.pass && /^claim_(future_promise|capability)$/.test(c.name)) : [];
+  if (opts.record !== false && overpromised.length) {
+    const { recordGuardDrop } = await import("../services/guardDrops.js");
+    recordGuardDrop({ guard: "overpromise", where: "reply.grounding", userId: opts.userId ?? null, count: overpromised.length, reason: `${result.outcome}: ${[...new Set(overpromised.map((c) => c.name.replace(/^claim_/, "")))].join(", ")}` });
+  }
   if (opts.record !== false) {
     await recordDecision({
       layer: 3,

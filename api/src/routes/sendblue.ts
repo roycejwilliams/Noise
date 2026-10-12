@@ -73,7 +73,7 @@ import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
 import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
-import { OWED_AFTER, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
+import { OWED_AFTER, owedFromRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
 import { learnFromTextTurn } from "../services/turnLearning.js";
@@ -386,18 +386,7 @@ async function owedAnswer(userId: string): Promise<{ text: string; afterFailure:
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  // rows[0] is the message being handled now; look for their previous one.
-  const earlier = rows.slice(1);
-  const prevUser = earlier.findIndex((r: any) => String(r.content).startsWith("User said:"));
-  if (prevUser === -1) return null;
-  const since = earlier.slice(0, prevUser);
-  const notAnAnswer = [...HOLD_LINES, ...OWED_AFTER].map((l) => `Co replied: ${l}`);
-  const answered = since.some((r: any) => (String(r.content).startsWith("Co replied:") && !notAnAnswer.includes(String(r.content))) || String(r.content).startsWith("Mo replied:"));
-  if (answered) return null;
-  // Co told them something broke: answering it is now this reply's job. (Without
-  // that, the earlier message may just be mid-reply in its own turn.)
-  const afterFailure = since.some((r: any) => OWED_AFTER.some((l) => String(r.content) === `Co replied: ${l}`));
-  return { text: String(earlier[prevUser].content).replace(/^User said:\s*/, ""), afterFailure };
+  return owedFromRows(rows.map((r: any) => String(r.content)), HOLD_LINES);
 }
 
 // "You're in" for a good code: names the member who invited them when the

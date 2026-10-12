@@ -399,6 +399,8 @@ export async function holdToFacts(reply: string, says: string[], input: Pick<Tea
   addFact(rf, "known", `What Mo is waiting on: ${pendingLine(input.pending)}`);
   const failed = (await claimChecksOnly(reply, rf, { message: input.text, recentConversation: "" }).catch(() => [])).filter((c) => !c.pass);
   if (!failed.length) return reply;
+  // One row per hold, by claim type only (services/guardDrops.ts).
+  (await import("../services/guardDrops.js")).recordGuardDrop({ guard: "overpromise", where: "mo.team_reply", count: failed.length, reason: `unsupported: ${[...new Set(failed.map((c) => c.name.replace(/^claim_/, "")))].join(", ")}` });
   const kept = stripUnsupported(reply, failed).trim();
   if (says.every((s) => kept.includes(s.trim())) && kept.split(/\s+/).length >= 3) return kept;
   return says.length ? says.join("\n\n") : kept || `I can't do that one.`;
