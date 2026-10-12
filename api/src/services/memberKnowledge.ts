@@ -303,7 +303,13 @@ export const realKnowledgeDeps: KnowledgeDeps = {
     const at = (await rows(`SELECT MAX(created_at) AS at FROM suggestion_outcomes WHERE user_id = $1 AND result <> 'no_signal'`, [userId]))[0]?.at;
     return { text, at: at ? new Date(at) : new Date() };
   },
-  claims: async (userId, now, zone) => (await import("./claims.js")).liveClaims(userId, now, zone),
+  // Backstop: a claim a live guard says was removed or corrected away (services/whatCoKnows.ts) is never read, even if a row of it
+  // is still in the table (review of 3108dcf).
+  claims: async (userId, now, zone) => {
+    const [claims, W] = await Promise.all([(await import("./claims.js")).liveClaims(userId, now, zone), import("./whatCoKnows.js")]);
+    const rows = await W.forgottenRows(userId).catch(() => []);
+    return rows.length ? claims.filter((c) => !W.forgets(c.text, rows, "claim")) : claims;
+  },
   restraint: async (userId, now) => {
     const [state, safetyHold, emotional, kinds, inbound] = await Promise.all([
       rows(`SELECT hold_until, space_until FROM proactive_user_state WHERE user_id = $1`, [userId]).then((r) => r[0] ?? null),

@@ -296,18 +296,25 @@ export function forgetInSnapshot<T extends { work: string | null; place: string 
 // Their words asking to remove or forget something, or saying it's wrong (like memberFiles.ts DELETE_ASK), or a plain yes to Co's
 // own offer to remove it. A removal can't be undone, so the tool guard's "their words are in the message" isn't enough on its own
 // (review of ac5474a: "what do you know" passed it).
-export const REMOVE_ASK = /\b(remove|forget|delete|drop|erase|wipe|scrub|get rid of|take (?:that|it|this|those) (?:off|out|down)|(?:that'?s|that is|it'?s|its) (?:wrong|not true|not right|outdated)|not true|no longer true|isn'?t true|isn'?t right|don'?t (?:want|need) (?:that|it|this|those) (?:on file|kept|saved|anymore)|stop (?:remembering|holding|keeping))\b/i;
+const OBJ = "(?:that|it|this|those|these|the|my|about|everything|all|what)";
+export const REMOVE_ASK = new RegExp(
+  "\\b(?:remove|delete|erase|wipe|scrub|get rid of|" +
+    `(?<!don'?t |do not |never )forget ${OBJ}|drop ${OBJ}|` +
+    "take (?:that|it|this|those) (?:off|out|down)|(?:that'?s|that is|it'?s|its) (?:wrong|not true|not right|outdated)|not true|no longer true|isn'?t true|isn'?t right|" +
+    "don'?t (?:want|need) (?:that|it|this|those) (?:on file|kept|saved|anymore)|stop (?:remembering|holding|keeping))\\b",
+  "i",
+);
 const PLAIN_YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|do it|go ahead|yes please|please do|definitely|absolutely)[.!]*$/i;
 export function removalAsked(message: string, lastCoMessage: string | null | undefined): boolean {
-  if (REMOVE_ASK.test(message)) return true;
+  if (REMOVE_ASK.test(message.replace(/[’‘]/g, "'"))) return true;
   const co = String(lastCoMessage ?? "");
   return PLAIN_YES.test(message.trim()) && /\b(remove|forget|delete|take (?:it|that) off|drop)\b/i.test(co) && /\?\s*$/.test(co.trim());
 }
 
 // ---------------------------------------------------------------- reading
 
-export async function readKnown(userId: string): Promise<RawKnown> {
-  const q = (sql: string, args: unknown[]) => pool.query(sql, args).then((r) => r.rows as any[]);
+export async function readKnown(userId: string, db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<RawKnown> {
+  const q = (sql: string, args: unknown[]) => db.query(sql, args).then((r) => r.rows as any[]);
   const [prof, claims, snap, threads, kit, tastes, asks, files, zone] = await Promise.all([
     q(`SELECT city, long_term_direction, availability_pattern, goals, life_chapters, blockers, activity_preferences, avoid, intent FROM co_profiles WHERE user_id = $1`, [userId]),
     q(`SELECT id, text, provenance, kind, quote, expires_on FROM member_claims WHERE user_id = $1 ORDER BY said_on DESC LIMIT 40`, [userId]),
@@ -390,19 +397,31 @@ export function resolveRefs(refs: string[], items: KnownItem[]): { refs: string[
 
 // ---------------------------------------------------------------- changing
 
+export class NotApplied extends Error {
+  constructor() {
+    super("no row changed");
+  }
+}
 type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 
 // Applies one item's change at its source. Returns what it had and what it holds now, or why it can't.
-async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, action: "correct" | "remove", now: string | null, theirWords: string): Promise<Applied | { why: string }> {
+export async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, action: "correct" | "remove", now: string | null, theirWords: string): Promise<Applied | { why: string }> {
   const [kind, a, b] = item.ref.split(":");
   const was = item.text;
   if (action === "correct" && !item.canCorrect) return { why: "this kind can only be removed; remove it and note the new one with its own tool" };
   const v = action === "correct" ? now : null;
+  // The row it changes must still be there: 0 rows changed is not a change (review of 3108dcf: a claim rewritten by the nightly
+  // refresh under new ids was "removed" while it stayed live).
+  const must = async (sql: string, args: unknown[]) => {
+    const r = await db.query(sql, args);
+    if (!r.rowCount) throw new NotApplied();
+    return r;
+  };
   switch (kind) {
     case "profile": {
       const field = a;
       if (["city", "long_term_direction", "availability_pattern"].includes(field)) {
-        await db.query(`UPDATE co_profiles SET ${field} = $2, updated_at = NOW() WHERE user_id = $1`, [userId, v]);
+        await must(`UPDATE co_profiles SET ${field} = $2, updated_at = NOW() WHERE user_id = $1`, [userId, v]);
         return { ref: item.ref, source: "profile", was: String((raw.profile as any)?.[field] ?? was), now: v };
       }
       if (!["goals", "life_chapters", "blockers", "activity_preferences"].includes(field)) return { why: "not a field that can change" };
@@ -411,7 +430,7 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
       if (!old) return { why: "it's no longer on file" };
       const next = list.filter((x) => x !== old);
       if (v && !next.includes(v)) next.unshift(v);
-      await db.query(`UPDATE co_profiles SET ${field} = $2, updated_at = NOW() WHERE user_id = $1`, [userId, next]);
+      await must(`UPDATE co_profiles SET ${field} = $2, updated_at = NOW() WHERE user_id = $1`, [userId, next]);
       return { ref: item.ref, source: "profile", was: old, now: v };
     }
     case "goal": {
@@ -420,14 +439,14 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
       const e = intent.find((x: any) => x?.id === a);
       if (!e) return { why: "it's no longer on file" };
       const next = v ? intent.map((x: any) => (x?.id === a ? { ...x, text: v, confirmed_at: new Date().toISOString() } : x)) : intent.filter((x: any) => x?.id !== a);
-      await db.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(next)]);
+      await must(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(next)]);
       const { goalHash } = await import("./goalEdges.js");
       await db.query(`DELETE FROM goal_states WHERE user_id = $1 AND goal_hash = $2`, [userId, goalHash(String(e.text))]).catch(() => {});
       return { ref: item.ref, source: "goal", was: String(e.text), now: v };
     }
     case "claim": {
-      if (v) await db.query(`UPDATE member_claims SET text = $3, provenance = 'user_said', quote = $4, confirmed_on = CURRENT_DATE WHERE id = $1 AND user_id = $2`, [a, userId, v, theirWords.slice(0, 200)]);
-      else await db.query(`DELETE FROM member_claims WHERE id = $1 AND user_id = $2`, [a, userId]);
+      if (v) await must(`UPDATE member_claims SET text = $3, provenance = 'user_said', quote = $4, confirmed_on = CURRENT_DATE WHERE id = $1 AND user_id = $2`, [a, userId, v, theirWords.slice(0, 200)]);
+      else await must(`DELETE FROM member_claims WHERE id = $1 AND user_id = $2`, [a, userId]);
       return { ref: item.ref, source: "claim", was: raw.claims.find((c) => c.id === a)?.text ?? was, now: v };
     }
     case "snapshot": {
@@ -446,13 +465,13 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
       }
       if (!old) return { why: "it's no longer on file" };
       // updated_at is left alone: the next rebuild still runs on schedule, and its guard (forgetInSnapshot) keeps this change.
-      await db.query(`UPDATE person_snapshots SET snapshot = $2 WHERE user_id = $1`, [userId, JSON.stringify(s)]);
+      await must(`UPDATE person_snapshots SET snapshot = $2 WHERE user_id = $1`, [userId, JSON.stringify(s)]);
       return { ref: item.ref, source: "snapshot", was: old, now: v };
     }
     case "thread": {
-      if (v) await db.query(`UPDATE member_threads SET text = $3, last_touched_at = NOW() WHERE id = $1 AND user_id = $2`, [a, userId, v]);
+      if (v) await must(`UPDATE member_threads SET text = $3, last_touched_at = NOW() WHERE id = $1 AND user_id = $2`, [a, userId, v]);
       else {
-        await db.query(`UPDATE member_threads SET status = 'changed', closed_quote = $3, closed_at = NOW() WHERE id = $1 AND user_id = $2`, [a, userId, theirWords.slice(0, 300)]);
+        await must(`UPDATE member_threads SET status = 'changed', closed_quote = $3, closed_at = NOW() WHERE id = $1 AND user_id = $2`, [a, userId, theirWords.slice(0, 300)]);
         // Nothing left to follow up on (the same as a thread closing, memberThreads.ts applyThreadProposal).
         await db.query(`UPDATE proactive_candidates SET status = 'skipped', updated_at = NOW() WHERE user_id = $1 AND target_key = $2 AND status = 'pending'`, [userId, `thread:${a}`]).catch(() => {});
       }
@@ -460,16 +479,16 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
     }
     case "kit": {
       const old = raw.kit.find((k) => k.key === a)?.value ?? was;
-      if (v) await db.query(`UPDATE member_kit SET value = $3, updated_at = NOW() WHERE user_id = $1 AND key = $2`, [userId, a, v]);
-      else await db.query(`DELETE FROM member_kit WHERE user_id = $1 AND key = $2`, [userId, a]);
+      if (v) await must(`UPDATE member_kit SET value = $3, updated_at = NOW() WHERE user_id = $1 AND key = $2`, [userId, a, v]);
+      else await must(`DELETE FROM member_kit WHERE user_id = $1 AND key = $2`, [userId, a]);
       return { ref: item.ref, source: "kit", was: `${a}: ${old}`, now: v ? `${a}: ${v}` : null };
     }
     case "taste": {
       const t = raw.tastes.find((x) => x.id === a);
       if (!t) return { why: "it's no longer on file" };
       // Design taste is one thing (its reader takes the newest), so all of it goes: an older one must not come back in its place.
-      if (t.type === "design_taste") await db.query(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
-      else await db.query(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
+      if (t.type === "design_taste") await must(`DELETE FROM co_memories WHERE user_id = $1 AND memory_type = 'design_taste'`, [userId]);
+      else await must(`DELETE FROM co_memories WHERE id = $1 AND user_id = $2 AND memory_type = 'room_taste'`, [a, userId]);
       return { ref: item.ref, source: "taste", was: t.text, now: null };
     }
     case "ask": {
@@ -477,12 +496,12 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
       if (v) {
         // Reworded in both places it lives (the check-in row and its intent entry); the entry's embedding is redone in the background
         // (refreshDerived), and until then the old one is dropped so matching never reads the old words.
-        await db.query(`UPDATE ask_checkins SET ask_text = $3 WHERE user_id = $1 AND ask_id = $2`, [userId, a, v]);
+        await must(`UPDATE ask_checkins SET ask_text = $3 WHERE user_id = $1 AND ask_id = $2`, [userId, a, v]);
         const intent = (raw.profile?.intent ?? []).map((x: any) => (x?.id === a ? { ...x, text: v, embedding: null } : x));
         await db.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(intent)]);
       } else {
         // The same three writes as askKind.ts closeAsk, on this transaction's client.
-        await db.query(`UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()), closed_reason = COALESCE(closed_reason, 'member'), closed_evidence = COALESCE(closed_evidence, $3) WHERE user_id = $1 AND ask_id = $2`, [userId, a, theirWords.slice(0, 300)]);
+        await must(`UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()), closed_reason = COALESCE(closed_reason, 'member'), closed_evidence = COALESCE(closed_evidence, $3) WHERE user_id = $1 AND ask_id = $2`, [userId, a, theirWords.slice(0, 300)]);
         const intent = (raw.profile?.intent ?? []).map((x: any) => (x?.id === a && x?.status === "active" ? { ...x, status: "resolved", resolved_at: new Date().toISOString() } : x));
         await db.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(intent)]);
         await db.query(`UPDATE relevance_edges SET status = 'retired', retired_at = NOW(), retired_reason = $3 WHERE person_id = $1 AND ask_id = $2 AND status = 'open'`, [userId, a, "removed at their request"]);
@@ -493,7 +512,7 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
       const list = raw.profile?.avoid ?? [];
       const old = list.find((x) => hashOf(x) === a);
       if (!old) return { why: "it's no longer on file" };
-      await db.query(`UPDATE co_profiles SET avoid = $2 WHERE user_id = $1`, [userId, list.filter((x) => x !== old)]);
+      await must(`UPDATE co_profiles SET avoid = $2 WHERE user_id = $1`, [userId, list.filter((x) => x !== old)]);
       return { ref: item.ref, source: "avoid", was: old, now: null };
     }
   }
@@ -518,9 +537,6 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   const { memberSafeLine } = await import("./memberSafeMemories.js");
   const safe = await memberSafeLine(userId);
   const clean = (t: string) => (safe(t) ?? "").trim();
-  const raw = await readKnown(userId);
-  const items = strippedItems(raw, safe);
-  const byRef = new Map(items.map((i) => [i.ref, i]));
   const applied: Applied[] = [];
   const refused: ChangeResult["refused"] = [];
   const changedRefs = new Set<string>();
@@ -535,6 +551,10 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     // The nightly claims refresh rewrites a member's claims under this lock (claims.ts refreshClaims): taking it here means a claim
     // removed now can't be re-inserted from a read the refresh made before it.
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('member_claims:' || $1))`, [userId]);
+    // Read and resolved under the lock, on this transaction: what's changed is what's on file now, not before a refresh ran.
+    const raw = await readKnown(userId, client);
+    const items = strippedItems(raw, safe);
+    const byRef = new Map(items.map((i) => [i.ref, i]));
     for (const c of changes) {
       if (c.action === "remove" && !asked) {
         for (const ref of c.refs) refused.push({ ref, why: "removing something needs them to ask for it in this message (remove, forget, delete, that's wrong) or say yes to your offer to remove it" });
@@ -559,8 +579,19 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
           else refused.push({ ref, why: "a file can only be removed" });
           continue;
         }
-        const r = await applyOne(client, userId, raw, item, c.action, now, o.theirWords);
+        // Each item on its own savepoint: one that changed nothing is rolled back alone and reported as not done.
+        await client.query("SAVEPOINT item");
+        let r: Awaited<ReturnType<typeof applyOne>>;
+        try {
+          r = await applyOne(client, userId, raw, item, c.action, now, o.theirWords);
+        } catch (err) {
+          await client.query("ROLLBACK TO SAVEPOINT item");
+          if (!(err instanceof NotApplied)) throw err;
+          refused.push({ ref, why: "nothing changed: it was no longer on file as it was (call whatCoKnows again); tell them plainly it wasn't done yet" });
+          continue;
+        }
         if ("why" in r) {
+          await client.query("ROLLBACK TO SAVEPOINT item");
           refused.push({ ref, why: r.why });
           continue;
         }
