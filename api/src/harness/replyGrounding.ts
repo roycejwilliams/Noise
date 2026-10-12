@@ -1060,13 +1060,25 @@ function extractJson(text: string): any {
 export function receiptsForCheck(rf: ReplyFacts): string {
   return rf.facts.filter((f) => f.kind === "did_this_turn" && !NEGATIVE_RECEIPT.test(f.text)).map((f) => `[${f.id}] ${f.text}`).join("\n");
 }
-export const NEGATIVE_RECEIPT = /\b(no|not|never|nothing|failed|fail|couldn'?t|could not|didn'?t|did not|wasn'?t|was not|isn'?t|won'?t|can'?t|cannot|unable|refused)\b/i;
+// A failure is its own kind (not_done). Only a did_this_turn receipt that leads with the failure is one too ("No call was scheduled",
+// "Trying X failed", "...didn't send"); a word inside a real receipt ("it isn't listed anywhere", "Nothing was sent to a@b.com" on a
+// draft) never makes it negative (2026-10-12 review).
+export const NEGATIVE_RECEIPT = /^\s*No\b|^\s*Trying\b.*\bfailed\b|\bdidn'?t send\b/i;
 
 // Co saying something it tried did NOT happen ("You're right, it never sent, and that's on me", "that didn't go through").
-export const ADMITS_NOT_DONE = /\b(never|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|not)\b[^.?!]{0,30}\b(sen[dt]|go(ne)? through|went( out| through)?|come through|came through|arrived?|sav(e|ed)|happen(ed)?|made|ma[dk]e it|work(ed)?|deliver(ed)?|pass(ed)?)\b/i;
+export const ADMITS_NOT_DONE = /\b(never|nothing|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|not)\b[^.?!]{0,30}\b(sen[dt]|go(ne)? through|went( out| through)?|come through|came through|arrived?|sav(e|ed)|happen(ed)?|made|ma[dk]e it|work(ed)?|deliver(ed)?|pass(ed)?|reach(ed)?|call(ed)?|book(ed)?)\b/i;
 // Something on record (not a receipt that it failed) says Co sent or did a thing; then an admission is left to the model's read.
 function doneOnRecord(facts: Fact[]): boolean {
   return facts.some((f) => f.kind !== "not_done" && f.kind !== "hint" && /\b(sent|delivered|texted|emailed|went out|saved|made them)\b/i.test(f.text) && !NEGATIVE_RECEIPT.test(f.text));
+}
+
+// Every clause that names an action is a negation: nothing in it says Co did something. "Couldn't reach them by phone, so I sent
+// Ellis your number" asserts a send, so it isn't an admission and its positive part is checked like any claim (2026-10-12 review).
+const ACTION_WORD = /\b(sen[dt]|went|go(ne)?|made|make|booked|book|introduced|intro|shared|share|texted|emailed|called|reached|scheduled|saved|passed|added|invited|forwarded|flagged|logged|delivered|came|arrived?|happened|work(ed)?)\b/i;
+export function onlyAdmits(text: string): boolean {
+  const clauses = text.split(/[,;.!?]+|\b(?:so|and|but|then|because|instead)\b/i).map((c) => c.trim()).filter(Boolean);
+  const acting = clauses.filter((c) => ACTION_WORD.test(c));
+  return acting.length > 0 && acting.every((c) => ADMITS_NOT_DONE.test(c));
 }
 
 async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources, model: string = LAYER3_MODELS.grounding): Promise<{ claims: Claim[]; latencyMs: number } | null> {
@@ -1163,7 +1175,7 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     // An honest admission it didn't happen is never cut as a false past action (2026-10-12 four-artifact test: "it never sent, and
     // that's on me" was cut while the doc truly never sent). Nothing on record says it happened: kept. Something does: the model's
     // read decides, without needing a fact to cite for an absence.
-    if (c.type === "past_action" && ADMITS_NOT_DONE.test(c.text) && (!doneOnRecord(rf.facts) || pass)) {
+    if (c.type === "past_action" && onlyAdmits(c.text) && (!doneOnRecord(rf.facts) || pass)) {
       return { name: `claim_${c.type}`, pass: true, reason: `${reason} (an admission it didn't happen${pass ? "" : ", and nothing on record says it did"})` };
     }
     if (!pass && c.type === "past_action" && savedForTeamThisTurn && TEAM_PASS.test(c.text) && !TEAM_PASS_PLUS.test(c.text)) {
