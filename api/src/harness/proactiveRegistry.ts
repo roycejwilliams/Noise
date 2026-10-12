@@ -660,25 +660,55 @@ export const proactiveRegistry: ProactiveRegistry = {
       const p = c.payload;
       const f = await B.presenceFlags(p.eventId, c.userId);
       if (f.briefSent || f.notGoing) return skip("already sent, or not going");
+      // A wait (the pause, an outage) can carry the row past its window; the brief never lands that late.
+      if (p.until && Date.now() > new Date(p.until).getTime()) return skip("the brief's window has closed");
+      // The matching pause (services/roomMatching.ts), as for every in-room send: the brief waits while it's on.
+      const RM = await import("../services/roomMatching.js");
+      const paused = await RM.matchingPause(p.eventId);
+      if (paused) return { defer: new Date(Date.now() + 30 * 60_000), reason: paused };
       const fetched = await eventMembers(p.eventId).catch(() => null);
       // A guest-list outage is not "no longer registered": try again shortly instead of dropping their brief for good.
       if (!fetched) return { defer: new Date(Date.now() + 30 * 60_000), reason: "couldn't read the guest list just now" };
       const members = fetched;
       if (!members.some((m) => m.user_id === c.userId)) return skip("no longer registered");
       const others = members.filter((m) => m.user_id !== c.userId);
-      const [flags, ranked] = await Promise.all([B.namedYes(p.eventId, others.map((m) => m.user_id)), B.rankingFor(p.eventId, c.userId)]);
+      const [flags, rankedAll] = await Promise.all([B.namedYes(p.eventId, others.map((m) => m.user_id)), B.rankingFor(p.eventId, c.userId)]);
+      // The pair record, as the in-room sends read it: a declined, introduced or blocked pair is never named or counted.
+      const blocks = await B.briefPairBlocks(p.eventId, c.userId, rankedAll.map((r) => r.candidate_id));
+      if (!blocks) return { defer: new Date(Date.now() + 30 * 60_000), reason: "couldn't read the pair records just now" };
+      const ranked = rankedAll.filter((r) => !blocks.has(r.candidate_id));
       // Their asks that are open and shareable right now: a stored reason that isn't one of them is never named.
       const { shareableAsks } = await import("../services/matching.js");
       const { rows: profs } = await pool.query(`SELECT user_id, intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [others.map((m) => m.user_id)]);
       const stillShareable = new Map<string, string[]>(profs.map((r: any) => [String(r.user_id), shareableAsks(r.intent).map((a) => String(a.text))]));
-      const chosen = B.pickNamed({ ranked, recipientId: c.userId, members: others, nameOk: flags.yes, notGoing: flags.notGoing, stillShareable });
-      // The same privacy check the in-room nudge uses, per person named: a reason that fails it is dropped, and the person with it.
-      const picks: typeof chosen.picks = [];
-      let unnamedFits = chosen.unnamedFits;
-      for (const pk of chosen.picks) {
-        if (await gateShareReason(c.userId, pk.id, pk.reason, "event_brief")) picks.push(pk);
-        else unnamedFits++;
+      // Per person named: the same privacy check the in-room nudge uses (a reason that fails it keeps them a count, not a name),
+      // then the same per-side value gate (services/roomMatching.ts valueGate, its policy as is) with this member's own line
+      // present. A pair the gate blocks is neither named nor counted, and the next one in line is considered instead.
+      const nameOk = new Set(flags.yes);
+      const dropped = new Set<string>();
+      const passed = new Set<string>();
+      let chosen = B.pickNamed({ ranked, recipientId: c.userId, members: others, nameOk, notGoing: flags.notGoing, stillShareable });
+      for (let again = true; again; ) {
+        again = false;
+        for (const pk of chosen.picks) {
+          if (passed.has(pk.id)) continue;
+          if (!(await gateShareReason(c.userId, pk.id, pk.reason, "event_brief"))) nameOk.delete(pk.id);
+          else {
+            const v = await RM.valueGate(p.eventId, p.name, c.userId, pk.id, "eventBrief.named", { allow: [p.name, ...(p.venue ? [p.venue] : [])] });
+            if (!v.ok && v.transient) return { defer: new Date(Date.now() + 30 * 60_000), reason: "the value read failed; trying again shortly" };
+            if (v.ok && v.lineFor(c.userId)) {
+              passed.add(pk.id);
+              continue;
+            }
+            dropped.add(pk.id);
+          }
+          chosen = B.pickNamed({ ranked: ranked.filter((r) => !dropped.has(r.candidate_id)), recipientId: c.userId, members: others, nameOk, notGoing: flags.notGoing, stillShareable });
+          again = true;
+          break;
+        }
       }
+      const picks = chosen.picks;
+      const unnamedFits = chosen.unnamedFits;
       if (!B.worthSending(picks, unnamedFits)) return skip("nobody to name and too few fit: the pre-arrival text covers it");
       const allowed = new Set(picks.map((x) => x.id));
       const zone = p.timezone ?? null;

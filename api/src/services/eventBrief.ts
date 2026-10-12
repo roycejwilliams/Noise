@@ -160,6 +160,26 @@ export async function namedYes(eventId: string, userIds: string[]): Promise<{ ye
   return { yes: new Set(rows.filter((r: any) => r.name_ok === true).map((r: any) => String(r.user_id))), notGoing: new Set(rows.filter((r: any) => r.not_going_at).map((r: any) => String(r.user_id))) };
 }
 
+// The pair record (services/roomMatching.ts pairBlockReason), the same guard the in-room sends read: a pair either side
+// declined at any event, one already introduced, one the value gate blocked or whose asks expired, is never in the brief,
+// named or counted. One read for all of the recipient's candidates. Returns candidate id -> why, for the blocked ones; null
+// when the read failed (the caller waits instead of naming anyone on a guess).
+export async function briefPairBlocks(eventId: string, recipientId: string, candidateIds: string[]): Promise<Map<string, string> | null> {
+  const out = new Map<string, string>();
+  if (!candidateIds.length) return out;
+  const { pairBlockReason } = await import("./roomMatching.js");
+  const rows = await pool
+    .query(`SELECT * FROM co_pairs WHERE (a_id = $1 AND b_id = ANY($2::uuid[])) OR (b_id = $1 AND a_id = ANY($2::uuid[])) ORDER BY created_at DESC`, [recipientId, candidateIds])
+    .then((r) => r.rows as any[])
+    .catch(() => null);
+  if (!rows) return null;
+  for (const id of candidateIds) {
+    const why = pairBlockReason(rows.filter((r) => String(r.a_id) === id || String(r.b_id) === id), eventId, recipientId, id);
+    if (why) out.set(id, why);
+  }
+  return out;
+}
+
 export async function rankingFor(eventId: string, personId: string): Promise<RankedCandidate[]> {
   const { rows } = await pool.query(`SELECT ranked_candidates FROM event_guest_rankings WHERE event_id = $1 AND person_id = $2`, [eventId, personId]).catch(() => ({ rows: [] as any[] }));
   return Array.isArray(rows[0]?.ranked_candidates) ? rows[0].ranked_candidates : [];
