@@ -92,7 +92,12 @@ function asOf(d: Date, zone: string | null): string {
 // /d/v/), so a share link never shows the owner's own link.
 // showNotes: speaker notes are for the speaker, so only their own link shows them; a share link (their audience) never does (review
 // of PR 3). Never printed.
-export function renderDeck(page: { id: string; data: DeckData; updatedAt: Date }, o: { url: string | null; zone?: string | null; assetBase?: string; showNotes?: boolean }): string {
+// imageSrc: where an image's bytes come from, when not the deck's own link (the PDF export inlines them, PR 4). print: one 16:9 page
+// per slide, edge to edge, no downloads bar (the PDF export). downloads: the deck's own export links, relative to its address.
+export function renderDeck(
+  page: { id: string; data: DeckData; updatedAt: Date },
+  o: { url: string | null; zone?: string | null; assetBase?: string; showNotes?: boolean; imageSrc?: (assetId: string) => string | null; print?: boolean; downloadBase?: string },
+): string {
   const d = page.data;
   const s = d.style;
   const f = FONTS[s.type];
@@ -129,10 +134,17 @@ li::before{content:"";position:absolute;left:0;top:0.55em;width:clamp(6px,0.8vw,
 .slide.with-notes{flex-direction:column}
 .n{position:absolute;right:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
 .mark{position:absolute;left:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
-@media print{.notes{display:none}html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{border:none}}
+@media print{.notes{display:none}.dl{display:none}html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{border:none}}
+.dl{position:fixed;right:16px;top:12px;font-size:12px;letter-spacing:0.08em;z-index:5}
+@media (max-width:640px){.dl{position:static;text-align:right;padding:10px 16px 0}}
+.dl a{color:${s.text};opacity:0.7;text-decoration:none;border-bottom:1px solid ${s.accent};margin-left:14px}
+${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:13.333in;height:7.5in;min-height:0;padding:0;page-break-after:always;break-after:page}.frame{width:13.333in;height:7.5in;aspect-ratio:auto;border:none;border-radius:0;padding:0.9in}` : ""}
 `;
   // An asset is served only under this deck's own link (relative, so it never names another host).
-  const img = (id: string, alt: string, cls = "") => `<img${cls ? ` class="${cls}"` : ""} src="${e(`${o.assetBase ?? `${page.id}/a/`}${id}`)}" alt="${e(alt)}" decoding="async">`;
+  const img = (id: string, alt: string, cls = "") => {
+    const src = o.imageSrc ? o.imageSrc(id) : `${o.assetBase ?? `${page.id}/a/`}${id}`;
+    return src ? `<img${cls ? ` class="${cls}"` : ""} src="${e(src)}" alt="${e(alt)}" decoding="async">` : "";
+  };
   const slides = d.slides
     .map(
       (sl, i) =>
@@ -159,6 +171,7 @@ ${o.url ? `<meta property="og:url" content="${e(o.url)}">` : ""}
 </head>
 <body>
 <main>
+${o.downloadBase && !o.print ? `<div class="dl"><a href="${e(`${o.downloadBase}deck.pdf`)}" download>PDF</a><a href="${e(`${o.downloadBase}deck.pptx`)}" download>PowerPoint</a></div>` : ""}
 <section class="slide title"><div class="frame">${d.logo ? img(d.logo, `${d.title} logo`, "logo") : `<div class="rule"></div>`}<h1>${e(d.title)}</h1><p class="sub">${e(d.subtitle)}</p><div class="mark">Made by Co · ${e(asOf(page.updatedAt, o.zone ?? null))}</div></div></section>
 ${slides}
 </main>
