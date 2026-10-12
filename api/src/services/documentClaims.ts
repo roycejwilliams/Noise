@@ -36,11 +36,12 @@ A line PASSES when it is what they said, in other words:
 - two or more of their own statements put together, even from different texts (an answer and the question it answered count together);
 - a plain label or framing of their own point ("The format", "What we're asking for").
 
-- when they asked Co to frame, position or make the case for something: a framing, contrast or stance that rests on their facts ("Not a sponsored tasting: the pairings are picked for a table already seated on purpose"). Framing states no new fact.
+- when they asked Co to frame, position or make the case for something: a framing, contrast or stance that rests on their facts ("Not a sponsored tasting: the pairings are picked for a table already seated on purpose"). Framing states no new fact about them.
+- a contrast with the alternative they named, in general terms ("A sponsored tasting is the same pour for everyone"): that's framing too, not a fact about them.
 
 A line FAILS when it adds a fact they never gave:
 - a number, count, price, date, name, partner or deal, an event, a result or outcome, a metric;
-- something presented as true about their guests, partner, market or results that they never said ("guests rebook more", "the importer saw sales go up", "this proves the matching works");
+- something presented as true about them, their guests, partner, process or results that they never said ("guests rebook more", "the importer saw sales go up", "each pairing is planned for its table" when they never said how pairings are planned);
 - a missing piece written as if it were there (an example, a quote, a detail they said they don't have yet).
 
 What they said:
