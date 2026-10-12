@@ -5,7 +5,10 @@
 // Hourly: each signal's rate over the last 6 hours vs. the previous 7 days.
 // It alerts when the recent rate is both above its floor and at least double
 // the baseline, with enough volume to mean something. Each signal alerts at
-// most once every 12 hours. Alerts go to Royce only (services/reportEmail.ts) and the log.
+// most once every 12 hours. Alerts go to the decision log only (monitor.alert): Royce, 2026-10-11: "Remove the co alerts those are
+// not helpful. I don't understand why they were being sent to my email." The emails were rate statistics (a tool used more than its
+// week, often from a test run); read them in harness_decisions instead. The two alerts a person must act on still email
+// (alertTeamNow): a member who may not be safe, and texts to someone paused.
 //
 // Weekly (buildWeeklyReview): the week's bad moments with the conversation
 // around them, for turning into eval cases (scripts/weeklyReview.ts writes
@@ -174,9 +177,6 @@ export async function runMonitor(): Promise<void> {
       const detail = r.signal.steady
         ? `${r.signal.label}: ${pct(r.recentRate)} over the last ${r.signal.steady.window} (${r.recentBad} of ${r.recentTotal}).`
         : `${r.signal.label}: ${pct(r.recentRate)} in the last 6 hours (${r.recentBad} of ${r.recentTotal}), vs ${pct(r.baselineRate)} over the past week.`;
-      await sendTeamEmail(`Co alert: ${r.signal.label}`, `<p>${detail}</p><p>Look in harness_decisions for the details.</p>`).catch((err: any) =>
-        console.error("monitor: alert email failed (non-fatal):", err?.message ?? err),
-      );
       await recordDecision({ layer: 3, decision: "monitor.alert", userId: null, outcome: "act", action: r.signal.key, reason: detail });
     }
   } catch (err: any) {
@@ -198,19 +198,6 @@ export async function alertTeamNow(key: string, subject: string, detail: string)
   await recordDecision({ layer: 3, decision: "monitor.alert", userId: null, outcome: "act", action: key, reason: detail }).catch(() => {});
 }
 
-// Proves the alert path end to end (Resend, the address, the log) without
-// waiting for a real spike.
-export async function sendTestAlert(): Promise<void> {
-  const readings = await readSignals();
-  const pct = (x: number) => `${Math.round(x * 100)}%`;
-  await sendTeamEmail(
-    "Co alert test: monitoring is on",
-    `<p>This is a test from Co's hourly monitoring on co-test. Real alerts look like this, one per signal, at most every 12 hours.</p><ul>${readings
-      .map((r) => `<li>${r.signal.label}: ${pct(r.recentRate)} in the last 6 hours (${r.recentBad} of ${r.recentTotal}) vs ${pct(r.baselineRate)} over the week${shouldAlert(r) ? " (would alert)" : ""}</li>`)
-      .join("")}</ul>`,
-  );
-  await recordDecision({ layer: 3, decision: "monitor.alert", userId: null, outcome: "act", action: "test", reason: "test alert sent" });
-}
 
 // ---------------------------------------------------------------------------
 // Weekly review
