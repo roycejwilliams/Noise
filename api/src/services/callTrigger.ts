@@ -109,10 +109,11 @@ export async function triggerCallForUser(
 }
 
 // The dial claim: call_status 'dialing' (a live status to the gate, harness/callGate.ts), set only when no live call holds it. A live
-// status older than the gate's reclaim window is stale and can be claimed over, as the gate itself allows.
+// status older than the gate's reclaim window is stale and can be claimed over, as the gate itself allows; one with no timestamp at
+// all (older rows) is stale too, or the member could never be called again.
 export const DIAL_CLAIM_SQL = `WITH prev AS (SELECT call_status, call_status_updated_at FROM users WHERE id = $1 FOR UPDATE)
    UPDATE users u SET call_status = 'dialing', call_status_updated_at = NOW() FROM prev
-   WHERE u.id = $1 AND NOT (COALESCE(prev.call_status, '') = ANY($2::text[]) AND prev.call_status_updated_at > NOW() - make_interval(mins => $3))
+   WHERE u.id = $1 AND NOT (COALESCE(prev.call_status, '') = ANY($2::text[]) AND COALESCE(prev.call_status_updated_at, '-infinity'::timestamptz) > NOW() - make_interval(mins => $3))
    RETURNING prev.call_status AS prev_status, prev.call_status_updated_at AS prev_at`;
 type DialClaim = { prevStatus: string | null; prevAt: Date | null };
 async function claimDial(userId: string): Promise<DialClaim | null> {

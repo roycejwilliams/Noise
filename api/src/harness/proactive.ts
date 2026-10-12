@@ -686,7 +686,11 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   return checks;
 }
 
-const PERSON_CHECKS = new Set(["not_opted_out", "local_hours", "mid_conversation"]);
+const PERSON_CHECKS = new Set(["not_opted_out", "local_hours"]);
+// A safety follow-up is never held for a conversation going on (review of the concurrency fix: dispatch runs every 30 minutes, so a
+// hold could delay it that long). Every other proactive text waits.
+const isSafetyFollowUp = (c: Pick<Candidate, "payload">) => (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true;
+const safetyPassesHold = (k: GateCheck, c: Pick<Candidate, "payload">) => k.name === "mid_conversation" && isSafetyFollowUp(c);
 // The quota an answer skips. Spacing is not in it: every text keeps it.
 const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "engagement_pace"]);
 
@@ -739,7 +743,7 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
   const perCandidate = state.candidates.map((candidate) => {
     const answering = isAnswering(candidate);
     const laneChecks = (pacedByEngagement(candidate) ? byLane : legacyByLane)[laneOf(candidate.type)].filter(
-      (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap"),
+      (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap") && !safetyPassesHold(k, candidate),
     );
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering })];
     return { candidate, checks, ok: gate(checks).ok };
@@ -1562,7 +1566,8 @@ async function sendWithLedger(
     const joinedAt = await loadJoinedAt(client, person.userId).catch(() => null);
     const answering = isAnswering(c);
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt, midConversation }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
+      // A safety follow-up is never held for the conversation (isSafetyFollowUp).
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt, midConversation: midConversation && !isSafetyFollowUp(c) }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
         (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
       ),
       ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
