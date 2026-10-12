@@ -74,7 +74,7 @@ export function parseBoardRss(xml: string): { board: string; description: string
     .map((it) => pinTitle(decode(it.match(/<title>([\s\S]*?)<\/title>/i)?.[1] ?? "") || decode(it.match(/<description>([\s\S]*?)<\/description>/i)?.[1] ?? "")))
     .filter(Boolean)
     .slice(0, 25);
-  return { board: board.slice(0, 120), description: description?.slice(0, 300) ?? null, pins };
+  return { board: board.slice(0, 120), description: description ? description.replace(/\bhttps?:\/\/\S+|\bwww\.\S+/gi, "").replace(/\s+/g, " ").trim().slice(0, 200) || null : null, pins };
 }
 
 const lum = (hex: string) => {
