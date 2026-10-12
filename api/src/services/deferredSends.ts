@@ -94,13 +94,14 @@ export type AfterHandlers = Record<AfterKind, (payload: any, outcome: SendOutcom
 export const afterHandlers: AfterHandlers = {
   relay: async (p, outcome) => (await import("./relay.js")).relayDelivered(Number(p.relayId), outcome),
   reminder: async (p, outcome) => (await import("./relay.js")).reminderDelivered(Number(p.reminderId), outcome),
+  // Not sent because the other side already said yes (their own yes sent the intro): nothing to tell the asker.
   network_intro_ask: async (p, outcome) => {
     if (outcome === "sent") await (await import("./networkIntroNudge.js")).afterDirectAskSent(p as any);
-    else await noteIntroAskNotSent(p);
+    else if (!(await (await import("../harness/introConsent.js")).networkOptedIn(String(p?.candidateId ?? ""), String(p?.askerId ?? "")))) await noteIntroAskNotSent(p);
   },
   event_direct_ask: async (p, outcome) => {
     if (outcome === "sent") await (await import("./eventGuestMatchHandoff.js")).afterDirectAskSent(p as any);
-    else await noteIntroAskNotSent(p);
+    else if (!(await (await import("../harness/introConsent.js")).eventOptedIn(String(p?.eventId ?? ""), String(p?.candidateId ?? ""), String(p?.askerId ?? "")))) await noteIntroAskNotSent(p);
   },
   call_confirm: async (p, outcome) => {
     await (await import("./callFollowThrough.js")).afterConfirmSent(p as any, outcome);
@@ -236,6 +237,8 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     else if ((row.after_kind === "event_direct_ask" || row.after_kind === "network_intro_ask") && (await (await import("./roomMatching.js")).matchingPause(row.after_kind === "event_direct_ask" ? String((row.after_payload as any)?.eventId ?? "") : null))) result = { sent: false, reason: "proactive outreach is paused" };
     // Still valid when it finally goes: the pair wasn't declined, introduced or asked another way meanwhile.
     else if (row.after_kind === "event_direct_ask" && (await (await import("./roomMatching.js")).mayAsk(String((row.after_payload as any)?.eventId ?? ""), String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? ""), "deferredSends.directAsk"))) result = { sent: false, reason: "no longer valid" };
+    else if (row.after_kind === "event_direct_ask" && (await (await import("./roomMatching.js")).directAskStale(String((row.after_payload as any)?.eventId ?? ""), String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? "")))) result = { sent: false, reason: "no longer valid" };
+    else if (row.after_kind === "network_intro_ask" && (await (await import("./networkIntroNudge.js")).networkAskStale(String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? "")))) result = { sent: false, reason: "no longer valid" };
     else if (!localHourOk(now, row.timezone)) result = { sent: false, reason: "outside local hours" };
     else {
       result = await deps

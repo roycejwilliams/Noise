@@ -265,6 +265,10 @@ export function pairBlockReason(rows: PairRow[], eventId: string, x: string, y: 
   const member = here.origin === "member";
   if (!member && (here.state === "blocked" || here.value_verdict === "weak" || here.blocked_reason)) return `value lines blocked${here.blocked_reason ? `: ${here.blocked_reason}` : ""}`;
   if (!member && here.state === "expired") return "asks expired when the room closed";
+  // x has answered about y here already (or the pair is past asking): asking again would ask someone who already said.
+  const answered = xIsA ? here.a_answer : here.b_answer;
+  if (answered) return `already answered (${answered})`;
+  if (here.state === "both_yes" || here.state === "intro_sent" || here.state === "met") return `pair is ${here.state}`;
   const asked = xIsA ? here.asked_a_at : here.asked_b_at;
   // A Co ask that expired with the room doesn't swallow a later by-name request: an ask from before the expiry is spent.
   const spent = member && here.expired_at && asked && new Date(asked).getTime() <= new Date(here.expired_at).getTime();
@@ -289,6 +293,19 @@ export async function mayAsk(eventId: string, x: string, y: string, action: stri
     await recordDecision({ layer: 6, decision: "match.pair", userId: x, outcome: "skip", action, proposal: { eventId, other: y }, checks: [{ name: "pair_may_ask", pass: false, reason: why }] }).catch(() => {});
   }
   return why;
+}
+
+// Right before a direct ask to x about y goes out: why it shouldn't any more, or null. Read fresh: the pair record (any
+// answer of x's, a pair that moved on) and x's own yes in the opt-in table, which is written a moment before the pair's
+// answer (eventGuestMatchHandoff.ts recordOptIn). Concurrency audit finding 8: both said yes at once, and the side whose
+// turn saw "not both" still asked the other "X is up for an intro, open to it?".
+export async function directAskStale(eventId: string, x: string, y: string): Promise<string | null> {
+  const why = pairBlockReason(await pairRows(x, y), eventId, x, y);
+  if (why) return why;
+  const { rows } = await pool
+    .query(`SELECT status FROM event_guest_match_opt_ins WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3`, [eventId, x, y])
+    .catch(() => ({ rows: [] as any[] }));
+  return rows[0] ? `already answered (${rows[0].status})` : null;
 }
 
 export async function notePairSuggested(eventId: string, x: string, y: string, origin: "co" | "member"): Promise<void> {
@@ -358,6 +375,35 @@ export async function notePairAnswer(eventId: string, x: string, y: string, answ
     )
     .catch((err: any) => console.error("co_pairs: answer failed (non-fatal):", err?.message ?? err));
   return next;
+}
+
+// The one send of a pair's intro email: "claimed" (this call sends it), "taken" (another call already has), or "none" (no
+// pair row: the caller goes on as before, guarded by its other checks). The claim (intro_claimed_at) is separate from the
+// send (intro_sent_at, written only once the email went), so a server that dies between the two leaves an unconfirmed
+// claim, which goes stale after INTRO_CLAIM_STALE_MINUTES and is taken again (retryHeldIntros). A second send of the same
+// intro is also refused by the email provider itself (the send carries an idempotency key per pair and event).
+export const INTRO_CLAIM_STALE_MINUTES = 15;
+export async function claimIntroSend(eventId: string, x: string, y: string): Promise<"claimed" | "taken" | "none"> {
+  const { a, b } = orderPair(x, y);
+  const won = await pool
+    .query(
+      `UPDATE co_pairs SET intro_claimed_at = NOW(), updated_at = NOW()
+       WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND intro_sent_at IS NULL
+         AND (intro_claimed_at IS NULL OR intro_claimed_at < NOW() - INTERVAL '${INTRO_CLAIM_STALE_MINUTES} minutes')
+       RETURNING id`,
+      [eventId, a, b],
+    )
+    .catch(() => null);
+  if (!won) return "none";
+  if (won.rows.length) return "claimed";
+  const { rows } = await pool.query(`SELECT 1 FROM co_pairs WHERE event_id = $1 AND a_id = $2 AND b_id = $3`, [eventId, a, b]).catch(() => ({ rows: [] as any[] }));
+  return rows.length ? "taken" : "none";
+}
+
+// A claimed send that didn't go: the pair is free for a retry (retryHeldIntros reads intro_sent_at IS NULL).
+export async function releaseIntroClaim(eventId: string, x: string, y: string): Promise<void> {
+  const { a, b } = orderPair(x, y);
+  await pool.query(`UPDATE co_pairs SET intro_claimed_at = NULL, updated_at = NOW() WHERE event_id = $1 AND a_id = $2 AND b_id = $3 AND intro_sent_at IS NULL`, [eventId, a, b]).catch(() => {});
 }
 
 export async function notePairIntroSent(eventId: string, x: string, y: string): Promise<void> {
@@ -437,7 +483,7 @@ ${mine.length ? mine.join("\n") : "- (nothing on file)"}
 All Co may say about ${other.firstName}, what ${other.firstName} said Co may tell people they meet: ${other.shared.map((t, i) => `${other.kinds?.[i] === "offering" ? "can offer" : "looking for"} "${t}"`).join("; ")}
 
 Write one sentence to ${reader.firstName}: the concrete reason meeting ${other.firstName} is worth it for ${reader.firstName}, resting on what ${other.firstName} shared, in close to their own words. Say nothing else about ${other.firstName}. Speak as Co straight to them ("you", and "I" for Co, never "Co thinks"): plain, warm, composed, the way a friend who knows both would put it. No em dashes, no exclamation points, no titles or labels for anyone.
-Then judge it honestly: would a friend who knows ${reader.firstName} make this introduction for ${reader.firstName}'s sake? "strong" only for a specific reason ${reader.firstName} gets value. "weak" when the reason is generic (similar interests, both in tech, good to know, would get along), a stretch, or one-sided.
+Then judge it honestly: would a friend who knows ${reader.firstName} make this introduction for ${reader.firstName}'s sake? A friend makes it when what ${other.firstName} shared plainly meets something ${reader.firstName} needs or offers, even if it doesn't spell out every detail ${reader.firstName} cares about (a style, a place, a timeline, a title): what ${other.firstName} shared is a few words on purpose, and the two of them can sort out the details once they meet. "strong" for a specific reason ${reader.firstName} gets value, a direct need-and-offer fit included. "weak" when the reason is generic (similar interests, both like food, both in tech, good to know, would get along), when nothing ${other.firstName} shared bears on what ${reader.firstName} wants or offers, or when ${other.firstName}'s words openly rule it out. Sharing a general interest (both into food, tech, running, meeting people) is generic, never a need-and-offer fit, unless ${other.firstName} can give ${reader.firstName} something specific. A missing detail is not a mismatch.
 Return ONLY JSON: {"line": "...", "verdict": "strong" or "weak", "why": "a few words"}`;
 }
 
@@ -602,7 +648,8 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
       ...(prof.activity_preferences ?? []),
       ...(prof.long_term_direction ? [prof.long_term_direction] : []),
       ...allGoals,
-      ...m.rows.map((r: any) => String(r.content)),
+      // Co's own texts to them ("Co replied: ...") are never their private words, whatever the read returned.
+      ...m.rows.map((r: any) => String(r.content)).filter((c: string) => !c.startsWith("Co replied:")),
       ...facts,
       // How their earlier intros went, in their words: theirs alone.
       ...past.rows.map((r: any) => String(r.note ?? "")).filter(Boolean),
@@ -765,10 +812,12 @@ export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
 // to send (intro_attempts). Pure: whether it's worth trying again now.
 export const INTRO_MAX_ATTEMPTS = 3;
 export const INTRO_RETRY_MAX_AGE_MS = 3 * 86_400_000;
-export function introRetryDue(p: { both_yes_at: Date | null; intro_held_at: Date | null; intro_attempts: number | null }, now: Date): boolean {
+export function introRetryDue(p: { both_yes_at: Date | null; intro_held_at: Date | null; intro_attempts: number | null; intro_claimed_at?: Date | null }, now: Date): boolean {
   if (!p.both_yes_at || now.getTime() - new Date(p.both_yes_at).getTime() > INTRO_RETRY_MAX_AGE_MS) return false;
   const attempts = p.intro_attempts ?? 0;
-  return attempts < INTRO_MAX_ATTEMPTS && (Boolean(p.intro_held_at) || attempts > 0);
+  // A claim no send ever confirmed (the server died in between), once it's stale.
+  const staleClaim = Boolean(p.intro_claimed_at) && now.getTime() - new Date(p.intro_claimed_at!).getTime() >= INTRO_CLAIM_STALE_MINUTES * 60_000;
+  return attempts < INTRO_MAX_ATTEMPTS && (Boolean(p.intro_held_at) || attempts > 0 || staleClaim);
 }
 
 // Held by the pause: marked once (and logged once), so the cron doesn't log it every five minutes.
@@ -791,10 +840,10 @@ export async function noteIntroFailed(eventId: string, x: string, y: string, why
 
 // Every limit is in the WHERE clause, oldest first, so rows past their cap or their age can never fill the batch and
 // starve a real held email (2026-10-12 re-review). introRetryDue stays as the same rule in code, for the checks.
-export const RETRY_HELD_INTROS_SQL = `SELECT p.event_id, p.a_id, p.b_id, p.both_yes_at, p.intro_held_at, p.intro_attempts FROM co_pairs p
+export const RETRY_HELD_INTROS_SQL = `SELECT p.event_id, p.a_id, p.b_id, p.both_yes_at, p.intro_held_at, p.intro_attempts, p.intro_claimed_at FROM co_pairs p
        JOIN users ua ON ua.id = p.a_id JOIN users ub ON ub.id = p.b_id
        WHERE p.state = 'both_yes' AND p.intro_sent_at IS NULL
-         AND (p.intro_held_at IS NOT NULL OR COALESCE(p.intro_attempts, 0) > 0)
+         AND (p.intro_held_at IS NOT NULL OR COALESCE(p.intro_attempts, 0) > 0 OR p.intro_claimed_at < NOW() - INTERVAL '${INTRO_CLAIM_STALE_MINUTES} minutes')
          AND COALESCE(p.intro_attempts, 0) < ${INTRO_MAX_ATTEMPTS}
          AND p.both_yes_at > NOW() - INTERVAL '${INTRO_RETRY_MAX_AGE_MS / 86_400_000} days'
          AND ua.archived_at IS NULL AND ub.archived_at IS NULL AND NOT coalesce(ua.sms_opted_out, false) AND NOT coalesce(ub.sms_opted_out, false)

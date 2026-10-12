@@ -2873,7 +2873,7 @@ export async function runMigrations(): Promise<void> {
   // Intro emails: held by the matching pause (sent when it lifts) or failed (a few bounded retries). And every decline
   // already on record joins its pair, so a declined pair is never suggested again (idempotent backfill).
   await pool
-    .query(`ALTER TABLE co_pairs ADD COLUMN IF NOT EXISTS intro_held_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS intro_attempts INTEGER NOT NULL DEFAULT 0`)
+    .query(`ALTER TABLE co_pairs ADD COLUMN IF NOT EXISTS intro_held_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS intro_attempts INTEGER NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS intro_claimed_at TIMESTAMPTZ`)
     .then(() =>
       pool.query(
         `INSERT INTO co_pairs (event_id, a_id, b_id, origin, state, declined_at, a_answer, a_answered_at, b_answer, b_answered_at)

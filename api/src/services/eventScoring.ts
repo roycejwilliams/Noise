@@ -5,7 +5,7 @@ import pool from "../db/db.js";
 import { matchablePhone } from "../utils/phone.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
-import { getActiveOfferingAsk, getActiveSeekingAsk, getGoalFrame, scoreAgainstStatedAsk, shareableAsks } from "./matching.js";
+import { getActiveOfferingAsk, getActiveSeekingAsk, getGoalFrame, roomFrame, scoreAgainstRoomFrame, shareableAsks, type RoomFrame } from "./matching.js";
 import { goalTexts } from "./goalJourney.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import { scheduleUnmatchedFollowUp } from "./eventUnmatchedFollowUp.js";
@@ -14,11 +14,12 @@ import { inRoomSendAllowed, recordInRoomSend, enqueueCandidate, type OutputRules
 import { writeMemory } from "./memory.js";
 import { mergeWalkinsIntoGuestPool } from "./eventWalkinCheckin.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
-import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn, withEnd } from "../harness/introConsent.js";
+import { checkEventWindow, checkNamesWithheld, checkOneNudgePerEvent, draftWithConsent, eventOptedIn, eventPromptLine, withEnd, type IntroEvent } from "../harness/introConsent.js";
 import { gateShareReason } from "../harness/matchGate.js";
 import { recordDecision } from "../harness/core.js";
 import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
+import { isOpenAsk } from "../harness/profileWrite.js";
 
 // Model policy (Royce, 2026-09-14): a draft that names another person is
 // Sonnet 5; the additive offer names no one (checked in code) and stays Haiku.
@@ -408,10 +409,16 @@ async function maybeSendMatchNudge(
     otherPhone: candidate.phone_number,
     otherEmail: candidate.email,
   };
+  // What the recipient told Co themselves (their shareable asks and goals): a draft may say it back to them.
+  const recipientOwn = [...shareableAsks(person.intent).map((a) => String(a.text)), ...goalTexts(person.intent, person.goals)];
   // The candidate's private words (private asks, profile, notes, owner-only facts) never appear in this text.
   const candidateSide = await RM.gatherValueSide(candidate.user_id);
   // Words any text may carry whoever said them: the event's name, its venue, the two first names.
-  const venue = (await RM.eventTiming(eventId).catch(() => null))?.venue ?? null;
+  const info = await RM.eventTiming(eventId).catch(() => null);
+  const venue = info?.venue ?? null;
+  // The event as it really is (name, day, time, venue), for the prompt and for the check that nothing else is stated
+  // (harness/introConsent.ts checkInventedSpecifics). The live timing wins over a stale read.
+  const introEvent = { name: eventName, start_at: eventTiming?.start_at ?? info?.start_at ?? null, end_at: eventTiming?.end_at ?? info?.end_at ?? null, timezone: (eventTiming as any)?.timezone ?? info?.timezone ?? null, venue };
   const allow = [eventName, ...(venue ? [venue] : []), person.first_name, candidate.first_name];
   const noPrivateQuote = (d: string) => [RM.checkNoPrivateQuote(d, candidateSide.privateTexts, candidateSide.shared, "no_private_quote", allow)];
   // Taste first: the one line on why this person gets value from the candidate. Set once the gate passes.
@@ -436,6 +443,7 @@ async function maybeSendMatchNudge(
         // The value line Co wrote for this person (it rests on the candidate's shareable ask, checked in code).
         shareReason: valueLine || top.shareReason!,
         feedback,
+        event: introEvent,
       }),
     });
     return cleanCoMessage(text.trim());
@@ -480,7 +488,7 @@ async function maybeSendMatchNudge(
       return false;
     }
 
-    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote }, draftFn);
+    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote, event: introEvent, said: [...candidateShared, valueLine || top.shareReason!, ...recipientOwn] }, draftFn);
     if (!message) {
       await releaseMatchNudgeClaim(eventId, person.user_id); // free it up so a later pass can retry
       return false;
@@ -563,12 +571,14 @@ async function maybeSendMatchNudge(
       facts: draftFacts,
       otherUserIds: [candidate.user_id],
       extraDraftChecks: (d) => [checkNamesWithheld(d, [candidate.first_name])],
+      event: introEvent.start_at ? introEvent : { name: eventName },
+      said: [...candidateShared, valueLine || top.shareReason!, ...recipientOwn],
     },
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft" },
-        prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: valueLine || top.shareReason!, feedback }),
+        prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: valueLine || top.shareReason!, feedback, event: introEvent }),
       });
       return cleanCoMessage(text.trim());
     },
@@ -668,12 +678,13 @@ async function maybeSendAdditiveOffer(
       facts: { otherFirstName: "", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: person.first_name },
       otherUserIds: newCandidates.map((c) => c.user_id),
       extraDraftChecks: (d) => [checkNamesWithheld(d, newCandidates.map((c) => c.first_name))],
+      event: { name: eventName, ...eventTiming },
     },
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(PLAIN_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. ${eventPromptLine({ name: eventName, ...eventTiming }, eventName)} Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
 
 Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match. Don't say what anyone wants or said. This is just the offer to see more, nothing more. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
@@ -766,16 +777,32 @@ export async function scoreMatchedGroup(
   // Matching reads only asks a member marked shareable (Royce, 2026-10-12): a private ask is neither anyone's frame nor
   // anything the scorer sees about a candidate. Goals stay the frame for someone with no shareable ask.
   const { matchableIntent } = await import("./roomMatching.js");
+  // For the team (2026-10-12 audit: a room of text-only members produced zero nudges with no warning): how many guests
+  // have nothing shareable, so nobody can be pointed to them. Logged on every pass; never told to a member, no email.
+  const unshared = matched.filter((g) => !shareableAsks(g.intent).length);
+  console.log(`eventScoring: ${eventId} has ${unshared.length} of ${matched.length} guests with no shareable ask`);
+  await recordDecision({ layer: 6, decision: "match.room.unshared", userId: null, outcome: unshared.length ? "skip" : "act", action: "count", proposal: { eventId, guests: matched.length, noShareableAsk: unshared.length, ids: unshared.map((g) => g.user_id) }, reason: unshared.length ? `${unshared.length} of ${matched.length} guests have no shareable ask: nobody can be pointed to them` : null }).catch(() => {});
   const room = matched.map((g) => ({ ...g, intent: matchableIntent(g.intent) }));
   matched = room;
+  // Co's read of which asks are about people (services/peopleAsks.ts), for the whole room in one call; each person's frame
+  // below reads it from the cache.
+  {
+    const { readPeopleAsks, askLine } = await import("./peopleAsks.js");
+    const texts = [...new Set(matched.flatMap((g) => (Array.isArray(g.intent) ? (g.intent as any[]) : []).filter((e) => isOpenAsk(e)).map(askLine)))];
+    if (texts.length) await readPeopleAsks(texts).catch(() => []);
+  }
   for (const person of matched) {
     const others = matched.filter((m) => m.user_id !== person.user_id);
     // Goals are the frame for who is worth meeting; asks write the specific reason (a candidate's own ask is the share reason). Someone with only
     // goals is scored against them instead of being asked what they want from the room. Someone with only an OFFERING ("climate
     // hardware founders to back at seed") is scored against it too (2026-10-07): it names who they're there for.
     const ask = getActiveSeekingAsk(person.intent) ?? getGoalFrame(person.intent) ?? getActiveOfferingAsk(person.intent);
+    // What they're scored on (services/matching.ts roomFrame, 2026-10-12 audit): every open people-shaped ask, both
+    // directions, de-duplicated, errands left out, the goal as the frame when no ask is about people. Only errands on file
+    // and no goal: nothing to judge a room by, so they're asked what they'd like from it, like someone with no ask.
+    const frame: RoomFrame | null = ask?.text ? await roomFrame(person.intent) : null;
 
-    if (!ask?.text) {
+    if (!frame) {
       if (await wasRecentlySolicited(eventId, person.user_id)) {
         continue; // already asked within the cooldown window — wait for a reply or the next window
       }
@@ -809,8 +836,8 @@ export async function scoreMatchedGroup(
       const h = edgeHint(e);
       if (h) hints.set(id, h);
     }
-    const scored = await scoreAgainstStatedAsk(
-      ask,
+    const scored = await scoreAgainstRoomFrame(
+      frame,
       others,
       askerContextParts.length ? askerContextParts.join("; ") : undefined,
       hints,
@@ -833,7 +860,7 @@ export async function scoreMatchedGroup(
     // Read BEFORE storeRanking overwrites the row — this is the diff basis
     // for the additive-offer path below.
     const previouslyRankedIds = await getPreviousRankedCandidateIds(eventId, person.user_id);
-    await storeRanking(eventId, person.user_id, ranked, `ask: "${ask.text}"`);
+    await storeRanking(eventId, person.user_id, ranked, `asks: ${frame.asks.map((a) => `"${a.text}"`).join(" / ") || "(none about people)"}${frame.goal ? `; goal: "${frame.goal.text}"` : ""}`);
     scoredCount++;
 
     const alreadyNudged = await wasAlreadyNudgedForMatch(eventId, person.user_id);
@@ -848,7 +875,7 @@ export async function scoreMatchedGroup(
       for (const r of tries) {
         const cand = others.find((o) => o.user_id === r.candidate_id);
         if (!cand || (live && !r.shareReason)) continue;
-        const sent = await maybeSendMatchNudge(eventId, eventName, person, r, cand, eventTiming, opts).catch((err: any) => {
+            const sent = await maybeSendMatchNudge(eventId, eventName, person, r, cand, eventTiming, opts).catch((err: any) => {
           console.error(`eventScoring: maybeSendMatchNudge failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
           return false;
         });
@@ -963,16 +990,16 @@ export async function scoreGuestListForEvent(
 }
 
 // Exported so evals/intro can run the exact production prompt.
-export function matchNudgePrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
-  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they're going to. You found someone else going who's genuinely worth them meeting: ${p.otherFirstName}. Why they're worth meeting: ${p.shareReason}
+export function matchNudgePrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null; event?: IntroEvent | null }): string {
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they're going to. ${eventPromptLine(p.event, p.eventName)} You found someone else going who's genuinely worth them meeting: ${p.otherFirstName}. Why they're worth meeting: ${p.shareReason}
 
 Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName} and naming the real reason above in your own words. Use only that reason. Never say ${p.otherFirstName} wants to meet them, mentioned them, or said anything about them. Not a hard sell, just a genuine heads-up, like a friend connecting two people who'd get along. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }
 
 // A heads-up about an event Co doesn't run (2026-09-23): no name, only why
 // they'd get along, and a question. Exported for evals/intro.
-export function anonymousHeadsUpPrompt(p: { recipientFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
-  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they told you they're going to. Another member of the club is going too and seems worth meeting. Why: ${p.shareReason}
+export function anonymousHeadsUpPrompt(p: { recipientFirstName: string; eventName: string; shareReason: string; feedback: string | null; event?: IntroEvent | null }): string {
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} about "${p.eventName}," an event they told you they're going to. ${eventPromptLine(p.event, p.eventName)} Another member of the club is going too and seems worth meeting. Why: ${p.shareReason}
 
 Draft a short, warm text (1-2 sentences, no em dashes, normal sentence capitalization) that says another member is also going, gives that reason in your own words without anything that would identify who it is (no name, company, or title), and asks if they'd like an intro. Say you'll share who it is once you've checked with them too. Never say the other person wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }
@@ -983,13 +1010,13 @@ Draft a short, warm text (1-2 sentences, no em dashes, normal sentence capitaliz
 // matchNudgePrompt's confident "worth meeting" framing — that framing is
 // earned by the real score threshold it's built around, and this pool never
 // cleared it. Exported so evals/intro can check the honesty framing directly.
-export function unmatchedPairPrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null }): string {
+export function unmatchedPairPrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null; event?: IntroEvent | null }): string {
   // Nothing about the other person's own night goes in here (2026-09-22):
   // an earlier version told the model the other person "also didn't come up
   // as a strong match for anyone," and a draft could repeat that — telling
   // one member something about another member who isn't in this
   // conversation. Only the recipient's own situation and the share reason.
-  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} near the end of "${p.eventName}." Nothing came up as a strong match for them tonight. ${p.otherFirstName} is also there. What they might have in common: ${p.shareReason}
+  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} near the end of "${p.eventName}." ${eventPromptLine(p.event, p.eventName)} Nothing came up as a strong match for them tonight. ${p.otherFirstName} is also there. What they might have in common: ${p.shareReason}
 
 Draft a short, low-key text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName}. This is NOT a confident "you two should meet" recommendation — don't use that framing, don't oversell it, and don't call it a match. Something more like it might be worth a quick hello, genuinely low-pressure. Say nothing at all about ${p.otherFirstName}'s night, matches, or situation beyond the reason above, and never say ${p.otherFirstName} wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }

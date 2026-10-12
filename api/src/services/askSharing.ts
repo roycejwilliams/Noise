@@ -84,3 +84,49 @@ export async function recordRsvpShareAnswer(userId: string, message: string): Pr
   await pool.query(`UPDATE event_presence SET share_answered_at = NOW() WHERE event_api_id = $1 AND user_id = $2`, [open.event_api_id, userId]);
   return { ok: true, shared: next.filter((e: any) => e?.id && ids.includes(e.id) && e.shareable === true).map((e: any) => String(e.text)) };
 }
+
+// ---------------------------------------------------------------- before the event, once (2026-10-12 intelligence audit)
+//
+// A member who only ever texted Co has every ask private, so nobody in the room could be pointed to them, and the room
+// produced no nudges at all. The RSVP question above reaches only asks that existed when they were asked about the brief.
+// So before each Co event, a guest with no shareable ask and at least one undecided ask about people (services/peopleAsks.ts:
+// errands and anything personal are never offered) is asked once, in their thread, through the daily pick (their hours, the
+// room lane's caps and spacing). Never more than once per event (event_presence.share_asked_at), and never while the RSVP
+// question, which carries the same line, is still to go. Their answer goes through the same tool and the same record
+// (recordRsvpShareAnswer): a yes marks that ask shareable; no answer leaves it private.
+
+// Pure: whether the question is due for this guest at this event.
+export function shareQuestionDue(p: {
+  notGoing: boolean;
+  // The RSVP question (which carries the sharing line) is still to go for this event.
+  nameAskPending: boolean;
+  // Already asked about sharing for this event (by either question).
+  shareAsked: boolean;
+  hasShareableAsk: boolean;
+  offerable: number;
+  startAt: string;
+  now: Date;
+}): { due: boolean; why: string } {
+  if (p.notGoing) return { due: false, why: "said they can't make it" };
+  if (new Date(p.startAt).getTime() <= p.now.getTime()) return { due: false, why: "the event has started" };
+  if (p.shareAsked) return { due: false, why: "already asked for this event" };
+  if (p.nameAskPending) return { due: false, why: "the RSVP question carries it" };
+  if (p.hasShareableAsk) return { due: false, why: "already has a shareable ask" };
+  if (!p.offerable) return { due: false, why: "no undecided ask about people" };
+  return { due: true, why: "" };
+}
+
+// In Co's voice, fixed in code: one light question.
+export function roomShareAskMessage(eventName: string, asks: { text: string }[]): string | null {
+  const line = shareAskMessage(asks);
+  if (!line) return null;
+  return `One question before ${eventName}. ${line.replace(/^And if/, "If")}`;
+}
+
+// The asks the question may offer now: undecided, about people, not personal (Co's read; unknown offers nothing).
+export async function offerableShareAsks(intent: unknown): Promise<{ id: string; text: string }[]> {
+  const { shareableCandidates } = await import("./peopleAsks.js");
+  const undecided = (Array.isArray(intent) ? intent : []).filter((e: any) => isOpenAsk(e) && e.id && (e.shareable === undefined || e.shareable === null)) as { id: string; text: string; type?: string }[];
+  const ok = await shareableCandidates(undecided);
+  return ok.slice(-RSVP_SHARE_MAX).reverse().map((a) => ({ id: a.id, text: a.text }));
+}

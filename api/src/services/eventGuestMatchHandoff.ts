@@ -6,7 +6,7 @@ import { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
-import { checkBothYes, draftWithConsent, eventOptedIn, gateIntroAction } from "../harness/introConsent.js";
+import { checkBothYes, draftWithConsent, eventOptedIn, eventPromptLine, gateIntroAction } from "../harness/introConsent.js";
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
@@ -219,11 +219,16 @@ async function maybeAskCandidateDirectly(
   // The message tells the candidate the asker wants an intro, so that has
   // to be on record first.
   const askerOptedIn = await eventOptedIn(eventId, asker.user_id, candidate.user_id);
+  // The event as it really is: the only source of a day or time in the text (harness/introConsent.ts checkInventedSpecifics).
+  const info = await RM.eventTiming(eventId).catch(() => null);
+  const introEvent = { name: eventName, start_at: info?.start_at ?? null, end_at: info?.end_at ?? null, timezone: info?.timezone ?? null, venue: info?.venue ?? null };
   const message = await draftWithConsent(
     {
       decision: "eventGuestMatchHandoff.directAsk",
       recipientId: candidate.user_id,
       otherUserIds: [asker.user_id],
+      event: introEvent,
+      said: [...askerSide.shared, ...(valueLine ? [valueLine] : [])],
       // The asker's private words (private asks, profile, notes) never reach the person being asked.
       extraDraftChecks: (d) => [RM.checkNoPrivateQuote(d, askerSide.privateTexts, askerSide.shared, "no_private_quote", [eventName, askerFirstName, candidate.first_name])],
       preChecks: [
@@ -244,12 +249,21 @@ async function maybeAskCandidateDirectly(
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details.${valueLine ? ` Why it could be worth it for ${candidate.first_name}, in your own words (say nothing else about ${askerFirstName}): ${valueLine}` : ""} Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. ${eventPromptLine(introEvent, eventName)} Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details.${valueLine ? ` Why it could be worth it for ${candidate.first_name}, in your own words (say nothing else about ${askerFirstName}): ${valueLine}` : ""} Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
       return cleanCoMessage(text.trim());
     },
   );
   if (!message) return;
+
+  // Read the pair again right before the ask goes (concurrency audit finding 8, 2026-10-12): drafting takes seconds, and when
+  // both say yes at the same moment the other side's yes lands in between. Their yes already sent the email; asking them
+  // "X is up for an intro, open to it?" after they said yes is wrong. Any answer of theirs, or a pair that's moved on, stops it.
+  const stale = await RM.directAskStale(eventId, candidate.user_id, asker.user_id);
+  if (stale) {
+    await recordDecision({ layer: 6, decision: "match.pair", userId: candidate.user_id, outcome: "skip", action: "eventGuestMatchHandoff.directAsk.recheck", proposal: { eventId, askerId: asker.user_id }, checks: [{ name: "pair_still_waiting_on_them", pass: false, reason: stale }] }).catch(() => {});
+    return;
+  }
 
   // Opt-out and local hours checked at send time, queued for the next
   // allowed hour if it's night for them (code review, 2026-09-17): this
@@ -302,7 +316,36 @@ export async function afterDirectAskSent(p: { eventId: string; eventName: string
 // of existing templates — appsubmit/welcome/otp/etc — not a generic
 // send-anything utility, so a new Resend call here is more honest than
 // bolting an unrelated template onto it).
-async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<boolean> {
+// Pure: what a Resend reply means for the intro. The same idempotency key with a different body ("invalid_idempotent_request")
+// means an earlier send with this key went: the email is out, so the pair is recorded as introduced. A concurrent request
+// with the key is still in flight: not sent yet, the claim stays until it goes stale.
+export function introSendOutcome(error: { name?: string | null; statusCode?: number | null } | null | undefined): "sent" | "already_sent" | "in_flight" | "failed" {
+  if (!error) return "sent";
+  if (error.name === "invalid_idempotent_request") return "already_sent";
+  if (error.name === "concurrent_idempotent_requests") return "in_flight";
+  return "failed";
+}
+
+// Pure: the email itself, from the pair in one order (by id) and the event's own name, so a retry after a crash builds the
+// very same email the first try did (the idempotency key covers the same body only).
+export function introEmailContent(eventName: string, x: { user_id: string; first_name: string }, y: { user_id: string; first_name: string }): { subject: string; html: string; first: string; second: string } {
+  const [a, b] = x.user_id < y.user_id ? [x, y] : [y, x];
+  return {
+    subject: `Introducing ${a.first_name} and ${b.first_name}`,
+    html: galleryEmail({
+      preview: `From ${eventName}: Co thinks you two should meet.`,
+      eyebrow: "An introduction",
+      headline: `${a.first_name}, meet ${b.first_name}.`,
+      // Sent once both say yes: in the room, or after it. Never "before it".
+      body: [`You were both at ${eventName}, and Co thought you two should meet. Consider this your introduction.`],
+      close: "You both said yes. Take it from here.",
+    }),
+    first: a.user_id,
+    second: b.user_id,
+  };
+}
+
+async function sendIntroEmail(eventId: string, _callerEventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<boolean> {
   const { a: aYes, b: bYes } = await bothOptedIn(eventId, a.user_id, b.user_id);
   const RM = await import("./roomMatching.js");
   // The emergency pause holds the email (the pair stays both_yes); services/roomMatching.ts retryHeldIntros sends it once
@@ -317,22 +360,27 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
     await RM.noteIntroHeld(eventId, a.user_id, b.user_id, paused);
     return false;
   }
-  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes), pauseCheck, onceCheck], { eventId, b: b.user_id }))) return false;
+  // Only one call sends it (live run 2026-10-12: both said yes at the same moment, each turn saw the other's yes, and the email
+  // went twice). The claim is the pair's intro_sent_at, taken atomically before the send and given back if the send fails.
+  const claim = aYes && bYes && !paused && !sentBefore ? await RM.claimIntroSend(eventId, a.user_id, b.user_id) : "ok";
+  const claimCheck = claim === "taken" ? { name: "intro_claim", pass: false, reason: "another reply is already sending this intro" } : { name: "intro_claim", pass: true };
+  if (!(await gateIntroAction(a.user_id, "eventGuestMatchHandoff.introEmail", [checkBothYes(aYes, bYes), pauseCheck, onceCheck, claimCheck], { eventId, b: b.user_id }))) return false;
   // No email on file for one of them: nothing to retry.
   if (!a.email || !b.email) {
+    if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
     await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "missing email", true);
     return false;
   }
 
-  const subject = `Introducing ${a.first_name} and ${b.first_name}`;
-  const html = galleryEmail({
-    preview: `From ${eventName}: Co thinks you two should meet.`,
-    eyebrow: "An introduction",
-    headline: `${a.first_name}, meet ${b.first_name}.`,
-    // Sent once both say yes: in the room, or after it. Never "before it".
-    body: [`You were both at ${eventName}, and Co thought you two should meet. Consider this your introduction.`],
-    close: "You both said yes. Take it from here.",
-  });
+  // One source for the event's name (services/roomMatching.ts eventTiming), whoever replied first and on every retry. Unreadable
+  // right now: counted as a failed try (retried by retryHeldIntros), never sent under another name.
+  const eventName = (await RM.eventTiming(eventId).catch(() => null))?.name ?? null;
+  if (!eventName) {
+    if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
+    await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "event name unreadable");
+    return false;
+  }
+  const { subject, html } = introEmailContent(eventName, a, b);
   if (!ALLOW_REAL_SENDS) {
     console.log(`[sendIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
   } else {
@@ -340,19 +388,28 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       const resend = new Resend(process.env.RESEND_API_KEY);
       // Co cc'd (Royce, 2026-09-07: "Co would need to be the driver of the
       // email") — visibly present so a reply-all naturally includes it.
-      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
-      if (error) throw new Error(error.message);
+      // One email per pair per event, even if a stale claim is ever taken again after a send went out (Resend keeps the key 24h).
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
+      const outcome = introSendOutcome(error as any);
+      if (outcome === "already_sent") console.log(`sendIntroEmail: ${eventId} pair was already emailed under this key; recording it as sent`);
+      else if (outcome === "in_flight") {
+        // Another send with this key is still going: leave the claim to go stale (a retake then gets the original reply).
+        await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "a send with this key is in flight");
+        return false;
+      } else if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
+      if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
       await RM.noteIntroFailed(eventId, a.user_id, b.user_id, String(err?.message ?? err).slice(0, 120));
       return false;
     }
   }
+  // The send is confirmed first: from here the claim is spent and the pair reads as introduced.
+  await RM.notePairIntroSent(eventId, a.user_id, b.user_id);
   await writeMemory(a.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   await writeMemory(b.user_id, "event_intro_email_sent", `Sent an intro email connecting ${a.first_name} and ${b.first_name} ahead of "${eventName}".`);
   // Introduced after both said yes: the only people a relay can reach (services/relay.ts).
   await import("./relay.js").then((r) => r.recordConnection(a.user_id, b.user_id, "event_intro")).catch(() => {});
-  await RM.notePairIntroSent(eventId, a.user_id, b.user_id);
   return true;
 }
 

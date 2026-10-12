@@ -532,6 +532,41 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // Once before a Co event, to a guest nobody in the room can be pointed to yet (services/askSharing.ts): may Co tell a good
+  // match what they're looking for? Words fixed in code; the asks offered are read again now (still undecided, about people,
+  // not personal), and nothing goes if they've shared one since, said they can't make it, or were asked already.
+  room_share_ask: {
+    async draft(c) {
+      const S = await import("../services/askSharing.js");
+      const B = await import("../services/eventBrief.js");
+      const { shareableAsks } = await import("../services/matching.js");
+      const p = c.payload;
+      const f = await B.presenceFlags(p.eventId, c.userId);
+      const { rows: pres } = await pool.query(`SELECT share_asked_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2`, [p.eventId, c.userId]);
+      const intent = (await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [c.userId])).rows[0]?.intent;
+      const offer = await S.offerableShareAsks(intent);
+      const due = S.shareQuestionDue({ notGoing: f.notGoing, nameAskPending: false, shareAsked: Boolean(pres[0]?.share_asked_at), hasShareableAsk: shareableAsks(intent).length > 0, offerable: offer.length, startAt: p.startAt, now: new Date() });
+      if (!due.due) return skip(due.why);
+      // The matching pause (services/roomMatching.ts): the question waits, and expires only when the event starts.
+      const paused = await (await import("../services/roomMatching.js")).matchingPause(p.eventId);
+      if (paused) return { defer: new Date(Date.now() + 30 * 60_000), reason: paused };
+      const text = S.roomShareAskMessage(p.name, offer);
+      if (!text) return skip("nothing to offer");
+      c.payload.offered = offer.map((a) => a.id);
+      return { messages: [text], text, rules: { maxSentences: 7, maxChars: 900, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name] } };
+    },
+    async onSent(c) {
+      const offered: string[] = Array.isArray(c.payload.offered) ? c.payload.offered.map(String) : [];
+      // The asks offered, in the order shown, so "1 and 3" maps to the right ones; marks this event asked (never again).
+      await pool.query(
+        `INSERT INTO event_presence (event_api_id, user_id, share_asked_at, share_ask_ids, share_answered_at) VALUES ($1, $2, NOW(), $3, NULL)
+         ON CONFLICT (event_api_id, user_id) DO UPDATE SET share_asked_at = NOW(), share_ask_ids = $3, share_answered_at = NULL`,
+        [c.payload.eventId, c.userId, offered],
+      );
+      await writeMemory(c.userId, "event_brief_ask", `Asked, before "${c.payload.name}", whether Co may tell a good match in the room what they're looking for`);
+    },
+  },
+
   // A loop nobody has signalled on for a week: ask once whether it is still on their plate, then let it expire if they don't say.
   // A question only; the loop may not be stated as current (services/loopLifecycle.ts).
   loop_check: {

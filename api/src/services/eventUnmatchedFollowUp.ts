@@ -6,7 +6,7 @@ import { MODELS } from "../models.js";
 import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
-import { draftWithConsent } from "../harness/introConsent.js";
+import { draftWithConsent, eventPromptLine } from "../harness/introConsent.js";
 import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
 import { wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
 
@@ -83,18 +83,22 @@ async function sendSoloAcknowledgment(eventId: string, eventName: string, person
     console.log(`[eventUnmatchedFollowUp dryRun] would send solo acknowledgment to ${person.user_id} at ${eventId}`);
     return;
   }
+  // The event as it really is (harness/introConsent.ts checkInventedSpecifics): the only source of a day or time in the text.
+  const info = await (await import("./roomMatching.js")).eventTiming(eventId).catch(() => null);
+  const introEvent = { name: eventName, start_at: info?.start_at ?? null, end_at: info?.end_at ?? null, timezone: info?.timezone ?? null, venue: info?.venue ?? null };
   const message = await draftWithConsent(
     {
       decision: "eventUnmatchedFollowUp.soloAck",
       recipientId: person.user_id,
       preChecks: [{ name: "not_already_noticed", pass: true }],
       facts: { otherFirstName: "", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: person.first_name },
+      event: introEvent,
     },
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(MODELS.haiku),
         experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.soloAck.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} near the end of "${eventName}." Nothing came up as a strong match for them tonight — no one specific worth introducing them to.
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} near the end of "${eventName}." ${eventPromptLine(introEvent, eventName)} Nothing came up as a strong match for them tonight — no one specific worth introducing them to.
 
 Draft a short, honest, warm text (1-2 sentences, no em dashes, normal sentence capitalization) telling them plainly that nothing stood out as a strong pull tonight. Don't apologize, don't over-explain, don't invent a reason or promise anything specific — just honest and warm, still glad they came. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });

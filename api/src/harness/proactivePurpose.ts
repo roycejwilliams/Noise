@@ -23,6 +23,7 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   pre_arrival: "offer",
   event_brief: "offer",
   brief_name_ask: "offer",
+  room_share_ask: "offer",
   event_followthrough: "companion",
   mo_member_offer: "offer",
   mo_member_voice: "offer",
