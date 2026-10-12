@@ -171,6 +171,42 @@ export function deckTools(
   };
 
   return {
+    // A public Pinterest board they sent, read for the look (services/pinterestTaste.ts, PR 5): its name, pins and the colors its pins
+    // are made of. Public boards only: a board that needs a login (or is gone) is said plainly, never guessed at.
+    readInspo: tool({
+      description: toolUse("readInspo"),
+      inputSchema: z.object({ url: z.string().describe("The Pinterest board link exactly as they sent it.") }),
+      execute: async ({ url }) => {
+        if (!(ctx.resolvedContent ?? "").includes(url.trim()) && !String(ctx.turn?.message ?? "").includes(url.trim())) {
+          const recent = await o.source().then((s) => s.theirs).catch(() => "");
+          if (!recent.includes(url.trim())) return { ok: false, error: "Only a board link they sent you." };
+        }
+        const P = await import("../services/pinterestTaste.js");
+        const r = await P.readBoard(url);
+        const { recordDecision } = await import("../harness/core.js");
+        await recordDecision({ layer: 3, decision: "inspo.pinterest", userId: ctx.userId, outcome: r.readable ? "act" : "skip", action: r.readable ? "read" : r.why, proposal: { url: url.slice(0, 200) } }).catch(() => {});
+        if (!r.readable) {
+          const why =
+            r.why === "not_a_board"
+              ? "That link isn't a Pinterest board (a single pin or a search isn't one)."
+              : r.why === "needs_login_or_gone"
+                ? "That board can't be opened without signing in to Pinterest: it's secret or private, or it's been removed."
+                : "Pinterest didn't answer just now.";
+          ctx.facts?.add("known", `Co couldn't read their Pinterest board: ${why}`);
+          return { ok: false, readable: false, error: `${why} Say so plainly and ask them to describe the look in a line or pick one of Co's looks by name; never guess what's on it.` };
+        }
+        ctx.facts?.add("known", `Their Pinterest board "${r.board}"${r.description ? ` (${r.description})` : ""}: pins like ${r.pins.slice(0, 8).map((p) => `"${p}"`).join(", ")}; its colors ${r.colors.map((c) => `${c.hex} (${Math.round(c.share * 100)}%)`).join(", ") || "unknown"}; overall ${r.tone ?? "unknown"}.`);
+        return {
+          ok: true,
+          board: r.board,
+          description: r.description,
+          pins: r.pins,
+          colors: r.colors,
+          tone: r.tone,
+          note: "Choose the look from this board: a mood its pins point to, and background, text and accent from its colors (text must read on the background). Pass it as taste with quote = their words that sent the link and inspo = their Pinterest board by name. Tell them nothing about the board beyond a few words on the look you took from it.",
+        };
+      },
+    }),
     makeDeck: tool({
       description: toolUse("makeDeck"),
       inputSchema: DECK_INPUT.extend({

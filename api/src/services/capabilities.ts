@@ -207,6 +207,13 @@ export const ABILITIES: Ability[] = [
     use: "When they ask for a deck or slides. What goes on the slides is only what they gave you for this deck (in this conversation) or said yes to; what else you know about them can shape how you write it, never what it says. Never invent numbers, customers or traction. The look is theirs: pass taste only when they said something about the look in this conversation (their exact words); otherwise their saved taste is used. If makeDeck says to ask first, ask ONE question in one text covering their taste (Pinterest boards, sites or brands they like, colors, vibe; or, if they'd rather not describe it, a look by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic; fine if they don't mind) and anything you truly need for the content, then build from the answer. The deck page has PDF and PowerPoint downloads (bottom right); when they want it as a file, point them there in a few words. Speaker notes only when they ask for them, on the slides they name, from what they told you; they show on their own link, never on a share link, and stay through later edits unless they ask to change them. Images they sent are their image #N in what you see (the number is only for your tools; never say it to them): place their logo on the title slide and a picture on the slide it belongs to, only their own. They name images by what they show ('the studio photo', 'drop the logo'); match that to the description, or leave it out to take it off. An inspiration image is for the look, not a slide. The deck goes as ONE text, your line plus its link, and nothing about the slides in the chat; if their message also asks something else, put your answer in alsoAnswer so it goes in the same text, after the link.",
   },
   {
+    id: "co_inspo_pinterest",
+    can: "Co can read a public Pinterest board they send for the look of a deck or page (its pins and colors). A board that needs a Pinterest login, Co can't open, and says so.",
+    tool: "readInspo",
+    limits: { perTurn: 2, perDay: 10 },
+    use: "When they send a Pinterest board link for the look (\"this is the vibe\", or with a deck or page ask). Read it, then build with taste from it. If it can't be read, say plainly it needs a login or isn't public, and ask them to describe the look or pick a look by name; never guess.",
+  },
+  {
     id: "co_deck_update",
     can: "Co can change a deck it made for them; the link stays the same.",
     tool: "updateDeck",
