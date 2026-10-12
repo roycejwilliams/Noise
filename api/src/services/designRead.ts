@@ -409,3 +409,87 @@ export function poolPins(reads: Pick<PixelRead, "colors">[]): Tokens {
   }
   return t;
 }
+
+// In the page: a two-color gradient at 120 degrees (the deck's field), as a PNG data URL.
+function gradientInPage(from: string, to: string, w: number, h: number): string {
+  const cv = document.createElement("canvas");
+  cv.width = w;
+  cv.height = h;
+  const cx = cv.getContext("2d")!;
+  // 120deg in CSS runs from upper left toward lower right.
+  const a = (120 * Math.PI) / 180;
+  const dx = Math.sin(a), dy = -Math.cos(a);
+  const len = Math.abs(w * dx) + Math.abs(h * dy);
+  const g = cx.createLinearGradient(w / 2 - (dx * len) / 2, h / 2 - (dy * len) / 2, w / 2 + (dx * len) / 2, h / 2 + (dy * len) / 2);
+  g.addColorStop(0, from);
+  g.addColorStop(1, to);
+  cx.fillStyle = g;
+  cx.fillRect(0, 0, w, h);
+  return cv.toDataURL("image/png");
+}
+// The deck's gradient field as an image, for a PowerPoint slide's background (PowerPoint export has no gradient fill). Null without
+// Chrome; the caller then uses the gradient's first color, solid.
+export async function gradientPng(from: string, to: string, w = 1600, h = 900): Promise<string | null> {
+  if (!/^#[0-9a-f]{6}$/i.test(from) || !/^#[0-9a-f]{6}$/i.test(to)) return null;
+  const B = await import("./browserRead.js");
+  if (!B.browserReadEnabled()) return null;
+  const release = await B.browserSlot();
+  let context: any = null;
+  try {
+    const browser = await B.sharedBrowser();
+    context = await browser.newContext({ javaScriptEnabled: true });
+    await context.route("**/*", (route: any) => (route.request().url().startsWith("data:") || route.request().url() === "about:blank" ? route.continue() : route.abort()));
+    const pg = await context.newPage();
+    await pg.setContent("<!doctype html><html><body></body></html>");
+    return (await pg.evaluate(inPage(gradientInPage, from, to, w, h))) as string;
+  } catch (err: any) {
+    console.error("designRead: gradient image failed (non-fatal):", err?.message ?? err);
+    return null;
+  } finally {
+    await context?.close().catch(() => {});
+    release();
+  }
+}
+
+// In the page: a one-ink image with its ground made transparent (alpha by distance from the ground color), as a PNG data URL.
+async function knockoutInPage(dataUrl: string, ground: string): Promise<string> {
+  const img = new Image();
+  img.src = dataUrl;
+  await img.decode();
+  const cv = document.createElement("canvas");
+  cv.width = img.naturalWidth;
+  cv.height = img.naturalHeight;
+  const cx = cv.getContext("2d", { willReadFrequently: true })!;
+  cx.drawImage(img, 0, 0);
+  const id = cx.getImageData(0, 0, cv.width, cv.height);
+  const d = id.data;
+  const g = [1, 3, 5].map((i) => parseInt(ground.slice(i, i + 2), 16));
+  for (let i = 0; i < d.length; i += 4) {
+    const dist = Math.hypot(d[i] - g[0], d[i + 1] - g[1], d[i + 2] - g[2]);
+    d[i + 3] = Math.round(Math.min(1, dist / 120) * d[i + 3]);
+  }
+  cx.putImageData(id, 0, 0);
+  return cv.toDataURL("image/png");
+}
+// A one-ink logo without its ground, for a colored field where blending isn't available (the PowerPoint export). Null without Chrome.
+export async function knockoutGround(data: Buffer, mediaType: string, ground: string): Promise<string | null> {
+  if (!/^#[0-9a-f]{6}$/i.test(ground)) return null;
+  const B = await import("./browserRead.js");
+  if (!B.browserReadEnabled()) return null;
+  const release = await B.browserSlot();
+  let context: any = null;
+  try {
+    const browser = await B.sharedBrowser();
+    context = await browser.newContext({ javaScriptEnabled: true });
+    await context.route("**/*", (route: any) => (route.request().url().startsWith("data:") || route.request().url() === "about:blank" ? route.continue() : route.abort()));
+    const pg = await context.newPage();
+    await pg.setContent("<!doctype html><html><body></body></html>");
+    return (await pg.evaluate(inPage(knockoutInPage, `data:${mediaType};base64,${data.toString("base64")}`, ground))) as string;
+  } catch (err: any) {
+    console.error("designRead: knockout failed (non-fatal):", err?.message ?? err);
+    return null;
+  } finally {
+    await context?.close().catch(() => {});
+    release();
+  }
+}
