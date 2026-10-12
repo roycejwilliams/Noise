@@ -62,8 +62,9 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
   const { withoutReferenceText } = await import("../services/designSystem.js");
   const words = withoutReferenceText([ctx.resolvedContent, ctx.isVoice ? String(ctx.turn?.message ?? "") : "", ...rows].filter(Boolean).join("\n"), refs);
   const theirs = [words, deck?.lines ?? ""].filter(Boolean).join("\n");
-  // thread: the last few texts both ways, so a line Co proposed that they then approved ("Ok create the doc") counts for the claim
-  // check (deckClaims.ts); the judge reads whether they approved it, and Co's lines stay out of words.
+  // thread: only the Co text directly before their latest message, and that message (deckClaims.ts approvalPair), so a line Co
+  // proposed that they then approved ("Ok create the doc") counts for the claim check; the judge reads whether they approved it,
+  // and Co's lines stay out of words.
   const recent = ctx.dryRun
     ? []
     : await pool
@@ -76,7 +77,8 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
         .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "Them: ").replace(/^Co replied:\s*/i, "Co: ")).reverse())
         .catch(() => [] as string[]);
   if (ctx.resolvedContent && recent[recent.length - 1] !== `Them: ${ctx.resolvedContent}`) recent.push(`Them: ${ctx.resolvedContent}`);
-  return { theirs, read, words, thread: recent.join("\n") };
+  const { approvalPair } = await import("../services/coPages/deckClaims.js");
+  return { theirs, read, words, thread: approvalPair(recent) };
 }
 
 // A line copied from a reference image's own words (what's written on an inspiration image or a site screenshot) is never deck

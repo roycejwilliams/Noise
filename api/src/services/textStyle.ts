@@ -51,7 +51,7 @@ export function userLinesFrom(recentConversation: string, latestMessage?: string
 // draft", "here's a version", "I'll draft the message to Alex" are deliveries and offers; what's blocked is the instruction
 // leaking (being Co, asking what to say, a single message) or a reply addressed to "the user" instead of to them.
 export function looksLikeMetaReply(text: string): boolean {
-  return /\b(i'?m ready to be co(?![-\w])|ready to be co(?![-\w])|(to|i) be co(?![-\w])|as co(?![-\w])(?! (knows|sees|said))|send me what you'?d like|what you'?d like me to (say|write)|i'?ll (write|draft|compose) (a|one) single (message|text|reply)|(write|draft) (a|the|one) single (message|text))|\bhere'?s (a|the|my) (draft(ed)? |revised |new )?(reply|response|message|text) (to|for) (the user|the member|this (person|user|member))\b|^\s*here'?s (my|a|the) (draft(ed)? )?(reply|response)\s*:/i.test(text);
+  return /\b(i'?m ready to be co(?![-\w])|ready to be co(?![-\w])|(to|i) be co(?![-\w])|as co(?![-\w])(?! (knows|sees|said))|send me what you'?d like|what you'?d like me to (say|write)|i'?ll (write|draft|compose) (a|one) single (message|text|reply)|(write|draft) (a|the|one) single (message|text))|\b(?:here(?:'|’)?s|here is) (a|the|my) (draft(ed)? |revised |new )?(reply|response|message|text) (to|for) (the user|the member|this (person|user|member))\b|^\s*(?:here(?:'|’)?s|here is) (my|a|the) (draft(ed)? )?(reply|response)\s*:/i.test(text);
 }
 
 // Readable on a phone (Royce, 2026-09-22: "fix the text format so it's

@@ -1055,8 +1055,18 @@ function extractJson(text: string): any {
 
 // This turn's receipts, listed again for the claim check so a paraphrase of what a tool just did is read as backed (2026-10-12
 // audit: "passed along to the team" was cut 1s after saveFeedbackForTeam saved it).
+// Only what happened: a receipt saying something didn't (no call scheduled, a failed send) is never listed here, so it can't back a
+// claim that it did (2026-10-12 review).
 export function receiptsForCheck(rf: ReplyFacts): string {
-  return rf.facts.filter((f) => f.kind === "did_this_turn").map((f) => `[${f.id}] ${f.text}`).join("\n");
+  return rf.facts.filter((f) => f.kind === "did_this_turn" && !NEGATIVE_RECEIPT.test(f.text)).map((f) => `[${f.id}] ${f.text}`).join("\n");
+}
+export const NEGATIVE_RECEIPT = /\b(no|not|never|nothing|failed|fail|couldn'?t|could not|didn'?t|did not|wasn'?t|was not|isn'?t|won'?t|can'?t|cannot|unable|refused)\b/i;
+
+// Co saying something it tried did NOT happen ("You're right, it never sent, and that's on me", "that didn't go through").
+export const ADMITS_NOT_DONE = /\b(never|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|not)\b[^.?!]{0,30}\b(sen[dt]|go(ne)? through|went( out| through)?|come through|came through|arrived?|sav(e|ed)|happen(ed)?|made|ma[dk]e it|work(ed)?|deliver(ed)?|pass(ed)?)\b/i;
+// Something on record (not a receipt that it failed) says Co sent or did a thing; then an admission is left to the model's read.
+function doneOnRecord(facts: Fact[]): boolean {
+  return facts.some((f) => f.kind !== "not_done" && f.kind !== "hint" && /\b(sent|delivered|texted|emailed|went out|saved|made them)\b/i.test(f.text) && !NEGATIVE_RECEIPT.test(f.text));
 }
 
 async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources, model: string = LAYER3_MODELS.grounding): Promise<{ claims: Claim[]; latencyMs: number } | null> {
@@ -1095,11 +1105,11 @@ Never claims (don't list these):
 
 Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Co about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
 
-Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. A FACT listed under DONE THIS TURN is what Co's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. Their own texts in this conversation are a source for their own life and plans, said back in Co's words with everyday inferences: where they moved from and that they now live here (the city Co knows them in), their work, a plan they named and its day ("today's meeting" backs "tonight" or "later" for that meeting); quote their words. What they've told Co before (their own words, below) can support member_life; what Co knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Co is never part of their own life. Never count something as supported because it's plausible.
+Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. Saying Co did NOT do something ("it never sent, and that's on me", "that didn't go through") is supported when no FACT shows it happened; mark it supported with no factId. A FACT listed under DONE THIS TURN is something that really happened this turn, what Co's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. Their own texts in this conversation are a source for their own life and plans, said back in Co's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day ("today's meeting" backs "later today" for it, never "tonight"); quote their words. What they've told Co before (their own words, below) can support member_life; what Co knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Co is never part of their own life. Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
-${receipts ? `\nDONE THIS TURN (what Co's own tools did in this turn; each is also a FACT above, cite its id):\n${receipts}\n` : ""}
+${receipts ? `\nDONE THIS TURN (what Co's own tools really did in this turn; each is also a FACT above, cite its id):\n${receipts}\n` : ""}
 Conversation so far:
 ${src.recentConversation || "(none)"}
 ${src.sentThisTurn?.length ? `\nCo already sent this turn:\n${src.sentThisTurn.join("\n")}\n` : ""}${src.contextSummary ? `\nWhat Co knows about them:\n${src.contextSummary}\n` : ""}${theirOwnWords(src.recentMemories) ? `\nWhat they've told Co before (their own words from older conversations):\n${theirOwnWords(src.recentMemories)}\n` : ""}
@@ -1127,6 +1137,9 @@ Return ONLY JSON: {"claims": [{"text": "exact words from the message", "type": "
 // Co saying it passed something to the team ("Noted, and passed along to the team", "flagged it for the team", "the team has it").
 export const TEAM_PASS = /\b(pass(ed|ing)?|sen[dt]|shar(ed|ing)|flagg(ed|ing)|forward(ed|ing)|not(ed|ing)|sav(ed|ing)|log(ged|ging)|g(o|oes|one) (straight )?)\b[^.?!]{0,30}\b(to|for|with) the team\b|\bthe team (has|got|will see) (it|that|this)\b/i;
 
+// More than the pass-along ("and they'll fix it by Friday"): a promise, a day or a fix still needs its own source.
+export const TEAM_PASS_PLUS = /\b(will|won'?t|going to|gonna|fix(es|ed|ing)?|today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|soon|by \w+)\b|\w['’]ll\b|\d/i;
+
 // A model's "supported" only counts if its citation checks out in code.
 export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   // A hint (model-written read) is never support, even when cited.
@@ -1147,7 +1160,13 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     }
     // Passing it to the team, right after saveFeedbackForTeam saved it this turn: the receipt is the fact, whatever the model cited
     // (2026-10-12 audit, row 10175). Never the other way: no receipt, no pass.
-    if (!pass && c.type === "past_action" && savedForTeamThisTurn && TEAM_PASS.test(c.text)) {
+    // An honest admission it didn't happen is never cut as a false past action (2026-10-12 four-artifact test: "it never sent, and
+    // that's on me" was cut while the doc truly never sent). Nothing on record says it happened: kept. Something does: the model's
+    // read decides, without needing a fact to cite for an absence.
+    if (c.type === "past_action" && ADMITS_NOT_DONE.test(c.text) && (!doneOnRecord(rf.facts) || pass)) {
+      return { name: `claim_${c.type}`, pass: true, reason: `${reason} (an admission it didn't happen${pass ? "" : ", and nothing on record says it did"})` };
+    }
+    if (!pass && c.type === "past_action" && savedForTeamThisTurn && TEAM_PASS.test(c.text) && !TEAM_PASS_PLUS.test(c.text)) {
       pass = true;
       reason += " (saved for the team this turn)";
       return { name: `claim_${c.type}`, pass, reason };

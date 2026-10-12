@@ -92,3 +92,21 @@ export function turnReplayBlocked(c: TurnReplayCheck): string | null {
   if (c.callAt && c.callAt.getTime() > c.receivedAt.getTime()) return "call_placed";
   return null;
 }
+
+// Pure: their previous message, when Co never really answered it (routes/sendblue.ts owedAnswer). rows newest first; rows[0] is the
+// message being handled now. A hold line or a "something broke" line isn't an answer. REPLY_PARTIAL_NOTE leaves it owed even though
+// the first part of the reply was logged ("Co replied: Fair."), since that part alone never answered them (2026-10-12 review).
+export function owedFromRows(rows: string[], holdLines: readonly string[]): { text: string; afterFailure: boolean } | null {
+  const earlier = rows.slice(1);
+  const prevUser = earlier.findIndex((r) => r.startsWith("User said:"));
+  if (prevUser === -1) return null;
+  const since = earlier.slice(0, prevUser);
+  const notAnAnswer = [...holdLines, ...OWED_AFTER].map((l) => `Co replied: ${l}`);
+  const partial = since.includes(`Co replied: ${REPLY_PARTIAL_NOTE}`);
+  const answered = !partial && since.some((r) => (r.startsWith("Co replied:") && !notAnAnswer.includes(r)) || r.startsWith("Mo replied:"));
+  if (answered) return null;
+  // Co told them something broke: answering it is now this reply's job. (Without
+  // that, the earlier message may just be mid-reply in its own turn.)
+  const afterFailure = since.some((r) => OWED_AFTER.some((l) => r === `Co replied: ${l}`));
+  return { text: earlier[prevUser].replace(/^User said:\s*/, ""), afterFailure };
+}

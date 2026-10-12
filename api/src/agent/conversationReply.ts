@@ -616,7 +616,8 @@ ${TOOL_TURN_RULES(input.isVoice)}
     // next text gets it answered too. A retry only runs when this run sent
     // nothing at all, so nothing goes out twice.
     const attempt = opts.attempt ?? 1;
-    const retrying = attempt === 1 && !!input.resumeLater && !opts.dryRun && state.sentMessages.length === 0;
+    // Two failed sends mean texts aren't getting through: a retry would be a second paid run into the same outage.
+    const retrying = attempt === 1 && !!input.resumeLater && !opts.dryRun && state.sentMessages.length === 0 && state.failedSends < 2;
     const fallback = retrying ? REPLY_DELAYED_NOTE : attempt > 1 ? REPLY_GAVE_UP_NOTE : REPLY_NO_RETRY_NOTE;
     if (opts.dryRun) {
       console.log(`[conversationReply dryRun] fallback would send to ${input.userId}: "${fallback}"`);
