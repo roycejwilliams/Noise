@@ -161,6 +161,7 @@
     "evals/calls/reasonGate.ts",
     "evals/reply-flow/fixes1010.ts",
     "evals/tasks/awayReplay.ts",
-    "evals/calls/memory.ts"
+    "evals/calls/memory.ts",
+    "evals/brain/binding.ts"
   ]
 }
