@@ -62,6 +62,9 @@ export type ConversationToolContext = {
   checkAnswer?: (draft: string) => Promise<string>;
   // An answer that rode with a link went out: it counts as part of this turn's reply (the call-offer check reads lastReplyText).
   noteAnswerSent?: (answer: string) => void;
+  // An answer that was meant to ride with a link but didn't go (agent/linkAnswer.ts withAnswer): owed, so the one reply that
+  // answers it may follow the link (sendReply), once.
+  answerOwed?: string | null;
   // When their text arrived; the loop's time budget runs from here.
   turnStartedAt?: number;
   userId: string;
@@ -175,6 +178,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // ("Done. The old link is dead now, only this new one works.") in live runs, so after a link went out nothing more does.
         // An answer to something else they asked still goes (Royce, 2026-10-11: never drop it silently); commentary on the link
         // doesn't (agent/linkAnswer.ts afterLinkAnswers). Either way it's logged.
+        // The answer that was meant to ride with the link didn't go (agent/linkAnswer.ts withAnswer): this one reply may answer it.
+        const owed = state.linkDelivered && ctx.answerOwed ? ctx.answerOwed : null;
+        if (owed) ctx.answerOwed = null;
+        // Still owed when this reply didn't go out (emptied by the check, or the send failed): the retry keeps the allowance.
+        const stillOwed = () => {
+          if (owed) ctx.answerOwed = owed;
+        };
         if (state.linkDelivered) {
           // Already said with the link (alsoAnswer): never twice.
           const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
@@ -183,10 +193,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: true, note: "That already went with the link; nothing more went out." };
           }
           const { afterLinkAnswers } = await import("./linkAnswer.js");
-          const answers = ctx.dryRun ? true : await afterLinkAnswers(ctx.resolvedContent, state.sentMessages.join("\n"), draft);
+          const answers = ctx.dryRun || owed ? true : await afterLinkAnswers(ctx.resolvedContent, state.sentMessages.join("\n"), draft);
           if (!ctx.dryRun) {
             const { recordDecision } = await import("../harness/core.js");
-            await recordDecision({ layer: 3, decision: "reply.after_link", userId: ctx.userId, outcome: answers ? "act" : "skip", action: answers ? "sent_answer" : "held_commentary", proposal: { draft: draft.slice(0, 300) } }).catch(() => {});
+            await recordDecision({ layer: 3, decision: "reply.after_link", userId: ctx.userId, outcome: answers ? "act" : "skip", action: owed ? "sent_owed_answer" : answers ? "sent_answer" : "held_commentary", proposal: { draft: draft.slice(0, 300), ...(owed ? { owed: owed.slice(0, 200) } : {}) } }).catch(() => {});
           }
           if (!answers) {
             notDone("A reply about the link after the link wasn't sent (the link's text is the whole delivery).");
@@ -197,7 +207,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // The fact check left nothing to add after what already went out this turn.
         if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
         // Never an empty text (2026-10-12 audit, row 11661): with nothing sent yet, Co says it again from what's true.
-        if (!message.trim()) return { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
+        if (!message.trim()) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
         // Texted in beats: each paragraph its own message (services/beats.ts).
         // A voice note stays one clip.
@@ -215,6 +225,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
                   state.sendStopped = true;
                   return { ok: false, error: "Texts to them can't go out right now. Stop here; don't call any more tools." };
                 }
+                stillOwed();
                 return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
               }
               // Part went out and the rest didn't (2026-10-12 audit: "Fair." went, the draft after it was refused, and the reply
@@ -261,6 +272,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
               state.sendStopped = true;
               return { ok: false, error: "Texts to them can't go out right now. Stop here; don't call any more tools." };
             }
+            stillOwed();
             return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
           }
         }

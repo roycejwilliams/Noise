@@ -34,9 +34,11 @@ export async function withAnswer(ctx: ConversationToolContext, text: string, ans
   const a = answer?.trim();
   const checked = a && ctx.checkAnswer ? (await ctx.checkAnswer(a).catch(() => "")).trim() : "";
   // An answer the check cut down to a fragment is dropped whole, never sent (live, 2026-10-11: "On the builder community." went out
-  // after a deck's link). Co is told it didn't go, so it can answer plainly instead.
-  if (a && checked && isFragment(a, checked)) {
-    ctx.facts?.add("not_done", `Your answer to the other thing they asked didn't pass the check and wasn't sent: "${a.slice(0, 120)}"`);
+  // after a deck's link). So is one the check emptied, or couldn't run on. Never silently: it's a not_done fact, it's owed (the one
+  // reply that answers it may follow the link, conversationTools.ts sendReply), and the link tool's note says so (owedAnswerNote).
+  if (a && (!checked || isFragment(a, checked))) {
+    ctx.facts?.add("not_done", `Your answer to the other thing they asked didn't pass the check and wasn't sent with the link: "${a.slice(0, 120)}"`);
+    ctx.answerOwed = a;
     return { text, confirm: () => {} };
   }
   if (!checked) return { text, confirm: () => {} };
@@ -47,6 +49,25 @@ export async function withAnswer(ctx: ConversationToolContext, text: string, ans
       ctx.noteAnswerSent?.(checked);
     },
   };
+}
+
+// The link tools' own notes say the link's text is the whole delivery and to stop. When the answer meant to ride with it didn't go,
+// that's not true any more: the note says so instead, so Co answers it in one reply (the one sendReply lets through).
+export const OWED_NOTE =
+  "The link went as one text, but your answer to the other thing they asked didn't pass the check and wasn't sent with it. Answer that one thing now in a single reply, plainly and only from what you know, with nothing about the link. Don't say it went with the link.";
+// Wraps each tool's execute in place (the tool objects stay the ones the caller holds) and returns the same set.
+export function owedAnswerNote<T extends Record<string, any>>(ctx: ConversationToolContext, tools: T): T {
+  for (const t of Object.values(tools)) {
+    if (typeof t?.execute !== "function") continue;
+    const run = t.execute;
+    t.execute = async (...args: any[]) => {
+      const before = ctx.answerOwed ?? null;
+      const r = await run(...args);
+      // Only an answer this call left owed, with its link sent (ok): the reply after it is the answer's only way out.
+      return ctx.answerOwed && ctx.answerOwed !== before && r && typeof r === "object" && r.ok ? { ...r, note: OWED_NOTE } : r;
+    };
+  }
+  return tools;
 }
 
 // Pure: whether the check cut the answer down to a piece of itself: four words or fewer, under half its words, or no longer ending as a sentence when it
