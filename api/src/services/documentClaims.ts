@@ -37,6 +37,7 @@ A line PASSES when it is what they said, in other words:
 - a plain label or framing of their own point ("The format", "What we're asking for").
 
 - when they asked Co to frame, position or make the case for something: a framing, contrast or stance that rests on their facts ("Not a sponsored tasting: the pairings are picked for a table already seated on purpose"). Framing states no new fact about them.
+- a closing ask or next step they asked Co to write, when it states no fact they never gave ("Pour at the launch dinner on the same terms");
 - a contrast with the alternative they named, in general terms ("A sponsored tasting is the same pour for everyone"): that's framing too, not a fact about them.
 
 A line FAILS when it adds a fact they never gave:

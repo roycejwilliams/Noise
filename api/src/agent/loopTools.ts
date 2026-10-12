@@ -838,7 +838,7 @@ export function loopTools(
           if (docRefusals >= 2) {
             return { ok: false, error: `Not sent, and that's twice: ${problems.slice(0, 3).join(" | ")}. Don't call writeDocument again this turn. In one text, tell them plainly the document isn't made, name the line you couldn't back from what they told you, and say what would unblock it (them confirming that fact or giving the missing piece), as what they get, not your process ("The doc isn't made yet: I can't back \"...\" from what you've told me. Tell me ... and it's done."). Never describe the document as if it exists, and never send its points as bare bullets.` };
           }
-          return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try once more, keeping every section full (rewrite a flagged line from their own words or move it to suggestions; never strip it to bare bullets). If it can't be fixed, tell them plainly the document isn't made, which line you couldn't back, and what would unblock it.` };
+          return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix only the lines named and try once more, keeping every other section and line as it was (rewrite a flagged line from their own words or move it to suggestions; never drop a section they asked for, and never strip it to bare bullets). If it can't be fixed, tell them plainly the document isn't made, which line you couldn't back, and what would unblock it.` };
         }
         if (ctx.dryRun) {
           // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.
