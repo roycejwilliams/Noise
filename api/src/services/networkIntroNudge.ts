@@ -403,11 +403,14 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
     return "held";
   }
   if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return "failed";
-  const subject = `Introducing ${a.first_name} and ${b.first_name}`;
+  // The pair in one order (by id), so a retry from either side or after a crash builds the very same email: the send's
+  // idempotency key covers the same body only (as eventGuestMatchHandoff.ts introEmailContent).
+  const [p1, p2] = a.user_id < b.user_id ? [a, b] : [b, a];
+  const subject = `Introducing ${p1.first_name} and ${p2.first_name}`;
   const html = galleryEmail({
     preview: `Co thinks you two should meet.`,
     eyebrow: "An introduction",
-    headline: `${a.first_name}, meet ${b.first_name}.`,
+    headline: `${p1.first_name}, meet ${p2.first_name}.`,
     body: [matchReason, "Co figured you two should actually meet. Consider this your introduction."],
     close: "You both said yes. Take it from here.",
   });
@@ -423,8 +426,12 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
       // and email has no natural "@-mention" convention the way a group
       // chat does, so Co doesn't act on anything that comes back here; the
       // real outcome signal stays the existing proactive SMS check-in.
-      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html });
-      if (error) throw new Error(error.message);
+      // One email per pair, even when a stale claim is retaken after a send went out (Resend keeps the key 24h).
+      const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [p1.email, p2.email], cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `network-intro:${p1.user_id}:${p2.user_id}` });
+      const outcome = (await import("./eventGuestMatchHandoff.js")).introSendOutcome(error as any);
+      if (outcome === "already_sent") console.log("sendNetworkIntroEmail: this pair was already emailed under this key; recording it as sent");
+      else if (outcome === "in_flight") throw new Error("a send with this key is in flight");
+      else if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendNetworkIntroEmail: send failed (non-fatal):", err?.message ?? err);
       return "failed";
@@ -454,9 +461,9 @@ async function scheduleIntroFollowUps(pairs: (readonly [string, string])[]): Pro
   }
 }
 
-// Network intro emails the matching pause held: sent once it lifts, with the same limits as in-room ones (both still
-// active, both still yes, at most INTRO_MAX_ATTEMPTS tries, within INTRO_RETRY_MAX_AGE_MS of the hold), oldest first,
-// every limit in the WHERE clause.
+// Network intro emails that didn't go: held by the matching pause (sent once it lifts), a send that failed, or a claim no send
+// confirmed, with the same limits as in-room ones (both still active, both still yes, at most INTRO_MAX_ATTEMPTS tries, within
+// INTRO_RETRY_MAX_AGE_MS of the hold or claim), oldest first, every limit in the WHERE clause.
 export async function retryHeldNetworkIntros(now = new Date()): Promise<number> {
   const RM = await import("./roomMatching.js");
   if (await RM.matchingPause(null)) return 0;
@@ -464,7 +471,15 @@ export async function retryHeldNetworkIntros(now = new Date()): Promise<number> 
   let sent = 0;
   for (const r of rows) {
     // The same claim as a live yes: only the call that marks it introduced sends.
-    const claimed = await pool.query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2 AND status = 'both_interested' RETURNING 1`, [r.person_a_id, r.person_b_id]).catch(() => ({ rows: [] as any[] }));
+    // A claim no send confirmed (the server died between the claim and the send's record) is retaken once it's stale; the send's
+    // idempotency key makes a retake after a send that did go out record it, never send it twice.
+    const claimed = await pool
+      .query(
+        `UPDATE network_introductions SET status = 'introduced', introduced_at = NOW(), email_claimed_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2 AND email_sent_at IS NULL
+           AND (status = 'both_interested' OR (status = 'introduced' AND email_claimed_at < NOW() - INTERVAL '${NETWORK_CLAIM_STALE_MINUTES} minutes')) RETURNING 1`,
+        [r.person_a_id, r.person_b_id],
+      )
+      .catch(() => ({ rows: [] as any[] }));
     if (!claimed.rows.length) continue;
     const { rows: us } = await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[r.person_a_id, r.person_b_id]]);
     const a = us.find((u: any) => u.user_id === r.person_a_id);
@@ -480,15 +495,21 @@ export async function retryHeldNetworkIntros(now = new Date()): Promise<number> 
   return sent;
 }
 
-// Pure, for the checks: the held-email query, every limit in the WHERE clause, oldest first.
+// A network intro's claim no send confirmed is retaken after this long (the same as an in-room one, roomMatching.ts).
+export const NETWORK_CLAIM_STALE_MINUTES = 15;
+
+// Pure, for the checks: the held-email query (held by the pause, failed and counted, or a stale unconfirmed claim), every limit in
+// the WHERE clause, oldest first. An intro from before the claim column has no claim and is never retaken.
 export function retryHeldNetworkIntrosSql(maxAttempts: number, maxAgeMs: number): string {
   return `SELECT n.person_a_id, n.person_b_id, n.match_reason FROM network_introductions n
        JOIN users ua ON ua.id = n.person_a_id JOIN users ub ON ub.id = n.person_b_id
-       WHERE n.status = 'both_interested' AND n.email_held_at IS NOT NULL AND n.email_sent_at IS NULL
+       WHERE n.email_sent_at IS NULL
+         AND ((n.status = 'both_interested' AND (n.email_held_at IS NOT NULL OR n.email_attempts > 0))
+           OR (n.status = 'introduced' AND n.email_claimed_at < NOW() - INTERVAL '${NETWORK_CLAIM_STALE_MINUTES} minutes'))
          AND n.email_attempts < ${maxAttempts}
-         AND n.email_held_at > NOW() - INTERVAL '${maxAgeMs / 86_400_000} days'
+         AND COALESCE(n.email_held_at, n.email_claimed_at) > NOW() - INTERVAL '${maxAgeMs / 86_400_000} days'
          AND ua.archived_at IS NULL AND ub.archived_at IS NULL AND NOT coalesce(ua.sms_opted_out, false) AND NOT coalesce(ub.sms_opted_out, false)
-       ORDER BY n.email_held_at ASC
+       ORDER BY COALESCE(n.email_held_at, n.email_claimed_at) ASC
        LIMIT 20`;
 }
 
@@ -645,7 +666,7 @@ export async function resolveNetworkIntroReply(
   if (bothInterested) {
     // Only the call that marks it introduced sends the email (2026-10-01 next-live run: two calls sent two).
     const claimed = await pool
-      .query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2 AND status <> 'introduced' RETURNING 1`, [aId, bId])
+      .query(`UPDATE network_introductions SET status = 'introduced', introduced_at = NOW(), email_claimed_at = NOW() WHERE person_a_id = $1 AND person_b_id = $2 AND status <> 'introduced' RETURNING 1`, [aId, bId])
       .then((r) => r.rows.length > 0)
       // A failed mark keeps the old behaviour (send); only a confirmed "already introduced" stops it.
       .catch((err: any) => { console.error("resolveNetworkIntroReply: introduced-mark failed (non-fatal):", err?.message ?? err); return null; });
@@ -661,6 +682,11 @@ export async function resolveNetworkIntroReply(
       return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them hasn't gone out yet; Co will send it. Tell them plainly that both of you are in and the intro email is coming. Don't say it was sent, and don't say when.`;
     }
     if (emailed !== "sent") {
+      // Not introduced: the pair goes back to waiting on its email, counted, and retryHeldNetworkIntros tries again (before this, a
+      // failed send stayed 'introduced' with no email, so nothing retried it and a later yes was told the intro had gone out).
+      await pool
+        .query(`UPDATE network_introductions SET status = 'both_interested', introduced_at = NULL, email_attempts = email_attempts + 1 WHERE person_a_id = $1 AND person_b_id = $2 AND email_sent_at IS NULL`, [aId, bId])
+        .catch((err: any) => console.error("resolveNetworkIntroReply: failed-send revert failed (non-fatal):", err?.message ?? err));
       return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them failed to send. Tell them plainly that both of you are in, but the intro email didn't go through yet. Don't say it was sent.`;
     }
     await scheduleIntroFollowUps([[person.user_id, pending.candidate.first_name], [pending.candidate.candidate_id, person.first_name]] as const);
