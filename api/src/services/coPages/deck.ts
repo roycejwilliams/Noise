@@ -40,7 +40,9 @@ export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: st
 const ASSET = /^[A-Za-z0-9_-]{24}$/;
 const HEX = /^#[0-9a-f]{6}$/i;
 
-export const DECK_LIMITS = { title: 90, subtitle: 140, slidesMin: 2, slides: 15, headline: 90, bulletsMin: 1, bullets: 4, bullet: 160, notes: 700 } as const;
+// bullets stays 5 for what's stored (decks saved with five points before the tool asked for four must still open, update and
+// export); the tool asks for four (agent/deckTools.ts DECK_INPUT) and QA's one-idea rule flags a fifth.
+export const DECK_LIMITS = { title: 90, subtitle: 140, slidesMin: 2, slides: 15, headline: 90, bulletsMin: 1, bullets: 5, bullet: 160, notes: 700 } as const;
 
 function imageMeta(v: unknown, field: string, problems: string[]): ImageMeta | undefined {
   if (v === undefined || v === null) return undefined;
@@ -239,6 +241,9 @@ export function renderDeck(
   const accOnPaper = readableOn(s.accent, s.background, 3);
   // Small labels (the index numbers) read at 4.5:1 (design audit: labels were never measured, and sat at 3.4:1).
   const labOnPaper = readableOn(s.accent, s.background, 4.6);
+  // The foot line, quieter than the text but never under 4.5:1: their text color softened toward the paper, then shaded back until it
+  // reads (review: a foot failing at 72% opacity re-inked the member's whole text color).
+  const footInk = readableOn(mixHex(s.text, s.background, 0.72), s.background, 4.6);
   // Labels on a color field (the foot line, an index number) sit on a light scrim of the field's own ink's opposite, so they read
   // wherever the gradient runs; data-ground tells QA the ground they're really on.
   const scrimInk = contrast(fieldInk, "#000000") > contrast(fieldInk, "#FFFFFF") ? "#000000" : "#FFFFFF";
@@ -263,7 +268,7 @@ body{margin:0;background:${s.background};color:${s.text};font-family:${fontStack
 .paper .lab.acc{color:${labOnPaper}}
 .on-field .foot{opacity:1}
 .on-field .foot span,.on-field .lab{background:${scrimInk === "#000000" ? "rgba(0,0,0,0.32)" : "rgba(255,255,255,0.32)"};padding:0.3cqw 0.6cqw;border-radius:0.3cqw;opacity:1}
-.foot{position:absolute;left:${dens.pad * 1.1}cqw;right:${dens.pad * 1.1}cqw;bottom:${dens.pad * 0.55}cqw;display:flex;justify-content:space-between;font-size:0.95cqw;letter-spacing:0.14em;text-transform:uppercase;opacity:0.72}
+.foot{position:absolute;left:${dens.pad * 1.1}cqw;right:${dens.pad * 1.1}cqw;bottom:${dens.pad * 0.55}cqw;display:flex;justify-content:space-between;font-size:0.95cqw;letter-spacing:0.14em;text-transform:uppercase;color:${footInk}}
 /* title: field */
 .t-field .in{justify-content:space-between}
 .t-field h1{font-size:${dens.h1 * 1.18}cqw;max-width:13ch}

@@ -677,6 +677,8 @@ export function deckTools(
           }
           const final = store.checkPage(qa.data, backed);
           const toStore = final.ok ? final.data : checked.data;
+          // What ships is what's said: when the fixed version didn't pass, the unfixed one goes, with what QA first found (review).
+          const shipped = final.ok ? qa.final : qa.first;
           const made = await store.createCoPage(toStore, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
           if (!made.ok) {
             o.notDone("The deck wasn't made.");
@@ -687,11 +689,11 @@ export function deckTools(
           // The look said is the one stored (design audit: the line must never describe a look the deck doesn't have), in their color words.
           const choices = DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words });
           const turns = await DS.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
-          await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: (toStore as any).style?.titleLayout ?? null, tokens: (toStore as any).style, qa: { ran: qa.final.ran, findings: qa.final.findings, fixed: qa.fixed, first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null, turnsToBuild: turns }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
+          await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: (toStore as any).style?.titleLayout ?? null, tokens: (toStore as any).style, qa: { ran: shipped.ran, findings: shipped.findings, fixed: final.ok ? qa.fixed : [], first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null, turnsToBuild: turns }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
           const lineText = input.line?.trim() || `Here's the ${deckIn.title} deck.`;
           ctx.facts?.add("known", `The deck's look, as Co chose it: ${choices}`);
           // What QA found and code couldn't fix is said, in one line (never shipped silently).
-          const short = Q.qaShortfall(qa.final.findings);
+          const short = Q.qaShortfall(shipped.findings);
           const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
           if (!(await o.say(text, `Co replied: ${text}`))) {
             o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
@@ -705,8 +707,8 @@ export function deckTools(
             ok: true,
             url: made.url,
             choices,
-            qa: Q.qaSummary(qa.final),
-            ...(qa.fixed.length ? { qaFixed: qa.fixed } : {}),
+            qa: Q.qaSummary(shipped),
+            ...(final.ok && qa.fixed.length ? { qaFixed: qa.fixed } : {}),
             ...(placed.length ? { images: placed } : {}),
             note: "The line, Co's design choices and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here.",
           };
@@ -831,10 +833,12 @@ export function deckTools(
           // Design QA on a change too (design audit: a corrected look went out with type that didn't read on its field).
           if (!ctx.dryRun) {
             const q = await deckQa(ctx.userId, next).catch(() => null);
-            if (q) {
+            // The fixed version only when it still passes the gate; otherwise the change goes as written, with what QA first found.
+            const ok = q ? store.checkPage(q.data, self ? { ...source, read: `${source.read}\n${self}` } : source).ok : false;
+            if (q && ok) {
               Object.assign(next, q.data);
               updateQa = q;
-            }
+            } else if (q) updateQa = { ...q, final: q.first };
           }
           r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source, { expectVersion: was ? before?.version : null });
           if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };

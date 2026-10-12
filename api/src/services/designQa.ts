@@ -335,7 +335,7 @@ export const unresolved = (fs: QaFinding[]) => fs.filter((f) => f.rule !== "rend
 // Pure: one plain line for the delivery text when something still isn't right after the fixes (design audit: QA found contrast and blur
 // and the deck went out silently). Null when nothing is left.
 export function qaShortfall(fs: QaFinding[]): string | null {
-  const left = unresolved(fs).filter((f) => f.fix !== "co");
+  const left = unresolved(fs);
   if (!left.length) return null;
   const say = (f: QaFinding): string => {
     const at = f.where.replace(/^the whole thing$/, "the deck");
@@ -345,6 +345,8 @@ export function qaShortfall(fs: QaFinding[]): string | null {
     if (f.rule === "type_scale" || f.rule === "print_type") return `the type on ${at} is smaller or flatter than it should be`;
     if (f.rule === "page_break") return `a heading lands at the foot of a page`;
     if (f.rule === "orphan") return `a headline on ${at} ends on a word alone`;
+    if (f.rule === "one_idea") return `${at} carries more than one idea`;
+    if (f.rule === "scannability") return `${at} is dense to read`;
     return `${at}: ${f.detail}`;
   };
   const items = [...new Set(left.map(say))];
@@ -457,6 +459,8 @@ export function applyDeckFixes(data: any, findings: QaFinding[]): { data: any; f
     } else if (f.rule === "contrast" && f.color && f.ground?.length && f.need) {
       const stops = st.gradient && st.accent2 ? [st.accent, st.accent2] : [st.accent];
       const onField = f.ground.length > 1 ? f.ground.every((g, i) => g === stops0[i]) : f.ground[0] !== st.background && f.ground[0] === stops0[0];
+      // A label (the foot line, slide numbers) is the renderer's to fix, never by re-inking their whole text color.
+      if (f.role === "label") continue;
       if (!onField && f.ground[0] === st.background && f.color === text0) {
         const ink = inkFor(st.text, st.background, f.need, f.alpha ?? 1);
         if (ink !== st.text) {
@@ -490,7 +494,10 @@ export function applyDeckFixes(data: any, findings: QaFinding[]): { data: any; f
     }
   }
   // Split last first, so earlier indexes hold. The same headline carries on; its picture and notes stay with the first half.
+  // Never past 15 slides (a split that pushed the last slide, usually the closing ask, off the deck): the slide stays at its tightest
+  // and the delivery line says it's crowded.
   for (const i of [...new Set(split)].sort((a, b) => b - a)) {
+    if (next.slides.length >= 15) break;
     const sl = next.slides[i];
     const half = Math.ceil(sl.bullets.length / 2);
     const a = { ...sl, bullets: sl.bullets.slice(0, half), fit: "tight" };
@@ -498,7 +505,7 @@ export function applyDeckFixes(data: any, findings: QaFinding[]): { data: any; f
     next.slides.splice(i, 1, a, b);
     fixed.push(`slide ${i + 2}: split in two so it fits`);
   }
-  next.slides = next.slides.slice(0, 15);
+
   return { data: next, fixed: [...new Set(fixed)] };
 }
 
@@ -539,7 +546,7 @@ export async function qaPage(data: any, render: (d: any) => string, o: { screens
   if (st) {
     const text0 = st.text;
     for (const f of first.findings) {
-      if (f.rule !== "contrast" || !f.color || !f.ground?.length) continue;
+      if (f.rule !== "contrast" || !f.color || !f.ground?.length || f.role === "label") continue;
       if (f.ground[0] === st.background && f.color === text0) {
         const ink = inkFor(st.text, st.background, f.need ?? 4.5, f.alpha ?? 1);
         if (ink !== st.text) {
