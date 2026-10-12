@@ -281,7 +281,9 @@ export async function readWithSdk(url: string, fields: AskedField[], client = ne
   let tools: GeneralReader | null = null;
   try {
     const b = await sharedBrowser();
-    context = await b.newContext({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", locale: "en-US", viewport: GENERAL_READER.viewport });
+    context = await b.newContext({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", locale: "en-US", viewport: GENERAL_READER.viewport, serviceWorkers: "block" });
+    // No WebSockets either (security review, 2026-10-12): they skip context.route, so each one is closed before it connects.
+    await context.routeWebSocket(/.*/, (ws) => ws.close());
     // The read-only guarantee: nothing but GET/HEAD leaves; https only, no social site, nothing that resolves to a private
     // address (every request the page makes, not just the page itself), no media streams.
     await context.route("**/*", async (route) => {

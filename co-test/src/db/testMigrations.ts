@@ -234,5 +234,13 @@ export function runTestMigrations() {
     )
     // The number the browser said it would text from; a code only counts from that number (security review, 2026-10-12).
     .then(() => pool.query(`ALTER TABLE text_login_requests ADD COLUMN IF NOT EXISTS expected_phone TEXT`))
+    // The one-time code Co texts back, typed into the same browser (hashed), its expiry and attempts.
+    .then(() =>
+      pool.query(
+        `ALTER TABLE text_login_requests ADD COLUMN IF NOT EXISTS confirm_hash TEXT,
+           ADD COLUMN IF NOT EXISTS confirm_expires_at TIMESTAMPTZ,
+           ADD COLUMN IF NOT EXISTS confirm_attempts INT NOT NULL DEFAULT 0`,
+      ),
+    )
     .catch((err: Error) => console.error("text_login_requests table init failed:", err));
 }

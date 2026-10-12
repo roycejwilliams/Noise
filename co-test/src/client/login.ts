@@ -9,6 +9,8 @@ const waitingEl = document.getElementById("login-waiting") as HTMLElement;
 const errorEl = document.getElementById("login-error") as HTMLElement;
 const phoneForm = document.getElementById("login-phone-form") as HTMLFormElement;
 const phoneInput = document.getElementById("login-phone") as HTMLInputElement;
+const confirmForm = document.getElementById("login-confirm-form") as HTMLFormElement;
+const confirmInput = document.getElementById("login-confirm-code") as HTMLInputElement;
 
 const POLL_MS = 2000;
 let pollTimer: number | null = null;
@@ -57,10 +59,14 @@ function startPolling() {
   pollTimer = window.setInterval(async () => {
     try {
       const data = await (await fetch("/api/login/check")).json();
-      if (data.status === "signed_in") {
+      if (data.status === "confirm") {
+        // Co has texted a one-time code to that phone; it's typed here.
         window.clearInterval(pollTimer!);
-        statusEl.textContent = "Signed in.";
-        window.location.href = "/phone";
+        waitingEl.classList.add("hidden");
+        textCoButton.classList.add("hidden");
+        confirmForm.classList.remove("hidden");
+        statusEl.textContent = "Co just texted you a code. Enter it here.";
+        confirmInput.focus();
       } else if (data.status === "expired") {
         window.clearInterval(pollTimer!);
         waitingEl.classList.add("hidden");
@@ -80,6 +86,28 @@ textCoButton.addEventListener("click", (e) => {
   }
   waitingEl.classList.remove("hidden");
   statusEl.textContent = "Send the text, then come back here.";
+});
+
+confirmForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  errorEl.classList.add("hidden");
+  try {
+    const data = await (
+      await fetch("/api/login/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: confirmInput.value.trim() }) })
+    ).json();
+    if (data.status === "signed_in") {
+      statusEl.textContent = "Signed in.";
+      window.location.href = "/phone";
+    } else if (data.status === "wrong") {
+      showError("That code doesn't match. Check the text from Co and try again.");
+    } else {
+      confirmForm.classList.add("hidden");
+      textCoButton.classList.remove("hidden");
+      statusEl.textContent = "That code expired. Enter your number to start again.";
+    }
+  } catch (err) {
+    showError(err instanceof Error ? err.message : String(err));
+  }
 });
 
 phoneForm.addEventListener("submit", async (e) => {

@@ -102,6 +102,7 @@ async function main() {
   // /plan-file, /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
   app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
   app.use("/api/login/start", authLimiter);
+  app.use("/api/login/confirm", authLimiter);
 
   // Serves Co's vCard so Sendblue can attach it to the real onboarding
   // "intro" text (see api/src/routes/sendblue.ts's identity_captured/

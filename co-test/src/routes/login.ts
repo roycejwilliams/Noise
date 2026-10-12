@@ -1,5 +1,5 @@
 import express, { Request, Response, NextFunction } from "express";
-import { checkTextLogin, logoutTester, resetOwnData, startTextLogin, verifyTesterSession } from "../services/testerAuth.js";
+import { checkTextLogin, confirmTextLogin, logoutTester, resetOwnData, startTextLogin, verifyTesterSession } from "../services/testerAuth.js";
 import { COOKIE_NAME } from "../middleware/requireTesterLogin.js";
 
 const router = express.Router();
@@ -30,16 +30,27 @@ router.post("/start", async (req: Request, res: Response, next: NextFunction) =>
   }
 });
 
-// GET /api/login/check — polled by the login page until the text arrives.
+// GET /api/login/check — polled by the login page until the text arrives and Co has texted back the one-time code.
 router.get("/check", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const token = req.cookies?.[PENDING_COOKIE];
     if (!token) return res.status(200).json({ success: true, status: "expired" });
     const result = await checkTextLogin(token);
+    return res.status(200).json({ success: true, status: result.status });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/login/confirm {code} — the code Co texted, typed into the browser that started the sign-in.
+router.post("/confirm", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const token = req.cookies?.[PENDING_COOKIE];
+    if (!token) return res.status(200).json({ success: true, status: "expired" });
+    const result = await confirmTextLogin(token, (req.body as { code?: unknown } | undefined)?.code);
     if (result.status === "signed_in") {
       res.clearCookie(PENDING_COOKIE);
       res.cookie(COOKIE_NAME, result.sessionToken, cookieOptions(req));
-      return res.status(200).json({ success: true, status: "signed_in" });
     }
     return res.status(200).json({ success: true, status: result.status });
   } catch (error) {

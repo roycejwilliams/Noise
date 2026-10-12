@@ -169,7 +169,9 @@ export async function readVenueWithSdk(url: string, when: string, client = new A
   const trace: string[] = [];
   try {
     const b = await sharedBrowser();
-    context = await b.newContext({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", locale: "en-US", viewport: { width: 1280, height: 900 } });
+    context = await b.newContext({ userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", locale: "en-US", viewport: { width: 1280, height: 900 }, serviceWorkers: "block" });
+    // No WebSockets either (security review, 2026-10-12): they skip context.route, so each one is closed before it connects.
+    await context.routeWebSocket(/.*/, (ws) => ws.close());
     // The read-only guarantee: nothing but GET/HEAD leaves, https only, nothing that resolves to a private address (security
     // review, 2026-10-12: names are resolved, for every request the page makes), no fonts or media.
     await context.route("**/*", async (route) => {
