@@ -245,7 +245,10 @@ export function loopTools(
   // Co pages (agent/pageTools.ts): grounded on the same source as a document, their words and what Co read this turn.
   const pageSource = async () => {
     const { loadTheirWords } = await import("../services/documentDelivery.js");
-    const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
+    // An image read only for its look (readReference) says nothing they said (services/designSystem.ts withoutReferenceText).
+    const D = await import("../services/designSystem.js");
+    const refs = ctx.dryRun ? new Set<number>() : await D.referenceImageNumbers(ctx.userId).catch(() => new Set<number>());
+    const theirs = D.withoutReferenceText([await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n"), refs);
     const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
     return { theirs, read };
   };

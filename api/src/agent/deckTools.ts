@@ -54,10 +54,27 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
         )
         .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "")))
         .catch(() => [] as string[]);
-  // words: only what they said (for the claim check, which must never take Co's own earlier lines as their word).
-  const words = [ctx.resolvedContent, ctx.isVoice ? String(ctx.turn?.message ?? "") : "", ...rows].filter(Boolean).join("\n");
+  // words: only what they said (for the claim check, which must never take Co's own earlier lines as their word). What's written in an
+  // image Co read as a look reference is taken out (services/designSystem.ts withoutReferenceText): it's data for the look, never
+  // their words, so it can't be a slide or back one.
+  const refs = ctx.dryRun ? new Set<number>() : await import("../services/designSystem.js").then((m) => m.referenceImageNumbers(ctx.userId)).catch(() => new Set<number>());
+  const { withoutReferenceText } = await import("../services/designSystem.js");
+  const words = withoutReferenceText([ctx.resolvedContent, ctx.isVoice ? String(ctx.turn?.message ?? "") : "", ...rows].filter(Boolean).join("\n"), refs);
   const theirs = [words, deck?.lines ?? ""].filter(Boolean).join("\n");
   return { theirs, read, words };
+}
+
+// A line copied from a reference image's own words (what's written on an inspiration image or a site screenshot) is never deck
+// content: those words are data for the look (services/designSystem.ts referenceCopies). An error naming the lines, or null.
+async function referenceCopyProblem(ctx: ConversationToolContext, data: any, words: string): Promise<string | null> {
+  if (ctx.dryRun) return null;
+  const D = await import("../services/designSystem.js");
+  const refs = await D.referenceImageNumbers(ctx.userId).catch(() => new Set<number>());
+  const texts = await D.referenceTexts(ctx.userId, refs).catch(() => [] as string[]);
+  if (!texts.length) return null;
+  const lines = [data.title, data.subtitle, ...(data.slides ?? []).flatMap((s: any) => [s.headline, ...(s.bullets ?? [])])].filter(Boolean);
+  const copied = D.referenceCopies(lines, texts, words);
+  return copied.length ? `These lines copy words from an image they sent only for its look: ${copied.map((l) => `"${l}"`).join(" | ")}. That image's words are never deck content; write those lines from what they told you.` : null;
 }
 
 // Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
@@ -359,7 +376,7 @@ export function deckTools(
           if (tokens.accent && /^(black|charcoal|white|off-white|ivory|cream|grey|stone|slate)$/.test(D.colorName(tokens.accent))) delete tokens.accent;
         }
         const ref = what === "logo" ? "your logo" : "the image you sent";
-        const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref, confirmed: false, fontNotes: r.fontNote ? [r.fontNote] : [] });
+        const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref, confirmed: false, fontNotes: r.fontNote ? [r.fontNote] : [], assetN: image });
         if (id) readThisTurn.add(id);
         const confirm = D.confirmLine(tokens, { weight: what === "logo" ? null : r.vision?.weight });
         const { recordDecision } = await import("../harness/core.js");
@@ -479,6 +496,12 @@ export function deckTools(
             if (retry(checked.problems.slice(0, 4).join("; "))) continue;
             o.notDone(`No deck made: ${checked.problems.slice(0, 3).join("; ")}.`);
             return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these (only what they told you or you read) and try once more, or give them the points in a text and say the deck isn't there yet.` };
+          }
+          const copied = await referenceCopyProblem(ctx, checked.data, source.words);
+          if (copied) {
+            if (retry(copied)) continue;
+            o.notDone("No deck made: some lines copied an inspiration image's own words.");
+            return { ok: false, error: `Not made. ${copied}` };
           }
           const invented = await inventedClaims(ctx, checked.data, source, null);
           if (invented) {
@@ -611,6 +634,12 @@ export function deckTools(
               const from = same ?? (there && (there.bullets ?? []).some((b: string) => sl.bullets.includes(b)) ? there : null);
               return { ...sl, image: from?.image ?? null };
             });
+          }
+          const copied = await referenceCopyProblem(ctx, next, source.words);
+          if (copied) {
+            if (retry(copied)) continue;
+            o.notDone("The deck wasn't changed: some lines copied an inspiration image's own words.");
+            return { ok: false, error: `Not changed. ${copied}` };
           }
           const invented = await inventedClaims(ctx, next, source, was);
           if (invented) {

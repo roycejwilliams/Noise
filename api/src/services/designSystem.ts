@@ -299,14 +299,33 @@ const rowSignal = (r: any): DesignSignal => ({
   fontNotes: Array.isArray(r.font_notes) ? r.font_notes.map(String) : [],
 });
 
-export async function recordSignal(userId: string, s: { context: DesignContext; source: SignalSource; values: Tokens & { dontCare?: boolean }; quote?: string | null; ref?: string | null; confirmed?: boolean; fontNotes?: string[] }): Promise<number | null> {
+// assetN: the member's image number a reference read came from, so what's written in that image is never read as their words.
+export async function recordSignal(userId: string, s: { context: DesignContext; source: SignalSource; values: Tokens & { dontCare?: boolean }; quote?: string | null; ref?: string | null; confirmed?: boolean; fontNotes?: string[]; assetN?: number | null }): Promise<number | null> {
   const values = cleanTokens(s.values);
   if (!Object.keys(values).length) return null;
   const { rows } = await db.query(
-    `INSERT INTO member_design_signals (owner_user_id, context, source, vals, quote, ref, confirmed, font_notes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-    [userId, s.context, s.source, JSON.stringify(values), s.quote ? s.quote.slice(0, 300) : null, s.ref ? s.ref.slice(0, 120) : null, s.source === "reference" ? !!s.confirmed : true, JSON.stringify((s.fontNotes ?? []).slice(0, 3))],
+    `INSERT INTO member_design_signals (owner_user_id, context, source, vals, quote, ref, confirmed, font_notes, asset_n) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+    [userId, s.context, s.source, JSON.stringify(values), s.quote ? s.quote.slice(0, 300) : null, s.ref ? s.ref.slice(0, 120) : null, s.source === "reference" ? !!s.confirmed : true, JSON.stringify((s.fontNotes ?? []).slice(0, 3)), s.assetN ?? null],
   );
   return rows[0] ? Number(rows[0].id) : null;
+}
+
+// ---------------------------------------------------------------- reference text is data for the look, never their words
+
+// The image numbers of theirs Co read as a look reference (readReference): what those images say is a stranger's text or a design's
+// copy, never something the member said. A photo they sent as content (a menu to summarize) was never read as a reference, so its
+// description stays theirs: the line is drawn by what Co did with the image, which is what they asked for, not by its words.
+export async function referenceImageNumbers(userId: string): Promise<Set<number>> {
+  const { rows } = await db.query(`SELECT DISTINCT asset_n FROM member_design_signals WHERE owner_user_id = $1 AND source = 'reference' AND asset_n IS NOT NULL`, [userId]);
+  return new Set(rows.map((r) => Number(r.asset_n)));
+}
+// Pure: their words with every reference image's description taken out. The photo line the texting route records looks like
+// "[sent a photo showing: ...] (saved as their image #N)"; only the description is dropped, so the record that a photo came stays.
+export function withoutReferenceText(words: string, refs: Set<number>): string {
+  if (!refs.size) return words;
+  return words
+    .replace(/\[sent a photo showing: [\s\S]*?\] \(saved as their image #(\d+)\)/g, (m, n: string) => (refs.has(Number(n)) ? `[sent a reference image for the look] (their image #${n})` : m))
+    .replace(/\[They also sent a photo\. It shows: [\s\S]*?\. Saved as their image #(\d+)\]/g, (m, n: string) => (refs.has(Number(n)) ? `[They also sent a reference image for the look, their image #${n}]` : m));
 }
 
 export async function loadSignals(userId: string): Promise<DesignSignal[]> {
@@ -368,3 +387,23 @@ export async function designMetrics(days = 30): Promise<{ medium: string; made: 
 // Pure: contrast is part of the check readers lean on (re-exported so QA and the renderers share one formula).
 export { contrast };
 export const moodBase = (m: DeckMood) => MOOD_STYLES[m];
+
+// Pure: deck lines that copy a reference image's own words (four words in a row from what it says) that the member never wrote
+// themselves. Provenance, not taste: where the line came from is the fact checked.
+export function referenceCopies(lines: string[], refTexts: string[], theirWords: string): string[] {
+  const norm = (s: string) => s.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  const grams = (s: string) => {
+    const w = norm(s).split(" ").filter(Boolean);
+    const out = new Set<string>();
+    for (let i = 0; i + 4 <= w.length; i++) out.add(w.slice(i, i + 4).join(" "));
+    return out;
+  };
+  const ref = new Set(refTexts.flatMap((t) => [...grams(t)]));
+  const theirs = ` ${norm(theirWords)} `;
+  return lines.filter((l) => [...grams(l)].some((g) => ref.has(g) && !theirs.includes(` ${g} `)));
+}
+export async function referenceTexts(userId: string, numbers: Set<number>): Promise<string[]> {
+  if (!numbers.size) return [];
+  const { rows } = await db.query(`SELECT description FROM member_assets WHERE owner_user_id = $1 AND n = ANY($2::int[]) AND description IS NOT NULL`, [userId, [...numbers]]);
+  return rows.map((r) => String(r.description));
+}
