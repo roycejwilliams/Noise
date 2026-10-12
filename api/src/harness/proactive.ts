@@ -281,6 +281,12 @@ export type PickState = {
   suppressedKinds?: ProactiveKind[];
   // They said they're away from home (services/away.ts): finds tied to where they live wait until they're back.
   away?: AwayState | null;
+  // Their text arrived in the last few minutes or its reply turn is still running, so any text Co starts now would land in the middle
+  // of the conversation (concurrency audit, 2026-10-12; intelligence audit: a check-in went 40 seconds after Co's reply). Every
+  // proactive and Co-initiated text waits; it's requeued, never dropped.
+  midConversation?: boolean;
+  // When they joined (users.created_at): no companion check-in in their first day (NEW_MEMBER_QUIET_HOURS).
+  joinedAt?: Date | null;
 };
 
 // While someone is struggling, asks, check-ins on asks, and product updates
@@ -428,7 +434,10 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
     unansweredSince(lastCounted, state.lastInboundAt);
 
   const spacing = spacingCheck(state);
-  const checks: GateCheck[] = [{ name: "not_opted_out", pass: !state.optedOut, reason: "they opted out of texts" }];
+  const checks: GateCheck[] = [
+    { name: "not_opted_out", pass: !state.optedOut, reason: "they opted out of texts" },
+    { name: "mid_conversation", pass: !state.midConversation, reason: "they're mid-conversation with Co right now" },
+  ];
   if (!opts.skipHours) {
     checks.push({
       name: "local_hours",
@@ -478,17 +487,24 @@ export function spacingCheck(state: Pick<PickState, "now" | "sends">): GateCheck
 // The gates a Co-initiated exempt text waits on (sendExempt coInitiated, issue #126): spacing from any text Co sent first,
 // the engagement pace, the unanswered pause, and the backoff for its kind. Not the daily/weekly caps: those are the offer
 // lanes' quota, and a task text was never counted in them. Quiet hours are checked by the caller (respectHours).
-const CO_INITIATED_GATES = new Set(["spacing", "engagement_pace", "unanswered_pause"]);
+const CO_INITIATED_GATES = new Set(["spacing", "engagement_pace", "unanswered_pause", "mid_conversation"]);
 export function coInitiatedChecks(state: Omit<PickState, "candidates">, kind: ProactiveKind | null): GateCheck[] {
   const checks = userLevelChecks(state, { lane: "other", skipHours: true }).filter((c) => CO_INITIATED_GATES.has(c.name));
   if (kind) checks.push({ name: "kind_restraint", pass: !state.suppressedKinds?.includes(kind), reason: `they keep letting ${kind} texts pass` });
   return checks;
 }
+// How recent a text of theirs counts as mid-conversation, and how soon a text held for it looks again.
+export const MID_CONVERSATION_MINUTES = 3;
+export const MID_CONVERSATION_RETRY_MINUTES = 5;
 // When a held Co-initiated text is worth another look, from the gate that held it (review of #129: a spacing-only retry woke a
 // task paused on an unanswered text every hour until it ran out of wakes). Spacing clears at a known time; the unanswered pause
 // and the engagement pace wait a day (their reply wakes a task that texted them sooner); a kind they've backed off from, a week.
 export const CO_INITIATED_RETRY_HOURS = { spacing: 0, unanswered_pause: 24, engagement_pace: 24, kind_restraint: 24 * 7 } as const;
 export function coInitiatedRetryAt(state: Pick<PickState, "now" | "sends">, failed: string[] = ["spacing"]): Date {
+  // Held only because they're mid-conversation: a few minutes, not an hour (it's requeued, never dropped).
+  const others = failed.filter((f) => f !== "mid_conversation");
+  if (failed.length && !others.length) return new Date(state.now.getTime() + MID_CONVERSATION_RETRY_MINUTES * 60_000);
+  failed = others;
   const last = state.sends.filter((s) => spaces(s) && s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
   const spaced = failed.includes("spacing") && last ? last.sentAt.getTime() + RULES.minHoursBetweenTexts * HOUR : 0;
   const waits = failed.map((f) => (CO_INITIATED_RETRY_HOURS as Record<string, number>)[f] ?? 24);
@@ -501,8 +517,10 @@ async function coInitiatedHold(client: Queryable, o: { userId: string; timezone:
   const sends = await loadSends(client, o.userId);
   const lastInboundAt = await loadLastInbound(client, o.userId);
   const suppressed = o.kind ? await loadKindRestraint(client, o.userId, o.now).then((r) => suppressedKinds(r.verdicts)).catch(() => null) : [];
+  // Can't tell: held a few minutes rather than texting into a conversation (fail safe, requeued).
+  const midConversation = await midConversationNow(client, o.userId, o.now, lastInboundAt);
   const failed = suppressed
-    ? coInitiatedChecks({ now: o.now, timezone: o.timezone, optedOut: false, sends, lastInboundAt, suppressedKinds: suppressed }, o.kind).filter((c) => !c.pass)
+    ? coInitiatedChecks({ now: o.now, timezone: o.timezone, optedOut: false, sends, lastInboundAt, suppressedKinds: suppressed, midConversation }, o.kind).filter((c) => !c.pass)
     : [{ name: "kind_restraint", pass: false, reason: "couldn't read their backoff" }];
   return { failed, sends };
 }
@@ -579,7 +597,12 @@ export function watchOfferMatches(logged: string, lastCoLine: string): boolean {
 
 // answering: a reply (isAnswering) doesn't wait on the last text of its type
 // (two time frames they named are two replies); the same topic still waits.
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away">, opts: { answering?: boolean } = {}): GateCheck[] {
+// A new member's first day has no companion check-in (intelligence audit, 2026-10-12: all seven new members got one within about 20
+// minutes of joining, one 40 seconds after Co's reply). The door (services/theDoor.ts) already tells them what Co does next and when
+// (the first look, today or tomorrow, a task that texts them itself); a check-in before then talks over that promise. A safety
+// follow-up is never held by it.
+export const NEW_MEMBER_QUIET_HOURS = 24;
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away" | "joinedAt">, opts: { answering?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -600,6 +623,13 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
       reason: unansweredTopic ? `already asked about ${c.topicKey} and they never replied` : undefined,
     },
   ];
+  if (PROACTIVE_PURPOSE_MAP[c.type] === "companion" && (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp !== true && state.joinedAt) {
+    checks.push({
+      name: "new_member_quiet",
+      pass: state.now.getTime() - state.joinedAt.getTime() >= NEW_MEMBER_QUIET_HOURS * HOUR,
+      reason: `they joined less than ${NEW_MEMBER_QUIET_HOURS}h ago; the first check-in waits a day`,
+    });
+  }
   if (policy.typeGapDays !== undefined && !opts.answering) {
     checks.push({
       name: "type_gap",
@@ -657,6 +687,10 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
 }
 
 const PERSON_CHECKS = new Set(["not_opted_out", "local_hours"]);
+// A safety follow-up is never held for a conversation going on (review of the concurrency fix: dispatch runs every 30 minutes, so a
+// hold could delay it that long). Every other proactive text waits.
+const isSafetyFollowUp = (c: Pick<Candidate, "payload">) => (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true;
+const safetyPassesHold = (k: GateCheck, c: Pick<Candidate, "payload">) => k.name === "mid_conversation" && isSafetyFollowUp(c);
 // The quota an answer skips. Spacing is not in it: every text keeps it.
 const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "engagement_pace"]);
 
@@ -709,7 +743,7 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
   const perCandidate = state.candidates.map((candidate) => {
     const answering = isAnswering(candidate);
     const laneChecks = (pacedByEngagement(candidate) ? byLane : legacyByLane)[laneOf(candidate.type)].filter(
-      (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap"),
+      (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap") && !safetyPassesHold(k, candidate),
     );
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering })];
     return { candidate, checks, ok: gate(checks).ok };
@@ -1165,7 +1199,7 @@ export function mergeExpiry(existing: Date | null, incoming: Date | null): Date 
   return existing.getTime() <= incoming.getTime() ? existing : incoming;
 }
 
-export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: boolean }> {
+export async function enqueueCandidate(input: EnqueueInput, retried = false): Promise<{ queued: boolean }> {
   // Advice follow-ups, time-frame follow-ups, ask check-ins and debriefs: Co
   // decides when (services/followUps.ts). What it sends still comes back here.
   if (!input.fromCo) {
@@ -1173,6 +1207,7 @@ export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: b
     if (F.followUpsByCo() && F.handedToCo(input)) return F.startFollowUp(input);
   }
   const client = await pool.connect();
+  let released = false;
   try {
     await client.query("BEGIN");
     const existing = await client.query(
@@ -1225,6 +1260,13 @@ export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: b
       ],
     );
     await client.query("COMMIT");
+    // Another enqueue of the same target inserted first (concurrency audit, 2026-10-12: its row didn't exist for this one's FOR
+    // UPDATE, so both reached the insert). Once more, so this one merges into that row instead of being dropped.
+    if (!inserted.rows[0] && !retried) {
+      client.release();
+      released = true;
+      return enqueueCandidate(input, true);
+    }
     // New work for this person: let the pick model look again.
     if (inserted.rows[0]) {
       await pool.query(`UPDATE proactive_user_state SET hold_until = NULL WHERE user_id = $1`, [input.userId]).catch(() => {});
@@ -1234,7 +1276,7 @@ export async function enqueueCandidate(input: EnqueueInput): Promise<{ queued: b
     await client.query("ROLLBACK").catch(() => {});
     throw err;
   } finally {
-    client.release();
+    if (!released) client.release();
   }
 }
 
@@ -1261,6 +1303,38 @@ async function loadSends(db: Queryable, userId: string): Promise<SendRecord[]> {
     sentAt: new Date(r.sent_at),
     exempt: r.exempt,
   }));
+}
+
+// Their stamp (written the moment a text arrives, before its turn runs), Co's last reply to them, and whether a turn for one of their
+// texts hasn't finished (inbound_webhook_handles, bounded so a crashed turn doesn't hold forever).
+// Pure: mid-conversation when their text, or Co's own last reply to them, is within MID_CONVERSATION_MINUTES (the intelligence audit's
+// check-in went 40 seconds after Co's reply), or a turn for one of their texts is still running.
+export function midConversationFrom(o: { now: Date; lastInboundAt: Date | null; lastCoReplyAt: Date | null; turnRunning: boolean }): boolean {
+  const recent = (at: Date | null) => !!at && o.now.getTime() - at.getTime() < MID_CONVERSATION_MINUTES * 60_000 && at.getTime() <= o.now.getTime() + 60_000;
+  return o.turnRunning || recent(o.lastInboundAt) || recent(o.lastCoReplyAt);
+}
+// Can't tell: held a few minutes rather than texting into a conversation (fail safe, requeued).
+async function midConversationNow(db: Queryable, userId: string, now: Date, lastInboundAt: Date | null): Promise<boolean> {
+  if (midConversationFrom({ now, lastInboundAt, lastCoReplyAt: null, turnRunning: false })) return true;
+  return loadMidConversation(db, userId, now).catch(() => true);
+}
+async function loadJoinedAt(db: Queryable, userId: string): Promise<Date | null> {
+  const { rows } = await db.query(`SELECT created_at FROM users WHERE id = $1`, [userId]);
+  return rows[0]?.created_at ? new Date(rows[0].created_at) : null;
+}
+async function loadMidConversation(db: Queryable, userId: string, now: Date): Promise<boolean> {
+  const { rows } = await db.query(
+    `SELECT
+       (SELECT d.last_inbound_at FROM phone_debounce d WHERE d.phone = u.phone_number) AS stamped_at,
+       (SELECT MAX(m.created_at) FROM co_memories m WHERE m.user_id = u.id AND m.memory_type = 'text_exchange' AND m.content LIKE 'Co replied:%'
+          AND m.created_at > $2::timestamptz - make_interval(mins => $3)) AS co_reply_at,
+       EXISTS (SELECT 1 FROM inbound_webhook_handles h WHERE h.finished_at IS NULL AND h.received_at > NOW() - INTERVAL '15 minutes' AND h.payload->>'number' = u.phone_number) AS running
+     FROM users u WHERE u.id = $1`,
+    [userId, now, MID_CONVERSATION_MINUTES],
+  );
+  const r = rows[0];
+  if (!r) return false;
+  return midConversationFrom({ now, lastInboundAt: r.stamped_at ? new Date(r.stamped_at) : null, lastCoReplyAt: r.co_reply_at ? new Date(r.co_reply_at) : null, turnRunning: !!r.running });
 }
 
 async function loadLastInbound(db: Queryable, userId: string): Promise<Date | null> {
@@ -1487,12 +1561,16 @@ async function sendWithLedger(
     const sends = await loadSends(client, person.userId);
     const lastInboundAt = await loadLastInbound(client, person.userId);
     const now = new Date();
+    // Read again at send time, inside the lock: a draft can take a minute, and they may have texted meanwhile.
+    const midConversation = await midConversationNow(client, person.userId, now, lastInboundAt);
+    const joinedAt = await loadJoinedAt(client, person.userId).catch(() => null);
     const answering = isAnswering(c);
     const checks = [
-      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
+      // A safety follow-up is never held for the conversation (isSafetyFollowUp).
+      ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt, midConversation: midConversation && !isSafetyFollowUp(c) }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
         (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
       ),
-      ...candidateChecks(c, { now, sends, lastInboundAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
+      ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
     ];
     const g = gate(checks);
     if (!g.ok) {
@@ -1801,11 +1879,13 @@ async function recordSkipOnce(userId: string, reason: string, decision: Paramete
 export type MemberSendState = { state: Omit<PickState, "candidates">; holdUntil: Date | null; spaceUntil: Date | null; raw: import("../services/memberKnowledge.js").RawRestraint };
 export async function memberSendState(userId: string, person: { timezone: string | null; optedOut: boolean }, now: Date): Promise<MemberSendState> {
   const MK = await import("../services/memberKnowledge.js");
-  const [raw, sends, undeliveredYes] = await Promise.all([
+  const [raw, sends, undeliveredYes, joinedAt] = await Promise.all([
     MK.realKnowledgeDeps.restraint(userId, now),
     loadSends(pool, userId),
     import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(userId)).catch(() => false),
+    loadJoinedAt(pool, userId).catch(() => null),
   ]);
+  const midConversation = await midConversationNow(pool, userId, now, raw.lastInboundAt);
   return {
     state: {
       now,
@@ -1819,6 +1899,8 @@ export async function memberSendState(userId: string, person: { timezone: string
       // Kinds they keep letting pass (services/kindRestraint.ts). A read that fails holds what's stored, never more than that.
       suppressedKinds: raw.suppressed,
       away: raw.away ?? null,
+      midConversation,
+      joinedAt,
     },
     holdUntil: raw.holdUntil,
     spaceUntil: raw.spaceUntil,
@@ -1863,6 +1945,7 @@ export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | 
     attempts: 0,
     createdAt: s.state.now,
   };
+  // A conversation going on never holds a sweep: mid_conversation isn't one of SWEEP_BLOCKERS (what it finds waits at send time).
   const ev = evaluateCandidates({ ...s.state, candidates: [find] });
   const failed = [...ev.userChecks, ...(ev.perCandidate[0]?.checks ?? [])].filter((c) => !c.pass && SWEEP_BLOCKERS[kind].includes(c.name)).map((c) => c.name);
   return [...(paused.includes("event_offer") ? ["paused"] : []), ...new Set(failed)];

@@ -19,6 +19,7 @@ import { localStamp, memberZone } from "../services/memberTime.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
+import { randomUUID } from "crypto";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "./core.js";
@@ -248,8 +249,40 @@ ${b.body}
 Return ONLY JSON: {"snapshot": ${a.shape}, "threads": ${b.shape}}`;
 }
 
+// One rebuild per member at a time (concurrency audit, 2026-10-12): every text turn starts one, outside the phone lock, and the
+// 10-minute guard below reads updated_at, which is written only at the end, so two turns close together each started a full rebuild
+// and applied the same thread proposal twice (two threads, two check-ins). A rebuild claims the member first; one that can't, ends.
+// A forced rebuild (after a call) that finds one running asks it to run once more when it's done, so the call is never missed. A
+// claim older than this is a crashed rebuild and is taken over.
+export const SNAPSHOT_CLAIM_STALE_MS = 5 * 60_000;
+export async function claimRebuild(userId: string, force: boolean): Promise<string | null> {
+  const token = randomUUID();
+  const { rows } = await pool.query(
+    `INSERT INTO person_snapshot_claims (user_id, token, claimed_at, again) VALUES ($1, $2, NOW(), false)
+     ON CONFLICT (user_id) DO UPDATE SET token = EXCLUDED.token, claimed_at = NOW(), again = false
+     WHERE person_snapshot_claims.claimed_at < NOW() - make_interval(secs => $3)
+     RETURNING token`,
+    [userId, token, SNAPSHOT_CLAIM_STALE_MS / 1000],
+  );
+  if (rows[0]?.token === token) return token;
+  if (force) await pool.query(`UPDATE person_snapshot_claims SET again = true WHERE user_id = $1`, [userId]).catch(() => {});
+  return null;
+}
+// Released: says whether a forced rebuild asked for one more run meanwhile.
+export async function releaseRebuild(userId: string, token: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `WITH mine AS (SELECT again FROM person_snapshot_claims WHERE user_id = $1 AND token = $2 FOR UPDATE)
+     UPDATE person_snapshot_claims c SET claimed_at = '-infinity', again = false FROM mine WHERE c.user_id = $1 AND c.token = $2
+     RETURNING mine.again`,
+    [userId, token],
+  );
+  return rows[0]?.again === true;
+}
+
 // Non-blocking callers: fire and forget. Returns whether it rebuilt.
 export async function refreshPersonSnapshot(userId: string, opts: { force?: boolean } = {}): Promise<boolean> {
+  let token: string | null = null;
+  let again = false;
   try {
     if (!opts.force) {
       const { rows } = await pool.query(
@@ -262,6 +295,10 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       const newest = rows[0]?.newest ? new Date(rows[0].newest).getTime() : 0;
       if (newest <= updated || Date.now() - updated < REBUILD_MIN_INTERVAL_MS) return false;
     }
+    token = await claimRebuild(userId, !!opts.force);
+    if (!token) return false;
+    // What this rebuild is built from: its start. A later write from a rebuild that started earlier never replaces it.
+    const builtFrom = new Date();
     const input = await gatherInputs(userId);
     if (!input || (!input.recentStatements.length && !input.openAsks.length)) return false;
     // Loaded here so the many light importers of this file don't pull in the send path.
@@ -327,11 +364,15 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
     // What they corrected or removed (services/whatCoKnows.ts) stays that way: a rebuild from their older words never brings it back.
     const forgotten = await import("../services/whatCoKnows.js").then((W) => W.forgottenRows(userId).then((rows) => ({ W, rows }))).catch(() => null);
     if (forgotten?.rows.length) snapshot = forgotten.W.forgetInSnapshot(snapshot, forgotten.rows);
-    await pool.query(
-      `INSERT INTO person_snapshots (user_id, snapshot, updated_at) VALUES ($1, $2, NOW())
-       ON CONFLICT (user_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW()`,
-      [userId, JSON.stringify(snapshot)],
+    const wrote = await pool.query(
+      `INSERT INTO person_snapshots (user_id, snapshot, updated_at, built_from) VALUES ($1, $2, NOW(), $3)
+       ON CONFLICT (user_id) DO UPDATE SET snapshot = EXCLUDED.snapshot, updated_at = NOW(), built_from = EXCLUDED.built_from
+       WHERE person_snapshots.built_from IS NULL OR person_snapshots.built_from <= EXCLUDED.built_from
+       RETURNING 1`,
+      [userId, JSON.stringify(snapshot), builtFrom],
     );
+    // A newer rebuild already landed (one that took over a stale claim): this older one, and its threads, stand down.
+    if (!wrote.rows.length) return false;
     await recordDecision({ layer: 4, decision: "profile.snapshot", userId, outcome: "act", action: "rebuilt", proposal: { previous: input.previous, snapshot } });
     // Their open threads move on the same beat: after they've said something
     // new (2026-09-22, harness/memberThreads.ts), from the same first call.
@@ -340,5 +381,9 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
   } catch (err: any) {
     console.error("refreshPersonSnapshot failed (non-fatal):", err?.message ?? err);
     return false;
+  } finally {
+    if (token) again = await releaseRebuild(userId, token).catch(() => false);
+    // A call ended while this ran: once more, so the picture includes it.
+    if (again) refreshPersonSnapshot(userId, { force: true }).catch(() => {});
   }
 }

@@ -47,6 +47,12 @@ export async function keepAsset(userId: string, data: Buffer, mediaType: string,
       return { ok: true, id, n: Number(rows[0].n), isNew: true };
     } catch (err: any) {
       if (err?.code !== "23505" || attempt >= 4) throw err;
+      // The same photo arrived twice at once (concurrency audit, 2026-10-12): one live copy per owner (member_assets_one_live_copy),
+      // and the second gets the first one's number.
+      if (err?.constraint === "member_assets_one_live_copy") {
+        const first = await db.query(`SELECT id, n FROM member_assets WHERE owner_user_id = $1 AND sha256 = $2 AND wiped_at IS NULL AND n > 0 LIMIT 1`, [userId, sha]);
+        if (first.rows[0]) return { ok: true, id: String(first.rows[0].id), n: Number(first.rows[0].n), isNew: false };
+      }
     }
   }
 }

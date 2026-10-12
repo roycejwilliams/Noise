@@ -10,7 +10,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
-import { withAdvisoryLock } from "../db/advisoryLock.js";
+import { LockWaitTimeout, withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
@@ -498,6 +498,12 @@ async function tellInviterTheyJoined(newUser: { id: string; first_name?: string 
   // The claim was already stamped, so an unsent note would be lost forever
   // with no retry (2026-09-20 code review). Hand it back instead.
   if (!sent) await releaseJoinNotice(newUser.id);
+}
+
+// A text whose turn never ran (the phone's lock never came free): its "User said" line, once.
+async function logHeldText(phone: string, content: string, receivedAt: Date): Promise<void> {
+  const { rows } = await pool.query(`SELECT id FROM users WHERE phone_number = $1 LIMIT 1`, [phone]);
+  if (rows[0]) await logTextExchangeOnce(rows[0].id, `User said: ${content}`, receivedAt);
 }
 
 // Once per turn's text: a replayed turn's "User said" line is already logged
@@ -2714,6 +2720,20 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
       try {
         // Tracked so a restart waits for a reply mid-draft (services/shutdown.ts).
         await track(lockKey ? withPhoneLock(lockKey, run) : run());
+      } catch (err) {
+        // The phone's lock never came free (concurrency audit, 2026-10-12): the turn never ran, and it never runs unlocked. It's
+        // re-queued from what was saved: the replay re-checks that no newer text took it over and that Co hasn't answered since. A
+        // replay that also can't get the lock tells them plainly, so they're never left with nothing.
+        if (!(err instanceof LockWaitTimeout)) throw err;
+        if (!res.headersSent) res.status(200).send({ received: true, action: "queued" });
+        if (lockKey && isGenuineInbound && !isGroupMessage) {
+          // Its line goes on file now, so the next turn sees it; the replay answers it even after a newer text or a Co reply,
+          // since neither was to this text (review of the concurrency fix: the poll isn't first-in-first-out).
+          const receivedAt = replay?.receivedAt ?? turnStartedAt;
+          if (typeof bodyForStamp.content === "string" && bodyForStamp.content.trim()) await logHeldText(lockKey, bodyForStamp.content, receivedAt).catch(() => {});
+          if (!replay && typeof handle === "string" && handle) scheduleTurnReplay(handle, TURN_REPLAY_AFTER_MS, { neverRan: true });
+          else await tellMemberTurnFailed(lockKey, receivedAt, "turn_error", "LockWaitTimeout", { neverRan: true });
+        }
       } finally {
         if (typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
           pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1`, [handle]).catch(() => {});
@@ -2784,11 +2804,11 @@ async function claimRetry(handle: string): Promise<{ payload: any; receivedAt: D
 
 // A crashed turn runs once more from their saved text, shortly after.
 export const TURN_REPLAY_AFTER_MS = 10_000;
-function scheduleTurnReplay(handle: string, afterMs: number): void {
+function scheduleTurnReplay(handle: string, afterMs: number, o: { neverRan?: boolean } = {}): void {
   pool.query(`UPDATE inbound_webhook_handles SET retry_due_at = NOW() + make_interval(secs => $2) WHERE handle = $1 AND retry_claimed_at IS NULL`, [handle, afterMs / 1000]).catch(() => {});
   const timer = setTimeout(() => {
     if (isShuttingDown()) return;
-    track(replayOwedTurn(handle)).catch((err: any) => console.error("sendblue: replaying a crashed turn failed:", err?.message ?? err));
+    track(replayOwedTurn(handle, o)).catch((err: any) => console.error("sendblue: replaying a crashed turn failed:", err?.message ?? err));
   }, afterMs);
   timer.unref?.();
 }
@@ -2797,7 +2817,7 @@ function scheduleTurnReplay(handle: string, afterMs: number): void {
 // once, and only when it's safe: Co hasn't answered since, they haven't texted
 // again, no call went out, and it's under an hour old (turnReplayBlocked).
 // Returns whether it ran.
-export async function replayOwedTurn(handle: string): Promise<boolean> {
+export async function replayOwedTurn(handle: string, o: { neverRan?: boolean } = {}): Promise<boolean> {
   const claim = await claimRetry(handle);
   if (!claim?.payload || !replayHandler) return false;
   const { payload, receivedAt } = claim;
@@ -2826,6 +2846,7 @@ export async function replayOwedTurn(handle: string): Promise<boolean> {
     callAt: row?.call_status_updated_at ? new Date(row.call_status_updated_at) : null,
     receivedAt,
     now: new Date(),
+    neverRan: o.neverRan,
   });
   await recordDecision({ layer: 2, decision: "turn.replay", userId: row?.id ?? null, outcome: blocked ? "skip" : "act", action: blocked ?? "replayed", proposal: { handle, message: String(payload.content ?? "").slice(0, 200) } }).catch(() => {});
   if (blocked) return false;
@@ -2836,7 +2857,7 @@ export async function replayOwedTurn(handle: string): Promise<boolean> {
 // A turn died after the text was marked read: send the one honest line
 // (services/turnFailure.ts), unless Co answered anyway, they've opted out,
 // or they were just told. Never throws.
-export async function tellMemberTurnFailed(phone: string, receivedAt: Date, source: "turn_error" | "restart", errorClass: string): Promise<boolean> {
+export async function tellMemberTurnFailed(phone: string, receivedAt: Date, source: "turn_error" | "restart", errorClass: string, o: { neverRan?: boolean } = {}): Promise<boolean> {
   try {
     const { rows } = await pool.query(
       `SELECT u.id, u.sms_opted_out, u.archived_at,
@@ -2857,6 +2878,7 @@ export async function tellMemberTurnFailed(phone: string, receivedAt: Date, sour
       lastNoteAt: row?.last_note_at ? new Date(row.last_note_at) : null,
       receivedAt,
       now: new Date(),
+      neverRan: o.neverRan,
     });
     const sent = blocked ? false : await sendAndLog(row.id, phone, TURN_FAILED_NOTE);
     await recordDecision({

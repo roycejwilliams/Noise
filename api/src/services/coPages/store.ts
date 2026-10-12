@@ -89,18 +89,53 @@ export async function createCoPage(data: unknown, o: { ownerUserId: string; sour
 }
 
 // A new version, same link: the owner's own live page only. Null when there's no such page for them.
-export async function updateCoPage(id: string, ownerUserId: string, data: unknown, source: PageSource): Promise<{ ok: true; version: number } | { ok: false; problems: string[] } | null> {
+// expectVersion (concurrency audit, 2026-10-12): the version the change was written from. Another change that landed in between is
+// never overwritten: the result says so (conflict) with the newest version, and the caller recomposes or reads again. A reset that
+// moved the page to a fresh link meanwhile is followed there (moved: the new id and link), so the change isn't lost.
+export type UpdateConflict = { ok: false; problems: string[]; conflict: { id: string; version: number } };
+export async function updateCoPage(
+  id: string,
+  ownerUserId: string,
+  data: unknown,
+  source: PageSource,
+  opts: { expectVersion?: number | null } = {},
+): Promise<{ ok: true; version: number; moved?: { id: string; url: string } } | { ok: false; problems: string[]; conflict?: UpdateConflict["conflict"] } | null> {
   if (!CO_PAGE_ID.test(id) || !ownerUserId) return null;
   const c = checkPage(data, source);
   if (!c.ok) return c;
   const notTheirs = await assetsAreTheirs(c.data, ownerUserId);
   if (notTheirs.length) return { ok: false, problems: notTheirs };
+  const expect = typeof opts.expectVersion === "number" ? opts.expectVersion : null;
+  let at = id;
+  for (let hop = 0; hop < 3; hop++) {
+    const { rows } = await db.query(
+      `UPDATE co_pages SET data = $3, version = version + 1, updated_at = NOW(), expires_at = CASE WHEN kept THEN expires_at ELSE NOW() + make_interval(days => $4) END, expiry_warned_at = NULL
+       WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND expires_at > NOW() AND COALESCE(data->>'kind', 'page') = $5 AND ($6::int IS NULL OR version = $6::int) RETURNING version`,
+      [at, ownerUserId, JSON.stringify(c.data), PAGE_LIFETIME_DAYS, artifactKind(c.data), expect],
+    );
+    if (rows[0]) return { ok: true, version: Number(rows[0].version), ...(at !== id ? { moved: { id: at, url: coPageUrl(at) } } : {}) };
+    const miss = await whyNotUpdated(at, ownerUserId);
+    if (miss.movedTo) {
+      at = miss.movedTo;
+      continue;
+    }
+    if (miss.liveVersion != null && expect != null && miss.liveVersion !== expect) {
+      return { ok: false, problems: ["another change to it landed while this one was being written"], conflict: { id: at, version: miss.liveVersion } };
+    }
+    return null;
+  }
+  return null;
+}
+// Why an owner's update matched nothing: a reset moved it (resetCoPageLink sets moved_to on the old row), it's live at another
+// version, or it's gone.
+async function whyNotUpdated(id: string, ownerUserId: string): Promise<{ movedTo: string | null; liveVersion: number | null }> {
   const { rows } = await db.query(
-    `UPDATE co_pages SET data = $3, version = version + 1, updated_at = NOW(), expires_at = CASE WHEN kept THEN expires_at ELSE NOW() + make_interval(days => $4) END, expiry_warned_at = NULL
-     WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND expires_at > NOW() AND COALESCE(data->>'kind', 'page') = $5 RETURNING version`,
-    [id, ownerUserId, JSON.stringify(c.data), PAGE_LIFETIME_DAYS, artifactKind(c.data)],
+    `SELECT version, moved_to, (taken_down_at IS NULL AND expires_at > NOW()) AS live FROM co_pages WHERE id = $1 AND owner_user_id = $2`,
+    [id, ownerUserId],
   );
-  return rows[0] ? { ok: true, version: Number(rows[0].version) } : null;
+  const r = rows[0];
+  if (!r) return { movedTo: null, liveVersion: null };
+  return { movedTo: !r.live && r.moved_to && CO_PAGE_ID.test(String(r.moved_to)) ? String(r.moved_to) : null, liveVersion: r.live ? Number(r.version) : null };
 }
 
 // "Take that page down": the owner's own page only. The link answers 404 from now on and the content is wiped right away.
@@ -149,17 +184,26 @@ export async function loadCoPage(id: string): Promise<StoredCoPage | null> {
 // ---------------------------------------------------------------- keep and renewal (2026-10-11)
 
 // "Keep this": no expiry from now on. "Renew": 90 more days from today. The owner's own live artifact only. Null when there's none.
-export async function keepCoPage(id: string, ownerUserId: string, mode: "keep" | "renew"): Promise<{ kept: boolean; expiresAt: Date | null } | null> {
+export async function keepCoPage(id: string, ownerUserId: string, mode: "keep" | "renew"): Promise<{ kept: boolean; expiresAt: Date | null; moved?: { id: string; url: string } } | null> {
   if (!CO_PAGE_ID.test(id) || !ownerUserId) return null;
-  const { rows } = await db.query(
-    mode === "keep"
-      ? `UPDATE co_pages SET kept = true, expires_at = 'infinity', expiry_warned_at = NULL WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND expires_at > NOW() RETURNING kept, expires_at`
-      : `UPDATE co_pages SET expires_at = CASE WHEN kept THEN expires_at ELSE NOW() + make_interval(days => $3) END, expiry_warned_at = NULL WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND expires_at > NOW() RETURNING kept, expires_at`,
-    mode === "keep" ? [id, ownerUserId] : [id, ownerUserId, PAGE_LIFETIME_DAYS],
-  );
-  if (!rows[0]) return null;
-  const at = new Date(rows[0].expires_at);
-  return { kept: !!rows[0].kept, expiresAt: Number.isFinite(at.getTime()) ? at : null };
+  // A reset that landed first moved it to a fresh link: the keep follows it there (concurrency audit, 2026-10-12).
+  let at = id;
+  for (let hop = 0; hop < 3; hop++) {
+    const { rows } = await db.query(
+      mode === "keep"
+        ? `UPDATE co_pages SET kept = true, expires_at = 'infinity', expiry_warned_at = NULL WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND expires_at > NOW() RETURNING kept, expires_at`
+        : `UPDATE co_pages SET expires_at = CASE WHEN kept THEN expires_at ELSE NOW() + make_interval(days => $3) END, expiry_warned_at = NULL WHERE id = $1 AND owner_user_id = $2 AND taken_down_at IS NULL AND expires_at > NOW() RETURNING kept, expires_at`,
+      mode === "keep" ? [at, ownerUserId] : [at, ownerUserId, PAGE_LIFETIME_DAYS],
+    );
+    if (rows[0]) {
+      const when = new Date(rows[0].expires_at);
+      return { kept: !!rows[0].kept, expiresAt: Number.isFinite(when.getTime()) ? when : null, ...(at !== id ? { moved: { id: at, url: coPageUrl(at) } } : {}) };
+    }
+    const miss = await whyNotUpdated(at, ownerUserId);
+    if (!miss.movedTo) return null;
+    at = miss.movedTo;
+  }
+  return null;
 }
 
 // Their link opened: the artifact is in use. The first ten minutes don't count (the link preview fetches it as it's sent).
@@ -193,13 +237,15 @@ export function coShareUrl(shareId: string, env: NodeJS.ProcessEnv = process.env
   if (!base) throw new Error("API_URL isn't set, so there's no link to give");
   return `${base}/d/v/${shareId}`;
 }
+// FOR SHARE (concurrency audit, 2026-10-12): a reset already under way makes this wait and then find the page gone (null, said
+// plainly); a share that locks first makes the reset wait, and the reset's second sweep below ends it.
 export async function createShareLink(pageId: string, ownerUserId: string, theirWords: string): Promise<{ shareId: string; url: string } | null> {
   if (!CO_PAGE_ID.test(pageId) || !ownerUserId || !theirWords.trim()) return null;
   const shareId = newCoPageId();
   const url = coShareUrl(shareId);
   const { rowCount } = await db.query(
     `INSERT INTO co_page_shares (id, page_id, owner_user_id, their_words)
-     SELECT $1, id, owner_user_id, $3 FROM co_pages WHERE id = $2 AND owner_user_id = $4 AND taken_down_at IS NULL AND expires_at > NOW()`,
+     SELECT $1, id, owner_user_id, $3 FROM co_pages WHERE id = $2 AND owner_user_id = $4 AND taken_down_at IS NULL AND expires_at > NOW() FOR SHARE`,
     [shareId, pageId, theirWords.slice(0, 400), ownerUserId],
   );
   return (rowCount ?? 0) > 0 ? { shareId, url } : null;
@@ -239,7 +285,7 @@ export async function resetCoPageLink(id: string, ownerUserId: string): Promise<
        WHERE id = $2 AND owner_user_id = $3 AND taken_down_at IS NULL AND expires_at > NOW()
        FOR UPDATE
      ), down AS (
-       UPDATE co_pages p SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW() FROM old
+       UPDATE co_pages p SET taken_down_at = NOW(), data = '{}'::jsonb, updated_at = NOW(), moved_to = $1 FROM old
        WHERE p.id = old.id AND p.taken_down_at IS NULL
        RETURNING old.owner_user_id, old.data, old.version, old.created_at, old.updated_at, old.expires_at, old.kept, old.last_viewed_at
      ), ins AS (
@@ -253,5 +299,8 @@ export async function resetCoPageLink(id: string, ownerUserId: string): Promise<
     [fresh, id, ownerUserId],
   );
   if (!rows[0]?.id) return null;
+  // A share link made while this reset waited on the page's row was committed after this statement's snapshot, so the sweep above
+  // can't see it: a second sweep, now, ends it too (concurrency audit, 2026-10-12).
+  await db.query(`UPDATE co_page_shares SET revoked_at = NOW() WHERE page_id = $1 AND revoked_at IS NULL`, [id]).catch(() => {});
   return { id: fresh, url };
 }

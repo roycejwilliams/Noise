@@ -621,7 +621,7 @@ export function deckTools(
         if (pick === "ambiguous") return { ok: false, error: "More than one of their decks fits. Ask which one by its title." };
         if (!pick) return { ok: false, error: "They have no live deck by that name. Make a new one (makeDeck) if that's what they want." };
         // The look stays unless they said something new about it.
-        const before = await store.loadCoPage(pick.id).catch(() => null);
+        let before = await store.loadCoPage(pick.id).catch(() => null);
         const kept = before && before.ownerUserId === ctx.userId && (before.data as any).kind === "deck" ? (before.data as any).style : null;
         let taste: any = kept ? { mood: kept.mood, colors: { background: kept.background, text: kept.text, accent: kept.accent }, type: kept.type } : null;
         // The deck's whole look (fonts, gradient, density included) stays unless they said something new; then it's refilled from
@@ -640,16 +640,17 @@ export function deckTools(
           } else restyle = undefined;
         }
         // What's on the deck now went out to them and stands; the edit may also use what they said since it was made.
-        const was: any = before && before.ownerUserId === ctx.userId && (before.data as any).kind === "deck" ? before.data : null;
+        let was: any = before && before.ownerUserId === ctx.userId && (before.data as any).kind === "deck" ? before.data : null;
         const lines = was ? [was.title, was.subtitle, ...was.slides.flatMap((x: any) => [x.headline, ...x.bullets, ...(x.notes ? [x.notes] : [])])].join("\n") : "";
-        const source = await deckSource(ctx, (await o.source()).read, { id: pick.id, lines });
-        const onDeck = was ? [was.logo, ...was.slides.map((x: any) => x.image)].filter(Boolean) : [];
+        let source = await deckSource(ctx, (await o.source()).read, { id: pick.id, lines });
+        let onDeck = was ? [was.logo, ...was.slides.map((x: any) => x.image)].filter(Boolean) : [];
         // Only the change, no slides (PR 6, how a call changes a deck): the new version is written from the deck and their words,
         // through the same checks; a refused version is written once more with the refusal in hand.
         const composing = !input0.slides?.length;
         if (composing && !was) return { ok: false, error: "That deck can't be opened to change it." };
         let refused: string | null = null;
         let r: any = null;
+        let reread = false;
         for (let attempt = 0; ; attempt++) {
           // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
           const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
@@ -707,8 +708,25 @@ export function deckTools(
             return { ok: false, error: `Not changed. ${invented}` };
           }
           const self = await selfIfAboutCo(ctx, next);
-          r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source);
+          r = await store.updateCoPage(pick.id, ctx.userId, next, self ? { ...source, read: `${source.read}\n${self}` } : source, { expectVersion: was ? before?.version : null });
           if (!r) return { ok: false, error: "That deck is gone (taken down or expired). Make a new one if they want it." };
+          // Another change landed while this one was written (concurrency audit, 2026-10-12): never written over. A change written
+          // from the deck is written once more from the newest version; one with the slides in hand is read again first.
+          if (r.conflict) {
+            const newest = composing && !reread ? await store.loadCoPage(r.conflict.id).catch(() => null) : null;
+            if (newest && newest.ownerUserId === ctx.userId && (newest.data as any).kind === "deck") {
+              reread = true;
+              before = newest;
+              was = newest.data;
+              const now = [was.title, was.subtitle, ...was.slides.flatMap((x: any) => [x.headline, ...x.bullets, ...(x.notes ? [x.notes] : [])])].join("\n");
+              source = await deckSource(ctx, (await o.source()).read, { id: newest.id, lines: now });
+              onDeck = [was.logo, ...was.slides.map((x: any) => x.image)].filter(Boolean);
+              refused = null;
+              continue;
+            }
+            o.notDone("The deck wasn't changed: another change to it landed just now.");
+            return { ok: false, error: "Not changed: another change to this deck landed while this one was being written, so it was read before that change. Open it again and make this change on the newest version, or tell them plainly it isn't changed yet." };
+          }
           if (!r.ok) {
             if (retry(r.problems.slice(0, 4).join("; "))) continue;
             o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
@@ -717,15 +735,16 @@ export function deckTools(
           break;
         }
         // A change is a revision: first-shot acceptance counts against it (services/designSystem.ts metrics).
-        if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: pick.id, medium: "deck", event: "revised", tokens: restyle ?? null }).catch(() => {});
-        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
+        if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: r.moved?.id ?? pick.id, medium: "deck", event: "revised", tokens: restyle ?? null }).catch(() => {});
+        // A reset that landed meanwhile moved it to a fresh link (store.ts): the change went there, and the new link goes with the line.
+        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
-          ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
+          ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
         ctx.onLinkDelivered?.();
         confirm();
-        ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
+        ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}) and told them what changed.`);
         return { ok: true, note: "Same deck, same link; the text said what changed. Send nothing more about it." };
       },
     }),

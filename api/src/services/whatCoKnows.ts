@@ -611,8 +611,17 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       return { ref: item.ref, source: "snapshot", was: old, now: v };
     }
     case "thread": {
-      if (v) await must(`UPDATE member_threads SET text = $3, last_touched_at = NOW() WHERE id = $1 AND user_id = $2`, [a, userId, v]);
-      else {
+      if (v) {
+        // The same words already open another thread saying this (the one-open unique index, concurrency audit 2026-10-12).
+        const clash = await must(`UPDATE member_threads SET text = $3, last_touched_at = NOW() WHERE id = $1 AND user_id = $2`, [a, userId, v]).then(
+          () => false,
+          (err: any) => {
+            if (err?.code === "23505") return true;
+            throw err;
+          },
+        );
+        if (clash) return { why: "another open thread from the same words already says that, so this one wasn't changed" };
+      } else {
         await must(`UPDATE member_threads SET status = 'changed', closed_quote = $3, closed_at = NOW() WHERE id = $1 AND user_id = $2`, [a, userId, theirWords.slice(0, 300)]);
         // Nothing left to follow up on (the same as a thread closing, memberThreads.ts applyThreadProposal).
         await db.query(`UPDATE proactive_candidates SET status = 'skipped', updated_at = NOW() WHERE user_id = $1 AND target_key = $2 AND status = 'pending'`, [userId, `thread:${a}`]).catch(() => {});

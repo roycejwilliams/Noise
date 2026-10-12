@@ -47,31 +47,52 @@ type Stored = { type: string; targetKey: string; topicKey?: string; summary: str
 
 // Called by enqueueCandidate for the four handed-over types.
 export async function startFollowUp(input: EnqueueInput): Promise<{ queued: boolean }> {
-  const { rows } = await pool.query(`SELECT id, status, closed_at, followup FROM co_tasks WHERE user_id = $1 AND kind = 'followup' AND target_key = $2 ORDER BY created_at DESC LIMIT 1`, [input.userId, input.targetKey]);
-  const ex = rows[0] ?? null;
-  const action = followUpAction(ex ? { status: ex.status, closedAt: ex.closed_at ? new Date(ex.closed_at) : null } : null, new Date());
-  if (action === "ignore") return { queued: false };
-  const stored: Stored = {
-    type: input.type,
-    targetKey: input.targetKey,
-    topicKey: input.topicKey,
-    summary: input.summary,
-    // A debrief collects both the outcome follow-up and the event check-in.
-    payload: action === "update" && input.merge ? input.merge(ex.followup?.payload, input.payload) : input.payload,
-    expiresAt: input.expiresAt ? input.expiresAt.toISOString() : null,
-    priority: input.priority,
-  };
-  if (action === "update") {
-    await pool.query(`UPDATE co_tasks SET followup = $2::jsonb, goal = $3, updated_at = NOW() WHERE id = $1`, [ex.id, JSON.stringify(stored), input.summary.slice(0, 200)]);
-    return { queued: true };
+  // One follow-up per target (concurrency audit, 2026-10-12): two enqueues at once (two snapshot rebuilds, a call and a text) both
+  // read "none yet" and both inserted. The read and the write now run under a lock on this member and target.
+  const client = await pool.connect();
+  let created = false;
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`followup:${input.userId}:${input.targetKey}`]);
+    const { rows } = await client.query(`SELECT id, status, closed_at, followup FROM co_tasks WHERE user_id = $1 AND kind = 'followup' AND target_key = $2 ORDER BY created_at DESC LIMIT 1`, [input.userId, input.targetKey]);
+    const ex = rows[0] ?? null;
+    const action = followUpAction(ex ? { status: ex.status, closedAt: ex.closed_at ? new Date(ex.closed_at) : null } : null, new Date());
+    if (action === "ignore") {
+      await client.query("ROLLBACK");
+      return { queued: false };
+    }
+    const stored: Stored = {
+      type: input.type,
+      targetKey: input.targetKey,
+      topicKey: input.topicKey,
+      summary: input.summary,
+      // A debrief collects both the outcome follow-up and the event check-in.
+      payload: action === "update" && input.merge ? input.merge(ex.followup?.payload, input.payload) : input.payload,
+      expiresAt: input.expiresAt ? input.expiresAt.toISOString() : null,
+      priority: input.priority,
+    };
+    if (action === "update") {
+      await client.query(`UPDATE co_tasks SET followup = $2::jsonb, goal = $3, updated_at = NOW() WHERE id = $1`, [ex.id, JSON.stringify(stored), input.summary.slice(0, 200)]);
+    } else {
+      const firstLook = input.dueAt && input.dueAt.getTime() > Date.now() ? input.dueAt : new Date();
+      await client.query(
+        `INSERT INTO co_tasks (user_id, kind, goal, their_words, steps, plan_next, next_check_at, notes, followup, target_key)
+         VALUES ($1, 'followup', $2, '', '[]'::jsonb, $3, $4, $5::jsonb, $6::jsonb, $7)`,
+        [input.userId, input.summary.slice(0, 200), "Decide whether and when to check in", firstLook, JSON.stringify([{ at: new Date().toISOString(), text: `Queued: ${input.type}` }]), JSON.stringify(stored), input.targetKey],
+      );
+      created = true;
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-  const firstLook = input.dueAt && input.dueAt.getTime() > Date.now() ? input.dueAt : new Date();
-  await pool.query(
-    `INSERT INTO co_tasks (user_id, kind, goal, their_words, steps, plan_next, next_check_at, notes, followup, target_key)
-     VALUES ($1, 'followup', $2, '', '[]'::jsonb, $3, $4, $5::jsonb, $6::jsonb, $7)`,
-    [input.userId, input.summary.slice(0, 200), "Decide whether and when to check in", firstLook, JSON.stringify([{ at: new Date().toISOString(), text: `Queued: ${input.type}` }]), JSON.stringify(stored), input.targetKey],
-  );
-  await recordDecision({ layer: 7, decision: "task.followup", userId: input.userId, outcome: "act", action: "held_for_co", proposal: { type: input.type, targetKey: input.targetKey, firstLook: firstLook.toISOString() } }).catch(() => {});
+  if (created) {
+    const firstLook = input.dueAt && input.dueAt.getTime() > Date.now() ? input.dueAt : new Date();
+    await recordDecision({ layer: 7, decision: "task.followup", userId: input.userId, outcome: "act", action: "held_for_co", proposal: { type: input.type, targetKey: input.targetKey, firstLook: firstLook.toISOString() } }).catch(() => {});
+  }
   return { queued: true };
 }
 

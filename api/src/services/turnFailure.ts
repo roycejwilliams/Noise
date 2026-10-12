@@ -39,6 +39,8 @@ export type TurnFailedCheck = {
   lastNoteAt: Date | null;
   receivedAt: Date;
   now: Date;
+  // The text's turn never ran (its phone's lock never came free): a Co reply since answered another text, not this one.
+  neverRan?: boolean;
 };
 
 // Why not to send, or null to send.
@@ -46,7 +48,7 @@ export function turnFailedNoteBlocked(c: TurnFailedCheck): string | null {
   if (!c.member) return "no_member";
   if (c.member.optedOut) return "opted_out";
   if (c.member.archived) return "archived";
-  if (c.coRepliedSince) return "already_answered";
+  if (c.coRepliedSince && !c.neverRan) return "already_answered";
   if (c.now.getTime() - c.receivedAt.getTime() > TURN_FAILED_NOTE_MAX_AGE_MS) return "too_old";
   if (c.lastNoteAt && c.now.getTime() - c.lastNoteAt.getTime() < TURN_FAILED_NOTE_COOLDOWN_MS) return "just_told_them";
   return null;
@@ -64,15 +66,18 @@ export type TurnReplayCheck = {
   callAt: Date | null;
   receivedAt: Date;
   now: Date;
+  // The text's turn never ran (its phone's lock never came free, concurrency review 2026-10-12): nothing answered it, and a newer
+  // text's turn never saw it, so neither a Co reply since nor a newer text of theirs stops it from being answered now.
+  neverRan?: boolean;
 };
 export function turnReplayBlocked(c: TurnReplayCheck): string | null {
   if (!c.member) return "no_member";
   if (c.member.optedOut) return "opted_out";
   if (c.member.archived) return "archived";
-  if (c.coRepliedSince) return "already_answered";
+  if (c.coRepliedSince && !c.neverRan) return "already_answered";
   if (c.now.getTime() - c.receivedAt.getTime() > TURN_REPLAY_MAX_AGE_MS) return "too_old";
   // Their own stamp lands a moment after the text arrives; past that, it's a newer text.
-  if (c.lastInboundAt && c.lastInboundAt.getTime() > c.receivedAt.getTime() + 5_000) return "newer_text";
+  if (!c.neverRan && c.lastInboundAt && c.lastInboundAt.getTime() > c.receivedAt.getTime() + 5_000) return "newer_text";
   if (c.callAt && c.callAt.getTime() > c.receivedAt.getTime()) return "call_placed";
   return null;
 }
