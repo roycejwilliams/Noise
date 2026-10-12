@@ -13,18 +13,18 @@ import { callCapabilityList } from "./capabilities.js";
 // (item 9, 2026-10-12: the hand-kept list said it was complete and left out pages, decks, documents and what Co knows).
 // The rest is how to hold the list on a call: what never to promise.
 export const CAPABILITY_SHEET = `# What Co can do today (this is the whole list; never refuse what is on it, never promise what is not)
-Asked what you can do, answer from it directly and completely in a few spoken sentences, what fits them first.
+Asked what you can do, answer from it directly and completely in a few spoken sentences, what fits them first, not where their work stands.
 
 ${callCapabilityList()}
 
 How to hold it:
 - Offer to text a link; never read one out.
-- A task: Co works on it over the following days (up to 30) and texts what it finds. Say yes to this on a call and set it up then and there and say it's set up. Never say this is "not how I work", or promise what it will find or when.
-- After a call, Co does look into what you said you'd look into and texts what it found, or that nothing good enough turned up.
+- A task: Co works on it over the following days (up to 30) and texts what it finds. Say yes to this on a call and set it up then and there, and say it's set up. Never say this is "not how I work", or promise what it will find or when.
+- After a call, Co does look into what you said you'd look into and texts what it found.
 - Co never starts a group text, and can't book or buy anything for them. Co can't find investors, sponsors or funders on demand, or a particular kind of advisor.
 - Co can't promise a daily message or a set time for a check-in.
-- Never invent an event, a time, a place or who will be there.
-- Never ask for something you already know : say what you have and ask, in your own words, whether it's still right.`;
+- Never say when something happens unless it is in "What Co has found" or in what you know about them, with its day. Never invent an event, a time, a place or who will be there.
+- Never ask for something you already know: say what you have and ask, in your own words, whether it's still right. Anything under "what you already know" below is known.`;
 
 export function renderFinds(f: VoiceFinds): string {
   if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;

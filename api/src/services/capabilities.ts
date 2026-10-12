@@ -41,6 +41,8 @@ export type Ability = {
   // Also runs on a phone call (services/callTools.ts takes its call toolset from these entries, so the call
   // briefing's list and the tools enabled on a call are the same list). Every tool runs by text.
   onCall?: true;
+  // An ability without a tool that also works on a call (talking itself). Tool abilities use onCall.
+  surfaces?: Surface[];
 };
 
 // Co's calling line is a different number from the one it texts from
@@ -538,7 +540,7 @@ export const ABILITIES: Ability[] = [
     use: "Send the latest list of what's new in Co (new features, changes), when they ask what's new with Co, what changed, or for updates on Co itself. The list changes as the team ships, so you can't know what's on it without sending it: check it rather than saying nothing's new. Not for news about their own life or an event. It goes out verbatim as its own text.",
   },
   // Handled by their own steps for now.
-  { id: "calls", confirm: "irreversible", can: `Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co: ${callLine()} What Co can't do is call other people for them. So when listing what Co can't do, say it can't call other people for them; calling them is something it does.` },
+  { id: "calls", confirm: "irreversible", surfaces: ["text", "call"], can: `Co can call them right now when they ask ("call me"), and can schedule a call for a specific later time. Calling is real and working. They can also call Co: ${callLine()} What Co can't do is call other people for them. So when listing what Co can't do, say it can't call other people for them; calling them is something it does.` },
   {
     id: "invites",
     can: "Members can invite friends to Co: 5 invites each, and one only counts once the friend joins. Co can text them an invite link to forward.",
@@ -729,59 +731,64 @@ export function abilityForTool(tool: string): Ability | undefined {
 
 // ---------- The list a member hears (item 9, 2026-10-12: the call briefing kept its own "complete" list that left out decks,
 // pages, documents and what Co knows while the call had those tools, and coVoice turned "what can you do" into open-work
-// status). One list, from the entries above: each line names the abilities it stands for, and shows on a surface only while
-// one of them is live there (a tool that runs on a call has onCall; everything runs by text). Lines are what Co can do, in
-// plain words, about "them"; Co says them in its own voice.
+// status). One list, from the entries above. Each line has a main ability and shows on a surface only while that ability is
+// live there (a tool that runs on a call has onCall; everything runs by text), so every line on a call is doable on that
+// call. A line has its own wording per surface: `call` is what it says on a call, "by text" (the default) lists it as
+// something Co does in their texts, and null leaves it off a call. Lines are what Co can do, in plain words, about "them";
+// Co says them in its own voice.
 export type Surface = "text" | "call";
 type MenuGroup = "Finding things" | "Working on something over days" | "Making things" | "People" | "Being there";
-type MenuLine = { group: MenuGroup; ids: string[]; line: string | null };
+type MenuLine = { group: MenuGroup; main: string; text: string | null; call?: string | "by text" | null };
 const MENU: MenuLine[] = [
-  { group: "Finding things", ids: ["search_events"], line: "find events for the days they ask about, Co's own first" },
-  { group: "Finding things", ids: ["web_search", "search_posts", "read_page"], line: "search the web and X for venues, vendors, programs and people" },
-  { group: "Finding things", ids: ["save_ask", "list_open_asks", "steer_away", "close_ask"], line: "keep watch for what they want found and text when something fits; list it, or stop suggesting a kind of thing" },
-  { group: "Finding things", ids: ["list_sent"], line: "recap what it sent and resend a link" },
-  { group: "Working on something over days", ids: ["task_start", "task_update", "task_close"], line: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds" },
-  { group: "Working on something over days", ids: ["research_brief", "find_reaction"], line: "research venues for an event and send a brief of the options" },
-  { group: "Working on something over days", ids: ["draft_email"], line: "write an email for them to send themselves" },
-  { group: "Working on something over days", ids: ["email_plan"], line: "plan a day, a night or a trip as a one-page sheet" },
-  { group: "Working on something over days", ids: ["relay"], get line() { return process.env.CO_RELAY === "on" ? "pass a message to someone they're connected to through Co, or remind them to follow up" : "remind them to follow up on something"; } },
-  { group: "Making things", ids: ["co_page", "co_page_update", "co_page_take_down"], line: "make a private page (a plan, options side by side) and change it or take it down" },
-  { group: "Making things", ids: ["co_deck", "co_deck_update", "co_design_read", "co_inspo_pinterest"], line: "make a slide deck from their taste, a logo or a Pinterest board, and change it" },
-  { group: "Making things", ids: ["co_artifact_share", "co_artifact_keep", "co_artifact_stop_sharing", "co_artifact_reset_link", "co_images_delete"], line: "share a view-only link to a page or deck, stop it, or keep it for good" },
-  { group: "Making things", ids: ["write_document", "write_from_file", "offer_document", "read_document"], line: "write a document (a plan, a summary, a write-up from a PDF they sent) and send it" },
-  { group: "People", ids: ["co_events", "arrival"], line: "at Co events, tell them who's worth meeting and why" },
-  { group: "People", ids: ["introductions", "event_intro"], line: "introduce them to someone by one email, after both say yes" },
-  { group: "People", ids: ["outside_events"], line: "give a heads-up when another member is going to the same outside event" },
-  { group: "People", ids: ["invites"], line: "send invite links for friends (5 each)" },
-  { group: "People", ids: ["mo_member_optin"], line: "with their yes, have Mo look outside the club for people who could help" },
-  { group: "Being there", ids: ["calls"], line: "talk anything through; call them now or at a set time, and take their calls" },
-  { group: "Being there", ids: ["check_ins"], line: "check in every few days, and ask how things went" },
-  { group: "Being there", ids: ["media"], line: "read photos and screenshots, and listen to voice memos" },
-  { group: "Being there", ids: ["what_co_knows", "correct_what_co_knows", "corrections"], line: "say what it knows about them, and correct or remove any of it" },
-  { group: "Being there", ids: ["google"], get line() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Google to see when they're busy and which emails await a reply" : null; } },
-  { group: "Being there", ids: ["team_feedback"], line: "pass feedback to the team" },
+  { group: "Finding things", main: "search_events", text: "find events for the days they ask about, Co's own first", call: "find events for the days they ask about, Co's own first" },
+  { group: "Finding things", main: "web_search", text: "search the web and X for venues, vendors, programs and people" },
+  { group: "Finding things", main: "save_ask", text: "keep watch for what they want found and text when something fits; list it, or stop suggesting a kind of thing" },
+  { group: "Finding things", main: "steer_away", text: null, call: "stop suggesting a kind of thing they don't want" },
+  { group: "Finding things", main: "list_sent", text: "recap what it sent and resend a link" },
+  { group: "Working on something over days", main: "task_start", text: "take on something that needs more than one reply as its own task, for up to 30 days, and text what it finds", call: "take on something that needs more than one reply as its own task" },
+  { group: "Working on something over days", main: "research_brief", text: "research venues for an event and send a brief of the options", call: "research venues for an event and send a brief" },
+  { group: "Working on something over days", main: "draft_email", text: "write an email for them to send themselves" },
+  { group: "Working on something over days", main: "email_plan", text: "plan a day, a night or a trip as a one-page sheet" },
+  { group: "Working on something over days", main: "relay", get text() { return process.env.CO_RELAY === "on" ? "pass a message to someone they're connected to through Co, or remind them to follow up" : "remind them to follow up on something"; } },
+  { group: "Making things", main: "co_page", text: "make a private page (a plan, options side by side) and change it or take it down", call: "make a private page (a plan, options side by side) and change it or take it down" },
+  { group: "Making things", main: "co_deck", text: "make a slide deck from their taste, a logo or a Pinterest board, and change it", call: "make a slide deck from their taste or a Pinterest board, and change it" },
+  { group: "Making things", main: "co_artifact_share", text: "share a view-only link to a page or deck, stop it, or keep it for good", call: "share a view-only link to a page or deck, stop it, or keep it for good" },
+  { group: "Making things", main: "write_document", text: "write a document (a plan, a summary, a write-up from a PDF they sent) and send it", call: "write a document (a plan or a summary) and send it" },
+  { group: "People", main: "co_events", text: "at Co events, tell them who's worth meeting and why" },
+  { group: "People", main: "introductions", text: "introduce them to someone by one email, after both say yes" },
+  { group: "People", main: "outside_events", text: "give a heads-up when another member is going to the same outside event" },
+  { group: "People", main: "invites", text: "send invite links for friends (5 each)" },
+  { group: "People", main: "mo_member_optin", text: "with their yes, have Mo look outside the club for people who could help" },
+  { group: "Being there", main: "calls", text: "talk anything through; call them now or at a set time, and take their calls", call: "talk anything through, as long as they like" },
+  { group: "Being there", main: "check_ins", text: "check in every few days, and ask how things went" },
+  { group: "Being there", main: "media", text: "read photos and screenshots, and listen to voice memos", call: null },
+  { group: "Being there", main: "what_co_knows", text: "say what it knows about them, and correct or remove any of it", call: "say what it knows about them, and correct or remove any of it" },
+  { group: "Being there", main: "google", get text() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Google to see when they're busy and which emails await a reply" : null; } },
+  { group: "Being there", main: "team_feedback", text: "pass feedback to the team", call: null },
 ];
 // What Co can't do, for a complete answer (the LIMITS above say it in full).
 const CANNOT = "book, buy or register them for things, find investors or sponsors on demand, contact people for them, or start a group text";
 
 const memberAbility = (a: Ability) => !a.teamOnly && (!isMemberMoAbility(a) || memberMoOn());
-const liveOn = (a: Ability, surface: Surface) => memberAbility(a) && (surface === "text" || a.onCall === true);
+export const liveOn = (a: Ability, surface: Surface) => memberAbility(a) && (surface === "text" || a.onCall === true || !!a.surfaces?.includes("call"));
 
-// The member's list for a surface: each line whose abilities are live there. On a call, `byText` holds what Co still does,
-// just by text and not mid-call (so the call never refuses it, and never claims to do it on the line).
-export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; line: string }[]; byText: string[] } {
+// The member's list for a surface. On a call, `here` is what this call can do (each line's main ability is live on the call)
+// and `byText` is what Co does in their texts, offered and never done on the line. A line that's text-only by nature (photos,
+// feedback) is left off a call.
+export function capabilityMenu(surface: Surface): { here: { group: MenuGroup; line: string; main: string }[]; byText: string[] } {
   const byId = new Map(ABILITIES.map((a) => [a.id, a]));
-  const live = (m: MenuLine, s: Surface) => m.ids.some((id) => { const a = byId.get(id); return !!a && liveOn(a, s); });
-  const lines = MENU.filter((m) => m.line);
+  const live = (m: MenuLine, s: Surface) => { const a = byId.get(m.main); return !!a && liveOn(a, s); };
+  if (surface === "text") return { here: MENU.filter((m) => m.text && live(m, "text")).map((m) => ({ group: m.group, line: m.text!, main: m.main })), byText: [] };
+  const callWords = (m: MenuLine) => (m.call === undefined ? "by text" : m.call);
   return {
-    here: lines.filter((m) => live(m, surface)).map((m) => ({ group: m.group, line: m.line! })),
-    byText: surface === "call" ? lines.filter((m) => !live(m, "call") && live(m, "text")).map((m) => m.line!) : [],
+    here: MENU.filter((m) => { const w = callWords(m); return w !== null && w !== "by text" && live(m, "call"); }).map((m) => ({ group: m.group, line: callWords(m) as string, main: m.main })),
+    byText: MENU.filter((m) => callWords(m) === "by text" && m.text && live(m, "text")).map((m) => m.text!),
   };
 }
-// The menu's own check: every id it names is an entry above (pure; the capability probe runs it).
+// The menu's own check: every ability it names is an entry above (pure; the capability probe runs it).
 export function menuUnknownIds(): string[] {
   const ids = new Set(ABILITIES.map((a) => a.id));
-  return MENU.flatMap((m) => m.ids).filter((id) => !ids.has(id));
+  return MENU.map((m) => m.main).filter((id) => !ids.has(id));
 }
 
 // The tools that run on a call, from the entries (services/callTools.ts).
@@ -803,5 +810,5 @@ export function capabilityListInstruction(): string {
 // On a call: the list the call briefing carries (services/callBriefing.ts), from the same entries as the call's tools.
 export function callCapabilityList(): string {
   const m = capabilityMenu("call");
-  return `On this call, with your tools:\n${m.here.map((h) => `- ${h.line}`).join("\n")}\n\nBy text (offer it; never do it on the line):\n${m.byText.map((l) => `- ${l}`).join("\n")}`;
+  return `On this call:\n${m.here.map((h) => `- ${h.line}`).join("\n")}\n\nIn their texts, not on this call (offer it; never do it on the line):\n${m.byText.map((l) => `- ${l}`).join("\n")}`;
 }
