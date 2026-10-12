@@ -111,10 +111,11 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
   const body = docText(doc);
   if (body.length < L.minChars) out.push("it is too thin to be a document: say what they need written up");
   if (body.length > L.totalChars) out.push(`it is too long (${body.length} characters; ${L.totalChars} at most): cut it to what matters`);
-  // A bracketed gap ("[Example to drop in: ...]") is a placeholder too: it goes out only when they asked for a spot to fill in
-  // themselves ("leave a spot for the example"), never on Co's own (2026-10-12).
+  // A bracketed gap ("[Example to drop in: ...]") is a placeholder too: one goes out only when they asked for a spot to fill in
+  // themselves ("leave a spot for the example"), never on Co's own and never a document of gaps (2026-10-12).
+  const gaps = body.match(/\[[^\]\n]{2,}\]/g) ?? [];
   if (/\b(lorem ipsum|tbd|to be determined|xxx)\b|\[(?:insert|your)/i.test(body)) out.push("it has a placeholder in it");
-  else if (/\[[^\]\n]{2,}\]/.test(body) && !ASKED_FOR_A_SPOT.test(source.theirs)) out.push("it has a placeholder in it (a bracketed gap): leave the missing piece out and write the point as it stands, or ask them for it");
+  else if (gaps.length && !(gaps.length === 1 && ASKED_FOR_A_SPOT.test(source.theirs))) out.push(`it has ${gaps.length > 1 ? `${gaps.length} placeholders` : "a placeholder"} in it (a bracketed gap): leave the missing piece out and write the point as it stands, or ask them for it${gaps.length > 1 ? "; at most one spot, and only one they asked for" : ""}`);
   // Scannable: a record, not a chat. Points go in bullets; a paragraph is a few sentences, not a block.
   const long = doc.sections.flatMap((x) => x.paragraphs).find((x) => x.split(/\s+/).length > L.maxParagraphWords);
   if (long) out.push(`a paragraph runs ${long.split(/\s+/).length} words ("${long.slice(0, 40)}..."): put its points in bullets and keep paragraphs to two or three sentences`);
@@ -143,6 +144,9 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
 
 // The line Co gets for a claim of theirs that isn't backed (documentProblems). Shared so a judged claim drops exactly its line.
 export function claimProblem(u: Unbacked): string {
+  // A number or a name they never gave is said as one, so the fix is plain: leave it out (2026-10-12: "never put 4 together" for a
+  // count of the four things they listed, twice).
+  if (u.hard.length) return `"${u.text.slice(0, 90)}" isn't something they said: it has ${u.hard.slice(0, 3).join(", ")}, which they never gave. Leave that out (or ask them), or move the line to suggestions`;
   return `"${u.text.slice(0, 90)}" isn't something they said (their words never put ${u.missing.slice(0, 4).join(", ")} together): rewrite it from their own words, or move it to suggestions`;
 }
 
