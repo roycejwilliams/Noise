@@ -55,6 +55,8 @@ export function pageProblems(d: CoPageData, source: PageSource): string[] {
   const corpus = `${sameTimes(source.theirs, "theirs")}\n${sameTimes(source.read)}`;
   const out: string[] = [];
   for (const l of pageLines(d)) {
+    // A bracketed gap never ships on a page either (the deck rule below; review: "[Gallery]" in a title).
+    if (/\[[^\]\n]{2,}\]/.test(l.text)) out.push(`${l.where}: "${l.text.slice(0, 70)}" is a placeholder, and a page never ships one: ask them for the missing piece, or write it without it`);
     const bad = unsourced(sameTimes(l.text), corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }

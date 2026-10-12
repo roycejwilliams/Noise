@@ -442,21 +442,23 @@ export async function turnsToBuild(userId: string, current: string): Promise<num
 // Pure: first-shot acceptance for one artifact (design audit: the old view counted only "revised" events, so silence, a build that took
 // four turns and unfixed QA findings all read as first shot). It is first shot only when nothing QA found was left standing, it was
 // built within one member turn of their ask, and no correction or revision came within 48 hours.
-export function isFirstShot(a: { qaUnresolved: number; turnsToBuild: number | null; corrections: number }): boolean {
+// An artifact whose QA never ran is unknown (null), never first shot: nothing measured is not nothing found.
+export function isFirstShot(a: { qaRan: boolean; qaUnresolved: number; turnsToBuild: number | null; corrections: number }): boolean | null {
+  if (!a.qaRan) return null;
   return a.qaUnresolved === 0 && (a.turnsToBuild ?? 0) <= 1 && a.corrections === 0;
 }
 
 // First-shot acceptance, keeps and shares per medium over the last `days` (artifacts made at least 48 hours ago count for first shot),
 // with the build turns and corrections behind it.
-export async function designMetrics(days = 30): Promise<{ medium: string; made: number; settled: number; firstShot: number; firstShotRate: number | null; kept: number; shared: number; qaFindings: number; qaUnresolved: number; slowBuilds: number; corrected: number }[]> {
+export async function designMetrics(days = 30): Promise<{ medium: string; made: number; settled: number; firstShot: number; firstShotRate: number | null; unknown: number; kept: number; shared: number; qaFindings: number; qaUnresolved: number; slowBuilds: number; corrected: number }[]> {
   const { rows } = await db.query(
-    `SELECT medium, COUNT(*)::int AS made, COUNT(*) FILTER (WHERE settled)::int AS settled, COUNT(*) FILTER (WHERE settled AND first_shot)::int AS first_shot,
+    `SELECT medium, COUNT(*)::int AS made, COUNT(*) FILTER (WHERE settled)::int AS settled, COUNT(*) FILTER (WHERE settled AND first_shot)::int AS first_shot, COUNT(*) FILTER (WHERE settled AND first_shot IS NULL)::int AS unknown,
             COUNT(*) FILTER (WHERE kept)::int AS kept, COUNT(*) FILTER (WHERE shares > 0)::int AS shared, COALESCE(SUM(qa_findings), 0)::int AS qa_findings,
             COUNT(*) FILTER (WHERE qa_unresolved > 0)::int AS qa_unresolved, COUNT(*) FILTER (WHERE COALESCE(turns_to_build, 0) > 1)::int AS slow_builds, COUNT(*) FILTER (WHERE corrections > 0)::int AS corrected
        FROM artifact_design_metrics WHERE made_at > NOW() - make_interval(days => $1) GROUP BY medium ORDER BY medium`,
     [days],
   );
-  return rows.map((r) => ({ medium: String(r.medium), made: r.made, settled: r.settled, firstShot: r.first_shot, firstShotRate: r.settled ? Math.round((r.first_shot / r.settled) * 100) / 100 : null, kept: r.kept, shared: r.shared, qaFindings: r.qa_findings, qaUnresolved: r.qa_unresolved, slowBuilds: r.slow_builds, corrected: r.corrected }));
+  return rows.map((r) => ({ medium: String(r.medium), made: r.made, settled: r.settled, firstShot: r.first_shot, firstShotRate: r.settled - r.unknown > 0 ? Math.round((r.first_shot / (r.settled - r.unknown)) * 100) / 100 : null, unknown: r.unknown, kept: r.kept, shared: r.shared, qaFindings: r.qa_findings, qaUnresolved: r.qa_unresolved, slowBuilds: r.slow_builds, corrected: r.corrected }));
 }
 
 // The pending confirm-the-read, said to Co at the start of the next turn (design audit: "Yes, that's right." got "Good, burgundy and
