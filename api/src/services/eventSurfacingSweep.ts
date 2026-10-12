@@ -820,11 +820,14 @@ export async function pickerDecides(userId: string): Promise<boolean> {
 // send step bundles it by tier with whatever else is waiting (one per tier), checks it's still fresh, and holds it to the
 // lane's one find a day, the pause after an unanswered text, and 8am-9pm. The picker's reason is the reason it fits.
 // Returns false when it's already sent or decided (the queue keeps one row per thing).
-export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] } }): Promise<boolean> {
+// What queueing a pick did (Royce, 2026-10-12: why a chosen pick didn't queue took a manual trace): queued, or why not. A thrown
+// error is the caller's fourth answer.
+export type PickQueued = "queued" | "already decided" | "past" | "already exists";
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] } }): Promise<PickQueued> {
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
-  if (await alreadyDecided(userId, item)) return false;
-  if (isPastEvent(o.match, zone)) return false;
+  if (await alreadyDecided(userId, item)) return "already decided";
+  if (isPastEvent(o.match, zone)) return "past";
   const match = await enrichMatch({ ...o.match, whyItFits: o.why || o.match.whyItFits });
   // picked: the daily pick chose it, so the send step bundles it with the other picks waiting (any tier). lastDay: the last day
   // it's worth sending (Royce, 2026-10-09: "Fleet Week should never lose its slot to something that will still exist next week").
@@ -844,7 +847,8 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
     // The higher of the two: short notice stays 95 even when the pick's last day is a few days out (review of #127).
     priority: Math.max(timeBound ?? 0, isShortNotice(o.match, zone) ? 95 : 0) || undefined,
   });
-  return queued;
+  // Not queued: a row for the same thing that isn't pending (sent, or decided) or a send already on record holds it.
+  return queued ? "queued" : "already exists";
 }
 
 // Pure: a pick's rank from its last useful day, in their zone: today or tomorrow outranks everything (95), within three days 85,
