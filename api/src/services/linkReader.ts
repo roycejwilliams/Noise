@@ -120,7 +120,8 @@ export async function hostIsPublic(host: string): Promise<boolean> {
 }
 
 // Follows redirects by hand so every hop is checked; stops at the caps.
-export async function safeFetch(raw: string): Promise<{ finalUrl: string; status: number; contentType: string; body: string; hops: string[] } | { error: string; blocked?: boolean }> {
+// binary: the raw bytes too (an image for design QA, agent/pageTools.ts), under the same caps.
+export async function safeFetch(raw: string, o: { binary?: boolean } = {}): Promise<{ finalUrl: string; status: number; contentType: string; body: string; hops: string[]; bytes?: Buffer } | { error: string; blocked?: boolean }> {
   const deadline = Date.now() + FETCH_TIMEOUT_MS;
   let url = raw;
   const hops: string[] = [];
@@ -132,7 +133,7 @@ export async function safeFetch(raw: string): Promise<{ finalUrl: string; status
     if (left <= 0) return { error: "timed out" };
     let res: Response;
     try {
-      res = await fetch(u, { redirect: "manual", signal: AbortSignal.timeout(left), headers: { "User-Agent": "Mozilla/5.0 (compatible; CoLinkReader/1.0)", Accept: "text/html,application/xhtml+xml" } });
+      res = await fetch(u, { redirect: "manual", signal: AbortSignal.timeout(left), headers: { "User-Agent": "Mozilla/5.0 (compatible; CoLinkReader/1.0)", Accept: o.binary ? "image/*" : "text/html,application/xhtml+xml" } });
     } catch (err: any) {
       return { error: err?.name === "TimeoutError" ? "timed out" : "couldn't load" };
     }
@@ -155,7 +156,9 @@ export async function safeFetch(raw: string): Promise<{ finalUrl: string; status
       }
       reader.cancel().catch(() => {});
     }
-    const body = new TextDecoder().decode(Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, MAX_BYTES));
+    const all = Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, MAX_BYTES);
+    if (o.binary) return { finalUrl: u.toString(), status: res.status, contentType, body: "", hops, bytes: size >= MAX_BYTES ? Buffer.alloc(0) : all };
+    const body = new TextDecoder().decode(all);
     return { finalUrl: u.toString(), status: res.status, contentType, body, hops };
   }
   return { error: "too many redirects" };
