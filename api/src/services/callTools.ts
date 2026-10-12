@@ -23,12 +23,14 @@ import { mentionsIn } from "./offerGuard.js";
 // texts, the one taste question is asked out loud, edits keep the link, and their own board, images and shares work the same. On a
 // call Co passes a brief (makeDeck) or the change (updateDeck), never the slides: the deck is written from what they said
 // (services/deckCompose.ts) while the call carries on, so the caller isn't kept in silence while a whole deck is written.
+// openArtifact isn't on a call: updateDeck with the change reads the deck itself, and opening first used up the turn's time
+// (live run: the change was never made, and Co promised it anyway).
 // Tools that may outlast a call turn's wait, and how long to wait before carrying them on in the background.
 const LONG_ON_CALL = new Set(["makeDeck", "updateDeck", "makePage", "updatePage"]);
 const LONG_ON_CALL_WAIT_MS = 3500;
 const STILL_GOING = Symbol("still going");
 const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
-export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "makeDeck", "updateDeck", "openArtifact", "readInspo", "keepArtifact", "shareArtifact", "stopSharing", "resetLink", "deleteImages", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
+export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "makeDeck", "updateDeck", "readInspo", "keepArtifact", "shareArtifact", "stopSharing", "resetLink", "deleteImages", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
 export type CallToolName = (typeof CALL_TOOL_NAMES)[number];
 
 // The turn's bounds (steps, time) are in services/callLlmProxy.ts, where the rounds run.
@@ -54,9 +56,11 @@ You can act during the call with your tools, and the result is real. Whenever yo
 // Per call: what the tools did earlier on this call, so a later turn knows (ElevenLabs' history carries only what was said).
 // Keyed by the call's token; an hour is longer than any call.
 const CALL_MEMORY_MS = 60 * 60_000;
-// longOkAt: when a page or deck last went through on this call (a background failure's honest text waits on it).
-const callMemory = new Map<string, { at: number; did: string[]; longOkAt?: number }>();
-function memoryFor(key: string): { at: number; did: string[]; longOkAt?: number } {
+
+// okAt: when a page or a deck (by kind) last went through on this call; failTextSent: the one honest text already went.
+type CallMem = { at: number; did: string[]; okAt?: Record<string, number>; failTextSent?: boolean };
+const callMemory = new Map<string, CallMem>();
+function memoryFor(key: string): CallMem {
   const now = Date.now();
   for (const [k, v] of callMemory) if (now - v.at > CALL_MEMORY_MS) callMemory.delete(k);
   let m = callMemory.get(key);
@@ -241,6 +245,12 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     const t = picked[n];
     if (t?.inputSchema && typeof t.inputSchema.omit === "function") picked[n] = { ...t, inputSchema: t.inputSchema.omit({ title: true, subtitle: true, slides: true }) };
   }
+  // No answer rides in a link's text on a call (review of PR 6: it would reach their texts without the reply's fact check, which a
+  // call doesn't run); the answer is spoken.
+  for (const n of ["makePage", "updatePage", "makeDeck", "updateDeck", "shareArtifact", "resetLink"]) {
+    const t = picked[n];
+    if (t?.inputSchema?.shape?.alsoAnswer && typeof t.inputSchema.omit === "function") picked[n] = { ...t, inputSchema: t.inputSchema.omit({ alsoAnswer: true }) };
+  }
   if (picked.makeDeck?.inputSchema?.shape?.brief)
     picked.makeDeck = {
       ...picked.makeDeck,
@@ -269,27 +279,30 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
       const quick = await Promise.race([work, new Promise((r) => setTimeout(() => r(STILL_GOING), LONG_ON_CALL_WAIT_MS))]);
       if (quick === STILL_GOING) {
         const startedAt = Date.now();
+        const what = name.endsWith("Deck") ? "deck" : "page";
+        // The next turn must know it's on its way (review of PR 6: unseen, "and add our pricing" made a second deck).
+        mem.did.push(`A ${what} they asked for is being made right now and will arrive in their texts in a minute or two. Don't make it again; a change to it waits until it has arrived.`);
         work
           .then(async (r: any) => {
             if (r?.ok !== false) {
-              mem.longOkAt = Date.now();
+              mem.okAt = { ...(mem.okAt ?? {}), [what]: Date.now() };
               return;
             }
             // Not made (a line it couldn't back, say): the next turn of this call learns why and makes it again, as a text turn
-            // would. Only if nothing goes through in the next few minutes do they get one honest text.
-            const what = name.endsWith("Deck") ? "deck" : "page";
+            // would. Only if no other one of the same kind goes through in the next few minutes do they get one honest text, once.
             mem.did.push(`The ${what} you started on this call didn't go through and isn't in their texts: ${String(r?.error ?? "").replace(/\s+/g, " ").slice(0, 300)} Make it again now from only what they said.`);
             await recordDecision({ layer: 3, decision: "call.background_tool", userId: i.userId, outcome: "skip", action: "failed", proposal: { tool: name, error: String(r?.error ?? "").slice(0, 200) } }).catch(() => {});
             setTimeout(() => {
-              if ((mem.longOkAt ?? 0) > startedAt) return;
-              textThem(`I couldn't finish the ${what} while we were talking. Text me what you'd like on it and I'll make it here.`).catch(() => false);
+              if ((mem.okAt?.[what] ?? 0) > startedAt || mem.failTextSent) return;
+              mem.failTextSent = true;
+              textThem(`I couldn't finish the ${what} we talked about. Text me what you'd like on it and I'll make it here.`).catch(() => false);
             }, BACKGROUND_FAIL_TEXT_MS).unref?.();
           })
           .catch(() => {});
         result = { ok: true, pending: true, note: `Still being made: the link goes to their texts in a moment. Say it'll be in their texts; don't say it's done or describe it.` };
       } else {
         result = quick;
-        if ((quick as any)?.ok !== false) mem.longOkAt = Date.now();
+        if ((quick as any)?.ok !== false) mem.okAt = { ...(mem.okAt ?? {}), [name.endsWith("Deck") ? "deck" : "page"]: Date.now() };
       }
     } else result = await work;
     if (!i.dryRun) recordDecision({ layer: 8, decision: "call.tool", userId: i.userId, outcome: result?.ok === false ? "skip" : "act", action: name, proposal: { ms: Date.now() - t0, turn: i.turnWords.slice(0, 200) }, reason: String(result?.error ?? "").slice(0, 200) }).catch(() => {});

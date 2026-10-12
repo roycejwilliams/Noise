@@ -239,9 +239,11 @@ export function deckTools(
         // the very same checks; a refused version is written once more with the refusal in hand.
         const composing = !input.slides?.length;
         if (composing && !input.brief?.trim()) return { ok: false, error: "Write the slides, or pass a brief of what they want." };
+        if (!composing && (!input.title?.trim() || !input.subtitle?.trim())) return { ok: false, error: "With slides, give the deck a title and a subtitle too." };
         let refused: string | null = null;
         for (let attempt = 0; ; attempt++) {
-          const retry = (why: string) => composing && attempt === 0 && !ctx.dryRun ? ((refused = why), true) : false;
+          // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
+          const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
           let deckIn: any = input;
           if (composing) {
             if (ctx.dryRun) return { ok: true, note: "Test run: nothing was written or sent." };
@@ -321,7 +323,8 @@ export function deckTools(
         let refused: string | null = null;
         let r: any = null;
         for (let attempt = 0; ; attempt++) {
-          const retry = (why: string) => composing && attempt === 0 && !ctx.dryRun ? ((refused = why), true) : false;
+          // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
+          const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
           if (composing) {
             if (ctx.dryRun) return { ok: true, note: "Test run: nothing was changed." };
             const C = await import("../services/deckCompose.js");
@@ -332,7 +335,13 @@ export function deckTools(
           }
           const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
           if ("error" in ids) return { ok: false, error: ids.error };
-          const next = await deckDataFrom(input, taste, ids.map, was);
+          const next: any = await deckDataFrom(input, taste, ids.map, was);
+          // A change written from the deck keeps its pictures (review of PR 6): the logo, and each slide's image by headline, else
+          // by place, unless this version named its own.
+          if (composing && was) {
+            if (next.logo == null && input0.logo == null) next.logo = was.logo ?? null;
+            next.slides = next.slides.map((sl: any, k: number) => (sl.image ? sl : { ...sl, image: (was.slides.find((x: any) => x.headline === sl.headline) ?? was.slides[k])?.image ?? null }));
+          }
           const invented = await inventedClaims(ctx, next, source, was);
           if (invented) {
             if (retry(invented)) continue;
