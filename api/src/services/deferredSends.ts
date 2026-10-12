@@ -45,6 +45,8 @@ export type DeferredRow = {
   attempts: number;
   archived?: boolean;
   created_at?: Date | string | null;
+  // "recheck: ..." when a correction marked it (services/whatCoKnows.ts cancelQueued): re-read against the correction before it goes.
+  error?: string | null;
 };
 
 // Queue a send for `dueAt`. One row per (user, target_key): queueing the same thing twice keeps the first.
@@ -80,6 +82,8 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
   if (r.reason === "outside local hours") return "retry_hours";
   if (r.reason === "proactive outreach is paused") return "retry_paused";
   if (r.reason === "opted out" || r.reason === "already sent" || r.reason === "archived" || r.reason === "event over") return "skipped";
+  // It says something they corrected since it was queued (runDueDeferredSends' recheck): skipped, never retried.
+  if (/^corrected since queued:/.test(r.reason ?? "")) return "skipped";
   return "failed";
 }
 
@@ -138,14 +142,22 @@ export async function runAfter(after: AfterSend | null | undefined, outcome: Sen
 export type DeferredDeps = {
   send: typeof sendExempt;
   handlers: AfterHandlers;
+  // Tests: what the correction re-read finds (default: correctedAwayIn).
+  staleAfterCorrection?: (userId: string, messages: string[]) => Promise<{ message: string; was: string; now: string } | null>;
 };
+
+// The message that states a value they corrected away since it was queued, if any (services/whatCoKnows.ts live guards).
+export async function correctedAwayIn(userId: string, messages: string[]): Promise<{ message: string; was: string; now: string } | null> {
+  const W = await import("./whatCoKnows.js");
+  return W.statesCorrectedAway(messages, await W.forgottenRows(userId));
+}
 
 // The minute cron: send what's due. Returns what happened to each claimed row.
 export async function runDueDeferredSends(now: Date = new Date(), deps: DeferredDeps = { send: sendExempt, handlers: afterHandlers }): Promise<{ claimed: number; sent: number; requeued: number; skipped: number; failed: number }> {
   const out = { claimed: 0, sent: 0, requeued: 0, skipped: 0, failed: 0 };
   const { rows } = await pool.query(
     `SELECT d.id, d.user_id, COALESCE(u.phone_number, d.phone_number) AS phone_number, d.type, d.target_key, d.messages, d.timezone,
-            d.after_kind, d.after_payload, d.due_at, d.status, d.attempts, d.created_at, (u.archived_at IS NOT NULL) AS archived
+            d.after_kind, d.after_payload, d.due_at, d.status, d.attempts, d.created_at, d.error, (u.archived_at IS NOT NULL) AS archived
      FROM deferred_sends d JOIN users u ON u.id = d.user_id
      WHERE (d.status = 'queued' AND d.due_at <= $1) OR (d.status = 'sending' AND d.claimed_at < $2)
      ORDER BY d.due_at LIMIT ${DEFERRED_LIMITS.perRun}`,
@@ -168,11 +180,20 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     const messages = queuedAt ? raw.map((m, i) => (i === 0 ? dropStaleAck(m, { askedAt: queuedAt, sendAt: now }) : m)) : raw;
     const finish = (status: string, error: string | null, sentAt: Date | null) =>
       pool.query(`UPDATE deferred_sends SET status = $2, error = $3, sent_at = $4 WHERE id = $1 AND attempts = $5`, [row.id, status, error, sentAt, attempts]);
+    // A send a correction marked for a recheck keeps the mark across a retry, so its next try is re-read too.
+    const recheck = /^recheck:/i.test(String(row.error ?? ""));
     const requeue = (dueAt: Date, error: string | null) =>
-      pool.query(`UPDATE deferred_sends SET status = 'queued', due_at = $2, error = $3 WHERE id = $1 AND attempts = $4`, [row.id, dueAt, error, attempts]);
+      pool.query(`UPDATE deferred_sends SET status = 'queued', due_at = $2, error = $3 WHERE id = $1 AND attempts = $4`, [row.id, dueAt, recheck ? row.error : error, attempts]);
+    // Marked by a correction: a text that states the corrected-away value as theirs doesn't go (no model judges deferred sends,
+    // so the check is the guards' own rule, services/whatCoKnows.ts statesCorrectedAway). Anything else goes as written.
+    const stale = recheck ? await (deps.staleAfterCorrection ?? correctedAwayIn)(row.user_id, messages).catch(() => null) : null;
 
     let result: { sent: boolean; reason?: string };
     if (row.archived) result = { sent: false, reason: "archived" };
+    else if (stale) {
+      result = { sent: false, reason: `corrected since queued: says "${stale.was}", now "${stale.now}"`.slice(0, 300) };
+      await recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "skip", action: "stale_after_correction", proposal: { id: row.id, type: row.type, was: stale.was, now: stale.now, message: stale.message.slice(0, 200) }, reason: row.error ?? null }).catch(() => {});
+    }
     // An in-room intro ask held overnight is pointless once the event is over: dropped, never sent the next morning.
     else if (row.after_kind === "event_direct_ask" && (await eventIsOver(String((row.after_payload as any)?.eventId ?? ""), now))) result = { sent: false, reason: "event over" };
     else if (!localHourOk(now, row.timezone)) result = { sent: false, reason: "outside local hours" };

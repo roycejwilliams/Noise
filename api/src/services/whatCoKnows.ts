@@ -391,6 +391,19 @@ export function correctedSays(old: string, now: string, line: string): boolean {
   return false;
 }
 
+// Pure: the first queued message that still states a value they corrected away (as correctedSays reads it), with the correction,
+// or null. A deferred send marked "recheck:" by a correction (cancelQueued) is read through this when it comes due
+// (services/deferredSends.ts): one that states the old value as theirs ("Here's a run club in Berkeley" after they moved to
+// Oakland) is skipped with that reason; one that doesn't goes as written.
+export function statesCorrectedAway(messages: string[], rows: ForgottenRow[]): { message: string; was: string; now: string } | null {
+  for (const r of rows) {
+    if (r.removed || !r.now) continue;
+    const m = messages.find((x) => !safetySignal(x) && correctedSays(r.old, r.now!, x));
+    if (m) return { message: m, was: plainOf(r.old), now: r.now };
+  }
+  return null;
+}
+
 // Pure: every line of a block through guardText (a recap, a call's system prompt), lines it drops left out.
 export function guardBlock(text: string, rows: ForgottenRow[]): string {
   if (!rows.length) return text;
