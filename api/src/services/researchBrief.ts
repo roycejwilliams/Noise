@@ -14,6 +14,7 @@
 // Sources: the scripted Peerspace reader, and since round 2 passed (evals/browserPilot/round2.ts: 39 right, 11 unknown, 0
 // wrong on 12 sites with no script) the general reader (services/sdkGeneralReader.ts) for a venue's own pages.
 import type { Doc, DocSection, ResearchSource } from "./documentSheet.js";
+import { regionFor } from "./areaCodes.js";
 import { schemaFields, type FieldValue, type FindField, type FindType, type StoredFind } from "./researchQuality.js";
 
 export const SDK_FINDS_ALLOWED = true;
@@ -258,7 +259,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     return;
   }
   const city = p.city ?? person.city ?? null;
-  const zone = city ? await import("./geocoding.js").then((g) => g.getTimezoneForCity(city)).catch(() => null) : null;
+  const zone = city ? await import("./geocoding.js").then((g) => g.getTimezoneForCity(city, { region: regionFor({ city, phone: person?.phone_number }) })).catch(() => null) : null;
   const slot = p.date && p.start ? { date: p.date, start: p.start } : null;
   const { sendExempt } = await import("../harness/proactive.js");
   // A line to them that ends the brief (what it came to, or the question it needs first). Outside their hours it used to be

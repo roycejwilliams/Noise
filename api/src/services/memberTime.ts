@@ -53,7 +53,9 @@ export async function zoneFromProfile(
 }
 
 type Db = { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> };
-const lookupCity = async (city: string) => (await import("./geocoding.js")).getTimezoneForCity(city);
+// A bare city is read in their own state (from their phone's area code, services/areaCodes.ts) when it's known: "Cambridge" for a
+// 617 number is Cambridge, Massachusetts, not England (2026-10-12 intelligence audit).
+const lookupCity = async (city: string, region: string | null = null) => (await import("./geocoding.js")).getTimezoneForCity(city, { region });
 
 // Their zone, or null when none is known (a time decision then measures in FALLBACK_ZONE: wordsZone / memberZoneOrFallback).
 // Reads the stored zone; derives and stores it when it's missing or the city changed. Never throws.
@@ -65,7 +67,19 @@ export async function memberZone(userId: string, deps: { db?: Db; lookup?: (city
       // Before the column migration has run: the city alone.
       .catch(() => db.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]));
     if (!rows[0]) return null;
-    const r = await zoneFromProfile(rows[0], deps.lookup ?? lookupCity);
+    // Their state, read only when a lookup is needed; a failed read is no bias. What they said or have on file (their city, their
+    // snapshot's place, a city claim) wins; the phone's area code is only a guess (services/areaCodes.ts regionFor).
+    const regionOf = async () => {
+      const q = (sql: string) => db.query(sql, [userId]).then((r) => r.rows).catch(() => [] as any[]);
+      const [u, snap, claims] = await Promise.all([
+        q(`SELECT phone_number FROM users WHERE id = $1`),
+        q(`SELECT snapshot->>'place' AS place FROM person_snapshots WHERE user_id = $1`),
+        q(`SELECT text FROM member_claims WHERE user_id = $1 AND kind = 'city' ORDER BY confirmed_on DESC LIMIT 3`),
+      ]);
+      const { regionFor } = await import("./areaCodes.js");
+      return regionFor({ city: rows[0].city, places: [snap[0]?.place, ...claims.map((c: any) => c.text)], phone: u[0]?.phone_number });
+    };
+    const r = await zoneFromProfile(rows[0], deps.lookup ?? (async (city: string) => lookupCity(city, await regionOf())));
     if (r.store) {
       // Only if the city is still the one it came from (a concurrent city write re-derives on its own).
       await db

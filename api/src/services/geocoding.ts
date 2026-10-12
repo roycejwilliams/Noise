@@ -36,8 +36,25 @@ export function haversineMiles(a: GeoPoint, b: GeoPoint): number {
 //
 // Failed lookups are never cached — a transient API hiccup shouldn't
 // permanently blacklist a real city string; it just retries next call.
-export async function geocodeCity(city: string): Promise<GeoPoint | null> {
-  const trimmed = city.trim();
+//
+// A bare name is ambiguous (2026-10-12 intelligence audit: the cache held Cambridge in England, Medford in Oregon, Somerville and
+// Newark in New Jersey, Saratoga in New York, all for Boston-area members, and one bare row answered every caller). So a bare city
+// is geocoded as "city, region" when the caller knows the member's region (their state, from their phone's area code:
+// services/areaCodes.ts), and the cache row is keyed by what was actually geocoded, never by the bare name for a biased lookup.
+// A name that already carries its region ("Cambridge, MA", "Cambridge MA") is used as is.
+export type GeoBias = { region?: string | null };
+
+// Pure: what to geocode (and cache under) for a city and a bias.
+export function geoQuery(city: string, bias?: GeoBias | null): string {
+  const c = String(city ?? "").trim().replace(/\s+/g, " ");
+  if (!c) return "";
+  const region = String(bias?.region ?? "").trim();
+  if (!region || c.includes(",") || /\s[A-Z]{2}$/.test(c)) return c;
+  return `${c}, ${region}`;
+}
+
+export async function geocodeCity(city: string, bias?: GeoBias | null): Promise<GeoPoint | null> {
+  const trimmed = geoQuery(city, bias);
   if (!trimmed) return null;
 
   // The cache is an optimization: without a database (evals, local runs) the
@@ -55,9 +72,14 @@ export async function geocodeCity(city: string): Promise<GeoPoint | null> {
     // being enabled on the same key/project doesn't imply Geocoding is too,
     // they're separately toggled). Confirmed working against this key
     // immediately after enabling.
-    const response = await client.geocode({
-      params: { address: trimmed, key: process.env.GOOGLE_PLACES_API_KEY! },
+    const ask = (address: string) => client.geocode({
+      // region: a US bias for a name with nothing else to go on (the club is in the US).
+      params: { address, region: "us", key: process.env.GOOGLE_PLACES_API_KEY! },
     });
+    let response = await ask(trimmed);
+    // No such place in that state ("Newark, MA" came back as a nearby town): the name as given, never a guess near the bias.
+    const given = String(city ?? "").trim();
+    if (response.data.results?.[0]?.partial_match && given && given !== trimmed) response = await ask(given);
     const location = response.data.results?.[0]?.geometry?.location;
     if (!location) return openMeteoGeocode(trimmed);
 
@@ -109,12 +131,21 @@ export async function geocodeVenue(address: string): Promise<GeoPoint | null> {
 }
 
 // Open-Meteo's geocoding API: free, no key, no billing.
+// It searches names only, so "Medford, MA" is searched as "Medford" and the hit in that region (else in the US) is taken.
 async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
   try {
-    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`);
+    const [name, ...rest] = city.split(",").map((x) => x.trim());
+    const tail = rest.join(" ") || (city.match(/\s([A-Z]{2})$/)?.[1] ?? "");
+    const bare = rest.length ? name : city.replace(/\s[A-Z]{2}$/, "");
+    const { STATE_NAMES } = await import("./areaCodes.js");
+    const region = (STATE_NAMES[tail.toUpperCase()] ?? tail).toLowerCase();
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(bare)}&count=10&language=en&format=json`);
     if (!res.ok) return null;
     const data: any = await res.json();
-    const hit = data?.results?.[0];
+    const results: any[] = Array.isArray(data?.results) ? data.results : [];
+    // In the region asked for; else the first US hit; else the first hit (a bias, never a reason to find nothing).
+    const inRegion = region ? results.find((r) => String(r.admin1 ?? "").toLowerCase() === region || String(r.country ?? "").toLowerCase() === region) : undefined;
+    const hit = inRegion ?? results.find((r) => r.country_code === "US") ?? results[0];
     if (typeof hit?.latitude !== "number" || typeof hit?.longitude !== "number") return null;
     await pool
       .query(`INSERT INTO geocode_cache (query, lat, lng) VALUES ($1, $2, $3) ON CONFLICT (query) DO NOTHING`, [city, hit.latitude, hit.longitude])
@@ -137,8 +168,8 @@ async function openMeteoGeocode(city: string): Promise<GeoPoint | null> {
 // NOT another Google API, since Geocoding and Places both already hit
 // "This API is not activated on your API project" the first time each was
 // tried against this same key.
-export async function getTimezoneForCity(city: string): Promise<string | null> {
-  const trimmed = city.trim();
+export async function getTimezoneForCity(city: string, bias?: GeoBias | null): Promise<string | null> {
+  const trimmed = geoQuery(city, bias);
   if (!trimmed) return null;
 
   const cached = await pool.query(`SELECT lat, lng, timezone FROM geocode_cache WHERE query = $1`, [trimmed]);

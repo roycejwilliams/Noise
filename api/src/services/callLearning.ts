@@ -24,7 +24,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
-import { mightBeCorrection, PROFILE_JUDGMENT_MODEL } from "../harness/profileWrite.js";
+import { LIFE_CHAPTERS_RULE, mightBeCorrection, PROFILE_JUDGMENT_MODEL } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
 import { extractPsychographicProfile, storePlannedEventMention, storeProfile } from "./profileExtraction.js";
 import { parseTurnLearning, type TurnLearning } from "./turnLearning.js";
@@ -62,7 +62,7 @@ What Co already has on file about them:
 ${fileLines || "(nothing yet)"}
 ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}. ${a.text}`).join("\n")}\n` : ""}
 1. profile: psychographic fields from the whole call.
-  - life_chapters: applicable values from new_to_city, building_solo, career_pivot, starting_over.
+  - ${LIFE_CHAPTERS_RULE}
   - social_energy: a number 0-100 (0 = very introverted, 100 = very extroverted), or null if their own words gave no real signal this call; never guess a number.
   - connection_style: one of small_group, medium_group, large_social.
   - activity_preferences: activities they mentioned or implied enjoying.

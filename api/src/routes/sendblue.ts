@@ -66,7 +66,7 @@ import { describeNotes } from "../agent/loopTools.js";
 import { loadBrief } from "../services/searchIntent.js";
 import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
-import { addEventFacts, addFact, addHint, addInstruction, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
+import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { callLine } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
@@ -1742,6 +1742,9 @@ export function sendblueRouter(io: Server): Router {
           } else if (said) {
             addInstruction(replyFacts, "You have nothing current from them on any plan, deadline or event. If they ask what you meant by something you said about one, say you don't have that from them and own the slip; your own earlier text is not a source.");
           }
+          // Their message names a date: what they've told Co that is dated around it, in front of Co as a check (dateConflictFact).
+          const dateCheck = dateConflictFact(resolvedContent, turn?.knowledge);
+          if (dateCheck) addFact(replyFacts, "known", dateCheck);
           // Co's live work for them: ongoing, so its next step can be said (replyGrounding future_promise).
           if (notes) addFact(replyFacts, "ongoing", notes);
           if (loops) addFact(replyFacts, "ongoing", loops);

@@ -56,6 +56,9 @@ async function prefilterCandidates(personId: string, askEmbedding: number[]): Pr
                 COALESCE((SELECT MIN(x.emb <=> $2::vector) FROM (${OPEN_ASK_EMBEDDINGS}) x), 2)
               ) AS dist
        FROM co_profiles cp
+       -- Only members still in the club and still texting: an archived or opted-out member is never scored (2026-10-12 audit:
+       -- the first pass scored archived members, and only a later step dropped them).
+       JOIN users u ON u.id = cp.user_id AND u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false
        WHERE cp.user_id != $1
          AND (cp.goal_embeddings IS NOT NULL OR EXISTS (${OPEN_ASK_EMBEDDINGS}))
      ) c
@@ -212,9 +215,10 @@ export async function sweepAllOpenAsks(): Promise<void> {
   // text-less preference records captureIntent writes when a conversation
   // produced no ask (2026-09-20).
   const { rows } = await pool.query(
-    `SELECT DISTINCT user_id FROM co_profiles
+    `SELECT DISTINCT cp.user_id FROM co_profiles cp
+     JOIN users u ON u.id = cp.user_id AND u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false
      WHERE EXISTS (
-       SELECT 1 FROM jsonb_array_elements(COALESCE(intent, '[]'::jsonb)) AS e
+       SELECT 1 FROM jsonb_array_elements(COALESCE(cp.intent, '[]'::jsonb)) AS e
        WHERE e->>'status' = 'active' AND COALESCE(btrim(e->>'text'), '') <> ''
      )`,
   );

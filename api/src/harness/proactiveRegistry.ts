@@ -299,7 +299,11 @@ export const proactiveRegistry: ProactiveRegistry = {
         const fit = await heavyFitsNow(c.userId, new Date(c.payload.heavy.endedAt ?? 0));
         if (!fit.ok) return skip(`not the moment: ${fit.why}`);
       }
-      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null, c.payload.heavy ?? null);
+      // A thread Co took on since it was queued is Co's to deliver now, not a question for them (memberThreads.ts coOwns).
+      const { coOwns, ownedWorkFor } = await import("./memberThreads.js");
+      const owned = await ownedWorkFor(c.userId);
+      if (c.payload.thread && coOwns(c.payload.thread.text, owned)) return skip("Co owns this thread: an open task delivers it");
+      const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null, c.payload.heavy ?? null, owned);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP: no specific open thread");
     },
     async onSent(c, _p, messages) {

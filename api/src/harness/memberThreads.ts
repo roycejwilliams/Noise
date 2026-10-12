@@ -19,6 +19,7 @@
 // Read only with the owner's user id; nothing here ever goes to another member.
 import { notToTeammate } from "../services/teamLines.js";
 import { stampOf } from "../services/factLabels.js";
+import { sameThing } from "../services/whatCoKnows.js";
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { DateTime } from "luxon";
@@ -404,9 +405,12 @@ export async function markQuietThreadsWaiting(userId: string): Promise<number> {
 
 // The one thread a companion check-in is about: past its date or undated,
 // not a "remember" note, the one Co has touched least recently.
-export function pickThreadForCheckin(threads: MemberThread[], today: string): MemberThread | null {
+// ownedWork: what Co is working on for them (open tasks, running research briefs). A thread that is one of them is Co's to deliver,
+// not theirs to report on (2026-10-12 intelligence audit: Co told Kofi "give me a day to dig into prices", then the check-in asked
+// him "Anything coming to mind yet?"). That thread waits; the task's own messages say where it stands.
+export function pickThreadForCheckin(threads: MemberThread[], today: string, ownedWork: string[] = []): MemberThread | null {
   const eligible = threads.filter(
-    (t) => (t.status === "open" || t.status === "waiting") && t.nextStep !== "remember" && (!t.dueDate || t.dueDate < today),
+    (t) => (t.status === "open" || t.status === "waiting") && t.nextStep !== "remember" && (!t.dueDate || t.dueDate < today) && !coOwns(t.text, ownedWork),
   );
   eligible.sort((a, b) => (a.lastTouchedAt < b.lastTouchedAt ? -1 : 1));
   return eligible[0] ?? null;
@@ -418,6 +422,19 @@ export function renderThreads(threads: MemberThread[], now: Date = new Date(), z
   return threads
     .map((t) => `- ${t.text} (${t.status}, ${stampOf({ saidOn: t.openedAt, confirmedOn: t.lastTouchedAt, dueOn: t.dueDate }, now, wordsZone(zone)).label}${t.feeling ? `, felt ${t.feeling}` : ""}; they said: "${t.openedQuote.slice(0, 160)}")`)
     .join("\n");
+}
+
+// Pure: the thread is something Co is working on for them (the same words, services/whatCoKnows.ts sameThing).
+export function coOwns(threadText: string, ownedWork: string[]): boolean {
+  return ownedWork.some((w) => sameThing(threadText, w));
+}
+
+// What Co is working on for them right now: open tasks and research briefs (co_tasks). Never throws.
+export async function ownedWorkFor(userId: string): Promise<string[]> {
+  return pool
+    .query(`SELECT goal FROM co_tasks WHERE user_id = $1 AND status = 'open' ORDER BY created_at DESC LIMIT 20`, [userId])
+    .then((r) => r.rows.map((x: any) => String(x.goal ?? "")).filter(Boolean))
+    .catch(() => [] as string[]);
 }
 
 // What a companion check-in carries (Royce, 2026-09-22: "One useful thing
@@ -442,8 +459,12 @@ export async function companionPayloadFor(userId: string): Promise<CompanionPayl
   const checks: GateCheck[] = [];
   const zone = await zoneFor(userId);
   const today = DateTime.now().setZone(wordsZone(zone)).toISODate()!;
-  const thread = pickThreadForCheckin(await listThreads(userId), today);
-  if (!thread) return { threadId: null, thread: null, item: null, checks: [{ name: "open_thread", pass: false, reason: "no open thread due" }] };
+  const owned = await ownedWorkFor(userId);
+  const threads = await listThreads(userId);
+  const thread = pickThreadForCheckin(threads, today, owned);
+  const held = threads.filter((t) => coOwns(t.text, owned)).map((t) => t.text.slice(0, 60));
+  if (held.length) checks.push({ name: "co_owns_thread", pass: true, reason: `left for Co's own task: ${held.join("; ")}` });
+  if (!thread) return { threadId: null, thread: null, item: null, checks: [...checks, { name: "open_thread", pass: false, reason: "no open thread due" }] };
   checks.push({ name: "open_thread", pass: true, reason: thread.text.slice(0, 80) });
   let item: CompanionPayloadParts["item"] = null;
   if (thread.nextStep === "look_up") {
