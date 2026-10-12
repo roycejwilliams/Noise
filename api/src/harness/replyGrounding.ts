@@ -175,7 +175,7 @@ export function baseReplyFacts(situation?: Situation): ReplyFacts {
 // routes/sendblue.ts as it acts.
 // They're asking for a deck, slides or a presentation: a request word before the noun, so "my presentation went badly" or "she
 // slides into DMs" isn't an ask.
-export const DECK_ASK = /\b(make|build|put together|throw together|draft|design|create|need|want|would love|would like|can you|could you|help me with|do)\b[^.?!\n]{0,40}\b(pitch deck|deck|slides|presentation|slideshow)\b/i;
+export const DECK_ASK = /\b(make|build|put together|throw together|draft|design|create|need (a|some|new)|need(?= (slides|decks?|pitch deck)\b)|want (a|some)|would love (a|some)|would like (a|some)|can you|could you|help me with)\b[^.?!\n]{0,40}\b(pitch deck|deck|slides|presentation|slideshow)\b/i;
 // They asked Co to research, look up or look into someone or something.
 export const RESEARCH_ASK = /\b(do (some )?research|research (on|into)|look (up|into)|dig (into|up)|find out (about|who|what)|check out who)\b/i;
 export const RESEARCH_RULE =
@@ -223,7 +223,7 @@ export async function gatherReplyFacts(
   if (deckAsked) addInstruction(rf, "You already asked your one question about the deck they want. If this message answers it or still wants the deck, build it now with makeDeck from what you have (pass a brief if you don't have slides): no more questions first. If they haven't said anything about the look, it's clean and minimal.");
   // They're asking for a deck and Co hasn't asked its one question yet: the deck tool decides whether a question is needed and asks
   // it, so Co doesn't stack its own first (replay: "what's it for?", then "what's it about?", then the look).
-  else if (DECK_ASK.test(theirMessage)) addInstruction(rf, "They're asking for a deck. Call makeDeck in this turn with what you have (pass a brief if you don't have slides); don't ask them anything yourself first. If something is missing, makeDeck asks the one question, covering the look and the content together.");
+  else if (DECK_ASK.test(theirMessage)) addInstruction(rf, "If they're asking you to make a deck (not just talking about one), call makeDeck in this turn with what you have (pass a brief if you don't have slides); don't ask them anything yourself first. If something is missing, makeDeck asks the one question, covering the look and the content together.");
   // How they've told Co they like to be texted (services/textingStyle.ts).
   const style = await textingStyleFor(userId).catch(() => [] as string[]);
   if (style.length) addInstruction(rf, `How they've told you they like to be texted, follow it: ${style.join("; ")}.`);
