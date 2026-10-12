@@ -2683,6 +2683,57 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS member_assets_owner ON member_assets (owner_user_id, created_at DESC)`))
     .catch((err: Error) => console.error("member_assets table init failed:", err));
+  // A member's design system (services/designSystem.ts, 2026-10-12): every look signal they gave or Co read for them (a stated taste,
+  // a correction, a confirmed reference read), folded on read. One member's only. A reference read waits unconfirmed until they
+  // answer Co's confirm-the-read line (asked_at, confirmed).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS member_design_signals (
+        id BIGSERIAL PRIMARY KEY,
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        context TEXT NOT NULL CHECK (context IN ('professional','personal')),
+        source TEXT NOT NULL CHECK (source IN ('correction','stated','reference','preset','inferred')),
+        vals JSONB NOT NULL,
+        quote TEXT,
+        ref TEXT,
+        confirmed BOOLEAN NOT NULL DEFAULT true,
+        asked_at TIMESTAMPTZ,
+        font_notes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS member_design_signals_owner ON member_design_signals (owner_user_id, created_at DESC)`))
+    // What each artifact was made with and what its design QA found, and every later change: first-shot acceptance, keeps and shares
+    // are read from it with co_pages and co_page_shares (view artifact_design_metrics).
+    .then(() =>
+      pool.query(`CREATE TABLE IF NOT EXISTS artifact_design_log (
+        id BIGSERIAL PRIMARY KEY,
+        owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        page_id TEXT,
+        medium TEXT NOT NULL CHECK (medium IN ('deck','page','doc')),
+        event TEXT NOT NULL CHECK (event IN ('made','revised')),
+        layout TEXT,
+        tokens JSONB NOT NULL DEFAULT '{}'::jsonb,
+        qa JSONB NOT NULL DEFAULT '{}'::jsonb,
+        confirm_line TEXT,
+        choices TEXT,
+        audience TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS artifact_design_log_page ON artifact_design_log (page_id, created_at)`))
+    .then(() =>
+      pool.query(`CREATE OR REPLACE VIEW artifact_design_metrics AS
+        SELECT m.id, m.owner_user_id, m.page_id, m.medium, m.layout, m.created_at AS made_at,
+               m.created_at < NOW() - INTERVAL '48 hours' AS settled,
+               NOT EXISTS (SELECT 1 FROM artifact_design_log r WHERE r.event = 'revised' AND r.page_id = m.page_id AND r.created_at < m.created_at + INTERVAL '48 hours') AS first_shot,
+               COALESCE(p.kept, false) AS kept,
+               (SELECT COUNT(*) FROM co_page_shares s WHERE s.page_id = m.page_id)::int AS shares,
+               COALESCE(jsonb_array_length(CASE WHEN jsonb_typeof(m.qa->'findings') = 'array' THEN m.qa->'findings' ELSE '[]'::jsonb END), 0) AS qa_findings
+          FROM artifact_design_log m LEFT JOIN co_pages p ON p.id = m.page_id
+         WHERE m.event = 'made'`),
+    )
+    .catch((err: Error) => console.error("member_design_signals table init failed:", err));
   // Goal lifecycle (2026-10-08, services/goalEdges.ts): a goal is active (no row), done or stale. Stale and done goals stay on file
   // and stop generating searches. A set-aside made from context waits to be told to them (told_at NULL, hints counts replies that
   // carried the hint).

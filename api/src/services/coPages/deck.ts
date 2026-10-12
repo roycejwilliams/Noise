@@ -1,30 +1,58 @@
 // A deck: the second artifact type on the Co page pipeline (Royce, 2026-10-11: "make me a pitch deck about my startup" gets back a link
 // to a hosted deck). Same store, same /d/ link, same rules as a page (store.ts: owner-only changes, noindex, 90-day expiry, wiped on
 // take-down), same grounding (grounding.ts deckProblems). Only the shape and the renderer differ: a title slide, then content slides
-// of a headline and a few bullets. No speaker notes, no themes to pick, no export.
+// of a headline and a few bullets.
 //
-// The look comes from the member's own taste (services/designTaste.ts), never a fixed Co theme: a mood, and the colors they named.
-// Colors are plain six-digit hex only, checked here, so nothing but a color can reach the CSS. Text that wouldn't read on its
-// background falls back to the mood's own pairing. Like a page, every field is plain text, escaped, and the model writes no HTML.
+// The look comes from the member's own design system (services/designSystem.ts), never a fixed Co theme: their colors, a gradient,
+// their fonts (open fonts only), density, and a designed layout per slide (2026-10-12). Colors are plain six-digit hex only and font
+// names letters only, checked here, so nothing but a color or a font name can reach the CSS. Like a page, every field is plain text,
+// escaped, and the model writes no HTML.
+//
+// Layouts (a small designed set, filled by the member's tokens):
+//   title:   field (a full-bleed color or gradient field, oversized type), editorial (paper, oversized display type, a gradient strip),
+//            centered (the logo leads).
+//   content: statement (one big line on the field), points (index and headline left, points right on hairlines), grid (two to four
+//            short points as numbered columns), split (the picture bleeds off one side). Picked from each slide's shape unless Co
+//            picked one, never three of a kind in a row.
+// Every size is in container units (cqw), so a slide is the same design on a phone, a laptop and the 13.333in PDF page.
 import { escapeHtml } from "../emailDesign.js";
 import { list, obj, plain } from "./schema.js";
 
-import { DECK_MOODS, contrast, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
+import { DECK_MOODS, STYLE_KEYS, checkExtras, contrast, inkOn, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
+import { DEFAULT_FONTS, fontLinks, fontStack } from "../designFonts.js";
 export { DECK_MOODS, MOOD_STYLES, contrast, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
+
+export const SLIDE_LAYOUTS = ["statement", "points", "grid", "split"] as const;
+export type SlideLayout = (typeof SLIDE_LAYOUTS)[number];
+// How an image is placed, decided in code from its pixels (services/designRead.ts), never by the model: full, small (a low-res image
+// is never stretched), plate (a logo cropped to its edges sits on its own ground color). mono: one ink on one ground, so it can drop
+// its ground on a colored field.
+export type ImageMeta = { fit: "full" | "small" | "plate"; ground: string | null; ink: string | null; mono: boolean };
 // image / logo: a member asset's id (services/memberAssets.ts), one of the owner's own images; never a URL. The store checks the
 // owner, and the image is served only through this deck's own link (routes/coPage.ts).
 // notes: speaker notes for this slide, only when the member asked for them (PR 3, 2026-10-11); shown under the slide, folded.
-export type Slide = { headline: string; bullets: string[]; image: string | null; notes?: string };
-export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: string | null; slides: Slide[]; style: DeckStyle };
+// fit "tight": the design QA's fix for a slide whose text ran over (services/designQa.ts); a step smaller type.
+export type Slide = { headline: string; bullets: string[]; image: string | null; notes?: string; layout?: SlideLayout; imageMeta?: ImageMeta; fit?: "tight" };
+export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: string | null; slides: Slide[]; style: DeckStyle; logoMeta?: ImageMeta };
 const ASSET = /^[A-Za-z0-9_-]{24}$/;
 const HEX = /^#[0-9a-f]{6}$/i;
 
 export const DECK_LIMITS = { title: 90, subtitle: 140, slidesMin: 2, slides: 15, headline: 90, bulletsMin: 1, bullets: 5, bullet: 160, notes: 700 } as const;
 
+function imageMeta(v: unknown, field: string, problems: string[]): ImageMeta | undefined {
+  if (v === undefined || v === null) return undefined;
+  const m = obj(v, field, ["fit", "ground", "ink", "mono"], problems);
+  if (!m) return undefined;
+  const hex = (x: unknown) => (typeof x === "string" && HEX.test(x) ? x.toUpperCase() : null);
+  if (!["full", "small", "plate"].includes(m.fit as string)) problems.push(`${field}.fit must be full, small or plate`);
+  if ((m.ground != null && !hex(m.ground)) || (m.ink != null && !hex(m.ink))) problems.push(`${field} colors must be six-digit hex`);
+  return { fit: (["full", "small", "plate"].includes(m.fit as string) ? m.fit : "full") as ImageMeta["fit"], ground: hex(m.ground), ink: hex(m.ink), mono: m.mono === true };
+}
+
 // The one gate for a deck, like parseCoPageData for a page: unknown fields refused, every line plain, colors hex only.
 export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | { ok: false; problems: string[] } {
   const problems: string[] = [];
-  const o = obj(input, "the deck", ["kind", "title", "subtitle", "logo", "slides", "style"], problems);
+  const o = obj(input, "the deck", ["kind", "title", "subtitle", "logo", "slides", "style", "logoMeta"], problems);
   if (!o) return { ok: false, problems: ["a deck must be an object of fields"] };
   if (o.kind !== "deck") problems.push("kind must be deck");
   const L = DECK_LIMITS;
@@ -36,10 +64,11 @@ export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | 
     return typeof v === "string" && ASSET.test(v) ? v : null;
   };
   const logo = asset(o.logo, "logo");
+  const logoMeta = logo ? imageMeta(o.logoMeta, "logoMeta", problems) : undefined;
   const slides = list(o.slides, "slides", L.slides, problems, L.slidesMin)
     .map((s, i) => {
       const f = `slides[${i}]`;
-      const r = obj(s, f, ["headline", "bullets", "image", "notes"], problems);
+      const r = obj(s, f, ["headline", "bullets", "image", "notes", "layout", "imageMeta", "fit"], problems);
       if (!r) return null;
       const headline = plain(r.headline, `${f}.headline`, L.headline, problems, true);
       const bullets = list(r.bullets, `${f}.bullets`, L.bullets, problems, L.bulletsMin)
@@ -47,19 +76,27 @@ export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | 
         .filter((x): x is string => !!x);
       const image = asset(r.image, `${f}.image`);
       const notes = plain(r.notes, `${f}.notes`, L.notes, problems, false);
-      return headline && bullets.length ? { headline, bullets, image, ...(notes ? { notes } : {}) } : null;
+      if (r.layout !== undefined && r.layout !== null && !SLIDE_LAYOUTS.includes(r.layout as SlideLayout)) problems.push(`${f}.layout must be one of ${SLIDE_LAYOUTS.join(", ")}`);
+      if (r.fit !== undefined && r.fit !== null && r.fit !== "tight") problems.push(`${f}.fit must be tight`);
+      const layout = SLIDE_LAYOUTS.includes(r.layout as SlideLayout) ? (r.layout as SlideLayout) : undefined;
+      const meta = image ? imageMeta(r.imageMeta, `${f}.imageMeta`, problems) : undefined;
+      return headline && bullets.length
+        ? { headline, bullets, image, ...(notes ? { notes } : {}), ...(layout ? { layout } : {}), ...(meta ? { imageMeta: meta } : {}), ...(r.fit === "tight" ? { fit: "tight" as const } : {}) }
+        : null;
     })
     .filter((x): x is Slide => !!x);
-  const st = obj(o.style, "style", ["mood", "background", "text", "accent", "type"], problems);
+  const st = obj(o.style, "style", STYLE_KEYS, problems);
+  let extras = {};
   if (st) {
     if (!DECK_MOODS.includes(st.mood as DeckMood)) problems.push(`style.mood must be one of ${DECK_MOODS.join(", ")}`);
     for (const k of ["background", "text", "accent"] as const) if (typeof st[k] !== "string" || !HEX.test(String(st[k]))) problems.push(`style.${k} must be a six-digit hex color`);
     if (st.type !== "serif" && st.type !== "sans") problems.push("style.type must be serif or sans");
+    extras = checkExtras(st, problems);
   }
   if (problems.length) return { ok: false, problems };
   // Re-derived, so a stored style can never carry text that doesn't read.
-  const style = styleFrom(st!.mood, { background: st!.background, text: st!.text, accent: st!.accent }, st!.type);
-  return { ok: true, data: { kind: "deck", title: title!, subtitle: subtitle!, logo, slides, style } };
+  const style = { ...styleFrom(st!.mood, { background: st!.background, text: st!.text, accent: st!.accent }, st!.type), ...extras };
+  return { ok: true, data: { kind: "deck", title: title!, subtitle: subtitle!, logo, slides, style, ...(logoMeta ? { logoMeta } : {}) } };
 }
 
 // Pure: the member assets a deck places (its logo and slide images).
@@ -71,13 +108,42 @@ export function isDeckData(d: unknown): boolean {
   return !!d && typeof d === "object" && (d as any).kind === "deck";
 }
 
+// ---------------------------------------------------------------- layouts
+
+// Pure: each slide's layout. Co's pick stands; otherwise from the slide's shape: a picture splits, one line is a statement, two to four
+// short points are a grid, anything else is points. Never three of a kind in a row (points and grid trade places when a slide fits).
+export function slideLayouts(slides: Pick<Slide, "bullets" | "image" | "layout">[]): SlideLayout[] {
+  const fitsGrid = (s: Pick<Slide, "bullets">) => s.bullets.length >= 2 && s.bullets.length <= 4 && s.bullets.every((b) => b.length <= 95);
+  const out: SlideLayout[] = [];
+  slides.forEach((s, i) => {
+    let l: SlideLayout = s.layout ?? (s.image ? "split" : s.bullets.length === 1 ? "statement" : fitsGrid(s) ? "grid" : "points");
+    if (!s.layout && i >= 2 && out[i - 1] === l && out[i - 2] === l) {
+      if (l === "grid") l = "points";
+      else if (l === "points" && fitsGrid(s)) l = "grid";
+    }
+    out.push(l);
+  });
+  return out;
+}
+
+// Pure: a color moved toward black or white until it reads on a ground at the ratio asked.
+export function readableOn(color: string, ground: string, min: number): string {
+  if (contrast(color, ground) >= min) return color;
+  const darker = contrast("#000000", ground) > contrast("#FFFFFF", ground);
+  for (let t = 0.1; t <= 1.0001; t += 0.1) {
+    const to = darker ? 0 : 255;
+    const c = `#${[1, 3, 5].map((i) => Math.round(parseInt(color.slice(i, i + 2), 16) + (to - parseInt(color.slice(i, i + 2), 16)) * t).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
+    if (contrast(c, ground) >= min) return c;
+  }
+  return darker ? "#000000" : "#FFFFFF";
+}
+
+// Pure: the last two words of a headline held together, so a headline never ends on one word alone.
+export const noOrphan = (escaped: string) => escaped.replace(/\s+(\S+)\s*$/, "&nbsp;$1");
+
 // ---------------------------------------------------------------- the renderer
 
 const e = escapeHtml;
-const FONTS = {
-  serif: { css: "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500&display=swap", family: "'Fraunces', Georgia, serif" },
-  sans: { css: "https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap", family: "'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif" },
-} as const;
 
 function asOf(d: Date, zone: string | null): string {
   try {
@@ -86,6 +152,12 @@ function asOf(d: Date, zone: string | null): string {
     return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" }).format(d);
   }
 }
+
+const DENSITY = {
+  airy: { pad: 7.4, h1: 7.2, h2: 4.5, li: 1.95, stmt: 5.6, gap: 1.6 },
+  balanced: { pad: 6.2, h1: 6.4, h2: 3.9, li: 1.8, stmt: 5.0, gap: 1.25 },
+  dense: { pad: 5.0, h1: 5.6, h2: 3.3, li: 1.6, stmt: 4.4, gap: 0.95 },
+} as const;
 
 // One slide per screen, 16:9, scrolled (and printed) one at a time. No scripts, no controls: a link that reads on a phone or a laptop.
 // assetBase: where this view's images are served, relative to the page's own address ("<deck id>/a/" under /d/, "<share id>/a/" under
@@ -100,57 +172,149 @@ export function renderDeck(
 ): string {
   const d = page.data;
   const s = d.style;
-  const f = FONTS[s.type];
-  // Headlines in the display weight; on "bold" and "playful", heavier and tighter.
-  const heavy = s.mood === "bold" || s.mood === "playful";
-  // The title slide: on "bold" and "playful", the accent as a full field (when the background color reads on it); on every other mood,
-  // the deck's own background with the accent kept to the rule and the logo (live run, 2026-10-11: a gold field was loud for
-  // "quiet and premium like Aesop's site").
-  const field = heavy && contrast(s.background, s.accent) >= 4.5;
-  const titleInk = field ? s.background : s.text;
-  const titleBg = field ? s.accent : s.background;
+  const display = s.display ?? DEFAULT_FONTS[s.type];
+  const body = s.body ?? (s.display ? DEFAULT_FONTS.sans : DEFAULT_FONTS[s.type]);
+  const dens = DENSITY[s.density ?? "airy"];
+  const loud = s.mood === "bold" || s.mood === "playful";
+  // The field: their gradient, else their accent as a solid. Its ink reads on every stop of it.
+  const stops = s.gradient && s.accent2 ? [s.accent, s.accent2] : [s.accent];
+  const field = stops.length > 1 ? `linear-gradient(120deg, ${stops[0]} 0%, ${stops[1]} 100%)` : stops[0];
+  const fieldInk = inkOn(stops, [s.text, s.background]);
+  // The accent where it's text on the paper (index numbers, labels): shaded until it reads.
+  const accOnPaper = readableOn(s.accent, s.background, 3);
+  const titleLayout = s.titleLayout ?? (s.gradient || loud ? "field" : "editorial");
+  const displayWeight = display.kind === "serif" ? (loud ? 600 : 400) : loud || s.mood === "dark" ? 800 : 650;
+  const layouts = slideLayouts(d.slides);
+  const ground = (onField: boolean) => (onField ? stops.join(",") : s.background);
+
   const css = `
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%;scroll-snap-type:y mandatory}
-body{margin:0;background:${s.background};color:${s.text};font-family:${f.family};-webkit-font-smoothing:antialiased}
+body{margin:0;background:${s.background};color:${s.text};font-family:${fontStack(body)};-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 .slide{scroll-snap-align:center;min-height:100vh;min-height:100svh;display:flex;align-items:center;justify-content:center;padding:16px}
-.frame{width:min(100%,1100px);aspect-ratio:16/9;position:relative;display:flex;flex-direction:column;justify-content:center;padding:clamp(20px,6vw,72px);border:1px solid ${s.text}1F;border-radius:4px;background:${s.background};overflow:hidden}
-.title .frame{background:${titleBg};color:${titleInk};border-color:transparent}
-h1{font-size:clamp(26px,5.4vw,64px);line-height:1.04;margin:0;font-weight:${heavy ? 700 : s.type === "serif" ? 300 : 600};letter-spacing:-0.02em;max-width:16ch}
-.sub{margin:clamp(10px,2vw,22px) 0 0;font-size:clamp(13px,1.9vw,22px);opacity:0.8;max-width:40ch}
-h2{font-size:clamp(20px,3.6vw,44px);line-height:1.1;margin:0 0 clamp(10px,2.4vw,30px);font-weight:${heavy ? 700 : s.type === "serif" ? 300 : 600};letter-spacing:-0.015em;max-width:24ch}
-ul{list-style:none;margin:0;padding:0}
-li{position:relative;padding:0 0 clamp(6px,1.2vw,14px) clamp(16px,2vw,26px);font-size:clamp(13px,1.9vw,22px);line-height:1.4;max-width:52ch}
-li::before{content:"";position:absolute;left:0;top:0.55em;width:clamp(6px,0.8vw,9px);height:clamp(6px,0.8vw,9px);background:${s.accent};border-radius:${s.mood === "playful" ? "50%" : "1px"}}
-.rule{width:clamp(28px,5vw,56px);height:3px;background:${s.accent};margin:0 0 clamp(10px,2vw,22px)}
-.title .rule{background:${field ? titleInk : s.accent}}
-.split{display:grid;grid-template-columns:1fr;gap:clamp(12px,3vw,40px);align-items:center}
-.split img{width:100%;max-height:52vh;object-fit:contain;border-radius:2px}
-@media (min-width:640px){.split.has-img{grid-template-columns:1.15fr 1fr}.split img{max-height:none;aspect-ratio:4/3;object-fit:cover}}
-.logo{height:clamp(44px,8vw,96px);width:auto;max-width:40%;object-fit:contain;object-position:left center;margin:0 0 clamp(14px,3vw,34px);display:block}
-.notes{width:min(100%,1100px);margin:10px auto 0;font-size:clamp(13px,1.6vw,16px);line-height:1.55;opacity:0.85}
+.frame{width:min(100%,1180px);aspect-ratio:16/9;position:relative;container-type:inline-size;overflow:hidden;background:${s.background};color:${s.text};border-radius:6px;box-shadow:0 1px 2px rgba(0,0,0,0.06),0 12px 40px rgba(0,0,0,0.08)}
+.in{position:absolute;inset:0;padding:${dens.pad}cqw ${dens.pad * 1.1}cqw;display:flex;flex-direction:column}
+.on-field{background:${field};color:${fieldInk}}
+.disp{font-family:${fontStack(display)};font-weight:${displayWeight};letter-spacing:${display.kind === "serif" ? "-0.015em" : "-0.03em"};line-height:1.02;margin:0;text-wrap:balance}
+.lab{font-size:1.05cqw;letter-spacing:0.18em;text-transform:uppercase;font-weight:600;opacity:0.9}
+.paper .lab.acc{color:${accOnPaper}}
+.foot{position:absolute;left:${dens.pad * 1.1}cqw;right:${dens.pad * 1.1}cqw;bottom:${dens.pad * 0.55}cqw;display:flex;justify-content:space-between;font-size:0.95cqw;letter-spacing:0.14em;text-transform:uppercase;opacity:0.55}
+/* title: field */
+.t-field .in{justify-content:space-between}
+.t-field h1{font-size:${dens.h1 * 1.18}cqw;max-width:13ch}
+.t-field .sub{font-size:2.1cqw;line-height:1.35;max-width:46ch;margin:2.2cqw 0 0;opacity:0.92;font-weight:450}
+/* title: editorial */
+.t-editorial .in{justify-content:space-between;padding-bottom:${dens.pad + 3}cqw}
+.t-editorial .top{display:flex;justify-content:space-between;align-items:flex-start}
+.t-editorial h1{font-size:${dens.h1}cqw;max-width:14ch}
+.t-editorial .sub{font-size:1.95cqw;line-height:1.4;max-width:44ch;margin:2cqw 0 0;opacity:0.72}
+.t-editorial .strip{position:absolute;left:0;right:0;bottom:0;height:2.6cqw;background:${field}}
+/* title: centered */
+.t-centered .in{align-items:center;justify-content:center;text-align:center}
+.t-centered h1{font-size:${dens.h1 * 0.82}cqw;max-width:18ch}
+.t-centered .sub{font-size:1.9cqw;line-height:1.4;max-width:42ch;margin:1.8cqw auto 0;opacity:0.72}
+.t-centered .logo{height:9cqw;margin:0 auto 3cqw}
+.t-centered .rule{width:5cqw;height:0.3cqw;background:${field};margin:2.4cqw auto 0}
+/* the logo, placed by its own pixels */
+.logo{display:block;height:5.4cqw;width:auto;max-width:28cqw;object-fit:contain;object-position:left center}
+.plate{display:inline-flex;padding:1.2cqw 1.6cqw;border-radius:0.6cqw}
+.plate .logo{height:4.4cqw}
+.on-field .logo.drop-light{mix-blend-mode:multiply}
+.on-field .logo.drop-dark{filter:invert(1);mix-blend-mode:screen}
+/* content */
+.kicker{display:flex;gap:1.6cqw;align-items:baseline;margin:0 0 2.4cqw}
+.l-points .in{display:grid;grid-template-columns:0.95fr 1.05fr;gap:5cqw;align-items:start;padding-top:${dens.pad + 2.4}cqw}
+.l-points h2{font-size:${dens.h2}cqw}
+.l-points ul{list-style:none;margin:0;padding:0}
+.l-points li{font-size:${dens.li}cqw;line-height:1.45;padding:${dens.gap}cqw 0;border-top:1px solid ${s.text}26}
+.l-points li:last-child{border-bottom:1px solid ${s.text}26}
+.l-grid h2{font-size:${dens.h2}cqw;max-width:22ch;margin-bottom:auto}
+.l-grid .cols{display:grid;grid-template-columns:repeat(var(--n),1fr);gap:3cqw;margin-top:3cqw}
+.l-grid .col{border-top:0.25cqw solid ${s.gradient ? s.accent : accOnPaper};padding-top:1.6cqw}
+.l-grid .num{font-family:${fontStack(display)};font-size:3.2cqw;line-height:1;color:${accOnPaper};margin-bottom:1.2cqw;font-weight:${displayWeight}}
+.l-grid .col p{margin:0;font-size:${dens.li * 0.95}cqw;line-height:1.45}
+.l-statement .in{justify-content:center}
+.l-statement h2{font-size:${dens.stmt}cqw;max-width:17ch}
+.l-statement .after{font-size:2cqw;line-height:1.45;max-width:48ch;margin:3cqw 0 0;opacity:0.85}
+.l-statement ul{list-style:none;margin:2.4cqw 0 0;padding:0}
+.l-statement li{font-size:${dens.li}cqw;line-height:1.45;padding:0.5cqw 0;opacity:0.85}
+.l-split .in{right:44%;justify-content:center}
+.l-split h2{font-size:${dens.h2 * 0.92}cqw}
+.l-split ul{list-style:none;margin:2.6cqw 0 0;padding:0}
+.l-split li{position:relative;font-size:${dens.li}cqw;line-height:1.45;padding:0 0 ${dens.gap}cqw 1.8cqw}
+.l-split li::before{content:"";position:absolute;left:0;top:0.62em;width:0.7cqw;height:0.7cqw;border-radius:50%;background:${accOnPaper}}
+.l-split .pic{position:absolute;top:0;right:0;bottom:0;width:44%;background:${field};display:flex;align-items:center;justify-content:center;overflow:hidden}
+.l-split .pic img{width:100%;height:100%;object-fit:cover}
+.l-split .pic.small img,.l-split .pic.plate img{width:auto;height:auto;max-width:70%;max-height:60%;object-fit:contain;box-shadow:0 1cqw 3cqw rgba(0,0,0,0.18)}
+.tight h2{font-size:${dens.h2 * 0.84}cqw}.tight li,.tight .col p{font-size:${dens.li * 0.88}cqw}
+.notes{width:min(100%,1180px);margin:10px auto 0;font-size:clamp(13px,1.6vw,16px);line-height:1.55;opacity:0.85}
 .notes summary{cursor:pointer;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;opacity:0.7}
 .notes p{margin:8px 0 0;max-width:70ch}
 .slide.with-notes{flex-direction:column}
-.n{position:absolute;right:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
-.mark{position:absolute;left:clamp(14px,3vw,32px);bottom:clamp(10px,2.4vw,26px);font-size:clamp(10px,1.2vw,13px);letter-spacing:0.12em;opacity:0.55}
-@media print{.notes{display:none}.dl{display:none}html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{border:none}}
+@media print{.notes{display:none}.dl{display:none}html{scroll-snap-type:none}.slide{min-height:auto;page-break-after:always;padding:0}.frame{box-shadow:none;border-radius:0}}
 .dl{position:fixed;right:16px;top:12px;font-size:12px;letter-spacing:0.08em;z-index:5}
-@media (max-width:640px){.dl{position:static;text-align:right;padding:10px 16px 0}}
+@media (max-width:640px){.dl{position:static;text-align:right;padding:10px 16px 0}.slide{padding:10px}}
 .dl a{color:${s.text};opacity:0.7;text-decoration:none;border-bottom:1px solid ${s.accent};margin-left:14px}
-${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:13.333in;height:7.5in;min-height:0;padding:0;page-break-after:always;break-after:page}.frame{width:13.333in;height:7.5in;aspect-ratio:auto;border:none;border-radius:0;padding:0.9in}` : ""}
+${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:13.333in;height:7.5in;min-height:0;padding:0;page-break-after:always;break-after:page}.frame{width:13.333in;height:7.5in;aspect-ratio:auto;border-radius:0;box-shadow:none}` : ""}
 `;
   // An asset is served only under this deck's own link (relative, so it never names another host).
+  const src = (id: string) => (o.imageSrc ? o.imageSrc(id) : `${o.assetBase ?? `${page.id}/a/`}${id}`);
   const img = (id: string, alt: string, cls = "") => {
-    const src = o.imageSrc ? o.imageSrc(id) : `${o.assetBase ?? `${page.id}/a/`}${id}`;
-    return src ? `<img${cls ? ` class="${cls}"` : ""} src="${e(src)}" alt="${e(alt)}" decoding="async">` : "";
+    const u = src(id);
+    return u ? `<img${cls ? ` class="${cls}"` : ""} src="${e(u)}" alt="${e(alt)}" decoding="async" data-qa-img>` : "";
   };
+  // The logo on its ground: on the field, a one-ink logo drops its own ground (multiply for dark ink on light, screen for light on
+  // dark); a cropped one sits on a plate of its own ground color; otherwise as it is.
+  const logoHtml = (onField: boolean) => {
+    if (!d.logo) return "";
+    const m = d.logoMeta;
+    const light = (h: string | null) => !!h && contrast(h, "#000000") > contrast(h, "#FFFFFF");
+    if (onField && m?.mono && m.ground && m.ink) {
+      const darkInkOnLight = light(m.ground) && !light(m.ink);
+      const wantDark = contrast(fieldInk, "#000000") < contrast(fieldInk, "#FFFFFF");
+      const cls = darkInkOnLight === wantDark ? "logo drop-light" : "logo drop-dark";
+      return img(d.logo, `${d.title} logo`, cls);
+    }
+    if (m?.fit === "plate" || (onField && !m?.mono)) return `<span class="plate" style="background:${m?.ground ?? "#FFFFFF"}">${img(d.logo, `${d.title} logo`, "logo")}</span>`;
+    return img(d.logo, `${d.title} logo`, "logo");
+  };
+  const mark = `Made by Co · ${e(asOf(page.updatedAt, o.zone ?? null))}`;
+  const total = d.slides.length + 1;
+  const titleSlide = (() => {
+    if (titleLayout === "field")
+      return `<section class="slide title"><div class="frame t-field on-field" data-qa-frame data-ground="${ground(true)}"><div class="in"><div>${logoHtml(true)}</div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div></div><div class="foot"><span>${mark}</span><span>01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
+    if (titleLayout === "centered")
+      return `<section class="slide title"><div class="frame t-centered paper" data-qa-frame data-ground="${ground(false)}"><div class="in">${d.logo ? logoHtml(false).replace('class="logo', 'class="logo') : ""}<h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p><div class="rule"></div></div><div class="foot"><span>${mark}</span><span>01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
+    return `<section class="slide title"><div class="frame t-editorial paper" data-qa-frame data-ground="${ground(false)}"><div class="in"><div class="top">${d.logo ? logoHtml(false) : `<span class="lab acc">${e(d.subtitle.split(/[.:,]/)[0].slice(0, 40))}</span>`}<span class="lab">${e(asOf(page.updatedAt, o.zone ?? null))}</span></div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div></div><div class="strip"></div><div class="foot" style="bottom:3.6cqw"><span>Made by Co</span><span>01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
+  })();
+
   const slides = d.slides
-    .map(
-      (sl, i) =>
-        `<section class="slide${sl.notes && o.showNotes !== false ? " with-notes" : ""}"><div class="frame"><div class="split${sl.image ? " has-img" : ""}"><div><div class="rule"></div><h2>${e(sl.headline)}</h2><ul>${sl.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul></div>${sl.image ? img(sl.image, sl.headline) : ""}</div><div class="n">${i + 2} / ${d.slides.length + 1}</div></div>${sl.notes && o.showNotes !== false ? `<details class="notes"><summary>Speaker notes</summary><p>${e(sl.notes)}</p></details>` : ""}</section>`,
-    )
+    .map((sl, i) => {
+      const n = String(i + 2).padStart(2, "0");
+      const l = layouts[i];
+      // Statements stand on the field when the deck has one worth standing on (a gradient, or a loud mood); otherwise on paper.
+      const onField = l === "statement" && (!!s.gradient || loud);
+      const tight = sl.fit === "tight" ? " tight" : "";
+      const foot = `<div class="foot"><span>${e(d.title.slice(0, 60))}</span><span>${n} / ${String(total).padStart(2, "0")}</span></div>`;
+      const h2 = `<h2 class="disp" data-qa-text="h2">${noOrphan(e(sl.headline))}</h2>`;
+      const kicker = `<div class="kicker"><span class="lab acc">${n}</span></div>`;
+      let inner = "";
+      if (l === "statement") {
+        const [first, ...rest] = sl.bullets;
+        inner = `<div class="in">${kicker}${h2}${first ? `<p class="after" data-qa-text="body">${e(first)}</p>` : ""}${rest.length ? `<ul>${rest.map((b) => `<li data-qa-text="body">${e(b)}</li>`).join("")}</ul>` : ""}</div>`;
+      } else if (l === "grid") {
+        inner = `<div class="in">${kicker}${h2}<div class="cols" style="--n:${Math.min(4, sl.bullets.length)}">${sl.bullets.slice(0, 4).map((b, k) => `<div class="col"><div class="num">${String(k + 1).padStart(2, "0")}</div><p data-qa-text="body">${e(b)}</p></div>`).join("")}</div>${sl.bullets.length > 4 ? `<p data-qa-text="body" style="margin:2cqw 0 0;font-size:${dens.li}cqw">${e(sl.bullets.slice(4).join(" "))}</p>` : ""}</div>`;
+      } else if (l === "split") {
+        const fit = sl.imageMeta?.fit ?? "full";
+        inner = `<div class="in">${kicker}${h2}<ul>${sl.bullets.map((b) => `<li data-qa-text="body">${e(b)}</li>`).join("")}</ul></div>${sl.image ? `<div class="pic ${fit}"${fit === "plate" && sl.imageMeta?.ground ? ` style="background:${sl.imageMeta.ground}"` : ""}>${img(sl.image, sl.headline)}</div>` : ""}`;
+      } else {
+        inner = `<div class="in"><div>${kicker}${h2}</div><ul>${sl.bullets.map((b) => `<li data-qa-text="body">${e(b)}</li>`).join("")}</ul></div>`;
+      }
+      const notes = sl.notes && o.showNotes !== false ? `<details class="notes"><summary>Speaker notes</summary><p>${e(sl.notes)}</p></details>` : "";
+      return `<section class="slide${notes ? " with-notes" : ""}"><div class="frame l-${l}${onField ? " on-field" : " paper"}${tight}" data-qa-frame data-qa-slide="${i + 2}" data-qa-layout="${l}" data-ground="${ground(onField)}">${inner}${foot}</div>${notes}</section>`;
+    })
     .join("\n");
+  const links = fontLinks([display, body]);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -166,13 +330,13 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
 <meta property="og:site_name" content="Co">
 ${o.url ? `<meta property="og:url" content="${e(o.url)}">` : ""}
 <meta name="twitter:card" content="summary">
-<link href="${f.css}" rel="stylesheet">
+${links.map((h) => `<link href="${e(h)}" rel="stylesheet">`).join("\n")}
 <style>${css}</style>
 </head>
 <body>
 <main>
 ${o.downloadBase && !o.print ? `<div class="dl"><a href="${e(`${o.downloadBase}deck.pdf`)}" download>PDF</a><a href="${e(`${o.downloadBase}deck.pptx`)}" download>PowerPoint</a></div>` : ""}
-<section class="slide title"><div class="frame">${d.logo ? img(d.logo, `${d.title} logo`, "logo") : `<div class="rule"></div>`}<h1>${e(d.title)}</h1><p class="sub">${e(d.subtitle)}</p><div class="mark">Made by Co · ${e(asOf(page.updatedAt, o.zone ?? null))}</div></div></section>
+${titleSlide}
 ${slides}
 </main>
 </body>

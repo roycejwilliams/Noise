@@ -5,6 +5,8 @@
 //
 // Pure: validation and the page. Nothing here guesses a fact: a sentence that names an event, a place or a time must be backed by
 // what the member said or what Co read (the same check a call's sentences get, services/offerGuard.ts).
+import { contrast, type DeckStyle } from "./coPages/style.js";
+import { fontLinks, fontStack } from "./designFonts.js";
 import { z } from "zod";
 import { EMAIL_COLORS as C, escapeHtml } from "./emailDesign.js";
 import { unsourced } from "./offerGuard.js";
@@ -156,20 +158,31 @@ const SANS = "'Instrument Sans', -apple-system, 'Helvetica Neue', Arial, sans-se
 // Pure: the page. Two typefaces and nothing else: Fraunces for the title and section headings, Instrument Sans for everything
 // read and everything small. Paper, ink, one quiet gold. Sections are units: a numbered serif heading on the left, its points on
 // the right. The footer is the page's own margin (title and page number), so it sits at the bottom of every page at any length.
-export function documentHtml(doc: Doc, o: { firstName: string; date: string }): string {
+export function documentHtml(doc: Doc, o: { firstName: string; date: string; look?: DeckStyle | null }): string {
   const e = escapeHtml;
-  const C = PAPER;
+  // The member's design system (services/designSystem.ts), when they have one: their fonts, their ink, their accent where it reads
+  // on the paper. Print keeps a light paper, so a dark look keeps Co's paper and takes only their fonts and accent.
+  const look = o.look ?? null;
+  const lightPaper = look ? contrast(look.background, "#000000") > contrast(look.background, "#FFFFFF") : false;
+  const paper = look && lightPaper ? look.background : PAPER.paper;
+  const ink = look && lightPaper ? look.text : PAPER.ink;
+  const C = look
+    ? { ...PAPER, paper, ink, body: ink, gold: contrast(look.accent, paper) >= 3 ? look.accent : ink, line: `${ink}26`, soft: `${ink}B3`, muted: `${ink}8C` }
+    : PAPER;
+  const SER = look?.display ? fontStack(look.display) : SERIF;
+  const SAN = look?.body ? fontStack(look.body) : SANS;
+  const fonts = look ? fontLinks([look.display, look.body].filter((x): x is NonNullable<typeof x> => !!x)).map((h) => `<link href="${e(h)}" rel="stylesheet">`).join("") : "";
   const density = docDensity(doc);
   const name = o.firstName.trim() || "you";
   const section = (s: DocSection) =>
     `<section class="sec${s.heading ? "" : " bare"}">${s.heading ? `<h2>${e(s.heading)}</h2>` : ""}<div class="body">${s.paragraphs.map((p) => `<p>${e(p)}</p>`).join("")}${s.bullets.length ? `<ul>${s.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul>` : ""}</div></section>`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${e(doc.title)}</title>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">${fonts}
 <style>
 @page {
   size: Letter; margin: 0.8in 1in 0.95in 1in; background: ${C.paper};
-  @bottom-left { content: "${cssText(doc.title, 60)}"; font-family: ${SANS}; font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase; color: ${C.muted}; vertical-align: top; padding-top: 0.28in; }
-  @bottom-right { content: counter(page) " / " counter(pages); font-family: ${SANS}; font-size: 7.5px; letter-spacing: 0.16em; color: ${C.muted}; vertical-align: top; padding-top: 0.28in; }
+  @bottom-left { content: "${cssText(doc.title, 60)}"; font-family: ${SAN}; font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase; color: ${C.muted}; vertical-align: top; padding-top: 0.28in; }
+  @bottom-right { content: counter(page) " / " counter(pages); font-family: ${SAN}; font-size: 7.5px; letter-spacing: 0.16em; color: ${C.muted}; vertical-align: top; padding-top: 0.28in; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: ${C.paper}; }

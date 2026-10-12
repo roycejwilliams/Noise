@@ -26,6 +26,7 @@ export const DECK_INPUT = z.object({
         headline: line("The slide's one point."),
         bullets: z.array(line("A short supporting point.")).min(1).max(5),
         image: imageN("A picture for this slide (a product shot, the team, the space)."),
+        layout: z.enum(["statement", "points", "grid", "split"]).optional().describe("Only if you want a particular designed layout: statement (one big line), points (headline left, points right), grid (2 to 4 short parallel points as columns), split (with its picture). Leave it out and it's chosen from the slide's shape."),
         notes: z.string().nullable().optional().describe("Speaker notes for this slide: what to say out loud, from what they told you, in plain words. Write them only when they asked for speaker notes, on the slides they named (all of them if they said so). On a change, leave it out to keep the slide's notes as they are; an empty string takes them off."),
       }),
     )
@@ -117,9 +118,14 @@ export async function deckDataFrom(
   taste: { mood?: string; colors?: { background?: string | null; text?: string | null; accent?: string | null }; type?: string | null } | null,
   assets: Map<number, string> = new Map(),
   was: { slides?: { headline: string; bullets?: string[]; notes?: string }[] } | null = null,
+  design: { style?: unknown; theirWords?: string } = {},
 ): Promise<Record<string, unknown>> {
   const { styleFrom } = await import("../services/coPages/deck.js");
-  const style = styleFrom(taste?.mood ?? "minimal", taste?.colors ?? {}, taste?.type ?? undefined);
+  // The design system's filled look when there is one (services/designSystem.ts fillDesign), else the taste as before.
+  const style = design.style ?? styleFrom(taste?.mood ?? "minimal", taste?.colors ?? {}, taste?.type ?? undefined);
+  // Headlines in sentence case, names kept as they write them (grounding.ts headlineCase).
+  const { headlineCase } = await import("../services/coPages/grounding.js");
+  const hc = (h: string) => (design.theirWords !== undefined ? headlineCase(h, design.theirWords) : h);
   const at = (n: number | null | undefined) => (typeof n === "number" ? assets.get(n) ?? null : null);
   // A slide's notes on an edit (review of PR 3): written now, or kept from the slide with the same headline (else the same place)
   // when this version leaves them out; an empty string takes them off. An unrelated edit never drops their notes.
@@ -132,12 +138,13 @@ export async function deckDataFrom(
     return there && (there.bullets ?? []).some((b: string) => s.bullets.includes(b)) ? there.notes : undefined;
   };
   const notesFor = (s: { headline: string; bullets: string[]; notes?: string | null }, i: number) => (typeof s.notes === "string" ? s.notes.trim() : keptNotes(s, i)) || null;
-  return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s, i) => ({ headline: s.headline, bullets: s.bullets, image: at(s.image), ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}) })), style };
+  return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s: any, i) => ({ headline: hc(s.headline), bullets: s.bullets, image: at(s.image), ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}), ...(s.layout ? { layout: s.layout } : {}) })), style };
 }
 
-// Their taste, with no asking: what they said about the look now (their exact words, checked, then saved as member knowledge), else
-// what's saved, else null. Decks add the one ask on top (tasteFor); pages never ask and use Co's own design without a taste.
-export async function knownTaste(ctx: ConversationToolContext, said: z.infer<typeof TASTE_INPUT>, theirs: () => Promise<string>): Promise<{ taste: any } | { error: string }> {
+// Their taste, with no asking: what they said about the look now (their exact words, checked, then saved as member knowledge and as a
+// signal in their design system, services/designSystem.ts), else what's saved, else null. Decks add the one ask on top (tasteFor);
+// pages never ask and use Co's own design without a taste.
+export async function knownTaste(ctx: ConversationToolContext, said: z.infer<typeof TASTE_INPUT>, theirs: () => Promise<string>, context: "professional" | "personal" = "professional"): Promise<{ taste: any; fontNotes?: string[] } | { error: string }> {
   const D = await import("../services/designTaste.js");
   if (said) {
     const { wordsAreTheirs } = await import("../services/coTasks.js");
@@ -155,10 +162,72 @@ export async function knownTaste(ctx: ConversationToolContext, said: z.infer<typ
     };
     const parsed = D.parseDesignTaste(JSON.stringify(t));
     if (parsed && !ctx.dryRun) await D.recordDesignTaste(ctx.userId, parsed).catch(() => {});
-    return { taste: parsed ?? t };
+    // The design system's signal: fonts they named resolved to open ones (a licensed one mapped, with a note), a correction marked so
+    // it outweighs what came before.
+    const F = await import("../services/designFonts.js");
+    const kind = said.type ?? undefined;
+    const display = said.displayFont ? await F.resolveFontOnline(said.displayFont, kind ?? "serif").catch(() => null) : null;
+    const body = said.bodyFont ? await F.resolveFontOnline(said.bodyFont, "sans").catch(() => null) : null;
+    const fontNotes = [display?.note, body?.note].filter((x): x is string => !!x);
+    if (!ctx.dryRun) {
+      const S = await import("../services/designSystem.js");
+      await S.recordSignal(ctx.userId, {
+        context,
+        source: said.correction ? "correction" : said.preset && !said.mood && !said.background && !said.accent ? "preset" : "stated",
+        values: {
+          ...(said.dontCare ? { dontCare: true } : {}),
+          ...(said.mood || said.preset ? { mood: (said.mood ?? said.preset) as any } : {}),
+          background: said.background ?? undefined,
+          text: said.text ?? undefined,
+          accent: said.accent ?? undefined,
+          accent2: said.accent2 ?? undefined,
+          ...(said.gradient !== undefined ? { gradient: said.gradient } : {}),
+          type: said.type ?? undefined,
+          density: said.density ?? undefined,
+          ...(display ? { display: { family: display.family, source: display.source, kind: display.kind } } : {}),
+          ...(body ? { body: { family: body.family, source: body.source, kind: body.kind } } : {}),
+        },
+        quote: said.quote,
+        ref: said.inspo ?? null,
+        fontNotes,
+      }).catch((err: any) => console.error("design signal not saved (non-fatal):", err?.message ?? err));
+    }
+    return { taste: parsed ?? t, fontNotes };
   }
   const saved = ctx.dryRun ? null : await D.loadDesignTaste(ctx.userId).catch(() => null);
   return { taste: saved?.taste ?? null };
+}
+
+// How each image is placed, from its own pixels (services/designRead.ts): small when it's low-res, on a plate when a logo is cropped
+// to its edges, and whether it's one ink on one ground (so it can drop its ground on a colored field). Read once per image a process.
+const metaCache = new Map<string, { fit: "full" | "small" | "plate"; ground: string | null; ink: string | null; mono: boolean; note: string | null }>();
+async function imageMetaFor(userId: string, assetId: string, kind: "logo" | "photo") {
+  const key = `${userId}:${assetId}:${kind}`;
+  if (metaCache.has(key)) return metaCache.get(key)!;
+  const A = await import("../services/memberAssets.js");
+  const img = await A.loadAssetFor(userId, assetId).catch(() => null);
+  if (!img) return null;
+  const R = await import("../services/designRead.js");
+  const px = await R.readPixels(img.data, img.mediaType);
+  if (!px) return null;
+  const q = R.qualityOf(px, kind);
+  const big = px.colors.filter((c) => c.share > 0.015);
+  const meta = { fit: q.placement, ground: px.transparent ? null : px.ground, ink: px.ink, mono: !px.transparent && !px.gradient && big.length <= 2 && !!px.ink, note: q.note };
+  metaCache.set(key, meta);
+  return meta;
+}
+
+// A logo lost in a big empty square, cut to its content with room around it and kept as a new image of theirs (owner-only, like the
+// original), so it reads at the size a slide gives it. The original stays as it is.
+async function cleanedLogo(userId: string, assetId: string): Promise<string | null> {
+  const A = await import("../services/memberAssets.js");
+  const img = await A.loadAssetFor(userId, assetId).catch(() => null);
+  if (!img) return null;
+  const R = await import("../services/designRead.js");
+  const out = await R.trimImage(img.data, img.mediaType);
+  if (!out) return null;
+  const kept = await A.keepAsset(userId, out, "image/png", "Their logo, cut to its content by Co for a deck").catch(() => null);
+  return kept?.ok ? kept.id : null;
 }
 
 export function deckTools(
@@ -171,14 +240,54 @@ export function deckTools(
 
   // Their taste for this deck: what they just said (checked against their words and saved), else what's saved. "ask" when Co has
   // neither and hasn't asked yet; after the one ask, minimal.
-  const tasteFor = async (said: z.infer<typeof TASTE_INPUT>): Promise<{ taste: any; ask?: false } | { ask: true } | { error: string }> => {
+  const tasteFor = async (said: z.infer<typeof TASTE_INPUT>, context: "professional" | "personal" = "professional"): Promise<{ taste: any; fontNotes?: string[]; ask?: false } | { ask: true } | { error: string }> => {
     const D = await T();
-    const known = await knownTaste(ctx, said, () => o.source().then((s) => s.theirs).catch(() => ""));
+    const known = await knownTaste(ctx, said, () => o.source().then((s) => s.theirs).catch(() => ""), context);
     if ("error" in known) return known;
-    if (known.taste) return { taste: known.taste };
+    if (known.taste) return { taste: known.taste, fontNotes: known.fontNotes };
     const asked = ctx.dryRun ? false : await D.tasteAskedRecently(ctx.userId).catch(() => true);
     if (!asked) return { ask: true };
     return { taste: null };
+  };
+
+  // Reference reads made this turn (readReference): the confirm-the-read line goes out before anything is built from them.
+  const readThisTurn = new Set<number>();
+  // The read they confirmed this turn, kept for the log when the deck goes on a later call of the turn.
+  let confirmedThisTurn: string | null = null;
+  // The design for this deck from their design system (services/designSystem.ts): a reference read waiting on its confirm comes
+  // first (that line is the one question), then the one taste ask when the system has nothing at all, else the filled look.
+  type Design = { filled: import("../services/designSystem.js").Filled; refs: string[]; fontNotes: string[]; confirmed: string | null };
+  const designFor = async (said: z.infer<typeof TASTE_INPUT>, d: { context: "professional" | "personal"; audience: string | null; hasLogo: boolean; readConfirmed?: boolean | null }): Promise<Design | { ask: "taste" } | { ask: "confirm"; line: string } | { error: string }> => {
+    const S = await import("../services/designSystem.js");
+    const t = await tasteFor(said, d.context);
+    if ("error" in t) return t;
+    let confirmed: string | null = null;
+    // A test run writes nothing, so what they said now is folded in place.
+    const said0 = "taste" in t && t.taste ? t.taste : null;
+    const dry = said0 ? [{ context: d.context, source: "stated" as const, values: S.cleanTokens({ mood: said0.dontCare ? undefined : said0.mood, ...said0.colors, type: said0.type, dontCare: said0.dontCare }), quote: said0.quote ?? null, ref: null, confirmed: true, askedAt: null, at: new Date() }] : [];
+    let ds = ctx.dryRun ? S.foldSignals(dry, d.context) : await S.loadDesignSystem(ctx.userId, d.context);
+    if (!ctx.dryRun && ds.pending.length) {
+      const read = S.foldSignals(ds.pending.map((p) => ({ ...p, confirmed: true })), d.context).tokens;
+      const line = S.confirmLine(read);
+      if (ds.pending.some((p) => p.id && readThisTurn.has(p.id)) || ds.pending.some((p) => !p.askedAt)) {
+        for (const p of ds.pending) if (p.id && !p.askedAt) await S.markReadAsked(ctx.userId, p.id).catch(() => {});
+        await (await T()).recordTasteAsked(ctx.userId).catch(() => {});
+        return { ask: "confirm", line };
+      }
+      if (d.readConfirmed === true || said?.correction) {
+        for (const p of ds.pending) if (p.id) await S.confirmRead(ctx.userId, p.id).catch(() => {});
+        confirmed = line;
+        confirmedThisTurn = line;
+      } else if (d.readConfirmed === false) {
+        for (const p of ds.pending) if (p.id) await S.dismissRead(ctx.userId, p.id).catch(() => {});
+      } else {
+        return { error: `They were asked to confirm the look Co read ("${line}"). Pass readConfirmed true if their reply agrees, or false if it doesn't (and taste with what they want instead).` };
+      }
+      ds = await S.loadDesignSystem(ctx.userId, d.context);
+    }
+    if ("ask" in t && t.ask && !ds.answered.size && !ds.dontCare) return { ask: "taste" };
+    const filled = S.fillDesign(ds, { audience: d.audience, hasLogo: d.hasLogo });
+    return { filled, refs: ds.references, fontNotes: [...("fontNotes" in t && t.fontNotes ? t.fontNotes : []), ...ds.fontNotes].slice(0, 1), confirmed: confirmed ?? confirmedThisTurn };
   };
 
   return {
@@ -221,18 +330,80 @@ export function deckTools(
         };
       },
     }),
+    // A logo, screenshot or inspiration image of theirs, read for real tokens (services/designRead.ts): its colors from its pixels,
+    // a gradient's two ends, its type from a vision read. The read waits in their design system until they confirm it: the confirm
+    // line is the one question before the deck is built from it.
+    readReference: tool({
+      description: toolUse("readReference"),
+      inputSchema: z.object({
+        image: z.number().int().positive().describe("Their image number (\"their image #2\" in what they sent). Only one of theirs."),
+        what: z.enum(["logo", "inspiration", "screenshot"]).describe("logo: their own logo (its colors join their look; it goes on the title slide as itself). inspiration or screenshot: a look they want to follow."),
+        context: z.enum(["professional", "personal"]).optional().describe("Professional (work, investors, clients) or personal (friends, family, a party). Leave it out for professional."),
+      }),
+      execute: async ({ image, what, context }) => {
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was read." };
+        const A = await import("../services/memberAssets.js");
+        const mine = (await A.listAssets(ctx.userId).catch(() => [])).find((a) => a.n === image);
+        if (!mine) return { ok: false, error: `They have no image #${image}. Use one of theirs, or ask them to send it.` };
+        const img = await A.loadAssetFor(ctx.userId, mine.id);
+        if (!img) return { ok: false, error: "That image is gone (deleted or wiped). Ask them to send it again." };
+        const R = await import("../services/designRead.js");
+        const D = await import("../services/designSystem.js");
+        const r = await R.readReference(img.data, img.mediaType);
+        if (!r) return { ok: false, error: "The image couldn't be read for its look just now. Build from their words, or ask them to describe the look in a line." };
+        const tokens: any = { ...r.tokens };
+        // A logo stays itself on the title slide: its colors join their look (a neutral ink is the text, never the accent), its type
+        // doesn't set their headlines.
+        if (what === "logo") {
+          for (const k of ["display", "type", "density", "mood"]) delete tokens[k];
+          if (tokens.accent && /^(black|charcoal|white|off-white|ivory|cream|grey|stone|slate)$/.test(D.colorName(tokens.accent))) delete tokens.accent;
+        }
+        const ref = what === "logo" ? "your logo" : "the image you sent";
+        const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref, confirmed: false, fontNotes: r.fontNote ? [r.fontNote] : [] });
+        if (id) readThisTurn.add(id);
+        const confirm = D.confirmLine(tokens, { weight: what === "logo" ? null : r.vision?.weight });
+        const { recordDecision } = await import("../harness/core.js");
+        await recordDecision({ layer: 3, decision: "design.read", userId: ctx.userId, outcome: "act", action: what, proposal: { tokens, quality: r.quality, vision: r.vision } }).catch(() => {});
+        // What Co measured is known; any words in the image are not (they're part of the picture).
+        if (confirm) ctx.facts?.add("known", `Co read the look of their ${what === "logo" ? "logo" : "image"}: ${confirm.replace(/, right\?$/, "")}.`);
+        return {
+          ok: true,
+          tokens,
+          kind: r.vision?.kind ?? null,
+          quality: r.quality.note,
+          fontNote: r.fontNote,
+          confirmLine: confirm || null,
+          note: confirm
+            ? `Before building from it, the one question is this confirm line, in one text: "${confirm}" (you may add the one thing missing about content). Call makeDeck now and it hands this back to send; build when they answer.`
+            : "Nothing to confirm from it; build from their words.",
+        };
+      },
+    }),
     makeDeck: tool({
       description: toolUse("makeDeck"),
       inputSchema: DECK_INPUT.partial({ title: true, subtitle: true, slides: true }).extend({
         brief: z.string().nullable().optional().describe("Instead of slides (on a call, always): what deck they want, in their words. It's written from what they said, with the same checks."),
         taste: TASTE_INPUT,
-        line: line("The one line that goes with the link, saying what you made (\"Here's the pitch deck for Northlight.\").").nullable().optional(),
+        audience: z.string().nullable().optional().describe("Who the deck is for (\"seed investors\", \"the venue's events team\", \"my friends\"): what they said, or what's clear from the conversation. Leave it out only if you can't tell."),
+        context: z.enum(["professional", "personal"]).optional().describe("Professional (work, investors, clients) or personal (friends, family, a party), from the audience. Leave it out for professional."),
+        readConfirmed: z.boolean().nullable().optional().describe("Only after Co sent its confirm-the-read line about an image of theirs: true when their reply agrees (yes, right, perfect), false when it doesn't. A correction goes in taste too."),
+        line: line("The one line that goes with the link, saying what you made (\"Here's the pitch deck for Northlight.\"). Co's design choices (fonts, colors, spacing) follow it in code, so don't describe the look in it.").nullable().optional(),
         alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input) => {
-        const t = await tasteFor(input.taste);
+        const context = input.context ?? (await import("../services/designSystem.js")).audienceContext(input.audience) ?? "professional";
+        const words0 = `${ctx.resolvedContent ?? ""}`;
+        const t = await designFor(input.taste, { context, audience: input.audience ?? null, hasLogo: input.logo != null || /\blogo\b/i.test(words0), readConfirmed: input.readConfirmed });
         if ("error" in t) return { ok: false, error: t.error };
-        if (t.ask) {
+        if ("ask" in t && t.ask === "confirm") {
+          ctx.facts?.add("known", `Co hasn't built the deck yet: before building from the look it read, it is checking that read with them: "${t.line}"`);
+          return {
+            ok: false,
+            ask: true,
+            error: `Not built yet. Send this confirm line as your one question, in one text, in your voice: "${t.line}" Add, only if you truly need it, the one thing missing about what the deck should say. When they answer, call makeDeck again with readConfirmed (and taste if they corrected anything).`,
+          };
+        }
+        if ("ask" in t) {
           if (!ctx.dryRun) await (await T()).recordTasteAsked(ctx.userId).catch(() => {});
           ctx.facts?.add("known", "Co hasn't built the deck yet: it is asking one question first, about their taste and anything missing for the content.");
           // The question names things the fact check would otherwise cut as unsourced (live run, PR 3: the looks and Pinterest were
@@ -245,6 +416,7 @@ export function deckTools(
               "Not built yet. Ask ONE question, in one text: the look they like (a Pinterest board, sites or brands they love, colors, the vibe), or, if they'd rather not describe it, one of these looks by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic; fine if they don't mind. Add, only if you need it, the one thing missing about what the deck should say. Then build it from their answer. You won't ask again: if they skip the taste part, it's built clean and minimal.",
           };
         }
+        const design = t;
         const source = await deckSource(ctx, (await o.source()).read, null);
         // Given a brief instead of slides (PR 6, how a call makes a deck): written from their words (services/deckCompose.ts), then
         // the very same checks; a refused version is written once more with the refusal in hand.
@@ -252,6 +424,7 @@ export function deckTools(
         if (composing && !input.brief?.trim()) return { ok: false, error: "Write the slides, or pass a brief of what they want." };
         if (!composing && (!input.title?.trim() || !input.subtitle?.trim())) return { ok: false, error: "With slides, give the deck a title and a subtitle too." };
         let refused: string | null = null;
+        let qaReturned = false;
         for (let attempt = 0; ; attempt++) {
           // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
           const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
@@ -260,7 +433,7 @@ export function deckTools(
             if (ctx.dryRun) return { ok: true, note: "Test run: nothing was written or sent." };
             const C = await import("../services/deckCompose.js");
             const selfForBrief = await selfIfAboutCo(ctx, { brief: input.brief, title: input.title });
-            const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.theirs}\n\nWhat Co is and does (the deck is about Co; these are facts):\n${selfForBrief}` : source.theirs, input.brief!, null, refused));
+            const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.theirs}\n\nWhat Co is and does (the deck is about Co; these are facts):\n${selfForBrief}` : source.theirs, input.brief!, null, refused, input.audience ?? null));
             const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides });
             if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
             deckIn = { ...input, ...parsed.data };
@@ -269,13 +442,35 @@ export function deckTools(
           // the logo they sent was left off).
           if (deckIn.logo == null && /\blogo\b/i.test(source.words) && !ctx.dryRun) {
             const since = Date.now() - DECK_WINDOW_HOURS * 3600_000;
-            const logos = (await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => [])).filter((a) => a.at.getTime() > since && /\blogo\b|wordmark/i.test(a.description ?? ""));
+            const logos = (await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => [])).filter((a) => a.at.getTime() > since && /\blogo\b|wordmark/i.test(a.description ?? "") && !/cut to its content by Co/.test(a.description ?? ""));
             if (logos.length === 1) deckIn = { ...deckIn, logo: logos[0].n };
           }
           const ids = await assetIds(ctx.userId, deckIn, !!ctx.dryRun, { words: source.theirs, onDeck: [] });
           if ("error" in ids) return { ok: false, error: ids.error };
           const store = await S();
-          const data = await deckDataFrom(deckIn, t.taste, ids.map);
+          const data: any = await deckDataFrom(deckIn, null, ids.map, null, { style: design.filled.style, theirWords: source.theirs });
+          // Images placed by their own pixels: a logo lost in empty space is cut to its content, a low-res picture placed small, a
+          // logo cropped to its edges put on a plate (bad inputs are handled, then said in a few words).
+          const placed: string[] = [];
+          if (!ctx.dryRun) {
+            if (data.logo) {
+              const clean = await cleanedLogo(ctx.userId, data.logo).catch(() => null);
+              if (clean) data.logo = clean;
+              const m = await imageMetaFor(ctx.userId, data.logo, "logo").catch(() => null);
+              if (m) {
+                data.logoMeta = { fit: m.fit, ground: m.ground, ink: m.ink, mono: m.mono };
+                if (m.note) placed.push(m.note);
+              }
+            }
+            for (const sl of data.slides) {
+              if (!sl.image) continue;
+              const m = await imageMetaFor(ctx.userId, sl.image, "photo").catch(() => null);
+              if (m) {
+                sl.imageMeta = { fit: m.fit, ground: m.ground, ink: m.ink, mono: m.mono };
+                if (m.note) placed.push(m.note);
+              }
+            }
+          }
           // A team deck about Co: what Co knows about itself backs its names and facts too.
           const self = await selfIfAboutCo(ctx, { ...deckIn, brief: input.brief });
           const backed = self ? { ...source, read: `${source.read}\n${self}` } : source;
@@ -292,13 +487,37 @@ export function deckTools(
             return { ok: false, error: `Not made. ${invented}` };
           }
           if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent.", style: (checked.data as any).style };
-          const made = await store.createCoPage(checked.data, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
+          // Design QA before it goes (services/designQa.ts): rendered, screenshotted, measured; what code can fix is fixed and measured
+          // again. A slide carrying more than one idea goes back once (rewritten on a brief, to Co otherwise).
+          const Q = await import("../services/designQa.js");
+          const A = await import("../services/memberAssets.js");
+          const imgs = new Map<string, { data: Buffer; mediaType: string }>();
+          for (const id of (await import("../services/coPages/deck.js")).deckAssetIds(checked.data as any)) {
+            const im = await A.loadAssetFor(ctx.userId, id).catch(() => null);
+            if (im) imgs.set(id, im);
+          }
+          const qa = await Q.qaDeck(checked.data, imgs, { screenshot: false });
+          const ideas = qa.final.findings.filter((f) => f.fix === "co");
+          if (ideas.length && !qaReturned) {
+            qaReturned = true;
+            const why = `Design QA: ${ideas.slice(0, 4).map((f) => `${f.where}: ${f.detail}`).join("; ")}`;
+            if (retry(why)) continue;
+            if (!composing) return { ok: false, error: `Not made yet. ${why}. Rewrite those slides (split one into two, or cut to the one idea) and call makeDeck once more.` };
+          }
+          const final = store.checkPage(qa.data, backed);
+          const toStore = final.ok ? final.data : checked.data;
+          const made = await store.createCoPage(toStore, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
           if (!made.ok) {
             o.notDone("The deck wasn't made.");
             return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
           }
+          // Co's choices, in one line with the link (fill and state).
+          const DS = await import("../services/designSystem.js");
+          const choices = DS.choicesLine(design.filled, { refs: design.refs, fontNote: design.fontNotes[0] ?? null });
+          await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: (toStore as any).style?.titleLayout ?? null, tokens: (toStore as any).style, qa: { ran: qa.final.ran, findings: qa.final.findings, fixed: qa.fixed, first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
           const lineText = input.line?.trim() || `Here's the ${deckIn.title} deck.`;
-          const { text, confirm } = await withAnswer(ctx, `${lineText}\n${made.url}`, input.alsoAnswer);
+          ctx.facts?.add("known", `The deck's look, as Co chose it: ${choices}`);
+          const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}\n${made.url}`, input.alsoAnswer);
           if (!(await o.say(text, `Co replied: ${text}`))) {
             o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
             return { ok: false, error: "The deck is made, but the link didn't send. Tell them plainly and give the link again in your reply." };
@@ -306,7 +525,15 @@ export function deckTools(
           ctx.onLinkDelivered?.();
           confirm();
           ctx.facts?.add("did_this_turn", `Made them a deck, "${deckIn.title}", ${deckIn.slides.length + 1} slides, and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
-          return { ok: true, url: made.url, note: "The line and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here." };
+          return {
+            ok: true,
+            url: made.url,
+            choices,
+            qa: Q.qaSummary(qa.final),
+            ...(qa.fixed.length ? { qaFixed: qa.fixed } : {}),
+            ...(placed.length ? { images: placed } : {}),
+            note: "The line, Co's design choices and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here.",
+          };
         }
       },
     }),
@@ -328,10 +555,18 @@ export function deckTools(
         const before = await store.loadCoPage(pick.id).catch(() => null);
         const kept = before && before.ownerUserId === ctx.userId && (before.data as any).kind === "deck" ? (before.data as any).style : null;
         let taste: any = kept ? { mood: kept.mood, colors: { background: kept.background, text: kept.text, accent: kept.accent }, type: kept.type } : null;
+        // The deck's whole look (fonts, gradient, density included) stays unless they said something new; then it's refilled from
+        // their design system, where what they just said (a correction outweighs) is now the newest signal.
+        let restyle: unknown = kept ?? undefined;
         if (input.taste) {
           const t = await tasteFor(input.taste);
           if ("error" in t) return { ok: false, error: t.error };
           if ("taste" in t && t.taste) taste = t.taste;
+          if (!ctx.dryRun) {
+            const DS = await import("../services/designSystem.js");
+            const ds = await DS.loadDesignSystem(ctx.userId, "professional");
+            restyle = DS.fillDesign(ds, { hasLogo: !!(before?.data as any)?.logo }).style;
+          } else restyle = undefined;
         }
         // What's on the deck now went out to them and stands; the edit may also use what they said since it was made.
         const was: any = before && before.ownerUserId === ctx.userId && (before.data as any).kind === "deck" ? before.data : null;
@@ -357,7 +592,13 @@ export function deckTools(
           }
           const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
           if ("error" in ids) return { ok: false, error: ids.error };
-          const next: any = await deckDataFrom(input, taste, ids.map, was);
+          const next: any = await deckDataFrom(input, taste, ids.map, was, { style: restyle, theirWords: source.theirs });
+          // Image placement carries over from the deck as it was.
+          if (was?.logoMeta && next.logo === was.logo) next.logoMeta = was.logoMeta;
+          for (const sl of next.slides) {
+            const w = was?.slides?.find((x: any) => x.image && x.image === sl.image);
+            if (w?.imageMeta) sl.imageMeta = w.imageMeta;
+          }
           // A change written from the deck keeps its pictures (review of PR 6): the logo, and each slide's image by headline, else
           // by place, unless this version named its own.
           if (composing && was) {
@@ -387,6 +628,8 @@ export function deckTools(
           }
           break;
         }
+        // A change is a revision: first-shot acceptance counts against it (services/designSystem.ts metrics).
+        if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: pick.id, medium: "deck", event: "revised", tokens: restyle ?? null }).catch(() => {});
         const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);

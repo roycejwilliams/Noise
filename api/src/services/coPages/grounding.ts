@@ -83,3 +83,55 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
   }
   return out.slice(0, 7);
 }
+
+// ---------------------------------------------------------------- headline case (2026-10-12)
+// The deck composer wrote Title Case headlines ("Why Co Wins Against Parties"), and the name check above read every capitalized run as
+// a name nobody gave; asking for sentence case over-corrected into all lowercase ("why co wins against parties"). Headlines are put
+// in sentence case here, in code, before any check: the first word capitalized, every common word lowercase, and a word kept
+// capitalized when it's a name (capitalized mid-sentence in what they said, an acronym, or "I"). A capitalized word that is neither
+// common nor theirs stays capitalized, so the name check still catches a name the member never gave ("Backed by Sequoia").
+const COMMON = new Set(
+  (
+    "a about above across after again against all almost alone along already also always am among an and another any anyone anything are around as at away back be because been before being below best better between beyond big both bring build built but by can can't change clear come comes coming could cut day days deal does doing done don't down each early easy end enough even every everyone everything fast few find first for from full get gets give go goes going good great grow growth had has have having help her here high his how if in inside instead into is it it's its just keep kind know last later lead less let like little live long look love made make makes making many matter matters may me meet more most move much must my need needs never new next no not nothing now of off on once one only open or other our out over own part people place plan play point power pro real really right room rooms run same say see set should show side simple small so some start stay still stop such take than that the their them then there these they thing things think this those through time to today together too top true turn under up us use very want was way ways we well what when where which while who why will win wins winning with without work works world would year years yet you your " +
+    "ask audience better bigger brand business case clients community company cost costs customer customers data demand design edge event events experience focus founders future guest guests idea ideas impact intro intros launch market members model moment money network night nights offer outcome partner partners party parties pitch premium price private problem product proof question reason results revenue roadmap scale service signal social solution space story strategy team tech the then traction trust value vision why yes raise raising round seed investors investor second third opening open table tables seat seats chef chefs menu loop format city club month monthly week weekly night nightly dinner dinners host hosts venue venues ticket tickets"
+  ).split(/\s+/).filter(Boolean),
+);
+export function headlineCase(text: string, theirWords: string): string {
+  const words = text.split(/(\s+)/);
+  // Words they capitalize mid-sentence (not after . ! ? or a line start): their names, in their spelling.
+  const named = new Map<string, string>();
+  const lowerSeen = new Set<string>();
+  const startCaps = new Map<string, string>();
+  for (const sentence of theirWords.split(/(?<=[.!?\n])\s+/)) {
+    sentence.split(/\s+/).forEach((w, i) => {
+      const bare = w.replace(/^[("'“]+|[)"'”.,!?;:]+$/g, "");
+      if (!bare) return;
+      if (/^[a-z]/.test(bare)) lowerSeen.add(bare.toLowerCase());
+      else if (i > 0 && /^[A-Z]/.test(bare)) named.set(bare.toLowerCase(), bare);
+      else if (i === 0 && /^[A-Z]/.test(bare)) startCaps.set(bare.toLowerCase(), bare);
+    });
+  }
+  // Capitalized only at the start of their sentences, never written lowercase and not a common word: still their name ("Co is great").
+  for (const [k, v] of startCaps) if (!named.has(k) && !lowerSeen.has(k) && !COMMON.has(k) && k.length > 1) named.set(k, v);
+  let first = true;
+  return words
+    .map((w) => {
+      if (/^\s+$/.test(w) || !w) return w;
+      const m = w.match(/^([("'“]*)(.*?)([)"'”.,!?;:]*)$/)!;
+      const [, pre, core, post] = m;
+      if (!core) return w;
+      const lower = core.toLowerCase();
+      let out = core;
+      if (/^[A-Z0-9&]{2,}$/.test(core) && /[A-Z]/.test(core)) out = core; // an acronym: AI, SF, B2B
+      else if (lower === "i" || lower.startsWith("i'")) out = `I${core.slice(1)}`;
+      else if (named.has(lower) && !(lowerSeen.has(lower) && COMMON.has(lower))) out = named.get(lower)!;
+      else if (first) out = core[0].toUpperCase() + core.slice(1);
+      else if (/^[A-Z][a-z'’-]*$/.test(core) && (COMMON.has(lower) || lowerSeen.has(lower))) out = lower;
+      else if (/^[a-z]/.test(core)) out = core;
+      if (first) out = out[0].toUpperCase() + out.slice(1);
+      // A second sentence in the headline ("Down to collaborate? We're ready") starts with a capital too.
+      first = /[.?!:]$/.test(post);
+      return `${pre}${out}${post}`;
+    })
+    .join("");
+}

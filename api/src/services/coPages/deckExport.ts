@@ -100,13 +100,18 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     };
     // Title slide.
     const t = pptx.addSlide();
-    t.background = { color: hex(st.background) };
+    // The field title layout (services/designSystem.ts): the accent as the title slide's ground (PowerPoint has no CSS gradient, so its
+    // first end), the title in the ink that reads on it.
+    const fieldTitle = st.titleLayout === "field" || (!st.titleLayout && (st.gradient || heavy));
+    const { inkOn } = await import("./style.js");
+    const titleInk = fieldTitle ? inkOn(st.gradient && st.accent2 ? [st.accent, st.accent2] : [st.accent], [st.text, st.background]) : st.text;
+    t.background = { color: hex(fieldTitle ? st.accent : st.background) };
     const logo = dataUrl(deck.data.logo);
     if (logo) t.addImage({ data: logo, x: 0.9, y: 1.2, w: 1.1, h: 1.1, sizing: { type: "contain", w: 1.1, h: 1.1 } });
     else t.addShape(pptx.ShapeType.rect, { x: 0.9, y: 2.2, w: 0.7, h: 0.05, fill: { color: hex(st.accent) }, line: { color: hex(st.accent) } });
-    t.addText(deck.data.title, { x: 0.9, y: 2.5, w: 11.5, h: 1.6, fontFace: face, fontSize: 48, bold: heavy, color: hex(st.text), valign: "top" });
-    t.addText(deck.data.subtitle, { x: 0.9, y: 4.1, w: 10, h: 1, fontFace: face, fontSize: 20, color: hex(st.text), transparency: 20, valign: "top" });
-    t.addText("Made by Co", { x: 0.9, y: 6.7, w: 4, h: 0.4, fontFace: face, fontSize: 10, color: hex(st.text), transparency: 45 });
+    t.addText(deck.data.title, { x: 0.9, y: 2.5, w: 11.5, h: 1.6, fontFace: face, fontSize: 48, bold: heavy, color: hex(titleInk), valign: "top" });
+    t.addText(deck.data.subtitle, { x: 0.9, y: 4.1, w: 10, h: 1, fontFace: face, fontSize: 20, color: hex(titleInk), transparency: 20, valign: "top" });
+    t.addText("Made by Co", { x: 0.9, y: 6.7, w: 4, h: 0.4, fontFace: face, fontSize: 10, color: hex(titleInk), transparency: 45 });
     // Content slides.
     deck.data.slides.forEach((sl, i) => {
       const s = pptx.addSlide();

@@ -63,6 +63,10 @@ export type DeliverDeps = {
   shareDoc?: (token: string, fileId: string) => Promise<import("./googleDocs.js").DocsShare>;
   updateDoc?: (token: string, fileId: string, html: string) => Promise<Awaited<ReturnType<typeof import("./googleDocs.js").updateGoogleDoc>>>;
   docMeta?: (token: string, fileId: string) => Promise<Awaited<ReturnType<typeof import("./googleDocs.js").googleDocMeta>>>;
+  // Their design system's look for the PDF (services/designSystem.ts), and the shared design QA before it goes (services/designQa.ts).
+  // Left out (tests), the PDF is Co's own design and goes unmeasured.
+  look?: (userId: string) => Promise<import("./coPages/style.js").DeckStyle | null>;
+  qa?: (html: string, doc: Doc, userId: string) => Promise<void>;
 };
 // line: the one sentence that goes with the attachment (services/speakable.ts deliveryLine). Without one, the title.
 // noFallback: a retry of a PDF that already went as text (deliveryReceipts) must not send the text again.
@@ -84,6 +88,16 @@ const realDeps = async (): Promise<DeliverDeps> => {
     shareDoc: (token, fileId) => d.shareWithLink(token, fileId),
     updateDoc: (token, fileId, html) => d.updateGoogleDoc(token, fileId, html),
     docMeta: (token, fileId) => d.googleDocMeta(token, fileId),
+    look: async (userId) => {
+      const DS = await import("./designSystem.js");
+      const ds = await DS.loadDesignSystem(userId, "professional");
+      return ds.answered.size && !ds.dontCare ? DS.fillDesign(ds, {}).style : null;
+    },
+    qa: async (html, doc, userId) => {
+      const Q = await import("./designQa.js");
+      const r = await Q.runQa(html, "doc", doc, { screenshot: false });
+      await (await import("./designSystem.js")).logArtifactDesign({ ownerUserId: userId, medium: "doc", event: "made", layout: "letter", qa: { ran: r.ran, findings: r.findings } });
+    },
   };
 };
 // The real senders with one part swapped: a plan sends its own rendered sheet (agent/loopTools.ts emailPlan) through the same
@@ -110,7 +124,11 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
     }
     return { ok: true, via: "text_fallback", filename, pdfPending: true, error };
   };
-  const pdf = await deps.render(documentHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") })).catch(() => null);
+  const look = deps.look ? await deps.look(to.userId).catch(() => null) : null;
+  const html = documentHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy"), look });
+  // Measured before it goes; a QA that can't run never holds the PDF.
+  if (deps.qa) await deps.qa(html, doc, to.userId).catch((err: any) => console.error("doc design QA failed (non-fatal):", err?.message ?? err));
+  const pdf = await deps.render(html).catch(() => null);
   if (!pdf) return fallback("the PDF couldn't be made");
   try {
     // The attachment and its one line, as one send (2026-10-08: a title text, then a "here it is" text, said it three times).

@@ -15,6 +15,12 @@ export const TASTE_INPUT = z
     accent: hex,
     type: z.enum(["serif", "sans"]).nullable().optional().describe("Serif or sans, only if their words or inspiration point to one."),
     inspo: line("What they pointed to for inspiration (a Pinterest board, sites, brands), as they said it.").nullable().optional(),
+    displayFont: z.string().nullable().optional().describe("A font they named for headlines, as they wrote it (\"Canela\", \"Playfair\"). Licensed fonts are swapped for the closest open one in code."),
+    bodyFont: z.string().nullable().optional().describe("A font they named for body text, as they wrote it."),
+    accent2: hex,
+    gradient: z.boolean().optional().describe("True when they want the accent to run as a gradient into accent2."),
+    density: z.enum(["airy", "balanced", "dense"]).optional().describe("How much air they want: airy (lots of space), balanced, or dense (full)."),
+    correction: z.boolean().optional().describe("True when this corrects a look Co made or read for them (\"less gold\", \"airier\", \"not that green\"). A correction outweighs what they said before."),
   })
   .optional()
   .describe("Only when they said something about the look in this conversation. Leave it out otherwise: their saved taste, if any, is used.");

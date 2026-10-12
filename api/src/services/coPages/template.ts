@@ -10,7 +10,8 @@
 // CSS, no scripts. The footer ("Made by Co", as of) is how Co travels when the page is shared with non-members.
 import { EMAIL_COLORS, escapeHtml } from "../emailDesign.js";
 import type { Block, CoPageData, ComparisonOption, LinkItem } from "./schema.js";
-import { contrast, type DeckStyle } from "./style.js";
+import { contrast, inkOn, type DeckStyle } from "./style.js";
+import { fontLinks, fontStack } from "../designFonts.js";
 
 export type CoPageView = { id: string; data: CoPageData; version: number; updatedAt: Date };
 
@@ -132,10 +133,14 @@ export function paletteFor(st: DeckStyle | null | undefined): Palette {
   const band = dark ? mix(st.background, st.text, 0.07) : st.text;
   const bandText = dark ? st.text : st.background;
   const sans = st.type === "sans" ? SANS : SERIF;
+  // Their design system's tokens (2026-10-12): their fonts (open fonts, by name), and a gradient runs the cover from one end to the
+  // other with an ink that reads on both.
+  const grad = st.gradient && st.accent2 ? [st.accent, st.accent2] : null;
   return {
     paper: st.background, body: st.text, ink: st.text, muted: `${st.text}99`, soft: `${st.text}BF`, line: `${st.text}26`, gold: st.accent, maroon: st.accent,
     band, bandText, bandSoft: `${bandText}E6`, bandLine: `${bandText}29`,
-    coverTop: coverBg, coverBottom: coverBg, coverText, serif: st.type === "sans" ? SANS : SERIF, sans,
+    coverTop: grad ? grad[0] : coverBg, coverBottom: grad ? grad[1] : coverBg, coverText: grad ? inkOn(grad, [st.text, st.background]) : coverText,
+    serif: st.display ? fontStack(st.display) : st.type === "sans" ? SANS : SERIF, sans: st.body ? fontStack(st.body) : sans,
   };
 }
 // Their accent must read where it's text (review of PR 2: a navy accent on a navy band was 1.6:1): the band's times and dots fall back
@@ -267,7 +272,7 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
 <meta name="description" content="${e(desc)}">
 ${og}
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400&display=swap" rel="stylesheet">
-<link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500&display=swap" rel="stylesheet">
+<link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500&display=swap" rel="stylesheet">${d.style ? fontLinks([d.style.display, d.style.body].filter((f): f is NonNullable<typeof f> => !!f)).map((h) => `\n<link href="${e(h)}" rel="stylesheet">`).join("") : ""}
 <style>${d.style ? pageCss(paletteFor(d.style)) + readableAccents(d.style) : STYLE}${d.logo ? ".cover-logo{display:block;height:64px;width:auto;max-width:50%;object-fit:contain;margin:0 auto 18px}" : ""}</style>
 </head>
 <body>
