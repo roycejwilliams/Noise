@@ -749,7 +749,7 @@ export function registerJobs(io: Server) {
   cron.schedule("*/15 * * * *", async () => {
     try {
       const r = await runEventBriefs();
-      if (r.asks || r.briefs) console.log(`eventBrief: queued ${r.asks} name question(s), ${r.briefs} brief(s)`);
+      if (r.asks || r.briefs || r.shareQuestions) console.log(`eventBrief: queued ${r.asks} name question(s), ${r.briefs} brief(s), ${r.shareQuestions} sharing question(s)`);
     } catch (error: any) {
       console.error("Event brief cron error:", error?.message ?? error);
     }

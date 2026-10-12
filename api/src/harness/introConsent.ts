@@ -27,6 +27,8 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
+import { unbackedSpecifics } from "./proactiveSpecifics.js";
+import { inventedFailure } from "../services/speakable.js";
 
 const CONSENT_READ_MODEL = MODELS.sonnet;
 
@@ -291,6 +293,13 @@ export type ConsentContext = {
   decision: string; // e.g. "eventScoring.matchNudge"
   recipientId: string;
   facts: ConsentFacts;
+  // The event the draft is about, as it really is (name, start, end, zone, venue): the only thing that may back a day, a
+  // date or a time in the draft (checkInventedSpecifics). Null: no day, date or time may appear at all. Missing: a draft
+  // with no event (network intros), not checked here.
+  event?: IntroEvent | null;
+  // What the draft may rest on (the other member's shareable asks, the value line): it backs an event, a deadline or a
+  // "you're weighing..." stated back to them.
+  said?: string[];
   // Non-draft checks already computed (timing, one-per-event, both-yes).
   preChecks?: GateCheck[];
   extraDraftChecks?: (draft: string) => GateCheck[];
@@ -309,11 +318,54 @@ async function privateFactCheck(draft: string, otherUserIds: string[] | undefine
   return { name: "private_fact_leak", pass: true };
 }
 
+// ---------- no invented details (2026-10-12 intelligence audit: an in-room draft said "Supper on Thursday" for a Monday event,
+// with no date in its prompt and no check on the draft)
+
+export type IntroEvent = { name: string; start_at?: string | null; end_at?: string | null; timezone?: string | null; venue?: string | null };
+
+// Pure: the event as a draft prompt states it, in the event's own zone ("Monday, October 12 at 7:00 PM").
+export function eventWhen(e: IntroEvent | null | undefined): string | null {
+  if (!e?.start_at) return null;
+  const zone = e.timezone && DateTime.now().setZone(e.timezone).isValid ? e.timezone : "America/Los_Angeles";
+  const d = DateTime.fromISO(e.start_at, { zone });
+  if (!d.isValid) return null;
+  return `${d.toFormat("cccc, LLLL d")} at ${d.toFormat("h:mm a")}`;
+}
+
+// Pure: the line every intro draft prompt carries about its event.
+export function eventPromptLine(e: IntroEvent | null | undefined, name: string): string {
+  const when = eventWhen(e);
+  return `The event is "${name}"${when ? `, ${when}${e?.venue ? `, at ${e.venue}` : ""}` : ""}. Call it by that name exactly. ${when ? "If you say when or where it is, use only this." : "Don't say when or where it is."} Never name any other day, date or time.`;
+}
+
+// Pure: the date guard and the invented-claim check on an intro draft (harness/proactiveSpecifics.ts unbackedSpecifics, the
+// same guard every proactive draft goes through; services/speakable.ts inventedFailure). A day, date or time is backed only
+// by the event's own start (and "tonight" only on its day); an event, a deadline or a "you're weighing..." only by what
+// the draft may rest on. "Meeting" is what every intro is about, never a claim of one.
+export function checkInventedSpecifics(draft: string, ctx: Pick<ConsentContext, "event" | "said">, now = new Date()): GateCheck {
+  const name = "no_invented_details";
+  const e = ctx.event ?? null;
+  const facts: Record<string, string> = {
+    event_name: e?.name ?? "",
+    event_starts_at: e?.start_at ?? "",
+    event_local_when: eventWhen(e) ?? "",
+    event_venue: e?.venue ?? "",
+    what_they_shared: (ctx.said ?? []).filter(Boolean).join("; "),
+  };
+  const zone = e?.timezone && DateTime.now().setZone(e.timezone).isValid ? e.timezone : "America/Los_Angeles";
+  const bad = unbackedSpecifics(draft, facts, { now, zone }).filter((b) => !(/^an event or commitment/.test(b.why) && /^meet/i.test(b.text)));
+  if (inventedFailure(draft)) bad.push({ text: "a failure", why: "says something is broken or unavailable with nothing behind it" });
+  return bad.length ? { name, pass: false, reason: `states ${bad.map((b) => `"${b.text}"`).join(", ")}, which nothing real backs (${bad[0].why}); use only the event's real name, day and time, or leave it out` } : { name, pass: true };
+}
+
 async function checkWithPrivacy(draft: string, ctx: ConsentContext): Promise<{ ok: boolean; checks: GateCheck[] }> {
   const priv = await privateFactCheck(draft, ctx.otherUserIds);
   if (priv && !priv.pass) return { ok: false, checks: [priv] };
+  // Every draft about an event (ctx.event set) is held to it. Network intros carry no event and keep their own checks.
+  const invented = ctx.event !== undefined ? checkInventedSpecifics(draft, ctx) : null;
+  if (invented && !invented.pass) return { ok: false, checks: [...(priv ? [priv] : []), invented] };
   const r = await checkDraftFull(draft, ctx.facts, ctx.extraDraftChecks);
-  return priv ? { ok: r.ok, checks: [priv, ...r.checks] } : r;
+  return { ok: r.ok, checks: [...(priv ? [priv] : []), ...(invented ? [invented] : []), ...r.checks] };
 }
 
 // Drafts, checks, redrafts once with the failures named, then gives up.
@@ -344,7 +396,7 @@ export async function draftWithConsent(
       .join("; ");
     try {
       const retry = await draft(
-        `Your last draft was rejected: ${feedback}. Rewrite it so it doesn't say or imply what ${ctx.facts.otherFirstName || "anyone else"} wants, feels, or said, names no one it shouldn't, and includes no phone number or email.`,
+        `Your last draft was rejected: ${feedback}. Rewrite it so it doesn't say or imply what ${ctx.facts.otherFirstName || "anyone else"} wants, feels, or said, names no one it shouldn't, includes no phone number or email, and states no day, time or detail beyond what you were given.`,
       );
       attempts = 2;
       const retryResult = await checkWithPrivacy(retry, ctx);

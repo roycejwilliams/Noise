@@ -318,6 +318,91 @@ mutual: true only if one of the candidate's own asks (if listed) is a "seeking" 
   return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);
 }
 
+// ---------------------------------------------------------------- the room frame (2026-10-12 intelligence audit)
+//
+// A room is scored against everything a person is open to, not their newest ask: every open, people-shaped ask in both
+// directions (what they need, and what they offer), de-duplicated, errands left out (services/peopleAsks.ts), with their
+// newest goal as the frame when no ask is about people. The caller passes only what matching may read (roomMatching.ts
+// matchableIntent: shareable asks only), so this changes nothing about what is private.
+export type RoomFrame = { asks: StatedIntent[]; goal: StatedIntent | null };
+
+export async function roomFrame(intent: unknown): Promise<RoomFrame | null> {
+  const open = Array.isArray(intent) ? (intent as StatedIntent[]).filter(isOpenAsk) : [];
+  const { peopleAsksOf } = await import("./peopleAsks.js");
+  const asks = await peopleAsksOf(open);
+  const goal = getGoalFrame(intent);
+  return asks.length || goal?.text ? { asks, goal: goal?.text ? goal : null } : null;
+}
+
+// Pure: the one line the frame is quoted as (also what the stub scorer and the Jev prune read).
+export function frameLine(f: RoomFrame): string {
+  const parts = f.asks.map((a) => `${a.type === "offering" ? "can offer" : "looking for"}: ${a.text}`);
+  if (f.goal?.text) parts.push(`headed toward: ${f.goal.text}`);
+  return parts.join(" | ");
+}
+
+export function buildRoomFramePrompt(f: RoomFrame, digest: string, askerContext?: string): string {
+  const lines = [
+    ...f.asks.map((a) => `- ${a.type === "offering" ? "can offer" : "looking for"}: "${a.text}"`),
+    ...(f.goal?.text ? [`- where they're headed: "${f.goal.text}"${f.asks.length ? " (the frame when none of the lines above is about people)" : ""}`] : []),
+  ];
+  return `Someone wants to be connected with people who match this: "${frameLine(f)}"
+
+Everything they're open to, in their words (a candidate needs to fit only one line):
+${lines.join("\n")}
+Only lines about people count: someone to meet, hire, work with, learn from, back or be backed by, or something they can give a person. An errand (a place, a product, a booking, a plan, a recommendation) says nothing about who to meet: leave it out of the judgment.
+${askerContext ? `\nWhat's known about the person asking (use it to judge what they can offer someone, and "mutual" below): ${askerContext}\n` : ""}
+Here is what's known about each candidate, one per line:
+${digest}
+
+For each candidate, judge how well they fit, based only on what's listed — never assume or infer facts that aren't present. A fit runs either way: the candidate can meet one of the person's needs, or the candidate needs what the person offers or does (a founder who needs a product designer fits a product designer weighing freelance work). Judge by who the candidate is and what they do, not only by whether the candidate's own ask repeats the person's words.
+
+Return ONLY valid JSON, no preamble:
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "mutual": false}, ...]}
+
+score: 0-100. 0 means nothing on file supports a fit, 100 means a clear fit for one of their lines. Score every candidate, even a 0.
+reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
+share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
+mutual: true only if one of the candidate's own asks also plausibly points back at the person (what they need, offer or do). false if the candidate has no ask listed, or it doesn't plausibly connect.`;
+}
+
+export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
+  f: RoomFrame,
+  candidates: T[],
+  askerContext?: string,
+  hints?: Map<string, string>,
+): Promise<AskScore<T>[]> {
+  if (!candidates.length || (!f.asks.length && !f.goal?.text)) return [];
+  const line = frameLine(f);
+  let toScore = candidates;
+  let dropped: T[] = [];
+  const { PRUNE_MIN_CANDIDATES, pruneEnabled } = await import("./jevMatching.js");
+  if (candidates.length >= PRUNE_MIN_CANDIDATES && pruneEnabled()) {
+    try {
+      const { jevMatchScores, keepAfterPrune } = await import("./jevMatching.js");
+      const keep = new Set(keepAfterPrune(await jevMatchScores(line, candidates)));
+      toScore = candidates.filter((_, i) => keep.has(i));
+      dropped = candidates.filter((_, i) => !keep.has(i));
+    } catch (err: any) {
+      console.error("matching: Jev prune failed, scoring everyone (non-fatal):", err?.message ?? err);
+      toScore = candidates;
+      dropped = [];
+    }
+  }
+  const zero = dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
+  if (!toScore.length) return zero;
+  // What each candidate said that bears on any of the lines (top memories per ask embedding, merged).
+  const embeddings = [...f.asks, ...(f.goal ? [f.goal] : [])].map((a) => a.embedding).filter((e): e is number[] => Array.isArray(e) && e.length > 0).slice(-3);
+  const memoryByUser = new Map<string, string[]>();
+  for (const e of embeddings) {
+    const m = await fetchTopMemoryPerCandidate(toScore.map((c) => c.user_id), e).catch(() => new Map<string, string[]>());
+    for (const [id, list] of m) memoryByUser.set(id, [...new Set([...(memoryByUser.get(id) ?? []), ...list])].slice(0, 4));
+  }
+  const digest = formatCandidateDigest(toScore, memoryByUser, hints);
+  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore);
+  return [...scored, ...zero];
+}
+
 // Every active stated ask/offering text (the only profile text a person
 // gave in order to be matched; see harness/matchGate.ts and introConsent.ts).
 function getActiveAsks(intent: unknown): string[] {

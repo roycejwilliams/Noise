@@ -349,10 +349,10 @@ export const ABILITIES: Ability[] = [
   },
   {
     id: "ask_shareable_rsvp",
-    can: "When they RSVP to a Co event, beside the brief question, Co asks which of their asks it may tell a good match in the room. Each ask is private unless they pick it.",
+    can: "When they RSVP to a Co event, beside the brief question, Co asks which of their asks it may tell a good match in the room; a guest with nothing shareable is asked once more before the event. Each ask is private unless they pick it.",
     tool: "answerShareAsks",
     limits: { perTurn: 1 },
-    use: "They answered Co's RSVP question about which asks it may share with a good match in the room (numbers, all, none, or a yes/no for a single ask). Code reads their choice from their whole message; if it isn't clear, ask which numbers. Never guess.",
+    use: "They answered Co's question (at RSVP, or the one before the event) about which asks it may share with a good match in the room (numbers, all, none, or a yes/no for a single ask). Code reads their choice from their whole message; if it isn't clear, ask which numbers. Never guess.",
   },
   {
     id: "brief_name",

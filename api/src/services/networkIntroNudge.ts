@@ -492,6 +492,20 @@ export function retryHeldNetworkIntrosSql(maxAttempts: number, maxAgeMs: number)
        LIMIT 20`;
 }
 
+// Pure: why a direct ask to x about this pair shouldn't go now (x already said yes, the pair declined, both in, introduced).
+export function networkAskStaleReason(row: { status?: string | null; a_interested_at?: unknown; b_interested_at?: unknown } | null, xIsA: boolean): string | null {
+  if (!row) return null;
+  if (xIsA ? row.a_interested_at : row.b_interested_at) return "they already said yes";
+  if (row.status && ["both_interested", "introduced", "declined"].includes(row.status)) return `pair is ${row.status}`;
+  return null;
+}
+
+export async function networkAskStale(x: string, y: string): Promise<string | null> {
+  const [a, b] = x < y ? [x, y] : [y, x];
+  const { rows } = await pool.query(`SELECT status, a_interested_at, b_interested_at FROM network_introductions WHERE person_a_id = $1 AND person_b_id = $2`, [a, b]).catch(() => ({ rows: [] as any[] }));
+  return networkAskStaleReason(rows[0] ?? null, x === a);
+}
+
 export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker: MatchNudgeCandidate, matchReason: string, askId: string | null): Promise<void> {
   // The message tells the candidate the asker wants an intro, so that has
   // to be on record first.
@@ -525,6 +539,15 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
     },
   );
   if (!message) return;
+
+  // Read the pair again right before the ask goes (concurrency audit finding 8, 2026-10-12): when both say yes at the same
+  // moment, the reply whose upsert came first saw "not both" and went on to ask the other side, who had already said yes
+  // (and whose own reply sent the email). Their yes, a decline, or a pair already introduced stops it.
+  const stale = await networkAskStale(candidate.user_id, asker.user_id);
+  if (stale) {
+    await recordDecision({ layer: 6, decision: "network.intro", userId: candidate.user_id, outcome: "skip", action: "networkIntroNudge.directAsk.recheck", proposal: { askerId: asker.user_id }, checks: [{ name: "pair_still_waiting_on_them", pass: false, reason: stale }] }).catch(() => {});
+    return;
+  }
 
   // Opt-out and local hours at send time, queued for the next allowed hour
   // if it's night for them (code review, 2026-09-17) — triggered by the

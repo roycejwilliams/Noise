@@ -117,6 +117,8 @@ export type ProactiveType =
   // The member brief, the day before a Co event, and the one question at RSVP that lets it name them (services/eventBrief.ts, 2026-10-05).
   | "event_brief"
   | "brief_name_ask"
+  // Once before a Co event, to a guest with nothing shareable: may Co tell a good match what they're looking for (services/askSharing.ts).
+  | "room_share_ask"
   // After the member tells Co who they met: what stood out, and a note per person for them to send (services/eventFollowThrough.ts).
   | "event_followthrough"
   // Member-facing Mo (mo/memberFlow.ts): the one offer, the voice to approve, the people to pick, and what came back.
@@ -191,6 +193,7 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   // Once per event each, timed to the day before and to the RSVP.
   event_brief: { priority: 90 },
   brief_name_ask: { priority: 92 },
+  room_share_ask: { priority: 91 },
   event_followthrough: { priority: 93 },
   mo_member_offer: { priority: 40 },
   mo_member_voice: { priority: 86 },
@@ -384,7 +387,7 @@ function unansweredSince(send: SendRecord, lastInboundAt: Date | null): boolean 
 // events for 72 hours. Openings had a lane of their own for a day; merged back
 // (Royce, 2026-09-18: "A third set of caps is guesswork at this volume").
 export type Lane = "room" | "other";
-const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room", "pre_arrival", "event_brief", "brief_name_ask", "event_followthrough", "intro_nudge"]);
+const ROOM_LANE = new Set<string>(["event_offer", "event_match_nudge", "network_tease", "in_room", "pre_arrival", "event_brief", "brief_name_ask", "room_share_ask", "event_followthrough", "intro_nudge"]);
 export function laneOf(type: string): Lane {
   return ROOM_LANE.has(type) ? "room" : "other";
 }
@@ -823,7 +826,7 @@ export function codePick(eligible: Candidate[]): Candidate | null {
 const FIND_TYPES = new Set(["event_offer", "event_match_nudge", "deadline_nudge"]);
 // Real candidates that can't wait for tomorrow either: a post-call text (they just hung up), what goes before an event (the note, the
 // brief, the brief's name ask, a guest's ask before it), and a lapse notice. A find never jumps these (review of #132).
-const CANT_WAIT = new Set(["post_call", "pre_arrival", "event_brief", "brief_name_ask", "ask_solicitation", "membership_lapse", "artifact_expiry"]);
+const CANT_WAIT = new Set(["post_call", "pre_arrival", "event_brief", "brief_name_ask", "room_share_ask", "ask_solicitation", "membership_lapse", "artifact_expiry"]);
 
 // Pure: when a find's useful life ends: its own expiry, or the end of the last day the picker gave it, whichever is first.
 export function findEndsAt(c: Pick<Candidate, "expiresAt" | "payload">, zone: string | null): Date | null {

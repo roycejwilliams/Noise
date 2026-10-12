@@ -6,7 +6,7 @@ import { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { ALLOW_REAL_SENDS } from "../otpActions.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "./coVoice.js";
-import { checkBothYes, draftWithConsent, eventOptedIn, gateIntroAction } from "../harness/introConsent.js";
+import { checkBothYes, draftWithConsent, eventOptedIn, eventPromptLine, gateIntroAction } from "../harness/introConsent.js";
 import { sendExemptWhenAllowed } from "../harness/proactive.js";
 import { getTimezoneForCity } from "./geocoding.js";
 import { MODELS } from "../models.js";
@@ -219,11 +219,16 @@ async function maybeAskCandidateDirectly(
   // The message tells the candidate the asker wants an intro, so that has
   // to be on record first.
   const askerOptedIn = await eventOptedIn(eventId, asker.user_id, candidate.user_id);
+  // The event as it really is: the only source of a day or time in the text (harness/introConsent.ts checkInventedSpecifics).
+  const info = await RM.eventTiming(eventId).catch(() => null);
+  const introEvent = { name: eventName, start_at: info?.start_at ?? null, end_at: info?.end_at ?? null, timezone: info?.timezone ?? null, venue: info?.venue ?? null };
   const message = await draftWithConsent(
     {
       decision: "eventGuestMatchHandoff.directAsk",
       recipientId: candidate.user_id,
       otherUserIds: [asker.user_id],
+      event: introEvent,
+      said: [...askerSide.shared, ...(valueLine ? [valueLine] : [])],
       // The asker's private words (private asks, profile, notes) never reach the person being asked.
       extraDraftChecks: (d) => [RM.checkNoPrivateQuote(d, askerSide.privateTexts, askerSide.shared, "no_private_quote", [eventName, askerFirstName, candidate.first_name])],
       preChecks: [
@@ -244,12 +249,21 @@ async function maybeAskCandidateDirectly(
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
         experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details.${valueLine ? ` Why it could be worth it for ${candidate.first_name}, in your own words (say nothing else about ${askerFirstName}): ${valueLine}` : ""} Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. ${eventPromptLine(introEvent, eventName)} Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details.${valueLine ? ` Why it could be worth it for ${candidate.first_name}, in your own words (say nothing else about ${askerFirstName}): ${valueLine}` : ""} Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
       return cleanCoMessage(text.trim());
     },
   );
   if (!message) return;
+
+  // Read the pair again right before the ask goes (concurrency audit finding 8, 2026-10-12): drafting takes seconds, and when
+  // both say yes at the same moment the other side's yes lands in between. Their yes already sent the email; asking them
+  // "X is up for an intro, open to it?" after they said yes is wrong. Any answer of theirs, or a pair that's moved on, stops it.
+  const stale = await RM.directAskStale(eventId, candidate.user_id, asker.user_id);
+  if (stale) {
+    await recordDecision({ layer: 6, decision: "match.pair", userId: candidate.user_id, outcome: "skip", action: "eventGuestMatchHandoff.directAsk.recheck", proposal: { eventId, askerId: asker.user_id }, checks: [{ name: "pair_still_waiting_on_them", pass: false, reason: stale }] }).catch(() => {});
+    return;
+  }
 
   // Opt-out and local hours checked at send time, queued for the next
   // allowed hour if it's night for them (code review, 2026-09-17): this

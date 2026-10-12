@@ -203,11 +203,12 @@ export async function recordBriefSent(eventId: string, userId: string, namedIds:
 
 // ---------------------------------------------------------------- queueing
 
-export async function runEventBriefs(now = new Date()): Promise<{ asks: number; briefs: number }> {
+export async function runEventBriefs(now = new Date()): Promise<{ asks: number; briefs: number; shareQuestions: number }> {
   const { presenceEvents, eventMembers } = await import("./eventPresence.js");
   const { enqueueCandidate } = await import("../harness/proactive.js");
   let asks = 0;
   let briefs = 0;
+  let shareQs = 0;
   for (const event of await presenceEvents()) {
     if (new Date(event.start_at).getTime() <= now.getTime()) continue;
     // One event's failure (Luma down for it) never stops the others.
@@ -233,6 +234,8 @@ export async function runEventBriefs(now = new Date()): Promise<{ asks: number; 
         }).catch(() => ({ queued: false }));
         if (r.queued) asks++;
       }
+      // Once before the event, for a guest nobody can be pointed to yet (services/askSharing.ts shareQuestionDue).
+      if (await queueShareQuestion(event, m.user_id, f, now).catch(() => false)) shareQs++;
       // The brief, the day before.
       if (!w || now < w.from || now > w.until) continue;
       if (!briefEligible({ registered: true, notGoing: f.notGoing, alreadySent: f.briefSent, eventListed: true }).ok) continue;
@@ -249,5 +252,41 @@ export async function runEventBriefs(now = new Date()): Promise<{ asks: number; 
       if (r.queued) briefs++;
     }
   }
-  return { asks, briefs };
+  return { asks, briefs, shareQuestions: shareQs };
+}
+
+// The pre-event sharing question (services/askSharing.ts): queued once per guest per event when due. The asks it offers are
+// read again when it's drafted (proactiveRegistry.ts room_share_ask).
+async function queueShareQuestion(event: { api_id: string; name: string; start_at: string }, userId: string, f: { asked: boolean; notGoing: boolean }, now: Date): Promise<boolean> {
+  const S = await import("./askSharing.js");
+  const { shareableAsks } = await import("./matching.js");
+  const [{ rows: pres }, { rows: prof }] = await Promise.all([
+    pool.query(`SELECT share_asked_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2`, [event.api_id, userId]),
+    pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]),
+  ]);
+  const intent = prof[0]?.intent;
+  const base = {
+    notGoing: f.notGoing,
+    nameAskPending: nameAskDue({ registered: true, notGoing: f.notGoing, alreadyAsked: f.asked, startAt: event.start_at, now }),
+    shareAsked: Boolean(pres[0]?.share_asked_at),
+    hasShareableAsk: shareableAsks(intent).length > 0,
+    startAt: event.start_at,
+    now,
+  };
+  // Cheap gates first: the model read of their asks only runs when everything else says it's due.
+  if (!S.shareQuestionDue({ ...base, offerable: 1 }).due) return false;
+  const offer = await S.offerableShareAsks(intent);
+  if (!S.shareQuestionDue({ ...base, offerable: offer.length }).due) return false;
+  const { enqueueCandidate } = await import("../harness/proactive.js");
+  const r = await enqueueCandidate({
+    userId,
+    type: "room_share_ask",
+    targetKey: `room_share_ask:${event.api_id}`,
+    topicKey: `room_share_ask:${event.api_id}`,
+    summary: `Before "${event.name}": ask once whether Co may tell a good match in the room what they're looking for`,
+    payload: { eventId: event.api_id, name: event.name, startAt: event.start_at },
+    dueAt: now,
+    expiresAt: new Date(event.start_at),
+  }).catch(() => ({ queued: false }));
+  return r.queued;
 }

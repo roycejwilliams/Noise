@@ -265,6 +265,10 @@ export function pairBlockReason(rows: PairRow[], eventId: string, x: string, y: 
   const member = here.origin === "member";
   if (!member && (here.state === "blocked" || here.value_verdict === "weak" || here.blocked_reason)) return `value lines blocked${here.blocked_reason ? `: ${here.blocked_reason}` : ""}`;
   if (!member && here.state === "expired") return "asks expired when the room closed";
+  // x has answered about y here already (or the pair is past asking): asking again would ask someone who already said.
+  const answered = xIsA ? here.a_answer : here.b_answer;
+  if (answered) return `already answered (${answered})`;
+  if (here.state === "both_yes" || here.state === "intro_sent" || here.state === "met") return `pair is ${here.state}`;
   const asked = xIsA ? here.asked_a_at : here.asked_b_at;
   // A Co ask that expired with the room doesn't swallow a later by-name request: an ask from before the expiry is spent.
   const spent = member && here.expired_at && asked && new Date(asked).getTime() <= new Date(here.expired_at).getTime();
@@ -289,6 +293,19 @@ export async function mayAsk(eventId: string, x: string, y: string, action: stri
     await recordDecision({ layer: 6, decision: "match.pair", userId: x, outcome: "skip", action, proposal: { eventId, other: y }, checks: [{ name: "pair_may_ask", pass: false, reason: why }] }).catch(() => {});
   }
   return why;
+}
+
+// Right before a direct ask to x about y goes out: why it shouldn't any more, or null. Read fresh: the pair record (any
+// answer of x's, a pair that moved on) and x's own yes in the opt-in table, which is written a moment before the pair's
+// answer (eventGuestMatchHandoff.ts recordOptIn). Concurrency audit finding 8: both said yes at once, and the side whose
+// turn saw "not both" still asked the other "X is up for an intro, open to it?".
+export async function directAskStale(eventId: string, x: string, y: string): Promise<string | null> {
+  const why = pairBlockReason(await pairRows(x, y), eventId, x, y);
+  if (why) return why;
+  const { rows } = await pool
+    .query(`SELECT status FROM event_guest_match_opt_ins WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3`, [eventId, x, y])
+    .catch(() => ({ rows: [] as any[] }));
+  return rows[0] ? `already answered (${rows[0].status})` : null;
 }
 
 export async function notePairSuggested(eventId: string, x: string, y: string, origin: "co" | "member"): Promise<void> {
@@ -602,7 +619,8 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
       ...(prof.activity_preferences ?? []),
       ...(prof.long_term_direction ? [prof.long_term_direction] : []),
       ...allGoals,
-      ...m.rows.map((r: any) => String(r.content)),
+      // Co's own texts to them ("Co replied: ...") are never their private words, whatever the read returned.
+      ...m.rows.map((r: any) => String(r.content)).filter((c: string) => !c.startsWith("Co replied:")),
       ...facts,
       // How their earlier intros went, in their words: theirs alone.
       ...past.rows.map((r: any) => String(r.note ?? "")).filter(Boolean),
