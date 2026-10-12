@@ -88,6 +88,37 @@ export async function withImages(data: any, keep: any | null = null, deadlineMs 
   return got ?? kept;
 }
 
+// One context for saving what they said and for reading their design system back (founder review, 2026-10-12: taste was saved as
+// professional and read as personal, so older personal colors beat what they had just said). The page's own context when it has
+// one, else what Co passed, else personal (a page is usually a plan for them).
+// A page keeps its look unless they said something about it now: an unrelated edit never restyles it from their saved taste.
+export async function pageLook(ctx: ConversationToolContext, input: any, was: any | null, theirs: string): Promise<{ style: unknown | null; assets: Map<number, string>; was: any | null } | { error: string }> {
+  const D = await import("./deckTools.js");
+  const context: "professional" | "personal" = input.designContext ?? (was?.style?.context === "professional" || was?.style?.context === "personal" ? was.style.context : "personal");
+  const saidNow = !!input.taste;
+  let style: unknown = was?.style ?? null;
+  if (saidNow || !was) {
+    const t = await D.knownTaste(ctx, input.taste, async () => theirs, context);
+    if ("error" in t) return t;
+    const { styleFrom } = await import("../services/coPages/style.js");
+    // "Don't mind" keeps Co's own page design (review of PR 2): only a taste they described or picked restyles a page.
+    style = t.taste && !t.taste.dontCare ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : t.taste?.dontCare ? null : style;
+    // Their design system (services/designSystem.ts) fills the rest: their fonts, a gradient, density, read from the same context the
+    // taste was just saved in. Only when they have one and didn't say they don't mind; otherwise the page keeps Co's own design.
+    if (style && !ctx.dryRun) {
+      const DS = await import("../services/designSystem.js");
+      const ds = await DS.loadDesignSystem(ctx.userId, context).catch(() => null);
+      if (ds && ds.answered.size && !ds.dontCare) style = DS.fillDesign(ds, {}).style;
+    }
+    if (style) style = { ...(style as object), context };
+  }
+  const onPage = was ? [was.logo, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
+  const placed = (n: unknown) => (typeof n === "number" && n > 0 ? n : null);
+  const ids = await D.assetIdsFor(ctx.userId, [placed(input.logo), ...input.sections.map((x: any) => placed(x.picture))], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
+  if ("error" in ids) return ids;
+  return { style, assets: ids.map, was };
+}
+
 export function pageTools(
   ctx: ConversationToolContext,
   o: { say: (text: string, record: string) => Promise<boolean>; notDone: (what: string) => void; source: () => Promise<{ theirs: string; read: string }> },
@@ -95,31 +126,17 @@ export function pageTools(
   const S = () => import("../services/coPages/store.js");
   // Their look and their images for a page (2026-10-11, PR 2), the same way a deck takes them: taste they describe now (their words,
   // saved) or their saved taste, else Co's own design (a page never asks); images only theirs, sent for it, already on it, or named.
-  const lookFor = async (input: any, was: any | null, theirs: string): Promise<{ style: unknown | null; assets: Map<number, string>; was: any | null } | { error: string }> => {
-    const D = await import("./deckTools.js");
-    const t = await D.knownTaste(ctx, input.taste, async () => theirs);
-    if ("error" in t) return t;
-    const { styleFrom } = await import("../services/coPages/style.js");
-    // "Don't mind" keeps Co's own page design (review of PR 2): only a taste they described or picked restyles a page.
-    let style: unknown = t.taste && !t.taste.dontCare ? styleFrom(t.taste.mood, t.taste.colors ?? {}, t.taste.type ?? undefined) : t.taste?.dontCare ? null : (was?.style ?? null);
-    // Their design system (services/designSystem.ts) fills the rest: their fonts, a gradient, density. Only when they have one and
-    // didn't say they don't mind; otherwise the page keeps Co's own design, as before.
-    if (style && !ctx.dryRun) {
-      const DS = await import("../services/designSystem.js");
-      const ds = await DS.loadDesignSystem(ctx.userId, "personal").catch(() => null);
-      if (ds && ds.answered.size && !ds.dontCare) style = DS.fillDesign(ds, {}).style;
-    }
-    const onPage = was ? [was.logo, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
-    const placed = (n: unknown) => (typeof n === "number" && n > 0 ? n : null);
-    const ids = await D.assetIdsFor(ctx.userId, [placed(input.logo), ...input.sections.map((x: any) => placed(x.picture))], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
-    if ("error" in ids) return ids;
-    return { style, assets: ids.map, was };
-  };
+  const lookFor = (input: any, was: any | null, theirs: string) => pageLook(ctx, input, was, theirs);
   const pages = async () => (ctx.dryRun ? [] : (await S()).livePagesFor(ctx.userId).catch(() => []));
   return {
     makePage: tool({
       description: toolUse("makePage"),
-      inputSchema: PAGE_INPUT.extend({ line: line("The one line that goes with the link, saying what you made (\"Here's Saturday in the Mission, dinner then a drink.\")."), alsoAnswer: ALSO_ANSWER, taste: TASTE_INPUT }),
+      inputSchema: PAGE_INPUT.extend({
+        line: line("The one line that goes with the link, saying what you made (\"Here's Saturday in the Mission, dinner then a drink.\")."),
+        alsoAnswer: ALSO_ANSWER,
+        taste: TASTE_INPUT,
+        designContext: z.enum(["professional", "personal"]).optional().describe("Whose look this page takes: professional (work, clients, a venue) or personal (their own plans, friends, family), for what the page is for. Leave it out for a personal plan; a change keeps the page's own."),
+      }),
       execute: async (input) => {
         const store = await S();
         const source = await o.source();
@@ -160,6 +177,7 @@ export function pageTools(
         changed: line("What changed, in a few words they'd recognize (\"swapped Friday dinner for Saturday at Mesa Verde\")."),
         alsoAnswer: ALSO_ANSWER,
         taste: TASTE_INPUT,
+        designContext: z.enum(["professional", "personal"]).optional().describe("Whose look this page takes: professional (work, clients, a venue) or personal (their own plans, friends, family), for what the page is for. Leave it out for a personal plan; a change keeps the page's own."),
       }),
       execute: async (input) => {
         const store = await S();
