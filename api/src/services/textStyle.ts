@@ -46,8 +46,12 @@ export function userLinesFrom(recentConversation: string, latestMessage?: string
 // (2026-09-16, onboarding: "I'm ready to be Co. Send me what you'd like me to
 // say, and I'll write a single message."). Short generated lines are checked
 // against this and fall back to fixed copy.
+// Only talk ABOUT the reply, never a reply that delivers something (2026-10-12 audit: "Here's a version that doesn't lean on
+// Sequin AI" was refused at the send wrapper, and payload-first drafts and revisions go out exactly that way). "Here's the
+// draft", "here's a version", "I'll draft the message to Alex" are deliveries and offers; what's blocked is the instruction
+// leaking (being Co, asking what to say, a single message) or a reply addressed to "the user" instead of to them.
 export function looksLikeMetaReply(text: string): boolean {
-  return /\b(i'?m ready to be co(?![-\w])|ready to be co(?![-\w])|(to|i) be co(?![-\w])|as co(?![-\w])(?! (knows|sees|said))|send me what you'?d like|what you'?d like me to (say|write)|i'?ll (write|draft|compose) (a|the|one|your|that) (single )?(message|text|reply)|here'?s (a|the|my) (draft|version|message for)|(write|draft) (a|the|one) single (message|text))/i.test(text);
+  return /\b(i'?m ready to be co(?![-\w])|ready to be co(?![-\w])|(to|i) be co(?![-\w])|as co(?![-\w])(?! (knows|sees|said))|send me what you'?d like|what you'?d like me to (say|write)|i'?ll (write|draft|compose) (a|one) single (message|text|reply)|(write|draft) (a|the|one) single (message|text))|\bhere'?s (a|the|my) (draft(ed)? |revised |new )?(reply|response|message|text) (to|for) (the user|the member|this (person|user|member))\b|^\s*here'?s (my|a|the) (draft(ed)? )?(reply|response)\s*:/i.test(text);
 }
 
 // Readable on a phone (Royce, 2026-09-22: "fix the text format so it's

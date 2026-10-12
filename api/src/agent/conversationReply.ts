@@ -12,7 +12,7 @@ import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
 import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
-import { REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE } from "../services/turnFailure.js";
+import { deliveryFallback, REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE, REPLY_PARTIAL_NOTE } from "../services/turnFailure.js";
 
 // How Co listens, the part of the call guide that carries over to text,
 // written the way Co should text (2026-09-24). The full guide is 18,600
@@ -584,6 +584,9 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // Held by the send breaker: nothing can go out, so no plain-text retry and
   // no fallback line. The member is told what happened once texts resume
   // (replyGrounding.ts send_held).
+  // Stopped after two refused sends that weren't the breaker (the outbound filter, a failed send): not held, so the member still
+  // gets the plain-text reply or the fallback line, never silence for a reply Co wrote (2026-10-12 audit).
+  if (state.sendStopped && !state.sendsHeld) state.sendStopped = false;
   if (!state.sent && state.sendStopped) {
     console.error(`conversationReply: sends to ${input.userId} are held; stopped without retrying`);
   }
@@ -640,6 +643,18 @@ ${TOOL_TURN_RULES(input.isVoice)}
         await recordDecision({ layer: 3, decision: "reply.resume", userId: input.userId, outcome: again.sent && again.replyText !== REPLY_GAVE_UP_NOTE ? "act" : "skip", action: again.replyText === REPLY_GAVE_UP_NOTE ? "empty_again" : again.sent ? "answered" : "not_sent", proposal: { message: input.resolvedContent.slice(0, 200) } }).catch(() => {});
       });
     }
+  }
+
+  // Part of the reply went out and the rest never did, even after Co tried again: say so, never leave a bare first beat.
+  if (deliveryFallback(state) === "partial" && !opts.dryRun) {
+    const sent = await input.sendCoReply({ phone: input.phoneNumber, message: REPLY_PARTIAL_NOTE, asVoice: false });
+    if (sent !== false) {
+      state.partialUnsent = null;
+      state.lastReplyText = `${state.lastReplyText} ${REPLY_PARTIAL_NOTE}`;
+      await writeMemory(input.userId, "text_exchange", `Co replied: ${REPLY_PARTIAL_NOTE}`).catch((err: any) => console.error("conversationReply: logging the partial note failed (it did send):", err?.message ?? err));
+    }
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 3, decision: "reply.partial", userId: input.userId, outcome: sent !== false ? "act" : "skip", action: sent !== false ? "told_them" : "not_sent" }).catch(() => {});
   }
 
   // A link queued but never flushed (the model shared one and then stopped)

@@ -19,11 +19,22 @@ export const TURN_FAILED_NOTE = "Sorry, something broke on my end on that last o
 export const REPLY_DELAYED_NOTE = "Sorry, that one's taking me longer than it should. Give me a minute and I'll come back to it.";
 export const REPLY_GAVE_UP_NOTE = "Sorry, I still couldn't get that one to work on my end.";
 export const REPLY_NO_RETRY_NOTE = "Sorry, I got tangled up on that one.";
+// PARTIAL: the first part of a reply went out and the rest couldn't, even after Co tried again (2026-10-12 audit: a bare "Fair."
+// was all that arrived). Never a bare filler: they're told the rest didn't come through, and their message stays owed.
+export const REPLY_PARTIAL_NOTE = "Sorry, the rest of that didn't come through on my end.";
+
+// What a reply turn owes them after its sends: the fallback line when nothing went out, the partial line when only part did,
+// nothing when it all went or when the send breaker holds every text (the breaker's own note covers that, replyGrounding.ts).
+export function deliveryFallback(s: { sent: boolean; sendsHeld: boolean; partialUnsent: string | null }): "fallback" | "partial" | null {
+  if (s.sendsHeld) return null;
+  if (!s.sent) return "fallback";
+  return s.partialUnsent ? "partial" : null;
+}
 export const RESUME_AFTER_MS = 60_000;
 
 // Co lines that don't answer anything: after one of these, their message is
 // still owed, so the next reply answers it (routes/sendblue.ts owedAnswer).
-export const OWED_AFTER = [TURN_FAILED_NOTE, REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE];
+export const OWED_AFTER = [TURN_FAILED_NOTE, REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE, REPLY_PARTIAL_NOTE];
 
 // At most one of these per member in this window, so an outage that fails
 // every turn doesn't turn into a string of apologies.

@@ -122,7 +122,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false };
   ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
   ctx.noteAnswerSent = (answer: string) => {
     state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${answer}` : answer;
@@ -193,6 +193,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
         // The fact check left nothing to add after what already went out this turn.
         if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
+        // Never an empty text (2026-10-12 audit, row 11661): with nothing sent yet, Co says it again from what's true.
+        if (!message.trim()) return { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
         // Texted in beats: each paragraph its own message (services/beats.ts).
         // A voice note stays one clip.
@@ -204,6 +206,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             const ok = await ctx.sendCoReply({ phone: ctx.phoneNumber, message: beat, asVoice: false });
             if (ok === false) {
               state.failedSends += 1;
+              state.sendsHeld = !!sendLimiter.blocked(ctx.phoneNumber);
               if (!sentBeats.length) {
                 if (sendLimiter.blocked(ctx.phoneNumber) || state.failedSends >= 2) {
                   state.sendStopped = true;
@@ -211,13 +214,28 @@ export function createConversationTools(ctx: ConversationToolContext) {
                 }
                 return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
               }
+              // Part went out and the rest didn't (2026-10-12 audit: "Fair." went, the draft after it was refused, and the reply
+              // looked done). The model is told what's missing so it sends it; if it can't, the turn ends with an honest line
+              // (conversationReply.ts), never on the bare first beat.
               notDone(`Only part of the reply went out: "${beat.slice(0, 120)}" didn't send.`);
-              break;
+              const went = sentBeats.join("\n\n");
+              state.sentMessages.push(went);
+              state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${went}` : went;
+              state.sent = true;
+              state.replyCount += 1;
+              state.partialUnsent = beats.slice(i).join("\n\n");
+              // What went out counts (ok), and the note says what's missing.
+              if (sendLimiter.blocked(ctx.phoneNumber) || state.failedSends >= 2) {
+                state.sendStopped = true;
+                return { ok: true, note: "Only the first part went out, and texts to them can't go out right now. Stop here; don't call any more tools." };
+              }
+              return { ok: true, note: `Only this went out: "${went.slice(0, 200)}". The rest didn't send. Send the rest now with sendReply, as a plain, direct text to them, without repeating what went out.` };
             }
             await logDelivered(`Co replied: ${cleanCoMessage(beat)}`);
             sentBeats.push(beat);
           }
           const sentText = sentBeats.join("\n\n");
+          state.partialUnsent = null;
           state.sentMessages.push(sentText);
           state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${sentText}` : sentText;
           state.sent = true;
@@ -235,6 +253,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             // sendReply calls in a row against a closed breaker). The agent
             // loop stops on state.sendStopped.
             state.failedSends += 1;
+            state.sendsHeld = !!sendLimiter.blocked(ctx.phoneNumber);
             if (sendLimiter.blocked(ctx.phoneNumber) || state.failedSends >= 2) {
               state.sendStopped = true;
               return { ok: false, error: "Texts to them can't go out right now. Stop here; don't call any more tools." };
@@ -242,6 +261,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: false, error: "That message didn't go out. Rewrite it as a plain, direct text to them and call sendReply again." };
           }
         }
+        state.partialUnsent = null;
         state.sentMessages.push(message);
         state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${message}` : message;
         if (ctx.dryRun) {

@@ -87,7 +87,7 @@ export async function checkFacts(
 // (shared by Co's reply loop and the sweep: agent/loopTools.ts, sweepFind.ts).
 export async function checkVerified<T extends { name: string; facts: string[]; excerpts?: string[] }>(
   kept: T[],
-  deps: { check?: typeof checkFacts } = {},
+  deps: { check?: typeof checkFacts; where?: string; userId?: string | null } = {},
 ): Promise<{ kept: T[]; droppedFacts: string[] }> {
   const mode = factCheckMode();
   const items = kept.flatMap((r) => r.facts.map((fact, j) => ({ r, fact, passage: r.excerpts?.[j] ?? "" }))).filter((x) => x.passage);
@@ -103,5 +103,10 @@ export async function checkVerified<T extends { name: string; facts: string[]; e
       return { ...r, facts: keep.map((x) => x.f), excerpts: keep.map((x) => x.e ?? "") };
     })
     .filter((r) => r.facts.length);
+  // One row per drop, counted, never the facts' text (services/guardDrops.ts). Only from a real caller that says where.
+  if (no.length && deps.where) {
+    const { recordGuardDrop } = await import("./guardDrops.js");
+    recordGuardDrop({ guard: "fact_check", where: deps.where, userId: deps.userId, count: no.length, reason: `${no.length} fact(s) not what their page says; ${kept.length - out.length} result(s) left with none` });
+  }
   return { kept: out, droppedFacts };
 }
