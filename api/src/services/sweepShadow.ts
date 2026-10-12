@@ -156,7 +156,10 @@ async function noteGoalStarvation(q: Q, userId: string, now: Date, today: string
 // trigger "urgent_find": a sweep found something that ends before the next scheduled pick (eventSurfacingSweep.ts endsBeforeNextPick);
 // it runs the pick now, at most URGENT_PICK_RUNS_PER_DAY times a day.
 export const URGENT_PICK_RUNS_PER_DAY = 3;
-export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" } = {}): Promise<ShadowRun | null> {
+// trigger "retry": the hourly retry (jobs/index.ts) of a day whose run errored, or never ran. A day that keeps failing stops after
+// PICK_ERRORS_PER_DAY errors, so a failure that won't clear doesn't pay for a picker run every hour.
+export const PICK_ERRORS_PER_DAY = 3;
+export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" | "retry" } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
   const zone = await memberZone(userId);
@@ -168,6 +171,10 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
      LIMIT 1`,
     [userId, today],
   );
+  if (opts.trigger === "retry" && !done.length && !opts.dryRun) {
+    const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 AND action = 'error'`, [userId, today]);
+    if (Number(n) >= PICK_ERRORS_PER_DAY) return null;
+  }
   if (done.length && !opts.dryRun) {
     if (opts.trigger !== "urgent_find") return null;
     const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2`, [userId, today]);
@@ -246,8 +253,17 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     return { day: today, signature, skipped: true, judgments: r.judgments, pool: ctx.pool, error: r.error };
   }
   const count = (v: string) => r.judgments.filter((j) => j.verdict === v).length;
-  // The picks go in before the run is recorded: the record is what marks today done (review of #116).
-  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today, r.set ?? null).catch((err: any) => console.error("picker: applying the picks failed (non-fatal):", err?.message ?? err));
+  // The picks go in before the run is recorded: the record is what marks today done (review of #116). What applying them did is
+  // reported (chosen, queued, error); a failed apply, or one that queued none of its picks, logs the day as an error, so the retry
+  // runs it again (Royce, 2026-10-12: it swallowed its errors and still marked the day done). The retry is idempotent: a pick a
+  // partial apply already queued merges into its own row (one per thing), and one already sent is out of the pool.
+  const applied = newApplyReport(r.judgments);
+  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today, r.set ?? null, applied);
+  const applyError = opts.dryRun ? null : applyFailed(applied);
+  if (applyError) {
+    await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: applyError, proposal: { day: today, signature, model: r.model, usage: r.usage, poolSize: ctx.pool.length, judgments: r.judgments, applied } });
+    return { day: today, signature, skipped: false, judgments: r.judgments, pool: ctx.pool, error: applyError };
+  }
   if (!opts.dryRun) await recordDecision({
     layer: 5,
     decision: "sweep.select.shadow",
@@ -263,6 +279,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
       asks: asks.map((a) => ({ id: a.id, text: a.text.slice(0, 160) })),
       judgments: r.judgments,
       raw: r.raw.slice(0, 20_000),
+      applied,
     },
   });
   return { day: today, signature, skipped: false, judgments: r.judgments, pool: ctx.pool };
@@ -307,8 +324,36 @@ export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | 
   return { queue, reject, unqueue };
 }
 
-async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null = null): Promise<void> {
-  if (!pickerLive() || !(await pickerUserIds()).includes(userId)) return;
+// What applying the picks did, for the run's record and the queue record: what the picker chose, what queued, what didn't and why,
+// and the error that stopped it. live: false for a member the picker only shadows (nothing is queued for them).
+export type ApplyReport = { live: boolean; chosen: string[]; queued: string[]; notQueued: { name: string; why: string }[]; error: string | null };
+export function newApplyReport(judgments: Pick<Judgment, "verdict" | "name">[]): ApplyReport {
+  return { live: false, chosen: judgments.filter((j) => j.verdict === "send").map((j) => j.name), queued: [], notQueued: [], error: null };
+}
+// Pure: why the day's apply failed, or null. It failed when it threw, a pick errored, or it chose something and queued none of it.
+export function applyFailed(a: ApplyReport): string | null {
+  if (!a.live) return null;
+  if (a.error) return `applying the picks failed: ${a.error}`.slice(0, 300);
+  if (a.chosen.length && !a.queued.length) return `none of the ${a.chosen.length} chosen picks queued${a.notQueued.length ? ` (${a.notQueued.map((n) => `${n.name}: ${n.why}`).join("; ")})` : ""}`.slice(0, 300);
+  return null;
+}
+
+async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null, report: ApplyReport): Promise<void> {
+  let plan: ReturnType<typeof planPicks> | null = null;
+  try {
+    if (!pickerLive() || !(await pickerUserIds()).includes(userId)) return;
+    report.live = true;
+    plan = await applyPicksInner(userId, judgments, backlogs, set, report);
+  } catch (err: any) {
+    report.error = String(err?.message ?? err).slice(0, 200);
+    console.error("picker: applying the picks failed:", report.error);
+  } finally {
+    // Always written, whatever happened above.
+    await recordDecision({ layer: 5, decision: "sweep.select.queue", userId, outcome: report.queued.length ? "act" : "skip", action: !report.live ? "not live" : report.error ? "error" : `queued ${report.queued.length}, rejected ${plan?.reject.length ?? 0}, held back ${plan?.unqueue.length ?? 0}`, reason: report.error, proposal: { day: today, queued: report.queued, chosen: report.chosen, notQueued: report.notQueued, rejected: plan?.reject ?? [], heldBack: plan?.unqueue ?? [] } });
+  }
+}
+
+async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: any[], set: string | null, report: ApplyReport): Promise<ReturnType<typeof planPicks>> {
   const { queuePickedOffer, onEventOfferDropped } = await import("./eventSurfacingSweep.js");
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
     (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ askId: String(b.ask_id), askText: String(it?.askText ?? ""), fromProfile: b.ask_id === "profile", match: it?.match, reminder: !!it?.reminder, again: !!it?.again })),
@@ -333,19 +378,21 @@ async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[]
     .flatMap((j) => backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).map((b) => ({ key: exitKeyOf(b.match), name: String(b.match?.name ?? j.name), why: memberSafeWhy(String(j.why ?? j.reason ?? "")), askText: b.askText })));
   const uniq = [...new Map(rejectedFinds.map((r) => [r.key, r])).values()];
   await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
-  const queuedNames: string[] = [];
   // The finds the pick chose together, by the key each is queued under: the set line rides only with a bundle of exactly these.
   const setKeys = () => plan.queue.map((x) => offerTargetKeyOf({ match: x.match, reminder: x.reminder, again: x.again }));
   const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
   for (const q of plan.queue) {
     // The pick's view of the set rides with each find it chose today, only when it chose more than one (Phase C3).
     const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}) } }).catch((err: any) => {
-      console.error("picker: queueing a pick failed (non-fatal):", err?.message ?? err);
+      const msg = String(err?.message ?? err).slice(0, 200);
+      console.error("picker: queueing a pick failed:", msg);
+      // One pick erroring fails the day too: its retry queues what's missing, and what did queue merges into its own row.
+      report.error ??= `queueing ${String(q.match?.name ?? "")} failed: ${msg}`;
       return false;
     });
-    if (ok) queuedNames.push(String(q.match?.name ?? ""));
+    if (ok) report.queued.push(String(q.match?.name ?? ""));
   }
-  await recordDecision({ layer: 5, decision: "sweep.select.queue", userId, outcome: queuedNames.length ? "act" : "skip", action: `queued ${queuedNames.length}, rejected ${plan.reject.length}, held back ${plan.unqueue.length}`, proposal: { day: today, queued: queuedNames, chosen: judgments.filter((j) => j.verdict === "send").map((j) => j.name), rejected: plan.reject, heldBack: plan.unqueue } });
+  return plan;
 }
 
 // They just said what kind of room they want: the picker re-ranks today, not tomorrow at 10 (Royce, 2026-10-09). Same gates as the
@@ -402,10 +449,10 @@ export async function rerunPickerForTaste(userId: string): Promise<void> {
   await runSweepShadow(userId).catch((err: any) => console.error(`picker rerun after taste failed for ${userId} (non-fatal):`, err?.message ?? err));
 }
 
-export async function runSweepShadowAll(now = new Date()): Promise<void> {
+export async function runSweepShadowAll(now = new Date(), trigger?: "retry"): Promise<void> {
   if (!reviewEnabled()) return;
   for (const id of await shadowUserIds()) {
-    await runSweepShadow(id, now).catch((err: any) => console.error(`sweep shadow failed for ${id} (non-fatal):`, err?.message ?? err));
+    await runSweepShadow(id, now, trigger ? { trigger } : {}).catch((err: any) => console.error(`sweep shadow failed for ${id} (non-fatal):`, err?.message ?? err));
   }
 }
 

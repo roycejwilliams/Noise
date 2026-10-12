@@ -906,6 +906,13 @@ export function registerJobs(io: Server) {
         .then((m) => m.runSweepShadowAll())
         .catch((err: any) => console.error("sweep shadow cron error:", err?.message ?? err));
     }, { timezone: "America/Los_Angeles" });
+    // The retry (Royce, 2026-10-12): a day whose run errored (the selection, the member layer, or applying the picks) or never ran
+    // is run again on the hour until it's done; once done it's a no-op. Capped per day (sweepShadow.ts PICK_ERRORS_PER_DAY).
+    cron.schedule("40 11-19 * * *", () => {
+      import("../services/sweepShadow.js")
+        .then((m) => m.runSweepShadowAll(new Date(), "retry"))
+        .catch((err: any) => console.error("sweep shadow retry cron error:", err?.message ?? err));
+    }, { timezone: "America/Los_Angeles" });
   }
 
   if (process.env.MONITORING_ENABLED === "true") {
