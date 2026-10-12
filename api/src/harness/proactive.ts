@@ -878,6 +878,34 @@ export function expiringFind(eligible: Candidate[], o: { now: Date; zone: string
   return null;
 }
 
+// A find on its last day outranks what is still true tomorrow (Royce, 2026-10-12: Fleet Week was queued top priority on its last
+// day and lost both daily runs to debriefs). expiringFind covers a find that would miss its next slot; this covers the rest of its
+// last day: when what was chosen to go (Co's pick) is not a find, can wait (not a can't-wait type) and is still true tomorrow, a
+// picked find whose end falls inside their local today goes first instead, soonest-ending first. Only finds in the eligible set,
+// so caps, hours and spacing still apply; the chosen message waits for its next slot.
+export function lastDayFirst(chosen: Candidate | null, eligible: Candidate[], o: { now: Date; zone: string | null }): { pick: Candidate; endsAt: Date } | null {
+  if (!chosen || FIND_TYPES.has(chosen.type) || CANT_WAIT.has(chosen.type)) return null;
+  const endOfToday = DateTime.fromJSDate(o.now).setZone(hoursZone(o.zone)).endOf("day").toJSDate();
+  if (chosen.expiresAt && chosen.expiresAt.getTime() <= endOfToday.getTime()) return null;
+  const finds = eligible
+    .filter((c) => FIND_TYPES.has(c.type) && (c.payload as { picked?: boolean } | null)?.picked === true)
+    .map((c) => ({ pick: c, endsAt: findEndsAt(c, o.zone) }))
+    .filter((x): x is { pick: Candidate; endsAt: Date } => !!x.endsAt && x.endsAt.getTime() > o.now.getTime() && x.endsAt.getTime() <= endOfToday.getTime())
+    .sort((a, b) => a.endsAt.getTime() - b.endsAt.getTime());
+  return finds[0] ?? null;
+}
+
+// Pure: when a candidate stops being true, as a fact for Co's pick: a find's end (findEndsAt), else its own expiry.
+export function endsFact(c: Pick<Candidate, "type" | "expiresAt" | "payload">, o: { now: Date; zone: string | null }): string {
+  const end = FIND_TYPES.has(c.type) ? findEndsAt(c, o.zone) : c.expiresAt;
+  if (!end || Number.isNaN(end.getTime())) return "no end date, still true tomorrow";
+  const z = hoursZone(o.zone);
+  const today = DateTime.fromJSDate(o.now).setZone(z);
+  const at = DateTime.fromJSDate(end).setZone(z);
+  if (at.hasSame(today, "day")) return `last day today, ends ${localStamp(end, o.zone)}`;
+  return `still true tomorrow, ends ${localStamp(end, o.zone)}`;
+}
+
 // ---------- drafting
 
 // Principles, not scripts (Royce, 2026-09-28: "I don't want the language to be
@@ -1403,7 +1431,7 @@ export function readPick(text: string): { id: string; why: string } | null {
 // Only runs when there's a real choice, so most days cost nothing.
 export async function choosePick(
   eligible: Candidate[],
-  about: { recentConversation: string; feeling: string; taste?: string | null; statedTaste?: string | null; person?: string | null },
+  about: { recentConversation: string; feeling: string; taste?: string | null; statedTaste?: string | null; person?: string | null; zone?: string | null; now?: Date },
 ): Promise<{ pick: Candidate | null; reason: string; source: "code" | "co" }> {
   if (eligible.length < 2) return proposePick(eligible);
   try {
@@ -1424,8 +1452,8 @@ ${about.statedTaste ? `What kind of room they've said they want (their words): $
 ${about.person ? `What you know about them:\n${about.person.slice(0, 2500)}\n` : ""}Their recent texts with you (oldest first):
 ${about.recentConversation.slice(-2500) || "(none)"}
 
-Ready to send:
-${eligible.map((c) => `- ${c.id} [${c.type}] ${c.summary}`).join("\n")}
+Ready to send (each says when it stops being true; something on its last day today can't wait for tomorrow, something still true tomorrow can):
+${eligible.map((c) => `- ${c.id} [${c.type}] ${c.summary} (${endsFact(c, { now: about.now ?? new Date(), zone: about.zone ?? null })})`).join("\n")}
 
 Return ONLY JSON: {"id": "<one id from the list>", "why": "one short line"}`,
       }),
@@ -2045,9 +2073,14 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const drafting = <T,>(type: ProactiveType, fn: () => Promise<T>): Promise<T> => (OWN_MEMBER_CONTEXT.has(type) ? draftWithKnowledge(null, null, () => feelingForDraft.run(feelingText, fn)) : draftWithKnowledge(known, rules, () => feelingForDraft.run(feelingText, fn)));
   // A find on its last chance goes before what can wait (expiringFind); otherwise Co picks.
   const urgent = expiringFind(ev.eligible, { now: state.now, zone: person.timezone, sends: state.sends });
-  const picked = urgent
+  const chosen = urgent
     ? { pick: urgent.pick, reason: `expires before the next send slot (ends ${localStamp(urgent.endsAt, person.timezone)}, next slot ${localStamp(urgent.nextSlot, person.timezone)}): it goes ahead of what can wait`, source: "code" as const }
-    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null });
+    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null, zone: person.timezone, now: state.now });
+  // Co decides; code guards the fact: a picked find on its last day goes before what is still true tomorrow (lastDayFirst).
+  const lastDay = urgent ? null : lastDayFirst(chosen.pick, ev.eligible, { now: state.now, zone: person.timezone });
+  const picked = lastDay
+    ? { pick: lastDay.pick, reason: `its last day is today (ends ${localStamp(lastDay.endsAt, person.timezone)}), and what else was ready is still true tomorrow: it goes first`, source: "code" as const }
+    : chosen;
   if (!picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
