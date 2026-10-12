@@ -17,21 +17,23 @@ export type Judge = (prompt: string) => Promise<string>;
 const haiku: Judge = async (prompt) =>
   (await generateText({ model: anthropic(MODELS.haiku), experimental_telemetry: { isEnabled: true, functionId: "deck.claims" }, prompt, abortSignal: AbortSignal.timeout(20_000) })).text;
 
-// Pure: the prompt. self: what Co knows about itself, when the deck is about Co (else empty).
-export function claimsPrompt(lines: string[], theirWords: string, self = ""): string {
-  return `A member asked for a slide deck. Below is everything they said for it${self ? ", what Co knows about itself (the deck is about Co)" : ""}, then every line on the deck.
+// Pure: the prompt. self: what Co knows about itself, when the deck is about Co (else empty). thread: the last few texts both ways,
+// so a line Co proposed and they approved ("Ok create the doc", 2026-10-12 audit) is theirs; whether they approved it is the
+// judge's read, never a word list.
+export function claimsPrompt(lines: string[], theirWords: string, self = "", thread = ""): string {
+  return `A member asked for a slide deck. Below is everything they said for it${self ? ", what Co knows about itself (the deck is about Co)" : ""}${thread ? ", the last few texts between them and Co" : ""}, then every line on the deck.
 
 A pitch deck's job is rhetoric. A line PASSES when it is:
 - what they said, rephrased, tightened, sharpened, reordered or combined;
 - positioning, framing, a contrast, a tagline, a stance, a mission or a call to action ("Not another social club", "Built on understanding, not a form", "The room is curated"), even in words they never used;
 - any positioning at all when they asked Co to work out the positioning;
-${self ? "- anything that matches what Co knows about itself, below;\n" : ""}- only a label ("The problem", "Why now", "The ask").
+${self ? "- anything that matches what Co knows about itself, below;\n" : ""}${thread ? "- a line Co proposed in the last few texts that they then approved (said yes, ok, go with it, or asked Co to make the deck or doc from it), said the same or tightened; a Co line they didn't approve is not theirs;\n" : ""}- only a label ("The problem", "Why now", "The ask").
 
-A line FAILS only when it states a verifiable hard fact they never gave${self ? " and Co doesn't know about itself" : ""}: a partnership or deal ("Partnering with X" when they only named X), a customer or user count, a number, price, metric or date, a named event ("our November launch"), a named person or company presented as fact, or a result or award. Also a FACTUAL claim
+A line FAILS only when it states a verifiable hard fact they never gave${self ? " and Co doesn't know about itself" : ""}${thread ? " or approved" : ""}: a partnership or deal ("Partnering with X" when they only named X), a customer or user count, a number, price, metric or date, a named event ("our November launch"), a named person or company presented as fact, or a result or award. Also a FACTUAL claim
 about the market, the industry or the world, with or without a number ("Most retired EV batteries are landfilled", "Demand is
 doubling", "No one recycles X at scale", a market size, a share, a trend stated as fact) that nothing in what they said or what
 was read for it backs: it fails even when it sounds like framing. A stance about the market ("The next wave of X needs Y") is still
-rhetoric and passes; a statement of what is true out there needs their words or a source.
+rhetoric and passes; a statement of what is true out there needs their words or a source.${thread ? " A hard fact that appears only in Co's own texts, which they didn't clearly approve (a question back, a doubt, a change of subject), counts as never given." : ""}
 
 What they said (and what was read for this deck, when anything was):
 """
@@ -42,6 +44,11 @@ What Co knows about itself (facts):
 """
 ${self.slice(0, 3000)}
 """
+` : ""}${thread ? `
+The last few texts (Co's lines are Co's, not theirs, unless they approved them):
+"""
+${thread.slice(-3000)}
+"""
 ` : ""}
 Deck lines:
 ${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}
@@ -51,11 +58,11 @@ Return ONLY JSON: {"fails": [{"n": <line number>, "why": "<the hard fact they di
 
 // The lines that add a claim, or null when the check couldn't run.
 // Tried twice before giving up (PR 6: on a call the check timed out and, failing open, let "no free tier, no trials" onto a deck).
-export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = ""): Promise<{ line: string; why: string }[] | null> {
+export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = ""): Promise<{ line: string; why: string }[] | null> {
   if (!lines.length) return [];
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const out = parseModelJson<{ fails?: { n?: number; why?: string }[] }>(await judge(claimsPrompt(lines, theirWords, self)));
+      const out = parseModelJson<{ fails?: { n?: number; why?: string }[] }>(await judge(claimsPrompt(lines, theirWords, self, thread)));
       return (out.fails ?? [])
         .filter((f) => typeof f?.n === "number" && f.n >= 1 && f.n <= lines.length)
         .map((f) => ({ line: lines[f.n! - 1], why: String(f.why ?? "").slice(0, 120) }));
