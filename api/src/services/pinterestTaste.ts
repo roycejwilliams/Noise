@@ -7,7 +7,7 @@
 // it": no guessing from the link's words. Every fetch goes through linkReader.ts safeFetch (public addresses only, every redirect hop
 // checked, time and size capped).
 export type BoardRead =
-  | { readable: true; board: string; description: string | null; pins: string[]; colors: { hex: string; share: number }[]; tone: "light" | "dark" | "mixed" | null; url: string }
+  | { readable: true; board: string; description: string | null; pins: string[]; colors: { hex: string; share: number }[]; tone: "light" | "dark" | "mixed" | null; url: string; images?: string[] }
   | { readable: false; why: "not_a_board" | "needs_login_or_gone" | "unreachable" };
 
 export type PinDeps = { fetch: (url: string) => Promise<{ finalUrl: string; status: number; body: string } | { error: string }> };
@@ -98,6 +98,18 @@ export function paletteFromPage(html: string): { colors: { hex: string; share: n
   return { colors, tone: light > 0.65 ? "light" : light < 0.35 ? "dark" : "mixed" };
 }
 
+// Pure: the pins' own image files on the board page (Pinterest's image host only, medium size), first ones first, at most 8. They are
+// read for their pixels (services/designRead.ts), so the board's look comes from its pictures, not from what strangers wrote on them.
+export function pinImagesFromPage(html: string): string[] {
+  const out: string[] = [];
+  for (const m of html.matchAll(/https:\\?\/\\?\/i\.pinimg\.com\\?\/(?:236x|474x|564x)\\?\/[0-9a-f]{2}\\?\/[0-9a-f]{2}\\?\/[0-9a-f]{2}\\?\/[0-9a-f]{32}\.(?:jpg|png|webp)/g)) {
+    const u = m[0].replace(/\\\//g, "/");
+    if (!out.includes(u)) out.push(u);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 export async function readBoard(raw: string, deps: PinDeps = realDeps): Promise<BoardRead> {
   let link = raw.trim();
   // A pin.it short link: follow it (safeFetch checks every hop) to where it points.
@@ -121,7 +133,7 @@ export async function readBoard(raw: string, deps: PinDeps = realDeps): Promise<
   // look goes without colors (live run, PR 5: one read of the same board came back without them).
   const readPalette = async () => {
     const page = await deps.fetch(`${base}/`).catch(() => ({ error: "unreachable" }));
-    return "error" in page || page.status !== 200 ? { colors: [] as { hex: string; share: number }[], tone: null } : paletteFromPage(page.body);
+    return "error" in page || page.status !== 200 ? { colors: [] as { hex: string; share: number }[], tone: null, images: [] as string[] } : { ...paletteFromPage(page.body), images: pinImagesFromPage(page.body) };
   };
   let palette = await readPalette();
   if (!palette.colors.length) palette = await readPalette();

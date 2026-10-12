@@ -357,3 +357,55 @@ export async function trimImage(data: Buffer, mediaType: string): Promise<Buffer
     release();
   }
 }
+
+// A Pinterest board's look from its pins' own pictures (services/pinterestTaste.ts pinImagesFromPage): each pin's pixels read, then
+// pooled. The accent is the strongest color across pins, a second strong color that recurs is the second color, the ground follows the
+// board's overall tone. Pin images only from Pinterest's image host, size-capped, nothing else fetched.
+export async function readPins(urls: string[], o: { fetchImage?: (u: string) => Promise<{ data: Buffer; mediaType: string } | null>; pixels?: typeof readPixels } = {}): Promise<{ tokens: Tokens; read: number }> {
+  const get =
+    o.fetchImage ??
+    (async (u: string) => {
+      if (!/^https:\/\/i\.pinimg\.com\//.test(u)) return null;
+      const r = await fetch(u, { signal: AbortSignal.timeout(6000), redirect: "error" }).catch(() => null);
+      if (!r || !r.ok) return null;
+      const b = Buffer.from(await r.arrayBuffer());
+      if (b.length > 3_000_000) return null;
+      const { imageTypeOf } = await import("./imageRead.js");
+      const t = imageTypeOf(b);
+      return t ? { data: b, mediaType: t } : null;
+    });
+  const reads: PixelRead[] = [];
+  for (const u of urls.slice(0, 6)) {
+    const img = await get(u).catch(() => null);
+    if (!img) continue;
+    const p = await (o.pixels ?? readPixels)(img.data, img.mediaType).catch(() => null);
+    if (p) reads.push(p);
+  }
+  return { tokens: poolPins(reads), read: reads.length };
+}
+
+// Pure: the pooled tokens from several pins' pixel reads.
+export function poolPins(reads: Pick<PixelRead, "colors">[]): Tokens {
+  if (!reads.length) return {};
+  const chroma = (h: string) => {
+    const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    return Math.max(...c) - Math.min(...c);
+  };
+  const lum = (h: string) => contrast(h, "#000000");
+  const all = reads.flatMap((r) => r.colors.map((c) => ({ ...c, share: c.share / reads.length })));
+  const strong = all.filter((c) => chroma(c.hex) > 45).sort((a, b) => b.share * chroma(b.hex) - a.share * chroma(a.hex));
+  const dist = (a: string, b: string) => Math.hypot(...[1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16) - parseInt(b.slice(i, i + 2), 16)));
+  const t: Tokens = {};
+  if (strong[0]) t.accent = strong[0].hex;
+  const second = strong.find((c) => t.accent && dist(c.hex, t.accent) > 70);
+  if (second) t.accent2 = second.hex;
+  const neutral = all.filter((c) => chroma(c.hex) <= 45);
+  const lightShare = neutral.filter((c) => lum(c.hex) > 10).reduce((n, c) => n + c.share, 0);
+  const darkShare = neutral.filter((c) => lum(c.hex) < 3).reduce((n, c) => n + c.share, 0);
+  if (lightShare > darkShare * 1.5) t.background = neutral.filter((c) => lum(c.hex) > 10).sort((a, b) => b.share - a.share)[0]?.hex;
+  else if (darkShare > lightShare * 1.5) {
+    t.background = neutral.filter((c) => lum(c.hex) < 3).sort((a, b) => b.share - a.share)[0]?.hex;
+    t.mood = "dark";
+  }
+  return t;
+}

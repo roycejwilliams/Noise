@@ -219,7 +219,7 @@ export const ABILITIES: Ability[] = [
     can: "Co can read a public Pinterest board they send for the look of a deck or page (its pins and colors). A board that needs a Pinterest login, Co can't open, and says so.",
     tool: "readInspo",
     limits: { perTurn: 2, perDay: 10 },
-    use: "When they send a Pinterest board link for the look (\"this is the vibe\", or with a deck or page ask). Read it, then build with taste from it. If it can't be read, say plainly it needs a login or isn't public, and ask them to describe the look or pick a look by name; never guess.",
+    use: "When they send a Pinterest board link for the look (\"this is the vibe\", or with a deck or page ask). Read it: its look comes from its pins' own pictures. For a deck, call makeDeck next: it hands back the one confirm line to send, and the deck is built when they answer (readConfirmed). For a page, build with taste from what you read. If it can't be read, say plainly it needs a login or isn't public, and ask them to describe the look or pick a look by name; never guess.",
   },
   {
     id: "co_deck_update",
