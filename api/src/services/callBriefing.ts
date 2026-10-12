@@ -5,7 +5,8 @@
 // The sheet is static and lives in the agent's prompt (cached). The clock and the finds are per call, and ride in as dynamic variables.
 import { timelineFor } from "./timeline.js";
 import { voiceFinds, type VoiceFinds } from "./voiceFinds.js";
-import { fallbackBriefing, judgeBriefing, logBriefing, type BriefingDecision, type CallBriefing } from "../brain/index.js";
+import { fallbackBriefing, judgeBriefing, logBriefing, vetoBriefingOffers, type BriefingDecision, type CallBriefing } from "../brain/index.js";
+import pool from "../db/db.js";
 import { callCapabilityList } from "./capabilities.js";
 
 // One page. The list is generated from the capability registry (services/capabilities.ts callCapabilityList), from the same
@@ -48,9 +49,19 @@ export async function planCallBriefing(userId: string, now: Date = new Date()): 
   const [clock, finds, safetyHold] = await Promise.all([
     timelineFor(userId, city, now).catch(() => null),
     voiceFinds(userId, now).catch((): VoiceFinds => ({ available: false, reason: "the lookup didn't load" })),
-    import("./safety.js").then((s) => s.safetyHoldActive(userId)).catch(() => false),
+    safetyHoldOrUnknown(userId),
   ]);
-  return judgeBriefing({ userId, now, clock, finds, vetoes: safetyHold ? [{ guard: "safety", why: "a safety hold is on: only care, no offers" }] : [] });
+  return judgeBriefing({ userId, now, clock, finds, vetoes: safetyHold ? [{ guard: "safety", why: SAFETY_HOLD_WHY }] : [] });
+}
+
+// The safety guard for a call's offers, failing closed: a hold on (services/safety.ts, offers paused 3 days), or a read that
+// errored, both mean no finds. Read when the briefing is built and again when the call takes it, so a hold set while it rang holds.
+const SAFETY_HOLD_WHY = "a safety hold is on, or couldn't be checked: only care, no offers";
+export function safetyHoldOrUnknown(userId: string): Promise<boolean> {
+  return pool
+    .query(`SELECT 1 FROM co_profiles WHERE user_id = $1 AND safety_hold_until > NOW()`, [userId])
+    .then((r) => r.rows.length > 0)
+    .catch(() => true);
 }
 export async function buildCallBriefing(userId: string, now: Date = new Date()): Promise<CallBriefing> {
   return (await planCallBriefing(userId, now)).briefing;
@@ -71,7 +82,13 @@ export async function takeCallBriefing(userId: string, now = Date.now()): Promis
     let t: NodeJS.Timeout;
     return Promise.race([p, new Promise<BriefingDecision>((r) => { t = setTimeout(() => r(fallbackBriefing(new Date(), "the briefing wasn't ready in time")), 1500); })]).finally(() => clearTimeout(t));
   };
-  const used = await bound(hit && now - hit.at < TTL_MS ? hit.plan : planCallBriefing(userId, new Date(now)).catch(() => fallbackBriefing(new Date(), "the briefing failed to build")));
+  const plan = hit && now - hit.at < TTL_MS ? hit.plan : planCallBriefing(userId, new Date(now)).catch(() => fallbackBriefing(new Date(), "the briefing failed to build"));
+  // The safety guard again at take time (a prebuilt briefing can be up to 5 minutes old), inside the same bound.
+  const used = await bound(
+    Promise.all([plan, safetyHoldOrUnknown(userId)]).then(([d, held]) =>
+      held ? vetoBriefingOffers(d, { available: true, lookingFor: "", items: [], note: "" }, "safety", SAFETY_HOLD_WHY) : d,
+    ),
+  );
   logBriefing(userId, used);
   return used.briefing;
 }
