@@ -1988,7 +1988,14 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     `SELECT * FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND NOT (type = ANY($2::text[]))`,
     [userId, pausedTypes()],
   );
-  const state: PickState = { ...member.state, candidates: candRows.map(rowToCandidate) };
+  // A queued find whose ask has closed since it was queued is dead (Royce, 2026-10-12): it leaves the queue here, before the pick
+  // sees it, not only when it's drafted. A reminder is exempt (services/askLifecycle.ts servesClosedAsk).
+  const AL = await import("../services/askLifecycle.js");
+  const closedAsks = await AL.closedAskRefs(userId).catch(() => new Set<string>());
+  const all = candRows.map(rowToCandidate);
+  const dead = all.filter((c) => c.type === "event_offer" && AL.servesClosedAsk(c.payload as { askId?: string; reminder?: boolean }, closedAsks));
+  if (!opts.dryRun) for (const c of dead) await dropCandidate(registry, c, "skipped", "their ask has since closed");
+  const state: PickState = { ...member.state, candidates: all.filter((c) => !dead.includes(c)) };
   // The learned preference is written when it flips, from the same read.
   if (member.raw.kinds && !opts.dryRun) await syncKindPreferences(userId, member.raw.kinds.verdicts, member.raw.kinds.stored).catch(() => 0);
   const ev = evaluateCandidates(state, opts);

@@ -162,6 +162,20 @@ export async function askIsOpenRef(userId: string, ref: string | null | undefine
   return rows.length ? rows[0].open === true : true;
 }
 
+// Their closed asks, by both ids, as of `asOf`: closed is resolved either way (done, answered, delivered, moved on, declined,
+// expired). The member's ask state (ask_checkins.resolved_at) is the one source (Royce, 2026-10-12: 4 of 7 picks on Oct 9 were for
+// asks already closed).
+export async function closedAskRefs(userId: string, asOf: Date = new Date(), db: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<Set<string>> {
+  const { rows } = await db.query(`SELECT id::text AS id, ask_id FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NOT NULL AND resolved_at <= $2`, [userId, asOf]);
+  return new Set(rows.flatMap((r: any) => [String(r.id), String(r.ask_id)]));
+}
+
+// Pure: a find waiting for an ask that has closed is dead: it leaves the pool and the queue. A reminder (a heads-up about something
+// already shown to them) is exempt, and so is a find with no ask (a goal find, a call's promise with no row).
+export function servesClosedAsk(item: { askId?: string | null; reminder?: boolean | null }, closed: ReadonlySet<string>): boolean {
+  return !!item.askId && !item.reminder && closed.has(String(item.askId));
+}
+
 // ---------------------------------------------------------------- the real thing
 let realDeps: AskDeps = defaultDeps();
 export function setAskDepsForTests(d: AskDeps | null): void { realDeps = d ?? defaultDeps(); }

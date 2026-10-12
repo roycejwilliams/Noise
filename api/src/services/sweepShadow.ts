@@ -18,6 +18,7 @@ import { holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judg
 import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
 import { memberZone } from "./memberTime.js";
 import { exitKey } from "./findForm.js";
+import { closedAskRefs, servesClosedAsk } from "./askLifecycle.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -40,11 +41,12 @@ type RawCandidate = { name: string; date: string | null; tier: number; askId: st
 // Pure: the pool from what's waiting (the event backlogs and the queued
 // offers): deduped by name + date, past ones and things already sent dropped
 // (a reminder, or a month-later resurface, of a sent thing stays, as in the
-// live sweep), each tagged with the asks it serves.
-export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>): PoolItem[] {
+// live sweep), each tagged with the asks it serves. A find for an ask that has closed is dead and left out (a reminder stays).
+export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>, closedAsks: ReadonlySet<string> = new Set()): PoolItem[] {
   const items = new Map<string, PoolItem>();
   for (const r of raw) {
     if (!r.name || (r.date && r.date < today)) continue;
+    if (servesClosedAsk(r, closedAsks)) continue;
     if (sentNames.has(norm(r.name)) && !r.reminder && !r.again) continue;
     const key = shadowKey(r.name, r.date);
     const it = items.get(key) ?? { id: "", key, name: r.name, date: r.date, tier: r.tier, kind: "discovery" as const, asks: [] as string[], shortNotice: !!r.date && DateTime.fromISO(r.date).diff(DateTime.fromISO(today), "days").days <= 2, details: r.details };
@@ -55,6 +57,22 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
     items.set(key, it);
   }
   return [...items.values()].map((it, i) => ({ ...it, id: `C${i + 1}` }));
+}
+
+// Pure: the backlogs with every find waiting for a closed ask taken out (a reminder stays), and what came out, by the key each
+// backlog item is stored under (findForm.ts exitKey), per ask.
+export function splitDeadBacklog<B extends { ask_id: string; items: any }>(backlogs: B[], closed: ReadonlySet<string>): { live: B[]; dead: { askId: string; keys: string[]; names: string[] }[] } {
+  const dead: { askId: string; keys: string[]; names: string[] }[] = [];
+  const live = backlogs.map((b) => {
+    const items = Array.isArray(b.items) ? b.items : [];
+    const out = items.filter((it: any) => servesClosedAsk({ askId: b.ask_id, reminder: !!it?.reminder }, closed));
+    const kept = items.filter((it: any) => !out.includes(it));
+    // The backlog is changed by key: a key a kept reminder shares stays.
+    const keptKeys = new Set(kept.map((it: any) => exitKey(it?.match ?? {})));
+    if (out.length) dead.push({ askId: String(b.ask_id), keys: [...new Set(out.map((it: any) => exitKey(it?.match ?? {})))].filter((k) => !keptKeys.has(k)), names: out.map((it: any) => String(it?.match?.name ?? "")) });
+    return out.length ? { ...b, items: kept } : b;
+  });
+  return { live, dead };
 }
 
 // The date that matters: the event's, or an opening's deadline (eventSurfacingSweep relevantDate).
@@ -155,14 +173,22 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2`, [userId, today]);
     if (Number(n) >= URGENT_PICK_RUNS_PER_DAY + 1) return null;
   }
+  // Dead backlog: a find waiting for an ask that has closed (done, dropped or declined) leaves the pool, the picks and its backlog
+  // (Royce, 2026-10-12: 4 of 7 picks on Oct 9 were for asks already closed). A reminder is exempt. A queued one is dropped at
+  // dispatch (harness/proactive.ts). The member's ask state is the source. Cleared before the prune, so it pays no page reads.
+  const closed = await closedAskRefs(userId, now, { query: async (sql, args) => ({ rows: await q(sql, args) }) });
+  if (!opts.dryRun) {
+    const { dead } = splitDeadBacklog(await q(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId]), closed);
+    for (const d of dead) await realPruneDeps.merge(userId, d.askId, { remove: new Set(d.keys), replace: new Map() }).catch((err: any) => console.error("picker: clearing a closed ask's backlog failed (non-fatal):", err?.message ?? err));
+  }
   // The working set (services/workingSet.ts): past and undated backlog items exit, with their facts, before the pool is built, so
   // the picker never re-judges them.
   if (!opts.dryRun) await import("./workingSet.js").then((W) => W.pruneBacklogs(userId, today, realPruneDeps)).catch((err: any) => console.error("picker: backlog prune failed (non-fatal):", err?.message ?? err));
   // Asks win contested slots, and goals must not starve for it (Royce, 2026-10-09): logged for review, once a day, nothing held.
   if (!opts.dryRun) await noteGoalStarvation(q, userId, now, today).catch((err: any) => console.error("picker: goal starvation check failed (non-fatal):", err?.message ?? err));
 
-  const backlogs = await q(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId]);
-  const queued = await q(`SELECT payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId]);
+  const { live: backlogs } = splitDeadBacklog(await q(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId]), closed);
+  const queued = (await q(`SELECT payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])).filter((c: any) => !servesClosedAsk({ askId: c.payload?.askId, reminder: c.payload?.reminder }, closed));
   const raw: RawCandidate[] = [
     ...backlogs.flatMap((b: any) =>
       (Array.isArray(b.items) ? b.items : []).filter((it: any) => !it?.unread).map((it: any) => ({
@@ -200,7 +226,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
       ...(knowledge?.delivered ?? []).map((d) => d.what),
     ].map(norm).filter(Boolean),
   );
-  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames) };
+  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames, closed) };
 
   // Skip unchanged days: same signature as the last run (holds that came due count as a change).
   const [last] = await q(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]);
