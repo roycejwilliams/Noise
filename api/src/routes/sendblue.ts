@@ -31,7 +31,8 @@ import { logJevShadow, startJevShadow } from "../services/jevShadow.js";
 import { relayFacts, reminderFacts } from "../services/relay.js";
 import { CO_WHY } from "../services/coVoice.js";
 import { assembleContext, type TurnContext } from "../services/turnContext.js";
-import { ABOUT_CO_INSTRUCTION, feedbackInstruction, readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
+import { readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
+import { planTextReply } from "../brain/index.js";
 import { dotsInstruction, momentInstruction, readMoment, saveLesson, whyContext, type Moment } from "../services/connectDots.js";
 import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
@@ -68,7 +69,7 @@ import { routerGateChecks } from "../harness/routerChecks.js";
 import { linkForReply, linksIn, mergeEarlierLink, type LinkRead } from "../services/linkReader.js";
 import { addEventFacts, addFact, addHint, addInstruction, dateConflictFact, gatherReplyFacts, goalLens, heldClaimsFrom } from "../harness/replyGrounding.js";
 import { runConversationReplyAgent, filterRelevantMemories, CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
-import { callLine, capabilityListInstruction } from "../services/capabilities.js";
+import { callLine } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
@@ -1882,11 +1883,6 @@ export function sendblueRouter(io: Server): Router {
         // With the one read, feedback is flagged there and Co saves it with its
         // tool (no word filter deciding for it); READ_TURN=off keeps the old capture.
         const reportedIssue = hasText && !oneRead ? await captureIssueReport(user.id, resolvedContent, recentConversation) : null;
-        const feedbackNote = feedbackInstruction(turnRead?.feedback ?? []);
-        if (feedbackNote) addInstruction(replyFacts, feedbackNote);
-        // An outright "what can you do" gets the whole list, from the registry; the open-work answer is for "what are you".
-        if (turnRead?.asksForList) addInstruction(replyFacts, capabilityListInstruction());
-        else if (turnRead?.aboutCo) addInstruction(replyFacts, ABOUT_CO_INSTRUCTION);
         // What has really reached the team, so "is it noted to the team?" gets
         // a true answer (2026-09-18: Co said feedback "goes straight to the
         // team" when nothing had been saved).
@@ -1911,9 +1907,10 @@ export function sendblueRouter(io: Server): Router {
             "They pointed out a problem with how you work. It's already saved for the team, so don't save it again. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. If they gave other, separate feedback in the same message, save that with saveFeedbackForTeam. Then respond to anything else they said.",
           );
         }
-        if (repeatContext) addInstruction(replyFacts, repeatContext);
-        if (walkinAskInstruction) addInstruction(replyFacts, walkinAskInstruction);
-        if (decision.clarifyContext) addInstruction(replyFacts, decision.clarifyContext);
+        // Co's judgment of this text (brain/index.ts): feedback to save, the list or where their work stands when they ask about
+        // Co, a repeated text answered once, the walk-in ask, the clarifying question, and the decision (act, ask, deliver), logged
+        // with the guards in force. The facts are assembled around it; the guards (grounding, tool limits, privacy) still veto.
+        planTextReply({ userId: user.id, read: turnRead, owed: owesReply, safetyConcern: crisisWording, clarify: decision.clarifyContext ?? null, repeat: repeatContext || null, walkinAsk: walkinAskInstruction || null, turn }, replyFacts);
 
         // Same strings downstream code (and the reply agent) already key on.
         const callAction =
