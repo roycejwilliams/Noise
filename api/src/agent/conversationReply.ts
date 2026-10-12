@@ -9,7 +9,7 @@ import { CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { CO_CORE, CO_LISTENING } from "../services/coCore.js";
 import { MOVES_GUIDE, moveOf, type Move } from "../services/moves.js";
 import { COACHING, MESSAGE_RHYTHM } from "../services/textRhythm.js";
-import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer } from "../harness/replyGrounding.js";
+import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, type ReplyFacts, addFact, withdrawColdStartSteer, withdrawDoorMoment } from "../harness/replyGrounding.js";
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE } from "../services/turnFailure.js";
@@ -254,7 +254,12 @@ export async function runConversationReplyAgent(
   const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
   // A retry is its own attempt, with its own clock.
   const turnStart = (opts.attempt ?? 1) === 1 && input.turnStartedAt ? input.turnStartedAt.getTime() : Date.now();
+  // A first read this turn (services/theDoor.ts), settled once the reply has gone out.
+  let firstRead: import("../services/theDoor.js").FirstReadPending | null = null;
   const { tools, state, flushLinks } = createConversationTools({
+    onFirstRead: (p) => {
+      firstRead = p;
+    },
     turnStartedAt: turnStart,
     isTeam,
     userId: input.userId,
@@ -324,6 +329,9 @@ export async function runConversationReplyAgent(
   // One question a reply (services/coldStart.ts): a reply that offers a call, or answers a safety concern, never also steers.
   if (input.safetyConcern) withdrawColdStartSteer(input.facts, "a safety concern this turn");
   else if (callOfferEligible) withdrawColdStartSteer(input.facts, "this reply offers a call");
+  // The same for a new member's first read (services/theDoor.ts): never beside a call offer or a safety concern.
+  if (input.safetyConcern) withdrawDoorMoment(input.facts, "a safety concern this turn");
+  else if (callOfferEligible) withdrawDoorMoment(input.facts, "this reply offers a call");
 
   const lastCoMessage = lastCoLine(input.recentConversation);
 
@@ -669,6 +677,13 @@ ${TOOL_TURN_RULES(input.isVoice)}
   if (cold && state.sent && !opts.dryRun && opts.record !== false) {
     const [C, R] = await Promise.all([import("../services/coldStart.js"), import("../harness/repeatAsk.js")]);
     await C.recordSteer(input.userId, { offered: cold.offered, why: cold.why, sent: state.sentMessages.join("\n"), seeds: cold.seeds, questionsIn: R.questionsIn }).catch((err: any) => console.error("conversationReply: recording the cold-start steer failed (non-fatal):", err?.message ?? err));
+  }
+
+  // A new member's first read counts as given only when a text that went out says it back (services/theDoor.ts settleFirstRead);
+  // otherwise the door stays open for the next reply. Bookkeeping, never a gate on the text.
+  const fr = firstRead as import("../services/theDoor.js").FirstReadPending | null;
+  if (fr && state.sent && !opts.dryRun && opts.record !== false) {
+    await import("../services/theDoor.js").then((d) => d.settleFirstRead(input.userId, fr, state.sentMessages.join("\n"))).catch((err: any) => console.error("conversationReply: settling the first read failed (non-fatal):", err?.message ?? err));
   }
 
   // Which tools Co chose, in order (evals/capabilities/probe.ts reads this).

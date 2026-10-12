@@ -303,6 +303,15 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 1, perDay: 3 },
     use: "Take on something that needs work over more than this one reply: when they ask you to do it (a goal they've stated with a date, like a venue by Friday, counts: they've asked you to get it done), or you offer and they say yes. That's how a goal keeps moving when they're not texting you, so you can report where it stands before they have to ask. Their goal in a few words, a quote of their own words asking for it, the steps you'll take, what you'll do first and in how many hours (1 to 336). Then you can tell them plainly what you'll do and when you'll get back to them, but never what you'll find or a result you can't be sure of (“I'll look through venues and text you Thursday”, not “I'll get you real options by Friday”). For a search that just needs repeating, saveAsk is enough. A question about how something is going (\"any updates on the venue?\") isn't a new task: your open tasks are in what you know, so answer from them. Explicit watch language in their message right now (\"let me know when...\", \"keep an eye out for X\", \"tell me if...\", or a yes to your offer to watch) is a look-out: startTask with lookout: true, never saveAsk; what you send for it is something they asked for.",
   },
+  // The door (services/theDoor.ts): once, in a new member's first conversation.
+  {
+    id: "first_read",
+    can: "In a new member's first conversation, once Co has heard enough, Co gives them their first read, once: what it understood they're after, in one line, and, when Co can text them first, the time it will text them by with what its first look at that turned up.",
+    tool: "firstRead",
+    // No daily cap: "once" is held in code (services/theDoor.ts), and a turn whose text dropped it may retry once.
+    limits: { perTurn: 1 },
+    use: "Give a new member their first read, once, when you've heard enough to say back what they're after. understood: one line of what you understood they're after, only from what they told you, in their words. lookFor: the one thing you'll look for first, in their own words. A word in either that they never used is refused. theirWords: their own words it comes from, copied exactly. Call it before sendReply. It schedules your first look and gives you the time you'll text them by, in their zone: say that time, never what you'll find. If it says no time can be promised, don't name one.",
+  },
   {
     id: "task_update",
     can: "Co keeps its tasks current as they tell it things: a step done, a new detail, a change of plan or timing.",
@@ -619,17 +628,21 @@ export const LIMITS: string[] = [
 // location and "going" only with a Co event today, the details kit only when
 // they've saved details or the message is about applying, a form, an intro or
 // their LinkedIn. Without a situation (tests, the review), everything is listed.
-export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean };
+// door: a new member's first read is still Co's to give (services/theDoor.ts doorOpen).
+export type Situation = { kit: boolean; tasks: boolean; eventToday: boolean; door?: boolean };
 const SITUATIONAL: Record<string, keyof Situation> = {
   kit: "kit",
   task_update: "tasks",
   task_close: "tasks",
   location_share: "eventToday",
   event_going: "eventToday",
+  first_read: "door",
 };
-export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean }): Situation {
-  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday };
+export function situationFor(o: { kitFields: number; message: string; openTasks: number; eventToday: boolean; doorOpen?: boolean }): Situation {
+  return { kit: o.kitFields > 0 || /\b(apply|applying|application|form|linkedin|resume|cv|intro|introduce|submit|sign up|signup)\b/i.test(o.message), tasks: o.openTasks > 0, eventToday: o.eventToday, ...(o.doorOpen === undefined ? {} : { door: o.doorOpen }) };
 }
+// An entry is left out only when its situation is known not to apply; one the caller didn't read (door) stays.
+const outOf = (s: Situation, key: keyof Situation) => s[key] === false;
 // Member-facing Mo (mo/memberFlow.ts) exists for members only when it can work: Mo is on (MO_ENABLED) and Co's X send keys
 // are set (the same keys as mo/xApi.ts xWriteConfigured). Until then members are never told it exists.
 export function memberMoOn(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -640,12 +653,12 @@ export function memberMoTools(): string[] {
   return ABILITIES.filter(isMemberMoAbility).map((a) => a.tool!).filter(Boolean);
 }
 export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
-  const active = (a: Ability) => (!opts.situation || !SITUATIONAL[a.id] || opts.situation[SITUATIONAL[a.id]]) && (!isMemberMoAbility(a) || memberMoOn());
+  const active = (a: Ability) => (!opts.situation || !SITUATIONAL[a.id] || !outOf(opts.situation, SITUATIONAL[a.id])) && (!isMemberMoAbility(a) || memberMoOn());
   return [...ABILITIES.filter((a) => (opts.team || !a.teamOnly) && active(a)).map((a) => a.can), ...LIMITS];
 }
 // The tools to leave out for a situation, so Co isn't offered what can't apply.
 export function toolsOutOfSituation(s: Situation): string[] {
-  return ABILITIES.filter((a) => a.tool && SITUATIONAL[a.id] && !s[SITUATIONAL[a.id]]).map((a) => a.tool!);
+  return ABILITIES.filter((a) => a.tool && SITUATIONAL[a.id] && outOf(s, SITUATIONAL[a.id])).map((a) => a.tool!);
 }
 
 // Tools only the team gets (teamOnly abilities).

@@ -69,6 +69,10 @@ export function lookoutOriginOf(source: string | null | undefined, followup: any
   return followup?.lookoutOrigin === "member" ? "member" : "co";
 }
 
+// Pure: a look that began as a new member's first read whose text promised nothing (services/theDoor.ts settleFirstRead): Co's own
+// look, never promised and never said on a call, so nothing about it may read as a promise Co made.
+export const isDoorLook = (t: { followup?: any }): boolean => t.followup?.lookoutFrom === "first_read";
+
 // Pure: a work task's commitment window, from its followup JSON.
 export function windowOf(followup: any): CommitWindow | null {
   const w = followup?.window;

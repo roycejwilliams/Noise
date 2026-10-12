@@ -47,7 +47,7 @@ import { DISCRETION_GUIDE } from "../harness/discretion.js";
 import type { EmotionalContext } from "../harness/emotion.js";
 import { CO_GROUNDING, CO_MEMBER_SAFETY } from "./coCore.js";
 import { collapseCarried, promiseFacts, type CarriedLine, type CorrectionRow } from "./callContext.js";
-import type { BriefView, CoTask } from "./coTasks.js";
+import { isDoorLook, type BriefView, type CoTask } from "./coTasks.js";
 import type { Receipt } from "./deliveryReceipts.js";
 import type { Claim, Kind as ClaimKind, Provenance } from "./factLabels.js";
 import type { GoalState, GoalStateRow } from "./goalEdges.js";
@@ -500,7 +500,8 @@ export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: 
     // A promise from a reply, or a look-out said aloud on a call: they heard it, so it's told (review of #113).
     // A look-out they asked for is their ask in Co's hands, never "your promise on a call" (review of #131: the label would have Co
     // say it promised on a call that never happened).
-    const kind: CarryKind = t.source === "lookout" && t.lookoutOrigin !== "member" ? "lookout" : t.source === "promise" ? "promise" : "task";
+    // A first read's look that promised nothing (coTasks.ts isDoorLook) is Co's own work, never "your promise": it was never said.
+    const kind: CarryKind = isDoorLook(t) ? "task" : t.source === "lookout" && t.lookoutOrigin !== "member" ? "lookout" : t.source === "promise" ? "promise" : "task";
     const what = kind === "task" ? t.goal : t.goal.replace(/^(?:Keep your promise|Keep an eye out, as promised on a call):\s*/i, "");
     const dueMs = windowDue ?? deadlineDue;
     items.push(item({ what, kind, state: due ? "due" : "outstanding", told: kind !== "task" || !!t.lastTextedAt, theyHaveIt: false, dueAt: dueMs !== null ? new Date(dueMs).toISOString() : null, ref: `task #${t.id}`, verifiedAt: latest(t.createdAt, t.lastTextedAt, t.theirReplyAt, ...(t.notes ?? []).map((n: any) => n?.at)) }));

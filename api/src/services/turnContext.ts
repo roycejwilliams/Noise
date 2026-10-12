@@ -86,6 +86,8 @@ export type TurnContext = {
   // Findable interests on file and the steering so far (services/coldStart.ts): while there are fewer than two, a reply may ask one
   // easy question that lets them name something Co could find (harness/replyGrounding.ts addColdStartSteer).
   coldStart?: import("./coldStart.js").ColdStartView | null;
+  // The door (services/theDoor.ts): a new member's first read, while it's still Co's to give.
+  door?: import("./theDoor.js").DoorView | null;
   // The Co event they're registered for today, if any (services/eventPresence.ts).
   todayEvent?: { eventApiId: string; name: string; startAt: string; timezone: string | null } | null;
   // Everything Co is carrying for them, one ordered view: due first, then outstanding, then done (carryingItems).
@@ -413,9 +415,11 @@ export async function assembleContext(
   // Without member knowledge, cold start reads their asks itself (never an empty list that would undercount their seeds).
   // No member knowledge (it failed closed): no cold-start steer either, since it would read their asks unstripped (re-review of #125).
   const coldStartP = knowledge ? import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null) : Promise.resolve(null);
+  const doorP = import("./theDoor.js").then((d) => d.loadDoor(userId)).catch(() => null);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   const coldStart = await coldStartP;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, knowledge, rules: knowledge ? memberRules(knowledge) : null };
+  const door = await doorP;
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.
