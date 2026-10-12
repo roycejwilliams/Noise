@@ -16,6 +16,7 @@ import { recordDecision } from "../harness/core.js";
 import { enqueueCandidate } from "../harness/proactive.js";
 import { signalTarget, type EmotionSignal } from "../harness/emotion.js";
 import { memberZone } from "./memberTime.js";
+import { SELF_HARM } from "./safetyText.js";
 
 export const HEAVY = {
   // How far back a signal can be and still start a check-in.
@@ -50,7 +51,7 @@ export type HeavyEpisode = {
 
 // Anything about hurting themselves is for the conversation, never an
 // automated text: no check-in is drafted from it.
-const SELF_HARM = /\b(?:suicid\w*|kill(?:ing)? (?:my|him|her|them)self|end(?:ing)? (?:it all|my life)|take my own life|hurt(?:ing)? myself|cut(?:ting)? myself|overdos\w+|self[- ]?harm|disappear|better off without me|(?:want|wanted|wanna) (?:to )?die|(?:can'?t|cannot) go on|no (?:point|reason) (?:in )?(?:living|going on|being here)|don'?t want to (?:be here|wake up|live|exist))\b/i;
+// Self-harm wording: the one pattern lives with the crisis wording (services/safetyText.ts), so every reader shares it.
 export const plain = (t: string) => t.replace(/[’‘]/g, "'");
 
 // Frustration that is really about Co (its calls, search, replies) is not a hard

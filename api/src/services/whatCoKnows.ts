@@ -76,6 +76,7 @@
 import { createHash } from "node:crypto";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
+import { safetySignal } from "./safetyText.js";
 
 // ---------------------------------------------------------------- types
 
@@ -324,25 +325,70 @@ export function forgetInSnapshot<T extends { work: string | null; place: string 
 
 // ---------------------------------------------------------------- the raw words (their texts, Co's lines, call transcripts, recaps)
 
-// Pure: one raw line as a reader may see it. A line that says something they removed (a live removal guard covers it, scored
-// against the removed text, the same strictness as every other guard) is dropped; a line that still says what they corrected away
-// keeps its words, so the conversation still reads, with the correction inline ("[since corrected: Oakland]"). Their own ask to
-// forget something keeps only that it was asked, never the thing. Unrelated lines are returned as they are.
+// Pure: one raw line as a reader may see it. A part of the line that says something they removed (a live removal guard covers it,
+// scored against the removed text, the same strictness as every other guard) is dropped, and only that part: a line of several
+// things ("Goals: a; b; c", "Wants: a, b, c") keeps the others. A line that still says what they corrected away keeps its words,
+// so the conversation still reads, with the correction inline ("[since corrected: Oakland]"); a one-word value (a city) is tagged
+// only where it's used as that kind ("live in Berkeley"), never in "studied at UC Berkeley". Their own ask to forget something
+// keeps only that it was asked. A line carrying a safety signal (crisis or self-harm wording, services/safetyText.ts) is NEVER
+// filtered, cut or rewritten: the safety reads see it whole, whatever was removed. Unrelated lines are returned as they are.
 export function guardText(text: string, rows: ForgottenRow[]): string | null {
   if (!rows.length || !text.trim()) return text;
+  if (safetySignal(text)) return text;
   const removed = rows.filter((r) => r.removed);
-  if (removed.length && forgets(text, removed, "their_words")) return null;
-  // "please forget the divorce stuff": the ask stays (Co should know it was asked and done), its subject doesn't.
-  const own = text.match(/^\s*(User\b[^:\n]{0,40}:\s*)([\s\S]*)$/i);
-  if (own && removalAsked(own[2], null) && removed.some((r) => words(plainOf(r.old)).some((w) => w.length >= 4 && new Set(words(own[2]).map(stem)).has(stem(w))))) return `${own[1]}(asked Co to forget something they'd told it; done)`;
+  let out = text;
+  if (removed.length) {
+    const kept = withoutRemovedParts(text, removed);
+    if (kept === null) return null;
+    out = kept;
+    // "please forget the divorce stuff": the ask stays (Co should know it was asked and done), its subject doesn't.
+    const own = out.match(/^\s*(User\b[^:\n]{0,40}:\s*)([\s\S]*)$/i);
+    if (own && removalAsked(own[2], null) && removed.some((r) => words(plainOf(r.old)).some((w) => w.length >= 4 && new Set(words(own[2]).map(stem)).has(stem(w))))) return `${own[1]}(asked Co to forget something they'd told it; done)`;
+  }
   const notes: string[] = [];
   for (const r of rows) {
-    if (!r.now || !words(plainOf(r.old)).length) continue;
-    if (!covers(plainOf(r.old), text) || covers(r.now, text)) continue;
+    if (!r.now || !correctedSays(r.old, r.now, out)) continue;
     const now = r.now.replace(/^[a-z]+: /, "").slice(0, 80);
     if (!notes.some((n) => squash(n) === squash(now))) notes.push(now);
   }
-  return notes.length ? `${text} [since corrected: ${notes.slice(0, 2).join("; ")}]` : text;
+  return notes.length ? `${out} [since corrected: ${notes.slice(0, 2).join("; ")}]` : out;
+}
+
+// Pure: the line with only the parts that say a removed thing taken out, or null when every part did. Parts: the line split on
+// ";" after any lead-in ("User said:", "Goals:"), and a labelled list ("Wants: a, b, c") split on its commas.
+function withoutRemovedParts(text: string, removed: ForgottenRow[]): string | null {
+  const gone = (t: string) => !!forgets(t, removed, "their_words");
+  if (!gone(text) && !removed.some((r) => words(plainOf(r.old)).some((w) => new Set(words(text).map(stem)).has(stem(w))))) return text;
+  const m = text.match(/^(\s*[^:\n]{1,40}:\s*)([\s\S]*)$/);
+  const head = m ? m[1] : "";
+  const body = m ? m[2] : text;
+  const isLabel = !!m && !/^\s*(User|Co)\b/i.test(head);
+  let sep = /;\s*/.test(body) ? "; " : isLabel && /,\s*/.test(body) ? ", " : null;
+  if (!sep) return gone(text) ? null : text;
+  const parts = body.split(sep === "; " ? /;\s*/ : /,\s*/);
+  const keep = parts.filter((p) => !(p.trim() && gone(p)));
+  if (keep.length === parts.length) return gone(text) ? null : text;
+  if (!keep.some((p) => p.trim())) return null;
+  return `${head}${keep.join(sep)}`;
+}
+
+// Pure: whether a raw line still says a value they corrected away. A value of two or more real words: the line covers it (and
+// doesn't already say what's true now). A one-word value: only where it's used as a place ("in", "to", "live in", "based in",
+// "from", "near", or a "Where:"/"City:" line), since that's the kind of one-word value Co holds (a city), and never as part of a
+// longer name ("Berkeley Rep") or after "at UC".
+export function correctedSays(old: string, now: string, line: string): boolean {
+  const o = plainOf(old);
+  const w = words(o);
+  if (!w.length || covers(now, line)) return false;
+  if (w.length >= 2) return covers(o, line);
+  const v = w[0].replace(/[^a-z0-9']/g, "");
+  const re = new RegExp(`(?:\\b(?:live|lives|living|lived|based|located|moved|move|moving|home|from|near|around|staying|stay)\\s+(?:in\\s+|to\\s+|out of\\s+|back to\\s+|over in\\s+)?|\\b(?:in|to)\\s+|^\\W*(?:where|city|place|location|home base)\\s*:\\s*)(${v})\\b`, "gim");
+  for (const m of line.matchAll(re)) {
+    // Part of a longer name ("Berkeley Rep", "Berkeley Bowl") isn't the place.
+    const after = line.slice((m.index ?? 0) + m[0].length);
+    if (!/^\s+[A-Z]/.test(after)) return true;
+  }
+  return false;
 }
 
 // Pure: every line of a block through guardText (a recap, a call's system prompt), lines it drops left out.
@@ -760,7 +806,7 @@ export function queuedSays(text: string, a: Applied): boolean {
   const old = plainOf(a.was);
   if (!words(old).length) return false;
   if (a.now == null) return words(old).length >= 2 && !OWN_KIND_ONLY.some((p) => a.ref.startsWith(p)) && covers(old, text);
-  return covers(old, text) && !covers(a.now, text);
+  return correctedSays(old, a.now, text);
 }
 
 // What's waiting to go out or be worked on that rests on an item they just removed or corrected: proactive candidates (offers for
@@ -812,11 +858,16 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
     for (const d of sends) {
       const k = `d${d.id}`;
       if (done.has(k)) continue;
-      if (!tied(String(d.target_key ?? ""), String(d.after ?? "")) && !queuedSays(String(d.messages), a)) continue;
+      // A correction never loses an owed text: it matches only by id or by a specific (two or more word) old value, and the text
+      // stays queued, marked for a re-check, never skipped (review of 5b3dcfe: Berkeley to Oakland skipped "Here are the Berkeley
+      // Rep tickets you asked about"). A removal takes out a queued text that says the removed thing.
+      const byId = tied(String(d.target_key ?? ""), String(d.after ?? ""));
+      if (removing ? !byId && !queuedSays(String(d.messages), a) : !byId && !(words(plainOf(a.was)).length >= 2 && queuedSays(String(d.messages), a))) continue;
       done.add(k);
-      // A queued text that rests on what changed doesn't go: it said the old thing.
-      const r = await db.query(`UPDATE deferred_sends SET status = 'skipped', error = $3 WHERE id = $1 AND user_id = $2 AND status = 'queued'`, [d.id, userId, because.slice(0, 300)]);
-      if (r.rowCount) out.push({ kind: "deferred_send", id: String(d.id), what: `${d.type}`, action: "cancelled", because });
+      const r = removing
+        ? await db.query(`UPDATE deferred_sends SET status = 'skipped', error = $3 WHERE id = $1 AND user_id = $2 AND status = 'queued'`, [d.id, userId, because.slice(0, 300)])
+        : await db.query(`UPDATE deferred_sends SET error = $3 WHERE id = $1 AND user_id = $2 AND status = 'queued'`, [d.id, userId, `recheck: ${because}`.slice(0, 300)]);
+      if (r.rowCount) out.push({ kind: "deferred_send", id: String(d.id), what: `${d.type}`, action: removing ? "cancelled" : "recheck", because });
     }
     if (kind === "ask") {
       const r = await db.query(`UPDATE network_backlogs SET items = '[]'::jsonb, updated_at = NOW() WHERE user_id = $1 AND ask_id = $2 AND jsonb_array_length(items) > 0`, [userId, id]);

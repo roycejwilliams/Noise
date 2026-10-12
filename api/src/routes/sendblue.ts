@@ -1541,7 +1541,8 @@ export function sendblueRouter(io: Server): Router {
           introRecordFacts = introFacts(memoriesResult.rows);
           // A memory that says something they had removed (services/whatCoKnows.ts) is left out too.
           const removedRows = await import("../services/whatCoKnows.js").then(async (W) => ({ W, rows: (await W.forgottenRows(user.id)).filter((r) => r.removed) })).catch(() => null);
-          if (removedRows?.rows.length) candidates.splice(0, candidates.length, ...candidates.filter((c) => !removedRows.W.forgets(c, removedRows.rows, "their_words")));
+          // guardText: only the parts that say it go, and a line with a safety signal is always kept whole.
+          if (removedRows?.rows.length) candidates.splice(0, candidates.length, ...candidates.map((c) => removedRows.W.guardText(c, removedRows.rows)).filter((c): c is string => c !== null));
           return candidates.length ? await filterRelevantMemories(resolvedContent, candidates) : "";
         })().catch(() => "");
         const routeInput = {
