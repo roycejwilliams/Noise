@@ -3,6 +3,7 @@
 // must never reach an image host or a linked site), and an unknown, malformed, expired or taken-down id is the same plain 404.
 // Nothing here writes. Mounted by api/src/server.ts and co-test/src/server.ts behind the public-page rate limit.
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { assetIdsIn, coPageBase, loadCoPage, loadShared, noteViewed, type StoredCoPage } from "../services/coPages/store.js";
 import { notFoundPage, renderCoPage } from "../services/coPages/template.js";
 import { isDeckData, renderDeck, type DeckData } from "../services/coPages/deck.js";
@@ -77,10 +78,12 @@ export function createCoPageRouter(
     res.set("Content-Disposition", `attachment; filename="${file.filename}"`);
     return res.status(200).type(file.contentType).send(file.data);
   };
-  router.get("/v/:shareId/deck.pdf", async (req, res) => sendFile(await loadShare(String(req.params.shareId ?? "")).catch(() => null), "pdf", true, res));
-  router.get("/v/:shareId/deck.pptx", async (req, res) => sendFile(await loadShare(String(req.params.shareId ?? "")).catch(() => null), "pptx", true, res));
-  router.get("/:id/deck.pdf", async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pdf", false, res));
-  router.get("/:id/deck.pptx", async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pptx", false, res));
+  // Downloads make files, so they get their own tighter limit (review of PR 4), on top of the public-page one.
+  const downloads = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: "draft-7", legacyHeaders: false, message: "Too many downloads; try again in a few minutes." });
+  router.get("/v/:shareId/deck.pdf", downloads, async (req, res) => sendFile(await loadShare(String(req.params.shareId ?? "")).catch(() => null), "pdf", true, res));
+  router.get("/v/:shareId/deck.pptx", downloads, async (req, res) => sendFile(await loadShare(String(req.params.shareId ?? "")).catch(() => null), "pptx", true, res));
+  router.get("/:id/deck.pdf", downloads, async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pdf", false, res));
+  router.get("/:id/deck.pptx", downloads, async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pptx", false, res));
   // A share link (store.ts createShareLink): the same artifact, view-only, at its own revocable link. Revoked or unknown: 404.
   router.get("/v/:shareId/a/:assetId", async (req, res) => sendAsset(await loadShare(String(req.params.shareId ?? "")).catch(() => null), String(req.params.assetId ?? ""), res));
   router.get("/v/:shareId", async (req, res) => {
