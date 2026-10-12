@@ -275,6 +275,8 @@ async function queueShareQuestion(event: { api_id: string; name: string; start_a
   };
   // Cheap gates first: the model read of their asks only runs when everything else says it's due.
   if (!S.shareQuestionDue({ ...base, offerable: 1 }).due) return false;
+  // The matching pause: not queued while it's on; the next run (every 15 minutes) queues it once it lifts, before the start.
+  if (await (await import("./roomMatching.js")).matchingPause(event.api_id)) return false;
   const offer = await S.offerableShareAsks(intent);
   if (!S.shareQuestionDue({ ...base, offerable: offer.length }).due) return false;
   const { enqueueCandidate } = await import("../harness/proactive.js");

@@ -547,6 +547,9 @@ export const proactiveRegistry: ProactiveRegistry = {
       const offer = await S.offerableShareAsks(intent);
       const due = S.shareQuestionDue({ notGoing: f.notGoing, nameAskPending: false, shareAsked: Boolean(pres[0]?.share_asked_at), hasShareableAsk: shareableAsks(intent).length > 0, offerable: offer.length, startAt: p.startAt, now: new Date() });
       if (!due.due) return skip(due.why);
+      // The matching pause (services/roomMatching.ts): the question waits, and expires only when the event starts.
+      const paused = await (await import("../services/roomMatching.js")).matchingPause(p.eventId);
+      if (paused) return { defer: new Date(Date.now() + 30 * 60_000), reason: paused };
       const text = S.roomShareAskMessage(p.name, offer);
       if (!text) return skip("nothing to offer");
       c.payload.offered = offer.map((a) => a.id);

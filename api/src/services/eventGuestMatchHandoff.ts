@@ -316,7 +316,36 @@ export async function afterDirectAskSent(p: { eventId: string; eventName: string
 // of existing templates — appsubmit/welcome/otp/etc — not a generic
 // send-anything utility, so a new Resend call here is more honest than
 // bolting an unrelated template onto it).
-async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<boolean> {
+// Pure: what a Resend reply means for the intro. The same idempotency key with a different body ("invalid_idempotent_request")
+// means an earlier send with this key went: the email is out, so the pair is recorded as introduced. A concurrent request
+// with the key is still in flight: not sent yet, the claim stays until it goes stale.
+export function introSendOutcome(error: { name?: string | null; statusCode?: number | null } | null | undefined): "sent" | "already_sent" | "in_flight" | "failed" {
+  if (!error) return "sent";
+  if (error.name === "invalid_idempotent_request") return "already_sent";
+  if (error.name === "concurrent_idempotent_requests") return "in_flight";
+  return "failed";
+}
+
+// Pure: the email itself, from the pair in one order (by id) and the event's own name, so a retry after a crash builds the
+// very same email the first try did (the idempotency key covers the same body only).
+export function introEmailContent(eventName: string, x: { user_id: string; first_name: string }, y: { user_id: string; first_name: string }): { subject: string; html: string; first: string; second: string } {
+  const [a, b] = x.user_id < y.user_id ? [x, y] : [y, x];
+  return {
+    subject: `Introducing ${a.first_name} and ${b.first_name}`,
+    html: galleryEmail({
+      preview: `From ${eventName}: Co thinks you two should meet.`,
+      eyebrow: "An introduction",
+      headline: `${a.first_name}, meet ${b.first_name}.`,
+      // Sent once both say yes: in the room, or after it. Never "before it".
+      body: [`You were both at ${eventName}, and Co thought you two should meet. Consider this your introduction.`],
+      close: "You both said yes. Take it from here.",
+    }),
+    first: a.user_id,
+    second: b.user_id,
+  };
+}
+
+async function sendIntroEmail(eventId: string, _callerEventName: string, a: MatchNudgeCandidate, b: MatchNudgeCandidate): Promise<boolean> {
   const { a: aYes, b: bYes } = await bothOptedIn(eventId, a.user_id, b.user_id);
   const RM = await import("./roomMatching.js");
   // The emergency pause holds the email (the pair stays both_yes); services/roomMatching.ts retryHeldIntros sends it once
@@ -343,15 +372,15 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
     return false;
   }
 
-  const subject = `Introducing ${a.first_name} and ${b.first_name}`;
-  const html = galleryEmail({
-    preview: `From ${eventName}: Co thinks you two should meet.`,
-    eyebrow: "An introduction",
-    headline: `${a.first_name}, meet ${b.first_name}.`,
-    // Sent once both say yes: in the room, or after it. Never "before it".
-    body: [`You were both at ${eventName}, and Co thought you two should meet. Consider this your introduction.`],
-    close: "You both said yes. Take it from here.",
-  });
+  // One source for the event's name (services/roomMatching.ts eventTiming), whoever replied first and on every retry. Unreadable
+  // right now: counted as a failed try (retried by retryHeldIntros), never sent under another name.
+  const eventName = (await RM.eventTiming(eventId).catch(() => null))?.name ?? null;
+  if (!eventName) {
+    if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
+    await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "event name unreadable");
+    return false;
+  }
+  const { subject, html } = introEmailContent(eventName, a, b);
   if (!ALLOW_REAL_SENDS) {
     console.log(`[sendIntroEmail stub, ${process.env.NODE_ENV ?? "no NODE_ENV"}] to ${a.email}, ${b.email}: ${subject}`);
   } else {
@@ -361,7 +390,13 @@ async function sendIntroEmail(eventId: string, eventName: string, a: MatchNudgeC
       // email") — visibly present so a reply-all naturally includes it.
       // One email per pair per event, even if a stale claim is ever taken again after a send went out (Resend keeps the key 24h).
       const { error } = await resend.emails.send({ from: CO_EMAIL_FROM, to: [a.email, b.email], cc: ["hello@copatible.com"], subject, html }, { idempotencyKey: `event-intro:${eventId}:${[a.user_id, b.user_id].sort().join(":")}` });
-      if (error) throw new Error(error.message);
+      const outcome = introSendOutcome(error as any);
+      if (outcome === "already_sent") console.log(`sendIntroEmail: ${eventId} pair was already emailed under this key; recording it as sent`);
+      else if (outcome === "in_flight") {
+        // Another send with this key is still going: leave the claim to go stale (a retake then gets the original reply).
+        await RM.noteIntroFailed(eventId, a.user_id, b.user_id, "a send with this key is in flight");
+        return false;
+      } else if (error) throw new Error(error.message);
     } catch (err: any) {
       console.error("sendIntroEmail: send failed (non-fatal):", err?.message ?? err);
       if (claim === "claimed") await RM.releaseIntroClaim(eventId, a.user_id, b.user_id);
