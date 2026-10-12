@@ -26,7 +26,8 @@ export type CallAuthKind = "router_decision" | "scheduled_call" | "user_initiate
 
 export type CallAuthorization = { kind: CallAuthKind; scheduledCallId?: string };
 
-export const LIVE_CALL_STATUSES = ["initiated", "ringing", "in-progress"];
+// "dialing": claimed by a dial that hasn't reached Twilio yet (services/callTrigger.ts claimDial, concurrency audit 2026-10-12).
+export const LIVE_CALL_STATUSES = ["dialing", "initiated", "ringing", "in-progress"];
 export const LIVE_CALL_RECLAIM_MINUTES = 30;
 // Minimum gap since the last call Co placed. Short for calls the person just
 // asked for (only stops a double-fire); long for anything Co starts itself.

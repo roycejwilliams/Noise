@@ -72,8 +72,10 @@ export function artifactTools(ctx: ConversationToolContext, o: { say: (text: str
         const zone = await (await import("../services/memberTime.js")).memberZone(ctx.userId).catch(() => null);
         const day = (d: Date) => { try { return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: zone ?? "America/Los_Angeles" }); } catch { return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "America/Los_Angeles" }); } };
         const until = r.kept ? "for good" : r.expiresAt ? `until ${day(r.expiresAt)}` : "";
-        ctx.facts?.add("did_this_turn", `Kept their ${noun((got.p as any).kind)} "${got.p.title}" ${until} (same link).`);
-        return { ok: true, note: `Done: it stays ${until}, same link. Say so in a few words.` };
+        // A reset that landed first moved it to a fresh link; the keep followed it there (store.ts keepCoPage).
+        const link = r.moved ? `its new link, ${r.moved.url}, since the link was just reset` : "same link";
+        ctx.facts?.add("did_this_turn", `Kept their ${noun((got.p as any).kind)} "${got.p.title}" ${until} (${link}).`);
+        return { ok: true, note: `Done: it stays ${until}, ${link}. Say so in a few words${r.moved ? ", with the new link" : ""}.` };
       },
     }),
     shareArtifact: tool({

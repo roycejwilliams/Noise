@@ -10,7 +10,7 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { DateTime } from "luxon";
 import type { Server } from "socket.io";
 import pool from "../db/db.js";
-import { withAdvisoryLock } from "../db/advisoryLock.js";
+import { LockWaitTimeout, withAdvisoryLock } from "../db/advisoryLock.js";
 import { sendSMS } from "../otpActions.js";
 import elevenlabs from "../services/elevenlabs.js";
 import { generateEmbedding } from "../services/embeddings.js";
@@ -2714,6 +2714,16 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
       try {
         // Tracked so a restart waits for a reply mid-draft (services/shutdown.ts).
         await track(lockKey ? withPhoneLock(lockKey, run) : run());
+      } catch (err) {
+        // The phone's lock never came free (concurrency audit, 2026-10-12): the turn never ran, and it never runs unlocked. It's
+        // re-queued from what was saved: the replay re-checks that no newer text took it over and that Co hasn't answered since. A
+        // replay that also can't get the lock tells them plainly, so they're never left with nothing.
+        if (!(err instanceof LockWaitTimeout)) throw err;
+        if (!res.headersSent) res.status(200).send({ received: true, action: "queued" });
+        if (lockKey && isGenuineInbound && !isGroupMessage) {
+          if (!replay && typeof handle === "string" && handle) scheduleTurnReplay(handle, TURN_REPLAY_AFTER_MS);
+          else await tellMemberTurnFailed(lockKey, replay?.receivedAt ?? turnStartedAt, "turn_error", "LockWaitTimeout");
+        }
       } finally {
         if (typeof handle === "string" && handle && !req.body?.is_outbound && req.body?.type !== "typing") {
           pool.query(`UPDATE inbound_webhook_handles SET finished_at = NOW() WHERE handle = $1`, [handle]).catch(() => {});

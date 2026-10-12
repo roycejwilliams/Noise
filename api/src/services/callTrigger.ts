@@ -9,7 +9,7 @@ import { prebuildCallBriefing } from "./callBriefing.js";
 import { prebuildOpening } from "./callOpening.js";
 import { buildCallContextSummary } from "./callContext.js";
 import { recordDecision } from "../harness/core.js";
-import { decideCall, gatherCallState, type CallAuthorization } from "../harness/callGate.js";
+import { decideCall, gatherCallState, LIVE_CALL_RECLAIM_MINUTES, LIVE_CALL_STATUSES, type CallAuthorization } from "../harness/callGate.js";
 
 // Extracted from co.ts's POST /call/:user_id so a second call site (Co
 // triggering a call from within a texting conversation, see sendblue.ts's
@@ -67,6 +67,15 @@ export async function triggerCallForUser(
     return { success: false, error: gateResult.error ?? "Call blocked." };
   }
 
+  // One dial at a time (concurrency audit, 2026-10-12): the gate above reads call_status, which used to be written only after Twilio
+  // placed the call, so two triggers at once (the */5 and */15 jobs together, or a "call me" text) both passed and both dialed. The
+  // dial is claimed first; the claim is let go if the dial fails, back to the status it replaced.
+  const claim = await claimDial(userId);
+  if (!claim) {
+    await recordDecision({ layer: 8, decision: "call.gate", userId, outcome: "skip", action: "blocked", reason: "another dial claimed it first", checks: [{ name: "no_live_call", pass: false, reason: "a call is already being placed" }] }).catch(() => {});
+    return { success: false, error: "A call is already being placed." };
+  }
+
   const statusCallbackUrl = `${process.env.API_URL}/co/call-status`;
 
   // Calls run on Co's ElevenLabs agent (services/elevenLabsCalls.ts): Twilio
@@ -79,7 +88,9 @@ export async function triggerCallForUser(
   prebuildOpening(userId, user.first_name ?? "", "outbound", summary);
   // And the clock and what Co has found for them, so the call never waits on a lookup (services/callBriefing.ts).
   prebuildCallBriefing(userId);
-  const call = await twilioClient.calls.create({
+  let call: { sid: string };
+  try {
+    call = await twilioClient.calls.create({
     to: user.phone_number,
     from: process.env.TWILIO_PHONE_NUMBER!,
     url: `${process.env.API_URL}/co/el/outbound-twiml?u=${encodeURIComponent(userId)}&t=${encodeURIComponent(issueCallToken(userId))}`,
@@ -88,9 +99,29 @@ export async function triggerCallForUser(
     statusCallbackEvent: ["ringing", "answered", "completed"],
     statusCallbackMethod: "POST",
     timeout: 20,
-  });
+    });
+  } catch (err) {
+    await releaseDial(userId, claim).catch(() => {});
+    throw err;
+  }
   await recordCallPlaced(userId, user.first_name, call.sid, io);
   return { success: true, call_sid: call.sid };
+}
+
+// The dial claim: call_status 'dialing' (a live status to the gate, harness/callGate.ts), set only when no live call holds it. A live
+// status older than the gate's reclaim window is stale and can be claimed over, as the gate itself allows.
+export const DIAL_CLAIM_SQL = `WITH prev AS (SELECT call_status, call_status_updated_at FROM users WHERE id = $1 FOR UPDATE)
+   UPDATE users u SET call_status = 'dialing', call_status_updated_at = NOW() FROM prev
+   WHERE u.id = $1 AND NOT (COALESCE(prev.call_status, '') = ANY($2::text[]) AND prev.call_status_updated_at > NOW() - make_interval(mins => $3))
+   RETURNING prev.call_status AS prev_status, prev.call_status_updated_at AS prev_at`;
+type DialClaim = { prevStatus: string | null; prevAt: Date | null };
+async function claimDial(userId: string): Promise<DialClaim | null> {
+  const { rows } = await pool.query(DIAL_CLAIM_SQL, [userId, LIVE_CALL_STATUSES, LIVE_CALL_RECLAIM_MINUTES]);
+  return rows[0] ? { prevStatus: rows[0].prev_status ?? null, prevAt: rows[0].prev_at ? new Date(rows[0].prev_at) : null } : null;
+}
+// The dial failed: back to what it was, unless something has moved it on since.
+async function releaseDial(userId: string, c: DialClaim): Promise<void> {
+  await pool.query(`UPDATE users SET call_status = $2, call_status_updated_at = $3 WHERE id = $1 AND call_status = 'dialing'`, [userId, c.prevStatus, c.prevAt]);
 }
 
 // The call record, live status and app event, the same for either provider.

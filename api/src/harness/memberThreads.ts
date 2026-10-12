@@ -352,11 +352,19 @@ export async function applyThreadProposal(
     const queued: string[] = [];
     for (const o of opened) {
       const feeling = await feelingAt(userId, o.quotedAt);
-      const { rows } = await pool.query(
-        `INSERT INTO member_threads (user_id, text, opened_quote, opened_at, feeling, due_date, next_step, kind)
-         VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8) RETURNING id`,
-        [userId, o.text, o.quote, o.quotedAt + ":00Z", feeling, o.dueDate, o.nextStep, o.kind],
-      );
+      // The same thread from the same words is open once (a unique index, db/migrations.ts concurrencyMigrations, concurrency audit 2026-10-12): two
+      // rebuilds applying one proposal used to open it twice and queue two check-ins. The second insert is refused and skipped.
+      const { rows } = await pool
+        .query(
+          `INSERT INTO member_threads (user_id, text, opened_quote, opened_at, feeling, due_date, next_step, kind)
+           VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8) RETURNING id`,
+          [userId, o.text, o.quote, o.quotedAt + ":00Z", feeling, o.dueDate, o.nextStep, o.kind],
+        )
+        .catch((err: any) => {
+          if (err?.code === "23505") return { rows: [] as any[] };
+          throw err;
+        });
+      if (!rows[0]) continue;
       if (o.kind === "commitment" && o.dueDate && o.dueLabel && (await queueCommitmentFollowUp(userId, rows[0].id, o.text, o.dueDate, o.dueLabel, zone))) queued.push(rows[0].id);
     }
     // A thread they talked about again is fresh, even if nothing changed.

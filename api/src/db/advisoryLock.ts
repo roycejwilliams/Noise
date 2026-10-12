@@ -30,11 +30,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // replica and every request-handling process, since the lock lives in
 // Postgres rather than one process's memory.
 //
-// Waiting polls pg_try_advisory_lock without holding a connection. After
-// waitMs it runs fn without the lock rather than dropping the work — same
-// fallback on a connect() failure (2026-09-17 code review: an uncaught
-// rejection there used to throw out of this function entirely, dropping the
-// inbound message instead of just running it unserialized).
+// Waiting polls pg_try_advisory_lock without holding a connection. It never
+// runs fn without the lock (concurrency audit, 2026-10-12: after a 90s wait
+// the second text's turn used to run alongside the first, which a slow search
+// turn outlasts: two replies, the wrong branch on a double yes, duplicate
+// tasks). The wait outlasts the holder's own hard ceiling (maxHoldMs), so a
+// waiter always gets the lock in the end; if it still can't (the database
+// unreachable the whole time), it throws LockWaitTimeout and the caller
+// decides, without the work having run.
 //
 // A holder's lock is extended in holdMs steps for as long as fn is still
 // running (2026-09-17 code review), not force-released at a single fixed
@@ -44,15 +47,23 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // to prevent. maxHoldMs is the actual safety net: a genuinely hung turn
 // (e.g. a fetch with no timeout of its own) still can't block one phone's
 // messages forever.
+export class LockWaitTimeout extends Error {
+  constructor(public readonly key: string, public readonly waitedMs: number) {
+    super(`advisoryLock: couldn't get the lock for ${key} within ${waitedMs}ms`);
+    this.name = "LockWaitTimeout";
+  }
+}
+// The wait outlasts the hard ceiling (checked every holdMs) by this much.
+export const LOCK_WAIT_MARGIN_MS = 60_000;
 export async function withAdvisoryLock<T>(
   key: string,
   fn: () => Promise<T>,
   opts: { waitMs?: number; holdMs?: number; maxHoldMs?: number } = {},
 ): Promise<T> {
   const lockId = lockKeyToInt(key);
-  const waitMs = opts.waitMs ?? 90_000;
   const holdMs = opts.holdMs ?? 120_000;
   const maxHoldMs = opts.maxHoldMs ?? 10 * 60_000;
+  const waitMs = opts.waitMs ?? maxHoldMs + holdMs + LOCK_WAIT_MARGIN_MS;
   const started = Date.now();
   let client: PoolClient | null = null;
   while (!client && Date.now() - started < waitMs) {
@@ -79,13 +90,13 @@ export async function withAdvisoryLock<T>(
     await sleep(250);
   }
   if (!client) {
-    // Never drop the message: whether nobody ever got the lock in time, or
-    // every connect() attempt in the loop failed, the turn still runs, just
-    // unserialized against any other in-flight turn for this same key.
-    console.error(`advisoryLock: couldn't get the lock for ${key} within ${waitMs}ms, running without it`);
-    return fn();
+    // Never run unserialized. The caller re-queues the work (routes/sendblue.ts: the text's turn runs again from what was saved).
+    console.error(`advisoryLock: couldn't get the lock for ${key} within ${waitMs}ms; not running without it`);
+    throw new LockWaitTimeout(key, waitMs);
   }
   const held = client;
+  // The ceiling counts from when the lock was got, not from when the wait began: a turn that waited in line gets its full time.
+  const acquired = Date.now();
   let released = false;
   const release = async () => {
     if (released) return;
@@ -98,7 +109,7 @@ export async function withAdvisoryLock<T>(
   const armTimer = () => {
     timer = setTimeout(() => {
       if (done) return;
-      if (Date.now() - started >= maxHoldMs) {
+      if (Date.now() - acquired >= maxHoldMs) {
         console.error(`advisoryLock: ${key} held over ${maxHoldMs}ms (past the hard ceiling), releasing regardless`);
         release();
         return;

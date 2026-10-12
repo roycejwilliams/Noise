@@ -174,21 +174,26 @@ export function pageTools(
         const look = await lookFor(input, was, source.theirs);
         if ("error" in look) return { ok: false, error: look.error };
         const next = await withImages(pageDataFrom(input, look), was);
-        const r = await store.updateCoPage(pick.id, ctx.userId, next, source);
+        const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null });
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
+        // Another change landed after this one read the page (concurrency audit, 2026-10-12): never written over.
+        if (!r.ok && r.conflict) {
+          o.notDone("The page wasn't changed: another change to it landed just now.");
+          return { ok: false, error: "Not changed: another change to this page landed after you read it. Open it again and make this change on the newest version, or tell them plainly it isn't changed yet." };
+        }
         if (!r.ok) {
           o.notDone(`The page wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
-        if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: pick.id, medium: "page", event: "revised" }).catch(() => {});
-        const { text, confirm } = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.`, input.alsoAnswer);
+        if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: r.moved?.id ?? pick.id, medium: "page", event: "revised" }).catch(() => {});
+        const { text, confirm } = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
-          ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link), but the text saying so didn't send.`);
+          ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The page is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
         ctx.onLinkDelivered?.();
         confirm();
-        ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, same link) and told them what changed.`);
+        ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}) and told them what changed.`);
         return { ok: true, note: "Same page, same link; the text said what changed. Nothing more goes out this turn, so don't call sendReply." };
       },
     }),

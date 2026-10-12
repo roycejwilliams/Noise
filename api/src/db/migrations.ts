@@ -2900,4 +2900,44 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)
     .catch((err: Error) => console.error("proactive_sends_kinded index init failed:", err));
+  await concurrencyMigrations();
+}
+
+// Concurrency audit (2026-10-12). Each step is idempotent and on its own: one failing never blocks the rest or startup.
+export async function concurrencyMigrations(): Promise<void> {
+  // A reset's old row points at the fresh id, so a change or keep that raced it follows it there (services/coPages/store.ts).
+  await pool.query(`ALTER TABLE co_pages ADD COLUMN IF NOT EXISTS moved_to TEXT NULL`).catch((err: Error) => console.error("co_pages.moved_to init failed:", err));
+  // One snapshot rebuild per member at a time, and the newer picture is never replaced by an older one (harness/personSnapshot.ts).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS person_snapshot_claims (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT NOT NULL,
+        claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        again BOOLEAN NOT NULL DEFAULT false
+      )`,
+    )
+    .then(() => pool.query(`ALTER TABLE person_snapshots ADD COLUMN IF NOT EXISTS built_from TIMESTAMPTZ NULL`))
+    .catch((err: Error) => console.error("person_snapshot_claims init failed:", err));
+  // The same thread from the same words is open once (harness/memberThreads.ts). Copies already open are closed first, the oldest
+  // kept, never deleted: status 'changed' with closed_at, so the rows stay on file.
+  await pool
+    .query(
+      `WITH ranked AS (
+         SELECT id, row_number() OVER (PARTITION BY user_id, md5(opened_quote), md5(lower(text)) ORDER BY created_at, id) AS rn
+         FROM member_threads WHERE status IN ('open', 'waiting')
+       )
+       UPDATE member_threads t SET status = 'changed', closed_at = NOW() FROM ranked WHERE t.id = ranked.id AND ranked.rn > 1`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE UNIQUE INDEX IF NOT EXISTS member_threads_one_open ON member_threads (user_id, md5(opened_quote), md5(lower(text))) WHERE status IN ('open', 'waiting')`,
+      ),
+    )
+    .catch((err: Error) => console.error("member_threads_one_open init failed:", err));
+  // One live copy of a photo per member (services/memberAssets.ts keepAsset). Numbered images only: a cleaned-up copy is kept as -N
+  // and may share its original's bytes. If copies already exist this fails and is logged; keepAsset works either way.
+  await pool
+    .query(`CREATE UNIQUE INDEX IF NOT EXISTS member_assets_one_live_copy ON member_assets (owner_user_id, sha256) WHERE wiped_at IS NULL AND n > 0`)
+    .catch((err: Error) => console.error("member_assets_one_live_copy init failed (copies already on file?):", err.message));
 }
