@@ -5,7 +5,7 @@
 // Hourly: each signal's rate over the last 6 hours vs. the previous 7 days.
 // It alerts when the recent rate is both above its floor and at least double
 // the baseline, with enough volume to mean something. Each signal alerts at
-// most once every 12 hours. Alerts go to the decision log only (monitor.alert): Royce, 2026-10-12: "Remove the co alerts those are
+// most once every 12 hours. Alerts go to the decision log only (monitor.alert): Royce, 2026-10-11: "Remove the co alerts those are
 // not helpful. I don't understand why they were being sent to my email." The emails were rate statistics (a tool used more than its
 // week, often from a test run); read them in harness_decisions instead. The two alerts a person must act on still email
 // (alertTeamNow): a member who may not be safe, and texts to someone paused.
