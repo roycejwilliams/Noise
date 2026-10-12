@@ -19,7 +19,16 @@ import { mentionsIn } from "./offerGuard.js";
 // call it goes to startTask or researchBrief (background work that texts them), never blocking the voice.
 // steerAwayFrom and noteRoomTaste (2026-10-11, the call-memory gap): "stop sending me crypto stuff" or "I want rooms where I can drop
 // my guard", said on a call, was lost; nothing on the call path or after it wrote the stop-suggesting list or stated taste.
-export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
+// Decks (PR 6, 2026-10-11): a member can ask for a deck and change it during a call, by the same rules as text: the link goes to their
+// texts, the one taste question is asked out loud, edits keep the link, and their own board, images and shares work the same. On a
+// call Co passes a brief (makeDeck) or the change (updateDeck), never the slides: the deck is written from what they said
+// (services/deckCompose.ts) while the call carries on, so the caller isn't kept in silence while a whole deck is written.
+// Tools that may outlast a call turn's wait, and how long to wait before carrying them on in the background.
+const LONG_ON_CALL = new Set(["makeDeck", "updateDeck", "makePage", "updatePage"]);
+const LONG_ON_CALL_WAIT_MS = 3500;
+const STILL_GOING = Symbol("still going");
+const BACKGROUND_FAIL_TEXT_MS = 3 * 60 * 1000;
+export const CALL_TOOL_NAMES = ["makePage", "updatePage", "takeDownPage", "makeDeck", "updateDeck", "openArtifact", "readInspo", "keepArtifact", "shareArtifact", "stopSharing", "resetLink", "deleteImages", "noteMetAgain", "startTask", "updateTask", "closeTask", "writeDocument", "offerDocument", "researchBrief", "updateNotes", "updateLoop", "findReaction", "searchEvents", "steerAwayFrom", "noteRoomTaste"] as const;
 export type CallToolName = (typeof CALL_TOOL_NAMES)[number];
 
 // The turn's bounds (steps, time) are in services/callLlmProxy.ts, where the rounds run.
@@ -36,6 +45,7 @@ You can act during the call with your tools, and the result is real. Whenever yo
 - Doing it now replaces the promise: don't also say you'll do it after the call. The call carries on after a tool; say goodbye only when they do.
 - Anything that needs real looking (web research, comparing options, finding venues) goes to startTask or researchBrief: they work after the call and text them what comes of it. Don't search the web on the call.
 - Documents and briefs arrive by text, not on the call: say they'll be in their texts.
+- A page or deck you make or change on the call goes to their texts as its link: say it's in their texts and don't read it out. For a deck on a call, pass makeDeck a brief (what they want, in their words) and never write the slides yourself; for a change, pass updateDeck the change and never the slides. If a deck needs their taste first, ask the one question out loud (the look they like, a Pinterest board, or one of your looks by name). A change keeps the same link.
 - When they tell you something that belongs to one of your open tasks (a name, a date, a place, a number, a constraint, a change of plan), write it on that task with updateTask in this same turn, in their words. Saying it back ("got it") writes nothing down, and only what's written is there when the work happens after the call. Something about them rather than a task goes in updateNotes.
 - If you don't know a name, a place or a number, say you're not sure. Never guess one, and never promise work they didn't ask for.
 - A tool that needs their yes needs their own words from what they just said. If they haven't said yes, ask.
@@ -44,8 +54,9 @@ You can act during the call with your tools, and the result is real. Whenever yo
 // Per call: what the tools did earlier on this call, so a later turn knows (ElevenLabs' history carries only what was said).
 // Keyed by the call's token; an hour is longer than any call.
 const CALL_MEMORY_MS = 60 * 60_000;
-const callMemory = new Map<string, { at: number; did: string[] }>();
-function memoryFor(key: string): { at: number; did: string[] } {
+// longOkAt: when a page or deck last went through on this call (a background failure's honest text waits on it).
+const callMemory = new Map<string, { at: number; did: string[]; longOkAt?: number }>();
+function memoryFor(key: string): { at: number; did: string[]; longOkAt?: number } {
   const now = Date.now();
   for (const [k, v] of callMemory) if (now - v.at > CALL_MEMORY_MS) callMemory.delete(k);
   let m = callMemory.get(key);
@@ -183,6 +194,19 @@ export type CallToolsInput = {
 // Pure enough to test: the call's toolset for one turn, from the texting tools, guarded the same way.
 export function buildCallTools(i: CallToolsInput): CallToolset {
   const mem = memoryFor(i.callKey);
+  // A text to them during the call, from Co's number (a page's or deck's link, or a background tool's honest "it didn't come
+  // together"), logged like any text. A test member's texts are logged, never sent (services/sendblue.ts).
+  const textThem = async (text: string): Promise<boolean> => {
+    const from = process.env.SENDBLUE_PHONE_NUMBER;
+    if (!from || !i.member.phone) return false;
+    const sendblue = (await import("./sendblue.js")).default;
+    const ok = await sendblue.messages
+      .send({ number: i.member.phone, content: text, from_number: from } as any)
+      .then(() => true)
+      .catch(() => false);
+    if (ok && !/\/d\//.test(text)) await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'text_exchange', $2)`, [i.userId, `Co replied: ${text}`]).catch(() => {});
+    return ok;
+  };
   const did: string[] = [];
   const all: Record<string, any> = i.tools ? guardTools(i.tools, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {} }) : createConversationTools({
     turnStartedAt: Date.now(),
@@ -197,6 +221,8 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     // A call has no text thread to post into mid-call: a tool's "looking" line or reply is not sent (documents and briefs still
     // go by their own delivery). Returning false means "not sent", and the tool says so.
     sendCoReply: async () => false,
+    // A page's or deck's link (agent/loopTools.ts say) goes to their texts mid-call, from Co's number, logged like any text (PR 6).
+    sendLinkText: i.dryRun ? undefined : textThem,
     firstName: i.member.firstName,
     lastCoMessage: i.lastCoLine,
     // What a tool reads about the turn: the whole call's words (a document rests on what they said on the call), their city.
@@ -209,6 +235,20 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
   }).tools;
   const picked: Record<string, any> = {};
   for (const n of CALL_TOOL_NAMES) if (all[n]) picked[n] = all[n];
+  // On a call a deck is never written into the tool's input (PR 6: told to pass a brief, the model still wrote every slide, and the
+  // caller sat through 30 seconds of silence): makeDeck takes a brief, updateDeck the change, and the slides are written after.
+  for (const n of ["makeDeck", "updateDeck"]) {
+    const t = picked[n];
+    if (t?.inputSchema && typeof t.inputSchema.omit === "function") picked[n] = { ...t, inputSchema: t.inputSchema.omit({ title: true, subtitle: true, slides: true }) };
+  }
+  if (picked.makeDeck?.inputSchema?.shape?.brief)
+    picked.makeDeck = {
+      ...picked.makeDeck,
+      inputSchema: picked.makeDeck.inputSchema.extend({
+        brief: z.string().describe("What deck they want, in their words: what it's for and what it should cover."),
+        line: z.string().nullable().optional().describe("The one line in the text that carries the link, read in their texts (\"Here's the Northlight pitch deck.\"); never \"in your texts\". Plain words."),
+      }),
+    };
   const defs: AnthropicTool[] = Object.entries(picked).map(([name, t]) => {
     const schema: any = t.inputSchema && typeof t.inputSchema.safeParse === "function" ? z.toJSONSchema(t.inputSchema) : { type: "object", properties: {} };
     delete schema.$schema;
@@ -221,8 +261,37 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     if (!parsed.success) return { ok: false, error: `The input didn't fit: ${parsed.error.issues.slice(0, 3).map((x: any) => `${x.path.join(".")}: ${x.message}`).join("; ")}. Fix it and try once more, or say plainly it wasn't done.` };
     const t0 = Date.now();
     let result: any;
-    try { result = await t.execute(parsed.data, { toolCallId: toolUseId, messages: [] }); }
-    catch (err: any) { result = { ok: false, error: `It failed: ${String(err?.message ?? err).slice(0, 160)}. Say plainly it wasn't done.` }; }
+    // Making or changing a page or deck on a call (PR 6) can take longer than a call turn may wait (the claim check, saving, texting
+    // the link). Past a few seconds it carries on in the background: Co says it'll be in their texts, the link arrives when it's
+    // ready, and if it doesn't come together they get one honest text saying so, never silence.
+    const work = (async () => t.execute(parsed.data, { toolCallId: toolUseId, messages: [] }))().catch((err: any) => ({ ok: false, error: `It failed: ${String(err?.message ?? err).slice(0, 160)}. Say plainly it wasn't done.` }));
+    if (LONG_ON_CALL.has(name) && !i.dryRun) {
+      const quick = await Promise.race([work, new Promise((r) => setTimeout(() => r(STILL_GOING), LONG_ON_CALL_WAIT_MS))]);
+      if (quick === STILL_GOING) {
+        const startedAt = Date.now();
+        work
+          .then(async (r: any) => {
+            if (r?.ok !== false) {
+              mem.longOkAt = Date.now();
+              return;
+            }
+            // Not made (a line it couldn't back, say): the next turn of this call learns why and makes it again, as a text turn
+            // would. Only if nothing goes through in the next few minutes do they get one honest text.
+            const what = name.endsWith("Deck") ? "deck" : "page";
+            mem.did.push(`The ${what} you started on this call didn't go through and isn't in their texts: ${String(r?.error ?? "").replace(/\s+/g, " ").slice(0, 300)} Make it again now from only what they said.`);
+            await recordDecision({ layer: 3, decision: "call.background_tool", userId: i.userId, outcome: "skip", action: "failed", proposal: { tool: name, error: String(r?.error ?? "").slice(0, 200) } }).catch(() => {});
+            setTimeout(() => {
+              if ((mem.longOkAt ?? 0) > startedAt) return;
+              textThem(`I couldn't finish the ${what} while we were talking. Text me what you'd like on it and I'll make it here.`).catch(() => false);
+            }, BACKGROUND_FAIL_TEXT_MS).unref?.();
+          })
+          .catch(() => {});
+        result = { ok: true, pending: true, note: `Still being made: the link goes to their texts in a moment. Say it'll be in their texts; don't say it's done or describe it.` };
+      } else {
+        result = quick;
+        if ((quick as any)?.ok !== false) mem.longOkAt = Date.now();
+      }
+    } else result = await work;
     if (!i.dryRun) recordDecision({ layer: 8, decision: "call.tool", userId: i.userId, outcome: result?.ok === false ? "skip" : "act", action: name, proposal: { ms: Date.now() - t0, turn: i.turnWords.slice(0, 200) }, reason: String(result?.error ?? "").slice(0, 200) }).catch(() => {});
     return result;
   };
