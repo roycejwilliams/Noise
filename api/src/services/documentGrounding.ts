@@ -34,12 +34,15 @@ const GLUE = new Set([
 ]);
 const words = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
 // First five letters: "matching", "matches" and "match" are one word; "funds" and "funded" too.
-const stem = (w: string) => w.replace(/'s$/, "").slice(0, 5);
+// A contraction's tail is not part of the word: "RSVP'd" is "RSVP", "chef's" is "chef" (2026-10-12: "at RSVP" was refused when they
+// wrote "when they RSVP'd").
+const bare = (w: string) => w.replace(/'(?:s|d|ll|re|ve)$/, "");
+const stem = (w: string) => bare(w).slice(0, 5);
 // The same people, said any of these ways ("40 guests" backs "40 people").
 const SAME: Record<string, string> = Object.fromEntries(["person", "persons", "people", "peoples", "ppl", "guest", "guests", "folks", "attendees", "attendee", "heads", "pax"].map((w) => [w, "people"]));
 // A plural or a tense, folded: "bars"/"bar", "parties"/"party", "hosted"/"hosting"/"hosts"/"host", "invited"/"invite", "planned"/"plan".
 function fold(w0: string): string {
-  let w = w0.replace(/'s$/, "").replace(/'/g, "");
+  let w = bare(w0).replace(/'/g, "");
   if (SAME[w]) return SAME[w];
   if (w.length > 4 && w.endsWith("ies")) w = `${w.slice(0, -3)}y`;
   else if (w.length > 4 && /(?:sh|ch|x|ss|z)es$/.test(w)) w = w.slice(0, -2);
@@ -107,7 +110,8 @@ export function sourceWindows(source: string): SourceWindows {
   return { windows, text: source, all: new Set(words(source).flatMap(keys)), values: numberValues(source) };
 }
 
-export type Unbacked = { text: string; share: number; missing: string[] };
+// hard: the numbers and names in it they never gave. Those are facts, refused in code whatever a judge says (documentClaims.ts).
+export type Unbacked = { text: string; share: number; missing: string[]; hard: string[] };
 
 // Names and places: a capitalized word that doesn't open the line ("Harbor Hall", "Dallas", "Noor"), or a short all-caps one ("SF").
 const namesIn = (sentence: string) =>
@@ -138,7 +142,7 @@ export function support(sentence: string, src: SourceWindows): Unbacked | null {
   const share = need.length ? best / need.length : 1;
   const wordsFail = judgedLong ? share < GROUNDING.minShare : share < 1;
   if (missingNums.length || missingNames.length || wordsFail) {
-    return { text: sentence, share, missing: [...missingNums, ...missingNames, ...(wordsFail ? bestMissing : [])].filter((x, i, a) => a.indexOf(x) === i).slice(0, 6) };
+    return { text: sentence, share, missing: [...missingNums, ...missingNames, ...(wordsFail ? bestMissing : [])].filter((x, i, a) => a.indexOf(x) === i).slice(0, 6), hard: [...missingNums, ...missingNames] };
   }
   return null;
 }

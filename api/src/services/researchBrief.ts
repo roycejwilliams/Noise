@@ -336,10 +336,9 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   finds = Q.rankFinds(finds.map((f) => ({ ...f, type: "venue" as FindType })), signal.member, signal.global).map(({ score: _s, type: _t, ...f }) => f);
 
   const doc = buildBrief({ title: p.title || `Venue options: ${p.what}`.slice(0, 70), asked: p.what, finds, memberContext: p.memberContext ?? [], zone });
-  const { documentProblems } = await import("./documentSheet.js");
   const { loadTheirWords } = await import("./documentDelivery.js");
   const theirs = [await loadTheirWords(task.userId).catch(() => ""), task.theirWords].join("\n");
-  const problems = [...researchProblems(doc), ...documentProblems(doc, { theirs })];
+  const problems = [...researchProblems(doc), ...(await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs }))];
   if (problems.length) {
     const line = finds.length ? "I looked, but I couldn't verify enough to put a brief together that I'd stand behind. I'll tell you what I can check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?";
     await tellThenClose(line, "done", `no brief: ${problems.slice(0, 3).join("; ")}`);

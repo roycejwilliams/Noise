@@ -44,6 +44,10 @@ export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes";
 export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCtx): T {
   const usedThisTurn = new Map<string, number>();
   const retried = new Set<string>();
+  // Runs this turn that came back refused, and whether any went through: "already ran" is not "already done" (2026-10-12: after two
+  // refused documents, "Already done this turn" read as done, and Co described a document that didn't exist).
+  const refusedThisTurn = new Map<string, number>();
+  const doneThisTurn = new Set<string>();
   for (const [name, t] of Object.entries(tools)) {
     if (UNGUARDED.has(name)) continue;
     const ability = (ctx.abilityFor ?? abilityForTool)(name);
@@ -80,6 +84,14 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       }
       const used = usedThisTurn.get(name) ?? 0;
       if (limits.perTurn && used >= limits.perTurn) {
+        const refused = refusedThisTurn.get(name) ?? 0;
+        if (refused && !doneThisTurn.has(name)) {
+          return refuse(
+            "limited",
+            `${name} wasn't run again: it was refused ${refused} time(s) this turn and nothing came of it. Nothing from it exists or was sent.`,
+            `Nothing was made: it was refused ${refused} time(s) this turn, so nothing from it exists or was sent. Already done this turn as many times as allowed, so don't try again now. Tell them plainly it isn't done, what stopped it, and what would unblock it; never describe it as made.`,
+          );
+        }
         return refuse("limited", `${name} wasn't run again: it already ran ${used} time(s) this turn.`, "Already done this turn. Don't repeat it.");
       }
       if (!ctx.dryRun && limits.perDay) {
@@ -109,6 +121,8 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       const failed = !!result && typeof result === "object" && result.ok === false;
       // A refused attempt doesn't use up the turn's allowance, once: the tool's own refusal says "fix these and try again once"
       // (2026-10-08 call test: a document refused for one unbacked line was then refused again as "already done this turn").
+      if (failed) refusedThisTurn.set(name, (refusedThisTurn.get(name) ?? 0) + 1);
+      else doneThisTurn.add(name);
       if (failed && !retried.has(name)) { retried.add(name); usedThisTurn.set(name, used); }
       if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
       await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200) } : {});

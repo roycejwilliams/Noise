@@ -10,7 +10,7 @@ import { fontLinks, fontStack } from "./designFonts.js";
 import { z } from "zod";
 import { EMAIL_COLORS as C, escapeHtml } from "./emailDesign.js";
 import { unsourced } from "./offerGuard.js";
-import { unbackedClaims } from "./documentGrounding.js";
+import { unbackedClaims, type Unbacked } from "./documentGrounding.js";
 
 export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, titleChars: 70, noteChars: 240, headingChars: 70, paragraphChars: 700, bulletChars: 220, totalChars: 6500, minChars: 80, maxParagraphWords: 60, bulletsExpectedAfterChars: 600, maxSuggestions: 5, suggestionChars: 220 };
 
@@ -86,7 +86,9 @@ const sentencesOf = (t: string) => (t.match(/[^.!?\n]+[.!?]*/g) ?? []).map((s) =
 // Pure: what is wrong with a document, in words Co can act on.
 //   theirs: everything they said (their texts and calls). Their points must rest on it, claim by claim.
 //   read:   what Co read this turn. Only Co's own suggestions may lean on it, for an event or a place (never for a claim about them).
-export function documentProblems(doc: Doc, source: { theirs: string; read?: string }): string[] {
+//   o.backed: claims a judge read as their own words, rephrased (services/documentClaims.ts): not refused for wording. Their numbers
+//             and names are still checked here, whatever the judge said.
+export function documentProblems(doc: Doc, source: { theirs: string; read?: string }, o: { backed?: ReadonlySet<string> } = {}): string[] {
   const L = DOC_LIMITS;
   const out: string[] = [];
   if (doc.title.length < 3) out.push("it needs a title");
@@ -94,7 +96,9 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
   const body = docText(doc);
   if (body.length < L.minChars) out.push("it is too thin to be a document: say what they need written up");
   if (body.length > L.totalChars) out.push(`it is too long (${body.length} characters; ${L.totalChars} at most): cut it to what matters`);
+  // A bracketed gap ("[Example to drop in: ...]") is a placeholder too: a document that goes out never has one (2026-10-12).
   if (/\b(lorem ipsum|tbd|to be determined|xxx)\b|\[(?:insert|your)/i.test(body)) out.push("it has a placeholder in it");
+  else if (/\[[^\]\n]{2,}\]/.test(body)) out.push("it has a placeholder in it (a bracketed gap): leave the missing piece out and write the point as it stands, or ask them for it");
   // Scannable: a record, not a chat. Points go in bullets; a paragraph is a few sentences, not a block.
   const long = doc.sections.flatMap((x) => x.paragraphs).find((x) => x.split(/\s+/).length > L.maxParagraphWords);
   if (long) out.push(`a paragraph runs ${long.split(/\s+/).length} words ("${long.slice(0, 40)}..."): put its points in bullets and keep paragraphs to two or three sentences`);
@@ -110,10 +114,20 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
     if (bad.length) out.push(`the suggestion "${s.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // And every claim in their sections rests on their words, close together: Co's own reasoning is a suggestion, not their point.
-  for (const u of unbackedClaims(memberParts(doc), source.theirs).slice(0, 4)) {
-    out.push(`"${u.text.slice(0, 90)}" isn't something they said (their words never put ${u.missing.slice(0, 4).join(", ")} together): rewrite it from their own words, or move it to suggestions`);
+  for (const u of unbackedClaims(memberParts(doc), source.theirs).filter((x) => x.hard.length || !o.backed?.has(x.text)).slice(0, 4)) {
+    out.push(claimProblem(u));
   }
+  // Bare fragments are not a document (2026-10-12: after refusals, the last try was bullets that only repeated their headings, "QR
+  // table cards." under "QR table cards"). A point says something its heading doesn't.
+  const plain = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\b(a|an|the)\b/g, " ").replace(/\s+/g, " ").trim();
+  const echoes = doc.sections.filter((x) => !x.research && x.heading).flatMap((x) => x.bullets.filter((b) => plain(b) === plain(x.heading!)));
+  if (echoes.length >= 2) out.push(`its points only repeat their headings ("${echoes[0].slice(0, 40)}"): write each bullet as a short line that says what they told you about it, or leave the section out`);
   return out.slice(0, 7);
+}
+
+// The line Co gets for a claim of theirs that isn't backed (documentProblems). Shared so a judged claim drops exactly its line.
+export function claimProblem(u: Unbacked): string {
+  return `"${u.text.slice(0, 90)}" isn't something they said (their words never put ${u.missing.slice(0, 4).join(", ")} together): rewrite it from their own words, or move it to suggestions`;
 }
 
 // ---------------------------------------------------------------- the file's name

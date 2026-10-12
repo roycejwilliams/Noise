@@ -238,6 +238,8 @@ export function loopTools(
   let seeding: Promise<unknown> | null = null;
   const seeded = (): Promise<unknown> => (seeding ??= ctx.dryRun || ctx.stubSearch ? Promise.resolve() : storedFinds(ctx.userId).then((rows) => seedFound(loop, rows)).catch(() => 0));
   // A short line while a PDF is made (like whileLooking), unless the ✍️ reaction on their text already said "on it".
+  // Documents refused this turn (writeDocument): two is the budget before Co says plainly it isn't made.
+  let docRefusals = 0;
   const holdWhileWriting = async (line?: string) => {
     if (ctx.ackSent === "✍️") return;
     await hold(line);
@@ -824,10 +826,19 @@ export function loopTools(
         const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
         const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
         const source = { theirs, read };
-        const problems = documentProblems(doc, source);
+        // The word check first; a line it can't place in their words goes to a judge, so their own facts said another way pass
+        // (services/documentClaims.ts). Numbers and names they never gave are refused in code either way.
+        const problems = await (await import("../services/documentClaims.js")).judgedDocumentProblems(doc, source, documentProblems(doc, source));
         if (problems.length) {
-          notDone(`No document sent: ${problems.slice(0, 3).join("; ")}.`);
-          return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try again once, or tell them plainly what you couldn't back and give them the points in a text.` };
+          // Plain in the turn's facts: no document exists, so nothing about one (its sections, what's in it, what was left open) is said
+          // (2026-10-12: after every try was refused, Co texted "I left the example section open..." about a document that never existed).
+          docRefusals++;
+          notDone(`No document exists: writeDocument was refused${docRefusals > 1 ? ` ${docRefusals} times` : ""} this turn and nothing was written or sent (${problems.slice(0, 3).join("; ")}). Nothing about a document's contents, sections or what was put in it is true.`);
+          // Two refusals is the budget (the deck rule, applied to documents): say so plainly rather than retrying, and never strip it bare.
+          if (docRefusals >= 2) {
+            return { ok: false, error: `Not sent, and that's twice: ${problems.slice(0, 3).join(" | ")}. Don't call writeDocument again this turn. In one text, tell them plainly the document isn't made, name the line you couldn't back from what they told you, and say what would unblock it (them confirming that fact or giving the missing piece). Never describe the document as if it exists, and never send its points as bare bullets.` };
+          }
+          return { ok: false, error: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try once more, keeping every section full (rewrite a flagged line from their own words or move it to suggestions; never strip it to bare bullets). If it can't be fixed, tell them plainly the document isn't made, which line you couldn't back, and what would unblock it.` };
         }
         if (ctx.dryRun) {
           // A document or plan that went out is the turn's delivery, like a page's link: no leftover text or fallback line after it.

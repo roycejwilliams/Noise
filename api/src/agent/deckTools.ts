@@ -158,7 +158,7 @@ export async function deckDataFrom(
   input: z.infer<typeof DECK_INPUT>,
   taste: { mood?: string; colors?: { background?: string | null; text?: string | null; accent?: string | null }; type?: string | null } | null,
   assets: Map<number, string> = new Map(),
-  was: { slides?: { headline: string; bullets?: string[]; notes?: string }[] } | null = null,
+  was: { slides?: { headline: string; bullets?: string[]; notes?: string; layout?: string }[] } | null = null,
   design: { style?: unknown; theirWords?: string } = {},
 ): Promise<Record<string, unknown>> {
   const { styleFrom } = await import("../services/coPages/deck.js");
@@ -179,7 +179,45 @@ export async function deckDataFrom(
     return there && (there.bullets ?? []).some((b: string) => s.bullets.includes(b)) ? there.notes : undefined;
   };
   const notesFor = (s: { headline: string; bullets: string[]; notes?: string | null }, i: number) => (typeof s.notes === "string" ? s.notes.trim() : keptNotes(s, i)) || null;
-  return { kind: "deck", title: input.title, subtitle: input.subtitle, logo: at(input.logo), slides: input.slides.map((s: any, i) => ({ headline: hc(s.headline), bullets: s.bullets, image: at(s.image), ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}), ...(s.layout ? { layout: s.layout } : {}) })), style };
+  // A slide's designed layout on an edit, the same way (2026-10-12: a change that resent the slides without their layouts dropped
+  // every one): named now, or kept from the same slide. A split is kept only while the slide still has its picture.
+  const keptLayout = (s: { headline: string; bullets: string[] }, i: number, image: string | null): string | undefined => {
+    const same = was?.slides?.find((x) => x.headline.toLowerCase() === s.headline.toLowerCase());
+    const there: any = was?.slides?.[i];
+    const from = same ?? (there && (there.bullets ?? []).some((b: string) => s.bullets.includes(b)) ? there : null);
+    const l = from?.layout;
+    return l && (l !== "split" || image) ? l : undefined;
+  };
+  return {
+    kind: "deck",
+    title: input.title,
+    subtitle: input.subtitle,
+    logo: at(input.logo),
+    slides: input.slides.map((s: any, i) => {
+      const image = at(s.image);
+      const layout = s.layout ?? keptLayout(s, i, image);
+      return { headline: hc(s.headline), bullets: s.bullets, image, ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}), ...(layout ? { layout } : {}) };
+    }),
+    style,
+  };
+}
+
+// A deck that closed on its ask still closes on it after a change (2026-10-12: a slide added on request landed after "The ask", so the
+// importer's deck no longer ended on what it asks for). New slides go just before a closing ask or call to action, unless their own
+// words put it at the end. Pure: the slides in their new order.
+const CLOSING = /\b(?:the |our |one |my )?ask\b|\bnext steps?\b|\bcall to action\b|\bwhat we(?:'re| are) asking\b|\blet'?s (?:talk|build|do this|work)\b|\bjoin us\b|\bget in touch\b|\bwork with us\b|\bhow to (?:join|start)\b/i;
+const AT_THE_END = /\b(?:at the (?:very )?end|(?:the )?(?:last|final) slide|after the (?:ask|close|closing)|end (?:it |the deck )?(?:on|with) (?:this|that|the new|it))\b/i;
+export function keepClosingLast<T extends { headline: string }>(was: { headline: string }[], next: T[], theirWords: string): T[] {
+  const close = was[was.length - 1];
+  if (!close || !CLOSING.test(close.headline) || AT_THE_END.test(theirWords)) return next;
+  const key = (h: string) => h.trim().toLowerCase();
+  const at = next.findIndex((x) => key(x.headline) === key(close.headline));
+  if (at < 0 || at === next.length - 1) return next;
+  const after = next.slice(at + 1);
+  const old = new Set(was.map((x) => key(x.headline)));
+  // Only slides that are new on this version move; a reorder of existing slides is theirs to ask for.
+  if (after.some((x) => old.has(key(x.headline)))) return next;
+  return [...next.slice(0, at), ...after, next[at]];
 }
 
 // Their taste, with no asking: what they said about the look now (their exact words, checked, then saved as member knowledge and as a
@@ -628,6 +666,7 @@ export function deckTools(
         deck: z.string().describe("Which of their decks: its title, or a word from it."),
         taste: TASTE_INPUT,
         changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\"). On a call, leave the slides out and this is the change to make: the new version is written from the deck and what they said."),
+        notDone: line("Only when this version doesn't do all they asked: the part it doesn't do and why, in a few words (\"the board's colors, since a deck has one look for every slide\"). It goes in the same text as what changed, so they never read \"updated\" as all of it.").optional(),
         alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input0) => {
@@ -678,6 +717,9 @@ export function deckTools(
             if (!parsed.success) return { ok: false, error: "The change couldn't be written. Say so plainly." };
             input = { ...input0, ...parsed.data, changed: String(out?.changed ?? input0.changed).slice(0, 140) };
           }
+          // A change that leaves the title or subtitle out keeps them (2026-10-12: "title is required | subtitle is required" on an edit
+          // that only added a slide), and a deck that ended on its ask still does.
+          if (was) input = { ...input, title: input.title ?? was.title, subtitle: input.subtitle ?? was.subtitle, slides: keepClosingLast(was.slides, input.slides, ctx.resolvedContent) };
           const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.theirs, onDeck });
           if ("error" in ids) return { ok: false, error: ids.error };
           const named = await headlineNames(input.slides, source.theirs, source.read);
@@ -752,15 +794,17 @@ export function deckTools(
         }
         // A change is a revision: first-shot acceptance counts against it (services/designSystem.ts metrics).
         if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: r.moved?.id ?? pick.id, medium: "deck", event: "revised", tokens: restyle ?? null }).catch(() => {});
+        // What it couldn't do goes in the same line (2026-10-12: "Updated the deck" after a promised one-slide look that a deck can't have).
+        const partial = String(input0.notDone ?? "").trim().replace(/[.\s]+$/, "");
         // A reset that landed meanwhile moved it to a fresh link (store.ts): the change went there, and the new link goes with the line.
-        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
+        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${partial ? ` One part I couldn't do: ${partial}.` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
         ctx.onLinkDelivered?.();
         confirm();
-        ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}) and told them what changed.`);
+        ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}) and told them what changed${partial ? `, and what it didn't do (${partial})` : ""}. A deck has one look for every slide.`);
         return { ok: true, note: "Same deck, same link; the text said what changed. Send nothing more about it." };
       },
     }),

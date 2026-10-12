@@ -55,7 +55,8 @@ export function unsourced(sentence: string, source: string | Source): Mention[] 
 
 // A source text, normalized once: the spoken checks run per sentence on the voice's hot path, against the whole call.
 export type Source = { raw: string; hay: string; flat: string; nums: Set<string> };
-export const prepareSource = (source: string): Source => ({ raw: source, hay: norm(source), flat: squash(source), nums: numbersOf(source, true) });
+// A contraction's tail is not part of the word they said: "RSVP'd" backs "RSVP" (2026-10-12, a document was refused for it).
+export const prepareSource = (source: string): Source => ({ raw: source, hay: norm(`${source}\n${source.replace(/(\w)['’](?:d|ll|re|ve)\b/gi, "$1")}`), flat: squash(source), nums: numbersOf(source, true) });
 
 // The numbers in a text, as whole numbers ("$3,000" is 3000, "20th" is 20, never the "20" inside "2026"). The extraction is
 // taskWeb numbersBacked's; its substring match is too loose for a whole call's prompt, so a number here has to be a whole one.
