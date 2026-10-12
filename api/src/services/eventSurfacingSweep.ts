@@ -635,7 +635,7 @@ async function settleNewFinds(userId: string, items: BacklogItem[], today: strin
     if (k !== exitKey(it.match) && (exited.has(k) || (await W.exitedFindKeys(userId, [k]).catch(() => new Set<string>())).size)) continue;
     const end = lifeEndOf(match, zone);
     if (c.result === "undated" || c.result === "unknown") {
-      out.push({ ...it, match, unread: { days: [today], why: c.result } });
+      out.push({ ...it, match, unread: { days: [today], why: c.result, ...("note" in c && c.note ? { note: String(c.note).slice(0, 300) } : {}) } });
       continue;
     }
     if (end && end < today) {
