@@ -391,19 +391,6 @@ export function correctedSays(old: string, now: string, line: string): boolean {
   return false;
 }
 
-// Pure: the first queued message that still states a value they corrected away (as correctedSays reads it), with the correction,
-// or null. A deferred send marked "recheck:" by a correction (cancelQueued) is read through this when it comes due
-// (services/deferredSends.ts): one that states the old value as theirs ("Here's a run club in Berkeley" after they moved to
-// Oakland) is skipped with that reason; one that doesn't goes as written.
-export function statesCorrectedAway(messages: string[], rows: ForgottenRow[]): { message: string; was: string; now: string } | null {
-  for (const r of rows) {
-    if (r.removed || !r.now) continue;
-    const m = messages.find((x) => !safetySignal(x) && correctedSays(r.old, r.now!, x));
-    if (m) return { message: m, was: plainOf(r.old), now: r.now };
-  }
-  return null;
-}
-
 // Pure: every line of a block through guardText (a recap, a call's system prompt), lines it drops left out.
 export function guardBlock(text: string, rows: ForgottenRow[]): string {
   if (!rows.length) return text;
@@ -822,6 +809,21 @@ export function queuedSays(text: string, a: Applied): boolean {
   return correctedSays(old, a.now, text);
 }
 
+// Pure: the mark a correction leaves on a queued text: the one correction it's to be re-read against (services/deferredSends.ts).
+export function recheckMark(a: Applied): string {
+  return `recheck: ${JSON.stringify({ ref: a.ref.slice(0, 60), was: plainOf(a.was).slice(0, 100), now: String(a.now ?? "").slice(0, 100) })}`;
+}
+export function readRecheckMark(error: string | null | undefined): { ref: string; was: string; now: string } | null {
+  const m = String(error ?? "").match(/^recheck:\s*(\{[\s\S]*\})\s*$/);
+  if (!m) return null;
+  try {
+    const j = JSON.parse(m[1]);
+    return typeof j?.was === "string" && typeof j?.now === "string" && j.was.trim() && j.now.trim() ? { ref: String(j.ref ?? ""), was: j.was, now: j.now } : null;
+  } catch {
+    return null;
+  }
+}
+
 // What's waiting to go out or be worked on that rests on an item they just removed or corrected: proactive candidates (offers for
 // an ask, a goal's check-in, a thread's follow-up, an ask check-in), Co's open tasks and look-outs for that ask, the network backlog
 // for it, and deferred sends. Tied by id first (the ask, the goal, the thread), then by the item's own words. A removal cancels; a
@@ -879,7 +881,7 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
       done.add(k);
       const r = removing
         ? await db.query(`UPDATE deferred_sends SET status = 'skipped', error = $3 WHERE id = $1 AND user_id = $2 AND status = 'queued'`, [d.id, userId, because.slice(0, 300)])
-        : await db.query(`UPDATE deferred_sends SET error = $3 WHERE id = $1 AND user_id = $2 AND status = 'queued'`, [d.id, userId, `recheck: ${because}`.slice(0, 300)]);
+        : await db.query(`UPDATE deferred_sends SET error = $3 WHERE id = $1 AND user_id = $2 AND status = 'queued'`, [d.id, userId, recheckMark(a)]);
       if (r.rowCount) out.push({ kind: "deferred_send", id: String(d.id), what: `${d.type}`, action: removing ? "cancelled" : "recheck", because });
     }
     if (kind === "ask") {

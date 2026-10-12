@@ -142,15 +142,52 @@ export async function runAfter(after: AfterSend | null | undefined, outcome: Sen
 export type DeferredDeps = {
   send: typeof sendExempt;
   handlers: AfterHandlers;
-  // Tests: what the correction re-read finds (default: correctedAwayIn).
-  staleAfterCorrection?: (userId: string, messages: string[]) => Promise<{ message: string; was: string; now: string } | null>;
+  // Tests: the judge for a Co-initiated text marked by a correction (default: judgeAfterCorrection, one Haiku call).
+  judge?: CorrectionJudge;
 };
 
-// The message that states a value they corrected away since it was queued, if any (services/whatCoKnows.ts live guards).
-export async function correctedAwayIn(userId: string, messages: string[]): Promise<{ message: string; was: string; now: string } | null> {
-  const W = await import("./whatCoKnows.js");
-  return W.statesCorrectedAway(messages, await W.forgottenRows(userId));
+// One correction a queued text is re-read against (services/whatCoKnows.ts recheckMark).
+export type Correction = { ref: string; was: string; now: string };
+export type CorrectionJudge = (messages: string[], c: Correction) => Promise<{ wrongNow: boolean; why: string }>;
+
+// Owed to them: a text tied to something they asked for or a delivery they're waiting on (an after-send step, an answer to their
+// ask, a task's update or window, a call they set up, an event they're in). Never skipped by a correction: it goes as written.
+const OWED_TYPES = new Set<ExemptType>(["direct_ask", "search_result", "task_update", "task_window", "call_confirm", "call_reminder", "missed_call", "event_change"]);
+export function owedToThem(row: Pick<DeferredRow, "after_kind" | "type" | "target_key">): boolean {
+  return !!row.after_kind || OWED_TYPES.has(row.type) || /^(?:ask|answer|task|delivery|reminder|call)/i.test(String(row.target_key ?? ""));
 }
+
+// Pure-ish: what a send a correction marked does when it comes due. Owed: sends as written. No readable correction in the mark:
+// sends. Otherwise one judgment with that correction only; wrongNow skips it with the reason; a failed judgment sends it (a
+// Co-initiated text that was already approved once is better sent than lost).
+export async function recheckDecision(row: Pick<DeferredRow, "after_kind" | "type" | "target_key" | "error">, messages: string[], judge: CorrectionJudge): Promise<{ send: true; why: string } | { send: false; why: string; correction: Correction }> {
+  const W = await import("./whatCoKnows.js");
+  const c = W.readRecheckMark(row.error);
+  if (!c) return { send: true, why: "no correction in the mark" };
+  if (owedToThem(row)) return { send: true, why: "owed to them: sent as written" };
+  const v = await judge(messages, c).catch(() => null);
+  if (!v) return { send: true, why: "judge failed: sent as written" };
+  return v.wrongNow ? { send: false, why: v.why, correction: c } : { send: true, why: v.why || "still true" };
+}
+
+// One Haiku judgment: does this text treat the corrected-away value as true about them now?
+export const judgeAfterCorrection: CorrectionJudge = async (messages, c) => {
+  const [{ generateText }, { anthropic }, { MODELS }, { parseModelJson }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js"), import("./modelJson.js")]);
+  const { text } = await generateText({
+    model: anthropic(MODELS.haiku),
+    maxOutputTokens: 300,
+    experimental_telemetry: { isEnabled: true, functionId: "deferredSends.recheck", recordInputs: false, recordOutputs: false },
+    prompt: `A text Co queued for a member before they corrected something about themselves.
+They corrected: it was "${c.was}", now "${c.now}".
+The queued text:
+${messages.map((m) => `"${m}"`).join("\n")}
+
+Does this text treat the old value ("${c.was}") as true about the member now (where they are, who they are, what they want), so that sending it would be wrong after the correction? Mentioning the old value as a place, a name or a thing they asked about is not wrong. Return ONLY JSON: {"wrongNow": true or false, "why": "a few words"}`,
+  });
+  const j = parseModelJson<{ wrongNow?: unknown; why?: unknown }>(text);
+  if (typeof j?.wrongNow !== "boolean") throw new Error("no verdict");
+  return { wrongNow: j.wrongNow, why: String(j.why ?? "").slice(0, 160) };
+};
 
 // The minute cron: send what's due. Returns what happened to each claimed row.
 export async function runDueDeferredSends(now: Date = new Date(), deps: DeferredDeps = { send: sendExempt, handlers: afterHandlers }): Promise<{ claimed: number; sent: number; requeued: number; skipped: number; failed: number }> {
@@ -184,15 +221,17 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     const recheck = /^recheck:/i.test(String(row.error ?? ""));
     const requeue = (dueAt: Date, error: string | null) =>
       pool.query(`UPDATE deferred_sends SET status = 'queued', due_at = $2, error = $3 WHERE id = $1 AND attempts = $4`, [row.id, dueAt, recheck ? row.error : error, attempts]);
-    // Marked by a correction: a text that states the corrected-away value as theirs doesn't go (no model judges deferred sends,
-    // so the check is the guards' own rule, services/whatCoKnows.ts statesCorrectedAway). Anything else goes as written.
-    const stale = recheck ? await (deps.staleAfterCorrection ?? correctedAwayIn)(row.user_id, messages).catch(() => null) : null;
+    // Marked by a correction: re-read against that one correction (recheckDecision). Owed texts go as written; a Co-initiated one
+    // the judge finds wrong now is skipped with its reason; a failed judgment sends it.
+    const verdict = recheck ? await recheckDecision(row, messages, deps.judge ?? judgeAfterCorrection) : null;
+    const stale = verdict && !verdict.send ? verdict : null;
+    if (verdict?.send) recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "act", action: "sent_as_written", proposal: { id: row.id, type: row.type }, reason: verdict.why }).catch(() => {});
 
     let result: { sent: boolean; reason?: string };
     if (row.archived) result = { sent: false, reason: "archived" };
     else if (stale) {
-      result = { sent: false, reason: `corrected since queued: says "${stale.was}", now "${stale.now}"`.slice(0, 300) };
-      await recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "skip", action: "stale_after_correction", proposal: { id: row.id, type: row.type, was: stale.was, now: stale.now, message: stale.message.slice(0, 200) }, reason: row.error ?? null }).catch(() => {});
+      result = { sent: false, reason: `corrected since queued: "${stale.correction.was}" is now "${stale.correction.now}" (${stale.why})`.slice(0, 300) };
+      await recordDecision({ layer: 3, decision: "deferred.recheck", userId: row.user_id, outcome: "skip", action: "wrong_after_correction", proposal: { id: row.id, type: row.type, correction: stale.correction, message: String(messages[0] ?? "").slice(0, 200) }, reason: stale.why }).catch(() => {});
     }
     // An in-room intro ask held overnight is pointless once the event is over: dropped, never sent the next morning.
     else if (row.after_kind === "event_direct_ask" && (await eventIsOver(String((row.after_payload as any)?.eventId ?? ""), now))) result = { sent: false, reason: "event over" };
