@@ -6,6 +6,7 @@
 import { DateTime } from "luxon";
 import { timelineFor } from "./timeline.js";
 import { voiceFinds, type VoiceFinds } from "./voiceFinds.js";
+import { planCallBriefing, type CallBriefing } from "../brain/index.js";
 import { callCapabilityList } from "./capabilities.js";
 
 // One page. The list is generated from the capability registry (services/capabilities.ts callCapabilityList), from the same
@@ -26,13 +27,10 @@ How to hold it:
 - Never say when something happens unless it is in "What Co has found" or in what you know about them, with its day. Never invent an event, a time, a place or who will be there.
 - Never ask for something you already know: say what you have and ask, in your own words, whether it's still right. Anything under "what you already know" below is known.`;
 
-export function renderFinds(f: VoiceFinds): string {
-  if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;
-  const lines = f.items.map((i) => `- ${i.name}${i.starts ? ` | starts ${i.starts}` : ""}${i.details.length ? ` | ${i.details.join(" ")}` : ""}${i.link ? " | link on file (offer to text it)" : ""}`);
-  return `${f.note}\nLooking for: ${f.lookingFor}\n${lines.join("\n")}`.slice(0, 2400);
-}
+// The judgment (what the call may offer, how it reads the clock) is the brain's (brain/index.ts judgeBriefing); this file gathers
+// the facts it judges from and keeps the fallback a failed or slow build falls to.
+export { renderFinds, type CallBriefing } from "../brain/index.js";
 
-export type CallBriefing = { rightNow: string; findsNow: string };
 // How long the briefing waits on the call context's shared read before reading their city itself.
 const SHARED_WAIT_MS = 1000;
 
@@ -50,10 +48,7 @@ export async function buildCallBriefing(userId: string, now: Date = new Date()):
     timelineFor(userId, city, now).catch(() => null),
     voiceFinds(userId, now).catch((): VoiceFinds => ({ available: false, reason: "the lookup didn't load" })),
   ]);
-  const rightNow = clock
-    ? `${clock.fact}${clock.note ? ` ${clock.note}` : ""} "Tonight" and "today" mean the hours left before they sleep; an event is only "tonight" if its start below says today.`
-    : `It is ${DateTime.fromJSDate(now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`;
-  return { rightNow, findsNow: renderFinds(finds) };
+  return planCallBriefing({ userId, now, clock, finds });
 }
 
 // Kept for 5 minutes per member, like the context (services/elevenLabsCalls.ts): outbound builds it while it rings.
