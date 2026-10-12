@@ -109,6 +109,17 @@ export function sameThing(a: string, b: string): boolean {
 }
 const stem = (w: string) => w.replace(/(ing|ed|es|s)$/, "");
 
+// Pure: the text says all of `old` (at least three quarters of OLD's real words are in it), scored against old's words, never
+// the smaller set: a guard asks "does this say the thing that went", and a short text sharing one word with it doesn't
+// (review of ac5474a: "San Francisco" removed must not take "Flying to San Francisco Friday for my sister's wedding" with it).
+export function covers(old: string, text: string): boolean {
+  const O = new Set(words(old).map(stem)), T = new Set(words(text).map(stem));
+  if (!O.size) return squash(old) === squash(text);
+  let n = 0;
+  for (const w of O) if (T.has(w)) n++;
+  return n / O.size >= 0.75;
+}
+
 const CHAPTER_WORDS: Record<string, string> = { new_to_city: "new to the city", building_solo: "building something on your own", career_pivot: "changing careers", starting_over: "starting over" };
 
 export type RawKnown = {
@@ -211,17 +222,34 @@ export function stillSaying(view: KnownView, applied: Applied[], changedRefs: Se
 // ---------------------------------------------------------------- forgetting (the guards for what rebuilds itself)
 
 // A correction or removal made through this file: what Co had, what's true now (null: removed), and which source it came from.
+// ref is "" for a correction the turn learning made (profileExtraction.ts): those are read only to see that a value came back.
 export type ForgottenRow = { field: string; old: string; now: string | null; ref: string; removed: boolean };
 
+// Newest first. Every correction is read (the turn learning's too), so a value they put back later is seen as back.
 export async function forgottenRows(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<ForgottenRow[]> {
-  const { rows } = await q.query(`SELECT field, old_value, new_value, item_ref, removed FROM profile_corrections WHERE user_id = $1 AND item_ref IS NOT NULL ORDER BY corrected_at DESC LIMIT 200`, [userId]);
-  return rows.map((r: any) => ({ field: String(r.field), old: String(r.old_value ?? ""), now: r.new_value == null ? null : String(r.new_value), ref: String(r.item_ref), removed: !!r.removed }));
+  const { rows } = await q.query(`SELECT pc.field, pc.old_value, pc.new_value, to_jsonb(pc)->>'item_ref' AS item_ref, to_jsonb(pc)->>'removed' AS removed FROM profile_corrections pc WHERE pc.user_id = $1 ORDER BY pc.corrected_at DESC, pc.id DESC LIMIT 300`, [userId]);
+  return liveGuards(rows.map((r: any) => ({ field: String(r.field), old: String(r.old_value ?? ""), now: r.new_value == null ? null : String(r.new_value), ref: r.item_ref ? String(r.item_ref) : "", removed: r.removed === "true" || r.removed === true })));
 }
 
-// Which rows guard which rebuilt thing: a row guards its own kind of source (a claim row guards claims; where they live guards the
-// snapshot's place). A removal whose old text is specific (two or more real words) guards every source, so a removed thing can't
-// come back by another door. A one-word value ("Berkeley") only guards its own kind, so a corrected city never takes "studied at
-// UC Berkeley" with it.
+// Pure: the rows that still guard, from rows newest first. Only the newest row per item counts, and a row stops guarding its old
+// value once any newer correction made that value true again (Berkeley to Oakland, then Oakland back to Berkeley: Berkeley is
+// theirs again, everywhere). Rows the turn learning wrote only ever release a value; they guard through their own path.
+export function liveGuards(rows: ForgottenRow[]): ForgottenRow[] {
+  const seen = new Set<string>();
+  const out: ForgottenRow[] = [];
+  rows.forEach((r, i) => {
+    if (!r.ref || seen.has(r.ref)) return;
+    seen.add(r.ref);
+    const back = rows.slice(0, i).some((n) => n.now && squash(plainOf(n.now)) !== "" && (squash(plainOf(n.now)) === squash(plainOf(r.old)) || (covers(plainOf(r.old), n.now) && covers(n.now, plainOf(r.old)))));
+    if (!back) out.push(r);
+  });
+  return out;
+}
+
+// Which rows guard which rebuilt thing. A row guards its own kind of source (a claim row guards claims; where they live guards
+// the snapshot's place). Only a specific removal (two or more real words) from a kind that isn't a place, a role or a label guards
+// other kinds, so a removed thing can't come back by another door; a city, a place, work, a kit detail or a life chapter only ever
+// guards its own kind (review of ac5474a: "new to the city" must never empty a place of "New York City").
 export type Guarded = "claim" | "thread" | "snapshot:place" | "snapshot:work" | "snapshot:list" | "profile_field" | "their_words";
 const GUARDED_BY: Record<Guarded, string[]> = {
   claim: ["claim:"],
@@ -234,33 +262,46 @@ const GUARDED_BY: Record<Guarded, string[]> = {
   // The raw exchanges and memories that say a removed thing (memberKnowledge exchanges, the reply's memory search): only specific removals.
   their_words: [],
 };
+const OWN_KIND_ONLY = ["profile:city", "profile:availability_pattern", "profile:long_term_direction", "profile:life_chapters", "snapshot:place", "snapshot:work", "kit:", "avoid:", "file:"];
 const plainOf = (t: string) => t.replace(/^(my read|looking out for|not for you): /, "");
 
-// Pure: the row that says this text is gone (or changed), if any.
-export function forgets(text: string, rows: ForgottenRow[], what: Guarded): ForgottenRow | null {
+// Pure: the row that says this text is gone (or changed), if any. rows: live guards (forgottenRows / liveGuards).
+export function forgets(text: string, rows: ForgottenRow[], what: Guarded, opts: { ownOnly?: boolean } = {}): ForgottenRow | null {
   for (const r of rows) {
+    if (!r.ref) continue;
     const own = GUARDED_BY[what].some((p) => r.ref.startsWith(p));
-    const specific = r.removed && words(r.old).length >= 2;
-    if (!own && !specific) continue;
-    if (!sameThing(plainOf(r.old), text)) continue;
-    if (r.now && sameThing(r.now, text)) continue;
+    const crosses = !opts.ownOnly && r.removed && words(r.old).length >= 2 && !OWN_KIND_ONLY.some((p) => r.ref.startsWith(p));
+    if (!own && !crosses) continue;
+    if (!covers(plainOf(r.old), text)) continue;
+    if (r.now && covers(r.now, text)) continue;
     return r;
   }
   return null;
 }
 
-// Pure: a rebuilt snapshot with what they corrected away or removed taken out. A one-value field that still says the old value
-// takes the new one when its own kind was corrected (where they live), and is emptied when it was removed.
+// Pure: a rebuilt snapshot with what they corrected away or removed taken out. Place and work are only ever changed by their own
+// kind's rows (a corrected city gives the place its new value; a removed one empties it); lists drop what was removed.
 export function forgetInSnapshot<T extends { work: string | null; place: string | null; wantsNow: string[]; weighingOn: string[]; valuesInPeople: string[] }>(s: T, rows: ForgottenRow[]): T {
   if (!rows.length) return s;
   const one = (v: string | null, what: Guarded) => {
     if (!v) return v;
-    const r = forgets(v, rows, what);
+    const r = forgets(v, rows, what, { ownOnly: true });
     if (!r) return v;
-    return r.now && GUARDED_BY[what].some((p) => r.ref.startsWith(p)) ? r.now.replace(/^[a-z]+: /, "") : null;
+    return r.now ? r.now.replace(/^[a-z]+: /, "") : null;
   };
   const list = (xs: string[]) => (Array.isArray(xs) ? xs.filter((x) => !forgets(x, rows, "snapshot:list")) : xs);
   return { ...s, work: one(s.work, "snapshot:work"), place: one(s.place, "snapshot:place"), wantsNow: list(s.wantsNow), weighingOn: list(s.weighingOn), valuesInPeople: list(s.valuesInPeople) };
+}
+
+// Their words asking to remove or forget something, or saying it's wrong (like memberFiles.ts DELETE_ASK), or a plain yes to Co's
+// own offer to remove it. A removal can't be undone, so the tool guard's "their words are in the message" isn't enough on its own
+// (review of ac5474a: "what do you know" passed it).
+export const REMOVE_ASK = /\b(remove|forget|delete|drop|erase|wipe|scrub|get rid of|take (?:that|it|this|those) (?:off|out|down)|(?:that'?s|that is|it'?s|its) (?:wrong|not true|not right|outdated)|not true|no longer true|isn'?t true|isn'?t right|don'?t (?:want|need) (?:that|it|this|those) (?:on file|kept|saved|anymore)|stop (?:remembering|holding|keeping))\b/i;
+const PLAIN_YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|do it|go ahead|yes please|please do|definitely|absolutely)[.!]*$/i;
+export function removalAsked(message: string, lastCoMessage: string | null | undefined): boolean {
+  if (REMOVE_ASK.test(message)) return true;
+  const co = String(lastCoMessage ?? "");
+  return PLAIN_YES.test(message.trim()) && /\b(remove|forget|delete|take (?:it|that) off|drop)\b/i.test(co) && /\?\s*$/.test(co.trim());
 }
 
 // ---------------------------------------------------------------- reading
@@ -314,14 +355,37 @@ export async function readKnown(userId: string): Promise<RawKnown> {
 export async function whatCoKnows(userId: string): Promise<{ view: KnownView; items: KnownItem[] }> {
   const { memberSafeLine } = await import("./memberSafeMemories.js");
   const safe = await memberSafeLine(userId);
-  const items = knownItems(await readKnown(userId)).flatMap((i) => {
+  const items = strippedItems(await readKnown(userId), safe);
+  return { view: groupKnown(items), items };
+}
+
+// Pure: the items with other members' details stripped; an item the strip empties is left out. The ONLY items a member is shown,
+// and the only ones a change can be resolved against (review of ac5474a: resolving against the raw list let a ref match a hidden
+// line about another member and carry the name into the reply).
+export function strippedItems(raw: RawKnown, safe: (s: string) => string | null): KnownItem[] {
+  return knownItems(raw).flatMap((i) => {
     const text = safe(i.text);
     if (!text?.trim()) return [];
     // Their own words are theirs (safeMemory keeps "User said:" the same way), but a name in them is still stripped.
     const theirWords = i.theirWords ? safe(i.theirWords) : null;
     return [{ ...i, text: text.trim(), theirWords: theirWords?.trim() || null }];
   });
-  return { view: groupKnown(items), items };
+}
+
+// Pure: which items a change names. An exact ref, or an exact full-line match on what the member was shown (all the items that
+// say exactly those words). Nothing looser: "startup" never takes several lines with it (review of ac5474a).
+export function resolveRefs(refs: string[], items: KnownItem[]): { refs: string[]; unknown: string[] } {
+  const byRef = new Set(items.map((i) => i.ref));
+  const out: string[] = [];
+  const unknown: string[] = [];
+  for (const ref of [...new Set(refs)]) {
+    if (byRef.has(ref)) { out.push(ref); continue; }
+    const want = squash(plainOf(ref));
+    const hits = want ? items.filter((i) => squash(plainOf(i.text)) === want) : [];
+    if (hits.length) out.push(...hits.map((h) => h.ref));
+    else unknown.push(ref);
+  }
+  return { refs: [...new Set(out)], unknown };
 }
 
 // ---------------------------------------------------------------- changing
@@ -417,8 +481,11 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
         const intent = (raw.profile?.intent ?? []).map((x: any) => (x?.id === a ? { ...x, text: v, embedding: null } : x));
         await db.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(intent)]);
       } else {
-        const { closeAsk } = await import("./askKind.js");
-        await closeAsk(userId, a, "member", theirWords.slice(0, 300));
+        // The same three writes as askKind.ts closeAsk, on this transaction's client.
+        await db.query(`UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()), closed_reason = COALESCE(closed_reason, 'member'), closed_evidence = COALESCE(closed_evidence, $3) WHERE user_id = $1 AND ask_id = $2`, [userId, a, theirWords.slice(0, 300)]);
+        const intent = (raw.profile?.intent ?? []).map((x: any) => (x?.id === a && x?.status === "active" ? { ...x, status: "resolved", resolved_at: new Date().toISOString() } : x));
+        await db.query(`UPDATE co_profiles SET intent = $2::jsonb, updated_at = NOW() WHERE user_id = $1`, [userId, JSON.stringify(intent)]);
+        await db.query(`UPDATE relevance_edges SET status = 'retired', retired_at = NOW(), retired_reason = $3 WHERE person_id = $1 AND ask_id = $2 AND status = 'open'`, [userId, a, "removed at their request"]);
       }
       return { ref: item.ref, source: "ask", was: old, now: v };
     }
@@ -428,12 +495,6 @@ async function applyOne(db: Db, userId: string, raw: RawKnown, item: KnownItem, 
       if (!old) return { why: "it's no longer on file" };
       await db.query(`UPDATE co_profiles SET avoid = $2 WHERE user_id = $1`, [userId, list.filter((x) => x !== old)]);
       return { ref: item.ref, source: "avoid", was: old, now: null };
-    }
-    case "file": {
-      const { deleteFiles } = await import("./memberFiles.js");
-      const n = Number(a);
-      if (!Number.isFinite(n) || !(await deleteFiles(userId, n))) return { why: "that file isn't on file" };
-      return { ref: item.ref, source: "file", was: `file ${n}`, now: null };
     }
   }
   return { why: "not something Co can change" };
@@ -452,60 +513,87 @@ export function fieldFor(ref: string): string {
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.
 // theirWords: their own words asking for it, from this message (checked by the tool guard's their_yes).
-export async function applyKnowledgeChanges(userId: string, changes: Change[], o: { message: string; theirWords: string }): Promise<ChangeResult> {
+export async function applyKnowledgeChanges(userId: string, changes: Change[], o: { message: string; theirWords: string; lastCoMessage?: string | null }): Promise<ChangeResult> {
+  // Fails closed like the view: without the names to strip, nothing is changed and nothing is said back.
+  const { memberSafeLine } = await import("./memberSafeMemories.js");
+  const safe = await memberSafeLine(userId);
+  const clean = (t: string) => (safe(t) ?? "").trim();
   const raw = await readKnown(userId);
-  const items = knownItems(raw);
+  const items = strippedItems(raw, safe);
   const byRef = new Map(items.map((i) => [i.ref, i]));
   const applied: Applied[] = [];
   const refused: ChangeResult["refused"] = [];
   const changedRefs = new Set<string>();
-  for (const c of changes) {
-    const now = c.action === "correct" ? String(c.now ?? "").trim().slice(0, 200) : null;
-    if (c.action === "correct" && !now) {
-      for (const ref of c.refs) refused.push({ ref, why: "a correction needs what's true now" });
-      continue;
-    }
-    // What's true now rests on their words: never a value Co made up.
-    if (now && !backedBy(now, o.message)) {
-      for (const ref of c.refs) refused.push({ ref, why: "what's true now has to come from their own words in this message" });
-      continue;
-    }
-    // A ref Co gave as the line's words instead of its ref is matched to the items that say exactly that, in one group.
-    const resolved = [...new Set(c.refs)].flatMap((ref) => {
-      if (byRef.has(ref)) return [ref];
-      const hits = items.filter((i) => squash(plainOf(i.text)) === squash(plainOf(ref)) || sameThing(plainOf(i.text), plainOf(ref)));
-      return hits.length && hits.length <= 4 && new Set(hits.map((h) => h.group)).size === 1 ? hits.map((h) => h.ref) : [ref];
-    });
-    for (const ref of [...new Set(resolved)]) {
-      const item = byRef.get(ref);
-      if (!item) {
-        refused.push({ ref, why: "not one of the items on file now (call whatCoKnows again for the current list)" });
+  const removing = changes.some((c) => c.action === "remove");
+  const asked = !removing || removalAsked(o.message, o.lastCoMessage);
+  // Files go after the transaction (only memberFiles.ts touches their table), and only once everything else held.
+  const fileRemovals: { item: KnownItem }[] = [];
+  const decisions: Parameters<typeof recordDecision>[0][] = [];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // The nightly claims refresh rewrites a member's claims under this lock (claims.ts refreshClaims): taking it here means a claim
+    // removed now can't be re-inserted from a read the refresh made before it.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('member_claims:' || $1))`, [userId]);
+    for (const c of changes) {
+      if (c.action === "remove" && !asked) {
+        for (const ref of c.refs) refused.push({ ref, why: "removing something needs them to ask for it in this message (remove, forget, delete, that's wrong) or say yes to your offer to remove it" });
         continue;
       }
-      const r = await applyOne(pool, userId, raw, item, c.action, now, o.theirWords);
-      if ("why" in r) {
-        refused.push({ ref, why: r.why });
+      const now = c.action === "correct" ? String(c.now ?? "").trim().slice(0, 200) : null;
+      if (c.action === "correct" && !now) {
+        for (const ref of c.refs) refused.push({ ref, why: "a correction needs what's true now" });
         continue;
       }
-      applied.push(r);
-      changedRefs.add(ref);
-      // The corrections record every reader already carries; a file's removal is recorded only in the decision log (its name and
-      // contents are never written anywhere else, memberFiles.ts rule 3).
-      if (r.source !== "file")
-        await pool.query(`INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote, item_ref, removed) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, fieldFor(ref), r.was, r.now, o.theirWords.slice(0, 300), ref, r.now == null]);
-      await recordDecision({
-        layer: 3,
-        decision: r.now == null ? "knowledge.remove" : "knowledge.correct",
-        userId,
-        outcome: "act",
-        action: r.source,
-        proposal: { ref, was: r.source === "file" ? r.was : r.was.slice(0, 240), now: r.now, theirWords: o.theirWords.slice(0, 300) },
-        checks: [{ name: "their_words_in_message", pass: true }, ...(now ? [{ name: "new_value_backed", pass: true }] : [])],
-      }).catch(() => {});
+      // What's true now rests on their words: never a value Co made up.
+      if (now && !backedBy(now, o.message)) {
+        for (const ref of c.refs) refused.push({ ref, why: "what's true now has to come from their own words in this message" });
+        continue;
+      }
+      const { refs, unknown } = resolveRefs(c.refs, items);
+      for (const ref of unknown) refused.push({ ref: ref.slice(0, 80), why: "not one of the items on file now (call whatCoKnows again and pass its refs)" });
+      for (const ref of refs) {
+        const item = byRef.get(ref)!;
+        if (item.source === "file") {
+          if (c.action === "remove") fileRemovals.push({ item });
+          else refused.push({ ref, why: "a file can only be removed" });
+          continue;
+        }
+        const r = await applyOne(client, userId, raw, item, c.action, now, o.theirWords);
+        if ("why" in r) {
+          refused.push({ ref, why: r.why });
+          continue;
+        }
+        // What Co had, stripped before it's returned, logged or stored: the raw row may name another member.
+        const was = clean(r.was) || item.text;
+        const done = { ...r, was };
+        applied.push(done);
+        changedRefs.add(ref);
+        await client.query(`INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote, item_ref, removed) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, fieldFor(ref), was, r.now, clean(o.theirWords).slice(0, 300), ref, r.now == null]);
+        decisions.push({ layer: 3, decision: r.now == null ? "knowledge.remove" : "knowledge.correct", userId, outcome: "act", action: r.source, proposal: { ref, was: was.slice(0, 240), now: r.now, theirWords: clean(o.theirWords).slice(0, 300) }, checks: [{ name: "their_words_in_message", pass: true }, ...(removing ? [{ name: "removal_asked", pass: true }] : []), ...(now ? [{ name: "new_value_backed", pass: true }] : [])] });
+      }
     }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
+  for (const { item } of fileRemovals) {
+    const { deleteFiles } = await import("./memberFiles.js");
+    const n = Number(item.ref.split(":")[1]);
+    if (!Number.isFinite(n) || !(await deleteFiles(userId, n))) {
+      refused.push({ ref: item.ref, why: "that file isn't on file" });
+      continue;
+    }
+    applied.push({ ref: item.ref, source: "file", was: `file ${n}`, now: null });
+    changedRefs.add(item.ref);
+    decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { ref: item.ref, was: `file ${n}`, now: null }, checks: [{ name: "removal_asked", pass: true }] });
+  }
+  for (const d of decisions) await recordDecision(d).catch(() => {});
   if (refused.length) {
-    await recordDecision({ layer: 3, decision: "knowledge.change_refused", userId, outcome: "skip", action: "refused", proposal: { refused, theirWords: o.theirWords.slice(0, 300) }, checks: refused.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.ref}: ${r.why}` })) }).catch(() => {});
+    await recordDecision({ layer: 3, decision: "knowledge.change_refused", userId, outcome: "skip", action: "refused", proposal: { refused, theirWords: clean(o.theirWords).slice(0, 300) }, checks: refused.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.ref}: ${r.why}` })) }).catch(() => {});
   }
   if (applied.length) void refreshDerived(userId, applied).catch((err: any) => console.error("whatCoKnows: refreshing derived copies failed (non-fatal):", err?.message ?? err));
   // What else still says it, from the fresh read (stripped like the view).
@@ -534,7 +622,7 @@ async function refreshDerived(userId: string, applied: Applied[]): Promise<void>
   }
   // The people graph's wants/offers that say the old thing are retired now; the rest are re-read from the corrected sources.
   const { rows: facts } = await pool.query(`SELECT id, object_label FROM co_facts WHERE owner_user_id = $1 AND relation IN ('wants', 'offers') AND retired_at IS NULL`, [userId]);
-  const stale = facts.filter((f: any) => applied.some((a) => sameThing(a.was.replace(/^(my read|looking out for|not for you): /, ""), String(f.object_label)))).map((f: any) => f.id);
+  const stale = facts.filter((f: any) => applied.some((a) => words(plainOf(a.was)).length >= 2 && covers(plainOf(a.was), String(f.object_label)))).map((f: any) => f.id);
   if (stale.length) await pool.query(`UPDATE co_facts SET retired_at = NOW() WHERE owner_user_id = $1 AND id = ANY($2::bigint[])`, [userId, stale]);
   if (stale.length) await (await import("./peopleGraph.js")).refreshPeopleFacts(userId, { maxAgeHours: 0 }).catch(() => null);
   void import("./sweepShadow.js").then((m) => m.rerunPickerForTaste(userId)).catch(() => {});

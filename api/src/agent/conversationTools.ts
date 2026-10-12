@@ -423,7 +423,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const { changes } = input as { changes: { refs: string[]; action: "correct" | "remove"; now?: string }[] };
         if (ctx.dryRun) return { ok: true, applied: [], note: "(dry run) nothing changed." };
         const W = await import("../services/whatCoKnows.js");
-        const r = await W.applyKnowledgeChanges(ctx.userId, changes, { message: ctx.resolvedContent, theirWords: String(input?.theirYes ?? ctx.resolvedContent) });
+        const r = await W.applyKnowledgeChanges(ctx.userId, changes, { message: ctx.resolvedContent, theirWords: String(input?.theirYes ?? ctx.resolvedContent), lastCoMessage: ctx.lastCoMessage ?? null });
         for (const a of r.applied) {
           ctx.facts?.add("did_this_turn", a.now == null ? `Removed from what Co knows about them, everywhere Co uses it: "${a.was.slice(0, 120)}".` : `Corrected what Co knows about them, everywhere Co uses it: "${a.was.slice(0, 80)}" is now "${a.now.slice(0, 80)}".`);
         }

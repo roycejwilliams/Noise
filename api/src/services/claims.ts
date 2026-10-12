@@ -156,7 +156,8 @@ export async function refreshClaims(userId: string, now = new Date(), deps: { pr
     // transaction: a failed read here holds nothing back rather than aborting the refresh.
     const forgotten = await import("./whatCoKnows.js").then((W) => W.forgottenRows(userId).then((rows) => ({ W, rows }))).catch(() => null);
     const fresh = finishClaims(proposed, sources, today, zone).filter((c) => !forgotten?.W.forgets(c.text, forgotten.rows, "claim"));
-    const merged = mergeClaims(held, fresh, zone);
+    // And what's held: a claim they removed while the model was reading isn't put back from the earlier read of held.
+    const merged = mergeClaims(held, fresh, zone).filter((c) => !forgotten?.W.forgets(c.text, forgotten.rows, "claim"));
     await client.query(`DELETE FROM member_claims WHERE user_id = $1`, [userId]);
     for (const c of merged) {
       // What has expired is dropped here, not carried: the table holds only claims still inside their lifetime.
