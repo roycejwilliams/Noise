@@ -1910,7 +1910,7 @@ export function sendblueRouter(io: Server): Router {
         // Co's judgment of this text (brain/index.ts): feedback to save, the list or where their work stands when they ask about
         // Co, a repeated text answered once, the walk-in ask, the clarifying question, and the decision (act, ask, deliver), logged
         // with the guards in force. The facts are assembled around it; the guards (grounding, tool limits, privacy) still veto.
-        planTextReply({ userId: user.id, read: turnRead, owed: owesReply, safetyConcern: crisisWording, clarify: decision.clarifyContext ?? null, repeat: repeatContext || null, walkinAsk: walkinAskInstruction || null, turn }, replyFacts);
+        const brainDecision = planTextReply({ userId: user.id, read: turnRead, owed: owesReply, safetyConcern: crisisWording, clarify: decision.clarifyContext ?? null, repeat: repeatContext || null, walkinAsk: walkinAskInstruction || null, turn }, replyFacts);
 
         // Same strings downstream code (and the reply agent) already key on.
         const callAction =
@@ -2604,6 +2604,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 lastReaction,
                 replyOwed: owesReply,
                 safetyConcern: crisisWording,
+                // Binds: a wait holds the send, and what it rules out is enforced (brain/index.ts).
+                decision: brainDecision,
                 turn,
                 userId: user.id,
                 phoneNumber: user.phone_number,

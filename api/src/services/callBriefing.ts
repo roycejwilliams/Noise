@@ -3,10 +3,9 @@
 //   - the clock: what time and day it is for them right now (so it never calls tomorrow's event "tonight")
 //   - what Co has found for them, prefetched while the phone rings (so no tool call, no pause, mid-conversation)
 // The sheet is static and lives in the agent's prompt (cached). The clock and the finds are per call, and ride in as dynamic variables.
-import { DateTime } from "luxon";
 import { timelineFor } from "./timeline.js";
 import { voiceFinds, type VoiceFinds } from "./voiceFinds.js";
-import { planCallBriefing, type CallBriefing } from "../brain/index.js";
+import { fallbackBriefing, judgeBriefing, logBriefing, type BriefingDecision, type CallBriefing } from "../brain/index.js";
 import { callCapabilityList } from "./capabilities.js";
 
 // One page. The list is generated from the capability registry (services/capabilities.ts callCapabilityList), from the same
@@ -35,7 +34,9 @@ export { renderFinds, type CallBriefing } from "../brain/index.js";
 const SHARED_WAIT_MS = 1000;
 
 // Built while the phone rings (outbound) or alongside the context (inbound). Each part fails to a safe line, never to a guess.
-export async function buildCallBriefing(userId: string, now: Date = new Date()): Promise<CallBriefing> {
+// The brain judges from what's gathered here (brain/index.ts judgeBriefing), and the guards veto after it: a safety hold
+// (services/safety.ts, offers paused for 3 days) means the call is handed no finds, whatever is on file.
+export async function planCallBriefing(userId: string, now: Date = new Date()): Promise<BriefingDecision> {
   // Their city from the one member-knowledge layer (services/memberKnowledge.ts): the call context's read when it's already under
   // way (services/callContext.ts, shared for the call's setup) and back within a second, else an identity-only read of its own.
   const own = () => import("./memberKnowledge.js").then((m) => m.memberKnowledge(userId, { now, include: [] }));
@@ -44,28 +45,33 @@ export async function buildCallBriefing(userId: string, now: Date = new Date()):
   const slow = new Promise<"slow">((r) => setTimeout(() => r("slow"), SHARED_WAIT_MS).unref?.());
   const k = await (shared.read ? Promise.race([shared.read, slow]).then((x) => (x === "slow" ? own() : x)) : own()).catch(() => null);
   const city: string | null = k?.identity.city ?? null;
-  const [clock, finds] = await Promise.all([
+  const [clock, finds, safetyHold] = await Promise.all([
     timelineFor(userId, city, now).catch(() => null),
     voiceFinds(userId, now).catch((): VoiceFinds => ({ available: false, reason: "the lookup didn't load" })),
+    import("./safety.js").then((s) => s.safetyHoldActive(userId)).catch(() => false),
   ]);
-  return planCallBriefing({ userId, now, clock, finds });
+  return judgeBriefing({ userId, now, clock, finds, vetoes: safetyHold ? [{ guard: "safety", why: "a safety hold is on: only care, no offers" }] : [] });
+}
+export async function buildCallBriefing(userId: string, now: Date = new Date()): Promise<CallBriefing> {
+  return (await planCallBriefing(userId, now)).briefing;
 }
 
 // Kept for 5 minutes per member, like the context (services/elevenLabsCalls.ts): outbound builds it while it rings.
 const TTL_MS = 5 * 60 * 1000;
-const prebuilt = new Map<string, { at: number; briefing: Promise<CallBriefing> }>();
-const fallback = (now = new Date()): CallBriefing => ({ rightNow: `It is ${DateTime.fromJSDate(now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`, findsNow: "Nothing to offer right now. Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet." });
+const prebuilt = new Map<string, { at: number; plan: Promise<BriefingDecision> }>();
 export function prebuildCallBriefing(userId: string, now = Date.now()): void {
-  prebuilt.set(userId, { at: now, briefing: buildCallBriefing(userId, new Date(now)).catch(() => fallback()) });
+  prebuilt.set(userId, { at: now, plan: planCallBriefing(userId, new Date(now)).catch(() => fallbackBriefing(new Date(), "the briefing failed to build")) });
 }
+// The call takes its briefing here, and the decision is logged now, with what the call actually got (built or fallback).
 export async function takeCallBriefing(userId: string, now = Date.now()): Promise<CallBriefing> {
   const hit = prebuilt.get(userId);
   prebuilt.delete(userId);
   // Bounded: a slow lookup costs the call nothing (the finds are just not offered), never a pause after "hello".
-  const bound = (p: Promise<CallBriefing>) => {
+  const bound = (p: Promise<BriefingDecision>) => {
     let t: NodeJS.Timeout;
-    return Promise.race([p, new Promise<CallBriefing>((r) => { t = setTimeout(() => r(fallback()), 1500); })]).finally(() => clearTimeout(t));
+    return Promise.race([p, new Promise<BriefingDecision>((r) => { t = setTimeout(() => r(fallbackBriefing(new Date(), "the briefing wasn't ready in time")), 1500); })]).finally(() => clearTimeout(t));
   };
-  if (hit && now - hit.at < TTL_MS) return bound(hit.briefing);
-  return bound(buildCallBriefing(userId, new Date(now)).catch(() => fallback()));
+  const used = await bound(hit && now - hit.at < TTL_MS ? hit.plan : planCallBriefing(userId, new Date(now)).catch(() => fallbackBriefing(new Date(), "the briefing failed to build")));
+  logBriefing(userId, used);
+  return used.briefing;
 }
