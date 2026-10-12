@@ -331,45 +331,105 @@ async function closeDoor(userId: string, why: string): Promise<void> {
   await recordDecision({ layer: 3, decision: "door.first_read", userId, outcome: "act", action: "closed", reason: why });
 }
 
-// Pure: whether a sent text carries the playback: most of what Co said it understood (its own words, not framing) is in it.
-export function playbackCarried(understood: string, sent: string): boolean {
-  const mine = contentWords(understood);
-  if (!mine.length) return false;
-  const hit = mine.filter((w) => sameWordIn(w, words(sent))).length;
-  return hit >= Math.min(2, mine.length) && hit / mine.length >= 0.6;
+// What the text that went out did with the first read, judged once by Haiku (judgeFirstReadText): no wording is guessed by regex.
+// latestBy: the latest moment the follow-up it promised could mean, as an ISO time, or null when it gave no time.
+export type FirstReadJudgment = { playedBack: boolean; promisedFollowUp: boolean; when: string | null; latestBy: string | null };
+
+export type TaskFate =
+  | { kind: "keep" }
+  | { kind: "move"; at: string }
+  | { kind: "co_initiated" }
+  | { kind: "drop" }
+  | { kind: "none" };
+
+// Pure: two separate decisions from one judgment. (a) The read is given when the text played it back or promised the follow-up;
+// otherwise once more, and a second miss closes the door. (b) The task: a promise that went out is kept as a promise, moved earlier
+// when the text promised sooner than the task's time; a playback with no promise keeps the look but as Co's own (paced and capped
+// like any text Co starts); nothing offered at all drops it. A judge that failed (null) keeps everything: given, promise kept.
+export function settleFromJudgment(p: Pick<FirstReadPending, "taskId" | "at">, j: FirstReadJudgment | null, priorUnsaid: number, now: Date): { given: boolean; action: string; task: TaskFate } {
+  if (!j) return { given: true, action: "judge_failed_kept", task: p.taskId ? { kind: "keep" } : { kind: "none" } };
+  const given = j.playedBack || j.promisedFollowUp || priorUnsaid >= 1;
+  const action = j.playedBack && j.promisedFollowUp ? "played_back_and_promised" : j.playedBack ? "played_back" : j.promisedFollowUp ? "promised" : priorUnsaid >= 1 ? "closed_after_retry" : "unsaid";
+  if (!p.taskId) return { given, action, task: { kind: "none" } };
+  if (j.promisedFollowUp) {
+    const said = j.latestBy ? new Date(j.latestBy) : null;
+    const taskAt = p.at ? new Date(p.at) : null;
+    if (said && Number.isFinite(said.getTime()) && taskAt && said.getTime() < taskAt.getTime()) {
+      // They were told sooner than the task would run: it runs by then, never before a few minutes from now.
+      return { given, action, task: { kind: "move", at: new Date(Math.max(said.getTime() - 30 * 60_000, now.getTime() + 5 * 60_000)).toISOString() } };
+    }
+    return { given, action, task: { kind: "keep" } };
+  }
+  return { given, action, task: j.playedBack ? { kind: "co_initiated" } : { kind: "drop" } };
 }
 
-// Pure: whether a sent text carries the first look's promise: a later text to them, at the time Co was given.
-export function promiseCarried(p: Pick<FirstReadPending, "timed" | "words">, sent: string): boolean {
-  if (!p.timed || !p.words) return false;
-  const t = sent.toLowerCase();
-  if (!/\b(text|tell|hear from|get back to|send)\b/.test(t)) return false;
-  const when = p.words.toLowerCase();
-  const hour = when.match(/\b(\d{1,2})(?::\d\d)?\s*(am|pm)\b/);
-  const day = when.match(/\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/);
-  return (!!hour && new RegExp(`\\b${hour[1]}(?::\\d\\d)?\\s*(${hour[2]}|o'?clock)?\\b`).test(t) && /\b(today|tonight|tomorrow|this (evening|afternoon)|mon|tue|wed|thu|fri|sat|sun)/.test(t)) || (!!day && t.includes(day[1]));
+export function judgePrompt(p: Pick<FirstReadPending, "understood" | "lookFor" | "at" | "zone">, sent: string, now: Date): string {
+  const zone = p.zone ?? "UTC";
+  return `Co (a texting companion) just sent a new member the text below. Co meant to (1) say back what it understood they're after, close to: "${p.understood}", and (2) tell them it will look for "${p.lookFor}" and text them by a time.
+
+Now, their time: ${DateTime.fromJSDate(now).setZone(zone).toFormat("cccc yyyy-LL-dd HH:mm ZZ")}${p.zone ? "" : " (their zone isn't known; read times as UTC)"}.
+
+The text that went out:
+"""${sent.slice(0, 1200)}"""
+
+Answer with ONLY strict JSON: {"playedBack": boolean, "promisedFollowUp": boolean, "when": string or null, "latestBy": string or null}.
+- playedBack: the text says back, in any words, what they're after (not just "got it").
+- promisedFollowUp: the text promises Co will text, tell or get back to them later.
+- when: the time words of that promise as written ("by six tonight"), else null.
+- latestBy: the latest moment those words could mean, as an ISO 8601 time with offset ("tonight" means 21:00 their time, "this evening" 21:00, "tomorrow" 21:00 tomorrow, "by 6pm" 18:00), else null.`;
 }
 
-// Pure: what a turn's sent text did with its first read. Given when it said the playback back or the promise with its time (the
-// heart of it reached them, in whatever words); unsaid otherwise, once; a second unsaid turn closes the door anyway, so a member
-// never gets a third try or a second full first read.
-export function settleDecision(p: FirstReadPending, sent: string, priorUnsaid: number): { given: boolean; action: string; dropTask: boolean } {
-  if (playbackCarried(p.understood, sent)) return { given: true, action: p.timed ? "timed" : "untimed", dropTask: false };
-  if (promiseCarried(p, sent)) return { given: true, action: "promise_only", dropTask: false };
-  // The promise never went out: its task must not text them as if it had.
-  return { given: priorUnsaid >= 1, action: priorUnsaid >= 1 ? "closed_after_retry" : "unsaid", dropTask: true };
+export function parseJudgment(raw: string): FirstReadJudgment | null {
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try {
+    const j = JSON.parse(m[0]);
+    if (typeof j.playedBack !== "boolean" || typeof j.promisedFollowUp !== "boolean") return null;
+    const latest = typeof j.latestBy === "string" && Number.isFinite(new Date(j.latestBy).getTime()) ? new Date(j.latestBy).toISOString() : null;
+    return { playedBack: j.playedBack, promisedFollowUp: j.promisedFollowUp, when: typeof j.when === "string" ? j.when.slice(0, 80) : null, latestBy: latest };
+  } catch {
+    return null;
+  }
+}
+
+// One Haiku read of the sent text; null on any failure (the caller keeps everything).
+export async function judgeFirstReadText(p: FirstReadPending, sent: string, now: Date = new Date()): Promise<FirstReadJudgment | null> {
+  try {
+    const [{ generateText }, { anthropic }, { MODELS }] = await Promise.all([import("ai"), import("@ai-sdk/anthropic"), import("../models.js")]);
+    const { text } = await Promise.race([
+      generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 1500, experimental_telemetry: { isEnabled: true, functionId: "door.judgeFirstRead" }, prompt: judgePrompt(p, sent, now) }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 8000)),
+    ]);
+    return parseJudgment(text);
+  } catch {
+    return null;
+  }
 }
 
 // After the reply went out: bookkeeping, never a gate on the text.
-export async function settleFirstRead(userId: string, p: FirstReadPending, sent: string): Promise<boolean> {
-  const prior = await pool
-    .query(`SELECT count(*)::int AS n FROM harness_decisions WHERE user_id = $1 AND decision = 'door.first_read_unsaid'`, [userId])
-    .then((r) => Number(r.rows[0]?.n ?? 0))
-    .catch(() => 0);
-  const d = settleDecision(p, sent, prior);
-  if (d.dropTask && p.taskId) {
-    const { closeTask } = await import("./coTasks.js");
-    await closeTask(userId, p.taskId, "dropped", "The first look's promise never went out in a text.").catch(() => {});
+export async function settleFirstRead(userId: string, p: FirstReadPending, sent: string, judge: typeof judgeFirstReadText = judgeFirstReadText): Promise<boolean> {
+  const now = new Date();
+  const [prior, j] = await Promise.all([
+    pool
+      .query(`SELECT count(*)::int AS n FROM harness_decisions WHERE user_id = $1 AND decision = 'door.first_read_unsaid'`, [userId])
+      .then((r) => Number(r.rows[0]?.n ?? 0))
+      .catch(() => 0),
+    judge(p, sent, now),
+  ]);
+  const d = settleFromJudgment(p, j, prior, now);
+  if (p.taskId) {
+    const id = p.taskId;
+    if (d.task.kind === "drop") {
+      const { closeTask } = await import("./coTasks.js");
+      await closeTask(userId, id, "dropped", "Nothing about the first look went out in a text.").catch(() => {});
+    } else if (d.task.kind === "move") {
+      await pool.query(`UPDATE co_tasks SET next_check_at = $3, final_check_at = $3, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, id, d.task.at]).catch(() => {});
+    } else if (d.task.kind === "co_initiated") {
+      // No promise went out: the look is Co's own, paced and capped like any text Co starts, with no last check owed to them.
+      await pool
+        .query(`UPDATE co_tasks SET source = 'lookout', followup = COALESCE(followup, '{}'::jsonb) || '{"lookoutOrigin":"co"}'::jsonb, final_check_at = NULL, deadline = NULL, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, id])
+        .catch(() => {});
+    }
   }
   const { recordDecision } = await import("../harness/core.js");
   await recordDecision({
@@ -378,8 +438,8 @@ export async function settleFirstRead(userId: string, p: FirstReadPending, sent:
     userId,
     outcome: d.given ? "act" : "skip",
     action: d.action,
-    reason: d.given ? null : "the text that went out carried neither the playback nor the promise; the door stays open for one more try",
-    proposal: { ...p, sent: sent.slice(0, 400) },
+    reason: d.given ? null : "the text that went out carried neither the playback nor a promise; the door stays open for one more try",
+    proposal: { ...p, judgment: j, task: d.task, sent: sent.slice(0, 400) },
   });
   return d.given;
 }
