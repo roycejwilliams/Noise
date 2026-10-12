@@ -189,6 +189,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // Already said with the link (alsoAnswer): never twice.
           const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
           if (norm(draft).length > 20 && norm(state.sentMessages.join(" ")).includes(norm(draft))) {
+            // Nothing went, so an owed answer is still owed.
+            stillOwed();
             notDone("A reply repeating what already went with the link wasn't sent again.");
             return { ok: true, note: "That already went with the link; nothing more went out." };
           }
@@ -204,6 +206,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           }
         }
         const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
+        // An owed answer the check emptied never went: not "already answered", it's said again plainly.
+        if (!message.trim() && owed) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         // The fact check left nothing to add after what already went out this turn.
         if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
         // Never an empty text (2026-10-12 audit, row 11661): with nothing sent yet, Co says it again from what's true.
