@@ -3,7 +3,8 @@
 // day since the 10-07 move to Haiku 5.5; judges capped at 120-200 tokens failed the same way). Passing
 // thinking: { type: "disabled" } is ignored by the model, and effort "low" still thinks. So every Messages request to a
 // Haiku 5.x model gets THINKING_ROOM more max_tokens, and callers keep sizing max_tokens for the answer alone. A short
-// yes/no read doesn't think at all, so it costs nothing there.
+// yes/no read doesn't think at all, so it costs nothing there. On calls, if CALL_LLM_MODEL is ever set to
+// Haiku 5.x, its 800-token cap no longer bounds thinking before Co speaks: measure latency first.
 export const THINKING_ROOM = 2048;
 
 // Pure: the request body with room added, or unchanged when it isn't a Haiku 5.x Messages request.
@@ -17,11 +18,13 @@ export function withThinkingRoom(body: string): string {
   }
 }
 
-let installed = false;
+// On globalThis, so a second copy of this module can't wrap fetch twice.
+const INSTALLED = Symbol.for("co.thinkingRoom.installed");
 // Wraps fetch once for Anthropic Messages calls (the AI SDK provider and the Anthropic SDK both go through it).
 export function installThinkingRoom(): void {
-  if (installed || typeof globalThis.fetch !== "function") return;
-  installed = true;
+  const g = globalThis as any;
+  if (g[INSTALLED] || typeof globalThis.fetch !== "function") return;
+  g[INSTALLED] = true;
   const inner = globalThis.fetch;
   globalThis.fetch = (async (input: any, init?: any) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : null;

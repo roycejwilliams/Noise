@@ -356,10 +356,11 @@ export async function readPage(url: string): Promise<LinkRead> {
       return { ...base, finalUrl: got.finalUrl, status: /log ?in|sign ?in/i.test(text) ? "login_required" : "no_content", why: /log ?in|sign ?in/i.test(text) ? "the page needs a login" : "the page has nothing useful to read" };
     }
     // A failed model read still leaves the page's own text: Co reads the excerpt rather than hearing it couldn't read the page.
-    const read = await modelRead(got.finalUrl, text).catch(() => ({ fields: {} as Partial<Record<FieldName, Field>>, summary: null }));
+    let modelFailed = false;
+    const read = await modelRead(got.finalUrl, text).catch(() => ((modelFailed = true), { fields: {} as Partial<Record<FieldName, Field>>, summary: null }));
     // Structured data wins where both have a field: it's the site's own record.
     const fields = { ...read.fields, ...(structured ?? {}) };
-    return { ...base, finalUrl: got.finalUrl, status: "ok", why: null, fields, summary: read.summary, source: structured ? "structured" : "model", excerpt: text.slice(0, EXCERPT_MAX) };
+    return { ...base, finalUrl: got.finalUrl, status: "ok", why: null, fields, summary: read.summary, source: structured ? "structured" : modelFailed ? null : "model", excerpt: text.slice(0, EXCERPT_MAX) };
   } catch (err: any) {
     return { ...base, finalUrl: got.finalUrl, status: "failed", why: "couldn't read the page" };
   }
@@ -482,7 +483,9 @@ export function describeRead(label: string, r: LinkRead, now = new Date()): { fa
     );
   }
   const missing = (["start", "venue"] as FieldName[]).filter((k) => !r.fields[k]?.verified);
-  if (missing.length) facts.push(`The page for "${label}" doesn't state: ${missing.join(", ")}.`);
+  // Only a page that was actually read for fields can be said not to state one (source null: the model read failed and
+  // only the page's own text is known).
+  if (missing.length && r.source) facts.push(`The page for "${label}" doesn't state: ${missing.join(", ")}.`);
   const unverified = FIELDS.filter((k) => r.fields[k] && !r.fields[k]!.verified);
   if (unverified.length) hints.push(`Unconfirmed from the page for "${label}" (not on the page as quoted, don't state as fact): ${unverified.map((k) => `${k}: ${r.fields[k]!.value}`).join("; ")}.`);
   if (r.summary) hints.push(`Co's own read of "${label}": ${r.summary}`);
