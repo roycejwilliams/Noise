@@ -830,11 +830,15 @@ export const proactiveRegistry: ProactiveRegistry = {
   event_match_nudge: {
     async draft(c) {
       const p = c.payload as EventMatchNudgePayload;
+      // The matching kill switch (services/roomMatching.ts): waits, never dropped.
+      const paused = await (await import("../services/roomMatching.js")).matchingPause(p.eventId);
+      if (paused) return { defer: new Date(Date.now() + 30 * 60_000), reason: paused };
       return { messages: [p.message], text: p.message, rules: p.rules };
     },
     async onSent(c) {
       const p = c.payload as EventMatchNudgePayload;
       await markMatchNudgeSent(p.eventId, c.userId, p.candidateId, p.score, !!p.anonymous);
+      await (await import("../services/roomMatching.js")).notePairAsked(p.eventId, c.userId, p.candidateId).catch(() => {});
       await writeMemory(
         c.userId,
         "event_guest_match_nudge",

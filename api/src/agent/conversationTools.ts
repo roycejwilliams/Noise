@@ -1135,6 +1135,33 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // How meeting someone Co pointed them to at a Co event went (services/roomMatching.ts, 2026-10-12): their side of the
+    // pair record, so Co's next value lines learn from it. Only people Co told THEM about can be named; nothing about the
+    // other side's answer or outcome comes back.
+    noteRoomMeeting: tool({
+      description: toolUse("noteRoomMeeting"),
+      inputSchema: z.object({
+        person: z.string().describe("The first name of someone Co pointed them to or introduced them to at a Co event."),
+        outcome: z.enum(["met_good", "met_fine", "met_not_a_fit", "did_not_meet"]).describe("They met and it was worth it, met and it was fine, met and it wasn't a fit, or didn't meet."),
+        note: z.string().optional().describe("Their words, briefly."),
+      }),
+      execute: async ({ person, outcome, note }) => {
+        if (ctx.dryRun) return { ok: true, note: "Test run: nothing was recorded." };
+        const RM = await import("../services/roomMatching.js");
+        const wanted = person.trim().toLowerCase().split(/\s+/)[0] ?? "";
+        const told = (await RM.pairsToldAbout(ctx.userId).catch(() => [])).filter((p) => p.firstName.toLowerCase() === wanted);
+        const people = [...new Set(told.map((p) => p.otherId))];
+        if (people.length > 1) return { ok: false, error: `More than one person Co pointed them to is called ${person}. Ask which one, then try again.` };
+        if (!told.length) {
+          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Co pointed them to at a Co event.`);
+          return { ok: false, error: "That isn't someone Co pointed them to at a Co event (only Co's own suggestions count)." };
+        }
+        await RM.notePairMet(ctx.userId, told[0].pairId, outcome, note ?? null);
+        ctx.facts?.add("did_this_turn", `Noted how meeting ${told[0].firstName} went for them, so Co's next introductions learn from it.`);
+        return { ok: true };
+      },
+    }),
+
     // Living asks (2026-09-26): Co closes an ask when they say it's done,
     // found, no longer wanted, or replaced by a newer one. Closed in both
     // places it lives (services/askKind.ts closeAsk), with a receipt.

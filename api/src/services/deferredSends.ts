@@ -107,14 +107,10 @@ export const afterHandlers: AfterHandlers = {
   },
 };
 
-// Whether an event has ended by `now` (its end, or the end of that evening when Luma has none: introConsent.effectiveEnd).
+// Whether an event has ended by `now`: its end (introConsent.effectiveEnd), or its room closed for the night, read in one
+// place (services/roomMatching.ts eventOver), test events included.
 export async function eventIsOver(eventId: string, now: Date): Promise<boolean> {
-  if (!eventId) return false;
-  const { getEventDetails } = await import("./luma.js");
-  const { effectiveEnd } = await import("../harness/introConsent.js");
-  const d = await getEventDetails(eventId).catch(() => null);
-  if (!d?.start_at) return false;
-  return new Date(effectiveEnd({ start_at: d.start_at, end_at: d.end_at ?? null, timezone: (d as any).timezone ?? null })).getTime() <= now.getTime();
+  return (await import("./roomMatching.js")).eventOver(eventId, now);
 }
 
 // The person who asked for the intro was told "I'll ask them". When that ask never went out, it's written on THEIR side so Co can
@@ -235,6 +231,8 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     }
     // An in-room intro ask held overnight is pointless once the event is over: dropped, never sent the next morning.
     else if (row.after_kind === "event_direct_ask" && (await eventIsOver(String((row.after_payload as any)?.eventId ?? ""), now))) result = { sent: false, reason: "event over" };
+    // The matching kill switch holds an intro ask (it waits, like the global pause; nothing is dropped).
+    else if (row.after_kind === "event_direct_ask" && (await (await import("./roomMatching.js")).matchingPause(String((row.after_payload as any)?.eventId ?? "")))) result = { sent: false, reason: "proactive outreach is paused" };
     else if (!localHourOk(now, row.timezone)) result = { sent: false, reason: "outside local hours" };
     else {
       result = await deps

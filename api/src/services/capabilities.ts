@@ -484,6 +484,13 @@ export const ABILITIES: Ability[] = [
     use: "When they say they met someone specific at a Co event who Co never nudged them about, and they want to be connected — look that person up on the real guest list and start the same double opt-in intro Co uses for its own matches. It needs their full name: call it with the first name, and it will tell you to ask for the last name; call it again with lastName once they say it. Only for a real person from a real Co event they actually attended, never a stranger with no shared event.",
   },
   {
+    id: "room_meeting",
+    can: "Co remembers whether they met the people it pointed them to at a Co event, and how it went for them, and uses that to choose better introductions next time.",
+    tool: "noteRoomMeeting",
+    limits: { perTurn: 3 },
+    use: "When they tell you whether they met someone you pointed them to or introduced them to at a Co event, and how it went (\"met Ellis, great talk about fundraising\", \"never found Noor\", \"nice but not a fit\"), record it with that person's first name. Their side only: never tell the other person, never say what the other person thought or answered. Then reply as usual.",
+  },
+  {
     id: "rapport_topic",
     can: "Co keeps track of which getting-to-know-you questions it has already asked.",
     tool: "markTopicAsked",

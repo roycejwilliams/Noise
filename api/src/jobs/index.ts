@@ -705,6 +705,26 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // The end of the night (services/roomMatching.ts, 2026-10-12): every Co event gets a durable closure row (its end plus a
+  // buffer); a due one closes its room once: in-room matching stops, pending asks expire, the follow-up check-in starts.
+  // Intro emails the matching pause held go out once it lifts.
+  let roomCloseRunning = false;
+  cron.schedule("*/5 * * * *", async () => {
+    if (roomCloseRunning) return;
+    roomCloseRunning = true;
+    try {
+      const RM = await import("../services/roomMatching.js");
+      await RM.scheduleRoomCloses();
+      for (const r of await RM.runRoomCloses()) console.log(`roomMatching: closed ${r.eventId}: ${r.expiredOffers} offer(s) and ${r.expiredPairs} pair(s) expired, ${r.droppedAsks} held ask(s) dropped, ${r.checkins} check-in(s) scheduled`);
+      const held = await RM.retryHeldIntros();
+      if (held) console.log(`roomMatching: sent ${held} held intro email(s)`);
+    } catch (error: any) {
+      console.error("Room close cron error:", error?.message ?? error);
+    } finally {
+      roomCloseRunning = false;
+    }
+  });
+
   // Frees arrival asks and match nudges a restart or crash marked as sent
   // without sending (services/strandedClaims.ts), so the runs above and
   // below retry them.

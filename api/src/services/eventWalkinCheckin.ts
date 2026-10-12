@@ -1,4 +1,5 @@
 import pool from "../db/db.js";
+import { effectiveEnd } from "../harness/introConsent.js";
 import { listCalendarEvents } from "./luma.js";
 import { captureIntent } from "./profileExtraction.js";
 import { getActiveSeekingAsk } from "./matching.js";
@@ -49,13 +50,12 @@ const MATCH_THRESHOLD = 0.5;
 // pool, where in-room nudges would name them to strangers.
 export const CHECKIN_OPENS_BEFORE_START_MINUTES = 180;
 
-export function isCheckinOpen(event: { start_at: string; end_at?: string | null }, now: Date): boolean {
+export function isCheckinOpen(event: { start_at: string; end_at?: string | null; timezone?: string | null }, now: Date): boolean {
   const t = now.getTime();
   const start = new Date(event.start_at).getTime();
   if (t < start - CHECKIN_OPENS_BEFORE_START_MINUTES * 60_000) return false;
-  // No end time on file: treat it as a same-day event (12h after start).
-  const end = event.end_at ? new Date(event.end_at).getTime() : start + 12 * 3_600_000;
-  return t <= end;
+  // The one end every in-room reader uses (introConsent.effectiveEnd): with no end on file, the end of that evening.
+  return t <= new Date(effectiveEnd({ start_at: event.start_at, end_at: event.end_at ?? null, timezone: event.timezone ?? null })).getTime();
 }
 
 // Resolves an inbound text to a real, currently-listed Luma event. Returns
