@@ -789,16 +789,20 @@ export async function noteIntroFailed(eventId: string, x: string, y: string, why
   await recordDecision({ layer: 6, decision: "match.introEmail", userId: a, outcome: "skip", action: final ? "failed_final" : "failed_will_retry", proposal: { eventId, a, b }, reason: why }).catch(() => {});
 }
 
-export async function retryHeldIntros(now = new Date()): Promise<number> {
-  const { rows } = await pool
-    .query(
-      `SELECT p.event_id, p.a_id, p.b_id, p.both_yes_at, p.intro_held_at, p.intro_attempts FROM co_pairs p
+// Every limit is in the WHERE clause, oldest first, so rows past their cap or their age can never fill the batch and
+// starve a real held email (2026-10-12 re-review). introRetryDue stays as the same rule in code, for the checks.
+export const RETRY_HELD_INTROS_SQL = `SELECT p.event_id, p.a_id, p.b_id, p.both_yes_at, p.intro_held_at, p.intro_attempts FROM co_pairs p
        JOIN users ua ON ua.id = p.a_id JOIN users ub ON ub.id = p.b_id
-       WHERE p.state = 'both_yes' AND p.intro_sent_at IS NULL AND (p.intro_held_at IS NOT NULL OR COALESCE(p.intro_attempts, 0) > 0)
+       WHERE p.state = 'both_yes' AND p.intro_sent_at IS NULL
+         AND (p.intro_held_at IS NOT NULL OR COALESCE(p.intro_attempts, 0) > 0)
+         AND COALESCE(p.intro_attempts, 0) < ${INTRO_MAX_ATTEMPTS}
+         AND p.both_yes_at > NOW() - INTERVAL '${INTRO_RETRY_MAX_AGE_MS / 86_400_000} days'
          AND ua.archived_at IS NULL AND ub.archived_at IS NULL AND NOT coalesce(ua.sms_opted_out, false) AND NOT coalesce(ub.sms_opted_out, false)
-       LIMIT 20`,
-    )
-    .catch(() => ({ rows: [] as any[] }));
+       ORDER BY p.both_yes_at ASC
+       LIMIT 20`;
+
+export async function retryHeldIntros(now = new Date()): Promise<number> {
+  const { rows } = await pool.query(RETRY_HELD_INTROS_SQL).catch(() => ({ rows: [] as any[] }));
   let sent = 0;
   for (const r of rows) {
     if (!introRetryDue(r, now)) continue;
@@ -806,5 +810,7 @@ export async function retryHeldIntros(now = new Date()): Promise<number> {
     const H = await import("./eventGuestMatchHandoff.js");
     if (await H.sendHeldIntro(r.event_id, r.a_id, r.b_id).catch(() => false)) sent++;
   }
+  // Network intro emails the pause held (networkIntroNudge.ts), under the same rules.
+  sent += await (await import("./networkIntroNudge.js")).retryHeldNetworkIntros(now).catch(() => 0);
   return sent;
 }

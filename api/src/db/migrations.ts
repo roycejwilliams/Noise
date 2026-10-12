@@ -2887,6 +2887,10 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("co_pairs intro columns / decline backfill failed:", err));
+  // Network intro emails held by the matching pause (services/networkIntroNudge.ts retryHeldNetworkIntros).
+  await pool
+    .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_held_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_attempts INTEGER NOT NULL DEFAULT 0`)
+    .catch((err: Error) => console.error("network_introductions held-email columns failed:", err));
   // An in-room question still open when the room closes expires instead of binding a "yes" days later.
   await pool
     .query(`ALTER TABLE event_match_offers DROP CONSTRAINT IF EXISTS event_match_offers_status_check`)
