@@ -113,7 +113,7 @@ export function firstLookAt(now: Date, zone: string | null): { at: Date; words: 
 // Words that frame a playback without claiming anything about them ("you're new and looking for..."). Everything else in what Co
 // says it understood, or will look for, has to be a word they used.
 const FRAMING = new Set(
-  "that this these those with from into about your you're youre they them their what when where which while want wants wanting looking look find finding meet meeting people folks person someone some more most just really here there then like have having been being would could should also start starting first still right very kind sort thing things space room rooms around through over".split(" "),
+  "that this these those with from into about your you're youre they them their what when where which while want wants wanting looking look find finding meet meeting people folks person someone some more most just really here there then like have having been being would could should also start starting first still right very kind sort thing things space room rooms around through over you've you'd you'll it's i'll after outside before near".split(" "),
 );
 const words = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
 
@@ -144,10 +144,14 @@ export function firstReadProblem(i: FirstReadInput, o: { view: DoorView; now: Da
   if (clean(i.understood).length < 8) return "Say what you understood in a few words.";
   if (clean(i.lookFor).length < 3) return "Say what you'll look for, in their terms.";
   if (!o.wordsAreTheirs(clean(i.theirWords), o.theirText)) return "theirWords must be copied exactly from what they wrote. The first look is for something they told you about, not a guess.";
+  // Both named in one error, so a single retry can fix both.
   const lookMissing = wordsNotTheirs(i.lookFor, o.theirText);
-  if (lookMissing.length) return `lookFor has to be in their terms. They never said: ${lookMissing.slice(0, 5).join(", ")}. Use their own words for what they want.`;
   const readMissing = wordsNotTheirs(i.understood, o.theirText);
-  if (readMissing.length) return `understood has to be only what they told you. They never said: ${readMissing.slice(0, 5).join(", ")}. Say it back in their terms, adding nothing.`;
+  const parts = [
+    lookMissing.length ? `lookFor uses words they never said: ${lookMissing.slice(0, 6).join(", ")}` : null,
+    readMissing.length ? `understood uses words they never said: ${readMissing.slice(0, 6).join(", ")}` : null,
+  ].filter(Boolean);
+  if (parts.length) return `${parts.join("; ")}. Use only their own words for both, adding nothing.`;
   return null;
 }
 
