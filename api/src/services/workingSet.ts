@@ -188,7 +188,7 @@ export type BacklogChange = { remove: Set<string>; replace: Map<string, any> };
 export type PruneDeps = ExitDeps & {
   backlogs: (userId: string) => Promise<{ ask_id: string; items: any[] }[]>;
   merge: (userId: string, askId: string, change: BacklogChange) => Promise<void>;
-  classify: (match: any, today: string) => Promise<{ match: any; result: "dated_event" | "opening" | "undated" | "unknown" }>;
+  classify: (match: any, today: string) => Promise<{ match: any; result: "dated_event" | "opening" | "undated" | "unknown"; note?: string }>;
   zone: (userId: string) => Promise<string | null>;
   key: (match: any) => string;
   exited?: (userId: string, keys: string[]) => Promise<Set<string>>;
@@ -286,7 +286,8 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
         classified++;
         const c = await deps.classify(match, today).catch(() => ({ match, result: "unknown" as const }));
         match = c.match;
-        if (c.result === "undated" || c.result === "unknown") nowHeld = { days: [...new Set([...(held?.days ?? []), today])], why: c.result };
+        // Why it couldn't be read, kept with it, and said when it exits (Royce, 2026-10-12: it shelved silently).
+        if (c.result === "undated" || c.result === "unknown") nowHeld = { days: [...new Set([...(held?.days ?? []), today])], why: c.result, ...("note" in c && c.note ? { note: String(c.note).slice(0, 300) } : {}) };
         else {
           dated++;
           v = backlogVerdict(match, today, { lifeEnd, form: F.formOf });
@@ -296,7 +297,7 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
       if (tooLong || v === "past") {
         const end = lifeEnd(match);
         const reason = tooLong
-          ? nowHeld!.why === "stalled" ? `it couldn't be sent after repeated tries (${nowHeld!.note ?? "held at send"}), and was held ${UNREAD_DAYS} separate days` : nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
+          ? nowHeld!.why === "stalled" ? `it couldn't be sent after repeated tries (${nowHeld!.note ?? "held at send"}), and was held ${UNREAD_DAYS} separate days` : nowHeld!.why === "unknown" ? `its page couldn't be read on ${UNREAD_DAYS} separate days${nowHeld!.note ? ` (${nowHeld!.note})` : ""}, so when it is can't be checked` : `its page didn't say when it is on ${UNREAD_DAYS} separate days`
           : `${F.formOf(match) === "opening" ? "its deadline" : "its date"} (${end}) passed`;
         const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", recoverable: tooLong && nowHeld!.why === "stalled" && (deps.setAsides ? await deps.setAsides(userId, k).catch(() => RECOVER_MAX_TIMES) : 0) < RECOVER_MAX_TIMES, reason, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
         if (ok) {

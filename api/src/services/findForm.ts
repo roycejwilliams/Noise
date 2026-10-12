@@ -112,9 +112,12 @@ export function readClassification(raw: string, page: string): (Classified & { e
   return { form: j.form, date: onPage(j.date ?? null), end: onPage(j.end ?? null), deadline: onPage(j.deadline ?? null) };
 }
 
-export type ClassifyDeps = { page: (url: string) => Promise<string | null>; model: (prompt: string) => Promise<string> };
+// official: another source for the same item, its own page found by a verified web search (webOpportunitySearch.ts
+// findOfficialPage). Left out (as the tests do), there's no search.
+export type ClassifyDeps = { page: (url: string) => Promise<string | null>; model: (prompt: string) => Promise<string>; official?: (name: string) => Promise<string | null> };
 export const realClassifyDeps: ClassifyDeps = {
   page: async (url) => (await import("./webOpportunitySearch.js")).readPageText(url),
+  official: async (name) => (await import("./webOpportunitySearch.js")).findOfficialPage(name, 30_000),
   model: async (prompt) => {
     const { generateText } = await import("ai");
     const { anthropic } = await import("@ai-sdk/anthropic");
@@ -127,17 +130,47 @@ export const realClassifyDeps: ClassifyDeps = {
 // A find with its form and its dates, read from its own page when it doesn't carry them. "unknown": the page couldn't be read or
 // said nothing usable; an event whose date the page doesn't state is "undated". Callers keep a dated event or an opening, and exit
 // the rest on that fact.
-export async function classifyFind<M extends TierMatch>(m: M, today: string, deps: ClassifyDeps = realClassifyDeps): Promise<{ match: M; result: "dated_event" | "opening" | "undated" | "unknown" }> {
+// An unreadable page never shelves a find on one try (Royce, 2026-10-12: a16z Speedrun was set aside after 3 days of "couldn't be
+// read"; that was the Haiku cut-off #162 fixed, but a page that really fails is retried too): its own page is read again once, and
+// the reading of it tried again once; then another source for the same item (the post or listing it was found in, then its
+// official page by a verified search). Only then is it "unknown", with `note` saying what was tried.
+export async function classifyFind<M extends TierMatch>(m: M, today: string, deps: ClassifyDeps = realClassifyDeps): Promise<{ match: M; result: "dated_event" | "opening" | "undated" | "unknown"; note?: string }> {
   const known = formOf(m as any);
   if (known === "event" && eventDateOf(m)) return { match: { ...m, form: "event" } as M, result: "dated_event" };
   if (known === "opening") return { match: { ...m, form: "opening" } as M, result: "opening" };
   const url = "url" in m ? (m as any).url : null;
+  const classify = async (page: string) => readClassification(await deps.model(classifyPrompt(m.name, page, today)).catch(() => ""), page);
+  const readTwice = async (page: string) => (await classify(page)) ?? (await classify(page));
+  const fetchTwice = async (u: string) => (await deps.page(u).catch(() => null)) || (await deps.page(u).catch(() => null));
+  const tried: string[] = [];
   // The page the sweep already read (its evidence) is used first; it's fetched again only when there isn't enough of it (review of #133).
   const read = String((m as any).evidence ?? "");
-  const page = read.length >= 400 ? read : url ? await deps.page(url).catch(() => null) : null;
-  if (!page) return { match: m, result: "unknown" };
-  const c = readClassification(await deps.model(classifyPrompt(m.name, page, today)).catch(() => ""), page);
-  if (!c) return { match: m, result: "unknown" };
+  let c: Awaited<ReturnType<typeof classify>> = null;
+  if (read.length >= 400) {
+    c = await readTwice(read);
+    if (!c) tried.push("the text it was found with said nothing usable");
+  }
+  if (!c && url) {
+    const page = await fetchTwice(url);
+    c = page ? await readTwice(page) : null;
+    if (!c) tried.push(page ? "its page said nothing usable, read twice" : "its page couldn't be fetched, tried twice");
+  }
+  // Another source: the post or listing it came from.
+  const post = typeof (m as any).opportunity?.postText === "string" ? String((m as any).opportunity.postText).trim() : "";
+  if (!c && post.length >= 40 && post !== read) {
+    c = await classify(post);
+    if (!c) tried.push("its post said nothing usable");
+  }
+  // Then its own official page, found by a verified web search.
+  if (!c && deps.official) {
+    const other = await deps.official(m.name).catch(() => null);
+    if (other && other !== url) {
+      const page = await fetchTwice(other);
+      c = page ? await classify(page) : null;
+      if (!c) tried.push(`its official page (${other.replace(/^https?:\/\//, "").slice(0, 80)}) ${page ? "said nothing usable" : "couldn't be fetched"}`);
+    } else tried.push("no other page for it was found");
+  }
+  if (!c) return { match: m, result: "unknown", note: tried.join("; ") || "nothing to read" };
   if (c.form === "event") {
     if (!c.date) return { match: { ...m, form: "event" } as M, result: "undated" };
     return { match: { ...m, form: "event", statedDates: { start: c.date, end: c.end } } as M, result: "dated_event" };
