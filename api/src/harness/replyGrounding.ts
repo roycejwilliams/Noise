@@ -1073,12 +1073,43 @@ function doneOnRecord(facts: Fact[]): boolean {
   return facts.some((f) => f.kind !== "not_done" && f.kind !== "hint" && /\b(sent|delivered|texted|emailed|went out|saved|made them)\b/i.test(f.text) && !NEGATIVE_RECEIPT.test(f.text));
 }
 
-// An admission and nothing else: every clause either says an action didn't happen, or owns it ("that's on me", "sorry"). Any other
-// clause ("but I drafted it", "though Ellis has your number now") sends the whole claim through the normal check (2026-10-12 review).
-const OWNING = /^(?:(?:and|but|so|yes|yeah|honestly|ok(?:ay)?)\s+)*(?:that'?s on me|that was on me|sorry|i'?m sorry|you'?re right|my fault|my mistake|my bad)$/i;
-export function onlyAdmits(text: string): boolean {
-  const clauses = text.replace(/[’‘]/g, "'").split(/[,;.!?]+|\b(?:but|though|although|so|and)\b/i).map((c) => c.trim()).filter(Boolean);
-  return clauses.some((c) => ADMITS_NOT_DONE.test(c)) && clauses.every((c) => ADMITS_NOT_DONE.test(c) || OWNING.test(c));
+// An admission and nothing else is a judgment about meaning, so a small model reads it (2026-10-12 review: clause regexes let
+// "I never sent it because Jordan already has your number" through). The cheap pre-filter: only a claim with a negation or an
+// ownership word is ever asked about. Fails closed: no answer means the claim gets the normal check.
+export const MAY_ADMIT = /\b(never|nothing|not|no|didn'?t|did not|wasn'?t|was not|hasn'?t|has not|haven'?t|have not|couldn'?t|could not|isn'?t|won'?t|can'?t|cannot|sorry|my fault|my mistake|my bad|on me)\b/i;
+export type AdmissionJudge = (prompt: string) => Promise<string>;
+const haikuAdmission: AdmissionJudge = async (prompt) =>
+  // Sized for the answer; Haiku 5.x's thinking room is added at the fetch layer (thinkingRoom.ts).
+  (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 40, abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS), experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.admission" }, prompt })).text;
+// Pure: the question.
+export function admissionPrompt(claim: string): string {
+  return `Co, a texting companion, is about to send this line:
+"${claim}"
+
+Does this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Co or another person) beyond Co admitting that something did NOT happen (including that it tried and couldn't: "I couldn't reach them"), or owning a mistake ("that's on me", "sorry", "you're right")? A reason or an aside that states a fact ("because Jordan already has your number", "since Ellis got it first") counts as asserting something.
+
+Return ONLY JSON: {"onlyAdmission": true} if the line only admits something didn't happen and/or owns it, else {"onlyAdmission": false}.`;
+}
+const admissionCache = new Map<string, boolean>();
+export async function judgeAdmission(claim: string, judge: AdmissionJudge = haikuAdmission): Promise<boolean | null> {
+  const key = claim.trim();
+  if (admissionCache.has(key)) return admissionCache.get(key)!;
+  try {
+    const out = parseModelJson<{ onlyAdmission?: unknown }>(await judge(admissionPrompt(key)));
+    if (typeof out?.onlyAdmission !== "boolean") return null;
+    if (admissionCache.size > 500) admissionCache.clear();
+    admissionCache.set(key, out.onlyAdmission);
+    return out.onlyAdmission;
+  } catch {
+    return null;
+  }
+}
+// The past_action claims that might be admissions, judged; only a true answer is in the map.
+export async function admissionsFor(claims: Claim[], judge?: AdmissionJudge): Promise<Map<string, boolean>> {
+  const asks = [...new Set(claims.filter((c) => c.type === "past_action" && MAY_ADMIT.test(c.text)).map((c) => c.text))];
+  const out = new Map<string, boolean>();
+  await Promise.all(asks.map(async (t) => { if ((await judgeAdmission(t, judge)) === true) out.set(t, true); }));
+  return out;
 }
 
 async function extractClaims(draft: string, rf: ReplyFacts, src: GroundingSources, model: string = LAYER3_MODELS.grounding): Promise<{ claims: Claim[]; latencyMs: number } | null> {
@@ -1153,7 +1184,7 @@ export const TEAM_PASS = /\b(pass(ed|ing)?|sen[dt]|shar(ed|ing)|flagg(ed|ing)|fo
 export const TEAM_PASS_PLUS = /\b(will|won'?t|going to|gonna|fix(es|ed|ing)?|today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|soon|by \w+)\b|\w['’]ll\b|\d/i;
 
 // A model's "supported" only counts if its citation checks out in code.
-export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources): GateCheck[] {
+export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSources, admissions: Map<string, boolean> = new Map()): GateCheck[] {
   // A hint (model-written read) is never support, even when cited.
   const factIds = new Set(rf.facts.filter((f) => f.kind !== "hint").map((f) => f.id));
   const hintIds = new Set(rf.facts.filter((f) => f.kind === "hint").map((f) => f.id));
@@ -1175,7 +1206,7 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
     // An honest admission it didn't happen is never cut as a false past action (2026-10-12 four-artifact test: "it never sent, and
     // that's on me" was cut while the doc truly never sent). Nothing on record says it happened: kept. Something does: the model's
     // read decides, without needing a fact to cite for an absence.
-    if (c.type === "past_action" && onlyAdmits(c.text) && (!doneOnRecord(rf.facts) || pass)) {
+    if (c.type === "past_action" && admissions.get(c.text) === true && (!doneOnRecord(rf.facts) || pass)) {
       return { name: `claim_${c.type}`, pass: true, reason: `${reason} (an admission it didn't happen${pass ? "" : ", and nothing on record says it did"})` };
     }
     if (!pass && c.type === "past_action" && savedForTeamThisTurn && TEAM_PASS.test(c.text) && !TEAM_PASS_PLUS.test(c.text)) {
@@ -1595,7 +1626,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const extracted = await extractClaims(draft, rf, src, model);
-      if (extracted) return { checks: [...code, ...claimChecks(extracted.claims, rf, src)], modelOk: true, ms: extracted.latencyMs };
+      if (extracted) return { checks: [...code, ...claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims))], modelOk: true, ms: extracted.latencyMs };
       console.error(`replyGrounding: claim check returned unusable JSON on attempt ${attempt}${attempt === 1 ? ", retrying once" : ""}`);
     } catch (err: any) {
       console.error(`replyGrounding: claim check failed on attempt ${attempt}${attempt === 1 ? ", retrying once" : " (non-fatal, giving up)"}:`, err?.message ?? err);
@@ -1609,7 +1640,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
 export async function claimChecksOnly(draft: string, rf: ReplyFacts, src: GroundingSources, opts: { force?: boolean } = {}): Promise<GateCheck[]> {
   if (!opts.force && !needsClaimCheck(draft)) return [];
   const extracted = await extractClaims(draft, rf, src).catch(() => null);
-  return extracted ? claimChecks(extracted.claims, rf, src) : [];
+  return extracted ? claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims)) : [];
 }
 
 // True when the claim read never came back for a draft that's claim-shaped
