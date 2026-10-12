@@ -50,11 +50,15 @@
 // Text replies (cutover 1) own the turn's judgment calls: feedback to save, the list vs. "what are you", a repeated text answered
 // once, the walk-in ask, the clarifying question, and the act/ask/deliver decision. Facts (what's true) are still gathered in
 // routes/sendblue.ts; the owed-answer and crisis lines stay there for now, read by the brain as state (owed, safetyConcern).
+// Call briefings (cutover 2) own what a call may offer and how it reads the clock (judgeBriefing); services/callBriefing.ts gathers
+// the clock and the finds and keeps the fallback a slow or failed build falls to (a guard: never a pause, never a guessed offer).
 import { recordDecision } from "../harness/core.js";
 import { addInstruction, type ReplyFacts } from "../harness/replyGrounding.js";
 import { capabilityListInstruction, capabilityMenu, type Surface } from "../services/capabilities.js";
 import { ABOUT_CO_INSTRUCTION, feedbackInstruction, type TurnRead } from "../services/readTurn.js";
 import type { TurnContext } from "../services/turnContext.js";
+import type { VoiceFinds } from "../services/voiceFinds.js";
+import { DateTime } from "luxon";
 
 export type DecisionKind = "act" | "ask" | "wait" | "deliver";
 
@@ -129,6 +133,48 @@ export function planTextReply(p: TextPicture, facts: ReplyFacts): Decision {
   for (const i of d.instructions) addInstruction(facts, i);
   recordDecision({ layer: 3, decision: "brain.text", userId: p.userId, outcome: d.kind === "ask" ? "ask" : d.kind === "wait" ? "skip" : "act", action: d.kind, proposal: { why: d.why, instructions: d.instructions.length, guards: d.guards, tasks: p.turn?.tasks?.length ?? 0, eventToday: !!p.turn?.todayEvent } }).catch(() => {});
   return d;
+}
+
+// ---------- Call briefings (cutover 2)
+// What the call brain is handed per call besides its prompt: the clock and what Co has found for them. The facts are gathered in
+// services/callBriefing.ts (their city from member knowledge, the timeline, the finds); the brain judges what the call may offer.
+export type BriefingPicture = {
+  userId: string;
+  now: Date;
+  // Their local time and what's ahead (services/timeline.ts), or null when it didn't load.
+  clock: { fact: string; note?: string | null } | null;
+  finds: VoiceFinds;
+};
+export type CallBriefing = { rightNow: string; findsNow: string };
+
+export function renderFinds(f: VoiceFinds): string {
+  if (!f.available) return `Nothing to offer right now (${f.reason}). Don't offer an event; if they ask what's on, look it up now or say you don't have anything yet.`;
+  const lines = f.items.map((i) => `- ${i.name}${i.starts ? ` | starts ${i.starts}` : ""}${i.details.length ? ` | ${i.details.join(" ")}` : ""}${i.link ? " | link on file (offer to text it)" : ""}`);
+  return `${f.note}\nLooking for: ${f.lookingFor}\n${lines.join("\n")}`.slice(0, 2400);
+}
+
+// Pure: what the call may offer and how it reads the clock. Something on file is delivered; nothing means wait (no event offered).
+export function judgeBriefing(p: BriefingPicture): Decision & { briefing: CallBriefing } {
+  const rightNow = p.clock
+    ? `${p.clock.fact}${p.clock.note ? ` ${p.clock.note}` : ""} "Tonight" and "today" mean the hours left before they sleep; an event is only "tonight" if its start below says today.`
+    : `It is ${DateTime.fromJSDate(p.now).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, h:mm a")} Pacific. Don't assume that is their local time.`;
+  const findsNow = renderFinds(p.finds);
+  const offering = p.finds.available && p.finds.items.length > 0;
+  return {
+    surface: "call",
+    kind: offering ? "deliver" : "wait",
+    why: offering ? "Co has finds on file for them that the call can offer" : "nothing on file to offer, so the call offers no event",
+    instructions: [rightNow, findsNow],
+    guards: ["grounding", "privacy"],
+    briefing: { rightNow, findsNow },
+  };
+}
+
+// The briefing's cutover: judged, then logged without waiting (the call never pauses on the log).
+export function planCallBriefing(p: BriefingPicture): CallBriefing {
+  const d = judgeBriefing(p);
+  recordDecision({ layer: 3, decision: "brain.briefing", userId: p.userId, outcome: d.kind === "wait" ? "skip" : "act", action: d.kind, proposal: { why: d.why, guards: d.guards, finds: p.finds.available ? p.finds.items.length : 0, clock: !!p.clock } }).catch(() => {});
+  return d.briefing;
 }
 
 // What Co can do on a surface, from the registry (the brain's first input source).
