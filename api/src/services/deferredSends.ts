@@ -81,7 +81,7 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
   if (r.sent || (alreadyCounts && r.reason === "already sent")) return "sent";
   if (r.reason === "outside local hours") return "retry_hours";
   if (r.reason === "proactive outreach is paused") return "retry_paused";
-  if (r.reason === "opted out" || r.reason === "already sent" || r.reason === "archived" || r.reason === "event over") return "skipped";
+  if (r.reason === "opted out" || r.reason === "already sent" || r.reason === "archived" || r.reason === "event over" || r.reason === "no longer valid") return "skipped";
   // It says something they corrected since it was queued (runDueDeferredSends' recheck): skipped, never retried.
   if (/^corrected since queued:/.test(r.reason ?? "")) return "skipped";
   return "failed";
@@ -231,8 +231,11 @@ export async function runDueDeferredSends(now: Date = new Date(), deps: Deferred
     }
     // An in-room intro ask held overnight is pointless once the event is over: dropped, never sent the next morning.
     else if (row.after_kind === "event_direct_ask" && (await eventIsOver(String((row.after_payload as any)?.eventId ?? ""), now))) result = { sent: false, reason: "event over" };
-    // The matching kill switch holds an intro ask (it waits, like the global pause; nothing is dropped).
-    else if (row.after_kind === "event_direct_ask" && (await (await import("./roomMatching.js")).matchingPause(String((row.after_payload as any)?.eventId ?? "")))) result = { sent: false, reason: "proactive outreach is paused" };
+    // The matching kill switch holds an intro ask (it waits, like the global pause; nothing is dropped). Network asks wait
+    // on the all-events pause.
+    else if ((row.after_kind === "event_direct_ask" || row.after_kind === "network_intro_ask") && (await (await import("./roomMatching.js")).matchingPause(row.after_kind === "event_direct_ask" ? String((row.after_payload as any)?.eventId ?? "") : null))) result = { sent: false, reason: "proactive outreach is paused" };
+    // Still valid when it finally goes: the pair wasn't declined, introduced or asked another way meanwhile.
+    else if (row.after_kind === "event_direct_ask" && (await (await import("./roomMatching.js")).mayAsk(String((row.after_payload as any)?.eventId ?? ""), String((row.after_payload as any)?.candidateId ?? ""), String((row.after_payload as any)?.askerId ?? ""), "deferredSends.directAsk"))) result = { sent: false, reason: "no longer valid" };
     else if (!localHourOk(now, row.timezone)) result = { sent: false, reason: "outside local hours" };
     else {
       result = await deps

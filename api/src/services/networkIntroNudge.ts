@@ -151,6 +151,8 @@ export async function attemptNetworkSurfacing(
   _phoneNumber: string,
   askId: string,
 ): Promise<{ queued: boolean }> {
+  // The matching kill switch (services/roomMatching.ts, all-events scope): no new network suggestion while it's on.
+  if (await (await import("./roomMatching.js")).matchingPause(null)) return { queued: false };
   let pending = await dropStaleFront(userId, await getBacklog(userId, askId));
   if (!pending.length) {
     pending = await dropStaleFront(userId, await findFreshCandidates(userId, askId));
@@ -312,7 +314,8 @@ export async function resolveNetworkTeaseReply(
   // through" (2026-10-03: this said "say so briefly and honestly" and a "Sure"
   // got "Sorry for the false start."). harness/discretion.ts.
   const cantReveal = discretionInstruction("They said yes to hearing who it was, and you can't go further on that one. Don't promise another one.", { neutral: true });
-  if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal"))) return cantReveal;
+  // The matching kill switch (all events) blocks it the same way: nobody is named while it's on, same neutral answer.
+  if (!(await gateNetworkCandidate(userId, candidateId, pending.candidate.match_reason, "reveal")) || (await (await import("./roomMatching.js")).matchingPause(null))) return cantReveal;
 
   // The stored reveal was drafted under the other person's consent at the time;
   // if that changed since the tease, it's drafted again (the gate above covers
@@ -377,7 +380,10 @@ export async function findPendingNetworkIntroOffer(userId: string): Promise<Pend
 // it didn't (Resend reports failures in the result, not by throwing).
 async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<boolean> {
   const [aYes, bYes] = await Promise.all([networkOptedIn(a.user_id, b.user_id), networkOptedIn(b.user_id, a.user_id)]);
-  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return false;
+  // The matching kill switch (all events) holds the email; it's logged, and Co never says it went.
+  const paused = await (await import("./roomMatching.js")).matchingPause(null);
+  const pauseCheck = paused ? { name: "matching_not_paused", pass: false, reason: paused } : { name: "matching_not_paused", pass: true };
+  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes), pauseCheck], { b: b.user_id }))) return false;
   const subject = `Introducing ${a.first_name} and ${b.first_name}`;
   const html = galleryEmail({
     preview: `Co thinks you two should meet.`,
@@ -454,15 +460,22 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
   // stashed while queued, a text of theirs before the morning would bind to an
   // ask they never saw.
   const after = { candidateId: candidate.user_id, askerId: asker.user_id, askerFirstName: asker.first_name, askerPhone: asker.phone_number, askerEmail: asker.email, matchReason, askId };
-  const result = await sendExemptWhenAllowed({
+  const send = {
     userId: candidate.user_id,
     phoneNumber: candidate.phone_number,
-    type: "direct_ask",
+    type: "direct_ask" as const,
     targetKey: `network_direct_ask:${[candidate.user_id, asker.user_id].sort().join(":")}`,
     messages: [message],
     timezone: await timezoneFor(candidate.user_id),
-    after: { kind: "network_intro_ask", payload: after },
-  });
+    after: { kind: "network_intro_ask" as const, payload: after },
+  };
+  // The matching kill switch: the asker was told Co would check, so the ask waits in deferred_sends (held while the
+  // pause is on) instead of being dropped.
+  if (await (await import("./roomMatching.js")).matchingPause(null)) {
+    await (await import("./deferredSends.js")).enqueueDeferredSend({ ...send, dueAt: new Date() }).catch((err: any) => console.error("askCandidateDirectly: holding the ask failed (non-fatal):", err?.message ?? err));
+    return;
+  }
+  const result = await sendExemptWhenAllowed(send);
   if (!result.sent && !result.queued) {
     console.error(`askCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
   }

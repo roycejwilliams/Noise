@@ -218,6 +218,9 @@ export const proactiveRegistry: ProactiveRegistry = {
   network_tease: {
     async draft(c, person) {
       const candidate = c.payload.candidate;
+      // The matching kill switch (all events): waits, never dropped.
+      const paused = await (await import("../services/roomMatching.js")).matchingPause(null);
+      if (paused) return { defer: new Date(Date.now() + 30 * 60_000), reason: paused };
       // A closed ask makes no offers (services/askLifecycle.ts).
       if (!(await (await import("../services/askLifecycle.js")).askIsOpenRef(c.userId, c.payload.askId))) return skip("their ask has since closed");
       const text = await draftProactive({

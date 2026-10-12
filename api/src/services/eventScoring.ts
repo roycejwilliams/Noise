@@ -410,11 +410,16 @@ async function maybeSendMatchNudge(
   };
   // The candidate's private words (private asks, profile, notes, owner-only facts) never appear in this text.
   const candidateSide = await RM.gatherValueSide(candidate.user_id);
-  const noPrivateQuote = (d: string) => [RM.checkNoPrivateQuote(d, candidateSide.privateTexts, candidateSide.shared)];
+  // Words any text may carry whoever said them: the event's name, its venue, the two first names.
+  const venue = (await RM.eventTiming(eventId).catch(() => null))?.venue ?? null;
+  const allow = [eventName, ...(venue ? [venue] : []), person.first_name, candidate.first_name];
+  const noPrivateQuote = (d: string) => [RM.checkNoPrivateQuote(d, candidateSide.privateTexts, candidateSide.shared, "no_private_quote", allow)];
   // Taste first: the one line on why this person gets value from the candidate. Set once the gate passes.
   let valueLine = "";
   const passValueGate = async (): Promise<boolean> => {
-    const v = await RM.valueGate(eventId, eventName, person.user_id, candidate.user_id, opts.honestLowConfidence ? "eventScoring.unmatchedPair" : "eventScoring.matchNudge");
+    // Not ok: blocked (stored, logged) or a failed read (logged, tried again next pass). Either way the caller's loop moves
+    // on to this person's next candidate.
+    const v = await RM.valueGate(eventId, eventName, person.user_id, candidate.user_id, opts.honestLowConfidence ? "eventScoring.unmatchedPair" : "eventScoring.matchNudge", { allow });
     if (!v.ok) return false;
     // This person's own line; empty only when the candidate shared nothing, and then there's no nudge (nothing true to say).
     valueLine = v.lineFor(person.user_id);

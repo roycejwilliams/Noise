@@ -2870,6 +2870,23 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS event_room_closures_due_idx ON event_room_closures (due_at) WHERE closed_at IS NULL`))
     .catch((err: Error) => console.error("event_room_closures table init failed:", err));
+  // Intro emails: held by the matching pause (sent when it lifts) or failed (a few bounded retries). And every decline
+  // already on record joins its pair, so a declined pair is never suggested again (idempotent backfill).
+  await pool
+    .query(`ALTER TABLE co_pairs ADD COLUMN IF NOT EXISTS intro_held_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS intro_attempts INTEGER NOT NULL DEFAULT 0`)
+    .then(() =>
+      pool.query(
+        `INSERT INTO co_pairs (event_id, a_id, b_id, origin, state, declined_at, a_answer, a_answered_at, b_answer, b_answered_at)
+         SELECT o.event_id, LEAST(o.person_id, o.candidate_id), GREATEST(o.person_id, o.candidate_id), 'co', 'declined', o.decided_at,
+                CASE WHEN o.person_id < o.candidate_id THEN 'no' END, CASE WHEN o.person_id < o.candidate_id THEN o.decided_at END,
+                CASE WHEN o.person_id > o.candidate_id THEN 'no' END, CASE WHEN o.person_id > o.candidate_id THEN o.decided_at END
+         FROM event_guest_match_opt_ins o
+         WHERE o.status = 'declined' AND o.person_id <> o.candidate_id
+         ON CONFLICT (event_id, a_id, b_id) DO UPDATE SET state = 'declined', declined_at = COALESCE(co_pairs.declined_at, EXCLUDED.declined_at), updated_at = NOW()
+           WHERE co_pairs.declined_at IS NULL AND co_pairs.intro_sent_at IS NULL`,
+      ),
+    )
+    .catch((err: Error) => console.error("co_pairs intro columns / decline backfill failed:", err));
   // An in-room question still open when the room closes expires instead of binding a "yes" days later.
   await pool
     .query(`ALTER TABLE event_match_offers DROP CONSTRAINT IF EXISTS event_match_offers_status_check`)
