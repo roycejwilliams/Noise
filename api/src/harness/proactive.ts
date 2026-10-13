@@ -2044,7 +2044,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   if (!ev.userOk || !ev.eligible.length) {
     const failed = ev.userOk ? [] : gate(ev.userChecks).failed;
     const reason = failed.length ? describeFailed(failed) : "no eligible candidate";
-    await recordSkipOnce(userId, failed.map((f) => f.name).join(",") || "no_eligible", {
+    if (!opts.dryRun) await recordSkipOnce(userId, failed.map((f) => f.name).join(",") || "no_eligible", {
       layer: 7,
       decision: "proactive.dailyPick",
       userId,
@@ -2095,12 +2095,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     else logDraftDecision(userId, decision, type);
   };
   if (decision.kind === "wait" || !picked.pick) {
-    await pool.query(
+    if (!opts.dryRun) await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
        ON CONFLICT (user_id) DO UPDATE SET hold_until = EXCLUDED.hold_until`,
       [userId, decision.holdHours ?? RULES.pickNoneHoldHours],
     );
-    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", proposal, checks: ev.userChecks, reason: decision.why });
+    if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", proposal, checks: ev.userChecks, reason: decision.why });
     done(null);
     return;
   }
@@ -2120,7 +2120,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     }
     if (decision.drop) {
       if (!opts.dryRun) await dropCandidate(registry, c, "skipped", decision.drop);
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `archive:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: decision.why });
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `archive:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: decision.why });
       done(c.type);
       return;
     }
@@ -2161,6 +2161,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
             );
             await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: prep.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${prep.reason}` });
           }
+          done(c.type);
           return;
         }
         continue;
@@ -2168,7 +2169,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       if ("skip" in prep) {
         if (x.id === c.id) {
           if (!opts.dryRun) await dropCandidate(registry, c, "skipped", prep.skip);
-          await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${prep.skip}` });
+          if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${prep.skip}` });
+          done(c.type);
           return;
         }
         // A sibling its page re-read exited (its fact written) or held is archived, never left waiting (Phase B).
@@ -2205,7 +2207,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       done(c.type);
       const at = decision.until!;
       if (!opts.dryRun) await pool.query(`UPDATE proactive_candidates SET due_at = $2, payload = jsonb_set(payload, '{waits}', to_jsonb(COALESCE((payload->>'waits')::int, 0) + 1)), updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'pending'`, [items.map((b) => b.candidate.id), at]);
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: at.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: decision.why });
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: at.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: decision.why });
       return;
     }
     if ("fail" in res) {
@@ -2217,7 +2219,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
         }
       }
       // Logged the way every failed draft is, so the proactive_blocked monitor counts composed bundles too (review of #135).
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `draft skipped: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `draft skipped: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
+      done(c.type);
       return;
     }
     composed = res;
@@ -2228,9 +2231,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   try {
     draft = composed ? { messages: composed.messages, text: composed.text, rules: {} } : await drafting(c.type, () => registry[c.type].draft(c, person));
   } catch (err: any) {
-    await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
-    if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft error: ${err?.message ?? err}`);
-    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal, checks: [...ev.userChecks, ...pickChecks], reason: `draft failed: ${err?.message ?? err}` });
+    if (!opts.dryRun) {
+      await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
+      if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft error: ${err?.message ?? err}`);
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal, checks: [...ev.userChecks, ...pickChecks], reason: `draft failed: ${err?.message ?? err}` });
+    }
+    done(c.type);
     return;
   }
 
@@ -2241,12 +2247,14 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       [c.id, draft.defer, new Date(draft.defer.getTime() + 3 * 24 * 3_600_000)],
     );
     if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: draft.defer.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `deferred: ${draft.reason}` });
+    done(c.type);
     return;
   }
 
   if ("skip" in draft) {
-    await dropCandidate(registry, c, "skipped", draft.skip);
-    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${draft.skip}` });
+    if (!opts.dryRun) await dropCandidate(registry, c, "skipped", draft.skip);
+    if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${draft.skip}` });
+    done(c.type);
     return;
   }
 
@@ -2270,7 +2278,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       const fixed = { ...second, text: capitalizeSentences(second.text), messages: second.messages.map(capitalizeSentences) };
       const fixedChecks = withRepeat(checkDraft(fixed.text, fixed.rules), fixed.text);
       const fg = gate(fixedChecks);
-      await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.redraft", userId, outcome: fg.ok ? "act" : "skip", action: `send:${c.type}`, proposal: { picked: c.id, first: first.draft, second: fixed.text }, checks: fixedChecks, reason: `first draft broke: ${first.failed}` }).catch(() => {});
       if (fg.ok) {
         draft = fixed;
         draftChecks = fixedChecks;
@@ -2279,9 +2287,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     }
   }
   if (!dg.ok) {
-    await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
-    if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${describeFailed(dg.failed)}`);
-    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, draft: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: `draft failed checks: ${describeFailed(dg.failed)}` });
+    if (!opts.dryRun) {
+      await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
+      if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${describeFailed(dg.failed)}`);
+    }
+    if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, draft: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: `draft failed checks: ${describeFailed(dg.failed)}` });
+    done(c.type);
     return;
   }
 
@@ -2297,6 +2308,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   decision = afterPayloadFirst(decision, pf && "handedTo" in pf ? { handedTo: String(pf.handedTo), why: pf.why } : pf && "hold" in pf ? { hold: pf.hold } : null);
   if (decision.kind === "act" && pf && "handedTo" in pf) {
     done(c.type);
+    if (opts.dryRun) return;
     await dropCandidate(registry, c, "skipped", `payload first: handed to task ${pf.handedTo}`);
     // The task's result lands within 15 minutes: nothing else goes out first,
     // the same spacing as between any two texts (review of #59).
@@ -2310,6 +2322,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
   if (decision.drop && pf && "hold" in pf) {
     done(c.type);
+    if (opts.dryRun) return;
     // Not asked instead: dropped, and its source asks again on its own schedule
     // (a re-queued target is a no-op once dropped, so this can't loop hourly).
     await dropCandidate(registry, c, "skipped", decision.drop);
