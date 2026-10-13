@@ -156,7 +156,7 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     // Content slides, in the web deck's layouts: statements on the field, everything else on their paper.
     const { slideLayouts } = await import("./deck.js");
     const layouts = slideLayouts(deck.data.slides, st.grammar ?? "editorial");
-    const { leadOf } = await import("./art.js");
+    const { leadOf, dishOf } = await import("./art.js");
     const A = await import("../artImagery.js");
     // A map can't be drawn from tiles in PowerPoint, so it goes in as one picture of the map (rendered from the same tiles).
     const mapPics = new Map<number, string | null>();
@@ -166,7 +166,7 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
       const l0 = layouts[i];
       // The web deck's other layouts, set the nearest way PowerPoint can: oversized type as a statement, an asymmetric grid as points,
       // a menu's courses and a timeline as their own lines, a plate or a strip as a picture beside the points.
-      const l = l0 === "oversized" ? "statement" : l0 === "asym" ? "points" : l0;
+      const l = l0 === "oversized" || l0 === "pull" ? "statement" : l0 === "asym" ? "points" : l0;
       const field = l === "statement" && (!!st.gradient || heavy);
       const ink = field ? fieldInk : st.text;
       if (field) onField(s);
@@ -179,7 +179,7 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
         s.addText(sl.headline, { x: 0.9, y: 1.4, w: 11.5, h: 1.4, fontFace: headFace, fontSize: 34, bold: headBold, color: hex(ink), valign: "top", align: l === "courses" ? "center" : "left" });
         s.addText(
           sl.bullets.map((b) => {
-            const x = leadOf(b);
+            const x = l === "courses" ? dishOf(b) : leadOf(b);
             return x ? [{ text: `${x.lead}  `, options: { bold: true, color: hex(accOnPaper), breakLine: false } }, { text: x.text, options: { breakLine: true } }] : [{ text: b, options: { breakLine: true } }];
           }).flat() as any,
           { x: l === "courses" ? 2.4 : 0.9, y: 3.1, w: l === "courses" ? 8.5 : 11.5, h: 3.6, fontFace: bodyFace, fontSize: 18, color: hex(ink), valign: "top", paraSpaceAfter: 10, align: l === "courses" ? "center" : "left" },

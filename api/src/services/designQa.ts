@@ -17,7 +17,7 @@ import { compositionProblem, placeholderIn } from "./coPages/art.js";
 
 export type QaMedium = "deck" | "page" | "doc";
 // contrast findings carry what was measured (the ink, its ground, the ratio it needs), so code can re-ink or move a gradient end.
-export type QaFinding = { rule: "type_scale" | "spacing" | "contrast" | "overflow" | "orphan" | "image" | "one_idea" | "scannability" | "print_type" | "page_break" | "render" | "craft" | "composition" | "imagery"; where: string; detail: string; fix: "auto" | "co" | "none"; slide?: number; role?: string; color?: string; alpha?: number; ground?: string[]; need?: number; view?: "phone" };
+export type QaFinding = { rule: "type_scale" | "spacing" | "contrast" | "overflow" | "orphan" | "image" | "one_idea" | "scannability" | "print_type" | "page_break" | "render" | "craft" | "composition" | "imagery" | "depth"; where: string; detail: string; fix: "auto" | "co" | "none"; slide?: number; role?: string; color?: string; alpha?: number; ground?: string[]; need?: number; view?: "phone" };
 export type QaResult = { ran: boolean; findings: QaFinding[]; screenshot: Buffer | null; measured: number; phone?: Buffer | null };
 
 // alpha: how much of the text's own color shows (its opacity and its ancestors', times the color's own alpha); it's blended onto its
@@ -320,6 +320,10 @@ export function contentFindings(medium: QaMedium, data: any): QaFinding[] {
       else if (total > 110) out.push({ rule: "one_idea", where: `slide ${n}`, detail: `${total} words on one slide; cut it to the one idea (under 110 words)`, fix: "co", slide: n });
       if (words(s.headline) > 14) out.push({ rule: "one_idea", where: `slide ${n}`, detail: "the headline is a paragraph; say the one point in under 14 words", fix: "co", slide: n });
     });
+    // A full deck (founder's review: a pitch went out with two slides): six content slides at least, the same floor a deck written
+    // from a brief has. It goes back to Co once to expand from what they told them; never padded with filler.
+    const n0 = (data?.slides ?? []).length;
+    if (n0 && n0 < 6) out.push({ rule: "depth", where: "the whole thing", detail: `${n0} content slides; a full deck is 6 to 10. Expand it from what they told you (each part of the plan or pitch its own slide, one idea a slide); never add filler or anything they didn't give`, fix: "co" });
     // The composition rule, after code has re-laid what it can (art.ts composeLayouts): what's left goes back to Co to rewrite.
     const slides = data?.slides ?? [];
     if (slides.length >= 2) {
@@ -431,6 +435,7 @@ export function qaShortfall(fs: QaFinding[]): string | null {
     if (f.rule === "craft") return f.role?.startsWith("logo") ? `the logo on ${at} isn't set cleanly` : /placeholder/.test(f.detail) ? `${at} still has a placeholder` : `a label on ${at} is cut off`;
     if (f.rule === "composition") return "too many slides share one layout";
     if (f.rule === "imagery") return "it has no pictures yet";
+    if (f.rule === "depth") return "it's shorter than a full deck, since that's all the material I had";
     return `${at}: ${f.detail}`;
   };
   const items = [...new Set(left.map(say))];

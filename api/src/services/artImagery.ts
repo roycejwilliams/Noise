@@ -60,39 +60,64 @@ export function sameVenue(named: string, found: string, address: string | null =
 // The name part of what Co named ("Heath Ceramics" for "Heath Ceramics, San Francisco"): the label Co uses, never Google's.
 export const placeLabel = (named: string) => named.split(",")[0].trim().slice(0, 90);
 
-export type FoundPlace = { placeId: string; label: string; photos: ArtImage[] };
+export type FoundPlace = { placeId: string; label: string; photos: ArtImage[]; address: string };
 export type ImageryDeps = { fetch: typeof fetch; now: () => number };
 const realDeps: ImageryDeps = { fetch: (...a) => fetch(...a), now: () => Date.now() };
 
+// Pure: a street address in what Co named, only when the member or the venue gave one ("Heath Ceramics, 2900 18th Street"): its number
+// and its street's words.
+const STREET = /\b(\d{1,6})\s+((?:[A-Za-z0-9]+\s+){0,3}?)(st|street|ave|avenue|rd|road|blvd|boulevard|way|dr|drive|ln|lane|pl|place|ct|court|hwy|highway|pkwy|parkway)\b/i;
+export function streetOf(named: string): { number: string; words: string[] } | null {
+  const m = named.match(STREET);
+  return m ? { number: m[1], words: words(m[2]).filter((w) => !/^\d+$/.test(w) || /^\d+(st|nd|rd|th)$/.test(w)) } : null;
+}
+const normStreet = (s: string) => ` ${words(s).map((w) => ({ street: "st", avenue: "ave", road: "rd", boulevard: "blvd", drive: "dr", lane: "ln", place: "pl", court: "ct", highway: "hwy", parkway: "pkwy" } as Record<string, string>)[w] ?? w).join(" ")} `;
+// Pure: whether an address is at the street address given (its number, and its street's words).
+export function atStreet(address: string, st: { number: string; words: string[] }): boolean {
+  const a = normStreet(address);
+  return a.includes(` ${st.number} `) && st.words.every((w) => a.includes(` ${normStreet(w).trim()} `));
+}
+// Pure: of several candidates (name and address), the one place Co named, or "ambiguous" when more than one same-name place is in the
+// city named (a chain, two branches) and no street address picks one, or null.
+export function onePlace<T extends { name: string; address: string }>(named: string, cands: T[], check: (c: T) => boolean): T | "ambiguous" | null {
+  const ok = cands.filter(check);
+  const st = streetOf(named);
+  if (st) return ok.find((c) => atStreet(c.address, st)) ?? null;
+  if (ok.length > 1) return "ambiguous";
+  return ok[0] ?? null;
+}
+
 // A real place by what Co named ("Heath Ceramics, San Francisco"): its id, checked against its name and address, and up to n of its
-// photos as references (place id and index only). Null when the key is missing, nothing is found, or it isn't the place named.
-export async function findPlace(query: string, n = 3, deps: ImageryDeps = realDeps): Promise<FoundPlace | null> {
+// photos as references (place id and index only). Null when the key is missing, nothing is found, or it isn't the place named;
+// "ambiguous" when the city has more than one (founder's review: Heath has a factory and a Ferry Building shop) and no street says which.
+export async function findPlace(query: string, n = 3, deps: ImageryDeps = realDeps): Promise<FoundPlace | "ambiguous" | null> {
   if (!GOOGLE_KEY() || !query.trim()) return null;
   const r = await deps
     .fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Goog-Api-Key": GOOGLE_KEY(), "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.photos.name" },
-      body: JSON.stringify({ textQuery: query.slice(0, 200), maxResultCount: 1 }),
+      body: JSON.stringify({ textQuery: query.slice(0, 200), maxResultCount: 5 }),
       signal: AbortSignal.timeout(6000),
     })
     .catch(() => null);
   if (!r?.ok) return null;
-  const p = ((await r.json().catch(() => null)) as any)?.places?.[0];
-  if (!p?.id) return null;
-  const name = String(p?.displayName?.text ?? ""), address = String(p?.formattedAddress ?? "");
-  if (!sameVenue(query, name, address)) {
-    // Only the city failed (an area, not a town, in what Co named): the same state, else country, as where OpenStreetMap puts it.
+  const all: any[] = (((await r.json().catch(() => null)) as any)?.places ?? []).filter((p: any) => p?.id);
+  const cands = all.map((p) => ({ p, name: String(p?.displayName?.text ?? ""), address: String(p?.formattedAddress ?? "") }));
+  const cityPart = query.split(",").slice(1).join(",").trim();
+  // A city written as an area ("Mt Hood"): the same state, else country, as where OpenStreetMap puts it.
+  const needRegion = cands.some((c) => sameVenue(query, c.name, null) && !sameVenue(query, c.name, c.address));
+  const city = needRegion && cityPart ? await osmRegion(cityPart, deps).catch(() => null) : null;
+  const regionOf = (p: any): Region => {
     const comps: any[] = p.addressComponents ?? [];
-    const pick = (t: string) => comps.find((c) => (c.types ?? []).includes(t))?.longText ?? null;
-    const place: Region = { state: pick("administrative_area_level_1"), country: comps.find((c) => (c.types ?? []).includes("country"))?.shortText?.toLowerCase() ?? null };
-    const cityPart = query.split(",").slice(1).join(",").trim();
-    const city = cityPart && sameVenue(query, name, null) ? await osmRegion(cityPart, deps).catch(() => null) : null;
-    if (!city || !sameVenue(query, name, address, { place, city })) return null;
-  }
+    return { state: comps.find((c) => (c.types ?? []).includes("administrative_area_level_1"))?.longText ?? null, country: comps.find((c) => (c.types ?? []).includes("country"))?.shortText?.toLowerCase() ?? null };
+  };
+  const pick = onePlace(query, cands, (c) => sameVenue(query, c.name, c.address) || (!!city && sameVenue(query, c.name, c.address, { place: regionOf(c.p), city })));
+  if (pick === "ambiguous" || !pick) return pick;
+  const p = pick.p;
   const label = placeLabel(query);
   const count = Math.min(n, (p.photos ?? []).length);
   const photos: ArtImage[] = Array.from({ length: count }, (_, i) => ({ kind: "venue" as const, via: "google" as const, src: venueKey(String(p.id), i), placeId: String(p.id), i, place: label, alt: label }));
-  return { placeId: String(p.id), label, photos };
+  return { placeId: String(p.id), label, photos, address: pick.address };
 }
 
 // A place's photos and their authors, read when they're shown (never stored with the artifact): cached a few minutes, and a failure
@@ -148,7 +173,7 @@ export async function placePhotoBytes(photo: ArtImage, deps: ImageryDeps = realD
 // OpenStreetMap credited (every map says "© OpenStreetMap contributors").
 const PIN_DIR = process.env.CO_OSM_CACHE_DIR ? path.join(process.env.CO_OSM_CACHE_DIR, "geocode") : path.join(os.tmpdir(), "co-osm-geocode");
 const PIN_TTL = 30 * 24 * 3600_000;
-const pCache = new Map<string, { at: number; pin: MapPin | null }>();
+const pCache = new Map<string, any>();
 let queue: Promise<unknown> = Promise.resolve();
 let lastAt = 0;
 // Where OpenStreetMap puts an area or a town ("Mt Hood"): its state and country, through the same one-a-second queue, cached.
@@ -172,47 +197,50 @@ export async function osmRegion(area: string, deps: ImageryDeps = realDeps): Pro
   return got;
 }
 
+export type OsmFound = { pin: MapPin; road: string | null; house: string | null } | "ambiguous" | null;
 export async function osmPin(named: string, deps: ImageryDeps = realDeps): Promise<MapPin | null> {
+  const f = await osmFind(named, deps);
+  return f && f !== "ambiguous" ? f.pin : null;
+}
+// Where OpenStreetMap puts the place Co named, checked the same way as a photo (the name both ways, the city named, or for an area its
+// state), and "ambiguous" when the city has more than one and no street address picks one. Cached thirty days (a miss one day).
+export async function osmFind(named: string, deps: ImageryDeps = realDeps): Promise<OsmFound> {
   const q = named.trim().slice(0, 200);
   if (!q) return null;
-  const key = createHash("sha1").update(q.toLowerCase()).digest("hex");
-  const mem = pCache.get(key);
-  if (mem && deps.now() - mem.at < PIN_TTL) return mem.pin;
+  const key = createHash("sha1").update(`v2:${q.toLowerCase()}`).digest("hex");
+  const mem = pCache.get(key) as any;
+  if (mem && deps.now() - mem.at < PIN_TTL) return mem.found;
   const file = path.join(PIN_DIR, `${key}.json`);
   const disk = await fs.readFile(file, "utf8").then((t) => JSON.parse(t)).catch(() => null);
   if (disk && deps.now() - disk.at < PIN_TTL) {
     pCache.set(key, disk);
-    return disk.pin;
+    return disk.found;
   }
   const run = queue.then(async () => {
     const wait = 1100 - (deps.now() - lastAt);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     lastAt = deps.now();
-    const r = await deps.fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=1&addressdetails=1`, { headers: { "User-Agent": UA, "Accept-Language": "en" }, signal: AbortSignal.timeout(8000) }).catch(() => null);
+    const r = await deps.fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=5&addressdetails=1`, { headers: { "User-Agent": UA, "Accept-Language": "en" }, signal: AbortSignal.timeout(8000) }).catch(() => null);
     const j: any = r?.ok ? await r.json().catch(() => null) : null;
-    const hit = Array.isArray(j) ? j[0] : null;
-    const lat = Number(hit?.lat), lng = Number(hit?.lon);
-    // The same check as a photo: what OpenStreetMap found is the place named, in the city named.
-    return hit && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng, name: String(hit.name || String(hit.display_name ?? "").split(",")[0]), display: String(hit.display_name ?? ""), region: { state: hit.address?.state ?? null, country: hit.address?.country_code ?? null } } : null;
+    return (Array.isArray(j) ? j : [])
+      .map((h: any) => ({ lat: Number(h?.lat), lng: Number(h?.lon), name: String(h?.name || String(h?.display_name ?? "").split(",")[0]), address: `${h?.address?.house_number ?? ""} ${h?.address?.road ?? ""}, ${String(h?.display_name ?? "")}`, road: h?.address?.road ?? null, house: h?.address?.house_number ?? null, region: { state: h?.address?.state ?? null, country: h?.address?.country_code ?? null } as Region }))
+      .filter((h: any) => Number.isFinite(h.lat) && Number.isFinite(h.lng));
   });
   queue = run.catch(() => null);
-  const hit = await run.catch(() => null);
-  // The same check as a photo: what OpenStreetMap found is the place named, in the city named (or, for an area, its state).
-  let pin: MapPin | null = null;
-  if (hit) {
-    let ok = sameVenue(q, hit.name, hit.display);
-    if (!ok && sameVenue(q, hit.name, null) && q.includes(",")) {
-      const city = await osmRegion(q.split(",").slice(1).join(",").trim(), deps).catch(() => null);
-      ok = sameVenue(q, hit.name, hit.display, { place: hit.region, city });
-    }
-    if (ok) pin = { lat: hit.lat, lng: hit.lng, label: placeLabel(q) };
-  }
-  // A miss is cached for a day, a find for thirty.
-  const entry = { at: pin ? deps.now() : deps.now() - PIN_TTL + 24 * 3600_000, pin };
-  pCache.set(key, entry);
+  const cands: any[] = (await run.catch(() => null)) ?? [];
+  const needRegion = cands.some((c) => sameVenue(q, c.name, null) && !sameVenue(q, c.name, c.address)) && q.includes(",");
+  const city = needRegion ? await osmRegion(q.split(",").slice(1).join(",").trim(), deps).catch(() => null) : null;
+  // Two results for one place (a node and its building) are one place: only same-name results far apart are two.
+  const near = (a: any, b: any) => Math.abs(a.lat - b.lat) < 0.002 && Math.abs(a.lng - b.lng) < 0.002;
+  const ok = cands.filter((c) => sameVenue(q, c.name, c.address) || (!!city && sameVenue(q, c.name, c.address, { place: c.region, city })));
+  const distinct = ok.filter((c, i) => !ok.slice(0, i).some((d) => near(c, d)));
+  const pick = onePlace(q, distinct, () => true);
+  const found: OsmFound = pick === "ambiguous" ? "ambiguous" : pick ? { pin: { lat: pick.lat, lng: pick.lng, label: placeLabel(q) }, road: pick.road, house: pick.house } : null;
+  const entry = { at: found ? deps.now() : deps.now() - PIN_TTL + 24 * 3600_000, found };
+  pCache.set(key, entry as any);
   await fs.mkdir(PIN_DIR, { recursive: true }).catch(() => {});
   await fs.writeFile(file, JSON.stringify(entry)).catch(() => {});
-  return pin;
+  return found;
 }
 
 // A mood image from Unsplash for a few words (only with UNSPLASH_ACCESS_KEY). Landscape, safe content. Its download is tracked when
@@ -290,13 +318,32 @@ export function artNote(r: ArtReport, grammarName: string): string {
   return `Laid out as ${grammarName}${map ? `, ${map}` : ""}${pics ? `; ${pics}` : ""}.`;
 }
 
-// Places to pictures and pins, each place once: Google for its photos (by id), OpenStreetMap for where it is.
-async function lookUp(names: (string | undefined)[], n: number, deps: ImageryDeps): Promise<{ found: (FoundPlace | null)[]; pins: (MapPin | null)[] }> {
+// Places to pictures and pins, each place once: Google for its photos (by id), OpenStreetMap for where it is. The photo and the pin must
+// be the same place (founder's review: a factory photo over a pin on the Ferry Building shop): when either finds more than one branch in
+// the city, or OpenStreetMap's street isn't in Google's address, both go, and that's said.
+export function samePlace(f: FoundPlace | null, o: { road: string | null; house: string | null } | null): boolean {
+  if (!f || !o || !o.road) return true;
+  const a = normStreet(f.address);
+  const road = normStreet(o.road).trim();
+  return a.includes(` ${road} `) && (!o.house || a.includes(` ${o.house} `));
+}
+async function lookUp(names: (string | undefined)[], n: number, deps: ImageryDeps, notes: string[]): Promise<{ found: (FoundPlace | null)[]; pins: (MapPin | null)[] }> {
   const uniq = [...new Set(names.filter((x): x is string => !!x))];
-  const f = new Map<string, FoundPlace | null>(), p = new Map<string, MapPin | null>();
+  const f = new Map<string, FoundPlace | "ambiguous" | null>(), p = new Map<string, OsmFound>();
   await Promise.all(uniq.map(async (q) => f.set(q, await findPlace(q, n, deps).catch(() => null))));
-  for (const q of uniq) p.set(q, await osmPin(q, deps).catch(() => null));
-  return { found: names.map((q) => (q ? f.get(q) ?? null : null)), pins: names.map((q) => (q ? p.get(q) ?? null : null)) };
+  for (const q of uniq) p.set(q, await osmFind(q, deps).catch(() => null));
+  const keep = new Map<string, { f: FoundPlace | null; pin: MapPin | null }>();
+  for (const q of uniq) {
+    const fq = f.get(q) ?? null, pq = p.get(q) ?? null;
+    if (fq === "ambiguous" || pq === "ambiguous") {
+      notes.push(`there's more than one ${placeLabel(q)} there, so no photo or map until the street address is known`);
+      keep.set(q, { f: null, pin: null });
+    } else if (!samePlace(fq, pq)) {
+      notes.push(`the photo and the map for ${placeLabel(q)} didn't agree on where it is, so neither is shown`);
+      keep.set(q, { f: null, pin: null });
+    } else keep.set(q, { f: fq, pin: pq ? pq.pin : null });
+  }
+  return { found: names.map((q) => (q ? keep.get(q)?.f ?? null : null)), pins: names.map((q) => (q ? keep.get(q)?.pin ?? null : null)) };
 }
 
 // A cover kept from before an edit stays only while it's still right: a mood image, or a venue photo of a place still on it.
@@ -322,10 +369,10 @@ export async function fillDeckArt(data: any, o: { mood?: string | null; deadline
       delete s.photos;
       delete s.map;
     }
-    const { found, pins } = await lookUp(slides.map((s) => s.place), grammar === "fieldguide" || grammar === "catalog" ? 3 : 2, deps);
+    const { found, pins } = await lookUp(slides.map((s) => s.place), grammar === "fieldguide" || grammar === "catalog" ? 3 : 2, deps, report.notes);
     const mapPins: MapPin[] = [];
     found.forEach((f, i) => {
-      if (slides[i].place && !f && !pins[i]) report.notes.push(`couldn't find ${slides[i].place}`);
+      if (slides[i].place && !f && !pins[i] && !report.notes.some((x) => x.includes(placeLabel(slides[i].place)))) report.notes.push(`couldn't find ${slides[i].place}`);
       if (f) {
         if (!report.venues.includes(f.label)) report.venues.push(f.label);
         if (f.photos.length) slides[i].photos = f.photos;
@@ -403,11 +450,11 @@ export async function fillPageArt(data: any, o: { mood?: string | null; deadline
     }
     for (const s of next.sections) delete s.photos;
     delete next.map;
-    const { found, pins } = await lookUp(next.sections.map((s: any) => s.place), grammar === "fieldguide" ? 3 : 1, deps);
+    const { found, pins } = await lookUp(next.sections.map((s: any) => s.place), grammar === "fieldguide" ? 3 : 1, deps, report.notes);
     const mapPins: MapPin[] = [];
     found.forEach((f, i) => {
       const s = next.sections[i];
-      if (s.place && !f && !pins[i]) report.notes.push(`couldn't find ${s.place}`);
+      if (s.place && !f && !pins[i] && !report.notes.some((x) => x.includes(placeLabel(s.place)))) report.notes.push(`couldn't find ${s.place}`);
       if (f) {
         if (!report.venues.includes(f.label)) report.venues.push(f.label);
         if (f.photos.length) s.photos = f.photos;

@@ -197,7 +197,7 @@ export function abstractCover(title: string, c: { ground: string; ink: string; a
   const cx = 120 + r(160), cy = 150 + r(200), rad = 110 + r(70);
   const bandY = 280 + r(120), tilt = -18 + r(36);
   const arcs = Array.from({ length: 4 }, (_, k) => `<circle cx="${(cx + 40).toFixed(0)}" cy="${(cy + 30).toFixed(0)}" r="${(rad + 34 + k * 26).toFixed(0)}" fill="none" stroke="${c.ink}" stroke-opacity="${(0.22 - k * 0.04).toFixed(2)}" stroke-width="1.5"/>`).join("");
-  return `<svg class="tplate" viewBox="0 0 400 500" role="img" aria-label="Abstract cover design by Co" data-art="design" preserveAspectRatio="xMidYMid slice" style="background:${c.ground}"><rect width="400" height="500" fill="${c.ground}"/><g transform="rotate(${tilt.toFixed(1)} 200 250)"><rect x="-60" y="${bandY.toFixed(0)}" width="520" height="${(60 + r(50)).toFixed(0)}" fill="${a2}" fill-opacity="0.85"/></g><circle cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" r="${rad.toFixed(0)}" fill="${c.accent}"/>${arcs}<rect x="${(40 + r(220)).toFixed(0)}" y="${(40 + r(60)).toFixed(0)}" width="${(40 + r(60)).toFixed(0)}" height="${(40 + r(60)).toFixed(0)}" fill="none" stroke="${c.ink}" stroke-width="2"/></svg><span class="credit design" data-qa-text="credit">${e("Cover design by Co, not a photo")}</span>`;
+  return `<svg class="tplate" viewBox="0 0 400 500" role="img" aria-label="Abstract cover design by Co" data-art="design" preserveAspectRatio="xMidYMid slice" style="background:${c.ground}"><rect width="400" height="500" fill="${c.ground}"/><g transform="rotate(${tilt.toFixed(1)} 200 250)"><rect x="-60" y="${bandY.toFixed(0)}" width="520" height="${(60 + r(50)).toFixed(0)}" fill="${a2}" fill-opacity="0.85"/></g><circle cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" r="${rad.toFixed(0)}" fill="${c.accent}"/>${arcs}</svg><span class="credit design" data-qa-text="credit">${e("Cover design by Co, not a photo")}</span>`;
 }
 
 // ---------------------------------------------------------------- slide layouts per grammar
@@ -222,6 +222,14 @@ export function leadOf(b: string): { lead: string; text: string } | null {
   if (!m || /\s{2,}/.test(m[1]) || m[1].split(/\s+/).length > 3) return null;
   return { lead: m[1].trim(), text: m[2].trim() };
 }
+// Pure: a menu's dish ("Oyster: smoked butter", "Lamb shoulder over coals: green garlic"): its name and what it is, or null. Only these
+// are set as courses (founder's review: a call to action set as a dish).
+export function dishOf(b: string): { lead: string; text: string } | null {
+  const l = leadOf(b);
+  if (l && !/^\d/.test(l.lead)) return l;
+  const m = b.match(/^([^:]{2,40}?):\s+(.{2,})$/);
+  return m && m[1].trim().split(/\s+/).length <= 6 && !/^\d/.test(m[1]) ? { lead: m[1].trim(), text: m[2].trim() } : null;
+}
 export const timed = (s: Pick<Shape, "bullets">) => s.bullets.length >= 2 && s.bullets.filter((b) => leadOf(b)).length === s.bullets.length;
 const pictures = (s: Shape) => (s.image ? 1 : 0) + (s.photos?.length ?? 0);
 
@@ -234,7 +242,8 @@ export function layoutFits(l: string, s: Shape): boolean {
   if (l === "timeline") return timed(s) && s.bullets.length <= 5;
   if (l === "grid") return s.bullets.length >= 2 && s.bullets.length <= 4 && s.bullets.every((b) => b.length <= 95);
   if (l === "asym") return s.bullets.length >= 2 && s.bullets.length <= 5;
-  if (l === "courses") return s.bullets.length >= 1 && s.bullets.length <= 5;
+  if (l === "courses") return s.bullets.length >= 2 && s.bullets.length <= 5 && s.bullets.every((b) => dishOf(b));
+  if (l === "pull") return s.bullets.length <= 2;
   if (l === "oversized") return s.bullets.length <= 2;
   return true;
 }
@@ -259,8 +268,9 @@ function byShape(s: Shape, g: Grammar, i: number): string {
     case "menu":
       if (pics) return "plate";
       // Courses are dishes ("Oyster: smoked butter"); the rest of a menu is set as its statements, centered.
-      if (layoutFits("courses", s) && s.bullets.every((b) => leadOf(b))) return "courses";
-      if (s.bullets.length <= 2) return "oversized";
+      if (layoutFits("courses", s)) return "courses";
+      // The rest of a menu: a pull line, oversized type or a centered statement, in turn, so it never reads as one form.
+      if (s.bullets.length <= 2) return ["pull", "oversized", "statement"][i % 3];
       return i % 2 ? "asym" : "statement";
     case "poster":
       if (pics) return "plate";
@@ -290,10 +300,10 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
   if (slides.length < 2) return { layouts: out, relaid };
   const isList = (l: string, i: number) => listLike(l, slides[i].bullets.length);
   const alt: Record<Grammar, string[]> = {
-    catalog: ["asym", "oversized", "statement"],
+    catalog: ["asym", "oversized", "pull", "statement"],
     fieldguide: ["asym", "statement", "oversized"],
-    menu: ["courses", "oversized", "statement"],
-    editorial: ["asym", "statement", "oversized"],
+    menu: ["courses", "pull", "oversized", "statement"],
+    editorial: ["asym", "statement", "pull", "oversized"],
     poster: ["oversized", "asym", "statement"],
   };
   const order = out.map((l, i) => i).filter((i) => isList(out[i], i)).sort((a, b) => slides[a].bullets.length - slides[b].bullets.length);
@@ -302,7 +312,7 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
     if (count <= max) break;
     // Only a form that isn't itself a list counts (oversized type, a timeline, a picture or a map, courses); a slide with no such form
     // stays as it is, and the rule goes back to Co to rewrite (designQa.ts contentFindings).
-    const to = [...alt[g], "timeline", "courses", "plate", "strip", "map"].find((l) => layoutFits(l, slides[i]) && !listLike(l, slides[i].bullets.length) && (l !== "courses" || slides[i].bullets.every((b) => leadOf(b))));
+    const to = [...alt[g], "timeline", "courses", "plate", "strip", "map"].find((l) => layoutFits(l, slides[i]) && !listLike(l, slides[i].bullets.length) );
     if (!to) continue;
     out[i] = to;
     relaid.push(i);

@@ -20,12 +20,12 @@ import { list, obj, plain } from "./schema.js";
 
 import { DECK_MOODS, STYLE_KEYS, checkExtras, contrast, inkOn, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
 import { DEFAULT_FONTS, fontLinks, fontStack } from "../designFonts.js";
-import { checkArtImage, checkArtMap, composeLayouts, creditHtml, googlePhotosIn, leadOf, mapHtml, abstractCover, type ArtImage, type ArtMap, type Credit, type Grammar } from "./art.js";
+import { checkArtImage, checkArtMap, composeLayouts, creditHtml, dishOf, googlePhotosIn, leadOf, mapHtml, abstractCover, type ArtImage, type ArtMap, type Credit, type Grammar } from "./art.js";
 export { DECK_MOODS, MOOD_STYLES, contrast, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
 
 // The art-direction layouts (art.ts): timeline, map, asym (an asymmetric grid), oversized (oversized type), plate (a captioned plate),
 // strip (a photo strip), courses (a menu's centered column).
-export const SLIDE_LAYOUTS = ["statement", "points", "grid", "split", "timeline", "map", "asym", "oversized", "plate", "strip", "courses"] as const;
+export const SLIDE_LAYOUTS = ["statement", "points", "grid", "split", "timeline", "map", "asym", "oversized", "plate", "strip", "courses", "pull"] as const;
 export type SlideLayout = (typeof SLIDE_LAYOUTS)[number];
 // How an image is placed, decided in code from its pixels (services/designRead.ts), never by the model: full, small (a low-res image
 // is never stretched), plate (a logo cropped to its edges sits on its own ground color). mono: one ink on one ground, so it can drop
@@ -235,6 +235,8 @@ html{scroll-snap-type:none}
 .l-timeline .tl li::before{display:none}
 .l-timeline .tl .when{font-size:17px!important;margin:0}
 .l-asym .in{display:flex;flex-direction:column;gap:18px;align-items:stretch}
+.l-pull .in{display:flex;flex-direction:column;gap:18px;align-items:stretch}
+.l-pull h2{font-size:30px}
 .g-catalog.t-spread .tfig,.g-catalog.l-plate .pl,.g-poster.l-plate .pl{position:relative;inset:auto;top:auto;left:auto;right:auto;bottom:auto;width:100%;aspect-ratio:4/3}
 .g-catalog.l-plate .in,.g-poster.l-plate .in{position:relative;inset:auto;left:auto;right:auto;width:auto;padding:22px 22px 24px}
 .g-menu.t-spread .in{align-items:flex-start;text-align:left}
@@ -448,7 +450,13 @@ ${fitCss(dens)}
 .l-oversized h2{line-height:0.98;max-width:none}
 .l-oversized .after{font-size:${dens.li}cqw;line-height:1.45;max-width:40ch;margin:2.4cqw 0 0 auto;text-align:right}
 .l-oversized .after + .after{margin-top:0.6cqw}
-.g-menu.l-oversized .in,.g-menu.l-statement .in{align-items:center;text-align:center;justify-content:center}
+.g-menu.l-statement .in{align-items:center;text-align:center;justify-content:center}
+/* pull: a line set large in italic against a bar of their accent, its lines in a column beside it */
+.l-pull .in{display:grid;grid-template-columns:1.6fr 1fr;gap:5cqw;align-items:center}
+.l-pull .pullw{display:flex;gap:3cqw;align-items:stretch}
+.l-pull .bar{flex:0 0 0.7cqw;background:${s.gradient ? s.accent : accOnPaper};border-radius:0.35cqw}
+.l-pull h2{font-size:${dens.stmt * 1.1}cqw;font-style:italic;line-height:1.05;max-width:16ch}
+.l-pull .pulln p{margin:0 0 1.2cqw;font-size:${dens.li}cqw;line-height:1.5}
 .g-menu.l-statement h2{max-width:20ch}
 .g-menu.l-statement .after,.g-menu.l-statement ul{margin-left:auto;margin-right:auto}
 .g-menu.l-oversized .after{margin:2.4cqw auto 0;text-align:center}
@@ -590,10 +598,13 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
       } else if (l === "courses") {
         // A course: its name, then what it is, split at its first colon or " - " (never cut).
         const course = (b: string) => {
-          const m = leadOf(b) ?? (b.match(/^(.{2,40}?):\s+(.{2,})$/) ? { lead: b.split(/:\s+/)[0], text: b.split(/:\s+/).slice(1).join(": ") } : null) ?? (b.match(/^(.{2,40}?)\s+-\s+(.{2,})$/) ? { lead: b.split(/\s+-\s+/)[0], text: b.split(/\s+-\s+/).slice(1).join(" - ") } : null);
+          const m = dishOf(b);
           return m && m.lead ? `<span class="dish" data-qa-text="h3">${e(m.lead)}</span><span class="desc" data-qa-text="body">${e(m.text)}</span>` : `<span class="dish" data-qa-text="h3">${e(b)}</span>`;
         };
         inner = `<div class="in"><span class="lab acc" data-qa-text="label">${n}</span><div class="rule"></div>${h2}<div class="rule"></div><ul>${sl.bullets.map((b) => `<li>${course(b)}</li>`).join("")}</ul></div>`;
+      } else if (l === "pull") {
+        // A pull line: the headline set large in italic display type against a bar of their accent, its lines beside it.
+        inner = `<div class="in"><div class="pullw"><div class="bar"></div><div>${kicker}${h2}</div></div>${sl.bullets.length ? `<div class="pulln">${sl.bullets.map((b) => `<p data-qa-text="body">${e(b)}</p>`).join("")}</div>` : ""}</div>`;
       } else {
         inner = `<div class="in"><div>${kicker}${h2}</div>${ul(sl.bullets)}</div>`;
       }
