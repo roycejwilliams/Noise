@@ -883,8 +883,11 @@ export function expiringFind(eligible: Candidate[], o: { now: Date; zone: string
 // last day: when what was chosen to go (Co's pick) is not a find, can wait (not a can't-wait type) and is still true tomorrow, a
 // picked find whose end falls inside their local today goes first instead, soonest-ending first. Only finds in the eligible set,
 // so caps, hours and spacing still apply; the chosen message waits for its next slot.
+// Never past a safety follow-up or an answer owed to them (an answering type other than a debrief, which is Co's own question and
+// the case this rule is for).
 export function lastDayFirst(chosen: Candidate | null, eligible: Candidate[], o: { now: Date; zone: string | null }): { pick: Candidate; endsAt: Date } | null {
   if (!chosen || FIND_TYPES.has(chosen.type) || CANT_WAIT.has(chosen.type)) return null;
+  if (isSafetyFollowUp(chosen) || (isAnswering(chosen) && chosen.type !== "debrief")) return null;
   const endOfToday = DateTime.fromJSDate(o.now).setZone(hoursZone(o.zone)).endOf("day").toJSDate();
   if (chosen.expiresAt && chosen.expiresAt.getTime() <= endOfToday.getTime()) return null;
   const finds = eligible
