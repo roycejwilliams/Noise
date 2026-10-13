@@ -590,7 +590,7 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
       } else if (l === "courses") {
         // A course: its name, then what it is, split at its first colon or " - " (never cut).
         const course = (b: string) => {
-          const m = leadOf(b) ?? (b.match(/^(.{2,40}?)\s+-\s+(.{2,})$/) ? { lead: b.split(/\s+-\s+/)[0], text: b.split(/\s+-\s+/).slice(1).join(" - ") } : null);
+          const m = leadOf(b) ?? (b.match(/^(.{2,40}?):\s+(.{2,})$/) ? { lead: b.split(/:\s+/)[0], text: b.split(/:\s+/).slice(1).join(": ") } : null) ?? (b.match(/^(.{2,40}?)\s+-\s+(.{2,})$/) ? { lead: b.split(/\s+-\s+/)[0], text: b.split(/\s+-\s+/).slice(1).join(" - ") } : null);
           return m && m.lead ? `<span class="dish" data-qa-text="h3">${e(m.lead)}</span><span class="desc" data-qa-text="body">${e(m.text)}</span>` : `<span class="dish" data-qa-text="h3">${e(b)}</span>`;
         };
         inner = `<div class="in"><span class="lab acc" data-qa-text="label">${n}</span><div class="rule"></div>${h2}<div class="rule"></div><ul>${sl.bullets.map((b) => `<li>${course(b)}</li>`).join("")}</ul></div>`;
