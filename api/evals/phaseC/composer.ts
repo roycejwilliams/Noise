@@ -1,6 +1,6 @@
 // Phase C, assemble (Royce, 2026-10-10). Zero tokens: the composer's model is stubbed.
-//   The work order's test: a 3-item bundle is one model output where every caption knows the others, the reason doesn't repeat, and
-//   the closing question fits the set. Plus C1 one composer (no stitching), C2 the closing comes from the composed thought (no stock
+//   The work order's test: a 3-item bundle is one model output, each find standing alone (its link, then its own description, never
+//   grouped, Royce 2026-10-13), Co's closing line tied back to knowing them, and the closing question fitting the set. Plus C1 one composer (no stitching), C2 the closing comes from the composed thought (no stock
 //   fallback), C3 the pick's per-item why and its set view feed it, C4 quality control inside (the bundle never changes shape after a
 //   part is written), C5 the thread (a find never lands on top of a live, unrelated conversation).
 //   npx tsx evals/phaseC/composer.ts
@@ -52,9 +52,12 @@ const stub = (answers: any[]) => {
   const s = stub([good]);
   const r: any = await B.composeBundle(input(), s.deps);
   check("test: a 3-item bundle is ONE model output (one call writes the opening, every caption and the closing)", s.prompts.length === 1 && r.calls === 1 && "messages" in r, r);
-  check("it goes out as one thought, in order: opening, then each link and caption, then the closing", JSON.stringify(r.messages) === JSON.stringify([good.opening, "https://lu.ma/supper", good.items[0].caption, "https://lu.ma/walk", good.items[1].caption, "https://lu.ma/studio", good.items[2].caption, good.closing]), r.messages);
+  // Royce, 2026-10-13: each find stands alone, its link then its own description, never grouped; then Co's closing line (tied back
+  // to knowing them); then one closing question. Nothing comes before the first find's link.
+  check("each find stands alone, in order: its link, then its own description; then Co's closing line; then the one question", JSON.stringify(r.messages) === JSON.stringify(["https://lu.ma/supper", good.items[0].caption, "https://lu.ma/walk", good.items[1].caption, "https://lu.ma/studio", good.items[2].caption, good.opening, good.closing]), r.messages);
+  check("never grouped: nothing before the first link, and no description names another find", r.messages[0] === "https://lu.ma/supper" && good.items.every((it, k) => finds.every((f, q) => q === k || !it.caption.includes(f.name))) && r.messages.indexOf(good.opening) > r.messages.lastIndexOf(good.items[2].caption), r.messages);
   const p = s.prompts[0];
-  check("test: every caption knows the others: all three things, their facts and the rule, in the one prompt", finds.every((f) => p.includes(f.name)) && /Every caption knows the others: never give the same reason twice/.test(p) && /THING 1 \(it leads\)/.test(p) && /THING 3/.test(p));
+  check("the prompt asks for standalone finds and Co's own closing line, with its guardrail", finds.every((f) => p.includes(f.name)) && /THING 1 \(it leads\)/.test(p) && /THING 3/.test(p) && /No opening line/.test(p) && /Each caption describes its own thing only/.test(p) && /Never mention, compare with or group it with the other things/.test(p) && /After the last thing, end with your own line/.test(p) && /never invent a feeling or a situation, and never name what someone is unless they told you/.test(p) && !/Every caption knows the others/.test(p) && !/An opening line: one short sentence on why these, together/.test(p));
   const same = { ...good, items: [{ n: 1, caption: "Founder Supper Club on Oct 24, a small room where you can drop your guard with other founders." }, { n: 2, caption: "Quiet Builders Walk on Oct 24, a small room where you can drop your guard with other founders." }, good.items[2]] };
   const s2 = stub([same, good]);
   const r2: any = await B.composeBundle(input(), s2.deps);

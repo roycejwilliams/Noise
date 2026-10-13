@@ -697,6 +697,15 @@ const isSafetyFollowUp = (c: Pick<Candidate, "payload">) => (c.payload as { safe
 const safetyPassesHold = (k: GateCheck, c: Pick<Candidate, "payload">) => k.name === "mid_conversation" && isSafetyFollowUp(c);
 // The quota an answer skips. Spacing is not in it: every text keeps it.
 const QUOTA_CHECKS = new Set(["daily_cap", "weekly_cap", "unanswered_pause", "engagement_pace"]);
+// A morning find (Royce, 2026-10-13: after the 9am sweep, "members get their finds" right away, the usual send limits not applying):
+// a find the picker chose right after their 9am sweep, marked by services/dailySweep.ts with that day (payload.morningDay). On that
+// day it skips the pacing (the caps, the unanswered pause, the engagement pace and the spacing) and doesn't count against the caps.
+// Hours, opt-out, mid-conversation and every candidate check (safety, away, emotional timing, repeats) still apply.
+const MORNING_SKIPS = new Set([...QUOTA_CHECKS, "spacing"]);
+export function morningFind(c: Pick<Candidate, "type" | "payload">, now: Date, timezone: string | null): boolean {
+  const day = (c.payload as { morningDay?: string } | null)?.morningDay;
+  return c.type === "event_offer" && typeof day === "string" && day === DateTime.fromJSDate(now).setZone(hoursZone(timezone)).toISODate();
+}
 
 // Replies, not broadcasts (Royce, 2026-10-02): anything answering a member's
 // explicit ask, a conversation they're in, or a deadline they care about goes
@@ -746,8 +755,9 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
   const userOk = gate(userChecks).ok;
   const perCandidate = state.candidates.map((candidate) => {
     const answering = isAnswering(candidate);
+    const morning = morningFind(candidate, state.now, state.timezone);
     const laneChecks = (pacedByEngagement(candidate) ? byLane : legacyByLane)[laneOf(candidate.type)].filter(
-      (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap") && !safetyPassesHold(k, candidate),
+      (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(morning && MORNING_SKIPS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap") && !safetyPassesHold(k, candidate),
     );
     const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering })];
     return { candidate, checks, ok: gate(checks).ok };
@@ -1600,10 +1610,11 @@ async function sendWithLedger(
     const midConversation = await midConversationNow(client, person.userId, now, lastInboundAt);
     const joinedAt = await loadJoinedAt(client, person.userId).catch(() => null);
     const answering = isAnswering(c);
+    const morning = morningFind(c, now, person.timezone);
     const checks = [
       // A safety follow-up is never held for the conversation (isSafetyFollowUp).
       ...userLevelChecks({ now, timezone: person.timezone, optedOut: optedOutNow, sends, lastInboundAt, midConversation: midConversation && !isSafetyFollowUp(c) }, { lane: laneOf(c.type), ignorePacing: opts.ignorePacing, legacyPace: !pacedByEngagement(c) }).filter(
-        (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
+        (k) => !(answering && QUOTA_CHECKS.has(k.name)) && !(morning && MORNING_SKIPS.has(k.name)) && !(c.type === "companion" && k.name === "weekly_cap"),
       ),
       ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
     ];
@@ -1617,11 +1628,20 @@ async function sendWithLedger(
       `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt, kind)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
-      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true), kindOf(c.type, c.payload)],
+      [person.userId, c.type, c.targetKey, c.topicKey, c.id, messages.join("\n\n"), sendIsExempt(c, extras.map((e) => e.candidate), opts.ignorePacing === true) || morning, kindOf(c.type, c.payload)],
     );
     if (!ins.rows[0]) {
       await client.query("ROLLBACK");
       return { sent: false, failed: [{ name: "not_sent_before", pass: false, reason: "idempotency key taken" }] };
+    }
+    // A morning find goes out once (review, 2026-10-13): once their morning text is on the ledger, what's left of that morning's picks
+    // falls back to the normal pacing, so no second unpaced text follows half an hour later. Same transaction: rolled back with it.
+    if (morning) {
+      await client.query(
+        `UPDATE proactive_candidates SET payload = payload - 'morningDay', updated_at = NOW()
+          WHERE user_id = $1 AND status = 'pending' AND payload ? 'morningDay' AND id <> ALL($2::bigint[])`,
+        [person.userId, [c.id, ...extras.map((e) => e.candidate.id)].map(Number)],
+      );
     }
     // Offers that ride along count as part of this one send: ledgered as
     // exempt so the day's cap sees a single text, and marked sent together.
@@ -2239,6 +2259,23 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       return;
     }
     composed = res;
+    // The closing line's guardrail, in code (Royce, 2026-10-13): it stays only when what it says about them is backed by what Co knows
+    // (bundleComposer.ts closingLinePrompt; Haiku, fail-safe: an unbacked line or a read that fails is left out, the finds still go).
+    if (res.opening && !opts.dryRun) {
+      const aboutThem = [known && rules ? memberDraftBlock(known, rules) : "", feelingText ? `How they've been: ${feelingText}` : "", recentStamped].filter(Boolean).join("\n\n").slice(-12_000);
+      const verdict = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 200, abortSignal: AbortSignal.timeout(20_000), prompt: B.closingLinePrompt(res.opening, aboutThem) })
+        .then((r) => B.readClosingJudgment(r.text))
+        .catch((err: any) => ({ backed: false, why: `the read failed: ${String(err?.message ?? err).slice(0, 120)}` }));
+      if (!verdict.backed) {
+        const line = res.opening;
+        // Exactly where it sits: right after the last caption, before the closing question (bundleComposer.ts).
+        const at = res.messages.length - (res.closing ? 2 : 1);
+        const messages = res.messages[at] === line ? [...res.messages.slice(0, at), ...res.messages.slice(at + 1)] : res.messages;
+        const words = [...res.perItem.map((p) => p.messages[p.messages.length - 1]), res.closing].filter(Boolean) as string[];
+        composed = { ...res, opening: null, messages, text: words.join("\n"), notes: [...res.notes, `closing line left out: ${verdict.why}`] };
+        if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.closing_line", userId, outcome: "skip", action: "left_out", reason: verdict.why, proposal: { candidate: c.id, line } }).catch(() => {});
+      }
+    }
     for (const d of res.dropped) if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "composer", reason: d.why, proposal: { candidate: d.item.candidate.id } }).catch(() => {});
   }
 
@@ -2345,7 +2382,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     return;
   }
 
-  // A composed bundle goes out as written: the opening, each find's link and caption, and its closing question, one thought
+  // A composed bundle goes out as written: each find's link and caption, the tie-back line, and its closing question
   // (harness/bundleComposer.ts). Each included find is ledgered with its own link and caption.
   const outgoing = draft.messages;
   const extras: { candidate: Candidate; messages: string[] }[] = composed ? composed.perItem.slice(1) : [];

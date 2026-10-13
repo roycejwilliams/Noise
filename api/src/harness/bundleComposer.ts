@@ -4,8 +4,9 @@
 // Co's pick chose them, so the same reason could repeat three times and a find could land on top of a live conversation.
 //
 // Now one model call, given the member record, the thread, every find with its facts and the pick's own why, and the pick's view of
-// the day's set, writes the whole message as one thought: an opening line when there's more than one thing (why these, together),
-// each find's caption, and the closing question that comes out of what it just said (C1-C3, C5). Quality control is inside (C4): code
+// the day's set, writes the whole message: each find on its own, its link then its own caption, never grouped; then, when there's more
+// than one, Co's own line tying them back to what the member is going through (kept in the "opening" field, sent after the last find,
+// Royce 2026-10-13); and the closing question that comes out of what it just said (C1-C3, C5). Quality control is inside (C4): code
 // checks every part, and anything wrong goes back to the composer as one bundle, never as a lone redraft of one part. A find that can't
 // be said well is taken out and the rest is composed again, so no caption is ever sent that was written for a different set. There is
 // no stock closing line: a closing that doesn't hold up is left out.
@@ -24,7 +25,7 @@ import type { RevealItem } from "../agent/eventDiscoverySurfacing.js";
 import { AUDIENCE_RULE, OFFER_HONESTY, REVEAL_MAX_CHARS } from "../agent/eventDiscoverySurfacing.js";
 import { checkDraft, DRAFT_MODEL, renderFacts, type Candidate } from "./proactive.js";
 
-export const BUNDLE_LIMITS = { openingChars: 180, closingChars: 140, captionChars: REVEAL_MAX_CHARS, calls: 3 } as const;
+export const BUNDLE_LIMITS = { openingChars: 280, closingChars: 140, captionChars: REVEAL_MAX_CHARS, calls: 3 } as const;
 
 // The pick's own reading of one find (services/sweepSelect.ts): why it's for this member, and why now. Null for a find that didn't come
 // through the pick.
@@ -54,6 +55,30 @@ export const realComposeDeps: ComposeDeps = {
   // Bounded, so three tries in a row can't hold a dispatch worker (review of #135).
   model: async (prompt) => (await generateText({ model: anthropic(DRAFT_MODEL), maxOutputTokens: 4000, providerOptions: { anthropic: { effort: "medium" } }, abortSignal: AbortSignal.timeout(45_000), experimental_telemetry: { isEnabled: true, functionId: "proactive.bundleComposer" }, prompt })).text,
 };
+// The closing line's guardrail, in code (Royce, 2026-10-13: "never invent a feeling or a situation, never label who someone is"): a
+// fail-safe read of the line against what Co knows about them. It keeps the line only when everything it says about them (a feeling, a
+// situation, who they are) is backed by what's known; anything else, or a read that fails, and the line is left out. Pure prompt +
+// parse; the model is the caller's.
+export function closingLinePrompt(line: string, known: string): string {
+  return `A text Co is about to send ends with this line about the member:
+"${line}"
+
+What Co knows about them (their own words, their record, how they've been):
+${known.trim() || "(nothing)"}
+
+Does the line state any feeling, situation, event in their life, or label of who they are (identity, role, status) that what Co knows does not back? Saying what the finds are for, or a gentle general warmth, is fine. A feeling or situation it states about THEM must be backed.
+Return ONLY JSON: {"backed": true or false, "why": "a few words"}`;
+}
+export function readClosingJudgment(raw: string): { backed: boolean; why: string } {
+  const m = raw.match(/\{[\s\S]*\}/);
+  try {
+    const j = m ? JSON.parse(m[0]) : null;
+    return { backed: j?.backed === true, why: typeof j?.why === "string" ? j.why.slice(0, 200) : "no reason given" };
+  } catch {
+    return { backed: false, why: "the read couldn't be parsed" };
+  }
+}
+
 export const LIVE_MINUTES = 45;
 
 export type Composed = {
@@ -102,12 +127,12 @@ export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: 
     .join("\n\n");
   return `${CO_VOICE}
 
-${CO_TEXT_CHANNEL} You're texting ${i.firstName}. Co is reaching out first with ${many ? `${i.items.length} things, together, as one thought` : "one thing"}.
+${CO_TEXT_CHANNEL} You're texting ${i.firstName}. Co is reaching out first with ${many ? `${i.items.length} things, each its own link and description` : "one thing"}.
 
 HOW IT GOES OUT
-${many ? "- An opening line: one short sentence on why these, together, today (the day's set below says what Co's pick saw). No greeting formula, no list, nothing any text could open with.\n" : "- No opening line: it's one thing.\n"}- Then, for each thing in order: its link (sent for you, as its own message) and your caption under it. Each caption names the thing and when it is, and says the one reason it fits them, in plain words. ${CO_WHY}
-- Every caption knows the others: never give the same reason twice. If they share a reason, say it once${many ? ", in the opening" : ""}, and let each caption say what's different about its own.
-- Then one closing question that comes out of what you just said${many ? " about this set (which one, or whether any of them)" : ""}. Short, natural, yours: never a stock line.
+- No opening line: nothing before the first thing. Each thing stands on its own, its link then its description (Royce, 2026-10-13: "each tier found should get a link then a description. Never clump them up together").\n- Then, for each thing in order: its link (sent for you, as its own message) and your caption under it. Each caption names the thing and when it is, and says the one reason it fits them, in plain words. ${CO_WHY}
+- Each caption describes its own thing only, in its own words: what it is and why it fits them. Never mention, compare with or group it with the other things, and never repeat another caption's reason.
+${many ? "- After the last thing, end with your own line (it goes in \"opening\"): you know them, what they're going through and how they've been, so say what these mean for them now, however you'd say it. Your call, in Co's voice. Ground it in what you actually know about them below; never invent a feeling or a situation, and never name what someone is unless they told you. (Royce, 2026-10-13: tie it back to \"knowing the user ... we want to be that help\"; \"it doesn't need to be scripted. Co should have a mind of its own but still be on brand\".)\n" : ""}- Then one closing question that comes out of what you just said${many ? " about this set (which one, or whether any of them)" : ""}. Short, natural, yours: never a stock line.
 - A caption is at most ${BUNDLE_LIMITS.captionChars - 40} characters and never ends with a question; the opening at most ${BUNDLE_LIMITS.openingChars}; the closing at most ${BUNDLE_LIMITS.closingChars}. Don't mention links.
 - ${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY}
 - A thing they didn't ask for is something you noticed for them: never say or imply they asked for it.
@@ -117,12 +142,12 @@ ${many ? "- An opening line: one short sentence on why these, together, today (t
 
 THE THINGS (CONFIRMED_FACTS for each: the only facts you may state about it)
 ${items}
-${i.set && many ? `\nTHE DAY'S SET (what Co's pick saw in these together)\n${i.set}\n` : ""}${i.leadWhy ? `\nWHY THE FIRST ONE LEADS\n${i.leadWhy}\n` : ""}${i.memberBlock ? `\n${i.memberBlock}\n` : ""}${i.feeling ? `\nHOW THEY'VE BEEN FEELING (it shapes how you say this, never whether: if they've been struggling, gentler and lower-pressure; never name the feeling)\n${i.feeling}\n` : ""}
+${i.set && many ? `\nTHE DAY'S SET (what Co's pick saw in these together)\n${i.set}\n` : ""}${i.leadWhy ? `\nWHY THE FIRST ONE LEADS\n${i.leadWhy}\n` : ""}${i.memberBlock ? `\n${i.memberBlock}\n` : ""}${i.feeling ? `\nHOW THEY'VE BEEN FEELING (it shapes how you say this, never whether: if they've been struggling, gentler and lower-pressure; the captions never name it; your own line after the last thing may speak to what they're going through, gently, only from what's here; the closing question never names it)\n${i.feeling}\n` : ""}
 THE THREAD (your recent texts with them, oldest first, their time)
 ${i.thread.trim() || "(nothing recent)"}
-${i.threadLive && i.mayWait !== false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes: a conversation may be live. Never land these on top of something unrelated. If the thread is about something else and not finished, answer with {"wait": "why"}. If it's about this, or it's clearly done, go ahead and say in "connects" how this follows from it.\n` : ""}${i.threadLive && i.mayWait === false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes, and this can't wait any longer. If the thread is about something else, open by acknowledging it lightly in a few words before the rest, and say in "connects" how you did.\n` : ""}${o.problems?.length ? `\nYOUR LAST VERSION (not sent)\n${o.last ?? ""}\nIt broke: ${o.problems.join(" | ")}. Write the whole message again with those fixed, keeping what worked.\n` : ""}
+${i.threadLive && i.mayWait !== false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes: a conversation may be live. Never land these on top of something unrelated. If the thread is about something else and not finished, answer with {"wait": "why"}. If it's about this, or it's clearly done, go ahead and say in "connects" how this follows from it.\n` : ""}${i.threadLive && i.mayWait === false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes, and this can't wait any longer. If the thread is about something else, acknowledge it lightly in a few words in your first caption, and say in "connects" how you did.\n` : ""}${o.problems?.length ? `\nYOUR LAST VERSION (not sent)\n${o.last ?? ""}\nIt broke: ${o.problems.join(" | ")}. Write the whole message again with those fixed, keeping what worked.\n` : ""}
 Answer only with JSON:
-{${many ? '"opening": "...", ' : '"opening": null, '}"items": [{"n": 1, "caption": "..."}, {"n": 2, "skip": "why it doesn't fit"}], "closing": "...?"${i.threadLive ? ', "connects": "how this follows from the thread"' : ""}}
+{${many ? '"opening": "the tie-back line", ' : '"opening": null, '}"items": [{"n": 1, "caption": "..."}, {"n": 2, "skip": "why it doesn't fit"}], "closing": "...?"${i.threadLive ? ', "connects": "how this follows from the thread"' : ""}}
 or {"wait": "why"}`;
 }
 
@@ -191,17 +216,20 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
   const said = [...captions.entries()];
   for (let x = 0; x < said.length; x++)
     for (let y = x + 1; y < said.length; y++)
-      if (sameReason(said[x][1], said[y][1], i.items[said[x][0] - 1].item.name, i.items[said[y][0] - 1].item.name)) problems.push({ at: "bundle", why: `captions ${said[x][0]} and ${said[y][0]} give the same reason; say a shared reason once${i.items.length > 1 ? " in the opening" : ""} and what's different in each` });
+      if (sameReason(said[x][1], said[y][1], i.items[said[x][0] - 1].item.name, i.items[said[y][0] - 1].item.name)) problems.push({ at: "bundle", why: `captions ${said[x][0]} and ${said[y][0]} give the same reason; each caption says what's different about its own thing` });
   // The opening and the closing are held to every rule a caption is (review of #135: identity, "thinking about you" and "you asked"
   // went unchecked there): every item's forbidden patterns, and nothing about who they are beyond the grounding of the whole set.
   const forbidden = [...new Map(i.items.flatMap((b) => b.item.rules.forbidden ?? []).map((f) => [f.pattern.source, f])).values()];
   const grounding = i.items.map((b) => b.item.grounding).join("\n");
+  // The closing line ties back to them: what they told Co (the member block, how they've been) grounds it too (review, 2026-10-13: a
+  // true "new parent" tie-back was flagged because only the finds' facts counted).
+  const aboutThem = [grounding, i.memberBlock ?? "", i.feeling ?? ""].join("\n");
   // Prices and counts in the opening or closing are held to the records of the whole set (Phase B4 over C).
   const backedBy = i.items.map((b) => b.item.rules.backedBy).filter((x): x is string => typeof x === "string" && !!x).join("\n") || undefined;
   const framing = (text: string, at: "opening" | "closing", maxChars: number) => {
     const bad = checkDraft(text, { maxChars, maxSentences: 2, forbidden, ...(backedBy ? { backedBy } : {}) }).filter((k) => !k.pass);
     if (bad.length) problems.push({ at, why: `the ${at}: ${bad.map((k) => `${k.name}${k.reason ? ` (${k.reason})` : ""}`).join(", ")}` });
-    else if ((stripUngroundedIdentity(text, grounding) ?? "").trim() !== text.trim()) problems.push({ at, why: `the ${at} says who they are beyond what they've told Co` });
+    else if ((stripUngroundedIdentity(text, at === "opening" ? aboutThem : grounding) ?? "").trim() !== text.trim()) problems.push({ at, why: `the ${at} says who they are beyond what they've told Co` });
     else if (unbackedSpecifics(text, allFacts).length) problems.push({ at, why: `the ${at} states something the things' facts don't back` });
     else return true;
     return false;
@@ -293,16 +321,18 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
     const closingBad = checked.problems.some((p) => p.at === "closing");
     if (openingBad) notes.push("opening left out: it didn't hold up");
     if (closingBad) notes.push("closing left out: it didn't hold up");
+    // The tie-back line (kept as "opening"), sent after every find's link and description, when there's more than one (Royce, 2026-10-13:
+    // each find on its own, link then description; the line that ties them back to their why goes at the end).
     const opening = items.length > 1 && d.opening && !openingBad ? tidy(d.opening) : null;
     const closing = d.closing && !closingBad ? tidy(d.closing) : null;
     const messages: string[] = [];
-    if (opening) messages.push(opening);
     items.forEach((b, idx) => {
       if (b.item.url) messages.push(b.item.url);
       messages.push(checked.captions.get(idx + 1)!);
     });
+    if (opening) messages.push(opening);
     if (closing) messages.push(closing);
-    const words = [opening, ...items.map((_, idx) => checked.captions.get(idx + 1)!), closing].filter(Boolean) as string[];
+    const words = [...items.map((_, idx) => checked.captions.get(idx + 1)!), opening, closing].filter(Boolean) as string[];
     const perItem = items.map((b, idx) => ({ candidate: b.candidate, messages: [...(b.item.url ? [b.item.url] : []), checked.captions.get(idx + 1)!] }));
     return { messages, text: words.join("\n"), included: items, dropped, opening, closing, perItem, calls, notes };
   }
