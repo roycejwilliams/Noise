@@ -1613,10 +1613,10 @@ export async function storePlannedEventMention(user_id: string, parsed: Captured
     if (!embedding) return; // matching depends entirely on the embedding — no point storing without one
 
     const { rows } = await pool.query(
-      `INSERT INTO planned_event_mentions (user_id, event_name_raw, event_date, event_location, embedding)
-       VALUES ($1, $2, $3, $4, $5::vector)
+      `INSERT INTO planned_event_mentions (user_id, event_name_raw, event_date, event_location, embedding, provenance, quote)
+       VALUES ($1, $2, $3, $4, $5::vector, 'stated', $6)
        RETURNING id`,
-      [user_id, parsed.event_name, parsed.event_date, parsed.event_location, `[${embedding.join(",")}]`],
+      [user_id, parsed.event_name, parsed.event_date, parsed.event_location, `[${embedding.join(",")}]`, String(parsed.quote ?? "").slice(0, 300)],
     );
 
     // Immediately check for other Co users who mentioned roughly the same

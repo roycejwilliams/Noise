@@ -1307,6 +1307,8 @@ export async function runMigrations(): Promise<void> {
     .then(() =>
       pool.query(`CREATE INDEX IF NOT EXISTS idx_planned_event_mentions_date ON planned_event_mentions (event_date)`),
     )
+    // Provenance (2026-10-12, services/provenance.ts): 'stated' with their words. NULL is a row from before, read as unconfirmed.
+    .then(() => pool.query(`ALTER TABLE planned_event_mentions ADD COLUMN IF NOT EXISTS provenance TEXT, ADD COLUMN IF NOT EXISTS quote TEXT`))
     .then(() =>
       pool.query(`CREATE INDEX IF NOT EXISTS planned_event_mentions_embedding_hnsw_idx
         ON planned_event_mentions USING hnsw (embedding vector_cosine_ops)

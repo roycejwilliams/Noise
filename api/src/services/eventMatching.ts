@@ -55,7 +55,8 @@ async function findCrossMatches(
     pool.query(
       `SELECT user_id, NULL::text AS event_api_id, 'mention' AS source
        FROM planned_event_mentions
-       WHERE ($1::uuid IS NULL OR id != $1::uuid)
+       -- Only their stated going counts (services/provenance.ts, 2026-10-12): a row from before provenance is never someone "going".
+       WHERE provenance = 'stated' AND ($1::uuid IS NULL OR id != $1::uuid)
          AND user_id != $2
          AND event_date IS NOT NULL
          AND event_date BETWEEN $3::date - $4::int AND $3::date + $4::int
@@ -95,7 +96,7 @@ export function pickCanonicalEventId(matches: CrossMatch[], matchedUserIds: stri
 export async function matchAndScoreEventMention(mentionId: string): Promise<void> {
   const { rows: mentionRows } = await pool.query(
     `SELECT id, user_id, event_name_raw, event_date, embedding
-     FROM planned_event_mentions WHERE id = $1`,
+     FROM planned_event_mentions WHERE id = $1 AND provenance = 'stated'`,
     [mentionId],
   );
   const mention = mentionRows[0];
