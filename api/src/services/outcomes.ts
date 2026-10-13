@@ -72,12 +72,15 @@ export function tasteFrom(rows: { item_name: string; result: string; provenance?
   if (!rows.length) return null;
   const did = (r: { result: string; provenance?: string | null }) => isDidResult(r.result) && isStated(r.provenance);
   const names = (xs: typeof rows) => [...new Set(xs.map((r) => r.item_name))].slice(0, 6);
-  const liked = names(rows.filter(did));
-  const unconfirmed = names(rows.filter((r) => isDidResult(r.result) && !isStated(r.provenance) && r.result !== "didnt_help")).filter((n) => !liked.includes(n));
-  const keen = names(rows.filter((r) => r.result === "interested")).filter((n) => !liked.includes(n) && !unconfirmed.includes(n));
+  // Went to and liked: their stated word that they went and it helped. A stated "going" is a plan, said as one (2026-10-12 review).
+  const liked = names(rows.filter((r) => did(r) && r.result === "helped"));
+  const planned = names(rows.filter((r) => did(r) && r.result === "acted")).filter((n) => !liked.includes(n));
+  const unconfirmed = names(rows.filter((r) => isDidResult(r.result) && !isStated(r.provenance) && r.result !== "didnt_help")).filter((n) => !liked.includes(n) && !planned.includes(n));
+  const keen = names(rows.filter((r) => r.result === "interested")).filter((n) => !liked.includes(n) && !planned.includes(n) && !unconfirmed.includes(n));
   const not = names(rows.filter((r) => r.result === "declined" || (r.result === "didnt_help" && isStated(r.provenance))));
   const parts = [
-    liked.length ? `went to or liked: ${liked.join(", ")}` : null,
+    liked.length ? `went to and liked: ${liked.join(", ")}` : null,
+    planned.length ? `said they were going to or signed up for (not that they went; ask whether they made it): ${planned.join(", ")}` : null,
     keen.length ? `were interested in: ${keen.join(", ")}` : null,
     not.length ? `said weren't for them or didn't help: ${not.join(", ")}` : null,
   ].filter(Boolean);

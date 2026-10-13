@@ -1,8 +1,8 @@
 // Milestones and the story back (Royce, 2026-09-29: "Co should feel like it's
 // beside you for the whole stretch"). The moments worth marking, taken from
 // Co's own record and never from a model: a thread they closed in their own
-// words, something Co sent that they said they went to or were going to (a
-// stated outcome only, services/provenance.ts), and the time they've been with
+// words, something Co sent that they said they went to and how it was (a
+// stated helped or didn't help only, never a plan to go; services/provenance.ts), and the time they've been with
 // Co. Each is stored once with the evidence it came from. Co marks one at
 // most every 7 days, in its own voice, using only that evidence (a companion
 // text, harness/memberReflection.ts), and knows them in every reply so it can
@@ -91,7 +91,10 @@ function rowTo(r: any): Milestone {
 }
 
 // A "went" row is confirmed only by a stated outcome for the same item (its key is went:<item_key>).
-export const WENT_CONFIRMED_SQL = `(m.kind <> 'went' OR EXISTS (SELECT 1 FROM suggestion_outcomes so WHERE so.user_id = m.user_id AND 'went:' || so.item_key = m.key AND so.result = 'acted' AND so.provenance = 'stated'))`;
+// Their stated word that they went and how it was (helped / didn't help); a stated "going" is a plan, never "they went" (2026-10-12
+// review: "I'm going" on Monday became "you went" on Tuesday, before the event). A check-in at the door is recorded the same way
+// (routes/sendblue.ts event_checkin).
+export const WENT_CONFIRMED_SQL = `(m.kind <> 'went' OR EXISTS (SELECT 1 FROM suggestion_outcomes so WHERE so.user_id = m.user_id AND 'went:' || so.item_key = m.key AND so.result IN ('helped', 'didnt_help') AND so.provenance = 'stated'))`;
 
 export async function loadMilestones(userId: string): Promise<Milestone[]> {
   const { rows } = await pool.query(`SELECT m.*, ${WENT_CONFIRMED_SQL} AS confirmed FROM member_milestones m WHERE m.user_id = $1 ORDER BY m.happened_at DESC LIMIT 60`, [userId]);
@@ -107,7 +110,7 @@ export async function milestoneConfirmed(userId: string, key: string): Promise<b
 async function loadSource(userId: string, now: Date): Promise<Source | null> {
   const [u, went, closed] = await Promise.all([
     pool.query(`SELECT created_at FROM users WHERE id = $1`, [userId]),
-    pool.query(`SELECT item_key, item_name, created_at FROM suggestion_outcomes WHERE user_id = $1 AND result = 'acted' AND provenance = 'stated' ORDER BY created_at DESC LIMIT 30`, [userId]),
+    pool.query(`SELECT item_key, item_name, created_at FROM suggestion_outcomes WHERE user_id = $1 AND result IN ('helped', 'didnt_help') AND provenance = 'stated' ORDER BY created_at DESC LIMIT 30`, [userId]),
     pool.query(`SELECT id, text, opened_quote, closed_quote, closed_at FROM member_threads WHERE user_id = $1 AND status = 'resolved' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 30`, [userId]),
   ]);
   if (!u.rows[0]) return null;
