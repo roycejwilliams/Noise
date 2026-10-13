@@ -342,6 +342,18 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
       if (!moved) break;
     }
   }
+  // Never three of one form in a row, any form (founder's review: three oversized slides in a row read as one): the third takes the
+  // grammar's next form that fits and keeps the rules above.
+  for (let i = 2; i < out.length; i++) {
+    if (out[i] !== out[i - 1] || out[i] !== out[i - 2]) continue;
+    const listsNow = out.filter((l, j) => listLike(l, slides[j].bullets.length)).length - (listLike(out[i], slides[i].bullets.length) ? 1 : 0);
+    const count = (l: string) => out.filter((x) => x === l).length;
+    const to = [...alt[g], "pull", "statement", "oversized", "asym"].find((l) => l !== out[i] && layoutFits(l, slides[i]) && (slides.length < 4 || count(l) < max) && (!listLike(l, slides[i].bullets.length) || listsNow < max));
+    if (to) {
+      out[i] = to;
+      relaid.push(i);
+    }
+  }
   return { layouts: out, relaid };
 }
 
