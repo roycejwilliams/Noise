@@ -11,7 +11,7 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { pickPage } from "./pageTools.js";
-import { TASTE_INPUT, imageN } from "./artifactInputs.js";
+import { ART_DIRECTION, COVER_MOOD, PLACE, TASTE_INPUT, imageN } from "./artifactInputs.js";
 export { TASTE_INPUT } from "./artifactInputs.js";
 import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
 
@@ -20,6 +20,10 @@ export const DECK_INPUT = z.object({
   title: line("The deck's title: their company, project or the talk's name."),
   subtitle: line("The line under it: what it is and who it's for."),
   logo: imageN("Their logo on the title slide."),
+  cover: imageN("Their own photo as the full-bleed cover, when one of theirs fits."),
+  artDirection: ART_DIRECTION,
+  coverMood: COVER_MOOD,
+  place: PLACE.describe("The main real place it's about (a venue, a lodge, a gallery), only one they named or you read, with its city: its own credited photo becomes the cover and a map comes in. Pass it whenever it's about a place."),
   slides: z
     .array(
       z.object({
@@ -27,7 +31,8 @@ export const DECK_INPUT = z.object({
         // Four at most: one idea a slide, the same bar design QA holds (services/designQa.ts contentFindings).
         bullets: z.array(line("A short supporting point.")).min(1).max(4),
         image: imageN("A picture for this slide (a product shot, the team, the space)."),
-        layout: z.enum(["statement", "points", "grid", "split"]).optional().describe("Only if you want a particular designed layout: statement (one big line), points (headline left, points right), grid (2 to 4 short parallel points as columns), split (with its picture). Leave it out and it's chosen from the slide's shape."),
+        layout: z.enum(["statement", "points", "grid", "split", "timeline", "map", "asym", "oversized", "plate", "strip", "courses", "pull"]).optional().describe("Only if you want a particular designed layout: statement (one big line), points (headline left, points right), grid (2 to 4 short parallel points as columns), split (with its picture), timeline (points written \"7:00 PM: ...\" or \"Friday: ...\"), map (a slide with a place), asym (an asymmetric grid), oversized (one huge line), plate (a large captioned picture), strip (a row of pictures), courses (a menu's courses, every point \"Dish: what it is\"), pull (one line set large in italic beside its point). Leave it out and the art direction chooses from the slide's shape; no more than half the slides go on one list layout."),
+        place: PLACE,
         notes: z.string().nullable().optional().describe("Speaker notes for this slide: what to say out loud, from what they told you, in plain words. Write them only when they asked for speaker notes, on the slides they named (all of them if they said so). On a change, leave it out to keep the slide's notes as they are; an empty string takes them off."),
       }),
     )
@@ -134,7 +139,7 @@ async function selfIfAboutCo(ctx: ConversationToolContext, data: any): Promise<s
 // window), already on it, or that they named by number. An older photo is never placed on Co's own. A number that doesn't fit is
 // an error naming what they do have, never a guess.
 async function assetIds(userId: string, input: z.infer<typeof DECK_INPUT>, dryRun: boolean, o: { words: string; onDeck: string[] }): Promise<{ map: Map<number, string> } | { error: string }> {
-  return assetIdsFor(userId, [input.logo, ...input.slides.map((s) => s.image)], dryRun, { ...o, what: "deck" });
+  return assetIdsFor(userId, [input.logo, (input as any).cover, ...input.slides.map((s) => s.image)], dryRun, { ...o, what: "deck" });
 }
 // The same rule for any artifact (a page too, 2026-10-11 PR 2): wanted = the image numbers it places.
 export async function assetIdsFor(userId: string, numbers: (number | null | undefined)[], dryRun: boolean, o: { words: string; onDeck: string[]; what: "deck" | "page" }): Promise<{ map: Map<number, string> } | { error: string }> {
@@ -158,7 +163,7 @@ export async function deckDataFrom(
   input: z.infer<typeof DECK_INPUT>,
   taste: { mood?: string; colors?: { background?: string | null; text?: string | null; accent?: string | null }; type?: string | null } | null,
   assets: Map<number, string> = new Map(),
-  was: { slides?: { headline: string; bullets?: string[]; notes?: string; layout?: string }[] } | null = null,
+  was: { slides?: { headline: string; bullets?: string[]; notes?: string; layout?: string; place?: string }[]; style?: any; coverImage?: string; place?: string } | null = null,
   design: { style?: unknown; theirWords?: string } = {},
 ): Promise<Record<string, unknown>> {
   const { styleFrom } = await import("../services/coPages/deck.js");
@@ -178,6 +183,12 @@ export async function deckDataFrom(
     const there: any = was?.slides?.[i];
     return there && (there.bullets ?? []).some((b: string) => s.bullets.includes(b)) ? there.notes : undefined;
   };
+  // A slide's place on an edit, kept the same way (named now, or the same slide's).
+  const keptPlace = (s: { headline: string; bullets: string[] }, i: number): string | undefined => {
+    const same: any = was?.slides?.find((x) => x.headline.toLowerCase() === s.headline.toLowerCase());
+    const there: any = was?.slides?.[i];
+    return (same ?? (there && (there.bullets ?? []).some((b: string) => s.bullets.includes(b)) ? there : null))?.place;
+  };
   const notesFor = (s: { headline: string; bullets: string[]; notes?: string | null }, i: number) => (typeof s.notes === "string" ? s.notes.trim() : keptNotes(s, i)) || null;
   // A slide's designed layout on an edit, the same way (2026-10-12: a change that resent the slides without their layouts dropped
   // every one): named now, or kept from the same slide. A split is kept only while the slide still has its picture.
@@ -196,9 +207,13 @@ export async function deckDataFrom(
     slides: input.slides.map((s: any, i) => {
       const image = at(s.image);
       const layout = s.layout ?? keptLayout(s, i, image);
-      return { headline: hc(s.headline), bullets: s.bullets, image, ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}), ...(layout ? { layout } : {}) };
+      const place = typeof s.place === "string" ? s.place.trim() || undefined : s.place === null ? undefined : keptPlace(s, i);
+      return { headline: hc(s.headline), bullets: s.bullets, image, ...(notesFor(s, i) ? { notes: notesFor(s, i) } : {}), ...(layout ? { layout } : {}), ...(place ? { place } : {}) };
     }),
-    style,
+    // The art direction Co chose (kept on an edit unless it chose again), on the style with their tokens.
+    style: { ...(style as object), ...((input as any).artDirection ? { grammar: (input as any).artDirection } : (was as any)?.style?.grammar ? { grammar: (was as any).style.grammar } : {}) },
+    ...(typeof (input as any).place === "string" && (input as any).place.trim() ? { place: (input as any).place.trim() } : (input as any).place !== null && (was as any)?.place ? { place: (was as any).place } : {}),
+    ...(at((input as any).cover) ? { coverImage: at((input as any).cover) } : (input as any).cover !== 0 && (was as any)?.coverImage ? { coverImage: (was as any).coverImage } : {}),
   };
 }
 
@@ -344,7 +359,9 @@ async function deckQa(userId: string, data: any) {
     const im = await A.loadAssetFor(userId, id).catch(() => null);
     if (im) imgs.set(id, im);
   }
-  return Q.qaDeck(data, imgs, { screenshot: false });
+  // The pictures Co found and the map tiles, inlined so QA measures the real ones.
+  const art = await (await import("../services/artImagery.js")).artDataUris(data).catch(() => undefined);
+  return Q.qaDeck(data, imgs, { screenshot: false, art });
 }
 
 export function deckTools(
@@ -593,7 +610,7 @@ export function deckTools(
             const C = await import("../services/deckCompose.js");
             const selfForBrief = await selfIfAboutCo(ctx, { brief: input.brief, title: input.title });
             const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.theirs}\n\nWhat Co is and does (the deck is about Co; these are facts):\n${selfForBrief}` : source.theirs, input.brief!, null, refused, input.audience ?? null));
-            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides });
+            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides, artDirection: input.artDirection ?? out?.artDirection, coverMood: input.coverMood ?? out?.coverMood, cover: input.cover, place: input.place ?? out?.place });
             if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
             deckIn = { ...input, ...parsed.data };
           }
@@ -667,7 +684,12 @@ export function deckTools(
           // Design QA before it goes (services/designQa.ts): rendered, screenshotted, measured; what code can fix is fixed and measured
           // again. A slide carrying more than one idea goes back once (rewritten on a brief, to Co otherwise).
           const Q = await import("../services/designQa.js");
-          const qa = await deckQa(ctx.userId, checked.data);
+          // Its pictures and map (services/artImagery.ts): a real place's photos, a mood image said as one, a map of the places.
+          const AI = await import("../services/artImagery.js");
+          const art = await AI.fillDeckArt(checked.data, { mood: deckIn.coverMood ?? null });
+          const artOk = store.checkPage(art.data, backed);
+          const withArt: any = artOk.ok ? artOk.data : checked.data;
+          const qa = await deckQa(ctx.userId, withArt);
           const ideas = qa.final.findings.filter((f) => f.fix === "co");
           if (ideas.length && !qaBounced) {
             qaBounced = true;
@@ -676,7 +698,7 @@ export function deckTools(
             if (!composing) return { ok: false, error: `Not made yet. ${why}. Rewrite those slides (split one into two, or cut to the one idea) and call makeDeck once more.` };
           }
           const final = store.checkPage(qa.data, backed);
-          const toStore = final.ok ? final.data : checked.data;
+          const toStore = final.ok ? final.data : withArt;
           // What ships is what's said: when the fixed version didn't pass, the unfixed one goes, with what QA first found (review).
           const shipped = final.ok ? qa.final : qa.first;
           const made = await store.createCoPage(toStore, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
@@ -687,9 +709,13 @@ export function deckTools(
           // Co's choices, in one line with the link (fill and state).
           const DS = await import("../services/designSystem.js");
           // The look said is the one stored (design audit: the line must never describe a look the deck doesn't have), in their color words.
-          const choices = DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words });
+          const { GRAMMAR_SAID } = await import("../services/coPages/art.js");
+          const grammar = (toStore as any).style?.grammar ?? "editorial";
+          const choices = `${DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words })} ${AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (toStore as any).logo ? "logo" : "none" }, (GRAMMAR_SAID as any)[grammar])}`;
+          // A mood image used counts as a download, as Unsplash's guidelines ask.
+          for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
           const turns = await DS.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
-          await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: (toStore as any).style?.titleLayout ?? null, tokens: (toStore as any).style, qa: { ran: shipped.ran, findings: shipped.findings, fixed: final.ok ? qa.fixed : [], first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null, turnsToBuild: turns }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
+          await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: `${(toStore as any).style?.grammar ?? "editorial"}/${(toStore as any).style?.titleLayout ?? "auto"}`, tokens: (toStore as any).style, qa: { ran: shipped.ran, findings: shipped.findings, fixed: final.ok ? qa.fixed : [], first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null, turnsToBuild: turns }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
           const lineText = input.line?.trim() || `Here's the ${deckIn.title} deck.`;
           ctx.facts?.add("known", `The deck's look, as Co chose it: ${choices}`);
           // What QA found and code couldn't fix is said, in one line (never shipped silently).
@@ -721,6 +747,8 @@ export function deckTools(
         deck: z.string().describe("Which of their decks: its title, or a word from it."),
         taste: TASTE_INPUT,
         changed: line("What changed, in a few words they'd recognize (\"slide 3 now leads with the waitlist numbers\"). On a call, leave the slides out and this is the change to make: the new version is written from the deck and what they said. When the look changed, don't name colors or fonts here: the look as applied follows in code."),
+        artDirection: ART_DIRECTION,
+        coverMood: COVER_MOOD,
         removeImages: z.array(z.union([z.literal("logo"), z.number().int().min(2)])).optional().describe("Only when they asked to take a picture off: the slide numbers (2 and up) or \"logo\". A picture you just leave out stays where it is."),
         notDone: line("Only when this version doesn't do all they asked: the part it doesn't do and why, in a few words (\"the board's colors, since a deck has one look for every slide\"). It goes in the same text as what changed, so they never read \"updated\" as all of it.").optional(),
         alsoAnswer: ALSO_ANSWER,
@@ -830,6 +858,15 @@ export function deckTools(
             return { ok: false, error: `Not changed. ${invented}` };
           }
           const self = await selfIfAboutCo(ctx, next);
+          // Its pictures and map again, from the places on it now (a cover they gave, or a mood image it had, stays).
+          if (!ctx.dryRun) {
+            const AI = await import("../services/artImagery.js");
+            Object.assign(next, AI.carryArt(next, was));
+            const art = await AI.fillDeckArt(next, { mood: input.coverMood ?? null }).catch(() => null);
+            // A mood image used on the edit counts as a download too (Unsplash's guidelines).
+            for (const loc of art?.report.track ?? []) AI.trackUnsplash(loc).catch(() => {});
+            if (art && store.checkPage(art.data, self ? { ...source, read: `${source.read}\n${self}` } : source).ok) Object.assign(next, art.data);
+          }
           // Design QA on a change too (design audit: a corrected look went out with type that didn't read on its field).
           if (!ctx.dryRun) {
             const q = await deckQa(ctx.userId, next).catch(() => null);

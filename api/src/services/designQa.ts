@@ -12,22 +12,28 @@
 // The browser loads only the font hosts and data: URLs. Findings come back with whether code can fix them ("auto") or Co must
 // ("co"); the caller applies the fixes, measures again, and logs what was found.
 import { contrast, inkOn } from "./coPages/style.js";
+import * as artMod from "./coPages/art.js";
+import { compositionProblem, placeholderIn } from "./coPages/art.js";
 
 export type QaMedium = "deck" | "page" | "doc";
 // contrast findings carry what was measured (the ink, its ground, the ratio it needs), so code can re-ink or move a gradient end.
-export type QaFinding = { rule: "type_scale" | "spacing" | "contrast" | "overflow" | "orphan" | "image" | "one_idea" | "scannability" | "print_type" | "page_break" | "render"; where: string; detail: string; fix: "auto" | "co" | "none"; slide?: number; role?: string; color?: string; alpha?: number; ground?: string[]; need?: number; view?: "phone" };
+export type QaFinding = { rule: "type_scale" | "spacing" | "contrast" | "overflow" | "orphan" | "image" | "one_idea" | "scannability" | "print_type" | "page_break" | "render" | "craft" | "composition" | "imagery" | "depth"; where: string; detail: string; fix: "auto" | "co" | "none"; slide?: number; role?: string; color?: string; alpha?: number; ground?: string[]; need?: number; view?: "phone" };
 export type QaResult = { ran: boolean; findings: QaFinding[]; screenshot: Buffer | null; measured: number; phone?: Buffer | null };
 
 // alpha: how much of the text's own color shows (its opacity and its ancestors', times the color's own alpha); it's blended onto its
 // ground before contrast is measured (design audit: a subtitle at 0.25 opacity measured as fully opaque).
-type TextM = { role: string; size: number; color: string; alpha?: number; ground: string[]; slide: number | null; rect: [number, number, number, number]; frame: [number, number, number, number] | null; orphan: boolean; chars: number; words: number };
+// text: what it says (the craft bar reads it for placeholders); clipped: cut off by its box (an ellipsis, or past an edge that hides it).
+type TextM = { role: string; size: number; color: string; alpha?: number; ground: string[]; slide: number | null; rect: [number, number, number, number]; frame: [number, number, number, number] | null; orphan: boolean; chars: number; words: number; text?: string; clipped?: boolean };
 // crop: the share of the picture that shows when it's cropped to fill a box of another shape (object-fit cover), and whether the
 // shapes are more than 1.5x apart.
-type ImgM = { natural: [number, number]; shown: [number, number]; slide: number | null; logo: boolean; edge: boolean; crop?: { shown: number; mismatch: boolean } };
-type FrameM = { slide: number | null; overflow: boolean; layout: string | null };
+// A logo chip (the craft bar): drawn at its own shape (distorted: off by more than 3%), not cut off by a box (clipped), and on a
+// transparent ground or a plate (box: an opaque ground of its own that isn't the plate's or the slide's color, with that color).
+type ImgM = { natural: [number, number]; shown: [number, number]; slide: number | null; logo: boolean; edge: boolean; crop?: { shown: number; mismatch: boolean }; distorted?: boolean; clipped?: boolean; box?: string | null };
+type FrameM = { slide: number | null; overflow: boolean; layout: string | null; points?: number };
 type HeadM = { top: number; text: string };
 // secs: a document's sections in order (where each starts and how tall it is), to lay the printed pages out the way print does.
-export type Measure = { texts: TextM[]; imgs: ImgM[]; frames: FrameM[]; heads: HeadM[]; pageHeight: number; fontsLoaded: boolean; secs?: { top: number; height: number; head: string }[]; unloaded?: number };
+// pictures: how many pictures the artifact really shows (loaded photos and logos, a map with its tiles, a typographic plate).
+export type Measure = { texts: TextM[]; imgs: ImgM[]; frames: FrameM[]; heads: HeadM[]; pageHeight: number; fontsLoaded: boolean; secs?: { top: number; height: number; head: string }[]; unloaded?: number; pictures?: number };
 
 // In the page. Reads data-qa-* markers the renderers put on frames, text and images; anything unmarked is measured by tag.
 function measureInPage(medium: string): Measure {
@@ -78,7 +84,7 @@ function measureInPage(medium: string): Measure {
     return n ? Number(n) : f ? 1 : null;
   };
   // Labels too (index numbers, the foot line and slide numbers, small capitals): they're read, so they're measured (design audit).
-  const LABELS = ".num, .gl, .asof, .f dt, .meta, .date, .for, h3";
+  const LABELS = ".num, .gl, .asof, .f dt, .meta, .date, .for, h3, .credit, .cover-credit, figcaption, .plab, .coords";
   const textEls = [...document.querySelectorAll(medium === "deck" ? "[data-qa-text]" : `h1, h2, h3, p, li, dd, .ln, .lnote, ${LABELS}`)].filter((el) => (el.textContent ?? "").trim() && (el as HTMLElement).offsetParent !== null);
   const alphaOf = (el: Element): number => {
     const m = getComputedStyle(el).color.match(/rgba?\(([^)]+)\)/);
@@ -92,7 +98,19 @@ function measureInPage(medium: string): Measure {
     const role = el.getAttribute("data-qa-text") ?? (el.matches(LABELS) ? "label" : /^H[1-2]$/.test(el.tagName) ? el.tagName.toLowerCase() : "body");
     const f = frameOf(el);
     const words = (el.textContent ?? "").trim().split(/\s+/).length;
-    return { role, size: parseFloat(cs.fontSize), color: rgb(cs.color), alpha: alphaOf(el), ground: groundOf(el), slide: slideOf(el), rect: rectOf(el), frame: f ? rectOf(f) : null, orphan: /^h[12]$/.test(role) ? orphanOf(el) : false, chars: (el.textContent ?? "").length, words };
+    const he = el as HTMLElement;
+    const r0 = el.getBoundingClientRect();
+    // Cut off: an ellipsis that's in use, or a box above it that hides what runs past its edge.
+    let clipped = cs.textOverflow === "ellipsis" && he.scrollWidth > he.clientWidth + 1;
+    for (let n = el.parentElement; n && !clipped; n = n.parentElement) {
+      const o = getComputedStyle(n);
+      // A box that scrolls (a side-by-side carousel) shows the rest on a swipe: only a box that hides it cuts it off.
+      if (!/hidden|clip/.test(o.overflowX) && !/hidden|clip/.test(o.overflowY)) continue;
+      const nr = n.getBoundingClientRect();
+      if (r0.right > nr.right + 1 || r0.left < nr.left - 1 || r0.bottom > nr.bottom + 1) clipped = true;
+      if (n.hasAttribute("data-qa-frame")) break;
+    }
+    return { role: role === "credit" ? "label" : role, size: parseFloat(cs.fontSize), color: rgb(cs.color), alpha: alphaOf(el), ground: groundOf(el), slide: slideOf(el), rect: rectOf(el), frame: f ? rectOf(f) : null, orphan: /^h[12]$/.test(role) ? orphanOf(el) : false, chars: (el.textContent ?? "").length, words, text: (el.textContent ?? "").trim().slice(0, 300), clipped };
   });
   // An image that didn't load (a host the check can't reach) isn't measured as a 1x1 picture (design audit: every photo page read
   // "1280x its pixels"); it's counted apart.
@@ -109,9 +127,43 @@ function measureInPage(medium: string): Measure {
     const k = fit === "contain" || fit === "scale-down" ? Math.min(r.width / nw, r.height / nh) : fit === "cover" ? Math.max(r.width / nw, r.height / nh) : r.width / nw;
     const shownShare = fit === "cover" && r.width && r.height ? Math.min(r.width / (nw * k), r.height / (nh * k)) : 1;
     const ia = nw / nh, ba = r.width / Math.max(1, r.height);
-    const crop = fit === "cover" ? { shown: Math.round(shownShare * 100) / 100, mismatch: Math.max(ia / ba, ba / ia) > 1.5 } : undefined;
-    return { natural: [nw, nh], shown: [nw * k, nh * k], slide: slideOf(im), logo: /\blogo\b/.test(im.className), edge: edge && /\blogo\b/.test(im.className), ...(crop ? { crop } : {}) };
+    // A designed crop (a full-bleed cover, a strip, a found photo filling its plate) is meant to crop; it's not measured as one.
+    const crop = fit === "cover" && im.getAttribute("data-qa-crop") !== "ok" ? { shown: Math.round(shownShare * 100) / 100, mismatch: Math.max(ia / ba, ba / ia) > 1.5 } : undefined;
+    const isLogo = /\blogo\b/.test(im.className);
+    let distorted = false, clipped = false;
+    let box: string | null = null;
+    if (isLogo) {
+      distorted = !(fit === "contain" || fit === "scale-down") && Math.abs(r.width / Math.max(1, r.height) - nw / nh) / (nw / nh) > 0.03;
+      for (let n = im.parentElement; n; n = n.parentElement) {
+        const o = getComputedStyle(n);
+        if (/hidden|clip/.test(o.overflowX) || /hidden|clip/.test(o.overflowY)) {
+          const nr = n.getBoundingClientRect();
+          if (r.left < nr.left - 1 || r.right > nr.right + 1 || r.top < nr.top - 1 || r.bottom > nr.bottom + 1) clipped = true;
+        }
+        if (n.hasAttribute("data-qa-frame")) break;
+      }
+      // Its corners: one opaque color all round is a ground of its own; it must be the color it sits on (or it's on a plate).
+      try {
+        const c = document.createElement("canvas");
+        c.width = Math.min(nw, 400);
+        c.height = Math.min(nh, 400);
+        const x = c.getContext("2d")!;
+        x.drawImage(im, 0, 0, c.width, c.height);
+        const px = [[1, 1], [c.width - 2, 1], [1, c.height - 2], [c.width - 2, c.height - 2]].map(([a, b]) => Array.from(x.getImageData(a, b, 1, 1).data));
+        const opaque = px.every((p) => p[3] > 240);
+        const same = px.every((p) => Math.abs(p[0] - px[0][0]) + Math.abs(p[1] - px[0][1]) + Math.abs(p[2] - px[0][2]) < 24);
+        if (opaque && same) {
+          const hex = "#" + px[0].slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase();
+          const on = groundOf(im.parentElement ?? im)[0];
+          const d = [1, 3, 5].reduce((a, i) => a + Math.abs(parseInt(hex.slice(i, i + 2), 16) - parseInt(on.slice(i, i + 2), 16)), 0);
+          if (d > 30) box = hex;
+        }
+      } catch {}
+    }
+    return { natural: [nw, nh], shown: [nw * k, nh * k], slide: slideOf(im), logo: isLogo, edge: edge && isLogo, ...(crop ? { crop } : {}), ...(isLogo ? { distorted, clipped, box } : {}) };
   });
+  // The pictures it shows: loaded photos and logos (map tiles counted as their map), maps with tiles, typographic plates.
+  const pictures = allImgs.filter((im) => im.naturalWidth > 0 && !im.hasAttribute("data-qa-tile")).length + [...document.querySelectorAll("[data-art=map]")].filter((m) => [...m.querySelectorAll("img")].some((t) => (t as HTMLImageElement).naturalWidth > 0)).length + document.querySelectorAll("[data-art=design]").length;
   const frameM: FrameM[] = frames.map((f) => {
     const fr = f.getBoundingClientRect();
     const over = [...f.querySelectorAll("[data-qa-text]")].some((t) => {
@@ -119,12 +171,12 @@ function measureInPage(medium: string): Measure {
       return r.bottom > fr.bottom + 1 || r.right > fr.right + 1;
     });
     const n = f.getAttribute("data-qa-slide");
-    return { slide: n ? Number(n) : 1, overflow: over || (f as HTMLElement).scrollHeight > (f as HTMLElement).clientHeight + 2, layout: f.getAttribute("data-qa-layout") };
+    return { slide: n ? Number(n) : 1, overflow: over || (f as HTMLElement).scrollHeight > (f as HTMLElement).clientHeight + 2, layout: f.getAttribute("data-qa-layout"), points: Number(f.getAttribute("data-qa-points") ?? 3) };
   });
   const heads = [...document.querySelectorAll("h2, h3")].map((h) => ({ top: h.getBoundingClientRect().top + scrollY, text: (h.textContent ?? "").slice(0, 60) }));
   const fontsLoaded = [...(document as any).fonts].some((f: any) => f.status === "loaded");
   const secs = medium === "doc" ? [...document.querySelectorAll("section.sec")].map((sec) => ({ top: sec.getBoundingClientRect().top + scrollY, height: sec.getBoundingClientRect().height, head: (sec.querySelector("h2")?.textContent ?? "").slice(0, 60) })) : undefined;
-  return { texts, imgs, frames: frameM, heads, pageHeight: document.documentElement.scrollHeight, fontsLoaded, ...(secs ? { secs } : {}), unloaded };
+  return { texts, imgs, frames: frameM, heads, pageHeight: document.documentElement.scrollHeight, fontsLoaded, ...(secs ? { secs } : {}), unloaded, pictures };
 }
 
 // Pure: a color at an alpha over a ground, as the eye sees it.
@@ -214,6 +266,25 @@ export function qaFindings(m: Measure, medium: QaMedium, o: { printPageHeightPx?
     if (im.crop?.mismatch && !im.logo) out.push({ rule: "image", where: where(im), detail: `the picture is cropped to ${Math.round(im.crop.shown * 100)}% of it: its shape is far from its box's`, fix: "auto", slide: im.slide ?? undefined, role: "crop" });
     if (im.edge) out.push({ rule: "image", where: where(im), detail: "the logo touches the edge of its frame", fix: "auto", slide: im.slide ?? undefined });
   }
+  // The craft bar (founder's brief, 2026-10-12): no literal placeholder in anything shown, no label cut off (the phone pass included),
+  // logo chips drawn at their own shape, uncut, on a transparent ground or a plate.
+  for (const t of m.texts) {
+    const ph = t.text ? placeholderIn(t.text) : null;
+    if (ph) out.push({ rule: "craft", where: where(t), detail: `"${ph}" is a placeholder in what ships`, fix: "co", slide: t.slide ?? undefined });
+    if (t.clipped) out.push({ rule: "craft", where: where(t), detail: `the ${t.role} "${(t.text ?? "").slice(0, 40)}" is cut off`, fix: "none", slide: t.slide ?? undefined, role: t.role, view: o.phone ? "phone" : undefined });
+  }
+  for (const im of m.imgs.filter((x) => x.logo)) {
+    if (im.distorted) out.push({ rule: "craft", where: where(im), detail: "the logo is stretched off its own shape", fix: "auto", slide: im.slide ?? undefined, role: "logo_shape" });
+    if (im.clipped) out.push({ rule: "craft", where: where(im), detail: "the logo is cut off by its box", fix: "auto", slide: im.slide ?? undefined, role: "logo_clip" });
+    if (im.box) out.push({ rule: "craft", where: where(im), detail: `the logo sits on a box of its own color (${im.box}) instead of a plate`, fix: "auto", slide: im.slide ?? undefined, role: "logo_box", color: im.box });
+  }
+  // Composition (decks): read off the rendered layouts too, each with how many points it carries.
+  if (medium === "deck" && !o.phone) {
+    const comp = compositionProblem(m.frames.filter((f) => f.layout && f.slide && f.slide >= 2).map((f) => ({ layout: f.layout!, bullets: f.points ?? 3 })));
+    if (comp) out.push({ rule: "composition", where: "the whole thing", detail: comp, fix: "co" });
+  }
+  // No artifact ships with zero images.
+  if (medium !== "doc" && m.pictures === 0) out.push({ rule: "imagery", where: "the whole thing", detail: "it shows no picture at all (no photo, map, logo or plate)", fix: "none" });
   // Docs: print line length and page breaks.
   if (medium === "doc") {
     for (const t of m.texts.filter((x) => x.role === "body" && x.words > 12)) {
@@ -249,6 +320,18 @@ export function contentFindings(medium: QaMedium, data: any): QaFinding[] {
       else if (total > 110) out.push({ rule: "one_idea", where: `slide ${n}`, detail: `${total} words on one slide; cut it to the one idea (under 110 words)`, fix: "co", slide: n });
       if (words(s.headline) > 14) out.push({ rule: "one_idea", where: `slide ${n}`, detail: "the headline is a paragraph; say the one point in under 14 words", fix: "co", slide: n });
     });
+    // A full deck (founder's review: a pitch went out with two slides): six content slides at least, the same floor a deck written
+    // from a brief has. It goes back to Co once to expand from what they told them; never padded with filler.
+    const n0 = (data?.slides ?? []).length;
+    if (n0 && n0 < 6) out.push({ rule: "depth", where: "the whole thing", detail: `${n0} content slides; a full deck is 6 to 10. Expand it from what they told you (each part of the plan or pitch its own slide, one idea a slide); never add filler or anything they didn't give`, fix: "co" });
+    // The composition rule, after code has re-laid what it can (art.ts composeLayouts): what's left goes back to Co to rewrite.
+    const slides = data?.slides ?? [];
+    if (slides.length >= 2) {
+      const { composeLayouts } = artMod;
+      const ls = composeLayouts(slides.map((s: any) => ({ bullets: s.bullets ?? [], image: s.image ?? null, photos: s.photos, map: s.map, layout: s.layout })), data?.style?.grammar ?? "editorial").layouts;
+      const comp = compositionProblem(ls.map((l: string, i: number) => ({ layout: l, bullets: (slides[i].bullets ?? []).length })));
+      if (comp) out.push({ rule: "composition", where: "the whole thing", detail: comp, fix: "co" });
+    }
   }
   if (medium === "page") {
     (data?.sections ?? []).forEach((s: any, i: number) => {
@@ -297,6 +380,8 @@ export async function qaRender(html: string, medium: QaMedium, o: { width?: numb
     await pg.setContent(doc, { waitUntil: "load", timeout: 15_000 });
     if (medium === "doc") await pg.emulateMedia({ media: "print" });
     await Promise.race([pg.evaluate("document.fonts && document.fonts.ready"), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
+    // Every picture decoded before it's measured and shot (a full-page shot left decoding-async pictures blank).
+    await Promise.race([pg.evaluate("Promise.all([...document.images].map((i) => i.decode().catch(() => {})))"), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
     const { inPage } = await import("./designRead.js");
     const measure = (await pg.evaluate(inPage(measureInPage, medium))) as Measure;
     const screenshot = o.screenshot === false ? null : Buffer.from(await pg.screenshot({ fullPage: true, type: "png" }));
@@ -347,6 +432,10 @@ export function qaShortfall(fs: QaFinding[]): string | null {
     if (f.rule === "orphan") return `a headline on ${at} ends on a word alone`;
     if (f.rule === "one_idea") return `${at} carries more than one idea`;
     if (f.rule === "scannability") return `${at} is dense to read`;
+    if (f.rule === "craft") return f.role?.startsWith("logo") ? `the logo on ${at} isn't set cleanly` : /placeholder/.test(f.detail) ? `${at} still has a placeholder` : `a label on ${at} is cut off`;
+    if (f.rule === "composition") return "too many slides share one layout";
+    if (f.rule === "imagery") return "it has no pictures yet";
+    if (f.rule === "depth") return "it's shorter than a full deck, since that's all the material I had";
     return `${at}: ${f.detail}`;
   };
   const items = [...new Set(left.map(say))];
@@ -482,6 +571,16 @@ export function applyDeckFixes(data: any, findings: QaFinding[]): { data: any; f
         next.logoMeta = { ...m, fit: "small" };
         fixed.push("the logo is drawn at its own size so it stays sharp");
       }
+    } else if (f.rule === "craft" && f.role?.startsWith("logo") && next.logo) {
+      // A logo off its shape or cut off is drawn whole at its own proportions; one on a box of its own color sits on a plate of that color.
+      const m = next.logoMeta ?? { fit: "full", ground: null, ink: null, mono: false };
+      if (f.role === "logo_box" && f.color && m.fit !== "plate") {
+        next.logoMeta = { ...m, fit: "plate", ground: f.color };
+        fixed.push("the logo now sits on a plate of its own color");
+      } else if (f.role !== "logo_box" && m.fit !== "small") {
+        next.logoMeta = { ...m, fit: "small" };
+        fixed.push("the logo is drawn whole at its own shape");
+      }
     } else if (f.rule === "image" && /touches the edge/.test(f.detail) && next.logo) {
       next.logoMeta = { ...(next.logoMeta ?? { ground: null, ink: null, mono: false }), fit: "plate" };
       fixed.push("the logo now sits on a plate with room around it");
@@ -511,9 +610,9 @@ export function applyDeckFixes(data: any, findings: QaFinding[]): { data: any; f
 
 // A deck's QA: render with its own images inlined, check, fix what code can, and measure again until nothing more can be fixed (six
 // rounds at most: three steps down and a split, twice over); then the phone pass. The findings left are what's logged, and said in one line with the link (qaShortfall).
-export async function qaDeck(data: any, images: Map<string, { data: Buffer; mediaType: string }>, o: { screenshot?: boolean; phone?: boolean } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
+export async function qaDeck(data: any, images: Map<string, { data: Buffer; mediaType: string }>, o: { screenshot?: boolean; phone?: boolean; art?: { src: (ref: string) => string | null; credit: (p: any) => any } } = {}): Promise<{ data: any; first: QaResult; final: QaResult; fixed: string[] }> {
   const { renderDeck } = await import("./coPages/deck.js");
-  const html = (d: any) => renderDeck({ id: "q".repeat(24), data: d, updatedAt: new Date() }, { url: null, showNotes: false, imageSrc: (id) => {
+  const html = (d: any) => renderDeck({ id: "q".repeat(24), data: d, updatedAt: new Date() }, { url: null, showNotes: false, artSrc: o.art?.src ?? (() => null), credit: o.art?.credit ?? (() => null), imageSrc: (id) => {
     const im = images.get(id);
     return im ? `data:${im.mediaType};base64,${im.data.toString("base64")}` : null;
   } });

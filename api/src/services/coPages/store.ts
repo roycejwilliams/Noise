@@ -50,7 +50,7 @@ export function coPageUrl(id: string, env: NodeJS.ProcessEnv = process.env): str
 export function assetIdsIn(d: CoArtifactData): string[] {
   if (isDeckData(d)) return deckAssetIds(d as DeckData);
   const p = d as CoPageData;
-  return [...new Set([p.logo, ...p.sections.map((s) => s.asset)].filter((x): x is string => !!x))];
+  return [...new Set([p.logo, p.coverImage, ...p.sections.map((s) => s.asset)].filter((x): x is string => !!x))];
 }
 // Every asset it places must be the owner's own (never another member's image), and placing one counts as using it.
 async function assetsAreTheirs(d: CoArtifactData, ownerUserId: string): Promise<string[]> {

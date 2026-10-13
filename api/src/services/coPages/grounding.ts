@@ -4,6 +4,7 @@
 // user id only, teammate texts left out) or on pages Co read this turn. Anything else in Co's context (another member, the people
 // graph, a teammate's note) has no source here, so it can't reach a page. The store refuses a page that fails this (store.ts).
 import type { CoPageData } from "./schema.js";
+import { placeholderIn } from "./art.js";
 import { unsourced } from "../offerGuard.js";
 import * as OG from "../offerGuard.js";
 import { unbackedClaims } from "../documentGrounding.js";
@@ -12,10 +13,11 @@ export type PageSource = { theirs: string; read: string };
 
 // Pure: every line of text a page shows, with where it is (for the problem message).
 export function pageLines(d: CoPageData): { where: string; text: string }[] {
-  const out: { where: string; text: string }[] = [{ where: "title", text: d.title }, { where: "context", text: d.context }];
+  const out: { where: string; text: string }[] = [{ where: "title", text: d.title }, { where: "context", text: d.context }, ...(d.place ? [{ where: "place", text: d.place }] : [])];
   d.sections.forEach((s, i) => {
     const at = `section ${i + 1}`;
     out.push({ where: `${at} heading`, text: s.heading });
+    if (s.place) out.push({ where: `${at} place`, text: s.place });
     for (const b of s.blocks) {
       if (b.type === "text") out.push({ where: at, text: b.text });
       if (b.type === "bullets") for (const it of b.items) out.push({ where: at, text: it.lead ? `${it.lead}: ${it.text}` : it.text });
@@ -56,12 +58,12 @@ export function pageProblems(d: CoPageData, source: PageSource): string[] {
   const out: string[] = [];
   for (const l of pageLines(d)) {
     // A bracketed gap never ships on a page either (the deck rule below; review: "[Gallery]" in a title).
-    if (/\[[^\]\n]{2,}\]/.test(l.text)) out.push(`${l.where}: "${l.text.slice(0, 70)}" is a placeholder, and a page never ships one: ask them for the missing piece, or write it without it`);
+    if (placeholderIn(l.text)) out.push(`${l.where}: "${placeholderIn(l.text)}" is a placeholder, and a page never ships one: ask them for the missing piece, or write it without it`);
     const bad = unsourced(sameTimes(l.text), corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // Headings and the title are Co's labels; the content lines are the claims.
-  const claims = pageLines(d).filter((l) => !/heading$|^title$/.test(l.where));
+  const claims = pageLines(d).filter((l) => !/heading$|^title$|place$/.test(l.where));
   for (const u of unbackedClaims(claims.map((l) => unlabeled(sameTimes(l.text))), corpus).slice(0, 4)) {
     out.push(`"${u.text.slice(0, 90)}" isn't backed by what they said or what you read (nothing puts ${u.missing.slice(0, 4).join(", ")} together)`);
   }
@@ -77,13 +79,14 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
   const lines: { where: string; text: string }[] = [
     { where: "title", text: d.title },
     { where: "subtitle", text: d.subtitle },
-    ...d.slides.flatMap((s, i) => [{ where: `slide ${i + 2} headline`, text: s.headline }, ...s.bullets.map((b) => ({ where: `slide ${i + 2}`, text: b })), ...(s.notes ? [{ where: `slide ${i + 2} notes`, text: s.notes }] : [])]),
+    ...(d.place ? [{ where: "place", text: d.place }] : []),
+    ...d.slides.flatMap((s, i) => [{ where: `slide ${i + 2} headline`, text: s.headline }, ...s.bullets.map((b) => ({ where: `slide ${i + 2}`, text: b })), ...(s.notes ? [{ where: `slide ${i + 2} notes`, text: s.notes }] : []), ...(s.place ? [{ where: `slide ${i + 2} place`, text: s.place }] : [])]),
   ];
   const out: string[] = [];
   for (const l of lines) {
     // A bracketed gap is a live placeholder on a shareable link (2026-10-12: "[Example seat to drop in: who sat where...]" went to
     // the importer). It never ships: ask them for the missing piece, or make the slide the point without it.
-    if (/\[[^\]\n]{2,}\]/.test(l.text)) out.push(`${l.where}: "${l.text.slice(0, 70)}" is a placeholder, and a deck never ships one: ask them for the missing piece, or write the slide as the point itself without the example`);
+    if (placeholderIn(l.text)) out.push(`${l.where}: "${placeholderIn(l.text)}" is a placeholder, and a deck never ships one: ask them for the missing piece, or write the slide as the point itself without the example`);
     const bad = unsourced(l.text, corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }

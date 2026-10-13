@@ -9,7 +9,7 @@ import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
-import { TASTE_INPUT, imageN } from "./artifactInputs.js";
+import { ART_DIRECTION, COVER_MOOD, PLACE, TASTE_INPUT, imageN } from "./artifactInputs.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 const url = z.string().nullable().optional().describe("Its own https link, only one you read or they gave you. Leave it out otherwise.");
@@ -25,9 +25,13 @@ const BLOCK = z.union([
 export const PAGE_INPUT = z.object({
   title: line("The page's headline."),
   context: line("The line under it: when, where, for whom. Written to them (\"Your Saturday\", or no pronoun), never \"their\" about the person reading it."),
-  sections: z.array(z.object({ heading: line("The section's heading."), blocks: z.array(BLOCK).min(1), picture: imageN("A picture of theirs for this section (their space, their product). On a change, 0 takes this section's picture off; leave it out to keep it.") })).min(1),
+  sections: z.array(z.object({ heading: line("The section's heading."), blocks: z.array(BLOCK).min(1), picture: imageN("A picture of theirs for this section (their space, their product). On a change, 0 takes this section's picture off; leave it out to keep it."), place: PLACE })).min(1),
   sources: z.array(z.object({ label: line("What the source is."), url: z.string() })).optional().describe("Pages you read that back what's on the page."),
   logo: imageN("Their logo, on the cover. On a change, 0 takes it off; leave it out to keep it."),
+  cover: imageN("Their own photo as the full-bleed cover, when one of theirs fits. On a change, 0 takes it off."),
+  artDirection: ART_DIRECTION,
+  coverMood: COVER_MOOD,
+  place: PLACE.describe("The main real place it's about (a venue, a lodge, a gallery), only one they named or you read, with its city: its own credited photo becomes the cover and a map comes in. Pass it whenever it's about a place."),
 });
 export type PageInput = z.infer<typeof PAGE_INPUT>;
 
@@ -81,12 +85,19 @@ export function pageDataFrom(input: PageInput, extras?: { style: unknown | null;
   // (review: an unrelated edit dropped the picture).
   const same = (a: unknown, b: string) => String(a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
   const keptPicture = (heading: string) => (was?.sections ?? []).find((x: any) => same(x.heading, heading) && x.asset)?.asset ?? null;
+  const keptPlace = (heading: string) => (was?.sections ?? []).find((x: any) => same(x.heading, heading) && x.place)?.place ?? null;
   const sections = input.sections.map((s) => {
     const asset = s.picture === 0 ? null : typeof s.picture === "number" ? at(s.picture) : keptPicture(s.heading);
-    return { heading: s.heading, blocks: s.blocks.map(norm), image: null, ...(asset ? { asset } : {}) };
+    const place = typeof s.place === "string" ? s.place.trim() || null : s.place === null ? null : keptPlace(s.heading);
+    return { heading: s.heading, blocks: s.blocks.map(norm), image: null, ...(asset ? { asset } : {}), ...(place ? { place } : {}) };
   });
   const logo = input.logo === 0 ? null : typeof input.logo === "number" ? at(input.logo) : (was?.logo ?? null);
-  return { title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(extras?.style ? { style: extras.style } : {}), ...(logo ? { logo } : {}) };
+  const coverImage = input.cover === 0 ? null : typeof input.cover === "number" ? at(input.cover) : (was?.coverImage ?? null);
+  // The art direction Co chose (kept on an edit unless it chose again): on their style when the page has one, else on the page.
+  const grammar = input.artDirection ?? was?.style?.grammar ?? was?.grammar ?? null;
+  const style = extras?.style ? { ...(extras.style as object), ...(grammar ? { grammar } : {}) } : null;
+  const place = typeof input.place === "string" ? input.place.trim() || null : input.place === null ? null : (was?.place ?? null);
+  return { ...(place ? { place } : {}), title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(style ? { style } : grammar ? { grammar } : {}), ...(logo ? { logo } : {}), ...(coverImage ? { coverImage } : {}) };
 }
 
 // Words about the page, not its title (review of #148: "take that page down" named no title and missed their only page).
@@ -147,9 +158,9 @@ export async function pageLook(ctx: ConversationToolContext, input: any, was: an
     }
     if (style) style = { ...(style as object), context };
   }
-  const onPage = was ? [was.logo, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
+  const onPage = was ? [was.logo, was.coverImage, ...(was.sections ?? []).map((x: any) => x.asset)].filter(Boolean) : [];
   const placed = (n: unknown) => (typeof n === "number" && n > 0 ? n : null);
-  const ids = await D.assetIdsFor(ctx.userId, [placed(input.logo), ...input.sections.map((x: any) => placed(x.picture))], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
+  const ids = await D.assetIdsFor(ctx.userId, [placed(input.logo), placed(input.cover), ...input.sections.map((x: any) => placed(x.picture))], !!ctx.dryRun, { words: theirs, onDeck: onPage, what: "page" });
   if ("error" in ids) return ids;
   return { style, assets: ids.map, was };
 }
@@ -184,13 +195,19 @@ export function pageTools(
           return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these and try once more, or give them the points in a text and say the page isn't there yet.` };
         }
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent." };
-        const imaged0 = await withImages(checked.data);
+        const og = await withImages(checked.data);
+        // Its pictures and map (services/artImagery.ts): each place's own photos (credited), a map of the places, a cover.
+        const AI = await import("../services/artImagery.js");
+        const art = await AI.fillPageArt(og, { mood: input.coverMood ?? null });
+        const artOk = store.checkPage(art.data, source);
+        const imaged0: any = artOk.ok ? artOk.data : og;
+        const art2 = await AI.artDataUris(imaged0).catch(() => undefined);
         // Design QA before it goes (services/designQa.ts): measured at laptop and phone width with its real pictures; what code can fix
         // is fixed and measured again, what's left is logged and said in one line with the link.
         const Q = await import("../services/designQa.js");
         const { renderCoPage } = await import("../services/coPages/template.js");
         const imageSrc = await qaImageSrc(ctx.userId, imaged0).catch(() => undefined);
-        const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc }), { screenshot: false }).catch(() => null);
+        const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc: art2?.src, credit: art2?.credit }), { screenshot: false }).catch(() => null);
         const fixedOk = qa?.fixed.length ? store.checkPage(qa.data, source) : null;
         const imaged = fixedOk?.ok ? fixedOk.data : imaged0;
         // What ships is what's said: the unfixed page goes with what QA first found (review).
@@ -202,9 +219,16 @@ export function pageTools(
         }
         const DSm = await import("../services/designSystem.js");
         const turns = await DSm.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
-        await DSm.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: (imaged as any).style ? "cover-band" : "co", tokens: (imaged as any).style ?? null, qa: qa && shipped ? { ran: shipped.ran, findings: shipped.findings, fixed: fixedOk?.ok ? qa.fixed : [], first: qa.first.findings.length } : { ran: false }, turnsToBuild: turns }).catch(() => {});
+        await DSm.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: `${(imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial"}/${(imaged as any).style ? "theirs" : "co"}`, tokens: (imaged as any).style ?? null, qa: qa && shipped ? { ran: shipped.ran, findings: shipped.findings, fixed: fixedOk?.ok ? qa.fixed : [], first: qa.first.findings.length } : { ran: false }, turnsToBuild: turns }).catch(() => {});
         const short = shipped ? Q.qaShortfall(shipped.findings) : null;
-        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
+        // Co's art direction, said in one line with the link (what it chose and what the pictures are).
+        const { GRAMMAR_SAID } = await import("../services/coPages/art.js");
+        const g = (imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial";
+        const artLine = AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (imaged as any).logo ? "logo" : "none" }, (GRAMMAR_SAID as any)[g]);
+        for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
+        ctx.facts?.add("known", `The page's art direction, as Co chose it: ${artLine}`);
+        // Said when Co chose an art direction for it (a page made without one keeps the one line and the link).
+        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}${input.artDirection ? ` ${artLine}` : ""}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
           return unsentLink(ctx, { url: made.url, text, what: `the page "${input.title}"` });
@@ -237,7 +261,13 @@ export function pageTools(
         const was: any = before && before.ownerUserId === ctx.userId ? before.data : null;
         const look = await lookFor(input, was, source.theirs);
         if ("error" in look) return { ok: false, error: look.error };
-        const next = await withImages(pageDataFrom(input, look), was);
+        const next0 = await withImages(pageDataFrom(input, look), was);
+        const AI = await import("../services/artImagery.js");
+        // Its imagery as it was rides along (kept when the search runs out of time), then is re-checked against the places on it now.
+        const carried = AI.carryArt(next0, was);
+        const art = ctx.dryRun ? null : await AI.fillPageArt(carried, { mood: input.coverMood ?? null }).catch(() => null);
+        for (const loc of art?.report.track ?? []) AI.trackUnsplash(loc).catch(() => {});
+        const next = art && store.checkPage(art.data, source).ok ? art.data : store.checkPage(carried, source).ok ? carried : next0;
         const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null });
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         // Another change landed after this one read the page (concurrency audit, 2026-10-12): never written over.
