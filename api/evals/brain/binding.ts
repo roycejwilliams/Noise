@@ -322,6 +322,45 @@ const NOW = new Date("2026-10-06T04:48:00Z");
   check("sweep: deliver queues, a drop comes out, a wait goes back, a never-judged find is left alone", B.judgeSweepItem({ key: "x", verdict: "send" }).kind === "deliver" && plan.queue.map((q: any) => q.match.name).join() === "Send me" && plan.reject.map((r) => r.id).join() === "d" && plan.unqueue.map((r) => r.id).join() === "h");
 }
 
+// ======== a dry-run dispatch writes nothing, on every path it can take (and still reaches the brain's decision)
+{
+  const P = await import("../../src/harness/proactive.js");
+  const { proactiveRegistry } = await import("../../src/harness/proactiveRegistry.js");
+  const realQuery = pool.query;
+  const writes: string[] = [];
+  const cand = (id: string, key: string) => ({ id, user_id: "dry-u", type: "companion", target_key: key, topic_key: key, summary: `check-in ${key}`, priority: 50, due_at: new Date(Date.now() - 60_000), expires_at: null, payload: { recap: "Noor is launching the beta of a budgeting app this Friday." }, attempts: 0, created_at: new Date(Date.now() - 3_600_000) });
+  let candidates: any[] = [];
+  pool.query = async (sql: string) => {
+    const q = String(sql).trim();
+    if (/^(INSERT|UPDATE|DELETE)\b/i.test(q) || /\bINSERT INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE FROM\b/i.test(q)) { writes.push(q.slice(0, 80)); return { rows: [], rowCount: 0 }; }
+    if (/FROM users u LEFT JOIN co_profiles/i.test(q)) return { rows: [{ first_name: "Noor", phone_number: "+14155550199", sms_opted_out: false, city: "Honolulu" }] };
+    if (/FROM proactive_candidates WHERE user_id = \$1 AND status = 'pending'/i.test(q)) return { rows: candidates };
+    return { rows: [], rowCount: 0 };
+  };
+  const dry: { path: string; text: () => Promise<string> }[] = [
+    { path: "a draft that goes (would send)", text: async () => "How are things going with the app these days?" },
+    { path: "the model chose SKIP", text: async () => "SKIP" },
+    { path: "a draft error", text: async () => { throw new Error("boom"); } },
+    { path: "a draft that fails its checks twice", text: async () => "Hey Noor! ".repeat(80) },
+  ];
+  for (const d of dry) {
+    for (const cands of [[cand("1", "companion:a")], [cand("1", "companion:a"), cand("2", "companion:b")]]) {
+      candidates = cands;
+      writes.length = 0;
+      const printed: string[] = [];
+      const log = console.log;
+      console.log = (...a: any[]) => { printed.push(a.map(String).join(" ")); };
+      P.setProactiveModelForTests(d.text as any);
+      await P.dispatchForUser(proactiveRegistry, "dry-u", { dryRun: true, ignorePacing: true }).catch((e: any) => printed.push(`THREW ${e?.message}`));
+      P.setProactiveModelForTests(null);
+      console.log = log;
+      const reached = printed.some((l) => /\[dispatch dryRun\] brain: /.test(l)) && (!/would send/.test(d.path) || printed.some((l) => /\[dispatch dryRun\] would send/.test(l)));
+      check(`dry run writes nothing: ${d.path} (${cands.length} candidate${cands.length > 1 ? "s" : ""})${writes.length ? `: ${writes.join(" | ")}` : ""}`, writes.length === 0 && reached && !printed.some((l) => l.startsWith("THREW")));
+    }
+  }
+  pool.query = realQuery;
+}
+
 console.log = quiet;
 console.error = quietErr;
 console.log(`${total - failed}/${total} passed`);
