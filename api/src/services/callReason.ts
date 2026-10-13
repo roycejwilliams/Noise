@@ -21,6 +21,7 @@
 // it may never speak for another member (callOpening.ts), and the intro nudge already goes by text.
 //
 // Member-requested calls (they texted "call me", scheduled one, pressed call) never need this: the reason is theirs.
+import { isStated, UNCONFIRMED_RULE } from "./provenance.js";
 import { WENT_CONFIRMED_SQL } from "./milestones.js";
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
@@ -153,7 +154,8 @@ export type CallReasonState = {
   // Live claims (expiry already applied).
   claims: Claim[];
   milestones: { key: string; kind: string; text: string; happenedAt: string }[];
-  plans: { name: string; date: string }[];
+  // stated: they said they're going (services/provenance.ts); otherwise a row from before provenance, asked about only.
+  plans: { name: string; date: string; stated?: boolean }[];
   // Co's own work: delivered doc titles and Co task goals, to exclude.
   coWork: string[];
   // Reason keys the last calls Co placed were about (not the same reason twice running).
@@ -264,7 +266,7 @@ export function callReasonFor(s: CallReasonState): CallReasonResult {
   for (const p of s.plans) {
     const d = daysBetween(today, p.date);
     if (d < 0 || d > CALL_REASON.comingUpDays) continue;
-    cands.push({ kind: "coming_up", key: `plan:${hash(p.name)}:${p.date}`, text: `${p.name} (${relDay(p.date, today)}, ${p.date}; they mentioned it)`, at: p.date });
+    cands.push({ kind: "coming_up", key: `plan:${hash(p.name)}:${p.date}`, text: `${p.name} (${relDay(p.date, today)}, ${p.date}; ${p.stated === false ? `they may have mentioned it, ${UNCONFIRMED_RULE}` : "they said they're going"})`, at: p.date });
   }
 
   const considered: Considered[] = [];
@@ -362,7 +364,7 @@ export async function loadCallReasonState(userId: string, kind: CallAuthKind, no
     listThreads(userId).catch(() => [] as MemberThread[]),
     // A "went" moment only on their stated going (services/milestones.ts WENT_CONFIRMED_SQL, 2026-10-12).
     q(`SELECT key, kind, text, happened_at FROM member_milestones m WHERE user_id = $1 AND kind IN ('thread_done', 'went') AND ${WENT_CONFIRMED_SQL} AND happened_at > $2 ORDER BY happened_at DESC LIMIT 5`, [userId, new Date(now.getTime() - CALL_REASON.celebrateWithinDays * DAY)]),
-    q(`SELECT event_name_raw, event_date FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date <= $3::date ORDER BY event_date LIMIT 5`, [userId, today, DateTime.fromISO(today).plus({ days: CALL_REASON.comingUpDays }).toISODate()]),
+    q(`SELECT event_name_raw, event_date, provenance FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date <= $3::date ORDER BY event_date LIMIT 5`, [userId, today, DateTime.fromISO(today).plus({ days: CALL_REASON.comingUpDays }).toISODate()]),
     // Co's tasks of the last 60 days, closed ones too (the layer carries only the open ones): a member thread that is one of them is
     // still Co's work.
     q(`SELECT goal FROM co_tasks WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 days' ORDER BY created_at DESC LIMIT 20`, [userId]),
@@ -383,7 +385,7 @@ export async function loadCallReasonState(userId: string, kind: CallAuthKind, no
     milestones: milestones.map((m: any) => ({ key: String(m.key), kind: String(m.kind), text: String(m.text), happenedAt: new Date(m.happened_at).toISOString() })),
     plans: plans
       .filter((p: any) => p.event_date)
-      .map((p: any) => ({ name: String(p.event_name_raw), date: p.event_date instanceof Date ? DateTime.fromJSDate(p.event_date, { zone: "utc" }).toISODate()! : String(p.event_date).slice(0, 10) })),
+      .map((p: any) => ({ name: String(p.event_name_raw), date: p.event_date instanceof Date ? DateTime.fromJSDate(p.event_date, { zone: "utc" }).toISODate()! : String(p.event_date).slice(0, 10), stated: isStated(p.provenance) })),
     coWork: coWorkFromKnowledge(k, tasks.map((t: any) => String(t.goal ?? ""))),
     recentReasonKeys: recent.map((r: any) => String(r.key ?? "")).filter(Boolean),
   };
