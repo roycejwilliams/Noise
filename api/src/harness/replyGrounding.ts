@@ -852,14 +852,17 @@ export function runningWorkLine(tasks: string[], briefs: string[]): string {
 
 // Pure: "nothing's running on that, it's just saved on my end" is the true status when the turn's running-work line says nothing
 // runs (item 3, live check: the narration rule cut it for "on my end", leaving only the offer). Never a claim that work is running.
+// Work started this turn (a task or research) means something is running now: neither the allowance nor the line applies.
+const startedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kind === "did_this_turn" && STARTED_WORK.test(f.text));
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
-  return rf.facts.some((f) => f.kind === "known" && NOTHING_RUNNING.test(f.text)) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
+  return !startedThisTurn(rf) && rf.facts.some((f) => f.kind === "known" && NOTHING_RUNNING.test(f.text)) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
 }
 
 // The honest line that replaces a cut "still working on it" (item 3): said once, never on top of one that already says it.
 export const NOTHING_RUNNING_LINE = "Nothing's running on that right now. Want me to start on it?";
-export function withNothingRunningLine(final: string, failed: GateCheck[]): string {
+export function withNothingRunningLine(final: string, failed: GateCheck[], rf?: Pick<ReplyFacts, "facts">): string {
   if (!failed.some((c) => c.name === "claim_work_status")) return final;
+  if (rf && startedThisTurn(rf)) return final;
   if (/\bnothing(?:'s| is)\s+(?:actively\s+)?(?:running|being worked|in motion)\b/i.test(final)) return final;
   // What's left already offers to start it: the honest part goes first, the offer isn't asked twice.
   if (/\b(?:want me to|should i|shall i|i can)\b[^.?]*\b(?:start|dig|look|begin|kick|get going)/i.test(final)) return `${NOTHING_RUNNING_LINE.split(". ")[0]}. ${final.trim()}`;
@@ -1780,7 +1783,7 @@ export async function groundReply(
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
     if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src)) {
-      result = { final: withNothingRunningLine(cut, effectiveFailed1), outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+      result = { final: withNothingRunningLine(cut, effectiveFailed1, rf), outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
       let kept: { text: string; checks: GateCheck[] } | null = null;
@@ -1821,8 +1824,8 @@ export async function groundReply(
         const honest = after === "honest" ? await honestNoAnswer(src.message).catch(() => null) : null;
         const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" ? "" : honest ?? MINIMAL_FALLBACK;
         // A cut "still working on it" ends on the honest line instead (item 3), never on a bare "not sure".
-        const workCut = effectiveFailed1.some((c) => c.name === "claim_work_status") && after !== "nothing";
-        result = { final: workCut ? withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1) : final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+        const workCut = effectiveFailed1.some((c) => c.name === "claim_work_status") && after !== "nothing" && !startedThisTurn(rf);
+        result = { final: workCut ? withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }
   }
