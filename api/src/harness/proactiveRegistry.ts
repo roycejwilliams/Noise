@@ -2,6 +2,7 @@
 // (src/harness/proactive.ts). Each type says how to draft its text (always
 // under PROACTIVE_RULES + CONFIRMED_FACTS, with code-checked output rules)
 // and what to record once it actually went out, or was dropped.
+import { isStated } from "../services/provenance.js";
 import pool from "../db/db.js";
 import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
@@ -102,17 +103,43 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   const onlyAboutASend = !p.eventApiId && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
   if (onlyAboutASend && !sent) return skip("no record of Co sending it to them");
   const people = await peopleCoPointedTo(c.userId, p.eventApiId);
-  // Did they go? Only a check-in, a walk-in, or their own words say so (Royce, 2026-10-09: "How was the Claude Founder Salon?"
-  // went to someone Co had only recommended it to; "I never confirmed I was going to those").
-  const theirs = await pool
-    .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User%' AND created_at > NOW() - INTERVAL '30 days' ORDER BY created_at DESC LIMIT 200`, [c.userId])
-    .then((r) => r.rows.map((x: any) => String(x.content)))
-    .catch(() => [] as string[]);
-  return draftDebriefText(firstName, p, people, sent, date, attendanceConfirmed(p, theirs));
+  // Did they go? Only a check-in, a walk-in, or their own stated word that they went (Royce, 2026-10-09: "How was the Claude
+  // Founder Salon?" went to someone Co had only recommended it to; 2026-10-12 review: word matching read "going to practice my
+  // pitch before the launch" as having gone). Otherwise the debrief asks whether they made it.
+  const keys = await debriefItemKeys(p);
+  const rows = await pool
+    .query(`SELECT item_key, result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND item_key = ANY($2::text[])`, [c.userId, keys])
+    .then((r) => r.rows as { item_key: string; result: string; provenance: string | null }[])
+    .catch(() => []);
+  return draftDebriefText(firstName, p, people, sent, date, wentOnRecord(p, rows));
 }
 
-// Pure: whether the record says they went (or meant to): checked in at the door, a walk-in, or their own words naming it with
-// going, RSVP or having been there. Co recommending it is never that.
+// The outcome keys one debrief is about: the event's own key, each recommendation it follows up (its event or name key, and the
+// "followup:<id>" key its answer is stored under), and its name.
+async function debriefItemKeys(p: DebriefPayload): Promise<string[]> {
+  const keys = new Set<string>([`name:${p.eventName.toLowerCase()}`]);
+  if (p.eventApiId) keys.add(`event:${p.eventApiId}`);
+  if (p.outcomeFollowupIds?.length) {
+    const { rows } = await pool.query(`SELECT id, match FROM recommendation_outcome_followups WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]).catch(() => ({ rows: [] as any[] }));
+    for (const r of rows) {
+      keys.add(`followup:${r.id}`);
+      if (r.match?.event_api_id) keys.add(`event:${r.match.event_api_id}`);
+      if (r.match?.name) keys.add(`name:${String(r.match.name).toLowerCase()}`);
+    }
+  }
+  return [...keys];
+}
+
+// Pure: whether the record says they went: a check-in at the door, a walk-in, or their own stated word that they went and how it
+// was (a stated helped / didn't help). A stated "going" is a plan, not having gone: it gets the question, never "how was it"
+// (services/provenance.ts). Rows are already scoped to this debrief's item keys.
+export function wentOnRecord(p: Pick<DebriefPayload, "checkinFollowupIds" | "walkinCheckinIds">, rows: { result: string; provenance?: string | null }[]): boolean {
+  if ((p.checkinFollowupIds ?? []).length || (p.walkinCheckinIds ?? []).length) return true;
+  return rows.some((r) => (r.result === "helped" || r.result === "didnt_help") && isStated(r.provenance));
+}
+
+// No longer read by the debrief (wentOnRecord above, 2026-10-12): word matching never decides they went. Kept only because layer 1
+// (evals/proactive/restraint126.ts) still exercises it; removing it needs that eval changed.
 const GOING = /\b(?:i'?m going|i'?ll (?:go|be there)|going to|gonna go|rsvp'?d|registered|signed up|got (?:a )?tickets?|i went|we went|was there|made it|heading to|see you at)\b/i;
 // Their own "not going" (review of #129: "I'm not going to the salon" and "I never made it" read as going).
 const NOT_GOING = /\b(?:not|never|didn'?t|don'?t|can'?t|cannot|couldn'?t|won'?t|wasn'?t|isn'?t|skip(?:ping|ped)?|pass(?:ing)?|missed|bail(?:ed|ing)?|no longer)\b/i;
