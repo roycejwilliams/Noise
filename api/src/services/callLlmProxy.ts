@@ -11,7 +11,8 @@
 import { SpeakableStream } from "./speakable.js";
 import { stockSentence } from "../harness/stockLines.js";
 import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
-import { DRAINED_NOTE, memberStateSignal } from "./memberState.js";
+import { memberStateSignal } from "./memberState.js";
+import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.js";
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
 // database and the tools' imports). One turn's bounds: at most CALL_TOOL_STEPS rounds of Co's tools, inside CALL_TOOL_BUDGET_MS from
@@ -32,6 +33,9 @@ export type CallToolset = {
   // This turn only, after the member's words (never in the cached system block): e.g. they just gave a name that belongs on an open
   // task, so writing it down is expected now.
   turnNote?: string | null;
+  // This turn's facts for its note (the stop list, their words, the open tasks); the brain writes the note from them (brain/index.ts
+  // judgeCallTurn). A turnNote above, when given, is used as is (tests).
+  turnFacts?: { turnWords: string; tasks: { id: number; goal: string }[]; avoid?: string[]; canWriteTasks: boolean };
   // When the turn is over: what was said aloud and which of Co's tools ran (services/callTools.ts records a fact Co acknowledged
   // but didn't write down). Not awaited: the voice never waits on it.
   afterTurn?: (t: { spoken: string[]; ran: string[] }) => Promise<unknown> | void;
@@ -260,6 +264,8 @@ export type ProxyDeps = {
   onFirstText?: (ms: { upstreamFirstTokenMs: number; firstSentenceMs: number }) => void;
   // Called when the member's last words say they are drained (the turn gets the note and a two-sentence cap).
   onState?: () => void;
+  // The brain's decision for this turn (brain/index.ts judgeCallTurn), for the decision log.
+  onDecision?: (d: CallTurnDecision) => void;
   clean?: boolean;
   // Voice only (Royce, 2026-10-08: the direct path had no way to keep dashes out of the voice or hold a turn to one question). The
   // stream is only made speakable (a dash becomes a full stop) and ends at its first question; nothing is fact-checked, held back,
@@ -329,6 +335,16 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const saidGoodbye = coLastWords.some((x) => GOODBYE.test(x.trim()));
   // Looser, for end_call only: Co closed its last turn in any words, and this is their reply to it.
   const coClosed = saidGoodbye || coLastWords.some((x) => CO_CLOSING.test(x));
+  // The brain judges the turn from these facts (brain/index.ts judgeCallTurn); what it rules out is enforced below.
+  const decision = judgeCallTurn({
+    drained,
+    safetyCall: safetyCall(b),
+    inboundFirst,
+    closed: memberClosed(theirLast) || coClosed,
+    tools: co ? { note: co.note, ...(co.turnFacts ?? { turnWords: "", tasks: [], canWriteTasks: false }) } : null,
+    givenTurnNote: co?.turnNote,
+  });
+  deps.onDecision?.(decision);
   let repeatGoodbye = false;
   const heldWhy: string[] = [];
   const unsureSaid = new Set<string>();
@@ -357,11 +373,11 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const say = (s: string): string | null => {
     const sentence = s.trim();
     const isQuestion = /\?["')\]]*\s*$/.test(sentence);
-    if (clean && asked && inboundFirst && !safetyTurn && !SAFETY_LINE.test(sentence)) {
+    if (clean && asked && ruledOut(decision, "after_question") && !safetyTurn && !SAFETY_LINE.test(sentence)) {
       deps.onDropped?.(sentence, "after the question on an inbound call's first reply: they lead");
       return null;
     }
-    if (clean && asked && isQuestion && !safetyTurn && !SAFETY_LINE.test(sentence)) {
+    if (clean && asked && isQuestion && ruledOut(decision, "second_question") && !safetyTurn && !SAFETY_LINE.test(sentence)) {
       deps.onDropped?.(sentence, "a second question in the turn");
       return null;
     }
@@ -440,7 +456,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
   const ran: string[] = [];
   const maxSteps = deps.maxToolSteps ?? CALL_TOOL_STEPS;
   const budgetMs = deps.toolBudgetMs ?? CALL_TOOL_BUDGET_MS;
-  let req = toAnthropic(b, undefined, [drained ? DRAINED_NOTE : "", co?.note ?? ""].filter(Boolean).join("\n\n") || undefined);
+  let req = toAnthropic(b, undefined, decision.systemNote);
   if (co) {
     // Co's own tools can take a longer input than a spoken line (a page; PR 6: at 500 a deck's input was cut off mid-write,
     // stop_reason max_tokens). Decks pass a brief on a call, so a little room is enough; spoken lines stay short by the call's rules.
@@ -448,7 +464,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     const theirs = new Set((req.tools ?? []).map((t) => t.name));
     req.tools = [...(req.tools ?? []), ...co.defs.filter((d) => !theirs.has(d.name))];
     // This turn's note goes after their words, past the cache breakpoint: the cached prefix (system and the call so far) is untouched.
-    if (co.turnNote) req.messages[req.messages.length - 1].content.push({ type: "text", text: co.turnNote });
+    if (decision.turnNote) req.messages[req.messages.length - 1].content.push({ type: "text", text: decision.turnNote });
   }
   // What Co's tools returned this turn also backs what Co says (an event searchEvents found can be named).
   let toolCorpus = "";
@@ -496,7 +512,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         // end_call only once they've closed: their goodbye now, or any reply to Co's goodbye. Held, the call stays open a turn.
         // Held when they haven't closed, even on a turn that says nothing (review of #113: a bare end_call mid-call still hung up
         // first). A held turn with nothing said gets one more answer below, never dead air.
-        if (name === "end_call" && !memberClosed(theirLast) && !coClosed) {
+        if (name === "end_call" && ruledOut(decision, "end_call")) {
           deps.onDropped?.("end_call", "Co never hangs up first: they haven't said goodbye");
           heldEnd = true;
           cur = { kind: "skip" };

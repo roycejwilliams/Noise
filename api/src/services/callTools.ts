@@ -13,7 +13,9 @@ import { recordDecision } from "../harness/core.js";
 import { createConversationTools } from "../agent/conversationTools.js";
 import { guardTools } from "../agent/toolGuard.js";
 import type { CallToolset as BaseToolset } from "./callLlmProxy.js";
-import { mentionsIn } from "./offerGuard.js";
+import { specificsTheyGave } from "../brain/index.js";
+// What a call turn is told (the stop list, a fact to write down) is the brain's (brain/index.ts judgeCallTurn); kept here for callers.
+export { avoidNote, specificsTheyGave, taskFactNote } from "../brain/index.js";
 import { callToolNames } from "./capabilities.js";
 
 // The subset that makes sense mid-call: quick writes and quick reads. Web research is not here: it is slow and multi-step, so on a
@@ -115,12 +117,6 @@ export async function loadMemberOnCall(userId: string): Promise<MemberOnCall> {
   return { phone: String(u.phone_number ?? ""), firstName: u.first_name ?? null, city: k?.identity.city ?? null, tasks, loops, avoid: lim ? lim.avoid : undefined };
 }
 
-// Pure: the stop-suggesting list as it stands right now, for this turn only (after the cache breakpoint, so the call's cached prefix is
-// untouched). The call's opening context has it too; this keeps it current when it changes during the call.
-export function avoidNote(avoid: string[] | undefined): string | null {
-  return avoid?.length ? `(Co's note, not their words: right now they've asked you never to suggest ${avoid.map((a) => `"${a}"`).join(", ")}. No need to mention it.)` : null;
-}
-
 export function callToolsNote(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall: string[]): string {
   return [CALL_TOOLS_GUIDE, callRecords(m, didOnCall)].join("\n");
 }
@@ -140,26 +136,8 @@ export function callRecords(m: Pick<MemberOnCall, "tasks" | "loops">, didOnCall:
 // specific and a task is open. Code guards the fact, not the intent: when Co said the specific back but no tool wrote anything, their
 // own words go on the task through the same guarded updateTask (afterTurn). Never Co's words, never a guess at what they meant.
 const normWords = (s: string) => ` ${s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
-const MONTH_OR_DAY = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 const WRITES = new Set(["updateTask", "updateNotes", "startTask", "closeTask", "updateLoop"]);
 const TOPIC_PLAIN = new Set("that this those these with what when where which there their they them your from have just also about into over then than been were will would could should called named date dates time open locked keep side note thing things anything something".split(" "));
-
-// Pure: the names and numbers in their words (each sentence's own first word is only a capital, so sentences are read apart).
-export function specificsTheyGave(turnWords: string): string[] {
-  const out = new Set<string>();
-  for (const s of turnWords.split(/(?<=[.!?])\s+/)) for (const m of mentionsIn(s)) if (m.kind === "name" || m.kind === "time") out.add(m.text);
-  for (const m of turnWords.match(/\$?\d[\d,.]*(?:\s?(?:k|%|people|guests|pm|am))?/gi) ?? []) out.add(m.replace(/[.,]$/, ""));
-  return [...out].filter((x) => x.length >= 2);
-}
-
-// Pure: this turn's note, after their words. Only when a task is open and their words carry a name, number or date.
-export function taskFactNote(turnWords: string, tasks: { id: number; goal: string }[]): string | null {
-  if (!tasks.length) return null;
-  const given = specificsTheyGave(turnWords);
-  if (!given.length && !MONTH_OR_DAY.test(turnWords)) return null;
-  const what = given.length ? given.map((g) => `"${g}"`).join(", ") : "a date";
-  return `(A note from Co's own records, not their words: they just gave you ${what}. If that belongs to one of your open tasks, write it on that task with updateTask in this turn, in their words, then answer. Saying it back doesn't write it down.)`;
-}
 
 // Pure: the task their words belong to, or null. The only open task, or the one whose goal shares a word with what they said.
 export function taskFor(turnWords: string, tasks: { id: number; goal: string }[]): { id: number; goal: string } | null {
@@ -325,7 +303,8 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     names: new Set(Object.keys(picked)),
     note: callToolsNote(i.member, mem.did),
     records: callRecords(i.member, mem.did),
-    turnNote: [picked.updateTask ? taskFactNote(i.turnWords, i.member.tasks) : null, avoidNote(i.member.avoid)].filter(Boolean).join("\n") || null,
+    // This turn's facts; the brain writes the turn's note from them (brain/index.ts judgeCallTurn).
+    turnFacts: { turnWords: i.turnWords, tasks: i.member.tasks, avoid: i.member.avoid, canWriteTasks: !!picked.updateTask },
     did,
     run,
     // The backstop: a specific they gave and Co said back, with nothing written, goes on the task in their own words, through the
