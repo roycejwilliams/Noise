@@ -330,11 +330,13 @@ export type ApplyReport = { live: boolean; chosen: string[]; queued: string[]; n
 export function newApplyReport(judgments: Pick<Judgment, "verdict" | "name">[]): ApplyReport {
   return { live: false, chosen: judgments.filter((j) => j.verdict === "send").map((j) => j.name), queued: [], notQueued: [], error: null };
 }
-// Pure: why the day's apply failed, or null. It failed when it threw, a pick errored, or it chose something and queued none of it.
+// Pure: why the day's apply failed, or null. It failed when it threw, a pick errored, or it queued none of what it chose for a real
+// error. Picks that were already decided, past or already there are a finished day, not a failure: a retry would change nothing
+// (review of the sweep fixes).
 export function applyFailed(a: ApplyReport): string | null {
   if (!a.live) return null;
   if (a.error) return `applying the picks failed: ${a.error}`.slice(0, 300);
-  if (a.chosen.length && !a.queued.length) return `none of the ${a.chosen.length} chosen picks queued${a.notQueued.length ? ` (${a.notQueued.map((n) => `${n.name}: ${n.why}`).join("; ")})` : ""}`.slice(0, 300);
+  if (a.chosen.length && !a.queued.length && a.notQueued.some((n) => /^error:/.test(n.why))) return `none of the ${a.chosen.length} chosen picks queued${a.notQueued.length ? ` (${a.notQueued.map((n) => `${n.name}: ${n.why}`).join("; ")})` : ""}`.slice(0, 300);
   return null;
 }
 
