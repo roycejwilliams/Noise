@@ -18,7 +18,7 @@ import type { KnowledgeSection, MemberKnowledge } from "./memberKnowledge.js";
 import { eventCandidates, reserveXSearch, type TierMatch } from "./tieredRecommendation.js";
 import { memberTerms, QueryLedger, SWEEP_QUERY_RULES } from "./sweepQuery.js";
 
-export const SWEEP_BUDGET = { steps: 7, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
+export const SWEEP_BUDGET = { steps: 7, allSourcesSteps: 9, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
 
 // X in the sweep (2026-10-07). After the old Tier 3 pipeline went (6f1530b),
 // X was one optional tool and the model wrote literal queries ("Peerspace NoPa
@@ -33,6 +33,50 @@ export const SWEEP_X_GUIDANCE = `X is where programs and gatherings are announce
 // ever looking at Co's own events for an event-shaped ask). Guidance, not a
 // forced call: Co still picks the tools.
 export const SWEEP_TIERS = `Where you can look, in order: (1) Co's own events and (2) the public event feed and openings Co already found, both through searchEvents; (3) the web (webSearch) and X (searchPosts) for programs, places and people. When the ask is something to go to or join (an event, a dinner, a meetup, a class, a community gathering), look at searchEvents before you finish, even if you expect it thin: Co's own events come first when they fit.`;
+
+// The 9am daily sweep looks in all three places (Royce, 2026-10-13: "Search all three sources (events, web, X) for every open ask ...
+// No per-ask source selectivity"): Co's own events and the public feed (searchEvents), the web (webSearch) and X (searchPosts). Co
+// writes each query and decides what to keep; code only makes sure no place is skipped (sweepFind's prepareStep, opts.allSources):
+// a place Co hasn't called yet is the next step's one tool, in the tiers' order. A call that's refused or fails still counts as
+// looked at and is reported with its reason, never retried in a loop. The hourly sweeps keep Co's own choice of places.
+export const SWEEP_SOURCES = [
+  { source: "events", tool: "searchEvents" },
+  { source: "web", tool: "webSearch" },
+  { source: "x", tool: "searchPosts" },
+] as const;
+export type SweepSource = (typeof SWEEP_SOURCES)[number]["source"];
+// Pure: the tool the next step must call, or null when every place has been looked at (or too few steps are left to also keep).
+export function nextRequiredSource(called: ReadonlySet<SweepSource>, stepNumber: number, steps: number = SWEEP_BUDGET.allSourcesSteps): (typeof SWEEP_SOURCES)[number]["tool"] | null {
+  const missing = SWEEP_SOURCES.filter((s) => !called.has(s.source));
+  if (!missing.length || stepNumber >= steps - 2) return null;
+  return missing[0].tool;
+}
+export const SWEEP_ALL_SOURCES = `This is the morning sweep, and it looks in all three places: searchEvents, webSearch and searchPosts, each at least once. When the ask is one X rarely covers, still search X once, broadly, for the kind of thing it is.`;
+// The morning sweep looks for what's new (Royce, 2026-10-13: "new stuff posts overnight ... Otherwise it re-finds the same pages every
+// morning"): X only returns the last RECENT_HOURS, the web search favors what was posted in them, and Co sees what it already looked
+// at for this ask on earlier mornings.
+export const RECENT_HOURS = 48;
+export const SEEN_BEFORE_CAP = 25;
+export const SWEEP_RECENT = `New things post overnight. Write your queries for what was announced, listed or opened in the last day or two (just announced, new dates, applications now open), and favor results that are new.`;
+// Pure: the morning sweep's line on what it already looked at for this ask, or "" when nothing was.
+export function seenBeforeLine(seen: { name: string; url: string }[]): string {
+  if (!seen.length) return "";
+  return `Already looked at on earlier mornings for this ask, so find what's new instead (one of these only if something about it changed, like a new date): ${seen.slice(0, SEEN_BEFORE_CAP).map((s) => `${s.name} (${s.url})`).join("; ")}.`;
+}
+// What earlier morning sweeps looked at for this ask (their sweep.find records, last 14 days): kept and passed over, by link.
+export async function seenBefore(userId: string, askText: string, db: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> }): Promise<{ name: string; url: string }[]> {
+  const { rows } = await db.query(
+    `SELECT proposal->'passedOver' AS passed, proposal->'keptBy' AS kept FROM harness_decisions
+      WHERE decision = 'sweep.find' AND user_id = $1 AND proposal->>'ask' = $2 AND (proposal->>'allSources')::boolean IS TRUE
+        AND created_at > NOW() - INTERVAL '14 days' ORDER BY created_at DESC LIMIT 14`,
+    [userId, askText.slice(0, 200)],
+  );
+  const out = new Map<string, string>();
+  for (const r of rows) for (const x of [...(Array.isArray(r.kept) ? r.kept : []), ...(Array.isArray(r.passed) ? r.passed : [])]) {
+    if (typeof x?.url === "string" && x.url && !out.has(x.url)) out.set(x.url, String(x.name ?? "").slice(0, 60));
+  }
+  return [...out].map(([url, name]) => ({ name, url }));
+}
 
 // What Co looked at and passed over, for the log (sweep.find), so "why did
 // nothing from X go out" can be answered from the record.
@@ -132,7 +176,7 @@ export function sweepRecord(k: MemberKnowledge, askText: string): SweepRecord {
   };
 }
 
-export function sweepPrompt(c: SweepCandidate, o: { today: string; record: SweepRecord }): string {
+export function sweepPrompt(c: SweepCandidate, o: { today: string; record: SweepRecord; allSources?: boolean; seen?: { name: string; url: string }[] }): string {
   const r = o.record;
   const section = (title: string, lines: string[]) => (lines.length ? `${title}\n${lines.map((l) => `- ${l}`).join("\n")}\n` : "");
   return `You're Co, finding things worth texting ${c.firstName} about over the next couple of weeks. Nothing is sent now: what you keep goes into a queue, and Co texts at most one a day, so keep only what genuinely fits.
@@ -148,7 +192,7 @@ ${r.statedTaste.length ? `THE KIND OF ROOM THEY'VE TOLD CO THEY WANT (their own 
 Search only for this one ask. Other things they're working on (in who they are) are context for judging fit, not things to look for in this sweep, because each ask gets its own sweep (2026-10-01: a founder-events sweep kept a venue from another ask).
 Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Co will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
 
-Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}
+Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}${o.allSources ? ` ${SWEEP_ALL_SOURCES} ${SWEEP_RECENT}${o.seen?.length ? ` ${seenBeforeLine(o.seen)}` : ""}` : ""}
 ${SWEEP_QUERY_RULES}
 Judge each result yourself against what they asked and who they are; results are candidates, not answers. Everything you keep goes to a member of a private club, so it has to be real and worth their time: a named thing with a way in (who runs it, how to apply or join), never a token or coin promotion, a giveaway, engagement bait or a bare headline. Keep at most ${SWEEP_BUDGET.keep} with keep(), each with one plain sentence on why it fits them, tied to something in their record. Keeping nothing is fine when nothing fits. When you're done, note in skip() the results you looked at and passed on, each with a few words on why, in the same step as your keeps. Then stop.`;
 }
@@ -156,7 +200,9 @@ Judge each result yourself against what they asked and who they are; results are
 // searched: the sweep really looked: a search came back, or nothing stood in its way (it chose not to search, or its queries were
 // refused for how they were written, which is the ask's own run). Not when a budget was used up or a source failed and nothing came
 // back: that's an outage, not an empty run (services/workingSet.ts empty runs; review and re-review of #133).
-export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; knowledge?: (userId: string) => Promise<MemberKnowledge> } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean; frustratedWithCo: boolean }> {
+// What a sweep reports about the places it looked (the daily sweep's summary): which were searched, and why any wasn't.
+export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[] };
+export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; knowledge?: (userId: string) => Promise<MemberKnowledge>; allSources?: boolean } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean; frustratedWithCo: boolean; sources?: SweepSources }> {
   const did: string[] = [];
   // The record, read once. A record that can't be read (a failed name read fails closed) means no sweep: the avoid list and taste
   // couldn't be applied, so nothing is searched, and it isn't an empty run.
@@ -168,6 +214,13 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   // Limits that couldn't be read (null, not an empty list) can't be applied: no sweep either.
   if (!k || !k.limits) return { matches: [], did, searched: false, frustratedWithCo: false };
   const record = sweepRecord(k, c.askText);
+  // The morning sweep: what it already looked at for this ask on earlier mornings (a read that fails leaves the list empty, logged).
+  const seen = opts.allSources
+    ? await import("../db/db.js").then((m) => seenBefore(c.userId, c.askText, { query: (sql, args) => m.default.query(sql, args as any[]) })).catch((err: any) => {
+        console.error("sweepFind: reading what earlier mornings looked at failed (non-fatal):", err?.message ?? err);
+        return [] as { name: string; url: string }[];
+      })
+    : [];
   let searched = false;
   let blocked = false;
   const found = new Map<string, TierMatch>();
@@ -184,19 +237,28 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const ledger = new QueryLedger(memberTerms({ firstName: c.firstName, goals: record.goalWords, except: c.askText }), c.askText, record.avoid);
   // A page kept in place of the post that pointed to it: the post counts as kept too.
   const postOf = new Map<string, string>();
+  // The places Co has called this sweep (refused or failed calls count), for SWEEP_SOURCES.
+  const called = new Set<SweepSource>();
+  // Why a place came back with nothing searched (refused, budget, outage), for the daily sweep's report.
+  const sourceFailures: string[] = [];
   const tools = {
     searchEvents: tool({
       description: "Co's own events, the public event feed, and openings Co already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",
       inputSchema: z.object({ what: z.string(), when: z.string().optional() }),
       execute: async ({ what, when }) => {
+        called.add("events");
         const bad = ledger.check("events", what);
-        if (bad.length) return { ok: false, error: ledger.refusal(what, bad) };
+        if (bad.length) {
+          sourceFailures.push(`events: query refused (${ledger.refusal(what, bad).slice(0, 160)})`);
+          return { ok: false, error: ledger.refusal(what, bad) };
+        }
         did.push(`events: ${what}${when ? `, ${when}` : ""}`);
         const [r, openings] = await Promise.all([
           eventCandidates(what, c.city, { when: when ?? null, userId: c.userId, timezone: opts.timezone ?? null, limit: 8 }),
           import("./eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(c.userId)).catch(() => [] as TierMatch[]),
         ]).catch((err) => {
           blocked = true;
+          sourceFailures.push(`events: the search failed (${String(err?.message ?? err).slice(0, 120)})`);
           throw err;
         });
         for (const { match } of r.candidates) if ("url" in match && match.url) {
@@ -217,23 +279,28 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       description: `Search the web; results come back checked against their own pages. Up to ${SWEEP_BUDGET.webQueries} short queries in all.`,
       inputSchema: z.object({ queries: z.array(z.string()).min(1).max(2) }),
       execute: async ({ queries: asks }) => {
+        called.add("web");
         const refusals: string[] = [];
         const good = asks.filter((q) => {
           const bad = ledger.check("web", q);
           if (bad.length) refusals.push(ledger.refusal(q, bad));
           return !bad.length;
         });
-        if (!good.length) return { ok: false, error: refusals.join(" ") };
+        if (!good.length) {
+          sourceFailures.push(`web: queries refused (${refusals.join(" ").slice(0, 160)})`);
+          return { ok: false, error: refusals.join(" ") };
+        }
         const run = good.slice(0, SWEEP_BUDGET.webQueries - webQueries);
         if (!run.length) return { ok: false, error: "No web searches left." };
         webQueries += run.length;
         did.push(...run.map((q) => `web: ${q}`));
         const { taskWebSearch } = await import("./taskWeb.js");
-        const all = await Promise.all(run.map((q) => taskWebSearch(c.userId, q, { city: c.city, zone: opts.timezone ?? null, source: "sweep" }).catch(() => null)));
+        const all = await Promise.all(run.map((q) => taskWebSearch(c.userId, q, { city: c.city, zone: opts.timezone ?? null, source: "sweep", ...(opts.allSources ? { recentHours: RECENT_HOURS } : {}) }).catch(() => null)));
         // Every search failed outright: an outage, not an empty run (re-review of #133). taskWebSearch catches its own failures and says
         // so in its note (review of #134: it never returns null).
         if (all.every((r) => r === null || /^Web search failed/.test(r.note ?? ""))) {
           blocked = true;
+          sourceFailures.push("web: the search failed (an outage, nothing came back)");
           return { ok: false, error: "Web search failed just now; nothing came back." };
         }
         const { checkVerified } = await import("./factCheck.js");
@@ -248,6 +315,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         }
         if (all.every((r) => r && /^No web search right now/.test(r.note))) {
           blocked = true;
+          sourceFailures.push("web: the day's web search budget is used up");
           return { ok: false, error: "Web search budget is used up for today." };
         }
         if (all.some((r) => r && !/^No web search right now/.test(r.note ?? ""))) searched = true;
@@ -258,25 +326,32 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       description: SWEEP_X_TOOL,
       inputSchema: z.object({ query: z.string() }),
       execute: async ({ query }) => {
+        called.add("x");
         if (xSearches >= SWEEP_BUDGET.xSearches) return { ok: false, error: "No X searches left." };
         const q = query.trim().slice(0, 200);
         const bad = ledger.check("x", q);
-        if (bad.length) return { ok: false, error: ledger.refusal(q, bad) };
+        if (bad.length) {
+          sourceFailures.push(`x: query refused (${ledger.refusal(q, bad).slice(0, 160)})`);
+          return { ok: false, error: ledger.refusal(q, bad) };
+        }
         xSearches++;
         const budget = await reserveXSearch(c.userId, "sweep", q);
         if (!budget.ok) {
           blocked = true;
+          sourceFailures.push(`x: unavailable (${budget.reason ?? "budget"})`);
           return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
         }
         did.push(`x: ${q}`);
         const { searchRecentPosts, X_SEARCH_RESULTS } = await import("./xSearch.js");
         let posts: Awaited<ReturnType<typeof searchRecentPosts>>;
         try {
-          posts = await searchRecentPosts(q, X_SEARCH_RESULTS);
+          // The morning sweep reads only what's new (RECENT_HOURS); the hourly sweep, the last 7 days.
+          posts = opts.allSources ? await searchRecentPosts(q, X_SEARCH_RESULTS, { sinceHours: RECENT_HOURS }) : await searchRecentPosts(q, X_SEARCH_RESULTS);
         } catch (err) {
           // Logged by kind and status, never swallowed into "no posts" (2026-10-08).
           xError = xFailure(err);
           blocked = true;
+          sourceFailures.push(`x: the search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""})`);
           console.error(`sweepFind: X search failed (${xError.kind}${xError.status ? `, status ${xError.status}` : ""}) for user ${c.userId}`);
           return { ok: false, error: xFailedNote(xError) };
         }
@@ -352,12 +427,22 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       maxOutputTokens: 4000,
       providerOptions: { anthropic: { effort: "low" } },
       tools,
-      stopWhen: stepCountIs(SWEEP_BUDGET.steps),
+      stopWhen: stepCountIs(opts.allSources ? SWEEP_BUDGET.allSourcesSteps : SWEEP_BUDGET.steps),
+      // The daily sweep looks in all three places (SWEEP_SOURCES): a place not yet looked at is the next step's only tool.
+      ...(opts.allSources
+        ? {
+            prepareStep: ({ stepNumber }: { stepNumber: number }) => {
+              const must = nextRequiredSource(called, stepNumber);
+              return must ? { toolChoice: { type: "tool" as const, toolName: must } } : undefined;
+            },
+          }
+        : {}),
       experimental_telemetry: { isEnabled: true, functionId: "sweep.find", metadata: { userId: c.userId } },
-      prompt: sweepPrompt(c, { today: localDay(new Date(), opts.timezone ?? null), record }),
+      prompt: sweepPrompt(c, { today: localDay(new Date(), opts.timezone ?? null), record, allSources: opts.allSources, seen }),
     });
   } catch (err: any) {
     console.error("sweepFind: the loop failed (non-fatal):", err?.message ?? err);
+    sourceFailures.push(`the search loop failed (${String(err?.message ?? err).slice(0, 120)})`);
   }
   // Facts only: sold out, past, too far, and a name/date the record actually states.
   const gatedOut: GatedOut[] = [];
@@ -378,7 +463,9 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const passed = passedOver(lookedAt, keptUrls, passReasons);
   // Each query beside what became of its results, and each keep with the query that found it (the tuning log, sweepQuery.ts).
   const { queries, keptBy } = ledger.finish(lookedAt, keptUrls, gated.map((m) => ({ name: m.name, url: "url" in m && m.url ? String(m.url) : "" })), postOf);
+  // A place the daily sweep never reached (the loop ended first) is a failure with its reason too.
+  if (opts.allSources) for (const s of SWEEP_SOURCES) if (!called.has(s.source)) sourceFailures.push(`${s.source}: not reached (the search ended before it)`);
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
-  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy } }).catch(() => {});
-  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo };
+  await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy, ...(opts.allSources ? { allSources: true } : {}), ...(sourceFailures.length ? { sourceFailures } : {}) } }).catch(() => {});
+  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures } };
 }

@@ -17,9 +17,10 @@ import { runTestMigrations } from "./db/testMigrations.js";
 import { configureCoTestSocket } from "./socket/index.js";
 import apiRouter from "./routes/api.js";
 import checklistRouter from "./routes/checklist.js";
+import sweepsRouter from "./routes/sweeps.js";
 import loginRouter from "./routes/login.js";
 import phoneRouter from "./routes/phone.js";
-import { requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
+import { requireTeam, requireTesterLoginApi, requireTesterLoginPage } from "./middleware/requireTesterLogin.js";
 import { createCoRouter } from "../../api/src/routes/co.js";
 import { createCallLlmRouter } from "../../api/src/routes/callLlm.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
@@ -169,6 +170,8 @@ async function main() {
   // sandbox (see requireTesterLogin.ts) now that there's a single sign-in
   // for the whole tool, not a separate team-only password.
   app.use("/api/checklist", requireTesterLoginApi, checklistRouter);
+  // The 9am sweep's daily rollup (routes/sweeps.ts): team only.
+  app.use("/api/sweeps", sweepsRouter);
 
   // Root is the login form itself now — not the call page. A tester who's
   // already logged in gets redirected client-side (see login.ts checking
@@ -182,6 +185,7 @@ async function main() {
   app.get("/prompt", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "prompt.html")));
   app.get("/phone", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "phone.html")));
   app.get("/checklist", requireTesterLoginPage, (_req, res) => res.sendFile(path.join(publicDir, "checklist.html")));
+  app.get("/sweeps", requireTesterLoginPage, requireTeam, (_req, res) => res.sendFile(path.join(publicDir, "sweeps.html")));
 
   // Static assets (JS/CSS) still need to serve out of public/, but the HTML
   // pages above must only ever be reachable through the gated routes — a

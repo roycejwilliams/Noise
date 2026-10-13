@@ -2008,12 +2008,22 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
   if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUser(registry, userId, opts));
   const person = await loadPerson(userId);
-  if (!person) return;
+  // No phone on file: nothing can go. Said, not silent (Royce, 2026-10-13: "No silent skips anywhere in the chain").
+  if (!person) {
+    if (!opts.dryRun) await recordSkipOnce(userId, "no_phone", { layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", reason: "no phone number on file, so nothing can be sent" });
+    return;
+  }
 
   const now = new Date();
   const member = await memberSendState(userId, person, now);
   // A hold, or the spacing after work was handed to a task (harness/payloadFirst.ts): nothing goes. Unlike hold_until, new candidates
   // don't clear the space.
+  // Said, not silent (Royce, 2026-10-13): why nothing goes, once per hold.
+  const heldBy = heldNow(member, now);
+  if (heldBy && !opts.dryRun) {
+    const until = heldBy === "hold" ? member.holdUntil : member.spaceUntil;
+    await recordSkipOnce(userId, `${heldBy}:${until?.toISOString() ?? ""}`, { layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: heldBy, reason: heldBy === "hold" ? `held until ${until?.toISOString()} (Co's pick had nothing to send; a new find clears it)` : `space until ${until?.toISOString()} after work was handed to a task` });
+  }
   if (heldNow(member, now)) return;
 
   const { rows: candRows } = await pool.query(
@@ -2043,8 +2053,13 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   if (!ev.userOk || !ev.eligible.length) {
     const failed = ev.userOk ? [] : gate(ev.userChecks).failed;
-    const reason = failed.length ? describeFailed(failed) : "no eligible candidate";
-    if (!opts.dryRun) await recordSkipOnce(userId, failed.map((f) => f.name).join(",") || "no_eligible", {
+    // Each held candidate's own failed checks are in the key and the reason (Royce, 2026-10-13: "No silent skips anywhere in the chain,
+    // including the conversation hold"): a find held because they're mid-conversation used to read as the day's earlier "no_eligible"
+    // and wasn't logged. Only the same skip for the same reasons is logged once.
+    const held = ev.perCandidate.filter((p) => !p.ok).map((p) => ({ id: p.candidate.id, failed: p.checks.filter((c) => !c.pass) }));
+    const heldKey = held.map((h) => `${h.id}=${h.failed.map((f) => f.name).join("+")}`).join(",");
+    const reason = failed.length ? describeFailed(failed) : held.length ? `no eligible candidate: ${held.map((h) => `${h.id} held (${describeFailed(h.failed)})`).join("; ")}` : "no eligible candidate";
+    if (!opts.dryRun) await recordSkipOnce(userId, failed.map((f) => f.name).join(",") || (heldKey ? `no_eligible:${heldKey}` : "no_eligible"), {
       layer: 7,
       decision: "proactive.dailyPick",
       userId,

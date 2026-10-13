@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Co (test): Daily sweep</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .sweeps-page { padding: 20px; }
+    .sweeps-explainer { color: var(--text-muted, #8a8a8a); margin: 0 0 16px; max-width: 760px; }
+    .sweeps-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .sweeps-table th, .sweeps-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(127,127,127,0.2); vertical-align: top; }
+    .sweeps-table th { font-weight: 600; white-space: nowrap; }
+    .sweeps-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .sweeps-day td { padding-top: 18px; font-weight: 600; border-bottom: none; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+    .pill-ran { background: rgba(46,160,67,0.15); color: #2ea043; }
+    .pill-quiet { background: rgba(127,127,127,0.15); }
+    .pill-bad { background: rgba(218,54,51,0.15); color: #da3633; font-weight: 600; }
+    .detail { color: var(--text-muted, #8a8a8a); max-width: 420px; }
+    .table-wrap { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <nav id="sidebar" class="sidebar"></nav>
+    <div class="app-main">
+      <header class="app-header">
+        <div class="header-title">
+          <div class="app-name">Co (test): Daily sweep</div>
+          <div id="status" class="status-line">Loading…</div>
+        </div>
+      </header>
+      <main class="scroll-area">
+        <div class="sweeps-page">
+          <p class="sweeps-explainer">The 9am sweep, one row per member per day: whether it ran, what it searched and kept, and how many finds were texted that day. A red row is a day that needs a look: it failed, was missed, or left no record at all.</p>
+          <div class="table-wrap"><table class="sweeps-table" id="sweeps"></table></div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="/sweeps.js"></script>
+</body>
+</html>

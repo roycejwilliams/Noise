@@ -44,8 +44,10 @@ export function xSearchQuery(query: string): string {
   return [q, /-is:retweet/.test(q) ? "" : "-is:retweet", /\blang:/.test(q) ? "" : "lang:en"].filter(Boolean).join(" ");
 }
 
-export function xSearchUrl(query: string, maxResults = X_SEARCH_RESULTS): URL {
+// sinceHours: only posts from the last that many hours (the 9am daily sweep looks at what's new overnight, services/dailySweep.ts).
+export function xSearchUrl(query: string, maxResults = X_SEARCH_RESULTS, now = new Date(), sinceHours?: number): URL {
   const url = new URL(X_SEARCH_URL);
+  if (sinceHours) url.searchParams.set("start_time", new Date(now.getTime() - sinceHours * 3_600_000).toISOString().replace(/\.\d{3}Z$/, "Z"));
   url.searchParams.set("query", xSearchQuery(query));
   // X's own bounds for recent search.
   url.searchParams.set("max_results", String(Math.min(100, Math.max(10, maxResults))));
@@ -80,8 +82,8 @@ export function expandPost(post: any, usernames: Map<string, string> = new Map()
   };
 }
 
-export async function searchRecentPosts(query: string, maxResults = X_SEARCH_RESULTS): Promise<XPost[]> {
-  const res = await fetch(xSearchUrl(query, maxResults), { headers: xHeaders() });
+export async function searchRecentPosts(query: string, maxResults = X_SEARCH_RESULTS, opts: { sinceHours?: number } = {}): Promise<XPost[]> {
+  const res = await fetch(xSearchUrl(query, maxResults, new Date(), opts.sinceHours), { headers: xHeaders() });
   if (!res.ok) {
     throw new Error(`xSearch: searchRecentPosts failed (${res.status}): ${await res.text()}`);
   }

@@ -537,7 +537,7 @@ export function registerJobs(io: Server) {
         .then(async (W) => {
           const gone = await W.exitGoneMembersAsks();
           if (gone) console.log(`Working set: closed ${gone} ask(s) of members who are gone`);
-          const { rows: tired } = await pool.query(`SELECT id, ask_id, user_id, ask_text, empty_runs FROM ask_checkins WHERE resolved_at IS NULL AND kind = 'find' AND empty_runs >= $1`, [W.ASK_BACKOFF.exitAfter]);
+          const { rows: tired } = await pool.query(`SELECT id, ask_id, user_id, ask_text, empty_runs FROM ask_checkins WHERE resolved_at IS NULL AND kind = 'find' AND empty_runs >= $1 AND intent IS DISTINCT FROM 'lookout'`, [W.ASK_BACKOFF.exitAfter]);
           for (const t of tired) await W.exitAsk({ userId: t.user_id, askRowId: String(t.id), askId: String(t.ask_id), text: String(t.ask_text ?? ""), state: "expired", closedReason: "nothing_found", reason: `searched ${t.empty_runs} times, nothing found`, scope: "this ask; saying it again opens a new search" });
         })
         .catch((err: any) => console.error("Working set: exits failed (non-fatal):", err?.message ?? err));
@@ -571,7 +571,15 @@ export function registerJobs(io: Server) {
         rowsByUser.set(row.user_id, list);
       }
 
+      const { claimMember, releaseMember } = await import("../services/dailySweep.js");
       await runWithConcurrency(Array.from(rowsByUser.values()), 5, async (userRows) => {
+        // The 9am daily sweep is on this member right now (services/dailySweep.ts): their hourly pass waits for the next tick.
+        if (!claimMember(userRows[0].user_id)) {
+          await recordDecision({ layer: 5, decision: "sweep.held", userId: userRows[0].user_id, outcome: "skip", action: "daily_sweep_running", proposal: { asks: userRows.length } }).catch(() => {});
+          return;
+        }
+        try {
+
         // Resolved once per user (all their rows share the same profile
         // city), not once per ask — cheap either way since getTimezoneForCity
         // is cache-backed, but no reason to repeat it per row.
@@ -603,6 +611,7 @@ export function registerJobs(io: Server) {
         // three-tier search every morning and kept finding the same events).
         // Rows come least-recently-searched first, so every ask gets its turn.
         let searchedToday = userRows.filter((r) => localDayOf(r.last_attempted_at) === localToday).length;
+        let searchedThisTick = false;
 
         for (const row of userRows) {
           if (localDayOf(row.last_attempted_at) === localToday) continue; // already ran today's check for this ask — don't re-run every hourly tick inside the window
@@ -635,6 +644,7 @@ export function registerJobs(io: Server) {
           } catch (err: any) {
             console.error(`Event surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
           }
+          searchedThisTick = true; // a real search ran (a person ask above only makes an introduction)
           // "Did we run today's search" marker. last_surfaced_at (the 3-day
           // cadence) now moves only when a text actually goes out, in the
           // harness's onSent hook.
@@ -649,11 +659,28 @@ export function registerJobs(io: Server) {
             console.error(`Network surfacing sweep failed for ${row.user_id}:`, err?.message ?? err);
           }
         }
+        // The picker right after their sweep (services/sweepShadow.ts runPickerAfterSweep, Royce 2026-10-13).
+        if (searchedThisTick) await import("../services/sweepShadow.js").then((S) => S.runPickerAfterSweep(userRows[0].user_id, "hourly")).catch((err: any) => console.error("picker after the hourly sweep failed (non-fatal):", err?.message ?? err));
+        } finally {
+          releaseMember(userRows[0].user_id);
+        }
       });
       // Queueing is done; send whatever tiers are waiting, together.
       await runDispatch();
     } catch (error) {
       console.error("Event surfacing sweep cron error:", error);
+    }
+  });
+
+  // The 9am daily sweep (services/dailySweep.ts, Royce 2026-10-13): once per member per day from 9am their time, every open ask in all
+  // three places and each active goal, one summary line per member, then the day's rollup. Its own tick (:05, after the hourly ask
+  // sweep's lifecycle pass at :00), never overlapping itself; a member the hourly sweep is on waits for the next hour.
+  cron.schedule("5 * * * *", async () => {
+    try {
+      const D = await import("../services/dailySweep.js");
+      await D.runDailySweepAll(runWithConcurrency);
+    } catch (err: any) {
+      console.error("Daily sweep failed (members retried next hour):", err?.message ?? err);
     }
   });
 

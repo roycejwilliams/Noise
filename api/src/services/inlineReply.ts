@@ -47,6 +47,13 @@ export async function repliedTo(body: any, memberPhone: string): Promise<Replied
 
 async function lookUp(handle: unknown, memberPhone: string): Promise<RepliedTo | null> {
   if (typeof handle !== "string" || !handle) return null;
+  // An ops text (the daily sweep's rollup, services/dailySweep.ts) isn't part of their conversation with Co: a reply under it carries
+  // no target, so its words (other members' names) never enter their thread.
+  {
+    const { default: pool } = await import("../db/db.js");
+    const { rows } = await pool.query(`SELECT 1 FROM outbound_messages WHERE message_handle = $1 AND sender = 'ops' LIMIT 1`, [handle]).catch(() => ({ rows: [] as any[] }));
+    if (rows.length) return null;
+  }
   // A test member's messages never went through Sendblue (services/testNumbers.ts):
   // Co's own send log has them.
   if (isTestHandle(handle)) {

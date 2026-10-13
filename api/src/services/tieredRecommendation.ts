@@ -158,6 +158,8 @@ async function cachedPublicEvents(city: string | null, until: Date) {
 // still get one (2026-09-17).
 const X_SEARCH_DAILY_CAP = Number(process.env.X_SEARCH_DAILY_CAP ?? 100);
 const X_SEARCH_REQUEST_RESERVE = Number(process.env.X_SEARCH_REQUEST_RESERVE ?? 30);
+// What sweeps may spend of the day's X searches (the cap minus what's kept for member requests), for the daily rollup.
+export const X_SWEEP_SHARE = (): number => X_SEARCH_DAILY_CAP - X_SEARCH_REQUEST_RESERVE;
 
 // Reserves one X search against the daily budget, or says why not. Count and
 // insert happen under one transaction-scoped advisory lock, so two searches

@@ -258,7 +258,7 @@ export async function taskWebSearch(
   // ownPage: the kind of page a found listicle is swapped for ("private events or private dining page"), looked up near
   //   opts.city. readsPageItself: the caller reads each kept page itself (a research brief), so a result on the place's
   //   own page whose name checked out is kept even when none of the search model's details did; anything else still needs one.
-  opts: { city?: string | null; zone?: string | null; taskId?: number | null; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request"; background?: boolean; max?: number; searches?: number; ownPage?: string; readsPageItself?: boolean } = {},
+  opts: { city?: string | null; zone?: string | null; taskId?: number | null; recentHours?: number; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request"; background?: boolean; max?: number; searches?: number; ownPage?: string; readsPageItself?: boolean } = {},
 ): Promise<TaskWebResult> {
   if (!opts.skipBudget) {
     const budget = await reserveWebSearch(userId, opts.source ?? "sweep", what);
@@ -273,7 +273,7 @@ export async function taskWebSearch(
       tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: Math.min(4, Math.max(1, opts.searches ?? 2)) }) },
       stopWhen: stepCountIs(opts.searches && opts.searches > 2 ? 5 : 3),
       timeout: opts.background ? 120_000 : 60_000,
-      prompt: `Find on the real web: ${what}${opts.city ? ` (they're in ${opts.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.${opts.sites?.length ? ` Good places to look: ${opts.sites.join(", ")} (and the thing's own site).` : ""}${opts.sites?.some(cantCheck) ? ` Listings on ${opts.sites.filter(cantCheck).join(", ")} can't be opened to check, so for anything found there give the place's OWN website and its real name (a listing that hides the name, like "Modern loft in SoMa", can't be used).` : ""}
+      prompt: `Find on the real web: ${what}${opts.city ? ` (they're in ${opts.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.${opts.recentHours ? ` Favor what was first posted, announced or opened in the last ${opts.recentHours} hours (new listings, newly announced dates, applications that just opened); something older only if it's still ahead and nothing new fits.` : ""}${opts.sites?.length ? ` Good places to look: ${opts.sites.join(", ")} (and the thing's own site).` : ""}${opts.sites?.some(cantCheck) ? ` Listings on ${opts.sites.filter(cantCheck).join(", ")} can't be opened to check, so for anything found there give the place's OWN website and its real name (a listing that hides the name, like "Modern loft in SoMa", can't be used).` : ""}
 Up to ${Math.min(6, Math.max(1, opts.max ?? 3))} real, specific options, each from a page you actually read, ideally the thing's own site. For each, the details that matter (capacity, price, dates, address or neighborhood, deadline), each copied from that page as it's written there.
 Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read", "details": [{"label": "capacity", "value": "..."}], "date": "YYYY-MM-DD or null (when it happens, if it's an event)", "deadline": "YYYY-MM-DD or null"}]}. {"items": []} if nothing real.`,
     });
