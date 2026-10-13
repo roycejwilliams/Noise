@@ -77,6 +77,10 @@ export type TurnContext = {
   tasks?: string[];
   // Their research briefs: running, held for their hours, or finished lately (services/coTasks.ts briefFactLines).
   briefs?: string[];
+  // What Co's daily search is covering for them now (services/searchCoverage.ts): the reply check's running work reads it.
+  searching?: import("./searchCoverage.js").SearchCoverage;
+  // What's ahead for them from Co, as scheduled (services/whatsAhead.ts aheadLine): one fact line.
+  ahead?: string;
   // Goals they handed Co (services/goalOwnership.ts): offered (waiting on their pick) or active (what Co carries, what's theirs, the
   // check-in on the ledger). Tool references for Co, never member-facing text.
   goals?: { kind: "known" | "scheduled"; text: string }[];
@@ -341,6 +345,9 @@ export async function assembleContext(
     console.error("assembleContext: member knowledge unavailable (non-fatal, left out):", err?.message ?? err);
     return null;
   });
+  // Running work and what's ahead, read from real state every turn (Royce, 2026-10-13), started now so they cost no extra wait.
+  const searchingP = import("./searchCoverage.js").then((C) => C.searchCoverage(userId).catch(() => C.UNREADABLE));
+  const aheadP = import("./whatsAhead.js").then((W) => W.loadAhead(userId)).catch(() => null);
   const [profile, snapshot, sent, knowledge, threads, offersThisWeek, emotional, inlineTarget, ledger] = await Promise.all([
     pool.query(`SELECT * FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     getPersonSnapshot(userId).catch(() => null),
@@ -423,7 +430,13 @@ export async function assembleContext(
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   const coldStart = await coldStartP;
   const door = await doorP;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null };
+  // Asks and goals read raw go through keep like everything else here (another member's details stripped, fails closed).
+  const rawSearching = await searchingP;
+  const keptAsks = keepAll(rawSearching.asks), keptGoals = keepAll(rawSearching.goals);
+  const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length };
+  const rawAhead = await aheadP;
+  const ahead = rawAhead ? await import("./whatsAhead.js").then((W) => W.aheadLine(rawAhead, searching, zone, keep)).catch(() => undefined) : undefined;
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

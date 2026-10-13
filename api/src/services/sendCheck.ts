@@ -56,7 +56,14 @@ export type RecheckDeps = {
   luma: (url: string) => Promise<EventDetails | null>;
   // Any other page: its text, and whether it's gone (404/410).
   page: (url: string) => Promise<PageRead>;
+  // A dated find's page, read now for whether it is still open (Royce, 2026-10-13: "Finds with a deadline, application window or
+  // event date get their page re-verified at send time"). The word list (closedOnPage) missed "Applications for Batch 4 are closed"
+  // because the name wasn't in that sentence, and "applications open now" went out. Optional: without it only the word list runs.
+  openRead?: (i: { name: string; page: string; today: string; onFile: string | null; isOpening: boolean }) => Promise<OpenRead | null>;
 };
+// open: the page shows it still taking applications or still ahead; closed: the page says it is closed, over, full or past (quote is
+// the page's own words); unclear: the page doesn't say either way.
+export type OpenRead = { state: "open" | "closed" | "unclear"; quote: string | null };
 export type Recheck =
   | { ok: true; match: TierMatch; checkedAt: string; changed: string[]; verified: boolean }
   | { ok: false; why: string; exit: boolean; state?: ExitState };
@@ -119,6 +126,38 @@ function otherDate(sentence: string, onFile: string | null, name = "", now = new
   return [...dates].some((d) => d !== onFile.slice(0, 10)) || years.some((y) => y !== onFile.slice(0, 4));
 }
 
+// Pure: is a quote really on the page (spacing and case aside)? A closed read stands only on the page's own words.
+export function onPage(page: string, quote: string): boolean {
+  const n = (t: string) => t.toLowerCase().replace(/&[a-z]+;/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+  const q = n(quote);
+  // Two words count when one of them says closed ("Applications closed"); otherwise three, so a lone word never holds a find.
+  const words = q.split(" ").length;
+  return (words >= 3 || (words === 2 && /\b(?:closed|over|ended|full|sold)\b/.test(q))) && n(page).includes(q);
+}
+
+// The send-time read of a dated find's page: still open, closed, or unclear. One short model read; null when it can't be made.
+export async function readOpenNow(i: { name: string; page: string; today: string; onFile: string | null; isOpening: boolean }): Promise<OpenRead | null> {
+  const { anthropic } = await import("@ai-sdk/anthropic");
+  const { generateText } = await import("ai");
+  const { MODELS } = await import("../models.js");
+  const { parseModelJson } = await import("./modelJson.js");
+  const { text } = await generateText({
+    model: anthropic(MODELS.haiku),
+    maxOutputTokens: 200,
+    abortSignal: AbortSignal.timeout(8000),
+    experimental_telemetry: { isEnabled: true, functionId: "readOpenNow" },
+    prompt: `Today is ${i.today}. A companion is about to text a member about "${i.name}"${i.isOpening ? ", an opening (an application, program or grant)" : ""}${i.onFile ? `, on file for ${i.onFile}` : ""}. Its own page, read just now:
+"""${i.page.slice(0, 12000)}"""
+
+Is "${i.name}" itself still open as of today: still taking applications or sign-ups, or still ahead? Answer "closed" only if the page says this one is closed, over, full, sold out or past (applications closed, batch closed, registration ended), and quote that whole sentence exactly as the page has it. Answer "open" if the page shows it still open or ahead. Answer "unclear" if the page doesn't say, or the closed words are about something else (another event, another year, a past batch when a new one is open).
+
+Return ONLY JSON: {"state": "open" | "closed" | "unclear", "quote": "the page's exact words" or null}`,
+  });
+  const p = parseModelJson(text) ?? {};
+  const state = p.state === "open" || p.state === "closed" ? p.state : "unclear";
+  return { state, quote: typeof p.quote === "string" && p.quote.trim() ? p.quote.trim() : null };
+}
+
 // Pure-with-deps: one find's own page, read again now. Never throws.
 export async function recheckFind(match: TierMatch, o: { now: Date; zone: string | null; deps: RecheckDeps }): Promise<Recheck> {
   const { now, zone, deps } = o;
@@ -168,6 +207,13 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   const onFile = eventDateOf(match, zone) ?? (isOpening && "deadline" in match ? match.deadline ?? null : null);
   const closed = closedOnPage(r.text, match.name, onFile);
   if (closed) return { ok: false, exit: false, why: `its page says "${closed}" next to its name (checked ${today}); held and read again, not sent` };
+  // A dated find (an opening, or anything with a date or deadline on file): read for whether it is still open, whatever the wording.
+  // Closed counts only with the page's own words, found on the page; held and read again like the word list, never an exit.
+  const dated = isOpening || !!onFile || ("deadline" in match && !!match.deadline);
+  if (dated && deps.openRead) {
+    const o = await deps.openRead({ name: String(match.name ?? ""), page: r.text, today, onFile, isOpening }).catch(() => null);
+    if (o?.state === "closed" && o.quote && onPage(r.text, o.quote)) return { ok: false, exit: false, why: `its page says "${o.quote.slice(0, 120)}" (read for whether it's still open, ${today}); held and read again, not sent` };
+  }
   // A date on file the page doesn't show (it moved, or the page writes it in a form the date reader misses): held, never an exit.
   if (onFile) {
     const stated = datesOnPage(r.text, Number(onFile.slice(0, 4)));
@@ -191,6 +237,7 @@ export type SendCheckDeps = RecheckDeps &
 export const realSendCheckDeps: SendCheckDeps = {
   luma: async (url) => (await import("./eventDetails.js")).fetchLumaEventDetails(url, { maxAgeMs: RECHECK_FRESH_MS }),
   page: async (url) => (await import("./webOpportunitySearch.js")).readPageChecked(url),
+  openRead: (i) => readOpenNow(i),
   now: () => new Date(),
   writeFact: async (e) => (await import("./workingSet.js")).realExitDeps.writeFact(e),
   saveMatch: async (id, match) => {

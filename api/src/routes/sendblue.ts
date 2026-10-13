@@ -33,7 +33,7 @@ import { CO_WHY } from "../services/coVoice.js";
 import { assembleContext, type TurnContext } from "../services/turnContext.js";
 import { readTurn, readTurnEnabled, type TurnRead } from "../services/readTurn.js";
 import { planTextReply } from "../brain/index.js";
-import { dotsInstruction, momentInstruction, readMoment, saveLesson, whyContext, type Moment } from "../services/connectDots.js";
+import { dotsInstruction, momentInstruction, readMoment, whyContext, type Moment } from "../services/connectDots.js";
 import { bareLink, inlineNote, repliedTo, repliedToFact, sentMessageHandle, threadReason } from "../services/inlineReply.js";
 import { recordSafetyConcern, SAFETY_INSTRUCTION, soundsLikeCrisis } from "../services/safety.js";
 import { describeImage, readableImage } from "../services/imageRead.js";
@@ -1744,7 +1744,7 @@ export function sendblueRouter(io: Server): Router {
           if (dateCheck) addFact(replyFacts, "known", dateCheck);
           // Co's live work for them: ongoing, so its next step can be said (replyGrounding future_promise).
           if (notes) addFact(replyFacts, "ongoing", notes);
-          // An open ask among them reads as on file, not being worked on (openLoops.ts ASK_ON_FILE); saying Co is working on something
+          // An open ask among them reads as on file (openLoops.ts ASK_ON_FILE); saying Co is working on or searching for something
           // stands only on running work (replyGrounding runningWorkLine and the work_status claim check, 2026-10-12, item 3).
           if (loops) addFact(replyFacts, "ongoing", loops);
           if (timeline) addFact(replyFacts, "known", timeline.fact);
@@ -2581,8 +2581,10 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           const momentNote = momentInstruction(moment);
           if (momentNote) addInstruction(replyFacts, momentNote);
           const lessons = turn?.lessons ?? [];
-          if (lessons.length) addInstruction(replyFacts, `What you've learned about how to be with them, from times they corrected you: ${lessons.join(" / ")}`);
-          if (moment?.lesson) saveLesson(user.id, moment.lesson).catch(() => {});
+          if (lessons.length) addInstruction(replyFacts, `What you've learned about how to be with them, from times they corrected you: ${lessons.join(" / ")}. One marked "Hypothesis" is a guess at what went wrong, not a confirmed cause: weigh it lightly. One whose cause was the reply check is about that line, not something you chose to say.`);
+          // Checked against the reply log before it's kept (services/lessonCheck.ts, Royce 2026-10-13): a known cause is named, an
+          // unknown one is kept as a hypothesis.
+          if (moment?.lesson) import("../services/lessonCheck.js").then((L) => L.checkAndSaveLesson(user.id, { message: resolvedContent, pushback: moment.pushback, lesson: moment.lesson! })).catch(() => {});
           if (moment) recordDecision({ layer: 3, decision: "reply.moment", userId: user.id, outcome: "act", action: moment.mode, proposal: { topic: moment.topic, pushback: moment.pushback, lesson: moment.lesson } }).catch(() => {});
           if (reactingToSent) {
             const why = whyContext(await askedAndDoing());
