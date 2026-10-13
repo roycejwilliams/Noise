@@ -83,18 +83,17 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
 // 3. Debriefs ask whether they went.
 {
   const p = { eventName: "Claude Founder Salon", checkinFollowupIds: [] as string[], walkinCheckinIds: [] as string[] };
-  check("Co suggested it and nothing more: not confirmed", !R.attendanceConfirmed(p, ["User: that sounds cool", "User: maybe"]));
-  check("Royce's 10-09 case: never confirmed going", !R.attendanceConfirmed(p, ["User: Yes. Also i never confirmed I was going to those"]));
-  check("their words naming it with going: confirmed", R.attendanceConfirmed(p, ["User: I'm going to the Claude Founder Salon tonight"]));
-  check("an RSVP in their words: confirmed", R.attendanceConfirmed(p, ["User: rsvp'd for the founder salon"]));
-  check("going to something else: not confirmed", !R.attendanceConfirmed(p, ["User: I'm going to the gym"]));
-  // Review of #129: negations and near-miss words read as going.
-  for (const l of ["User: I'm not going to the Claude Founder Salon", "User: I never made it to the founder salon", "User: not going to make the founder salon sorry", "User: can't make the Claude salon, going to skip it"]) check(`their "not going" isn't going: ${l}`, !R.attendanceConfirmed(p, [l]));
-  check("another event sharing a word stem isn't this one", !R.attendanceConfirmed(p, ["User: going to a Claude meetup for founders next month"]));
-  check("\"can't wait\" isn't a no", R.attendanceConfirmed(p, ["User: going to the Claude Founder Salon, can't wait"]));
-  check("a curly apostrophe still reads", R.attendanceConfirmed(p, ["User: I\u2019ll be there, Claude Founder Salon tonight"]));
-  check("a check-in at the door: confirmed", R.attendanceConfirmed({ ...p, checkinFollowupIds: ["c1"] }, []));
-  check("a walk-in: confirmed", R.attendanceConfirmed({ ...p, walkinCheckinIds: ["w1"] }, []));
+  // Founder-approved 2026-10-12 (memory provenance): "went" comes only from a door check-in, a walk-in, or their stated went (a
+  // stated helped / didn't help row for that item). Their texts are never read for it: "going to practice my pitch before the
+  // launch" read as having gone, and a stated "I'm going" is a plan. Everything else gets the question.
+  check("Co suggested it and nothing more: not confirmed", !R.wentOnRecord(p, []));
+  check("a stated going is a plan, not having gone: the debrief asks", !R.wentOnRecord(p, [{ result: "acted", provenance: "stated" }]));
+  check("Co's own read of their words (no provenance, or inferred) never counts", !R.wentOnRecord(p, [{ result: "helped", provenance: null }]) && !R.wentOnRecord(p, [{ result: "didnt_help", provenance: "inferred" }]) && !R.wentOnRecord(p, [{ result: "acted", provenance: null }]));
+  check("interest or a pass never counts", !R.wentOnRecord(p, [{ result: "interested", provenance: "stated" }, { result: "declined", provenance: "stated" }]));
+  check("their stated went and liked it: confirmed", R.wentOnRecord(p, [{ result: "helped", provenance: "stated" }]));
+  check("their stated went and didn't: confirmed", R.wentOnRecord(p, [{ result: "didnt_help", provenance: "stated" }]));
+  check("a check-in at the door: confirmed", R.wentOnRecord({ ...p, checkinFollowupIds: ["c1"] }, []));
+  check("a walk-in: confirmed", R.wentOnRecord({ ...p, walkinCheckinIds: ["w1"] }, []));
   const presumes = ["How was the Claude Founder Salon?", "Anyone stood out?", "Who did you meet there?", "Did you have fun at the salon?", "How'd the salon go?", "How\u2019d it go?", "Meet anyone interesting?"];
   const asks = ["Did you end up making it to the Claude Founder Salon?", "Were you able to get to the founder salon last night?"];
   check("lines that take for granted they went are caught", presumes.every((t) => R.PRESUMES_THEY_WENT.test(t)), presumes.filter((t) => !R.PRESUMES_THEY_WENT.test(t)));
@@ -102,7 +101,9 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   const reg = src("harness/proactiveRegistry.ts");
   check("an unconfirmed event's debrief is told to ask whether they made it", /nothing says they went\. Ask, lightly, whether they ended up making it/.test(reg));
   check("code backstop: an unconfirmed debrief that assumes they went is skipped", /if \(!went && !isOpportunity && PRESUMES_THEY_WENT\.test\(text\)\) return skip/.test(reg));
-  check("the debrief reads only their own lines", /content LIKE 'User%'/.test(reg));
+  const draft = reg.slice(reg.indexOf("async function draftDebrief("), reg.indexOf("async function debriefItemKeys("));
+  check("the debrief decides went from the record only: this debrief's stated outcomes, never their texts", /wentOnRecord\(p, rows\)/.test(draft) && /FROM suggestion_outcomes WHERE user_id = \$1 AND item_key = ANY\(\$2::text\[\]\)/.test(draft) && !/text_exchange|attendanceConfirmed\(/.test(draft));
+  check("the went rule reads only a stated helped / didn't help", /\(r\.result === "helped" \|\| r\.result === "didnt_help"\) && isStated\(r\.provenance\)/.test(reg));
 }
 
 console.log(`restraint for Co-started texts: ${total - failed}/${total} passed`);
