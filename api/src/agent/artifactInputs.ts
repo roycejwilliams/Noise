@@ -39,7 +39,7 @@ export const PLACE = z
   .string()
   .nullable()
   .optional()
-  .describe("The real place this is about, only one they named or you read, with its city (\"Heath Ceramics, San Francisco\"): its own photos (credited) and a map come in by code. Leave it out when it isn't about a place.");
+  .describe("The real place this is about, only one they named or you read, with its street address when they gave one, else its city (\"Heath Ceramics, 2900 18th Street, San Francisco\"): its own photos (credited) and a map come in by code. Leave it out when it isn't about a place.");
 export const COVER_MOOD = z
   .string()
   .nullable()

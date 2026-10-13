@@ -216,25 +216,35 @@ export async function osmFind(named: string, deps: ImageryDeps = realDeps): Prom
     pCache.set(key, disk);
     return disk.found;
   }
-  const run = queue.then(async () => {
-    const wait = 1100 - (deps.now() - lastAt);
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    lastAt = deps.now();
-    const r = await deps.fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=jsonv2&limit=5&addressdetails=1`, { headers: { "User-Agent": UA, "Accept-Language": "en" }, signal: AbortSignal.timeout(8000) }).catch(() => null);
-    const j: any = r?.ok ? await r.json().catch(() => null) : null;
-    return (Array.isArray(j) ? j : [])
-      .map((h: any) => ({ lat: Number(h?.lat), lng: Number(h?.lon), name: String(h?.name || String(h?.display_name ?? "").split(",")[0]), address: `${h?.address?.house_number ?? ""} ${h?.address?.road ?? ""}, ${String(h?.display_name ?? "")}`, road: h?.address?.road ?? null, house: h?.address?.house_number ?? null, region: { state: h?.address?.state ?? null, country: h?.address?.country_code ?? null } as Region }))
-      .filter((h: any) => Number.isFinite(h.lat) && Number.isFinite(h.lng));
-  });
-  queue = run.catch(() => null);
-  const cands: any[] = (await run.catch(() => null)) ?? [];
+  const search = (text: string) => {
+    const run = queue.then(async () => {
+      const wait = 1100 - (deps.now() - lastAt);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      lastAt = deps.now();
+      const r = await deps.fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=jsonv2&limit=5&addressdetails=1`, { headers: { "User-Agent": UA, "Accept-Language": "en" }, signal: AbortSignal.timeout(8000) }).catch(() => null);
+      const j: any = r?.ok ? await r.json().catch(() => null) : null;
+      return (Array.isArray(j) ? j : [])
+        .map((h: any) => ({ lat: Number(h?.lat), lng: Number(h?.lon), name: String(h?.name || String(h?.display_name ?? "").split(",")[0]), address: `${h?.address?.house_number ?? ""} ${h?.address?.road ?? ""}, ${String(h?.display_name ?? "")}`, road: h?.address?.road ?? null, house: h?.address?.house_number ?? null, region: { state: h?.address?.state ?? null, country: h?.address?.country_code ?? null } as Region }))
+        .filter((h: any) => Number.isFinite(h.lat) && Number.isFinite(h.lng));
+    });
+    queue = run.catch(() => null);
+    return run.catch(() => [] as any[]);
+  };
+  const cands: any[] = (await search(q)) ?? [];
   const needRegion = cands.some((c) => sameVenue(q, c.name, null) && !sameVenue(q, c.name, c.address)) && q.includes(",");
   const city = needRegion ? await osmRegion(q.split(",").slice(1).join(",").trim(), deps).catch(() => null) : null;
   // Two results for one place (a node and its building) are one place: only same-name results far apart are two.
   const near = (a: any, b: any) => Math.abs(a.lat - b.lat) < 0.002 && Math.abs(a.lng - b.lng) < 0.002;
   const ok = cands.filter((c) => sameVenue(q, c.name, c.address) || (!!city && sameVenue(q, c.name, c.address, { place: c.region, city })));
   const distinct = ok.filter((c, i) => !ok.slice(0, i).some((d) => near(c, d)));
-  const pick = onePlace(q, distinct, () => true);
+  let pick = onePlace(q, distinct, () => true);
+  // A street address they gave that OpenStreetMap doesn't file under the venue's name: the address itself, at that number on that street.
+  const st = streetOf(q);
+  if (!pick && st) {
+    const addrQ = q.slice(q.match(STREET)!.index!).replace(/\s+/g, " ").trim();
+    const byAddr = ((await search(addrQ)) ?? []).filter((c: any) => atStreet(c.address, st));
+    if (byAddr[0]) pick = byAddr[0];
+  }
   const found: OsmFound = pick === "ambiguous" ? "ambiguous" : pick ? { pin: { lat: pick.lat, lng: pick.lng, label: placeLabel(q) }, road: pick.road, house: pick.house } : null;
   const entry = { at: found ? deps.now() : deps.now() - PIN_TTL + 24 * 3600_000, found };
   pCache.set(key, entry as any);
@@ -346,6 +356,7 @@ async function lookUp(names: (string | undefined)[], n: number, deps: ImageryDep
   return { found: names.map((q) => (q ? keep.get(q)?.f ?? null : null)), pins: names.map((q) => (q ? keep.get(q)?.pin ?? null : null)) };
 }
 
+const pageText = (sec: any): string[] => (sec.blocks ?? []).flatMap((b: any) => (b.type === "text" ? [b.text] : b.type === "bullets" ? b.items.map((i: any) => i.text) : b.type === "links" ? b.items.map((i: any) => i.note ?? "") : []));
 // A cover kept from before an edit stays only while it's still right: a mood image, or a venue photo of a place still on it.
 const keepCover = (c: ArtImage | undefined, placeIds: Set<string>) => (c && (c.kind === "mood" || (c.placeId && placeIds.has(c.placeId))) ? c : undefined);
 
@@ -369,7 +380,13 @@ export async function fillDeckArt(data: any, o: { mood?: string | null; deadline
       delete s.photos;
       delete s.map;
     }
-    const { found, pins } = await lookUp(slides.map((s) => s.place), grammar === "fieldguide" || grammar === "catalog" ? 3 : 2, deps, report.notes);
+    // A street address on the slide itself (their words, checked like every line) says which branch: it joins the lookup.
+    const withStreet = (sl: any) => (sl.place && !streetOf(sl.place) ? (() => {
+      const line = [sl.headline, ...sl.bullets].find((b: string) => streetOf(b));
+      const m = line ? line.match(STREET) : null;
+      return m ? `${placeLabel(sl.place)}, ${line!.slice(m.index!).replace(/\s+/g, " ").trim()}` : sl.place;
+    })() : sl.place);
+    const { found, pins } = await lookUp(slides.map(withStreet), grammar === "fieldguide" || grammar === "catalog" ? 3 : 2, deps, report.notes);
     const mapPins: MapPin[] = [];
     found.forEach((f, i) => {
       if (slides[i].place && !f && !pins[i] && !report.notes.some((x) => x.includes(placeLabel(slides[i].place)))) report.notes.push(`couldn't find ${slides[i].place}`);
@@ -450,7 +467,12 @@ export async function fillPageArt(data: any, o: { mood?: string | null; deadline
     }
     for (const s of next.sections) delete s.photos;
     delete next.map;
-    const { found, pins } = await lookUp(next.sections.map((s: any) => s.place), grammar === "fieldguide" ? 3 : 1, deps, report.notes);
+    const withStreet = (sec: any) => (sec.place && !streetOf(sec.place) ? (() => {
+      const line = [sec.heading, ...pageText(sec)].find((b: string) => streetOf(b));
+      const m = line ? line.match(STREET) : null;
+      return m ? `${placeLabel(sec.place)}, ${line!.slice(m.index!).replace(/\s+/g, " ").trim()}` : sec.place;
+    })() : sec.place);
+    const { found, pins } = await lookUp(next.sections.map(withStreet), grammar === "fieldguide" ? 3 : 1, deps, report.notes);
     const mapPins: MapPin[] = [];
     found.forEach((f, i) => {
       const s = next.sections[i];
