@@ -783,6 +783,10 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS awaiting_response_since TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins.awaiting_response_since migration failed:", err));
+  // What the ask is (services/askLifecycle.ts askIntent, Royce 2026-10-13): a question Co answers, or a lookout that stays open.
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS intent TEXT, ADD COLUMN IF NOT EXISTS intent_why TEXT`)
+    .catch((err: Error) => console.error("ask_checkins.intent migration failed:", err));
   await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS responded_count INT NOT NULL DEFAULT 0`)
     .catch((err: Error) => console.error("ask_checkins.responded_count migration failed:", err));

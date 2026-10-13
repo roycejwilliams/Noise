@@ -6,7 +6,7 @@
 // bootstraps." Never a build:client esbuild entry point itself — picked up
 // transitively via import, same as shared.ts is today.
 
-export type SidebarPage = "dashboard" | "call" | "phone" | "results" | "prompt";
+export type SidebarPage = "dashboard" | "call" | "phone" | "results" | "prompt" | "sweeps";
 
 type NavItem = {
   key: SidebarPage;
@@ -24,6 +24,7 @@ const ICONS = {
   // Twilio-bridged real-phone flow, not the browser-mic call.
   phone: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg>`,
   results: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="20" x2="4" y2="14"/><line x1="10" y1="20" x2="10" y2="10"/><line x1="16" y1="20" x2="16" y2="4"/></svg>`,
+  sweeps: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>`,
   prompt: `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="14" y2="18"/></svg>`,
 };
 
@@ -32,6 +33,8 @@ const NAV_ITEMS: NavItem[] = [
   { key: "phone", href: "/phone", label: "Phone test", icon: ICONS.phone },
   { key: "results", href: "#", label: "Results", icon: ICONS.results },
   { key: "prompt", href: "/prompt", label: "Prompt", icon: ICONS.prompt },
+  // Team only (the page answers 404 for anyone else): the 9am sweep's daily rollup.
+  { key: "sweeps", href: "/sweeps", label: "Daily sweep", icon: ICONS.sweeps },
 ];
 
 export function renderSidebar(active: SidebarPage): void {

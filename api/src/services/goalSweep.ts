@@ -153,6 +153,16 @@ const realDeps: GoalSweepDeps = {
   },
   surface: async (row, context) => {
     await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
+    // The picker right after (sweepShadow.ts runPickerAfterSweep, Royce 2026-10-13), unless another sweep is on this member right now
+    // (services/dailySweep.ts claimMember): that sweep runs the picker when it finishes.
+    const D = await import("./dailySweep.js");
+    if (D.claimMember(row.user_id)) {
+      try {
+        await import("./sweepShadow.js").then((S) => S.runPickerAfterSweep(row.user_id, "goal"));
+      } finally {
+        D.releaseMember(row.user_id);
+      }
+    }
   },
 };
 

@@ -7,7 +7,7 @@ import { generateEmbedding } from "./embeddings.js";
 import { scheduleOutcomeFollowUp, getTierBias } from "./recommendationOutcome.js";
 import { enrichMatch } from "./eventDetails.js";
 import { UNDATED_QUEUE_DAYS } from "./sendCheck.js";
-import { sweepFind } from "./sweepFind.js";
+import { sweepFind, type SweepSources } from "./sweepFind.js";
 import { recordDecision } from "../harness/core.js";
 import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
@@ -37,6 +37,10 @@ export type SurfacingCandidate = {
   // jobs/index.ts). false means only the cheap urgent pre-check below runs —
   // the full tiered engine (and its Tier 3 cost) waits for the real cycle.
   cooldownCleared: boolean;
+  // The 9am daily sweep (services/dailySweep.ts): look in all three places (sweepFind.ts SWEEP_SOURCES), not Co's choice of them.
+  allSources?: boolean;
+  // What this search did, handed to the daily sweep for its summary (the return value stays as the hourly sweep reads it).
+  onReport?: (r: SurfacingReport) => void;
 };
 
 // How long an unanswered tease stays "open" before Co treats it as
@@ -372,7 +376,11 @@ type SweepSearchTrace = {
   scope: Record<string, unknown> | null;
   // What Co's sweep loop looked at (services/sweepFind.ts).
   did?: string[];
+  // Which places were searched and why any wasn't (the daily sweep's report).
+  sources?: SweepSources;
 };
+// What one ask's (or one goal's) search did, for the daily sweep's summary (services/dailySweep.ts).
+export type SurfacingReport = { sources: SweepSources; found: number; pooled: number; queued: number; outcome: string };
 
 async function findFreshPending(candidate: SurfacingCandidate, timezone: string | null): Promise<{ items: BacklogItem[]; trace: SweepSearchTrace }> {
   // Their time zone (memberTime.ts), so event dates are their local calendar dates.
@@ -381,10 +389,10 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
   // frustration with what Co has found sends the real thing instead of a tease (attemptEventSurfacing, revealNow).
   const result = await sweepFind(
     { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: candidate.city },
-    { timezone },
+    { timezone, allSources: candidate.allSources },
   ).catch((err: any) => {
     console.error("attemptEventSurfacing: sweepFind failed (non-fatal):", err?.message ?? err);
-    return null;
+    return { matches: [] as TierMatch[], did: [] as string[], searched: false, frustratedWithCo: false, sources: { events: false, web: false, x: false, failures: [`the search failed (${String(err?.message ?? err).slice(0, 120)})`] } as SweepSources };
   });
   const matches: TierMatch[] = result?.matches ?? [];
   // Tier order as the mention priority (Tier 1 first by default) — same
@@ -417,6 +425,7 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
     items,
     trace: {
       searchText: candidate.askText,
+      sources: result?.sources,
       frustratedWithCo: result?.frustratedWithCo ?? false,
       found: matches.map((m) => ({ name: m.name, tier: m.tier, date: relevantDate(m) })),
       staleOrRepeat: matches.flatMap((m, i) => (repeats[i].action === "blocked" ? [`${m.name}: ${repeats[i].reason}`] : [])),
@@ -669,7 +678,8 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   const found = await settleNewFinds(candidate.userId, rawFound, localDay(new Date(), zone), candidate.askText, zone);
   // Empty runs in a row (the backoff, services/workingSet.ts askSearchDue): a real ask only.
   // Only a search that really ran counts (review of #133: a throw or a used-up web budget counted as "nothing found").
-  if (/^[0-9a-f-]{36}$/i.test(candidate.askId) && trace.searched) {
+  // The 9am daily sweep doesn't count (services/dailySweep.ts): it leaves the ask lifecycle as the hourly sweep runs it (Royce, 2026-10-13).
+  if (!candidate.allSources && /^[0-9a-f-]{36}$/i.test(candidate.askId) && trace.searched) {
     await pool.query(`UPDATE ask_checkins SET empty_runs = CASE WHEN $2 THEN 0 ELSE empty_runs + 1 END WHERE id::text = $1`, [candidate.askId, trace.found.length > 0]).catch(() => {});
   }
   // A reminder replaces an older queued pitch for the same event.
@@ -686,6 +696,9 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     ),
   ], zone);
   await saveBacklogMerged(candidate.userId, candidate.askId, readAtStart, pending);
+  // For the daily sweep's summary: what was searched, kept by the search, and is now in the pool (this ask's backlog).
+  const report = (outcome: string, queued = 0): void =>
+    candidate.onReport?.({ sources: trace.sources ?? { events: false, web: false, x: false, failures: ["nothing searched: their record, or the limits in it, couldn't be read"] }, found: trace.found.length, pooled: found.filter((i) => !i.unread).length, queued, outcome });
 
   // Every run is recorded, so a quiet week can be traced to where things
   // were dropped instead of guessed at (2026-09-18).
@@ -715,6 +728,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
 
   if (!pending.length) {
     await log("skip", trace.found.length ? "nothing_fresh" : "nothing_found");
+    report(trace.found.length ? "nothing fresh: what it found was already sent, past or set aside" : "nothing found");
     return { queued: false };
   }
 
@@ -727,6 +741,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     if (found.some((f) => endsBeforeNextPick(f.match, zone))) {
       await import("./sweepShadow.js").then((m) => m.rerunPickerForUrgentFind(candidate.userId)).catch((err: any) => console.error("picker rerun for an urgent find failed (non-fatal):", err?.message ?? err));
     }
+    report("in the pool for the picker");
     return { queued: false, fed: true };
   }
 
@@ -744,6 +759,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // and a person with a single ask still gets every tier that has something.
   const coveredTiers = new Set<number>(await waitingOfferTiers(candidate.userId));
   let queuedAny = false;
+  let queuedCount = 0;
 
   for (const item of pending) {
     if (item.unread) continue; // held: its date isn't known yet (services/workingSet.ts)
@@ -808,13 +824,18 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       await log("act", "queued", { queued: { name: item.match.name, tier: item.match.tier, date }, skipped });
       coveredTiers.add(item.match.tier);
       queuedAny = true;
+      queuedCount++;
       continue;
     }
     skipped.push({ name: item.match.name, why: "already sent or decided" });
   }
 
-  if (queuedAny) return { queued: true };
+  if (queuedAny) {
+    report(`queued ${queuedCount}`, queuedCount);
+    return { queued: true };
+  }
   await log("skip", "nothing_queued", { skipped });
+  report(`nothing queued: ${skipped.map((s) => `${s.name} (${s.why})`).join("; ").slice(0, 300) || "nothing ready"}`);
   return { queued: false };
 }
 
@@ -1000,5 +1021,7 @@ export async function surfaceNewAsksNow(userId: string): Promise<void> {
       console.error(`surfaceNewAsksNow failed for ${userId} (non-fatal):`, err?.message ?? err);
     }
   }
+  // What a new ask's first search put in the pool gets the picker now, not at the next sweep (sweepShadow.ts runPickerAfterSweep).
+  if (rows.length) await import("./sweepShadow.js").then((S) => S.runPickerAfterSweep(userId, "new_ask")).catch((err: any) => console.error("picker after a new ask's search failed (non-fatal):", err?.message ?? err));
 }
 

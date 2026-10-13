@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && npm run build:client",
-    "build:client": "esbuild src/client/results.ts src/client/prompt.ts src/client/phone.ts src/client/checklist.ts src/client/login.ts --bundle --outdir=public --platform=browser --format=iife --target=es2020",
+    "build:client": "esbuild src/client/results.ts src/client/prompt.ts src/client/phone.ts src/client/checklist.ts src/client/login.ts src/client/sweeps.ts --bundle --outdir=public --platform=browser --format=iife --target=es2020",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/co-test/src/server.js"
   },

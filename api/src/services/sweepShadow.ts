@@ -28,7 +28,11 @@ export const shadowKey = (name: string, date: string | null) => `${norm(name)}|$
 // decides WHAT is sent and the queue decides HOW. The per-ask sweep only feeds the backlog (eventSurfacingSweep.ts
 // pickerDecides); each "send" verdict is queued through the same send step as every find (queuePickedOffer). co-test only.
 export const pickerLive = () => reviewEnabled();
-export const pickerUserIds = (env: NodeJS.ProcessEnv = process.env) => shadowUserIds(env);
+// Every member since 2026-10-13 (Royce: "turn it on for all members, but not as a once-a-day 10am gate. The picker runs after each sweep
+// completes for a member (floor and hourly) ... Your account keeps its existing 10am review behavior"): the shadow accounts
+// (shadowUserIds) keep the 10am run; everyone else's picker runs after each of their sweeps (runPickerAfterSweep).
+export const pickerUserIds = async (_env: NodeJS.ProcessEnv = process.env): Promise<string[]> =>
+  (await pool.query(`SELECT id FROM users WHERE archived_at IS NULL AND phone_number IS NOT NULL AND phone_number NOT LIKE '%#%' AND identity_captured = true AND invite_verified = true`)).rows.map((r: any) => String(r.id));
 
 export async function shadowUserIds(env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
   const ids = (env.SWEEP_SHADOW_USER_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -160,7 +164,7 @@ export const URGENT_PICK_RUNS_PER_DAY = 3;
 // trigger "retry": the hourly retry (jobs/index.ts) of a day whose run errored, or never ran. A day that keeps failing stops after
 // PICK_ERRORS_PER_DAY errors, so a failure that won't clear doesn't pay for a picker run every hour.
 export const PICK_ERRORS_PER_DAY = 3;
-export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" | "retry" } = {}): Promise<ShadowRun | null> {
+export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" | "retry" | "after_sweep" } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
   const zone = await memberZone(userId);
@@ -176,7 +180,9 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2 AND action = 'error'`, [userId, today]);
     if (Number(n) >= PICK_ERRORS_PER_DAY) return null;
   }
-  if (done.length && !opts.dryRun) {
+  // After a sweep (runPickerAfterSweep), the picker runs again whenever the pool changed: not once a day (the unchanged check below
+  // skips it cheaply when nothing new came in).
+  if (done.length && !opts.dryRun && opts.trigger !== "after_sweep") {
     if (opts.trigger !== "urgent_find") return null;
     const [{ n }] = await q(`SELECT COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND proposal->>'day' = $2`, [userId, today]);
     if (Number(n) >= URGENT_PICK_RUNS_PER_DAY + 1) return null;
@@ -462,6 +468,21 @@ export async function rerunPickerForTaste(userId: string): Promise<void> {
   // Only for members the daily picker serves (review of #132: anyone saving a taste got a paid picker run).
   if (!reviewEnabled() || !(await shadowUserIds()).includes(userId)) return;
   await runSweepShadow(userId).catch((err: any) => console.error(`picker rerun after taste failed for ${userId} (non-fatal):`, err?.message ?? err));
+}
+
+// The picker for one member, after one of their sweeps finishes (the 9am floor, the hourly ask sweep, the goal sweep), so a find from
+// noon never waits until tomorrow. The shadow accounts keep their 10am review (and its urgent reruns) instead. A failure is logged as
+// that member's picker error; their next sweep runs it again.
+export async function runPickerAfterSweep(userId: string, after: "daily" | "hourly" | "goal" | "call" | "new_ask"): Promise<void> {
+  if (!pickerLive()) return;
+  if (await shadowUserIds().then((ids) => ids.includes(userId)).catch(() => true)) return;
+  await runSweepShadow(userId, new Date(), { trigger: "after_sweep" }).then((r) => {
+    // Counted for the daily rollup (how often the picker runs after sweeps, to set a cap from).
+    if (r && !r.skipped) void recordDecision({ layer: 5, decision: "sweep.picker_after", userId, outcome: r.error ? "skip" : "act", action: r.error ? "error" : "ran", proposal: { after, day: r.day } });
+  }).catch(async (err: any) => {
+    console.error(`picker after the ${after} sweep failed for ${userId} (non-fatal, runs again after their next sweep):`, err?.message ?? err);
+    await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: `the picker after the ${after} sweep failed: ${String(err?.message ?? err).slice(0, 200)}`, proposal: { after } });
+  });
 }
 
 export async function runSweepShadowAll(now = new Date(), trigger?: "retry"): Promise<void> {

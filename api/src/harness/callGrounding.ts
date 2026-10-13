@@ -224,6 +224,8 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
     activityPreferences: p.activity_preferences ?? null,
     cooldownCleared: true,
   });
+  // A find fed to the pool gets the picker now, not at the next sweep (review, 2026-10-13: "a find from noon never waits until tomorrow").
+  if (fed) await import("../services/sweepShadow.js").then((S) => S.runPickerAfterSweep(userId, "call")).catch((err: any) => console.error("picker after a call promise failed (non-fatal):", err?.message ?? err));
   const result = queued || fed
     ? `Looked into "${what}" after the call, as Co said it would, and found something; ${fed ? "Co's daily pick decides whether it goes out" : "it's queued to send"}.`
     : `Looked into "${what}" after the call, as Co said it would, and found nothing good enough to send yet.`;
