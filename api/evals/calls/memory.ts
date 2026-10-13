@@ -64,7 +64,7 @@ const NOW = new Date("2026-10-11T18:00:00Z");
 // ---------------------------------------------------------------- 3. mid-call freshness, after the cache breakpoint
 {
   check("the turn note carries the stop-suggesting list as it stands now", /never to suggest "crypto events"/.test(CT.avoidNote(["crypto events"]) ?? "") && CT.avoidNote([]) === null && CT.avoidNote(undefined) === null);
-  check("it goes in the turn note (past the cache breakpoint), never the cached system prompt", /turnNote: \[picked\.updateTask \? taskFactNote\(i\.turnWords, i\.member\.tasks\) : null, avoidNote\(i\.member\.avoid\)\]/.test(src("services/callTools.ts")) && /if \(co\.turnNote\) req\.messages\[req\.messages\.length - 1\]\.content\.push/.test(src("services/callLlmProxy.ts")));
+  check("it goes in the turn note (past the cache breakpoint), never the cached system prompt", /turnFacts: \{ turnWords: i\.turnWords, tasks: i\.member\.tasks, avoid: i\.member\.avoid, canWriteTasks: !!picked\.updateTask \}/.test(src("services/callTools.ts")) && /\[t\.canWriteTasks \? taskFactNote\(t\.turnWords, t\.tasks\) : null, avoidNote\(t\.avoid\)\]/.test(src("brain/index.ts")) && /if \(decision\.turnNote\) req\.messages\[req\.messages\.length - 1\]\.content\.push/.test(src("services/callLlmProxy.ts")));
   check("re-read after any tool acts, from the record's one reader", /realKnowledgeDeps\.limits\(userId\)/.test(src("services/callTools.ts")) && /if \(userId\) memberOnCall\(callKey, userId, true\)/.test(src("routes/callLlm.ts")));
 }
 

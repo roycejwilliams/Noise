@@ -234,6 +234,41 @@ const NOW = new Date("2026-10-06T04:48:00Z");
   pool.query = realQuery;
 }
 
+// ======== calls (cutover 3): each turn's decision binds the call brain's endpoint
+{
+  const P = await import("../../src/services/callLlmProxy.js");
+  const say = (t: string) => [
+    { type: "content_block_start", index: 0, content_block: { type: "text" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } },
+    { type: "content_block_stop", index: 0 },
+  ];
+  const endCall = [{ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "e1", name: "end_call" } }, { type: "content_block_stop", index: 0 }];
+  const turn = async (sys: string, msgs: [string, string][], script: any[][], tools: any = null) => {
+    const decisions: any[] = [], spoken: string[] = [], reqs: any[] = [];
+    let n = 0;
+    const chunks: any[] = [];
+    const body = { messages: [{ role: "system", content: sys }, ...msgs.map(([role, content]) => ({ role, content }))], tools: [{ type: "function", function: { name: "end_call", parameters: {} } }] };
+    for await (const c of P.runCallLlm(body as any, { stream: (r: any) => { reqs.push(r); const ev = script[Math.min(n++, script.length - 1)]; return (async function* () { for (const e of ev) yield e; })(); }, onSpoken: (x: string) => spoken.push(x), onDecision: (d: any) => decisions.push(d), tools })) chunks.push(c);
+    const ended = chunks.some((c) => (c.choices[0].delta.tool_calls ?? []).some((t: any) => t.function?.name === "end_call"));
+    return { d: decisions[0], spoken, reqs, ended };
+  };
+  const OUT = "This call is outbound: you called them.";
+  const act = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "The dinner is next week."]], [say("Next week works. Which night? And how many people?")]);
+  check("call act: one question a turn is ruled out past the first, and the second isn't spoken", act.d?.kind === "act" && !!B.ruledOut(act.d, "second_question") && act.spoken.join(" ") === "Next week works. Which night?");
+  const ask = await turn("This call is inbound: they called you.", [["assistant", "Hey, it's Co."], ["user", "Hey, just catching up."]], [say("Good to hear from you. What's on your mind? I also found a dinner spot.")]);
+  check("call ask: an inbound first reply is judged ask and ends at its question (they lead)", ask.d?.kind === "ask" && !!B.ruledOut(ask.d, "after_question") && !/dinner spot/.test(ask.spoken.join(" ")));
+  const safe = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "I don't feel safe right now."]], [say("I'm here. Are you safe right now? Is someone with you?")]);
+  check("call act on a safety call: no question limit (both questions spoken)", safe.d?.guards.includes("safety") && !B.ruledOut(safe.d, "second_question") && /Is someone with you\?/.test(safe.spoken.join(" ")));
+  const held = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "Yeah the dinner is next week."]], [endCall, say("Next week works.")]);
+  check("call: end_call is ruled out before they close, and the call isn't ended", !!B.ruledOut(held.d, "end_call") && !held.ended);
+  const bye = await turn(OUT, [["assistant", "Talk soon."], ["user", "Ok, bye!"]], [endCall]);
+  check("call: after their goodbye end_call isn't ruled out, and the call ends", !B.ruledOut(bye.d, "end_call") && bye.ended);
+  const drained = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "Honestly I'm exhausted, rough week."]], [say("That sounds heavy.")], { defs: [], names: new Set(), note: "TOOLS GUIDE", run: async () => ({ ok: true }), turnFacts: { turnWords: "Honestly I'm exhausted, rough week.", tasks: [], avoid: ["crypto events"], canWriteTasks: false } });
+  const sys = drained.reqs[0].system.map((x: any) => x.text).join("\n");
+  const last = drained.reqs[0].messages[drained.reqs[0].messages.length - 1].content.map((c: any) => c.text).join("\n");
+  check("call: the turn's notes come from the decision (the drained note and tools guide in the system, the stop list after their words)", /# This turn: they told you how they are/.test(sys) && /TOOLS GUIDE/.test(sys) && /never to suggest "crypto events"/.test(last) && !/crypto events/.test(sys) && drained.d.turnNote === B.avoidNote(["crypto events"]));
+}
+
 console.log = quiet;
 console.error = quietErr;
 console.log(`${total - failed}/${total} passed`);

@@ -137,6 +137,8 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
         if (userId) recordDecision({ layer: 8, decision: "call.offer_unsourced", userId, outcome: "skip", action: "dropped_sentence", proposal: { sentence: s.slice(0, 240) }, reason: why }).catch(() => {});
       },
       onFirstText: (t) => { timing = t; },
+      // The brain's judgment of this turn (brain/index.ts judgeCallTurn), logged as brain.call without waiting.
+      onDecision: (d) => { if (userId) import("../brain/index.js").then((B) => B.logCallTurn(userId, d)).catch(() => {}); },
     };
     // The call's instructions through the live guards, every turn (services/whatCoKnows.ts guardCallMessages).
     if (userId) {

@@ -45,6 +45,10 @@
 // Guards stay functions with veto power. The brain names the ones in force so the decision log shows them, and never bypasses
 // them: grounding (replyGrounding.groundReply, callGrounding), tool limits and the member's yes (agent/toolGuard.ts), outreach
 // caps and quiet hours (proactive), pause (proactivePause.ts), privacy (memberSafeMemories, no cross-member leaks), safety.
+// Calls (cutover 3) own each turn's judgment (judgeCallTurn): what the turn is told (the drained note, the tools guide and records,
+// the stop list and a fact to write down) and what it rules out (a second question, anything after the question when they lead,
+// ending the call before they close). services/callLlmProxy.ts reads the facts off the request and enforces the decision; its
+// spoken guards (the source check, sends not yet made, "glad you called" on Co's call, insisting, stock lines) keep their veto.
 // Migration: one surface at a time, each cutover its own commit, old assembly kept as the brain's implementation detail until
 // verified: (1) text replies, (2) the call briefing, (3) calls. Proactive drafts and the sweep picker come after.
 // Text replies (cutover 1) own the turn's judgment calls: feedback to save, the list vs. "what are you", a repeated text answered
@@ -66,6 +70,8 @@ import { ABOUT_CO_INSTRUCTION, feedbackInstruction, type TurnRead } from "../ser
 import type { TurnContext } from "../services/turnContext.js";
 import type { VoiceFinds } from "../services/voiceFinds.js";
 import { DateTime } from "luxon";
+import { DRAINED_NOTE } from "../services/memberState.js";
+import { mentionsIn } from "../services/offerGuard.js";
 
 export type DecisionKind = "act" | "ask" | "wait" | "deliver";
 
@@ -87,7 +93,10 @@ export type GuardName = keyof typeof GUARDS;
 //   steer        the cold-start steering question is withdrawn (replyGrounding withdrawColdStartSteer)
 //   first_read   a new member's first read is withdrawn (replyGrounding withdrawDoorMoment)
 //   event_offer  the call is handed no finds: its findsNow is the don't-offer line, so the spoken offer guard backs no find
-export type DontSay = "tapback" | "call_offer" | "steer" | "first_read" | "event_offer";
+//   second_question  a call turn says one question; a later one is not spoken (services/callLlmProxy.ts say)
+//   after_question   a call turn ends at its question: nothing after it is spoken (they lead)
+//   end_call         the call isn't ended by Co: they haven't closed it (Co never hangs up first)
+export type DontSay = "tapback" | "call_offer" | "steer" | "first_read" | "event_offer" | "second_question" | "after_question" | "end_call";
 export type Rule = { what: DontSay; why: string; tell?: string };
 
 export type Decision = {
@@ -249,4 +258,86 @@ export function fallbackBriefing(now: Date, why: string): BriefingDecision {
 // briefing or the fallback. A briefing built for a call that never connects is never logged. Never waits.
 export function logBriefing(userId: string, d: BriefingDecision): void {
   recordDecision({ layer: 3, decision: "brain.briefing", userId, outcome: d.kind === "wait" ? "skip" : "act", action: d.kind, proposal: { why: d.why, source: d.source, guards: d.guards, dontSay: d.dontSay.map((r) => r.what), offered: !ruledOut(d, "event_offer") } }).catch(() => {});
+}
+
+// ---------- Calls (cutover 3): each turn of a call
+// The facts of the turn, read off the call's request in services/callLlmProxy.ts (the brain reads no request itself).
+export type CallTurnPicture = {
+  userId?: string | null;
+  // Their last words said they are tired, stressed or drained (services/memberState.ts memberStateSignal), on this turn's first request.
+  drained: boolean;
+  // The call has touched their safety (callLlmProxy.ts safetyCall): no question limit.
+  safetyCall: boolean;
+  // An inbound call's first reply, and their first words don't ask Co anything: they lead.
+  inboundFirst: boolean;
+  // Their last words close the call, or Co already closed its last turn and this is their reply.
+  closed: boolean;
+  // Co's tools on this call (services/callTools.ts): the guide and Co's records, and this turn's facts for its note.
+  tools?: { note?: string | null; turnWords: string; tasks: { id: number; goal: string }[]; avoid?: string[]; canWriteTasks: boolean } | null;
+  // A turn note given as is (tests), in place of the one written from the tools' facts.
+  givenTurnNote?: string | null;
+};
+export type CallTurnDecision = Decision & {
+  // Added to the cached system prompt, and after their words this turn (past the cache breakpoint).
+  systemNote?: string;
+  turnNote: string | null;
+};
+
+// Pure: what this call turn may do, and what it is told.
+export function judgeCallTurn(p: CallTurnPicture): CallTurnDecision {
+  const dontSay: Rule[] = [];
+  // One question a turn, unless the call has touched their safety.
+  if (!p.safetyCall) dontSay.push({ what: "second_question", why: "one question a turn" });
+  if (p.inboundFirst && !p.safetyCall) dontSay.push({ what: "after_question", why: "an inbound call's first reply: they lead" });
+  if (!p.closed) dontSay.push({ what: "end_call", why: "Co never hangs up first: they haven't said goodbye" });
+  const kind: DecisionKind = p.inboundFirst && !p.safetyCall ? "ask" : "act";
+  const why = p.safetyCall
+    ? "the call has touched their safety: stay with them"
+    : p.drained
+      ? "they told Co how they are: stay with them"
+      : p.inboundFirst
+        ? "they called: ask what's on their mind and let them lead"
+        : "answer what they said and act on it";
+  const systemNote = [p.drained ? DRAINED_NOTE : "", p.tools?.note ?? ""].filter(Boolean).join("\n\n") || undefined;
+  const t = p.tools;
+  const turnNote = p.givenTurnNote ?? (t ? [t.canWriteTasks ? taskFactNote(t.turnWords, t.tasks) : null, avoidNote(t.avoid)].filter(Boolean).join("\n") || null : null);
+  return {
+    surface: "call",
+    kind,
+    why,
+    instructions: [systemNote ?? "", turnNote ?? ""].filter(Boolean),
+    guards: ["grounding", "privacy", "tool_limits", ...(p.safetyCall ? (["safety"] as const) : [])],
+    dontSay,
+    systemNote,
+    turnNote,
+  };
+}
+
+// Logged per turn without waiting (the voice never waits on it).
+export function logCallTurn(userId: string, d: CallTurnDecision): void {
+  recordDecision({ layer: 3, decision: "brain.call", userId, outcome: "act", action: d.kind, proposal: { why: d.why, guards: d.guards, dontSay: d.dontSay.map((r) => r.what), turnNote: !!d.turnNote } }).catch(() => {});
+}
+
+// Pure: the stop-suggesting list as it stands right now, for this turn only (after the cache breakpoint, so the call's cached prefix is
+// untouched). The call's opening context has it too; this keeps it current when it changes during the call.
+export function avoidNote(avoid: string[] | undefined): string | null {
+  return avoid?.length ? `(Co's note, not their words: right now they've asked you never to suggest ${avoid.map((a) => `"${a}"`).join(", ")}. No need to mention it.)` : null;
+}
+
+// Pure: the names and numbers in their words (each sentence's own first word is only a capital, so sentences are read apart).
+export function specificsTheyGave(turnWords: string): string[] {
+  const out = new Set<string>();
+  for (const s of turnWords.split(/(?<=[.!?])\s+/)) for (const m of mentionsIn(s)) if (m.kind === "name" || m.kind === "time") out.add(m.text);
+  for (const m of turnWords.match(/\$?\d[\d,.]*(?:\s?(?:k|%|people|guests|pm|am))?/gi) ?? []) out.add(m.replace(/[.,]$/, ""));
+  return [...out].filter((x) => x.length >= 2);
+}
+
+const MONTH_OR_DAY = /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+// Pure: this turn's note, after their words. Only when a task is open and their words carry a name, number or date.
+export function taskFactNote(turnWords: string, tasks: { id: number; goal: string }[]): string | null {
+  if (!tasks.length) return null;
+  const given = specificsTheyGave(turnWords);
+  if (!given.length && !MONTH_OR_DAY.test(turnWords)) return null;
+  const what = given.length ? given.map((g) => `"${g}"`).join(", ") : "a date";
+  return `(A note from Co's own records, not their words: they just gave you ${what}. If that belongs to one of your open tasks, write it on that task with updateTask in this turn, in their words, then answer. Saying it back doesn't write it down.)`;
 }
