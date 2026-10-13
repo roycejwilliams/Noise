@@ -626,7 +626,12 @@ async function settleNewFinds(userId: string, items: BacklogItem[], today: strin
   for (const it of items) {
     if (exited.has(exitKey(it.match))) continue;
     const known = !!formOf(it.match as any);
-    if (!known && (reads >= CLASSIFY_PER_SWEEP || Date.now() - started >= CLASSIFY_SWEEP_MS)) {
+    // Out of time for this run: held, read on a later pass (same as over the count).
+    if (!known && Date.now() - started >= CLASSIFY_SWEEP_MS) {
+      out.push({ ...it, unread: { days: [], why: "unknown" } });
+      continue;
+    }
+    if (!known && reads >= CLASSIFY_PER_SWEEP) {
       out.push({ ...it, unread: { days: [], why: "unknown" } });
       continue;
     }
