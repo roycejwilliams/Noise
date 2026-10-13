@@ -6,7 +6,7 @@
 //   - no source selectivity and no empty-streak backoff here; and it leaves the ask lifecycle alone: it never moves an ask's
 //     last_attempted_at or its empty-run count (eventSurfacingSweep.ts), so the hourly sweeps run exactly as before, on top;
 //   - finds go to the pool (the event backlog), and the picker chooses what sends, right after (sweepShadow.ts runPickerAfterSweep;
-//     the 10am review account keeps its 10am run). Nothing here picks or sends itself;
+//     the 10am review account also keeps its 10am run). Nothing here picks or sends itself;
 //   - every ask and goal it doesn't search says why, and each run writes one summary line per member (sweep.daily);
 //   - a failed run is a failed day: logged as an error and run again on a later hour, at most DAILY_SWEEP_ERRORS_PER_DAY a day.
 // Its own cron (jobs/index.ts, :05), never overlapping itself, and a member is claimed while a sweep works on them (claimMember),

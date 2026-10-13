@@ -29,8 +29,8 @@ export const shadowKey = (name: string, date: string | null) => `${norm(name)}|$
 // pickerDecides); each "send" verdict is queued through the same send step as every find (queuePickedOffer). co-test only.
 export const pickerLive = () => reviewEnabled();
 // Every member since 2026-10-13 (Royce: "turn it on for all members, but not as a once-a-day 10am gate. The picker runs after each sweep
-// completes for a member (floor and hourly) ... Your account keeps its existing 10am review behavior"): the shadow accounts
-// (shadowUserIds) keep the 10am run; everyone else's picker runs after each of their sweeps (runPickerAfterSweep).
+// completes for a member (floor and hourly)"; later: "I want the sweeps to run for everyone"): everyone's picker runs after each of
+// their sweeps (runPickerAfterSweep), and the shadow accounts (shadowUserIds) also keep their 10am run.
 export const pickerUserIds = async (_env: NodeJS.ProcessEnv = process.env): Promise<string[]> =>
   (await pool.query(`SELECT id FROM users WHERE archived_at IS NULL AND phone_number IS NOT NULL AND phone_number NOT LIKE '%#%' AND identity_captured = true AND invite_verified = true`)).rows.map((r: any) => String(r.id));
 
@@ -471,11 +471,10 @@ export async function rerunPickerForTaste(userId: string): Promise<void> {
 }
 
 // The picker for one member, after one of their sweeps finishes (the 9am floor, the hourly ask sweep, the goal sweep), so a find from
-// noon never waits until tomorrow. The shadow accounts keep their 10am review (and its urgent reruns) instead. A failure is logged as
-// that member's picker error; their next sweep runs it again.
+// noon never waits until tomorrow. Everyone, the 10am review account too (Royce, 2026-10-13: "I want the sweeps to run for everyone");
+// that account's 10am run stays on top. A failure is logged as that member's picker error; their next sweep runs it again.
 export async function runPickerAfterSweep(userId: string, after: "daily" | "hourly" | "goal" | "call" | "new_ask"): Promise<void> {
   if (!pickerLive()) return;
-  if (await shadowUserIds().then((ids) => ids.includes(userId)).catch(() => true)) return;
   await runSweepShadow(userId, new Date(), { trigger: "after_sweep" }).then((r) => {
     // Counted for the daily rollup (how often the picker runs after sweeps, to set a cap from).
     if (r && !r.skipped) void recordDecision({ layer: 5, decision: "sweep.picker_after", userId, outcome: r.error ? "skip" : "act", action: r.error ? "error" : "ran", proposal: { after, day: r.day } });
