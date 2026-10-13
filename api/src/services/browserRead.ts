@@ -240,7 +240,7 @@ export async function renderPng(html: string, size: { width: number; height: num
     const pg = await context.newPage();
     await pg.setContent(html, { waitUntil: "load", timeout: BROWSER_LIMITS.pageMs });
     await Promise.race([pg.evaluate(() => (document as any).fonts?.ready), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
-    const png = await pg.screenshot({ type: "png", clip: { x: 0, y: 0, width: size.width, height: size.height } });
+    const png = await pg.screenshot({ type: "png", clip: { x: 0, y: 0, width: size.width, height: size.height }, timeout: 8_000 });
     return png.length > 1_000 ? Buffer.from(png) : null;
   } catch (err: any) {
     if (/Executable doesn't exist|Failed to launch|ENOENT/i.test(err?.message ?? "")) failedAt = Date.now();

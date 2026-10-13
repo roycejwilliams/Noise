@@ -62,11 +62,11 @@ export function previewDescription(data: StoredCoPage["data"]): string {
 const styleOf = (data: StoredCoPage["data"]): DeckStyle | null => (isDeckData(data) ? (data as DeckData).style : ((data as CoPageData).style ?? null));
 const titleOf = (data: StoredCoPage["data"]): string => String((data as { title?: string }).title ?? "");
 
-// Pure: the image's tag: the artifact, its version, its title and its look. Any change gives a new address.
-export function previewTag(page: Pick<StoredCoPage, "id" | "version" | "data">): string {
+// Pure: the image's tag: the artifact, its version, its title, its look and the name on it. Any change gives a new address.
+export function previewTag(page: Pick<StoredCoPage, "id" | "version" | "data">, name: string | null): string {
   const st = styleOf(page.data);
   return createHash("sha256")
-    .update(JSON.stringify([page.id, page.version, titleOf(page.data), isDeckData(page.data) ? "deck" : "page", st ?? null]))
+    .update(JSON.stringify([page.id, page.version, titleOf(page.data), isDeckData(page.data) ? "deck" : "page", st ?? null, name ?? null]))
     .digest("base64url")
     .slice(0, 16);
 }
@@ -203,13 +203,35 @@ function drop(k: string): void {
 export function clearPreviewCache(): void {
   cache.clear();
   inflight.clear();
+  failed.clear();
   cacheBytes = 0;
 }
 
+// A card whose render failed (Chrome missing or hung, the font host stalled) isn't tried again for a while (review, 2026-10-12):
+// without this, every crawler hit and image fetch, or a spoofed crawler, would start a fresh render and hold one of the two shared
+// browser slots that Co's web reads and PDF exports need.
+export const OG_FAIL_MS = 5 * 60_000;
+const failed = new Map<string, number>();
+const keyOf = (page: StoredCoPage, name: string | null) => `${page.id}:${previewTag(page, name)}`;
+// Pure over the cache: where a card stands. "failed" until its back-off ends.
+export function previewState(page: StoredCoPage, name: string | null, now = Date.now()): "ready" | "rendering" | "failed" | "none" {
+  const key = keyOf(page, name);
+  if (cache.has(key)) return "ready";
+  if (inflight.has(key)) return "rendering";
+  const until = failed.get(key);
+  if (until !== undefined) {
+    if (until > now) return "failed";
+    failed.delete(key);
+  }
+  return "none";
+}
+
 // The card for one live artifact: from the cache, else rendered once (concurrent asks share one render). Null when Chrome isn't
-// there or the render failed (the route answers 404, and the preview falls back to the title alone).
-export async function previewPng(page: StoredCoPage, name: string | null, render: Render = realRender): Promise<Buffer | null> {
-  const key = `${page.id}:${previewTag(page)}:${createHash("sha256").update(name ?? "").digest("base64url").slice(0, 8)}`;
+// there or the render failed, and then null at once, with no render, until the back-off ends.
+export async function previewPng(page: StoredCoPage, name: string | null, render: Render = realRender, now = Date.now()): Promise<Buffer | null> {
+  const key = keyOf(page, name);
+  const state = previewState(page, name, now);
+  if (state === "failed") return null;
   const hit = cache.get(key);
   if (hit) {
     cache.delete(key);
@@ -221,7 +243,12 @@ export async function previewPng(page: StoredCoPage, name: string | null, render
   const job = (async () => {
     const html = previewCardHtml({ title: titleOf(page.data), kind: isDeckData(page.data) ? "deck" : "page", name, style: styleOf(page.data) });
     const png = await render(html, { ...OG_SIZE }).catch(() => null);
-    if (!png || png.length > OG_CACHE_LIMITS.maxImage) return null;
+    if (!png || png.length > OG_CACHE_LIMITS.maxImage) {
+      failed.set(key, now + OG_FAIL_MS);
+      while (failed.size > 512) failed.delete(failed.keys().next().value as string);
+      return null;
+    }
+    failed.delete(key);
     put(key, png, page.id);
     return png;
   })().finally(() => inflight.delete(key));
