@@ -350,6 +350,22 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 1 },
     use: "Give a new member their first read, once, when you've heard enough to say back what they're after. understood: one line of what you understood they're after, only from what they told you, in their words. lookFor: the one thing you'll look for first, in their own words. A word in either that they never used is refused. theirWords: their own words it comes from, copied exactly. Call it before sendReply. It schedules your first look and gives you the time you'll text them by, in their zone: say that time, never what you'll find. If it says no time can be promised, don't name one.",
   },
+  // Goal ownership (services/goalOwnership.ts, 2026-10-13): a goal, a checklist or a plan they hand Co.
+  {
+    id: "goal_take_on",
+    can: "When they hand Co a goal, a checklist or a plan, Co can own the pieces it can do itself (research, drafts, watching for things, a reminder), then check back in at a time they agree to with what it actually did.",
+    tool: "takeOnGoal",
+    limits: { perTurn: 1, perDay: 3 },
+    use: "When they hand you a goal, a checklist or a plan (pasted, or described: a launch, an event, a creative project, a move, meeting people, and admin too: taxes, expense reports, their inbox), call this first, before you reply, whatever kind of goal it is: it decides how you take it on, so never turn one down or send them elsewhere without calling it. its title in a few words, a quote of their own words handing it over, and its items, each marked who: co for a piece you could do yourself (how: research, draft, watch or reminder) or who: member for anything else. A piece that spends money, posts publicly, or contacts, emails or commits anyone other than them is who: member (you can offer to draft it for them to send). If they named the dated moment it's all for (the show, the launch, a decision day), give it as moment with their words. If the goal is in a file they sent and, in this message, they hand it over for you to work through with them (\"hold me accountable on this\"), pass file and leave items out: you get only its item titles, and the file stays sealed otherwise; if they didn't hand it over, never describe or use what's in it. It tells you which pieces you may offer. Then, in the same reply, offer the split once, naturally, in your own words, like a friend who's good at this: what you'd take, what stays with them. Never a form, a numbered list or a checklist back at them, never a dashboard, a tracker or progress talk. For admin (taxes, expense reports, their inbox), it gives you one thing to offer, a reminder: open your reply with that offer, warmly and in your own words. Nothing starts until they pick. If a check-in time would help, suggest it inside the offer as a question (\"want me to check back Friday?\"), never as a promise: it's set only when they pick.",
+  },
+  {
+    id: "goal_pick",
+    can: "Co works only the pieces of a goal they said yes to, and holds a check-in or reminder only at a time it can actually schedule.",
+    tool: "pickGoalItems",
+    limits: { perTurn: 1 },
+    confirm: "their_yes",
+    use: "When they answer your split offer on a goal (its number is in what you know), pass the item numbers they handed you and, if a check-in or reminder time was agreed (yours or theirs, like \"Friday\" or \"next week\"), its words in checkIn. Only pieces you offered can be yours; the rest stay theirs. Each piece you take starts as its own work, sent to them when it lands; the check-in fires at that time with what you actually did. Only say a check-in time this returns: if it refuses the time, don't promise one. If they take nothing, don't call it: just leave their pieces with them.",
+  },
   {
     id: "task_update",
     can: "Co keeps its tasks current as they tell it things: a step done, a new detail, a change of plan or timing.",

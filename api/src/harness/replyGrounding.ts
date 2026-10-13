@@ -430,6 +430,8 @@ export async function gatherReplyFacts(
   }
   // Co's own open tasks: real scheduled work, so saying when it'll get back to them is true.
   for (const line of opts.turn?.tasks ?? []) addFact(rf, "scheduled", line);
+  // Goals they handed Co (services/goalOwnership.ts): a split waiting on their pick is known; an active goal's check-in is scheduled.
+  for (const g of opts.turn?.goals ?? []) addFact(rf, g.kind, g.text);
   // Their research briefs (services/coTasks.ts briefFactLines): one still running or held for their hours is scheduled; one that
   // finished or stopped is Co's record of what it did.
   for (const line of opts.turn?.briefs ?? []) addFact(rf, /^Co is putting together|hasn't reached them yet/.test(line) ? "scheduled" : "did_before", line);
@@ -1738,6 +1740,36 @@ const CLAIM_READ_FAILED_CHECK: GateCheck = {
   reason: "the claim check couldn't run twice; treating the draft as unverified",
 };
 
+// The binding guard for one reply (services/promiseBinding.ts). Never opens a task on a turn that kept a confidence or for a sentence
+// that names another member (the same lines trackPromise holds). Fail-safe: if the guard itself breaks, each timed-promise-shaped
+// sentence with no promise tracked this turn is treated as unbound.
+async function bindThisReply(draft: string, rf: ReplyFacts, src: GroundingSources, userId: string): Promise<{ checks: GateCheck[]; opened: { id: number; sentence: string }[]; pulled: import("../services/promiseBinding.js").Pulled[]; deferred: string[] }> {
+  const B = await import("../services/promiseBinding.js");
+  const discreet = isDiscreetTurn(rf.instructions);
+  const names = (rf.privateNames ?? []).filter(Boolean);
+  const namesMember = (s: string) => names.some((n) => new RegExp(`\\b${n.split(/[^\w]+/).filter(Boolean).join("[-\\s]?")}\\b`, "i").test(s));
+  try {
+    const deps = await B.realBindDeps(userId, src.message);
+    // A call promise with no scheduled call goes to the claim read (it sees scheduled-call facts); cut below if that read didn't run.
+    deps.deferCallsToClaimRead = true;
+    const open = deps.openPromise;
+    deps.openPromise = (o) => (discreet || namesMember(o.sentence) ? Promise.resolve({ ok: false as const, why: discreet ? "a turn that kept a confidence" : "it names a member it can't" }) : open(o));
+    const r = await B.bindPromises(draft, deps);
+    for (const v of r.verdicts) {
+      if (!v.bound) continue;
+      if (v.how === "opened") addFact(rf, "did_this_turn", `Started task #${v.entry}: Keep your promise: "${v.sentence.slice(0, 170)}". It's on Co's schedule to fire by the time it says.`);
+      if (v.how === "pulled") addFact(rf, "scheduled", `Co moved task #${v.entry} so it fires in time for what it told them: "${v.sentence.slice(0, 170)}".`);
+    }
+    if (r.verdicts.length) recordDecision({ layer: 3, decision: "promise.binding", userId, outcome: r.checks.length ? "skip" : "act", action: r.read ? "read" : "unread", proposal: { verdicts: r.verdicts } }).catch(() => {});
+    return { checks: r.checks, opened: r.opened, pulled: r.pulled, deferred: r.deferred };
+  } catch (err: any) {
+    console.error("replyGrounding: promise binding failed (fail-safe, unbound promises cut):", err?.message ?? err);
+    const tracked = rf.facts.some((f) => f.kind === "did_this_turn" && STARTED_WORK.test(f.text));
+    const checks = tracked ? [] : B.timedPromiseShaped(draft).map((s) => ({ name: "claim_future_promise", pass: false, reason: `future_promise: "${s}" (the promise check couldn't run, so nothing vouches that it's scheduled)` }));
+    return { checks, opened: [], pulled: [], deferred: [] };
+  }
+}
+
 export async function groundReply(
   rawDraft: string,
   rf: ReplyFacts,
@@ -1759,7 +1791,14 @@ export async function groundReply(
     }
     recordDecision({ layer: 3, decision: "promise.tracked", userId: opts.userId, outcome: tracked.ok ? "act" : "skip", action: tracked.ok ? `task:${tracked.task.id}` : tracked.why, proposal: { sentence: tracked.ok ? tracked.sentence : promiseSentence(draft) } }).catch(() => {});
   }
-  const first = await check(draft, rf, src);
+  // A promise with a time binds to the ledger, or it isn't said (services/promiseBinding.ts, 2026-10-13): a Haiku read finds each
+  // timed promise, code checks an entry fires by then, binds it when it can, and fails the rest as unsupported future promises.
+  const binding = opts.userId && opts.record !== false ? await bindThisReply(draft, rf, src, opts.userId) : { checks: [] as GateCheck[], opened: [] as { id: number; sentence: string }[], pulled: [] as import("../services/promiseBinding.js").Pulled[], deferred: [] as string[] };
+  const checked = await check(draft, rf, src);
+  // A call promise left to the claim read stands only if that read actually ran (review: never exempt by the read's label alone).
+  const unvouchedCalls: GateCheck[] = checked.modelOk ? [] : binding.deferred.map((s) => ({ name: "claim_future_promise", pass: false, reason: `future_promise: "${s}" (no scheduled call fires by then, and the claim check couldn't run)` }));
+  const extra = [...binding.checks, ...unvouchedCalls];
+  const first = extra.length ? { ...checked, checks: [...checked.checks, ...extra] } : checked;
   const firstCheckMs = Date.now() - started;
   const stages: NonNullable<GroundingResult["stages"]> = {};
   let result: GroundingResult;
@@ -1854,6 +1893,21 @@ export async function groundReply(
   if (promiseTaskId !== null && opts.userId && !promiseStays(result.final)) {
     await dropPromise(opts.userId, promiseTaskId);
     recordDecision({ layer: 3, decision: "promise.dropped", userId: opts.userId, outcome: "skip", action: `task:${promiseTaskId}`, reason: "the promise was not in the final text" }).catch(() => {});
+  }
+
+  // An entry the binding pulled earlier for a sentence that was then cut goes back to when it was (review item 11).
+  for (const p of binding.pulled) {
+    if (opts.userId && !norm(result.final).includes(norm(p.sentence).replace(/[.!?]+$/, ""))) {
+      const T = await import("../services/coTasks.js");
+      await T.scheduleTaskAt(opts.userId, p.id, new Date(p.previous), p.plan ?? "").catch(() => null);
+    }
+  }
+  // A promise task the binding opened has to be in the text that goes out too.
+  for (const o of binding.opened) {
+    if (opts.userId && !norm(result.final).includes(norm(o.sentence).replace(/[.!?]+$/, ""))) {
+      await dropPromise(opts.userId, o.id);
+      recordDecision({ layer: 3, decision: "promise.dropped", userId: opts.userId, outcome: "skip", action: `task:${o.id}`, reason: "the bound promise was not in the final text" }).catch(() => {});
+    }
   }
 
   // Promises and "I can"s held back, as their own typed row (services/guardDrops.ts): counted, no text.

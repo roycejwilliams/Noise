@@ -894,6 +894,15 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { ref: item.ref, was: `file ${n}`, now: null }, checks: [{ name: "removal_asked", pass: true }] });
   }
   for (const d of decisions) await recordDecision(d).catch(() => {});
+  // A commitment a removal closed (services/commitmentLog.ts): released, on their own words asking for the removal, so it never shows
+  // as open forever on the team's promises view. Logged only after the change committed.
+  for (const c of cancelled) {
+    if (c.kind !== "task" || c.action !== "cancelled" || !c.task) continue;
+    const L = await import("./commitmentLog.js");
+    if (L.isCommitment(c.task)) await L.logCommitment("outcome", { userId, taskId: Number(c.id), goalId: c.task.followup?.goalId ?? null, outcome: "released", why: c.because, what: c.task.goal, source: c.task.source, theirWord: clean(o.theirWords).slice(0, 200) });
+    // Its goal, settled if that was the last thing open on it (goalOwnership.ts closeGoalIfSettled).
+    if (c.task.followup?.goalId != null) await import("./goalOwnership.js").then((G) => G.closeGoalIfSettled(userId, Number(c.task!.followup.goalId))).catch(() => false);
+  }
   if (refused.length) {
     await recordDecision({ layer: 3, decision: "knowledge.change_refused", userId, outcome: "skip", action: "refused", proposal: { refused, theirWords: clean(o.theirWords).slice(0, 300) }, checks: refused.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.ref}: ${r.why}` })) }).catch(() => {});
   }
@@ -906,7 +915,8 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
 // ---------------------------------------------------------------- what's queued on what changed
 
 // One queued thing a change took out of line (or sent back to be re-checked), for the decision log.
-export type Cancelled = { kind: "candidate" | "task" | "deferred_send" | "backlog"; id: string; what: string; action: "cancelled" | "recheck"; because: string };
+// task: the closed task's own row, so a commitment it carried is logged as closed (released, on their words) once the change commits.
+export type Cancelled = { kind: "candidate" | "task" | "deferred_send" | "backlog"; id: string; what: string; action: "cancelled" | "recheck"; because: string; task?: { kind: string; source: string; followup: any; goal: string } };
 
 // Pure: whether a queued item's own text says what changed. A removal: the removed text's own words, specific removals only (two
 // or more real words, not a place, a role or a label), as every guard. A correction: any kind, since a re-check only sends the item
@@ -970,8 +980,8 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
       if (!byId && !queuedSays(String(t.goal), a)) continue;
       done.add(k);
       if (removing) {
-        const r = await db.query(`UPDATE co_tasks SET status = 'dropped', outcome = $3, closed_at = NOW(), next_check_at = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'open'`, [t.id, userId, because.slice(0, 300)]);
-        if (r.rowCount) out.push({ kind: "task", id: String(t.id), what: String(t.goal).slice(0, 120), action: "cancelled", because });
+        const r = await db.query(`UPDATE co_tasks SET status = 'dropped', outcome = $3, closed_at = NOW(), next_check_at = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'open' RETURNING kind, source, followup, goal`, [t.id, userId, because.slice(0, 300)]);
+        if (r.rowCount) out.push({ kind: "task", id: String(t.id), what: String(t.goal).slice(0, 120), action: "cancelled", because, task: r.rows?.[0] ? { kind: String(r.rows[0].kind), source: String(r.rows[0].source), followup: r.rows[0].followup ?? null, goal: String(r.rows[0].goal) } : undefined });
       } else {
         // A task keeps going, with what's true now written on it, so its next step works from that.
         const note = JSON.stringify([{ at: new Date().toISOString(), text: `They corrected ${fieldFor(a.ref)}: now "${String(a.now).slice(0, 120)}". Work from that.` }]);

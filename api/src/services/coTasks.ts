@@ -59,6 +59,8 @@ export type CoTask = {
   // for it ("let me know when...", "keep an eye out for X", or yes to Co's offer to), whose finds are deliveries and never count
   // toward backoff; "co" when it came from Co's own promise ("you'll hear from me"), whose finds count like sweep finds.
   lookoutOrigin?: LookoutOrigin | null;
+  // How it closed, in a line (co_tasks.outcome), once it has.
+  outcome?: string | null;
 };
 export type LookoutOrigin = "member" | "co";
 
@@ -262,6 +264,7 @@ function rowTo(r: any): CoTask {
     source: r.source === "promise" ? "promise" : r.source === "lookout" ? "lookout" : "ask",
     window: r.kind === "followup" || r.kind === "research_brief" ? null : windowOf(r.followup),
     lookoutOrigin: lookoutOriginOf(r.source, r.followup),
+    outcome: r.outcome ?? null,
   };
 }
 
@@ -277,10 +280,15 @@ export async function getTask(userId: string, id: number): Promise<CoTask | null
 }
 
 // Pure: what a new task keeps in its followup JSON: its window, and a look-out's origin (always recorded; Co's unless told).
-export function followupJson(input: { source?: string; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null }): string | null {
+// A goal's piece or check-in (services/goalOwnership.ts) carries its goal: goalId, the item, and for a check-in what it is for.
+export type GoalLink = { goalId: number; goalTitle: string; item?: number; checkin?: "checkin" | "reminder"; at?: string; reminders?: string[]; moment?: GoalMoment | null };
+// The dated moment a goal is for, in their words ("the show is Nov 8"): YYYY-MM-DD, their day.
+export type GoalMoment = { date: string; words: string };
+export function followupJson(input: { source?: string; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null }): string | null {
   const f: Record<string, unknown> = {};
   if (input.window) f.window = input.window;
   if (input.source === "lookout") f.lookoutOrigin = input.lookoutOrigin ?? "co";
+  if (input.goalLink) Object.assign(f, { goalId: input.goalLink.goalId, goalTitle: input.goalLink.goalTitle.slice(0, 200), ...(input.goalLink.item != null ? { goalItem: input.goalLink.item } : {}), ...(input.goalLink.moment ? { goalMoment: input.goalLink.moment } : {}), ...(input.goalLink.checkin ? { checkin: input.goalLink.checkin, checkinAt: input.goalLink.at ?? null, reminders: input.goalLink.reminders ?? [] } : {}) });
   return Object.keys(f).length ? JSON.stringify(f) : null;
 }
 
@@ -303,8 +311,15 @@ async function underTaskLock<T>(userId: string, fn: (db: TaskDb) => Promise<T>):
   }
 }
 
-export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
-  return underTaskLock(input.userId, (db) => startTaskLocked(input, db));
+// exactAt: a check-in Co agreed to at a set moment (goalOwnership.ts), kept to that moment rather than rounded to hours.
+export async function startTask(input: { userId: string; goal: string; theirWords: string; steps: unknown; firstPlan: string; inHours: unknown; deadline?: { deadline: string; finalCheckAt: string } | null; source?: "ask" | "promise" | "lookout"; lookoutOrigin?: LookoutOrigin; window?: CommitWindow | null; goalLink?: GoalLink | null; exactAt?: Date | null }): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
+  const r = await underTaskLock(input.userId, (db) => startTaskLocked(input, db));
+  // The commitment ledger (services/commitmentLog.ts): a promise, a call look-out or a goal's piece is logged with its fire time.
+  if (r.ok) {
+    const L = await import("./commitmentLog.js");
+    if (L.isCommitment(r.task)) await L.logCommitment("created", { userId: r.task.userId, taskId: r.task.id, goalId: r.task.followup?.goalId ?? null, fireAt: r.task.nextCheckAt, what: r.task.goal, source: r.task.source ?? null });
+  }
+  return r;
 }
 async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskDb): Promise<{ ok: true; task: CoTask } | { ok: false; why: string }> {
   const open = await openTasks(input.userId, db);
@@ -314,7 +329,8 @@ async function startTaskLocked(input: Parameters<typeof startTask>[0], db: TaskD
   if (open.some((t) => norm(t.goal) === norm(goal))) return { ok: false, why: "already working on that" };
   const steps = cleanSteps(input.steps);
   const dl = input.deadline ?? null;
-  const next = firstCheckInWindow(capToFinal(new Date(Date.now() + clampNextHours(input.inHours) * HOUR), { finalCheckAt: dl?.finalCheckAt ?? null, finalTold: false }).at, input.window, new Date());
+  const exact = input.exactAt && input.exactAt.getTime() > Date.now() && input.exactAt.getTime() - Date.now() <= TASK_LIMITS.maxHours * HOUR ? input.exactAt : null;
+  const next = exact ?? firstCheckInWindow(capToFinal(new Date(Date.now() + clampNextHours(input.inHours) * HOUR), { finalCheckAt: dl?.finalCheckAt ?? null, finalTold: false }).at, input.window, new Date());
   const { rows } = await db.query(
     `INSERT INTO co_tasks (user_id, goal, their_words, steps, plan_next, next_check_at, notes, deadline, final_check_at, source, followup)
      VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8, $9, $10, $11::jsonb) RETURNING *`,
@@ -361,14 +377,33 @@ export async function wakeOnReply(userId: string): Promise<number> {
 }
 
 // Closing a task closes its window too (followup.window.closedAt), so nothing warns about a commitment that's finished.
-export async function closeTask(userId: string, id: number, status: "done" | "dropped" | "expired", outcome: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
+// A commitment's close is its outcome in the ledger (services/commitmentLog.ts): kept, partial, missed, released or withdrawn.
+// theirWord: the member's own words that closed it ("we booked it", "don't need it anymore"), quoted and checked by the caller. Only
+// that makes a drop "released"; without it a drop counts against Co (commitmentLog.ts outcomeOf).
+// A task turn's close passes their word this way (the turn's close is one line its checks read): held for that task's next close only.
+const theirWordAtClose = new Map<string, string>();
+export function closedOnTheirWord(userId: string, id: number, quote: string): void {
+  theirWordAtClose.set(`${userId}:${id}`, quote);
+}
+export async function closeTask(userId: string, id: number, status: "done" | "dropped" | "expired", outcome: string, opts: { theirWord?: string | null } = {}): Promise<boolean> {
+  const held = theirWordAtClose.get(`${userId}:${id}`) ?? null;
+  theirWordAtClose.delete(`${userId}:${id}`);
+  opts = { theirWord: opts.theirWord ?? held };
+  const { rowCount, rows } = await pool.query(
     `UPDATE co_tasks SET status = $3, outcome = $4, closed_at = NOW(), next_check_at = NULL, updated_at = NOW(),
        followup = CASE WHEN kind = 'work' AND followup ? 'window' THEN jsonb_set(followup, '{window,closedAt}', to_jsonb(NOW())) ELSE followup END
-     WHERE user_id = $1 AND id = $2 AND status = 'open'`,
+     WHERE user_id = $1 AND id = $2 AND status = 'open' RETURNING id, kind, source, followup, steps, goal, texts_sent`,
     [userId, id, status, outcome.trim().slice(0, 300)],
   );
-  return (rowCount ?? 0) > 0;
+  const closed = (rowCount ?? 0) > 0;
+  const row = rows?.[0];
+  if (closed && row) {
+    const L = await import("./commitmentLog.js");
+    if (L.isCommitment(row)) await L.logCommitment("outcome", { userId, taskId: id, goalId: row.followup?.goalId ?? null, outcome: L.outcomeOf(status, outcome, Array.isArray(row.steps) ? row.steps : [], { source: row.source, goalItem: row.followup?.goalItem != null, theirWord: opts.theirWord ?? null, sentAnything: Number(row.texts_sent ?? 0) > 0 }), why: outcome, what: row.goal, source: row.source, theirWord: opts.theirWord ?? null });
+    // A goal whose last open piece or check-in just closed is settled now (goalOwnership.ts closeGoalIfSettled).
+    if (row.followup?.goalId != null) await import("./goalOwnership.js").then((G) => G.closeGoalIfSettled(userId, Number(row.followup.goalId))).catch(() => false);
+  }
+  return closed;
 }
 
 // A commitment's window, set or replaced (a work task's followup JSON only).
@@ -393,10 +428,12 @@ export async function unspendWake(userId: string, id: number): Promise<void> {
   await pool.query(`UPDATE co_tasks SET wakes = GREATEST(wakes - 1, 0), updated_at = NOW() WHERE user_id = $1 AND id = $2`, [userId, id]);
 }
 
-// Tasks due to wake, each claimed so two runs never work the same one.
+// Tasks due to wake, each claimed so two runs never work the same one. The claim's 45-minute next check is a lease, not a time Co
+// chose: a work task records when it was leased (followup.leasedAt) so nothing reads the lease as a fire time (promiseBinding.ts entryOf).
 export async function claimDueTasks(limit = 20): Promise<CoTask[]> {
   const { rows } = await pool.query(
-    `UPDATE co_tasks SET next_check_at = NOW() + INTERVAL '45 minutes', wakes = wakes + 1, updated_at = NOW()
+    `UPDATE co_tasks SET next_check_at = NOW() + INTERVAL '45 minutes', wakes = wakes + 1, updated_at = NOW(),
+       followup = CASE WHEN kind = 'work' THEN jsonb_set(COALESCE(followup, '{}'::jsonb), '{leasedAt}', to_jsonb(NOW())) ELSE followup END
      WHERE id IN (SELECT id FROM co_tasks WHERE status = 'open' AND next_check_at <= NOW() ORDER BY next_check_at LIMIT $1 FOR UPDATE SKIP LOCKED)
      RETURNING *`,
     [limit],

@@ -105,6 +105,12 @@ export async function filesOnFile(userId: string): Promise<{ n: number; sentOn: 
   return rows.map((r: any) => ({ n: Number(r.n), sentOn: new Date(r.created_at).toISOString().slice(0, 10), read: !!r.read }));
 }
 
+// Their readable files by number and when each came (goal ownership ties a hand-over to the file just sent, services/goalOwnership.ts).
+export async function readableFileTimes(userId: string): Promise<{ n: number; at: Date }[]> {
+  const { rows } = await pool.query(`SELECT n, created_at FROM member_files WHERE user_id = $1 AND text IS NOT NULL ORDER BY n DESC LIMIT 20`, [userId]);
+  return rows.map((r: any) => ({ n: Number(r.n), at: new Date(r.created_at) }));
+}
+
 // When their newest file came, within `days` (services/inboundFile.ts fileRecordFact: whether something readable arrived lately).
 export async function lastFileAt(userId: string, days: number): Promise<Date | null> {
   const { rows } = await pool.query(`SELECT MAX(created_at) AS at FROM member_files WHERE user_id = $1 AND created_at > NOW() - make_interval(days => $2)`, [userId, days]);
@@ -122,6 +128,8 @@ export async function fileText(userId: string, n?: number | null): Promise<{ n: 
 // Gone completely: the row is the only copy. One file by number, or all of them.
 export async function deleteFiles(userId: string, n?: number | null): Promise<number> {
   const { rowCount } = n ? await pool.query(`DELETE FROM member_files WHERE user_id = $1 AND n = $2`, [userId, n]) : await pool.query(`DELETE FROM member_files WHERE user_id = $1`, [userId]);
+  // Item titles a goal took from a deleted file go with it (services/goalOwnership.ts forgetFileTitles).
+  if (rowCount) await import("./goalOwnership.js").then((G) => G.forgetFileTitles(userId, n ?? null)).catch((err: any) => console.error("memberFiles: forgetting a deleted file's goal titles failed:", err?.message ?? err));
   return rowCount ?? 0;
 }
 
