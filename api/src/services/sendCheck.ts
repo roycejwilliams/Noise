@@ -257,16 +257,28 @@ export function returnsOnExpiry(p: { match: TierMatch; lastDay?: string | null }
 // ---------------------------------------------------------------- B4: a caption's prices and counts
 
 const n = (s: string) => s.replace(/,/g, "").replace(/\.0+$/, "");
+// A number with its scale word, as one value (2026-10-13: "$75K+" in a caption was read as "$75" and refused against a page saying
+// "$75,000+", so the find never went out). k/K/thousand, m/M/million, b/bn/billion.
+const SCALE: Record<string, number> = { k: 1e3, thousand: 1e3, m: 1e6, mm: 1e6, million: 1e6, b: 1e9, bn: 1e9, billion: 1e9 };
+const scaled = (num: string, unit: string | undefined): string => {
+  const mult = unit ? SCALE[unit.toLowerCase()] : undefined;
+  if (!mult) return n(num);
+  return String(Math.round(Number(num.replace(/,/g, "")) * mult));
+};
+const NUM_WITH_SCALE = /(\d[\d,]*(?:\.\d+)?)(?:\s?(k|thousand|mm|m|million|bn|b|billion)\b)?/gi;
 const SCARCITY = /\b(?:only a few|a few|limited|last few|handful of|few)\s+(?:spots?|seats?|tickets?|places?|slots)\b|\b(?:selling|filling)\s+(?:out|up|fast)\b|\balmost (?:full|sold out|gone)\b|\bspots? (?:are )?(?:going|limited)\b|\bbefore it sells out\b/i;
 const SPOTS_ON_RECORD = /\bspots? (?:left|remaining)\b|\bsold out\b|\bcapacity\b|\bwait ?list\b|\blimited (?:spots?|seats?|capacity|space)\b|\bspots? (?:are )?limited\b/i;
 // Pure (B4): every price and count a caption states is on the record it was drafted from (the page's details, the source post, their
 // own ask), the way a task's texts already are (services/taskWeb.ts numbersBacked). Dates and clock times are left to the date checks.
 export function captionNumbersBacked(caption: string, facts: string): { ok: boolean; problems: string[] } {
-  const have = new Set((facts.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map(n));
+  // Every number on the record at its full value ("$250K" is on file as 250000 only, so a caption's "$250" isn't backed by it).
+  const have = new Set<string>();
+  for (const m of facts.matchAll(NUM_WITH_SCALE)) have.add(scaled(m[1], m[2]));
   const problems: string[] = [];
   const t = caption.replace(/[’‘]/g, "'");
-  for (const m of t.matchAll(/\$\s?(\d[\d,]*(?:\.\d+)?)|\b(\d[\d,]*(?:\.\d+)?)\s?(?:usd|dollars|bucks)\b/gi)) {
-    const v = n(m[1] ?? m[2]);
+  for (const m of t.matchAll(/\$\s?(\d[\d,]*(?:\.\d+)?)(?:\s?(k|thousand|mm|m|million|bn|b|billion)\b)?|\b(\d[\d,]*(?:\.\d+)?)\s?(?:usd|dollars|bucks)\b/gi)) {
+    // "$75K" is 75000: backed by "$75,000" or "$75K" on the record. A bare "$75" still needs 75.
+    const v = m[1] !== undefined ? scaled(m[1], m[2]) : n(m[3]);
     if (!have.has(v)) problems.push(`price "${m[0].trim()}" isn't on its page`);
   }
   if (/\b(?:it'?s|is|are|totally|completely)\s+free\b|\bfree (?:to (?:attend|join|go)|entry|admission|tickets?)\b|\bno (?:cover|cost|charge)\b/i.test(t) && !/\bfree\b|\bno (?:cost|charge|cover)\b|\$0\b/i.test(facts)) problems.push(`says it's free, and its page doesn't`);
