@@ -124,10 +124,12 @@ export function createCoPageRouter(
       if (a) images.set(id, a);
     }
     const X = await import("../services/coPages/deckExport.js");
+    // The pictures Co found and the map tiles go into the file too, with their credits.
+    const artSrc = await (await import("../services/artImagery.js")).artDataUris(data).catch(() => () => null);
     const file =
       kind === "pdf"
-        ? await X.deckPdf({ id: page.id, data, updatedAt: page.updatedAt, version: page.version }, images).catch(() => null)
-        : await X.deckPptx({ id: page.id, data, version: page.version }, images, { withNotes: !shared }).catch(() => null);
+        ? await X.deckPdf({ id: page.id, data, updatedAt: page.updatedAt, version: page.version }, images, undefined, artSrc).catch(() => null)
+        : await X.deckPptx({ id: page.id, data, version: page.version }, images, { withNotes: !shared, artSrc }).catch(() => null);
     if (!file) return res.status(404).type("text/plain").send("Not found");
     res.set("Content-Disposition", `attachment; filename="${file.filename}"`);
     return res.status(200).type(file.contentType).send(file.data);
@@ -138,6 +140,22 @@ export function createCoPageRouter(
   router.get("/v/:shareId/deck.pptx", downloads, async (req, res) => sendFile(await loadShare(String(req.params.shareId ?? "")).catch(() => null), "pptx", true, res));
   router.get("/:id/deck.pdf", downloads, async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pdf", false, res));
   router.get("/:id/deck.pptx", downloads, async (req, res) => sendFile(await load(String(req.params.id ?? "")).catch(() => null), "pptx", false, res));
+  // The art Co found for it (services/artImagery.ts): the k-th Google venue photo it shows (fetched with the key on the server, so the
+  // key never reaches the page) and the map tiles its own maps need (never any other tile: the link is no open tile proxy). Taken
+  // down, expired, or not on it: the same plain 404.
+  const sendArt = async (page: StoredCoPage | null, ref: { google?: number; tile?: string }, res: any) => {
+    res.set(ASSET_HEADERS);
+    const A = await import("../services/artImagery.js");
+    const got = page ? await A.artBytes(page.data, ref).catch(() => null) : null;
+    if (!got) return res.status(404).type("text/plain").send("Not found");
+    return res.status(200).type(got.mediaType).send(got.data);
+  };
+  const gRef = (k: unknown) => (/^\d{1,2}$/.test(String(k)) ? { google: Number(k) } : {});
+  const tRef = (p: any) => ({ tile: `${String(p.z)}/${String(p.x)}/${String(p.y ?? "").replace(/\.png$/, "")}` });
+  router.get("/v/:shareId/g/:k", async (req, res) => sendArt(await loadShare(String(req.params.shareId ?? "")).catch(() => null), gRef(req.params.k), res));
+  router.get("/v/:shareId/t/:z/:x/:y", async (req, res) => sendArt(await loadShare(String(req.params.shareId ?? "")).catch(() => null), tRef(req.params), res));
+  router.get("/:id/g/:k", async (req, res) => sendArt(await load(String(req.params.id ?? "")).catch(() => null), gRef(req.params.k), res));
+  router.get("/:id/t/:z/:x/:y", async (req, res) => sendArt(await load(String(req.params.id ?? "")).catch(() => null), tRef(req.params), res));
   // A share link (store.ts createShareLink): the same artifact, view-only, at its own revocable link. Revoked or unknown: 404.
   router.get("/v/:shareId/a/:assetId", async (req, res) => sendAsset(await loadShare(String(req.params.shareId ?? "")).catch(() => null), String(req.params.assetId ?? ""), res));
   router.get("/v/:shareId", async (req, res) => {

@@ -8,6 +8,7 @@
 // them (a comparison option's url, a link item's url, a source), and only as plain https. This file is the only gate: the store
 // refuses anything that hasn't passed it, and the page re-checks what it loads.
 import { STYLE_KEYS, checkExtras, styleFrom, type DeckStyle } from "./style.js";
+import { GRAMMARS, checkArtImage, checkArtMap, type ArtImage, type ArtMap, type Grammar } from "./art.js";
 
 export type TextBlock = { type: "text"; text: string };
 // lead: a short label in front of the line (a time on an itinerary, a day on a week view): "7:00 PM", "Thu".
@@ -27,7 +28,8 @@ export type Block = TextBlock | BulletsBlock | ComparisonBlock | LinksBlock;
 // about. Images are filled in code from those pages' own og:image when the page is made (ogImage.ts), never written by the model.
 export type Photo = { url: string; alt: string; sourceUrl: string };
 // asset: one of the owner's own images (services/memberAssets.ts) placed in this section, by id; never a URL (2026-10-11, PR 2).
-export type Section = { heading: string; blocks: Block[]; image: Photo | null; asset?: string };
+// place: the real place the section is about, as Co named it, for its photos and the map; photos are found by code (art.ts ArtImage).
+export type Section = { heading: string; blocks: Block[]; image: Photo | null; asset?: string; place?: string; photos?: ArtImage[] };
 export type Source = { label: string; url: string };
 
 export type CoPageData = {
@@ -42,6 +44,12 @@ export type CoPageData = {
   // them. Without a style the page is Co's own design (Royce, 2026-10-11: taste and images apply to pages as they do to decks).
   style?: DeckStyle | null;
   logo?: string | null;
+  // Art direction (art.ts): the grammar when the page has no style of theirs to carry it, a cover picture Co found or one of theirs,
+  // and the map of the places on it.
+  grammar?: Grammar;
+  coverArt?: ArtImage;
+  coverImage?: string;
+  map?: ArtMap;
 };
 const ASSET_ID_RE = /^[A-Za-z0-9_-]{24}$/;
 
@@ -252,14 +260,14 @@ const sameUrl = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\
 // The one gate.
 export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } | { ok: false; problems: string[] } {
   const problems: string[] = [];
-  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources", "style", "logo"], problems);
+  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources", "style", "logo", "grammar", "coverArt", "coverImage", "map"], problems);
   if (!o) return { ok: false, problems: ["a page must be an object of fields"] };
   const title = plain(o.title, "title", L.title, problems, true);
   const context = plain(o.context, "context", L.context, problems, true);
   const sections = list(o.sections, "sections", L.sections, problems, 1)
     .map((s, i) => {
       const f = `sections[${i}]`;
-      const r = obj(s, f, ["heading", "blocks", "image", "asset"], problems);
+      const r = obj(s, f, ["heading", "blocks", "image", "asset", "place", "photos"], problems);
       if (!r) return null;
       const heading = plain(r.heading, `${f}.heading`, L.heading, problems, true);
       const blocks = list(r.blocks, `${f}.blocks`, L.blocksPerSection, problems, 1)
@@ -268,7 +276,9 @@ export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } 
       const image = photo(r.image, `${f}.image`, problems);
       if (r.asset !== undefined && r.asset !== null && (typeof r.asset !== "string" || !ASSET_ID_RE.test(r.asset))) problems.push(`${f}.asset must be one of their saved images`);
       const asset = typeof r.asset === "string" && ASSET_ID_RE.test(r.asset) ? r.asset : null;
-      return heading && blocks.length ? { heading, blocks, image, ...(asset ? { asset } : {}) } : null;
+      const place = plain(r.place, `${f}.place`, 90, problems, false);
+      const photos = list(r.photos, `${f}.photos`, 3, problems).map((p, k) => checkArtImage(p, `${f}.photos[${k}]`, problems)).filter((x): x is ArtImage => !!x);
+      return heading && blocks.length ? { heading, blocks, image, ...(asset ? { asset } : {}), ...(place ? { place } : {}), ...(photos.length ? { photos } : {}) } : null;
     })
     .filter((x): x is Section => !!x);
   const sources = list(o.sources, "sources", L.sources, problems)
@@ -302,6 +312,12 @@ export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } 
   }
   if (o.logo !== undefined && o.logo !== null && (typeof o.logo !== "string" || !ASSET_ID_RE.test(o.logo))) problems.push("logo must be one of their saved images");
   const logo = typeof o.logo === "string" && ASSET_ID_RE.test(o.logo) ? o.logo : null;
+  if (o.grammar != null && !GRAMMARS.includes(o.grammar as Grammar)) problems.push(`grammar must be one of ${GRAMMARS.join(", ")}`);
+  const grammar = GRAMMARS.includes(o.grammar as Grammar) ? (o.grammar as Grammar) : null;
+  const coverArt = checkArtImage(o.coverArt, "coverArt", problems);
+  if (o.coverImage != null && (typeof o.coverImage !== "string" || !ASSET_ID_RE.test(o.coverImage))) problems.push("coverImage must be one of their saved images");
+  const coverImage = typeof o.coverImage === "string" && ASSET_ID_RE.test(o.coverImage) ? o.coverImage : null;
+  const map = checkArtMap(o.map, "map", problems);
   if (problems.length) return { ok: false, problems };
-  return { ok: true, data: { title: title!, context: context!, cover, sections, sources, ...(style ? { style } : {}), ...(logo ? { logo } : {}) } };
+  return { ok: true, data: { title: title!, context: context!, cover, sections, sources, ...(style ? { style } : {}), ...(logo ? { logo } : {}), ...(grammar ? { grammar } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(map ? { map } : {}) } };
 }

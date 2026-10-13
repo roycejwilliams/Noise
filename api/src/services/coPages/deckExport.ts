@@ -62,6 +62,7 @@ export async function deckPdf(
   deck: { id: string; data: DeckData; updatedAt: Date; version: number },
   images: Map<string, ExportImage>,
   render?: (html: string, size: { width: string; height: string }) => Promise<Buffer | null>,
+  artSrc?: (ref: string) => string | null,
 ): Promise<DeckFile | null> {
   const key = `${deck.id}:${deck.version}:pdf:${imagesKey(images)}`;
   return once(key, async () => {
@@ -70,6 +71,8 @@ export async function deckPdf(
       url: null,
       showNotes: false,
       print: true,
+      // The pictures Co found and the map tiles, inlined (the PDF's browser loads nothing else).
+      artSrc: artSrc ?? (() => null),
       imageSrc: (id) => {
         const img = images.get(id);
         return img ? `data:${img.mediaType};base64,${img.data.toString("base64")}` : null;
@@ -81,7 +84,7 @@ export async function deckPdf(
   });
 }
 
-export async function deckPptx(deck: { id: string; data: DeckData; version: number }, images: Map<string, ExportImage>, o: { withNotes: boolean }): Promise<DeckFile | null> {
+export async function deckPptx(deck: { id: string; data: DeckData; version: number }, images: Map<string, ExportImage>, o: { withNotes: boolean; artSrc?: (ref: string) => string | null }): Promise<DeckFile | null> {
   const key = `${deck.id}:${deck.version}:pptx:${o.withNotes ? "notes" : "plain"}:${imagesKey(images)}`;
   return once(key, async () => {
     const { default: PptxGenJS } = (await import("pptxgenjs")) as any;
@@ -118,8 +121,18 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     // Title slide.
     const t = pptx.addSlide();
     const fieldTitle = st.titleLayout === "field" || (!st.titleLayout && (st.gradient || heavy));
-    const titleInk = fieldTitle ? fieldInk : st.text;
-    if (fieldTitle) onField(t);
+    const titleInk = (deck.data.coverImage || deck.data.coverArt) && (o.artSrc || deck.data.coverImage) ? "#FFFFFF" : fieldTitle ? fieldInk : st.text;
+    // A cover picture (theirs, or one Co found): full bleed under a dark scrim, the title in white, its credit kept.
+    const art = o.artSrc ?? (() => null);
+    const artRef = (p: { via: string; src: string }) => art(p.via === "google" ? `g:${p.src}` : `u:${p.src}`);
+    const coverData = deck.data.coverImage ? dataUrl(deck.data.coverImage) : deck.data.coverArt ? artRef(deck.data.coverArt) : null;
+    const { creditLine } = await import("./art.js");
+    if (coverData) {
+      t.background = { color: "111111" };
+      t.addImage({ data: coverData, x: 0, y: 0, w: 13.333, h: 7.5, sizing: { type: "cover", w: 13.333, h: 7.5 } });
+      t.addShape(pptx.ShapeType.rect, { x: 0, y: 3.2, w: 13.333, h: 4.3, fill: { color: "000000", transparency: 35 }, line: { color: "000000", transparency: 100 } });
+      if (deck.data.coverArt) t.addText(creditLine(deck.data.coverArt), { x: 7.3, y: 0.2, w: 5.8, h: 0.35, fontFace: bodyFace, fontSize: 9, color: "FFFFFF", align: "right", fill: { color: "000000", transparency: 40 } });
+    } else if (fieldTitle) onField(t);
     else t.background = { color: hex(st.background) };
     // A one-ink logo on the field drops its ground, as on the web deck (where it blends); otherwise it sits as it is.
     const lm = deck.data.logoMeta;
@@ -138,18 +151,36 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     t.addText("Made by Co", { x: 0.9, y: 6.6, w: 4, h: 0.4, fontFace: bodyFace, fontSize: 10, color: hex(titleInk), transparency: 45 });
     // Content slides, in the web deck's layouts: statements on the field, everything else on their paper.
     const { slideLayouts } = await import("./deck.js");
-    const layouts = slideLayouts(deck.data.slides);
+    const layouts = slideLayouts(deck.data.slides, st.grammar ?? "editorial");
+    const { leadOf } = await import("./art.js");
+    const A = await import("../artImagery.js");
+    // A map can't be drawn from tiles in PowerPoint, so it goes in as one picture of the map (rendered from the same tiles).
+    const mapPics = new Map<number, string | null>();
+    for (const [i, sl] of deck.data.slides.entries()) if (layouts[i] === "map" && sl.map && o.artSrc) mapPics.set(i, await A.mapPng(sl.map, o.artSrc).catch(() => null));
     deck.data.slides.forEach((sl, i) => {
       const s = pptx.addSlide();
-      const l = layouts[i];
+      const l0 = layouts[i];
+      // The web deck's other layouts, set the nearest way PowerPoint can: oversized type as a statement, an asymmetric grid as points,
+      // a menu's courses and a timeline as their own lines, a plate or a strip as a picture beside the points.
+      const l = l0 === "oversized" ? "statement" : l0 === "asym" ? "points" : l0;
       const field = l === "statement" && (!!st.gradient || heavy);
       const ink = field ? fieldInk : st.text;
       if (field) onField(s);
       else s.background = { color: hex(st.background) };
-      const pic = dataUrl(sl.image);
+      const firstArt = sl.photos?.[0] ?? null;
+      const pic = dataUrl(sl.image) ?? (firstArt ? art(firstArt.via === "google" ? `g:${firstArt.src}` : `u:${firstArt.src}`) : null) ?? (l === "map" ? mapPics.get(i) ?? null : null);
       const textW = pic ? 6.4 : 11.5;
       s.addText(String(i + 2).padStart(2, "0"), { x: 0.9, y: 0.9, w: 2, h: 0.4, fontFace: bodyFace, fontSize: 11, bold: true, charSpacing: 3, color: hex(field ? ink : accOnPaper) });
-      if (l === "statement") {
+      if (l === "timeline" || l === "courses") {
+        s.addText(sl.headline, { x: 0.9, y: 1.4, w: 11.5, h: 1.4, fontFace: headFace, fontSize: 34, bold: headBold, color: hex(ink), valign: "top", align: l === "courses" ? "center" : "left" });
+        s.addText(
+          sl.bullets.map((b) => {
+            const x = leadOf(b);
+            return x ? [{ text: `${x.lead}  `, options: { bold: true, color: hex(accOnPaper), breakLine: false } }, { text: x.text, options: { breakLine: true } }] : [{ text: b, options: { breakLine: true } }];
+          }).flat() as any,
+          { x: l === "courses" ? 2.4 : 0.9, y: 3.1, w: l === "courses" ? 8.5 : 11.5, h: 3.6, fontFace: bodyFace, fontSize: 18, color: hex(ink), valign: "top", paraSpaceAfter: 10, align: l === "courses" ? "center" : "left" },
+        );
+      } else if (l === "statement") {
         s.addText(sl.headline, { x: 0.9, y: 2.0, w: 10.5, h: 2.4, fontFace: headFace, fontSize: 48, bold: headBold, color: hex(ink), valign: "bottom" });
         s.addText(sl.bullets.join("\n"), { x: 0.9, y: 4.6, w: 9.5, h: 1.8, fontFace: bodyFace, fontSize: 20, color: hex(ink), valign: "top", paraSpaceAfter: 8 });
       } else if (l === "grid") {
@@ -168,7 +199,10 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
           sl.bullets.map((b) => ({ text: b, options: { bullet: { indent: 18 }, paraSpaceAfter: 12 } })),
           pic ? { x: 0.9, y: 3.7, w: textW, h: 3.0, fontFace: bodyFace, fontSize: 17, color: hex(ink), valign: "top" } : { x: 6.6, y: 1.4, w: 5.8, h: 5.0, fontFace: bodyFace, fontSize: 17, color: hex(ink), valign: "top" },
         );
-        if (pic) s.addImage({ data: pic, x: 7.6, y: 1.3, w: 4.9, h: 4.9, sizing: { type: "contain", w: 4.9, h: 4.9 } });
+        if (pic) s.addImage({ data: pic, x: 7.6, y: 1.3, w: 4.9, h: l === "map" ? 3.06 : 4.9, sizing: { type: "contain", w: 4.9, h: l === "map" ? 3.06 : 4.9 } });
+        // Every picture Co found keeps its credit (and the map its OpenStreetMap credit) in the file too.
+        const cr = l === "map" && pic ? "© OpenStreetMap contributors" : firstArt && !sl.image ? creditLine(firstArt) : null;
+        if (cr) s.addText(cr, { x: 7.6, y: l === "map" ? 4.45 : 6.25, w: 4.9, h: 0.3, fontFace: bodyFace, fontSize: 9, color: hex(ink), transparency: 30 });
       }
       s.addText(`${String(i + 2).padStart(2, "0")} / ${String(deck.data.slides.length + 1).padStart(2, "0")}`, { x: 11.2, y: 6.9, w: 1.4, h: 0.4, fontFace: bodyFace, fontSize: 10, color: hex(ink), transparency: 45, align: "right" });
       if (o.withNotes && sl.notes) s.addNotes(sl.notes);

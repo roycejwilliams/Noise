@@ -14,6 +14,7 @@ import { EMAIL_COLORS, escapeHtml } from "../emailDesign.js";
 import type { Block, CoPageData, ComparisonOption, LinkItem } from "./schema.js";
 import { contrast, inkOn, type DeckStyle } from "./style.js";
 import { fontLinks, fontStack } from "../designFonts.js";
+import { creditHtml, googlePhotosIn, leadOf, mapHtml, typePlate, type ArtImage, type Grammar } from "./art.js";
 
 export type CoPageView = { id: string; data: CoPageData; version: number; updatedAt: Date };
 
@@ -241,14 +242,105 @@ footer .asof{display:block;margin-top:10px;font-size:11px;letter-spacing:0.16em;
 }
 export const STYLE = pageCss(CO_PALETTE);
 
+// Each grammar's composition on a page (art.ts), over the same palette: pictures, a map, a timeline, and how the page is set.
+function artCss(t: Palette, g: Grammar): string {
+  const base = `
+.cover-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.cover.photo{background:#222}
+.cover.photo::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.12),rgba(0,0,0,0.45))}
+.cover .cover-mark,.cover .credit,.cover .cover-logo{position:relative;z-index:1}
+.cover .cover-mark{position:absolute}
+.cover .credit{position:absolute;right:14px;bottom:12px;left:auto;z-index:2}
+.cover.plate-cover{min-height:260px;padding:0}
+.cover.plate-cover .tplate{position:absolute;inset:0;width:100%;height:100%}
+.credit{display:inline-block;font-size:11px;line-height:1.4;letter-spacing:0.04em;color:#FFFFFF;background:rgba(0,0,0,0.66);padding:3px 8px;border-radius:3px;max-width:calc(100% - 28px)}
+.credit a{color:inherit;text-decoration:underline;text-underline-offset:2px}
+.art{margin:24px 0 0;position:relative}
+.art img{display:block;width:100%;height:62vw;max-height:560px;object-fit:cover}
+.art .credit{position:absolute;left:12px;bottom:12px}
+.strip{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:20px 0 6px}
+.strip figure{margin:0;position:relative;aspect-ratio:4/3;overflow:hidden;background:${t.line}}
+.strip img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.strip .credit{position:absolute;left:6px;bottom:6px;right:6px}
+.map{position:relative;margin:28px auto 0;max-width:960px;aspect-ratio:16/10;overflow:hidden;background:#E8E4DC}
+.mapc{position:absolute;inset:0}
+.map .tile{position:absolute;display:block;max-width:none}
+.map .pin{position:absolute;transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;gap:4px}
+.map .pin b{display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:${t.maroon};color:#FFFFFF;font-size:12px;box-shadow:0 2px 8px rgba(0,0,0,0.3)}
+.map .pin b{font-family:${t.sans}}
+.map .pin.below .pl{order:1}
+.map .pl{order:-1;background:#FFFFFF;color:#111111;font-size:12px;padding:2px 7px;border-radius:3px;white-space:nowrap;box-shadow:0 1px 5px rgba(0,0,0,0.2)}
+.osm{position:absolute;right:0;bottom:0;font-size:11px;background:rgba(255,255,255,0.9);color:#222222;padding:2px 7px;margin:0;letter-spacing:0;text-transform:none}
+.osm a{color:inherit;text-decoration:none}
+.mapsec{padding:8px 0 24px}
+.tl{list-style:none;margin:8px 0 18px;padding:0 0 0 22px;position:relative}
+.tl::before{content:"";position:absolute;left:5px;top:8px;bottom:8px;width:2px;background:${t.line}}
+.band .tl::before{background:${t.bandLine}}
+.tl li{position:relative;padding:0 0 18px}
+.tl li::before{content:"";position:absolute;left:-22px;top:6px;width:12px;height:12px;border-radius:50%;background:${t.maroon}}
+.tl .when{display:block;font-family:${t.serif};font-style:italic;font-size:18px;line-height:1.3;color:${t.maroon}}
+.band .tl .when{color:inherit}
+`;
+  const per: Record<Grammar, string> = {
+    editorial: "",
+    catalog: `
+h1{font-size:40px;max-width:16ch}
+.plate{margin:24px 0 0}
+.plate figure{margin:0;position:relative}
+.plate img{display:block;width:100%;aspect-ratio:4/5;object-fit:cover;max-height:620px}
+.plate .cap{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin:10px 0 0;font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:${t.muted}}
+.plate .credit{position:absolute;left:10px;bottom:10px;text-transform:none;letter-spacing:0.02em}
+.plab{color:${t.maroon};font-weight:500}
+h2{font-size:32px}
+@media (min-width:720px){
+  .open{grid-template-columns:2fr 1fr}
+  h1{font-size:58px}
+  .spread{display:grid;grid-template-columns:1.15fr 1fr;gap:48px;align-items:start;max-width:1100px;margin:0 auto;padding:0 22px}
+  .spread.flip{grid-template-columns:1fr 1.15fr}
+  .spread.flip .plate{order:2}
+  .spread .inner{padding:0}
+  .spread .plate{margin-top:56px}
+}`,
+    fieldguide: `
+.coords{font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:${t.muted};margin:0}
+h2{font-size:26px}
+.num::after{content:" · field note"}
+@media (min-width:720px){h1{font-size:44px}}`,
+    menu: `
+.open{grid-template-columns:1fr!important;text-align:center;justify-items:center}
+.ctx{text-align:center!important}
+h1{font-size:40px;max-width:18ch;margin:0 auto}
+section .inner{text-align:center}
+.num{display:block}
+h2{font-size:24px;letter-spacing:0.02em}
+h2::after{content:"";display:block;width:56px;margin:18px auto 0;border-top:1px solid ${t.maroon}}
+.b li{padding-left:0}.b li::before{display:none}
+.b.led li{grid-template-columns:1fr;gap:2px;text-align:center}
+.lk li{text-align:center;border-bottom:1px dotted ${t.line};padding:14px 0}
+.ln{font-size:26px}
+.lnote{margin:6px auto 0;font-style:italic}
+.cmp{justify-content:center}
+.tl{display:inline-block;text-align:left}
+@media (min-width:720px){h1{font-size:52px}.inner{max-width:600px}.ln{font-size:30px}}`,
+    poster: `
+h1{font-size:56px;line-height:0.98;letter-spacing:-0.03em;font-weight:400}
+h2{font-size:40px;line-height:1.02;letter-spacing:-0.02em}
+.open{grid-template-columns:1fr!important}
+.ctx{text-align:left!important}
+@media (min-width:720px){h1{font-size:104px;max-width:12ch}h2{font-size:56px}}`,
+  };
+  return base + per[g];
+}
+
 // assetBase: where this view serves the member's own images (their logo, a section's picture), relative to the page's address, as
 // for a deck ("<id>/a/" for their link, "<share id>/a/" for a share link).
 // Pure: the last two words of a headline kept together (escaped text in, escaped text out), so it never ends on one word alone.
 const keepLastTwo = (escaped: string) => escaped.replace(/\s+(\S+)\s*$/, "&nbsp;$1");
 
 // imageSrc: where an image's bytes come from instead of its address (design QA inlines them, so it measures the real pictures).
-export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageUrl: string | null; zone?: string | null; assetBase?: string; imageSrc?: (ref: { asset?: string; url?: string }) => string | null }): string {
+export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageUrl: string | null; zone?: string | null; assetBase?: string; imageSrc?: (ref: { asset?: string; url?: string }) => string | null; artSrc?: (ref: string) => string | null }): string {
   const d = page.data;
+  const grammar: Grammar = d.style?.grammar ?? d.grammar ?? "editorial";
   const desc = ogDescription(d);
   const og = [
     `<meta property="og:type" content="article">`,
@@ -271,9 +363,62 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
   const urlSrc = (u: string) => o.imageSrc?.({ url: u }) ?? u;
   // Eager when inlined for the check (lazy images below the fold never load in a screenshot).
   const loading = o.imageSrc ? "eager" : "lazy";
+  // Pictures Co found (art.ts): a venue's photo through this page's own link (the key stays on the server), a mood image from
+  // Unsplash's own URL; map tiles through the same link. artSrc: inlined instead (design QA).
+  const artBase = base.replace(/a\/$/, "");
+  const gIndex = new Map(googlePhotosIn(d).map((p, k) => [p.src, k]));
+  const artUrl = (p: ArtImage): string | null => (o.artSrc ? o.artSrc(p.via === "google" ? `g:${p.src}` : `u:${p.src}`) : p.via === "google" ? (gIndex.has(p.src) ? `${artBase}g/${gIndex.get(p.src)}` : null) : p.src);
+  const tileSrc = (key: string) => (o.artSrc ? o.artSrc(`t:${key}`) : `${artBase}t/${key}.png`);
+  const artImg = (p: ArtImage) => {
+    const u = artUrl(p);
+    return u ? `<img src="${e(u)}" alt="${e(p.alt)}" loading="${loading}" decoding="async" data-qa-crop="ok">${creditHtml(p, e)}` : "";
+  };
+  const pal = d.style ? paletteFor(d.style) : CO_PALETTE;
+  const mapFig = d.map ? mapHtml(d.map, e, tileSrc) : "";
+  const mapAfter = d.map ? (grammar === "fieldguide" ? -1 : Math.max(0, d.sections.findIndex((x) => x.place))) : -2;
+  // A timed run as a field guide's timeline; elsewhere the dark band, as before.
+  const blockHtml = (b: CoPageData["sections"][number]["blocks"][number]) =>
+    grammar === "fieldguide" && b.type === "bullets" && b.items.some((x) => x.lead)
+      ? `<ol class="tl">${b.items.map((x) => `<li><span class="when">${e(x.lead ?? "")}</span><span class="bt">${e(x.text)}</span></li>`).join("")}</ol>`
+      : renderBlock(b);
+  const pictureOf = (s: CoPageData["sections"][number], i: number): string => {
+    const photos = s.photos ?? [];
+    if (grammar === "fieldguide" && photos.length >= 2) return "";
+    if (s.asset) return `<figure class="bleed"><img src="${e(assetSrc(s.asset))}" alt="${e(s.heading)}" loading="${loading}" decoding="async"></figure>`;
+    if (s.image) return `<figure class="bleed"><img src="${e(urlSrc(s.image.url))}" alt="${e(s.image.alt)}" loading="${loading}" decoding="async"><figcaption>From ${e(hostOf(s.image.sourceUrl))}</figcaption></figure>`;
+    if (photos[0] && grammar !== "catalog") return `<figure class="art">${artImg(photos[0])}</figure>`;
+    return "";
+  };
   const sections = d.sections
-    .map((s, i) => `${s.asset ? `<figure class="bleed"><img src="${e(assetSrc(s.asset))}" alt="${e(s.heading)}" loading="${loading}" decoding="async"></figure>` : s.image ? `<figure class="bleed"><img src="${e(urlSrc(s.image.url))}" alt="${e(s.image.alt)}" loading="${loading}" decoding="async"><figcaption>From ${e(hostOf(s.image.sourceUrl))}</figcaption></figure>` : ""}<section class="${dark(s) ? "band" : ""}${s.image || s.asset ? " after-img" : ""}"><div class="inner"><div class="num">${two(i + 1)}</div><h2>${keepLastTwo(e(s.heading))}</h2>${s.blocks.map(renderBlock).join("")}</div></section>`)
+    .map((s, i) => {
+      const photos = s.photos ?? [];
+      const strip = grammar === "fieldguide" && photos.length >= 2 ? `<div class="strip">${photos.slice(0, 3).map((p) => `<figure>${artImg(p)}</figure>`).join("")}</div>` : "";
+      const coords = grammar === "fieldguide" && s.place && d.map ? (() => {
+        const pin = d.map!.pins.find((p) => s.photos?.[0]?.place === p.label) ?? null;
+        return pin ? `<p class="coords">${Math.abs(pin.lat).toFixed(3)}° ${pin.lat >= 0 ? "N" : "S"}, ${Math.abs(pin.lng).toFixed(3)}° ${pin.lng >= 0 ? "E" : "W"}</p>` : "";
+      })() : "";
+      const pic = pictureOf(s, i);
+      const body = `<div class="num">${two(i + 1)}</div>${coords}<h2>${keepLastTwo(e(s.heading))}</h2>${strip}${s.blocks.map(blockHtml).join("")}`;
+      const band = dark(s) && grammar !== "fieldguide" && grammar !== "menu";
+      let html: string;
+      if (grammar === "catalog" && (photos[0] || s.asset)) {
+        // A gallery catalog: an asymmetric spread, the picture as a numbered plate with its caption, sides trading each time.
+        const plateImg = s.asset ? `<img src="${e(assetSrc(s.asset))}" alt="${e(s.heading)}" loading="${loading}" decoding="async">` : artImg(photos[0]);
+        html = `<section class="${band ? "band" : ""}"><div class="spread${i % 2 ? " flip" : ""}"><div class="plate"><figure>${plateImg}</figure><div class="cap"><span class="plab">Plate ${two(i + 1)}</span><span>${e(s.heading)}</span></div></div><div class="inner">${body}</div></div></section>`;
+      } else html = `${pic}<section class="${band ? "band" : ""}${pic ? " after-img" : ""}"><div class="inner">${body}</div></section>`;
+      return html + (i === mapAfter ? `<div class="inner mapsec">${mapFig}</div>` : "");
+    })
     .join("");
+  const mapTop = mapAfter === -1 ? `<div class="inner mapsec">${mapFig}</div>` : "";
+  // The cover: their own picture, the venue's own site image, or a picture Co found, as a real image with its credit; with nothing to
+  // show at all (no picture, map or logo anywhere), a typographic plate, said as one.
+  const coverSrc = d.coverImage ? { src: assetSrc(d.coverImage), alt: d.title, credit: "" } : d.cover ? { src: urlSrc(d.cover.url), alt: d.cover.alt, credit: `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` } : d.coverArt && artUrl(d.coverArt) ? { src: artUrl(d.coverArt)!, alt: d.coverArt.alt, credit: creditHtml(d.coverArt, e) } : null;
+  const nothing = !coverSrc && !d.logo && !d.map && !d.sections.some((x) => x.asset || x.image || x.photos?.length);
+  const coverHtml = coverSrc
+    ? `<div class="cover photo"><img class="cover-img" src="${e(coverSrc.src)}" alt="${e(coverSrc.alt)}" decoding="async" data-qa-crop="ok"><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${coverSrc.credit}</div>`
+    : nothing
+      ? `<div class="cover plate-cover">${typePlate(d.title, { ground: pal.coverTop, ink: pal.coverText, accent: pal.coverText, font: pal.serif }, e)}</div>`
+      : `<div class="cover${d.logo ? " logo-only" : " slim"}"><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}</div>`;
   const sources = d.sources.length
     ? `<div class="src"><h3>Sources</h3><ol>${d.sources.map((s) => `<li><a href="${e(s.url)}" rel="noopener noreferrer">${e(s.label)}</a> <span class="h">${e(hostOf(s.url))}</span></li>`).join("")}</ol></div>`
     : "";
@@ -289,13 +434,13 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
 ${og}
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,400&display=swap" rel="stylesheet">
 <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500&display=swap" rel="stylesheet">${d.style ? fontLinks([d.style.display, d.style.body].filter((f): f is NonNullable<typeof f> => !!f)).map((h) => `\n<link href="${e(h)}" rel="stylesheet">`).join("") : ""}
-<style>${d.style ? pageCss(paletteFor(d.style)) + readableAccents(d.style) : STYLE + CO_LABELS}${d.logo ? ".cover-logo{display:block;height:64px;width:auto;max-width:50%;object-fit:contain;margin:0 auto 18px}" : ""}</style>
+<style>${d.style ? pageCss(paletteFor(d.style)) + readableAccents(d.style) : STYLE + CO_LABELS}${artCss(pal, grammar)}${d.logo ? ".cover-logo{display:block;height:64px;width:auto;max-width:50%;object-fit:contain;margin:0 auto 18px}" : ""}</style>
 </head>
-<body>
-<div class="cover${d.cover ? " photo" : d.logo ? " logo-only" : " slim"}"${d.cover ? ` style="background-image:linear-gradient(180deg,rgba(38,19,24,0.25),rgba(38,19,24,0.55)),url('${e(urlSrc(d.cover.url))}')" role="img" aria-label="${e(d.cover.alt)}"` : ""}><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${d.cover ? `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` : ""}</div>
+<body class="g-${grammar}">
+${coverHtml}
 <main>
 <header class="open"><h1>${keepLastTwo(e(d.title))}</h1><p class="ctx">${e(d.context)}</p></header>
-${sections}
+${mapTop}${sections}
 <div class="inner">${sources}</div>
 <footer><div class="sign">Made by Co</div><span class="asof">As of ${e(asOfLine(page.updatedAt, o.zone ?? null))}</span></footer>
 </main>
