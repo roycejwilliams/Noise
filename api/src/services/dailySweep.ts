@@ -154,10 +154,10 @@ export async function runDailySweep(row: any, now = new Date()): Promise<void> {
   const { day, phase } = dailySweepWindow(now, zone);
   if (phase === "before") return; // not 9am for them yet: nothing is decided
   const { rows: earlier } = await pool.query(
-    `SELECT action, proposal FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND proposal->>'day' = $2 ORDER BY created_at`,
+    `SELECT action, proposal FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND proposal->>'day' = $2 AND COALESCE(proposal->>'trigger', '') <> 'manual' ORDER BY created_at`,
     [userId, day],
   );
-  if (earlier.some((e: any) => e.action !== "error")) return; // today's run is done and logged
+  if (earlier.some((e: any) => e.action !== "error")) return; // today's run is done and logged (an on-demand run never counts as it)
   const errorsToday = earlier.filter((e: any) => e.action === "error").length;
   if (errorsToday >= DAILY_SWEEP_ERRORS_PER_DAY) return; // the day's failed runs are logged; the retry cap is reached
   const base = { day, zone: hoursZone(zone) };
@@ -179,7 +179,34 @@ export async function runDailySweep(row: any, now = new Date()): Promise<void> {
   }
 }
 
-async function sweepMember(row: any, userId: string, now: Date, base: { day: string; zone: string }, earlier: any[], errorsToday: number): Promise<void> {
+// An on-demand run (Royce, 2026-10-13: "Every run self-reports, no exceptions for manual ones"): the same search, pick and send as the
+// 9am run, for one member, now (scripts/sweepNow.ts). Every outcome writes its summary line (sweep.daily, trigger "manual"), the runs
+// that don't happen too; the dashboard shows them beside the day's 9am run, and they never count as it (the floor still runs that day).
+// At most one morning text goes out a day, whatever ran the sweep (sendMorningFinds).
+export async function runDailySweepNow(userId: string, now = new Date()): Promise<{ ran: boolean; why: string }> {
+  const { rows } = await pool.query(`${MEMBERS_SQL} AND u.id = $1`, [userId]);
+  const row = rows[0];
+  const zone = await memberZone(userId).catch(() => null);
+  const base = { day: dailySweepWindow(now, zone).day, zone: hoursZone(zone), trigger: "manual" as const };
+  const skip = async (action: string, why: string) => {
+    await writeDaily(userId, "skip", action, why, { ...base, items: [] });
+    return { ran: false, why };
+  };
+  if (!row) return skip("not_member", "not a live member (archived, no phone, or not through the door)");
+  if (row.opted_out) return skip("opted_out", "they opted out of texts, so nothing is searched for them");
+  if (!claimMember(userId)) return skip("busy", "another sweep is on them right now; try again in a few minutes");
+  try {
+    await sweepMember(row, userId, now, base, [], 0);
+  } catch (err: any) {
+    await recordDecision({ layer: 5, decision: "sweep.daily", userId, outcome: "skip", action: "error", reason: `the on-demand run failed: ${String(err?.message ?? err).slice(0, 300)}`, proposal: { ...base, items: [] } });
+    return { ran: false, why: `failed: ${String(err?.message ?? err).slice(0, 200)}` };
+  } finally {
+    releaseMember(userId);
+  }
+  return { ran: true, why: "ran; its summary is on the dashboard" };
+}
+
+async function sweepMember(row: any, userId: string, now: Date, base: { day: string; zone: string; trigger?: "manual" }, earlier: any[], errorsToday: number): Promise<void> {
   const E = await import("./eventSurfacingSweep.js");
   const { sweepHold } = await import("../harness/proactive.js");
   const { goalTexts } = await import("./goalJourney.js");
@@ -312,6 +339,16 @@ async function sendMorningFinds(userId: string, day: string): Promise<void> {
     await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "paced", reason: pace.why, proposal: { day } });
     return;
   }
+  // One morning text a day, whatever ran the sweep (the 9am floor, a retry, an on-demand run): once one has gone out today, what's
+  // picked now waits under the normal pacing (review, 2026-10-13).
+  const [{ n: sentToday }] = (await pool.query(
+    `SELECT COUNT(*)::int AS n FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND payload->>'morningDay' = $2`,
+    [userId, day],
+  )).rows;
+  if (Number(sentToday) > 0) {
+    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "already_sent_today", reason: "a morning text already went out today; what's picked now waits under the normal pacing", proposal: { day } });
+    return;
+  }
   const { rowCount } = await pool.query(
     `UPDATE proactive_candidates SET payload = payload || jsonb_build_object('morningDay', $2::text), updated_at = NOW()
       WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending' AND payload->>'picked' = 'true'
@@ -345,7 +382,14 @@ export type RollupRow = {
 };
 
 // Pure: a member's day, from its sweep.daily records (oldest first), its find sends, and whether 9pm has passed for them.
-export function rollupDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends"> {
+export function rollupDay(all: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends"> {
+  // On-demand runs report themselves too, beside the 9am run, never as it.
+  const manual = all.filter((r) => r.proposal?.trigger === "manual");
+  const records = all.filter((r) => r.proposal?.trigger !== "manual");
+  const out = rollupFloorDay(records, sends, dayOver, started);
+  return manual.length ? { ...out, detail: `${out.detail} · on-demand runs: ${manual.length} (last: ${manual[manual.length - 1].action})` } : out;
+}
+function rollupFloorDay(records: { outcome: string; action: string; reason: string | null; proposal: any }[], sends: number, dayOver: boolean, started: boolean): Pick<RollupRow, "status" | "detail" | "asksSearched" | "goalsSearched" | "kept" | "queued" | "sends"> {
   const final = [...records].reverse().find((r) => r.action !== "error");
   const errors = records.filter((r) => r.action === "error");
   const t = (final?.proposal?.totals ?? {}) as Record<string, number>;

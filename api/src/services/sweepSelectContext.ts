@@ -73,7 +73,10 @@ export function factsFromKnowledge(k: MemberKnowledge): Facts {
     city: k.identity.city,
     zone,
     goals: k.goals.filter((g) => g.state === "active").map((g) => g.text).slice(0, 6),
-    goalsPast: k.goals.filter((g) => g.state !== "active").map((g) => `${g.text} (${g.state === "done" ? "done" : "set aside"})`).slice(0, 6),
+    // A goal replaced by a newer one (goalEdges.ts supersededBy) isn't history: its direction goes on in the newer goal, which is in
+    // `goals`. Left out here, so the picker never reads a replaced goal as abandoned (Royce, 2026-10-13: Founder Fellows was rejected
+    // as matching "the accelerator goal he set aside" when that goal had only been replaced by "apply to South Park Commons").
+    goalsPast: k.goals.filter((g) => g.state !== "active" && !/^replaced by a newer goal/.test(g.reason ?? "")).map((g) => `${g.text} (${g.state === "done" ? "done" : "set aside"})`).slice(0, 6),
     texts: k.exchanges
       .filter((e) => e.text.trim())
       .map((e, i) => ({ id: `T${i + 1}`, at: stamp(e.verifiedAt, "LLL d HH:mm"), from: e.from, text: e.text })),
