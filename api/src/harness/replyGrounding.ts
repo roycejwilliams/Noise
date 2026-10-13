@@ -39,6 +39,7 @@ import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
 import { TEAM_BUILDER_LINE, handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
+import { NO_COVERAGE, type SearchCoverage } from "../services/searchCoverage.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
 import { memberZone, validZone, wordsZone } from "../services/memberTime.js";
 import { sourceOf } from "../services/messageFormat.js";
@@ -357,6 +358,13 @@ export async function gatherReplyFacts(
     addFact(rf, "did_before", sendHeld);
     addInstruction(rf, "If they ask why you went quiet, didn't answer, or mention a limit, say plainly that a limit on your side paused your texts for a while and it wasn't them. Never deny it or give another reason. If something they asked in that time never got an answer, answer it now.");
   }
+  // The daily search's own fact names only what the floor really searches (find asks, read with its filter), help asks beside it.
+  // Read first from what the floor really searches (find asks with its filter, a held search as nothing), help asks beside it; the
+  // call after it then adds nothing (it adds only when no search fact is there yet).
+  if (opts.turn?.searching) {
+    const searchedAsks = [...opts.turn.searching.asks.map((text) => ({ text, kind: "find" as const })), ...(opts.turn.searching.hidden ? [{ text: "one more thing they asked for", kind: "find" as const }] : []), ...(opts.turn.asks ?? []).filter((a) => a.kind === "help")];
+    for (const f of ongoingFactsFor(searchedAsks)) addFact(rf, f.kind, f.text);
+  }
   await addOngoingSearchFacts(rf, userId, opts.turn?.asks);
   for (const correction of corrections) addFact(rf, "known", correction);
   // What Co knows about them, so "what do you know about me?" can be
@@ -437,7 +445,9 @@ export async function gatherReplyFacts(
   for (const line of opts.turn?.briefs ?? []) addFact(rf, /^Co is putting together|hasn't reached them yet/.test(line) ? "scheduled" : "did_before", line);
   // What is actually running for them, read from task state every turn (2026-10-12, item 3): only this backs saying Co is working on
   // something; with nothing running, Co says so.
-  if (opts.turn) addFact(rf, "known", runningWorkLine(opts.turn.tasks ?? [], opts.turn.briefs ?? []));
+  if (opts.turn) addFact(rf, "known", runningWorkLine(opts.turn.tasks ?? [], opts.turn.briefs ?? [], opts.turn.searching));
+  // What's ahead from Co, as scheduled (services/whatsAhead.ts): check-ins, follow-ups, tasks, the daily search and queued finds.
+  if (opts.turn?.ahead) addFact(rf, "scheduled", opts.turn.ahead);
   // Documents Co delivered (services/deliveryReceipts.ts): "Documents you've delivered", by doc number, what's outstanding first.
   // A PDF still to follow a text fallback is scheduled; everything else is what Co did. readDocument quotes from them.
   for (const line of opts.turn?.deliveries ?? []) addFact(rf, /^Outstanding:/.test(line) ? "scheduled" : "did_before", `Documents you've delivered: ${line}`);
@@ -666,8 +676,9 @@ export async function recentlySent(userId: string): Promise<string[]> {
 // "I'll keep looking and text you if something fits" true: the daily sweep
 // searches each open ask and the daily pick can text about a result. With
 // none open, nothing is being looked for and any such promise is false.
+const NOT_SEARCHING = "Co's daily search isn't looking for anything for them right now.";
 export async function addOngoingSearchFacts(rf: ReplyFacts, userId: string, asks?: { text: string; kind: "find" | "help" }[]): Promise<void> {
-  if (rf.facts.some((f) => f.kind === "ongoing")) return;
+  if (rf.facts.some((f) => f.kind === "ongoing" || (f.kind === "unknown" && f.text.startsWith(NOT_SEARCHING)))) return;
   const open =
     asks ??
     (await pool
@@ -690,7 +701,7 @@ export function ongoingFactsFor(asks: { text: string; kind: "find" | "help" }[])
   if (find.length) {
     out.push({ kind: "ongoing", text: `Co's daily search is looking for: ${find.map((a) => `"${a.text}"`).join("; ")}. If something real fits, Co may text them about it (at most one text a day). Co can't promise it will find anything, or when.` });
   } else {
-    out.push({ kind: "unknown", text: "Co's daily search isn't looking for anything for them right now. Nothing will be looked for later unless they ask for something a search can find." });
+    out.push({ kind: "unknown", text: `${NOT_SEARCHING} Nothing will be looked for later unless they ask for something a search can find.` });
   }
   if (help.length) {
     out.push({ kind: "known", text: `Also on file, but not something Co's search looks for: ${help.map((a) => `"${a.text}"`).join("; ")}. Co can talk it through with them now; nothing is being looked for or worked on in the background.` });
@@ -837,19 +848,39 @@ export function workBacksPromise(f: Fact): boolean {
   return (f.kind === "did_this_turn" && STARTED_WORK.test(f.text)) || (f.kind === "scheduled" && CARRIED_WORK.test(f.text));
 }
 
-// Pure: the one line of what is running for them now, from the turn's task and research-brief facts (co_tasks open: work, look-outs
-// and promises; research briefs running or held). Everything else they asked for is on file, not being worked on.
-export const NOTHING_RUNNING_REASON = "nothing is running for it: no open task, research brief or look-out";
+// Pure: the one line of what is running for them now, read from real state every turn (Royce, 2026-10-13: "The grounding rule reads
+// real current state, not a hardcoded list"): open tasks (work, look-outs, promises), research briefs running or held, and what Co's
+// daily search covers (services/searchCoverage.ts: every open find ask, look-outs included, and the goals the last daily run
+// searched, unless their sweep is held). "Nothing is running" only when none of these is: a false status denial is the same failure
+// as a false status claim (the 2026-10-13 "Nothing's running on that right now" while their look-out was being searched daily).
+export const NOTHING_RUNNING_REASON = "nothing is running for it: no open task, research brief, look-out or daily search";
 const NOTHING_RUNNING = /^Nothing is running for them right now:/;
+const SEARCH_HELD = "Co's daily search is paused for them right now, so nothing they asked for is being searched.";
+// An ask saved this turn (agent/conversationTools.ts saveAsk): the daily search takes it from the next morning, which the
+// running-work line, read before the reply, can't know yet (review of the 10-13 fixes).
+const SAVED_THIS_TURN = /^Co's daily search is now looking for/;
+const savedAskThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kind === "ongoing" && SAVED_THIS_TURN.test(f.text));
+const searchHeld = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kind === "known" && f.text.includes(SEARCH_HELD));
 const RUNNING_LIST = /^What is actually running for them right now/;
 const SAYS_NOT_RUNNING = /\b(?:nothing|not|no|isn't|aren't|haven't|hasn't|n't)\b/i;
-export function runningWorkLine(tasks: string[], briefs: string[]): string {
+export function runningWorkLine(tasks: string[], briefs: string[], searching: SearchCoverage = NO_COVERAGE): string {
+  const hidden = searching.hidden ? [`${searching.hidden} more thing${searching.hidden === 1 ? "" : "s"} Co's daily search is looking for (details not shown here)`] : [];
   const running = [
     ...tasks.map((t) => t.match(/^Co is working on task #(\d+) for them: "([^"]+)"/)).filter(Boolean).map((m) => `task #${m![1]}: "${m![2]}"`),
     ...briefs.map((b) => b.match(/^(?:Co is putting together research brief|Research brief) #(\d+) for them, "([^"]+)"/)).filter((m, i) => m && CARRIED_WORK.test(briefs[i])).map((m) => `research brief #${m![1]}: "${m![2]}"`),
+    ...searching.asks.map((a) => `Co's daily search (every morning: events, the web and X) for what they asked: "${a.slice(0, 160)}"`),
+    ...searching.goals.map((g) => `Co's daily search for their goal: "${g.slice(0, 160)}"`),
   ];
-  if (!running.length) return "Nothing is running for them right now: no open task, research brief or look-out. Asks on file are saved, not being worked on. If they ask how something is going, say plainly that nothing is running on it and offer to start it now; never say Co is digging into, working on, looking into or searching for it.";
-  return `What is actually running for them right now (only these can be described as being worked on): ${running.join("; ")}. Anything else they asked about is saved, not being worked on: if they ask about it, say nothing is running on it and offer to start it.`;
+  running.push(...hidden);
+  // Never the hold's reason (a safety hold, an opt-out): only that it's paused, which Co doesn't explain.
+  const held = searching.held.length ? ` ${SEARCH_HELD} Don't explain why or name a reason.` : "";
+  if (!running.length) return `Nothing is running for them right now: no open task, research brief, look-out or daily search.${held} Anything else they asked for is saved, not being worked on. If they ask how something is going, say plainly that nothing is running on it and offer to start it now; never say Co is digging into, working on, looking into or searching for it.`;
+  return `What is actually running for them right now (only these can be described as being worked on or searched for): ${running.join("; ")}.${held} When they ask what Co is doing or searching for, describe these plainly, in their terms. Anything else they asked about is saved, not being worked on: if they ask about that one, say nothing is running on it and offer to start it.`;
+}
+// Pure: does the turn's running-work line say nothing at all is running? Only then is the canned line literally true.
+export function nothingRunsAt(rf: Pick<ReplyFacts, "facts">): boolean {
+  if (savedAskThisTurn(rf) && !searchHeld(rf)) return false;
+  return rf.facts.some((f) => f.kind === "known" && NOTHING_RUNNING.test(f.text));
 }
 
 // Pure: "nothing's running on that, it's just saved on my end" is the true status when the turn's running-work line says nothing
@@ -857,18 +888,42 @@ export function runningWorkLine(tasks: string[], briefs: string[]): string {
 // Work started this turn (a task or research) means something is running now: neither the allowance nor the line applies.
 const startedThisTurn = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kind === "did_this_turn" && STARTED_WORK.test(f.text));
 export function honestNothingRunning(rf: Pick<ReplyFacts, "facts">, sentence: string): boolean {
-  return !startedThisTurn(rf) && rf.facts.some((f) => f.kind === "known" && NOTHING_RUNNING.test(f.text)) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
+  return !startedThisTurn(rf) && nothingRunsAt(rf) && /\bnothing(?:'s| is)\s+(?:actually\s+|actively\s+|really\s+)?(?:running|being worked|in motion)\b/i.test(sentence) && !/\b(?:still|digging|working on|looking into|searching)\b/i.test(sentence);
 }
 
 // The honest line that replaces a cut "still working on it" (item 3): said once, never on top of one that already says it.
 export const NOTHING_RUNNING_LINE = "Nothing's running on that right now. Want me to start on it?";
-export function withNothingRunningLine(final: string, failed: GateCheck[], rf?: Pick<ReplyFacts, "facts">): string {
+// Royce, 2026-10-13: the line fires only when it is literally true (the running-work line says nothing at all is running: no task,
+// brief, look-out or daily search), and it never adds a second offer. Whether what's left already offers or asks anything is read
+// whatever its wording (offersAlready): the old word list missed "Want me to turn it back on?" and the offer went out twice.
+export async function withNothingRunningLine(final: string, failed: GateCheck[], rf?: Pick<ReplyFacts, "facts">, offers: (text: string) => Promise<boolean> = offersAlready): Promise<string> {
   if (!failed.some((c) => c.name === "claim_work_status")) return final;
-  if (rf && startedThisTurn(rf)) return final;
+  if (!rf || !nothingRunsAt(rf) || startedThisTurn(rf)) return final;
   if (/\bnothing(?:'s| is)\s+(?:actively\s+)?(?:running|being worked|in motion)\b/i.test(final)) return final;
-  // What's left already offers to start it: the honest part goes first, the offer isn't asked twice.
-  if (/\b(?:want me to|should i|shall i|i can)\b[^.?]*\b(?:start|dig|look|begin|kick|get going)/i.test(final)) return `${NOTHING_RUNNING_LINE.split(". ")[0]}. ${final.trim()}`;
+  const [honest] = NOTHING_RUNNING_LINE.split(". ");
+  // What's left already offers or asks something: the honest part goes first, and no second offer.
+  if (final.trim() && (await offers(final))) return `${honest}. ${final.trim()}`;
   return [final.trim(), NOTHING_RUNNING_LINE].filter(Boolean).join(final.includes("\n\n") ? "\n\n" : " ");
+}
+
+// Does this reply already offer to do something or ask them anything, in any wording? Any question already asks; otherwise one short
+// read. When the read fails it counts as yes: a missing offer costs less than a second one.
+export async function offersAlready(text: string): Promise<boolean> {
+  const t = text.trim();
+  if (!t) return false;
+  if (t.includes("?")) return true;
+  try {
+    const { text: out } = await generateText({
+      model: anthropic(MODELS.haiku),
+      maxOutputTokens: 10,
+      abortSignal: AbortSignal.timeout(3000),
+      experimental_telemetry: { isEnabled: true, functionId: "offersAlready" },
+      prompt: `A text a companion is about to send:\n"""${t.slice(0, 800)}"""\n\nDoes it already offer to do something for them, or ask them to decide or answer anything, in any wording ("I can start it if you like", "say the word and I'll look", "let me know if you want it back on")? Answer only yes or no.`,
+    });
+    return !/^\s*no\b/i.test(out);
+  } catch {
+    return true;
+  }
 }
 
 // Deterministic checks that don't need a model.
@@ -1205,7 +1260,7 @@ Never claims (don't list these):
 
 Precedence, when a sentence fits both: a named venue, event, person, date, price, number, rule, fee or deadline that isn't in the sources is a claim even inside advice. Saying specific people will be there, or that they're the member's people, is other_person even when phrased loosely. A person the member told Co about, said back as who they are to the member ("your mentor Lena reviews your pitch on Fridays", if they said so), is member_life; what that person thinks, says, wants or will do now is other_person. A possibility about the kind of person or outcome the member wants is advice.
 
-Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. Saying Co did NOT do something ("it never sent, and that's on me", "that didn't go through") is supported when no FACT shows it happened; mark it supported with no factId. A FACT listed under DONE THIS TURN is something that really happened this turn, what Co's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. An offer Co makes in this reply, framed as something it can do if they say yes ("I can text you a nudge on the 27th", "I can sketch name directions"), is supported by a capability FACT that says Co offered it in this reply; cite that FACT. A promise said as already set ("I'll text you on the 27th") is not an offer and needs a FACT that it will actually happen. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A work_status claim needs a FACT naming that exact work as running now: an open task, a research brief being put together, or a look-out; an open ask on file, Co's daily search, or Co's working notes are not work running on it, and when the FACTS say nothing is running for it, it is unsupported. A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. Their own texts in this conversation are a source for their own life and plans, said back in Co's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day ("today's meeting" backs "later today" for it, never "tonight"); quote their words. What they've told Co before (their own words, below) can support member_life; what Co knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Co is never part of their own life. Never count something as supported because it's plausible.
+Support: a claim is supported only if a FACT below states it, or the real texts in the conversation show it. What Co did or didn't do (past_action, including "I never sent that") needs a FACT: Co's own earlier words aren't evidence of what it did, and if a FACT shows Co sent it, "never sent" is unsupported; passing something to the team needs a FACT that it was saved. Saying Co did NOT do something ("it never sent, and that's on me", "that didn't go through") is supported when no FACT shows it happened; mark it supported with no factId. A FACT listed under DONE THIS TURN is something that really happened this turn, what Co's own tools did in this turn (a receipt): it supports the same action said in other words ("passed it along to the team" from "Saved for the team"), and a description of something just sent supports what that FACT says it contains. An offer Co makes in this reply, framed as something it can do if they say yes ("I can text you a nudge on the 27th", "I can sketch name directions"), is supported by a capability FACT that says Co offered it in this reply; cite that FACT. A promise said as already set ("I'll text you on the 27th") is not an offer and needs a FACT that it will actually happen. A future_promise needs a FACT that it will actually happen (a scheduled call, a pending item, an open task, or the next step in Co's working notes for them); an open task Co is working on for them supports promising to keep working that goal (keep looking, chase a price or a quote, report back before its deadline). A work_status claim needs a FACT naming that exact work as running now: an open task, a research brief being put together, a look-out, or Co's daily search for something the running-work FACT lists under it; an open ask that line doesn't list, or Co's working notes, are not work running on it. When the FACTS say nothing is running for it, a claim that it is running is unsupported, and when the running-work FACT lists it, a claim that nothing is running on it is unsupported too. A capability needs a capability FACT covering that exact thing. A prediction needs a FACT stating that outcome; guessing from what was or wasn't found is never support. "I don't have X" is supported only when no FACT, and nothing they've told Co before, gives X; when nothing does, mark it supported with no factId or quote, since an absence has nothing to cite. Them having just mentioned X in this message doesn't make "I don't have anything on file about X" false. A clash needs FACTS giving both start times, overlapping. Dates decide offers and follow-ups: an offer needs a FACT showing it's still ahead or today, never one marked "already over" or "outside the dates they asked about"; a followup needs a FACT showing it's already over, never one marked "coming up". A number must match its source exactly. Their own texts in this conversation are a source for their own life and plans, said back in Co's words with everyday inferences: where they moved from (which never says where they live now unless they said that too), their work, a plan they named and its day ("today's meeting" backs "later today" for it, never "tonight"); quote their words. What they've told Co before (their own words, below) can support member_life; what Co knows about them can support a detail about the member themself; neither supports a claim about an event, a count, a link, or another person outside their own life, and someone who's another member of Co is never part of their own life. Never count something as supported because it's plausible.
 
 FACTS:
 ${facts}
@@ -1279,14 +1334,18 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       return { name: `claim_${c.type}`, pass, reason };
     }
     // Co's own work said as running ("digging into X", "still working the intro search") stands only on work that is running:
-    // an open task, a research brief or a look-out (2026-10-12, item 3: both were said while only open asks were on file).
+    // an open task, a research brief, a look-out or the daily search the running-work line lists (2026-10-12, item 3; 2026-10-13:
+    // the daily search of their open asks is running work since the 9am floor, #181).
     if (pass && c.type === "work_status") {
       const cited = rf.facts.find((f) => f.id === c.factId);
-      // The running-work line itself backs what it says: a listed item as running, or "nothing is running" as nothing.
+      // The running-work line itself backs what it says: a listed item as running, or "nothing is running" as nothing. The daily
+      // search's own fact backs it too, while the running-work line says something is running (it lists the same asks, held or not).
       const fromState = !!cited && cited.kind === "known" && (RUNNING_LIST.test(cited.text) || (NOTHING_RUNNING.test(cited.text) && SAYS_NOT_RUNNING.test(c.text)));
-      if (!cited || (!workBacksPromise(cited) && !fromState)) {
+      // A held search backs nothing; an ask saved this turn backs itself (nothingRunsAt is false then).
+      const fromSearch = !!cited && cited.kind === "ongoing" && /^Co's daily search is (?:now )?looking for/.test(cited.text) && !nothingRunsAt(rf) && !searchHeld(rf);
+      if (!cited || (!workBacksPromise(cited) && !fromState && !fromSearch)) {
         pass = false;
-        reason += ` (${NOTHING_RUNNING_REASON})`;
+        reason += nothingRunsAt(rf) ? ` (${NOTHING_RUNNING_REASON})` : " (that work isn't among what the running-work line lists for them)";
       }
     }
     // An offer Co makes in this reply (goal ownership, 2026-10-13) is a capability claim backed by its offer fact (goalOwnership.ts
@@ -1625,11 +1684,16 @@ export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTur
   return o.sentThisTurn.some((m) => m.trim()) ? "nothing" : "honest";
 }
 
-async function honestNoAnswer(message: string): Promise<string | null> {
+// What's ahead from Co (services/whatsAhead.ts aheadLine): the honest line never says nothing is planned while it lists something
+// (2026-10-13: "Nothing confirmed on my end for this week" with a Friday check-in on the ledger).
+const AHEAD_LINE = /^What's ahead for them from Co, as scheduled now:/;
+async function honestNoAnswer(message: string, ahead: string | null = null): Promise<string | null> {
   const { lineInVoice } = await import("../services/voiceLine.js");
   const r = await lineInVoice({
-    purpose: "Say plainly, in one short line, that you don't have a solid answer to what they just asked, without guessing, apologizing at length, or promising to find out later.",
-    facts: [`They asked: "${message.slice(0, 200)}"`, "Co doesn't have a confirmed answer to it right now."],
+    purpose: ahead
+      ? "Say plainly, in one or two short lines, what you can stand behind: if what they asked is about what's coming up or what's ahead, name what is scheduled from the facts in plain words; otherwise say you don't have a solid answer to it. No guessing, no long apology, no promise to find out later."
+      : "Say plainly, in one short line, that you don't have a solid answer to what they just asked, without guessing, apologizing at length, or promising to find out later.",
+    facts: [`They asked: "${message.slice(0, 200)}"`, ...(ahead ? ["Beyond what is scheduled, Co doesn't have a confirmed answer to it right now.", ahead] : ["Co doesn't have a confirmed answer to it right now."])],
     examples: [],
     fallback: MINIMAL_FALLBACK,
   });
@@ -1834,7 +1898,7 @@ export async function groundReply(
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
     if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src)) {
-      result = { final: withNothingRunningLine(cut, effectiveFailed1, rf), outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+      result = { final: await withNothingRunningLine(cut, effectiveFailed1, rf), outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
       let kept: { text: string; checks: GateCheck[] } | null = null;
@@ -1872,11 +1936,11 @@ export async function groundReply(
         const after = afterStrip({ enough, inviteCut, sentThisTurn: src.sentThisTurn ?? [] });
         // Co says it in its own words, claiming nothing (2026-09-28: the one
         // fixed line read as a script); the fixed line is the fallback.
-        const honest = after === "honest" ? await honestNoAnswer(src.message).catch(() => null) : null;
+        const honest = after === "honest" ? await honestNoAnswer(src.message, rf.facts.find((f) => f.kind === "scheduled" && AHEAD_LINE.test(f.text))?.text ?? null).catch(() => null) : null;
         const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" ? "" : honest ?? MINIMAL_FALLBACK;
         // A cut "still working on it" ends on the honest line instead (item 3), never on a bare "not sure".
-        const workCut = effectiveFailed1.some((c) => c.name === "claim_work_status") && after !== "nothing" && !startedThisTurn(rf);
-        result = { final: workCut ? withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+        const workCut = effectiveFailed1.some((c) => c.name === "claim_work_status") && after !== "nothing" && !startedThisTurn(rf) && nothingRunsAt(rf);
+        result = { final: workCut ? await withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }
   }

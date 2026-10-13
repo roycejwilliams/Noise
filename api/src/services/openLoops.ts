@@ -33,7 +33,9 @@ const STATUS_WORDS: Record<LoopStatus, string> = {
 
 // An open ask is on file, not work in progress: nothing runs for it unless a task does (2026-10-12, item 3: "still working the intro
 // search" was said off an open ask read as "in progress").
-export const ASK_ON_FILE = "an open ask on file; nothing is being worked on for it right now";
+// Whether Co's daily search covers it is said once, in the reply's running-work line (harness/replyGrounding.ts runningWorkLine, read
+// from real state, 2026-10-13): this label no longer says nothing is being worked on, which contradicted the daily search of a find ask.
+export const ASK_ON_FILE = "an open ask on file (whether Co's daily search covers it right now is in the running-work line)";
 
 // Pure: the loops implied by what Co already holds.
 export function deriveLoops(src: {
