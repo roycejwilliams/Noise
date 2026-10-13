@@ -5,8 +5,8 @@
 //     (read, never re-planned: planning sets goal states and retires asks, which is the lifecycle this must not touch);
 //   - no source selectivity and no empty-streak backoff here; and it leaves the ask lifecycle alone: it never moves an ask's
 //     last_attempted_at or its empty-run count (eventSurfacingSweep.ts), so the hourly sweeps run exactly as before, on top;
-//   - finds go to the pool (the event backlog), and the picker chooses what sends, right after (sweepShadow.ts runPickerAfterSweep;
-//     the 10am review account also keeps its 10am run). Nothing here picks or sends itself;
+//   - finds go to the pool (the event backlog), the picker chooses right after (sweepShadow.ts runPickerAfterSweep), and what it chose
+//     goes to the member then as their morning finds (sendMorningFinds: each find's link, then its description);
 //   - every ask and goal it doesn't search says why, and each run writes one summary line per member (sweep.daily);
 //   - a failed run is a failed day: logged as an error and run again on a later hour, at most DAILY_SWEEP_ERRORS_PER_DAY a day.
 // Its own cron (jobs/index.ts, :05), never overlapping itself, and a member is claimed while a sweep works on them (claimMember),
@@ -132,7 +132,7 @@ export async function runDailySweepAll(run: <T>(items: T[], limit: number, fn: (
   try {
     const { rows } = await pool.query(MEMBERS_SQL);
     await run(rows, DAILY_SWEEP_CONCURRENCY, async (row: any) => {
-      // (each member's run; the day's rollup text goes after all of them, below)
+      // (each member's run)
       await runDailySweep(row, now).catch(async (err: any) => {
         // Anything that escaped the member's run is that member's failed day (their day, not Pacific's), retried on a later hour.
         console.error(`Daily sweep failed for ${row.user_id}:`, err?.message ?? err);
@@ -140,132 +140,13 @@ export async function runDailySweepAll(run: <T>(items: T[], limit: number, fn: (
         await recordDecision({ layer: 5, decision: "sweep.daily", userId: row.user_id, outcome: "skip", action: "error", reason: `the run failed: ${String(err?.message ?? err).slice(0, 300)}`, proposal: { day: dailySweepWindow(now, zone).day, items: [] } });
       });
     });
-    // The day's rollup to Royce once every member's day has a result (sendRollupIfComplete).
-    await sendRollupIfComplete(rows, now).catch((err: any) => console.error("Daily sweep: the rollup text failed (non-fatal):", err?.message ?? err));
   } finally {
     floorRunning = false;
   }
 }
 
-// ------------------------------------------------------------------ the rollup text (Royce, 2026-10-13: "After the floor completes, send
-// one summary to my account: ran or failed, asks searched, finds kept, sends made. Failed day says so. This is how I catch a silent
-// day without reading logs."). One text a day, to the morning-report recipient (devReview.ts digestRecipient), once every member whose
-// 9am has come has a result for today. Sent as "ops" (services/sendblue.ts sendingAs): kept in the send log, never added to their
-// conversation with Co, so Co doesn't read other members' days as something it said to them. No text by mid-morning is itself the
-// sign of a silent day.
-export type RollupMember = { name: string; phase: "before" | "open" | "after"; final: { action: string; outcome: string; reason: string | null; totals: any } | null; errors: number; lastError: string | null; sends: number; xUsed?: number; xStarved?: boolean; held?: boolean };
-// Pure: why a member's day failed, in words that carry nothing of what they asked (the rollup is a text; ask words stay on the dashboard).
-export function failureGist(items: ItemResult[]): string {
-  const errs = items.filter((i) => i.status === "error");
-  if (!errs.length) return "the run failed";
-  const kinds = new Set(errs.map((i) => (/looked nowhere/.test(i.why ?? "") ? "every source failed" : /search failed/.test(i.why ?? "") ? "a search threw" : "a search failed")));
-  return `${errs.length} search(es) failed: ${[...kinds].join(", ")}`;
-}
-// Pure: a day where every item was skipped because sends are held (a hold, a pause, opted out of finds).
-export function heldDay(items: ItemResult[]): boolean {
-  return items.length > 0 && items.every((i) => i.status === "skipped" && /^held:/.test(i.why ?? ""));
-}
-// X usage (Royce, 2026-10-13: "Add X search usage to the daily rollup (searches used per run, and any member who got no X because the
-// budget ran dry, named). We'll set the cap from those numbers"). sweepsUsed: every sweep's X searches in the last 24 hours, against
-// what sweeps may use (tieredRecommendation.ts: the daily cap minus what's kept for member requests).
-export type XUsage = { sweepsUsed: number; sweepsCap: number; webUsed?: number; webCap?: number; pickerRuns?: number; pickerErrors?: number };
-// Pure: from a member's day items, X searches the floor ran and whether the budget left them without X.
-export function xOfItems(items: ItemResult[]): { used: number; starved: boolean } {
-  const searched = items.filter((i) => i.status === "searched" || i.status === "error");
-  return { used: searched.filter((i) => i.sources?.x).length, starved: searched.some((i) => (i.failures ?? []).some((f) => /^x: unavailable/.test(f))) };
-}
-
-// Pure: whether the day is complete (no member whose 9am has come is still without a result), and the text.
-export function rollupText(day: string, members: RollupMember[], x?: XUsage): { complete: boolean; text: string } {
-  const due = members.filter((m) => m.phase !== "before");
-  const pending = due.filter((m) => !m.final && !m.errors);
-  const ran = due.filter((m) => m.final && m.final.outcome === "act");
-  const held = due.filter((m) => m.held);
-  const quiet = due.filter((m) => m.final && m.final.outcome !== "act" && !m.held && !["missed", "opted_out"].includes(m.final.action));
-  const failed = due.filter((m) => !m.final && m.errors);
-  const missed = due.filter((m) => m.final?.action === "missed");
-  const sum = (k: string) => due.reduce((n, m) => n + Number(m.final?.totals?.[k] ?? 0), 0);
-  const sends = members.reduce((n, m) => n + m.sends, 0);
-  const label = DateTime.fromISO(day).toFormat("ccc LLL d");
-  const lines = [
-    `9am sweep, ${label}: ${failed.length || missed.length ? "failed for some" : "ran"}. ${ran.length} of ${due.length} member(s) searched${quiet.length ? `, ${quiet.length} had nothing to search` : ""}${held.length ? `, ${held.length} held (${held.map((m) => m.name).join(", ")})` : ""}.`,
-    `Asks searched ${sum("asksSearched")}, goals searched ${sum("goalsSearched")}, finds kept ${sum("kept")}, queued ${sum("queued")}, finds texted so far today ${sends}.`,
-    ...(failed.length ? [`Failed: ${failed.map((m) => `${m.name} (${(m.lastError ?? "no reason").slice(0, 90)}; ${m.errors >= DAILY_SWEEP_ERRORS_PER_DAY ? "no more retries today" : "retrying hourly"})`).join("; ")}.`] : []),
-    ...(missed.length ? [`Missed: ${missed.map((m) => m.name).join(", ")} (waking hours ended first).`] : []),
-    ...(members.some((m) => m.phase === "before") ? [`Not yet 9am for: ${members.filter((m) => m.phase === "before").map((m) => m.name).join(", ")}.`] : []),
-    `X searches: the floor ran ${due.reduce((n, m) => n + (m.xUsed ?? 0), 0)}${x ? `; all sweeps used ${x.sweepsUsed} of ${x.sweepsCap} in the last 24 hours` : ""}.${due.some((m) => m.xStarved) ? ` No X (budget ran dry): ${due.filter((m) => m.xStarved).map((m) => m.name).join(", ")}.` : ""}${x?.webCap ? ` Web searches by sweeps: ${x.webUsed ?? 0} of ${x.webCap} in the last 24 hours.` : ""}`,
-    ...(x?.pickerRuns !== undefined ? [`Picker runs after sweeps in the last 24 hours: ${x.pickerRuns}${x.pickerErrors ? `, ${x.pickerErrors} failed` : ""}.`] : []),
-  ];
-  return { complete: pending.length === 0 && due.length > 0, text: lines.join("\n") };
-}
-
-// The one account the rollup goes to, by user id (review, 2026-10-13: a first-name match could send every member's day to someone
-// else named Royce). Unset: no text, said once a day in the log.
-export function rollupRecipient(env: NodeJS.ProcessEnv = process.env): string | null {
-  const id = (env.DAILY_ROLLUP_USER_ID ?? "").trim();
-  return /^[0-9a-f-]{36}$/i.test(id) ? id : null;
-}
-
-async function sendRollupIfComplete(rows: any[], now: Date): Promise<void> {
-  const to = rollupRecipient();
-  if (!to) {
-    const day = dailySweepWindow(now, null).day;
-    const [said] = (await pool.query(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.daily_rollup_failed' AND proposal->>'day' = $1 LIMIT 1`, [day])).rows;
-    if (!said) await writeRollupRecord(null, false, day, "", "no rollup recipient set (DAILY_ROLLUP_USER_ID), so no text");
-    return;
-  }
-  const toZone = await memberZone(to).catch(() => null);
-  const { day, phase } = dailySweepWindow(now, toZone);
-  if (phase === "before") return;
-  const [already] = (await pool.query(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.daily_rollup' AND proposal->>'day' = $1 LIMIT 1`, [day])).rows;
-  if (already) return;
-  const members: RollupMember[] = [];
-  for (const r of rows) {
-    const zone = await memberZone(String(r.user_id)).catch(() => null);
-    const w = dailySweepWindow(now, zone);
-    const { rows: recs } = await pool.query(`SELECT outcome, action, reason, proposal->'totals' AS totals, proposal->'items' AS items FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND proposal->>'day' = $2 ORDER BY created_at`, [r.user_id, w.day]);
-    const final = [...recs].reverse().find((x: any) => x.action !== "error") ?? null;
-    const errs = recs.filter((x: any) => x.action === "error");
-    const { rows: s } = await pool.query(`SELECT COALESCE(decided_at, updated_at) AS at FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND COALESCE(decided_at, updated_at) > NOW() - INTERVAL '30 hours'`, [r.user_id]);
-    const sends = s.filter((x: any) => DateTime.fromJSDate(new Date(x.at)).setZone(hoursZone(zone)).toISODate() === w.day).length;
-    // X across every run today (a retry's carried items are counted once, in the run that searched them).
-    const xr = xOfItems(recs.flatMap((x: any) => (Array.isArray(x.items) ? x.items : []).filter((i: ItemResult) => !i.earlierRun)));
-    const lastErrItems = errs.length ? ((errs[errs.length - 1].items ?? []) as ItemResult[]) : [];
-    members.push({ name: String(r.first_name || "(no name)"), phase: w.phase, final, errors: errs.length, lastError: errs.length ? failureGist(lastErrItems) : null, sends, xUsed: xr.used, xStarved: xr.starved, held: !!final && heldDay((final.items ?? []) as ItemResult[]) });
-  }
-  const T = await import("./tieredRecommendation.js");
-  const [{ n }] = (await pool.query(`SELECT COUNT(*)::int AS n FROM x_search_log WHERE source = 'sweep' AND created_at > NOW() - INTERVAL '1 day'`)).rows;
-  const [{ w: webN }] = (await pool.query(`SELECT COUNT(*)::int AS w FROM web_search_log WHERE source = 'sweep' AND created_at > NOW() - INTERVAL '1 day'`)).rows;
-  const WS = await import("./webOpportunitySearch.js");
-  const [pk] = (await pool.query(`SELECT COUNT(*) FILTER (WHERE action = 'ran')::int AS ran, COUNT(*) FILTER (WHERE action = 'error')::int AS err FROM harness_decisions WHERE decision = 'sweep.picker_after' AND created_at > NOW() - INTERVAL '1 day'`)).rows;
-  const { complete, text } = rollupText(day, members, { sweepsUsed: Number(n), sweepsCap: T.X_SWEEP_SHARE(), webUsed: Number(webN), webCap: WS.WEB_SWEEP_SHARE(), pickerRuns: Number(pk?.ran ?? 0), pickerErrors: Number(pk?.err ?? 0) });
-  if (!complete) return;
-  const [me] = (await pool.query(`SELECT phone_number FROM users WHERE id = $1`, [to])).rows;
-  if (!me?.phone_number) return;
-  const { default: sendblue, sendingAs } = await import("./sendblue.js");
-  const { isTestNumber, testHandle } = await import("./testNumbers.js");
-  let sent = true;
-  if (isTestNumber(me.phone_number)) {
-    // A test member's texts are logged, never sent (services/testNumbers.ts).
-    await pool.query(`INSERT INTO outbound_messages (message_handle, user_id, content, sender) VALUES ($1, $2, $3, 'ops')`, [testHandle(), to, text]);
-  } else {
-    sent = await sendingAs("ops", () => sendblue.messages.send({ number: me.phone_number, content: text, from_number: process.env.SENDBLUE_PHONE_NUMBER! }))
-      .then(() => true)
-      .catch((err: any) => {
-        console.error("Daily sweep: the rollup text failed:", err?.message ?? err);
-        return false;
-      });
-  }
-  // Recorded either way; a failed send is retried next tick (only a sent one marks the day done).
-  await writeRollupRecord(to, sent, day, text);
-}
-
-async function writeRollupRecord(to: string | null, sent: boolean, day: string, text: string, why?: string): Promise<void> {
-  await pool.query(
-    `INSERT INTO harness_decisions (layer, decision, user_id, outcome, action, proposal, checks, confidence, reason) VALUES (5, $1, $2, $3, $4, $5, '[]', NULL, $6)`,
-    [sent ? "sweep.daily_rollup" : "sweep.daily_rollup_failed", to, sent ? "act" : "skip", sent ? "sent" : why ? "no_recipient" : "send_failed", JSON.stringify({ day, text }), sent ? null : why ?? "the text didn't go through; tried again next hour"],
-  );
-}
+// No recap text, ever (Royce, 2026-10-13: "Don't ever send a recap"). What the floor found goes to the members themselves (sendMorningFinds);
+// the numbers stay in the decision log and on the team-only co-test /sweeps dashboard.
 
 export async function runDailySweep(row: any, now = new Date()): Promise<void> {
   const userId = String(row.user_id);
@@ -367,13 +248,39 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
     const last = errorsToday + 1 >= DAILY_SWEEP_ERRORS_PER_DAY;
     await writeDaily(userId, "skip", "error", `${failed.join(" | ").slice(0, 800)}${last ? " (the day's last retry: no more runs today)" : " (run again next hour)"}`, proposal);
     // What did get searched is in the pool: the picker still runs for it.
-    if (totals.asksSearched + totals.goalsSearched > 0) await import("./sweepShadow.js").then((S) => S.runPickerAfterSweep(userId, "daily"));
+    if (totals.asksSearched + totals.goalsSearched > 0) await sendMorningFinds(userId, base.day);
     return;
   }
   const searchedAny = totals.asksSearched + totals.goalsSearched > 0;
   await writeDaily(userId, searchedAny ? "act" : "skip", action, searchedAny ? goalNote : [(proposal as any).note, goalNote].filter(Boolean).join("; ") || "nothing searched; each item says why", proposal);
   // The sweep discovers, the picker decides (sweepShadow.ts runPickerAfterSweep): right after, for what this run put in the pool.
-  if (searchedAny) await import("./sweepShadow.js").then((S) => S.runPickerAfterSweep(userId, "daily"));
+  if (searchedAny) await sendMorningFinds(userId, base.day);
+}
+
+// The morning's finds go to them now (Royce, 2026-10-13: the 9am sweep "should be what it found ... in this order link then description";
+// "Members get their finds"). The picker chooses (runPickerAfterSweep), what it chose that's still waiting is marked as today's morning
+// finds (payload.morningDay: harness/proactive.ts morningFind skips the pacing for them, that day only), and the send step runs for
+// them right away: each find's link, then its description. Hours, opt-out, mid-conversation and the safety checks still hold; a find
+// they hold for goes out at the next send run that day. Failures here are logged, never thrown into the floor.
+async function sendMorningFinds(userId: string, day: string): Promise<void> {
+  // Only what this run's picker queues becomes a morning find (review, 2026-10-13: a retry later in the day must not turn other sweeps'
+  // picks into unpaced texts); a pick already waiting from earlier keeps the normal pacing.
+  const [{ t0 }] = (await pool.query(`SELECT NOW() AS t0`)).rows;
+  await import("./sweepShadow.js").then((S) => S.runPickerAfterSweep(userId, "daily"));
+  const { rowCount } = await pool.query(
+    `UPDATE proactive_candidates SET payload = payload || jsonb_build_object('morningDay', $2::text), updated_at = NOW()
+      WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending' AND payload->>'picked' = 'true'
+        AND (created_at >= $3 OR (payload->>'pickedAt')::timestamptz >= $3)`,
+    [userId, day, t0],
+  );
+  if (!rowCount) return;
+  try {
+    const [P, R] = await Promise.all([import("../harness/proactive.js"), import("../harness/proactiveRegistry.js")]);
+    await P.dispatchForUser(R.proactiveRegistry, userId);
+  } catch (err: any) {
+    console.error(`Daily sweep: sending the morning finds failed for ${userId} (non-fatal, the next send run tries again):`, err?.message ?? err);
+    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "error", reason: String(err?.message ?? err).slice(0, 300), proposal: { day, finds: rowCount } });
+  }
 }
 
 // ------------------------------------------------------------------ the rollup (Royce, 2026-10-13: "Make the summary line visible to

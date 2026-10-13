@@ -37,8 +37,6 @@ const WEB_SEARCH_MODEL = MODELS.sonnet;
 // search that's at most ~$9 a day; the sweep can never take the live half.
 const WEB_SEARCH_DAILY_CAP = Number(process.env.WEB_SEARCH_DAILY_CAP ?? 150);
 const WEB_SEARCH_REQUEST_RESERVE = Number(process.env.WEB_SEARCH_REQUEST_RESERVE ?? 75);
-// What sweeps may spend of the day's web searches (the cap minus what's kept for member requests), for the daily rollup.
-export const WEB_SWEEP_SHARE = (): number => WEB_SEARCH_DAILY_CAP - WEB_SEARCH_REQUEST_RESERVE;
 
 // Same count-then-insert-under-one-advisory-lock pattern as reserveXSearch
 // in tieredRecommendation.ts, against its own table so the two budgets never

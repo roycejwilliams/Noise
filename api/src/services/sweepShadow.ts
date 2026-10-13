@@ -476,7 +476,7 @@ export async function rerunPickerForTaste(userId: string): Promise<void> {
 export async function runPickerAfterSweep(userId: string, after: "daily" | "hourly" | "goal" | "call" | "new_ask"): Promise<void> {
   if (!pickerLive()) return;
   await runSweepShadow(userId, new Date(), { trigger: "after_sweep" }).then((r) => {
-    // Counted for the daily rollup (how often the picker runs after sweeps, to set a cap from).
+    // Counted for the team-only dashboard (how often the picker runs after sweeps, to set a cap from).
     if (r && !r.skipped) void recordDecision({ layer: 5, decision: "sweep.picker_after", userId, outcome: r.error ? "skip" : "act", action: r.error ? "error" : "ran", proposal: { after, day: r.day } });
   }).catch(async (err: any) => {
     console.error(`picker after the ${after} sweep failed for ${userId} (non-fatal, runs again after their next sweep):`, err?.message ?? err);

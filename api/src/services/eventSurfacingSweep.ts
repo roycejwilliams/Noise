@@ -579,6 +579,8 @@ async function dropStaleFront(userId: string, items: BacklogItem[], zone: string
 export type EventOfferPayload = {
   // Chosen by Co's daily pick (services/sweepShadow.ts): sent together with the other picks waiting.
   picked?: boolean;
+  // When the pick was made (ISO): the 9am sweep's morning finds are this run's picks (services/dailySweep.ts sendMorningFinds).
+  pickedAt?: string;
   // The last day it's worth sending (the pick's own read): its expiry and its rank among finds.
   lastDay?: string;
   // The pick's own why, kept apart, and its view of the day's set (Phase C3): what the bundle composer writes from.
@@ -870,7 +872,8 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
     type: "event_offer",
     targetKey: offerTargetKey(item),
     summary: `${o.reminder ? "Reminder, already shown to them: " : ""}${o.match.kind === "opportunity" ? "An opportunity" : "An event"} Co's daily pick chose for them: ${o.match.name}`,
-    payload,
+    // When this pick was made: the 9am sweep's morning finds are this run's picks, merged ones too (services/dailySweep.ts).
+    payload: { ...payload, pickedAt: new Date().toISOString() },
     // Whichever comes first: an event still expires at its start (the 2026-10-07 rule), a pick at the end of its last day.
     expiresAt: o.lastDay ? new Date(Math.min(endOfLocalDay(o.lastDay, zone).getTime(), offerExpiresAt(match, zone).getTime())) : offerExpiresAt(match, zone),
     // The higher of the two: short notice stays 95 even when the pick's last day is a few days out (review of #127).
