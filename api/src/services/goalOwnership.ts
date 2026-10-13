@@ -137,6 +137,17 @@ export function withLightReminder(items: GoalItem[], title: string, moment: Goal
   return [...rest, { n, text: `the ${lead}${day?.isValid ? `, ahead of ${day.toFormat("LLL d")}` : ""}`, owner: "co", how: "reminder", reach: "internal", taskId: null, status: "offered", suggest: suggestedReminderAt(moment, o.now ?? new Date(), o.zone ?? null) }];
 }
 
+// Pure: the facts that back Co's offer on a goal AS AN OFFER: what Co can do for them if they say yes, offered in this reply, with
+// nothing set or started. Each is a capability fact: it backs an offer ("I can..."), never a promise said as set, which the claim check reads as a future_promise needing a scheduled fact (harness/replyGrounding.ts).
+export const OFFERED_NOT_SET_WORDS = "offered in this reply, only if they say yes; nothing is set or started yet";
+export function offerFactLines(pieces: Pick<GoalItem, "text" | "how" | "suggest">[]): string[] {
+  return pieces.map((p) =>
+    p.how === "reminder"
+      ? `Co can hold a reminder for them about ${p.text.replace(/, ahead of .*$/, "")} and text them ${p.suggest ? `on ${p.suggest.day}` : "on a day they pick"} (${OFFERED_NOT_SET_WORDS}).`
+      : `Co can ${p.how === "draft" ? "draft" : p.how === "watch" ? "watch for" : "research"} ${p.text} for them (${OFFERED_NOT_SET_WORDS}).`,
+  );
+}
+
 // ---------------------------------------------------------------- the read: club world, and each item's reach
 
 export type GoalRead = { clubWorld: boolean; why: string; reach: Map<number, ItemReach>; read: boolean };
