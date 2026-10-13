@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { quoteIsTheirs } from "./provenance.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
 import crypto from "crypto";
@@ -1543,6 +1544,8 @@ export type CapturedEventMentionData = {
   event_name: string | null;
   event_date: string | null; // resolved ISO date (YYYY-MM-DD), or null
   event_location: string | null;
+  // Their words saying they are going (2026-10-12, services/provenance.ts): a plan is stored only on their own stated going.
+  quote?: string | null;
 };
 
 // "Nudge Co users at events Co doesn't own" — same shape as captureIntent
@@ -1568,8 +1571,10 @@ Did the user mention a specific real-world event they're planning to attend (a c
 2. event_date — resolve this to an ISO date (YYYY-MM-DD) using today's date, ${today}, as the reference point. Only fill this in if you can confidently resolve it (a specific day, or an unambiguous relative reference like "this Thursday"). null if too vague ("sometime next month", no date mentioned at all) — do not guess.
 3. event_location — city or venue if mentioned, else null.
 
+Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is) or something Co offered is not. quote: their exact words that say they are going, copied from a "user:" line.
+
 Return ONLY valid JSON, no preamble:
-{"event_name": "..." or null, "event_date": "YYYY-MM-DD" or null, "event_location": "..." or null}
+{"event_name": "..." or null, "event_date": "YYYY-MM-DD" or null, "event_location": "..." or null, "quote": "..." or null}
 
 Transcript:
 "${transcript}"`,
@@ -1585,17 +1590,23 @@ Transcript:
     } catch {
       return;
     }
-    await storePlannedEventMention(user_id, parsed);
+    await storePlannedEventMention(user_id, parsed, transcript);
   } catch (err: any) {
     console.error("extractPlannedEventMention failed (non-fatal):", err?.message ?? err);
   }
 }
 
+// Pure: a plan to attend is theirs to say. Stored only with a name and their own words saying they're going.
+export function statedPlan(parsed: CapturedEventMentionData | null, theirWords: string): parsed is CapturedEventMentionData & { event_name: string } {
+  return !!parsed?.event_name && quoteIsTheirs(parsed.quote, theirWords);
+}
+
 // What extractPlannedEventMention does after its model call, for output
 // produced elsewhere (services/turnLearning.ts).
-export async function storePlannedEventMention(user_id: string, parsed: CapturedEventMentionData | null): Promise<void> {
+// theirWords: what they said (their message, or their lines of a call): the quote must be copied from it.
+export async function storePlannedEventMention(user_id: string, parsed: CapturedEventMentionData | null, theirWords: string): Promise<void> {
   try {
-    if (!parsed?.event_name) return;
+    if (!statedPlan(parsed, theirWords)) return;
 
     const embeddingSource = [parsed.event_name, parsed.event_location].filter(Boolean).join(", ");
     const embedding = await generateEmbedding(embeddingSource).catch(() => null);

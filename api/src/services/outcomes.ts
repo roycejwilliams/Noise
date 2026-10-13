@@ -8,6 +8,7 @@
 // and away from what didn't. Tier weighting (getTierBias) still reads its
 // own co_memories rows.
 import pool from "../db/db.js";
+import { isDidResult, isStated, UNCONFIRMED_RULE, type Provenance } from "./provenance.js";
 
 export type SuggestionKind = "event" | "opportunity" | "intro";
 // acted: they said they signed up, applied, or went (a reaction to something
@@ -18,6 +19,8 @@ export type SuggestionResult = "interested" | "declined" | "acted" | "helped" | 
 // routes/sendblue.ts): they hadn't been told who. When the reveal is sent and
 // they answer, the same item records again and the named label replaces it;
 // otherwise the first row stands (DO NOTHING before, and still for all else).
+// from: where a result about what they did comes from (services/provenance.ts). "stated" only with their own explicit words; left
+// out, the row's provenance is unknown and every reader treats a did-result as unconfirmed. A stated row upgrades an earlier one.
 export async function recordSuggestionOutcome(
   userId: string,
   kind: SuggestionKind,
@@ -25,15 +28,22 @@ export async function recordSuggestionOutcome(
   itemName: string,
   result: SuggestionResult,
   note?: string | null,
+  from?: { provenance: Provenance; quote?: string | null } | null,
 ): Promise<void> {
   await pool
     .query(
-      `INSERT INTO suggestion_outcomes (user_id, kind, item_key, item_name, result, note) VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO suggestion_outcomes (user_id, kind, item_key, item_name, result, note, provenance, quote) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (user_id, item_key, result) DO UPDATE SET item_name = EXCLUDED.item_name
          WHERE suggestion_outcomes.item_name LIKE '%(name not shared)'`,
-      [userId, kind, itemKey, itemName, result, note ?? null],
+      [userId, kind, itemKey, itemName, result, note ?? null, from?.provenance ?? null, from?.quote ? from.quote.slice(0, 300) : null],
     )
     .catch((err: any) => console.error("recordSuggestionOutcome failed (non-fatal):", err?.message ?? err));
+  // Their own words later confirm a row that was there already: it becomes stated, with those words.
+  if (from?.provenance === "stated") {
+    await pool
+      .query(`UPDATE suggestion_outcomes SET provenance = 'stated', quote = $4 WHERE user_id = $1 AND item_key = $2 AND result = $3 AND provenance IS DISTINCT FROM 'stated'`, [userId, itemKey, result, from.quote ? from.quote.slice(0, 300) : null])
+      .catch((err: any) => console.error("recordSuggestionOutcome: confirming the row failed (non-fatal):", err?.message ?? err));
+  }
 }
 
 // Named outcome from a "how did it go?" answer.
@@ -49,19 +59,29 @@ export function resultFromNamedOutcome(outcome: string): SuggestionResult {
 export async function tasteSummary(userId: string, days = 120): Promise<string | null> {
   const { rows } = await pool
     .query(
-      `SELECT item_name, result FROM suggestion_outcomes WHERE user_id = $1 AND created_at > NOW() - ($2 || ' days')::interval AND result <> 'no_signal' ORDER BY created_at DESC LIMIT 40`,
+      `SELECT item_name, result, provenance FROM suggestion_outcomes WHERE user_id = $1 AND created_at > NOW() - ($2 || ' days')::interval AND result <> 'no_signal' ORDER BY created_at DESC LIMIT 40`,
       [userId, days],
     )
     .catch(() => ({ rows: [] as any[] }));
+  return tasteFrom(rows);
+}
+
+// Pure: the summary from outcome rows. What they did (went, signed up, liked it) is said only when they stated it; a did-result
+// they never confirmed is listed as unconfirmed, to ask about at most (services/provenance.ts).
+export function tasteFrom(rows: { item_name: string; result: string; provenance?: string | null }[]): string | null {
   if (!rows.length) return null;
-  const pick = (results: string[]) => [...new Set(rows.filter((r: any) => results.includes(r.result)).map((r: any) => r.item_name as string))].slice(0, 6);
-  const liked = pick(["helped", "acted"]);
-  const keen = pick(["interested"]).filter((n) => !liked.includes(n));
-  const not = pick(["declined", "didnt_help"]);
+  const did = (r: { result: string; provenance?: string | null }) => isDidResult(r.result) && isStated(r.provenance);
+  const names = (xs: typeof rows) => [...new Set(xs.map((r) => r.item_name))].slice(0, 6);
+  const liked = names(rows.filter(did));
+  const unconfirmed = names(rows.filter((r) => isDidResult(r.result) && !isStated(r.provenance) && r.result !== "didnt_help")).filter((n) => !liked.includes(n));
+  const keen = names(rows.filter((r) => r.result === "interested")).filter((n) => !liked.includes(n) && !unconfirmed.includes(n));
+  const not = names(rows.filter((r) => r.result === "declined" || (r.result === "didnt_help" && isStated(r.provenance))));
   const parts = [
     liked.length ? `went to or liked: ${liked.join(", ")}` : null,
     keen.length ? `were interested in: ${keen.join(", ")}` : null,
     not.length ? `said weren't for them or didn't help: ${not.join(", ")}` : null,
   ].filter(Boolean);
-  return parts.length ? `From what they've told Co about things it sent, they ${parts.join("; and ")}.` : null;
+  const head = parts.length ? `From what they've told Co about things it sent, they ${parts.join("; and ")}.` : "";
+  const tail = unconfirmed.length ? ` Possibly went to or signed up for (${UNCONFIRMED_RULE}): ${unconfirmed.join(", ")}.` : "";
+  return head || tail ? `${head}${tail}`.trim() : null;
 }

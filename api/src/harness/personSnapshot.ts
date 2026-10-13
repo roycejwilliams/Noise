@@ -13,6 +13,7 @@
 // statements replace older ones; nothing about Co's own performance. The
 // knowledge eval (evals/knowledge) checks a stale profile plus newer texts
 // produce the newer facts.
+import { isDidResult, isStated, UNCONFIRMED_RULE } from "../services/provenance.js";
 import { goalEntries } from "./profileWrite.js";
 import { notToTeammate } from "../services/teamLines.js";
 import { localStamp, memberZone, wordsZone } from "../services/memberTime.js";
@@ -183,11 +184,12 @@ async function gatherInputs(userId: string): Promise<SnapshotInputs | null> {
 async function loadOutcomeLines(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(
-      `SELECT item_name, kind, result, note FROM suggestion_outcomes WHERE user_id = $1 AND created_at > NOW() - INTERVAL '90 days' ORDER BY created_at DESC LIMIT 10`,
+      `SELECT item_name, kind, result, note, provenance FROM suggestion_outcomes WHERE user_id = $1 AND created_at > NOW() - INTERVAL '90 days' ORDER BY created_at DESC LIMIT 10`,
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return rows.map((r: any) => `${r.kind} "${r.item_name}": ${r.result}${r.note ? ` (${r.note})` : ""}`);
+  // What they did, only as they stated it (services/provenance.ts): an unconfirmed did-result is said as one.
+  return rows.map((r: any) => `${r.kind} "${r.item_name}": ${r.result}${isDidResult(r.result) && !isStated(r.provenance) ? ` (${UNCONFIRMED_RULE})` : ""}${r.note ? ` (${r.note})` : ""}`);
 }
 
 // The check after every rebuild (Royce, 2026-09-15: "What Co knows about a

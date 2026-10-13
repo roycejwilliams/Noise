@@ -2329,6 +2329,8 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_suggestion_outcomes_user ON suggestion_outcomes (user_id, created_at DESC)`))
+    // Provenance (2026-10-12, services/provenance.ts): 'stated' with their words, or 'inferred'. NULL is a row from before, read as inferred.
+    .then(() => pool.query(`ALTER TABLE suggestion_outcomes ADD COLUMN IF NOT EXISTS provenance TEXT, ADD COLUMN IF NOT EXISTS quote TEXT`))
     .catch((err: Error) => console.error("suggestion_outcomes table init failed:", err));
 
   // Phone-number changes by text, confirmed with an emailed code

@@ -21,6 +21,7 @@
 // it may never speak for another member (callOpening.ts), and the intro nudge already goes by text.
 //
 // Member-requested calls (they texted "call me", scheduled one, pressed call) never need this: the reason is theirs.
+import { WENT_CONFIRMED_SQL } from "./milestones.js";
 import { createHash } from "node:crypto";
 import { DateTime } from "luxon";
 import { isCoCommitment } from "./askKind.js";
@@ -359,7 +360,8 @@ export async function loadCallReasonState(userId: string, kind: CallAuthKind, no
   const [nudges, threads, milestones, plans, tasks, recent] = await Promise.all([
     loadSnapshot(userId, now).then(detectAll).catch(() => [] as NudgeEntry[]),
     listThreads(userId).catch(() => [] as MemberThread[]),
-    q(`SELECT key, kind, text, happened_at FROM member_milestones WHERE user_id = $1 AND kind IN ('thread_done', 'went') AND happened_at > $2 ORDER BY happened_at DESC LIMIT 5`, [userId, new Date(now.getTime() - CALL_REASON.celebrateWithinDays * DAY)]),
+    // A "went" moment only on their stated going (services/milestones.ts WENT_CONFIRMED_SQL, 2026-10-12).
+    q(`SELECT key, kind, text, happened_at FROM member_milestones m WHERE user_id = $1 AND kind IN ('thread_done', 'went') AND ${WENT_CONFIRMED_SQL} AND happened_at > $2 ORDER BY happened_at DESC LIMIT 5`, [userId, new Date(now.getTime() - CALL_REASON.celebrateWithinDays * DAY)]),
     q(`SELECT event_name_raw, event_date FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date <= $3::date ORDER BY event_date LIMIT 5`, [userId, today, DateTime.fromISO(today).plus({ days: CALL_REASON.comingUpDays }).toISODate()]),
     // Co's tasks of the last 60 days, closed ones too (the layer carries only the open ones): a member thread that is one of them is
     // still Co's work.

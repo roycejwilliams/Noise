@@ -1744,6 +1744,8 @@ export function sendblueRouter(io: Server): Router {
           if (dateCheck) addFact(replyFacts, "known", dateCheck);
           // Co's live work for them: ongoing, so its next step can be said (replyGrounding future_promise).
           if (notes) addFact(replyFacts, "ongoing", notes);
+          // An open ask among them reads as on file, not being worked on (openLoops.ts ASK_ON_FILE); saying Co is working on something
+          // stands only on running work (replyGrounding runningWorkLine and the work_status claim check, 2026-10-12, item 3).
           if (loops) addFact(replyFacts, "ongoing", loops);
           if (timeline) addFact(replyFacts, "known", timeline.fact);
           if (timeline?.note) addInstruction(replyFacts, timeline.note);
@@ -2100,7 +2102,7 @@ export function sendblueRouter(io: Server): Router {
             const pendingOutcomeFollowUp = resolvedOutcome.item.ref.pending;
             const outcome = resolvedOutcome.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordOutcome(user.id, pendingOutcomeFollowUp.id, pendingOutcomeFollowUp.tier, outcome);
-            await recordSuggestionOutcome(user.id, pendingOutcomeFollowUp.tier === 0 ? "intro" : pendingOutcomeFollowUp.tier === 3 ? "opportunity" : "event", `followup:${pendingOutcomeFollowUp.id}`, pendingOutcomeFollowUp.match_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160));
+            await recordSuggestionOutcome(user.id, pendingOutcomeFollowUp.tier === 0 ? "intro" : pendingOutcomeFollowUp.tier === 3 ? "opportunity" : "event", `followup:${pendingOutcomeFollowUp.id}`, pendingOutcomeFollowUp.match_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160), { provenance: "stated", quote: resolvedContent.slice(0, 200) });
             addFact(replyFacts, "did_this_turn", `Recorded what they said about how "${pendingOutcomeFollowUp.match_name}" went.`);
             // Stay-scoped clause (Royce, 2026-09-07, confirmed live) —
             // without this, a name or detail from a DIFFERENT,
@@ -2132,7 +2134,7 @@ export function sendblueRouter(io: Server): Router {
             const pendingCheckin = resolvedCheckin.item.ref.pending;
             const outcome = resolvedCheckin.value as "named_positive" | "named_critical" | "not_mentioned";
             await recordEventCheckinOutcome(user.id, pendingCheckin.id, pendingCheckin.event_api_id, outcome);
-            await recordSuggestionOutcome(user.id, "event", `event:${pendingCheckin.event_api_id}`, pendingCheckin.event_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160));
+            await recordSuggestionOutcome(user.id, "event", `event:${pendingCheckin.event_api_id}`, pendingCheckin.event_name, resultFromNamedOutcome(outcome), resolvedContent.slice(0, 160), { provenance: "stated", quote: resolvedContent.slice(0, 200) });
             addFact(replyFacts, "did_this_turn", `Recorded what they said about "${pendingCheckin.event_name}".`);
             // They named someone they met: Co follows through with notes they can send (services/eventFollowThrough.ts).
             // Built from this message only, sent to them alone, a little after this reply.
