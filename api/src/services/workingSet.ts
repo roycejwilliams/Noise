@@ -252,7 +252,11 @@ export function backlogVerdict(match: any, today: string, f: { lifeEnd: (m: any)
 
 // Every backlog item for one member, through the same rules, in their zone: a past one exits on its date; an undated or unreadable
 // one is held and read again once a day, and exits after UNREAD_DAYS separate days; the rest stay. Applied to the whole backlog.
-export async function pruneBacklogs(userId: string, today: string, deps: PruneDeps, opts: { classifyLimit?: number } = {}): Promise<{ exited: number; dated: number; kept: number }> {
+// The prune runs before the daily pick: its reads are capped by count (classifyLimit) and by time (classifyMs), so the pick's start is
+// bounded; what's left is read tomorrow.
+export const PRUNE_CLASSIFY_MS = 120_000;
+export async function pruneBacklogs(userId: string, today: string, deps: PruneDeps, opts: { classifyLimit?: number; classifyMs?: number } = {}): Promise<{ exited: number; dated: number; kept: number }> {
+  const started = Date.now();
   const F = await import("./findForm.js");
   const zone = await deps.zone(userId).catch(() => null);
   const lifeEnd = (m: any) => F.lifeEndOf(m, zone);
@@ -281,7 +285,7 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
         }
         nowHeld = { ...held, days: [...new Set([...held.days, today])] };
       } else if (v === "classify" || held) {
-        if (held?.days.includes(today) || classified >= (opts.classifyLimit ?? 12)) {
+        if (held?.days.includes(today) || classified >= (opts.classifyLimit ?? 12) || Date.now() - started >= (opts.classifyMs ?? PRUNE_CLASSIFY_MS)) {
           kept++;
           continue; // read today already, or over this run's reading budget: tomorrow
         }

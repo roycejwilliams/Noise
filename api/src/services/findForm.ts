@@ -117,12 +117,12 @@ export function readClassification(raw: string, page: string): (Classified & { e
 export type ClassifyDeps = { page: (url: string) => Promise<string | null>; model: (prompt: string) => Promise<string>; official?: (name: string) => Promise<string | null> };
 export const realClassifyDeps: ClassifyDeps = {
   page: async (url) => (await import("./webOpportunitySearch.js")).readPageText(url),
-  official: async (name) => (await import("./webOpportunitySearch.js")).findOfficialPage(name, 30_000),
+  official: async (name) => (await import("./webOpportunitySearch.js")).findOfficialPage(name, CLASSIFY_STEP_MS),
   model: async (prompt) => {
     const { generateText } = await import("ai");
     const { anthropic } = await import("@ai-sdk/anthropic");
     const { MODELS } = await import("../models.js");
-    const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 120, experimental_telemetry: { isEnabled: true, functionId: "findForm.classify" }, prompt });
+    const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 120, abortSignal: AbortSignal.timeout(CLASSIFY_STEP_MS), experimental_telemetry: { isEnabled: true, functionId: "findForm.classify" }, prompt });
     return text;
   },
 };
@@ -134,14 +134,26 @@ export const realClassifyDeps: ClassifyDeps = {
 // read"; that was the Haiku cut-off #162 fixed, but a page that really fails is retried too): its own page is read again once, and
 // the reading of it tried again once; then another source for the same item (the post or listing it was found in, then its
 // official page by a verified search). Only then is it "unknown", with `note` saying what was tried.
-export async function classifyFind<M extends TierMatch>(m: M, today: string, deps: ClassifyDeps = realClassifyDeps): Promise<{ match: M; result: "dated_event" | "opening" | "undated" | "unknown"; note?: string }> {
+// Bounded (review of the sweep fixes): each step (a fetch, a reading, the search) gets at most CLASSIFY_STEP_MS, and one find's whole
+// read at most CLASSIFY_BUDGET_MS; past it the remaining steps are skipped and it's "unknown" for today (read again tomorrow).
+export const CLASSIFY_STEP_MS = 20_000;
+export const CLASSIFY_BUDGET_MS = 60_000;
+// Pure-ish: the promise's value, or null once `ms` passes (the step is abandoned, never awaited further).
+export function within<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([p.catch(() => null), new Promise<null>((r) => { t = setTimeout(() => r(null), Math.max(0, ms)); })]).finally(() => clearTimeout(t));
+}
+export async function classifyFind<M extends TierMatch>(m: M, today: string, deps: ClassifyDeps = realClassifyDeps, budgetMs = CLASSIFY_BUDGET_MS): Promise<{ match: M; result: "dated_event" | "opening" | "undated" | "unknown"; note?: string }> {
   const known = formOf(m as any);
   if (known === "event" && eventDateOf(m)) return { match: { ...m, form: "event" } as M, result: "dated_event" };
   if (known === "opening") return { match: { ...m, form: "opening" } as M, result: "opening" };
   const url = "url" in m ? (m as any).url : null;
-  const classify = async (page: string) => readClassification(await deps.model(classifyPrompt(m.name, page, today)).catch(() => ""), page);
+  const until = Date.now() + budgetMs;
+  const left = () => Math.min(CLASSIFY_STEP_MS, until - Date.now());
+  const step = <T,>(p: () => Promise<T>): Promise<T | null> => (left() > 0 ? within(p(), left()) : Promise.resolve(null));
+  const classify = async (page: string) => readClassification((await step(() => deps.model(classifyPrompt(m.name, page, today)))) ?? "", page);
   const readTwice = async (page: string) => (await classify(page)) ?? (await classify(page));
-  const fetchTwice = async (u: string) => (await deps.page(u).catch(() => null)) || (await deps.page(u).catch(() => null));
+  const fetchTwice = async (u: string) => (await step(() => deps.page(u))) || (await step(() => deps.page(u)));
   const tried: string[] = [];
   // The page the sweep already read (its evidence) is used first; it's fetched again only when there isn't enough of it (review of #133).
   const read = String((m as any).evidence ?? "");
@@ -163,13 +175,14 @@ export async function classifyFind<M extends TierMatch>(m: M, today: string, dep
   }
   // Then its own official page, found by a verified web search.
   if (!c && deps.official) {
-    const other = await deps.official(m.name).catch(() => null);
+    const other = await step(() => deps.official!(m.name));
     if (other && other !== url) {
       const page = await fetchTwice(other);
       c = page ? await classify(page) : null;
       if (!c) tried.push(`its official page (${other.replace(/^https?:\/\//, "").slice(0, 80)}) ${page ? "said nothing usable" : "couldn't be fetched"}`);
     } else tried.push("no other page for it was found");
   }
+  if (!c && Date.now() >= until) tried.push("ran out of time for today");
   if (!c) return { match: m, result: "unknown", note: tried.join("; ") || "nothing to read" };
   if (c.form === "event") {
     if (!c.date) return { match: { ...m, form: "event" } as M, result: "undated" };
