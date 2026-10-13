@@ -219,3 +219,34 @@ export async function renderPdf(html: string, size?: { width: string; height: st
     release();
   }
 }
+
+// A PNG of HTML Co wrote itself, at a fixed size (a link preview card, services/coPages/linkPreview.ts), or null. Same rules as
+// renderPdf: no scripts, and the only network is the two font hosts.
+export async function renderPng(html: string, size: { width: number; height: number }): Promise<Buffer | null> {
+  if (!browserReadEnabled()) return null;
+  const release = await slot();
+  let context: Awaited<ReturnType<Browser["newContext"]>> | null = null;
+  try {
+    const b = await getBrowser();
+    context = await b.newContext({ javaScriptEnabled: false, locale: "en-US", viewport: size, deviceScaleFactor: 1 });
+    await context.route("**/*", (route) => {
+      const u = route.request().url();
+      let host = "";
+      try {
+        host = new URL(u).hostname;
+      } catch {}
+      return u.startsWith("data:") || ["fonts.googleapis.com", "fonts.gstatic.com", "api.fontshare.com", "cdn.fontshare.com"].includes(host) ? route.continue() : route.abort();
+    });
+    const pg = await context.newPage();
+    await pg.setContent(html, { waitUntil: "load", timeout: BROWSER_LIMITS.pageMs });
+    await Promise.race([pg.evaluate(() => (document as any).fonts?.ready), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
+    const png = await pg.screenshot({ type: "png", clip: { x: 0, y: 0, width: size.width, height: size.height } });
+    return png.length > 1_000 ? Buffer.from(png) : null;
+  } catch (err: any) {
+    if (/Executable doesn't exist|Failed to launch|ENOENT/i.test(err?.message ?? "")) failedAt = Date.now();
+    return null;
+  } finally {
+    await context?.close().catch(() => {});
+    release();
+  }
+}

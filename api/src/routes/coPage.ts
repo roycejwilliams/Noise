@@ -8,6 +8,7 @@ import { assetIdsIn, coPageBase, loadCoPage, loadShared, noteViewed, type Stored
 import { notFoundPage, renderCoPage } from "../services/coPages/template.js";
 import { isDeckData, renderDeck, type DeckData } from "../services/coPages/deck.js";
 import type { CoPageData } from "../services/coPages/schema.js";
+import { CO_MARK_SVG, coMarkPng, genericHead, ownerPreviewName, PREVIEW_CRAWLER, PREVIEW_TAG, previewDescription, previewHead, previewPng, previewTag, withPreviewHead } from "../services/coPages/linkPreview.js";
 
 export const CO_PAGE_HEADERS = {
   "Cache-Control": "private, no-store",
@@ -38,19 +39,62 @@ function render(page: StoredCoPage, v: { shareId?: string }, zone = "America/Los
   const base = coPageBase();
   const path = v.shareId ? `v/${v.shareId}` : page.id;
   const url = base ? `${base}/d/${path}` : null;
+  // The link preview (services/coPages/linkPreview.ts): the card under the same link, the title, and only what the artifact is.
+  const head = previewHead({
+    title: String((page.data as { title?: string }).title ?? ""),
+    description: previewDescription(page.data),
+    url,
+    imageUrl: url ? `${url}/og/${previewTag(page)}.png` : null,
+    iconBase: base,
+  });
+  return withPreviewHead(renderArtifact(page, v, url, zone), head);
+}
+function renderArtifact(page: StoredCoPage, v: { shareId?: string }, url: string | null, zone: string): string {
   return isDeckData(page.data)
     ? renderDeck({ id: page.id, data: page.data as DeckData, updatedAt: page.updatedAt }, { url, zone, assetBase: `${v.shareId ?? page.id}/a/`, showNotes: !v.shareId, downloadBase: `${v.shareId ?? page.id}/` })
     : renderCoPage({ ...page, data: page.data as CoPageData }, { url, ogImageUrl: (page.data as CoPageData).cover?.url ?? null, zone, assetBase: `${v.shareId ?? page.id}/a/` });
 }
 
 export function createCoPageRouter(
-  o: { load?: (id: string) => Promise<StoredCoPage | null>; loadShare?: (id: string) => Promise<StoredCoPage | null>; viewed?: (id: string) => Promise<void>; zone?: string; loadAsset?: (ownerUserId: string, id: string) => Promise<{ data: Buffer; mediaType: string } | null> } = {},
+  o: { load?: (id: string) => Promise<StoredCoPage | null>; loadShare?: (id: string) => Promise<StoredCoPage | null>; viewed?: (id: string) => Promise<void>; zone?: string; loadAsset?: (ownerUserId: string, id: string) => Promise<{ data: Buffer; mediaType: string } | null>; ownerName?: (ownerUserId: string) => Promise<string | null>; renderPng?: (html: string, size: { width: number; height: number }) => Promise<Buffer | null> } = {},
 ): Router {
   const load = o.load ?? loadCoPage;
   const loadShare = o.loadShare ?? loadShared;
   const viewed = o.viewed ?? noteViewed;
   const loadAsset = o.loadAsset ?? (async (owner: string, id: string) => (await import("../services/memberAssets.js")).loadAssetFor(owner, id));
+  const ownerName = o.ownerName ?? ownerPreviewName;
   const router = Router();
+  // A link-preview crawler reads the page and then asks for its card within a second or two: the card starts rendering as the page
+  // is served, so it's ready when asked. Only for crawlers, so a member opening their link never starts a render.
+  const warm = (page: StoredCoPage, req: any) => {
+    if (!PREVIEW_CRAWLER.test(String(req.get?.("user-agent") ?? ""))) return;
+    void ownerName(page.ownerUserId)
+      .catch(() => null)
+      .then((n) => previewPng(page, n, o.renderPng))
+      .catch(() => {});
+  };
+  const notFound = () => withPreviewHead(notFoundPage(), genericHead(coPageBase()));
+  // A link's preview card (linkPreview.ts), under the link it was opened with: a reset, revoked, expired or taken-down link, or a
+  // tag that isn't the artifact's current one (an older version or look), is a plain 404, never an older title.
+  const sendCard = async (page: StoredCoPage | null, file: string, res: any) => {
+    res.set({ "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; sandbox" });
+    const tag = file.replace(/\.png$/, "");
+    if (!page || !file.endsWith(".png") || !PREVIEW_TAG.test(tag) || tag !== previewTag(page)) return res.status(404).set("Cache-Control", "no-store").type("text/plain").send("Not found");
+    const name = await ownerName(page.ownerUserId).catch(() => null);
+    const png = await previewPng(page, name, o.renderPng).catch(() => null);
+    if (!png) return res.status(404).set("Cache-Control", "no-store").type("text/plain").send("Not found");
+    // The tag changes with every version, so a crawler may keep this one a day; a revoked link's card ends at the next fetch.
+    return res.status(200).set("Cache-Control", "public, max-age=86400").type("image/png").send(png);
+  };
+  // Co's mark, for the favicon and the apple-touch-icon. The same for every link.
+  router.get("/co.svg", (_req, res) => res.status(200).set({ "Cache-Control": "public, max-age=604800", "X-Content-Type-Options": "nosniff" }).type("image/svg+xml").send(CO_MARK_SVG));
+  router.get("/co.png", async (_req, res) => {
+    const png = await coMarkPng(o.renderPng).catch(() => null);
+    if (!png) return res.status(404).type("text/plain").send("Not found");
+    return res.status(200).set({ "Cache-Control": "public, max-age=604800", "X-Content-Type-Options": "nosniff" }).type("image/png").send(png);
+  });
+  router.get("/v/:shareId/og/:file", async (req, res) => sendCard(await loadShare(String(req.params.shareId ?? "")).catch(() => null), String(req.params.file ?? ""), res));
+  router.get("/:id/og/:file", async (req, res) => sendCard(await load(String(req.params.id ?? "")).catch(() => null), String(req.params.file ?? ""), res));
   const sendAsset = async (page: StoredCoPage | null, assetId: string, res: any) => {
     res.set(ASSET_HEADERS);
     const asset = page && assetIdsIn(page.data).includes(assetId) ? await loadAsset(page.ownerUserId, assetId).catch(() => null) : null;
@@ -91,9 +135,10 @@ export function createCoPageRouter(
     const shareId = String(req.params.shareId ?? "");
     if (req.originalUrl.split("?")[0].endsWith("/")) return res.redirect(301, `/d/v/${shareId}`);
     const page = await loadShare(shareId).catch(() => null);
-    if (!page) return res.status(404).type("html").send(notFoundPage());
+    if (!page) return res.status(404).type("html").send(notFound());
     // Opened through a share link: in use too (the expiry notice).
     viewed(page.id).catch(() => {});
+    warm(page, req);
     return res.status(200).type("html").send(render(page, { shareId }, o.zone));
   });
   router.get("/:id/a/:assetId", async (req, res) => sendAsset(await load(String(req.params.id ?? "")).catch(() => null), String(req.params.assetId ?? ""), res));
@@ -105,9 +150,10 @@ export function createCoPageRouter(
       console.error("co page: load failed:", err?.message ?? err);
       return null;
     });
-    if (!page) return res.status(404).type("html").send(notFoundPage());
+    if (!page) return res.status(404).type("html").send(notFound());
     // Their link opened: in use (counts toward the expiry warning). Never blocks the page.
     viewed(page.id).catch(() => {});
+    warm(page, req);
     return res.status(200).type("html").send(render(page, {}, o.zone));
   });
   return router;
