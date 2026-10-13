@@ -106,7 +106,7 @@ export type ConversationToolContext = {
   lastCoMessage?: string | null;
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
-  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done", text: string) => void; text: () => string };
+  facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done" | "capability", text: string) => void; text: () => string };
   // A first read this turn (services/theDoor.ts): held until the reply goes out, then counted as given only if a sent text says it back.
   onFirstRead?: (pending: import("../services/theDoor.js").FirstReadPending) => void;
   // Thread the next text under theirs too (routes/sendblue.ts): the first find
@@ -721,6 +721,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: r.why };
         }
         await recordDecision({ layer: 3, decision: "goal.offered", userId: ctx.userId, outcome: "act", action: read.clubWorld ? "split" : "light", reason: read.why, proposal: { goalId: r.goal.id, items: split.map((i) => ({ n: i.n, owner: i.owner, how: i.how, reach: i.reach })), read: read.read } }).catch(() => {});
+        // The offer itself, backed as an offer (2026-10-13: "I can text you a nudge on the 27th" was cut as an unbacked promise, and only
+        // "Want me to set that?" went out): what Co can do for them if they say yes, offered in this reply, nothing set. It backs "I can..."
+        // and "want me to...?"; it never backs "I'll text you on the 27th" as if it were set (replyGrounding.ts OFFERED_NOT_SET).
+        for (const line of G.offerFactLines(read.clubWorld ? mayTake : split.filter((i) => i.owner === "co" && i.how === "reminder"))) ctx.facts?.add("capability", line);
         ctx.facts?.add("known", `Goal #${r.goal.id} they handed you, "${r.goal.title}", is on file${fromFile ? `, its pieces from their file #${fromFile.n}, which they handed over ("${fromFile.quote.slice(0, 120)}"); only those piece titles are yours to use, nothing else from the file` : ""}${goalMoment ? `; the moment it's for: ${goalMoment.words}` : ""}. Nothing is started on it until they pick. ${guidance}`);
         if (!read.clubWorld) return { ok: true, goalId: r.goal.id, youMayOffer: reminderPiece ? [{ n: reminderPiece.n, text: reminderPiece.text, how: "reminder", suggestedDay: reminderPiece.suggest?.day ?? null }] : [], guidance };
         return {
