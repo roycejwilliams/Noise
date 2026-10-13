@@ -172,6 +172,13 @@ function recordOutbound(handle: string, number: string, content: string): void {
     .catch((err: any) => console.error("sendblue: outbound handle not recorded (non-fatal):", err?.message ?? err));
 }
 
+// Pure: a number Co may send to: "+" then 10 to 15 digits, nothing else (E.164); a US/Canada number (+1) is exactly 11 digits.
+export function sendableNumber(number: unknown): boolean {
+  if (typeof number !== "string") return false;
+  const n = number.trim();
+  return /^\+\d{10,15}$/.test(n) && (!n.startsWith("+1") || n.length === 12);
+}
+
 // Every message send goes through this one wrapper so cleanup and the
 // meta-commentary guard apply uniformly, regardless of which prompt or call
 // site generated the content.
@@ -187,6 +194,12 @@ const sendblue = {
         );
       }
       const to = (body as { number?: string }).number;
+      // Only a real phone number is ever sent to (2026-10-13: archived test members' numbers, rewritten as "+15035550130#a8" by a
+      // test script, reached Sendblue as "+150355501308" and were declined 27 times). An archive placeholder, a marker or a number
+      // of the wrong length is refused here, before anything leaves.
+      if (!sendableNumber(to)) {
+        return Promise.reject(new Error(`sendblue: not a phone number (…${String(to ?? "").replace(/\D/g, "").slice(-4)}), refusing to send`));
+      }
       const limit = sendLimiter.check(to);
       if (!limit.ok) {
         if (limit.tripped) reportSendBreaker(to ?? "", limit.count, limit.resumesAt, limit.reason);
