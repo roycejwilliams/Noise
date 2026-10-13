@@ -95,7 +95,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
   - wants: things they said they miss or want to find.
   - availability: their stated GENERAL, RECURRING availability in their own words; null for a one-off request for a specific call or meeting time.
 
-6. planned_event: did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering, not a vague "I should get out more")? event_name in their own words; event_date resolved to YYYY-MM-DD from today's date only when you can resolve it confidently (a specific day or an unambiguous "this Thursday"), else null, never a guess; event_location as city or venue if mentioned, else null. All null if none.
+6. planned_event: did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering, not a vague "I should get out more")? event_name in their own words; event_date resolved to YYYY-MM-DD from today's date only when you can resolve it confidently (a specific day or an unambiguous "this Thursday"), else null, never a guess; event_location as city or venue if mentioned, else null. Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is), something Co offered, or an event you would have to infer is none. quote: their exact words that say they are going, copied from their line. All null if none.
 
 7. style: Co keeps a short list of how this person likes Co to text them.
 Current notes:
@@ -113,7 +113,7 @@ Return ONLY valid JSON, no preamble:
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
  "intent": {"asks": [{"text": "...", "type": "seeking"}], "concrete_preferences": [], "wants": [], "availability": null},
- "planned_event": {"event_name": null, "event_date": null, "event_location": null},
+ "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "style": {"changed": false} or {"changed": true, "notes": ["..."]},
  "advice": null or {"topic": "...", "gist": "..."},
  "met_someone": null or "their exact words"}`;
@@ -225,7 +225,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
       persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message").catch((err: any) =>
         console.error("turnLearning: intent write failed (non-fatal):", err?.message ?? err),
       ),
-      storePlannedEventMention(input.userId, learned.planned_event).catch((err: any) =>
+      storePlannedEventMention(input.userId, learned.planned_event, input.message).catch((err: any) =>
         console.error("turnLearning: planned event write failed (non-fatal):", err?.message ?? err),
       ),
       input.coSaidBefore?.trim() && row

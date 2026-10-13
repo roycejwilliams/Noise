@@ -1,7 +1,8 @@
 // Milestones and the story back (Royce, 2026-09-29: "Co should feel like it's
 // beside you for the whole stretch"). The moments worth marking, taken from
 // Co's own record and never from a model: a thread they closed in their own
-// words, something Co sent that they went to, and the time they've been with
+// words, something Co sent that they said they went to or were going to (a
+// stated outcome only, services/provenance.ts), and the time they've been with
 // Co. Each is stored once with the evidence it came from. Co marks one at
 // most every 7 days, in its own voice, using only that evidence (a companion
 // text, harness/memberReflection.ts), and knows them in every reply so it can
@@ -9,6 +10,7 @@
 //
 // Read only with the owner's user id; nothing here reaches another member.
 import pool from "../db/db.js";
+import { UNCONFIRMED_RULE } from "./provenance.js";
 
 export type MilestoneKind = "with_co" | "went" | "thread_done";
 export type Milestone = {
@@ -19,6 +21,9 @@ export type Milestone = {
   now: string | null; // their words when it landed, if any
   happenedAt: string; // ISO
   markedAt: string | null;
+  // A "went" moment stands only on their own stated "going" (services/provenance.ts, 2026-10-12). One stored before that, from a
+  // word-match read, is unconfirmed at read time: never marked, never said, only asked about.
+  confirmed?: boolean;
 };
 
 export const DAY_MARKS = [30, 90, 180, 365];
@@ -60,6 +65,7 @@ export function deriveMilestones(s: Source): Omit<Milestone, "markedAt">[] {
 // Pure: the one to mark now, if any. Newest that's still fresh, nothing if one
 // was marked lately.
 export function pickToMark(all: Milestone[], now: Date): Milestone | null {
+  all = all.filter((m) => m.confirmed !== false);
   const lastMarked = all.filter((m) => m.markedAt).map((m) => new Date(m.markedAt!).getTime()).sort((a, b) => b - a)[0];
   if (lastMarked && now.getTime() - lastMarked < MARK_EVERY_DAYS * dayMs) return null;
   const fresh = all
@@ -74,24 +80,34 @@ export function storyLines(all: Milestone[], limit = 6): string[] {
   const recent = [...all].sort((a, b) => new Date(b.happenedAt).getTime() - new Date(a.happenedAt).getTime()).slice(0, limit);
   return recent.map((m) => {
     const when = m.happenedAt.slice(0, 10);
+    if (m.confirmed === false) return `Unconfirmed (${when}; ${UNCONFIRMED_RULE}): Co once read a text of theirs as going to something it sent them. ${m.text.replace(/^They went to /, "It was ").replace(/, which Co had sent them\.$/, ".")}`;
     const words = m.then || m.now ? ` They first said: "${(m.then ?? "").slice(0, 160)}"${m.now ? ` and later: "${m.now.slice(0, 160)}"` : ""}.` : "";
     return `In their story with Co (${when}): ${m.text}${words}`;
   });
 }
 
 function rowTo(r: any): Milestone {
-  return { key: r.key, kind: r.kind, text: r.text, then: r.then_quote, now: r.now_quote, happenedAt: new Date(r.happened_at).toISOString(), markedAt: r.marked_at ? new Date(r.marked_at).toISOString() : null };
+  return { key: r.key, kind: r.kind, text: r.text, then: r.then_quote, now: r.now_quote, happenedAt: new Date(r.happened_at).toISOString(), markedAt: r.marked_at ? new Date(r.marked_at).toISOString() : null, confirmed: r.confirmed !== false };
 }
 
+// A "went" row is confirmed only by a stated outcome for the same item (its key is went:<item_key>).
+export const WENT_CONFIRMED_SQL = `(m.kind <> 'went' OR EXISTS (SELECT 1 FROM suggestion_outcomes so WHERE so.user_id = m.user_id AND 'went:' || so.item_key = m.key AND so.result = 'acted' AND so.provenance = 'stated'))`;
+
 export async function loadMilestones(userId: string): Promise<Milestone[]> {
-  const { rows } = await pool.query(`SELECT * FROM member_milestones WHERE user_id = $1 ORDER BY happened_at DESC LIMIT 60`, [userId]);
+  const { rows } = await pool.query(`SELECT m.*, ${WENT_CONFIRMED_SQL} AS confirmed FROM member_milestones m WHERE m.user_id = $1 ORDER BY m.happened_at DESC LIMIT 60`, [userId]);
   return rows.map(rowTo);
+}
+
+// One moment, read fresh before it is said (a queued companion text, harness/proactiveRegistry.ts).
+export async function milestoneConfirmed(userId: string, key: string): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT ${WENT_CONFIRMED_SQL} AS confirmed FROM member_milestones m WHERE m.user_id = $1 AND m.key = $2`, [userId, key]);
+  return rows[0]?.confirmed === true;
 }
 
 async function loadSource(userId: string, now: Date): Promise<Source | null> {
   const [u, went, closed] = await Promise.all([
     pool.query(`SELECT created_at FROM users WHERE id = $1`, [userId]),
-    pool.query(`SELECT item_key, item_name, created_at FROM suggestion_outcomes WHERE user_id = $1 AND result = 'acted' ORDER BY created_at DESC LIMIT 30`, [userId]),
+    pool.query(`SELECT item_key, item_name, created_at FROM suggestion_outcomes WHERE user_id = $1 AND result = 'acted' AND provenance = 'stated' ORDER BY created_at DESC LIMIT 30`, [userId]),
     pool.query(`SELECT id, text, opened_quote, closed_quote, closed_at FROM member_threads WHERE user_id = $1 AND status = 'resolved' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 30`, [userId]),
   ]);
   if (!u.rows[0]) return null;

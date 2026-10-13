@@ -100,7 +100,7 @@ export function describeOpenItem(kind: OpenItemKind, detail: string | null): str
     case "walkin_ask":
       return "They checked in at an event and Co asked what they're hoping to find there / who they'd want to meet";
     case "offer_reaction":
-      return `Co sent them "${detail ?? "something"}" (with its details) and they haven't reacted to it yet. Only answer this if their message clearly reacts to it: interested ("ooh I'll check it out", "that looks good"), not_interested ("not for me", "I'll pass", "not really my thing"), or already_did_it (they say they signed up, registered, applied, or went). A bare thanks, an emoji, or talking about something else isn't a reaction`;
+      return `Co sent them "${detail ?? "something"}" (with its details) and they haven't reacted to it yet. Only answer this if their message clearly reacts to it: interested ("ooh I'll check it out", "that looks good"), not_interested ("not for me", "I'll pass", "not really my thing"), or already_did_it (they say outright that they signed up, registered, applied, or went; a question about it, like what to bring or where it is, is not). A bare thanks, an emoji, or talking about something else isn't a reaction`;
   }
 }
 
@@ -547,11 +547,16 @@ export function decideActions<T extends RoutableItem>(
     const valueOk = item && ANSWER_VALUES[item.kind].includes(out.answers.value);
     if (item && valueOk) {
       const irreversible = isIrreversible(item.kind, out.answers.value);
+      // What they did is theirs to say (services/provenance.ts, 2026-10-12): "already did it" is recorded only on an unambiguous read.
+      const saysTheyDid = item.kind === "offer_reaction" && out.answers.value === "already_did_it";
       const ok = irreversible
         ? out.confidence === "high" && askIsFresh(item, turn.message, turn.recentConversation) && !coAskedSeveralThings(openItems, turn)
-        : out.confidence !== "low" && followUpStillCurrent(item, turn.recentConversation);
+        : (saysTheyDid ? out.confidence === "high" : out.confidence !== "low") && followUpStillCurrent(item, turn.recentConversation);
       if (ok) {
         d.resolve = { item, value: out.answers.value };
+      } else if (saysTheyDid) {
+        d.clarifyContext = `\nThey might be saying they already signed up for or went to ${plainOption(item).replace(/^what Co sent about /, "")}, but they didn't say it outright. Don't treat it as done or say they went. If it fits, ask them plainly whether they did.`;
+        d.clarifyAbout = "items";
       } else if (irreversible) {
         d.clarifyContext = `\nIt sounds like they might be saying yes to ${plainOption(item)}, but it isn't clear. Don't act on it yet. Check with them briefly, in one short line, that that's what they meant.`;
         d.clarifyAbout = "items";

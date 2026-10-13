@@ -41,6 +41,7 @@
 //
 // Every read is scoped to one member (user_id = $1). Read only: nothing here writes (memberZone may store a derived zone, as it
 // does for every reader).
+import { ASK_ON_FILE } from "./openLoops.js";
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
@@ -529,7 +530,7 @@ export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: 
   // Loops: task loops are the tasks above; the rest (their notes, an ask, an offer) are the loops' own.
   for (const l of o.loops.filter((x) => x.source !== "task" && x.status !== "done" && x.status !== "dropped").slice(0, 6)) {
     const due = !!l.dueDate && l.dueDate <= tomorrow;
-    items.push(item({ what: l.title, kind: "loop", state: due ? "due" : "outstanding", told: false, theyHaveIt: false, dueAt: l.dueDate ? new Date(`${l.dueDate}T23:59:00Z`).toISOString() : null, ref: `loop ${l.id}`, status: l.status, detail: l.detail ? l.detail.slice(0, 160) : null, verifiedAt: latest(l.lastConfirmedAt, l.changedAt) }));
+    items.push(item({ what: l.title, kind: "loop", state: due ? "due" : "outstanding", told: false, theyHaveIt: false, dueAt: l.dueDate ? new Date(`${l.dueDate}T23:59:00Z`).toISOString() : null, ref: `loop ${l.id}`, status: l.status, detail: l.detail ? l.detail.slice(0, 160) : l.source === "ask" && l.status === "open" ? ASK_ON_FILE : null, verifiedAt: latest(l.lastConfirmedAt, l.changedAt) }));
   }
   // What Co said on a call it would do (promise_result), collapsed against what was delivered (callContext.ts collapseCarried):
   // a promise that went, or that names a document they have, is theirs ("they have it"); the rest is outstanding, and told (they

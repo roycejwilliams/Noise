@@ -17,6 +17,7 @@
 //   team   internal; never told to a member
 // harness/introConsent.ts checks every text drafted about another member
 // against the other member's owner-only facts (privateFactLeak).
+import { isStated, UNCONFIRMED_RULE } from "./provenance.js";
 import pool from "../db/db.js";
 import { DEFAULT_ZONE, dateNote, localToday, readDates } from "./dateGuard.js";
 import { memberZone } from "./memberTime.js";
@@ -107,7 +108,7 @@ export function toolAction(tool: string, input: any): { relation: string; label:
     case "steerAwayFrom":
       return [{ relation: "did", label: `${input?.undo ? "stopped steering away from" : "steered away from"} ${s(input?.kind)}` }];
     case "noteReaction":
-      return [{ relation: "did", label: `noted how "${s(input?.item)}" landed: ${s(input?.reaction)}` }];
+      return [{ relation: "did", label: `noted how "${s(input?.item)}" landed: ${s(input?.reaction)}${s(input?.quote) ? ` (their words: "${s(input.quote).slice(0, 120)}")` : ""}` }];
     case "markArrived":
       return [{ relation: "did", label: "recorded that they arrived at a Co event" }];
     case "requestEventIntro":
@@ -135,7 +136,8 @@ export async function recordProactiveText(userId: string, type: string, message:
   await recordFact({ ownerUserId: userId, subject: "co", relation: "texted", label: message.replace(/\s+/g, " ").slice(0, 300), visibility: "owner", source: `proactive_sends:${sendId ?? "?"}`, meta: { type } });
 }
 
-export type LedgerRow = { relation: string; label: string; url: string | null; at: Date; when?: string | null; whenEnd?: string | null };
+// source/provenance: a reaction the catch-up read wrote before provenance existed (2026-10-12) reads as unconfirmed.
+export type LedgerRow = { relation: string; label: string; url: string | null; at: Date; when?: string | null; whenEnd?: string | null; source?: string | null; provenance?: string | null };
 
 const STOP = new Set(["ever", "that", "this", "with", "from", "have", "what", "your", "about", "event", "thing", "there", "they", "when", "were", "just", "send", "sent", "never", "didn", "into", "some", "anything", "something", "really", "would", "could", "should"]);
 export function distinctiveWords(text: string): string[] {
@@ -177,6 +179,11 @@ export function ledgerLine(r: LedgerRow, today = localToday(), zone: string | nu
     return link ? `On ${day} Co sent them this link, unprompted: ${link}${rest ? `, with: "${rest}"` : ""}` : `On ${day} Co texted them first: "${r.label}"`;
   }
   if (r.relation === "searched") return `On ${day} Co searched for them: "${r.label}".`;
+  // The catch-up's word-match reads from before 2026-10-12 (services/provenance.ts): a guess, never what they did.
+  if (r.source === "reaction.catchup" && !isStated(r.provenance)) {
+    const m = r.label.match(/^noted how "(.+)" landed: ([a-z_]+)/);
+    return `On ${day} Co guessed from a text of theirs that "${m?.[1] ?? r.label}" landed as ${(m?.[2] ?? "a reaction").replace(/_/g, " ")}; they never confirmed it (${UNCONFIRMED_RULE}).`;
+  }
   return `On ${day} Co ${r.label}.`;
 }
 
@@ -196,13 +203,13 @@ export async function ledgerFacts(userId: string, context: string, zoneIn?: stri
   const zone = zoneIn !== undefined ? zoneIn : await memberZone(userId);
   const { rows } = await pool
     .query(
-      `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end FROM co_facts
+      `SELECT relation, object_label AS label, url, happened_at AS at, meta->>'when' AS when, meta->>'when_end' AS when_end, source, meta->>'provenance' AS provenance FROM co_facts
        WHERE owner_user_id = $1 AND subject = 'co' AND relation <> 'exited' AND happened_at > NOW() - INTERVAL '90 days'
        ORDER BY happened_at DESC LIMIT 400`,
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  const all: LedgerRow[] = rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null }));
+  const all: LedgerRow[] = rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null, source: r.source ?? null, provenance: r.provenance ?? null }));
   const message = context.split("\n")[0] ?? "";
   const today = localToday(zone);
   return { lines: ledgerLinesFrom(all, context, Date.now(), zone), named: sendsNamedIn(all, message).map((r) => ledgerLine(r, today, zone)) };

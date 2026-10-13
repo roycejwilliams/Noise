@@ -17,6 +17,7 @@ import { recordTextArrival } from "../services/eventPresence.js";
 import { closeAsk } from "../services/askKind.js";
 import { recordSuggestionOutcome } from "../services/outcomes.js";
 import { REACTION_RESULT, sentItems } from "../services/reactionCatchup.js";
+import { quoteIsTheirs } from "../services/provenance.js";
 import { findSent, type TurnContext } from "../services/turnContext.js";
 import { scoreGuestListForEvent } from "../services/eventScoring.js";
 import pool from "../db/db.js";
@@ -815,8 +816,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
       description: toolUse("updateGoing"),
       inputSchema: z.object({ going: z.boolean(), theirWords: z.string().describe("Their words, copied exactly.") }),
       execute: async ({ going, theirWords }) => {
-        const T = await import("../services/coTasks.js");
-        if (!T.wordsAreTheirs(theirWords, ctx.resolvedContent) && theirWords.trim().length >= 6) {
+        // Going is theirs to say (services/provenance.ts): a short "yes" counts only when it is really in their message.
+        if (!quoteIsTheirs(theirWords, ctx.resolvedContent)) {
           notDone("Going wasn't updated: the quote isn't in their words.");
           return { ok: false, error: "Quote their own words." };
         }
@@ -1138,8 +1139,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         item: z.string().describe("The name of the event or opportunity Co sent them."),
         reaction: z.enum(["interested", "going", "went_liked", "went_disliked", "not_for_me"]),
         note: z.string().optional().describe("Their words, briefly, if they said why."),
+        quote: z.string().describe("Their exact words that say it (\"I'm going\", \"signed up\", \"not for me\", or their yes to you offering it), copied from what they said."),
       }),
-      execute: async ({ item, reaction, note }) => {
+      execute: async ({ item, reaction, note, quote }) => {
         const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
         const want = norm(item);
         // The turn's one list of what Co sent (services/turnContext.ts): search results and first offers.
@@ -1149,13 +1151,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Co sent them recently.`);
           return { ok: false, error: "That isn't something Co sent them recently (check listSentOffers)." };
         }
+        // What they did or will do is theirs to say (services/provenance.ts, 2026-10-12): only their own explicit words record it.
+        if (!ctx.dryRun && !quoteIsTheirs(quote, `${ctx.resolvedContent}\n${ctx.isVoice ? String(ctx.turn?.message ?? "") : ""}`)) {
+          notDone(`No reaction was recorded for "${item.slice(0, 80)}": they didn't say it in their own words.`);
+          return { ok: false, error: "Only their own explicit words record a reaction: the quote must be copied from what they just said. If they didn't say it, ask them (\"Did you end up going?\"); never say they went or are going." };
+        }
         const result = REACTION_RESULT[reaction];
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would record ${result} for "${item}" (${ctx.userId})`);
           return { ok: true };
         }
         if (!match) return { ok: false, error: "That isn't something Co sent them recently." };
-        await recordSuggestionOutcome(ctx.userId, match.kind, match.key, match.name, result, note ?? null);
+        await recordSuggestionOutcome(ctx.userId, match.kind, match.key, match.name, result, note ?? null, { provenance: "stated", quote: quote.trim() });
         // Their answer settles the sent find everywhere it waits: the router's reveal and the offer's loop (2026-10-11, loop 53372).
         await import("../services/offerReactions.js").then((O) => O.settleSentOffer(ctx.userId, match.name, reaction, note ?? null)).catch(() => {});
         ctx.facts?.add("did_this_turn", `Noted how "${match.name}" landed with them (${reaction.replace(/_/g, " ")}), so Co leans that way next time.`);

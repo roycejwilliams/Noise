@@ -303,6 +303,8 @@ export const proactiveRegistry: ProactiveRegistry = {
       const { coOwns, ownedWorkFor } = await import("./memberThreads.js");
       const owned = await ownedWorkFor(c.userId);
       if (c.payload.thread && coOwns(c.payload.thread.text, owned)) return skip("Co owns this thread: an open task delivers it");
+      // A moment is said only while the record still backs it: a "went" needs their stated going (services/milestones.ts).
+      if (c.payload.story?.key && !(await import("../services/milestones.js").then((M) => M.milestoneConfirmed(c.userId, c.payload.story.key)).catch(() => false))) return skip("the moment isn't confirmed by them: only theirs to say");
       const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null, c.payload.heavy ?? null, owned);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP: no specific open thread");
     },

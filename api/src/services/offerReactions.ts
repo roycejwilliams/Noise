@@ -55,7 +55,8 @@ export function outcomeForReaction(reaction: OfferReaction): "interested" | "dec
 
 export async function recordOfferReaction(userId: string, pending: PendingOfferReaction, reaction: OfferReaction, message: string): Promise<void> {
   await pool.query(`UPDATE revealed_offers SET reaction = $2, reacted_at = NOW() WHERE id = $1`, [pending.id, reaction]);
-  await recordSuggestionOutcome(userId, pending.kind, pending.itemKey, pending.itemName, outcomeForReaction(reaction), message.slice(0, 160));
+  // The router records "already did it" only on an unambiguous read of their own words (services/messageRouter.ts).
+  await recordSuggestionOutcome(userId, pending.kind, pending.itemKey, pending.itemName, outcomeForReaction(reaction), message.slice(0, 160), { provenance: "stated", quote: message.slice(0, 200) });
   // Their answer settles the offer's loop too (services/openLoops.ts settleOfferLoop, 2026-10-11).
   await import("./openLoops.js").then((L) => L.settleOfferLoop(userId, pending.itemName, reaction, message.slice(0, 160))).catch((err: any) => console.error("offerReactions: settling the offer loop failed (non-fatal):", err?.message ?? err));
 }

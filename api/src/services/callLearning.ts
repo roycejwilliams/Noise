@@ -80,7 +80,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
 
 4. cadence: near the end of a call Co may ask how often they'd like Co to call on its own. Did they state a preference? "weekly" (roughly every week), "biweekly" (roughly every two weeks, or anything looser but still wanting proactive calls, e.g. "every so often"), "none" (they said not to call proactively, or they'd rather reach out themselves), or "unstated" (it never came up, or no clear answer).
 
-5. planned_event: did they mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering, not a vague "I should get out more")? event_name in their own words; event_date resolved to YYYY-MM-DD from today's date only when you can resolve it confidently, else null, never a guess; event_location as city or venue if mentioned, else null. All null if none.
+5. planned_event: did they mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering, not a vague "I should get out more")? event_name in their own words; event_date resolved to YYYY-MM-DD from today's date only when you can resolve it confidently, else null, never a guess; event_location as city or venue if mentioned, else null. Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is), something Co offered, or an event you would have to infer is none. quote: their exact words that say they are going, copied from their line. All null if none.
 
 6. lessons: moments where they corrected or pushed back on Co itself: something Co said, assumed, suggested, or how Co was talking to them ("that's not what I asked", "this has nothing to do with my event", "you already told me that", "slow down"). Not a correction of their own details (that's #3), and not disagreement with a normal answer. For each, one short standing note to Co about how to be with them from now on, general enough to apply next time ("when he asks about logistics, answer the logistics; don't tie it to his own event"), and their exact words (at least a few words, from their line). None when there were none.
 
@@ -89,7 +89,7 @@ Return ONLY valid JSON, no preamble:
  "resolved": {"resolved_goals": [{"item": "...", "quote": "..."}], "resolved_blockers": [{"item": "...", "quote": "..."}], "resolved_asks": [{"index": 0, "quote": "..."}]},
  "corrections": [{"field": "...", "old": "...", "new": "..." or null, "quote": "..."}],
  "cadence": "weekly" | "biweekly" | "none" | "unstated",
- "planned_event": {"event_name": null, "event_date": null, "event_location": null},
+ "planned_event": {"event_name": null, "event_date": null, "event_location": null, "quote": null},
  "lessons": [{"lesson": "...", "quote": "..."}]}`;
 }
 
@@ -228,7 +228,7 @@ export async function learnFromCall(input: {
     },
   });
   // Non-blocking siblings, as before.
-  storePlannedEventMention(input.userId, learned.planned_event).catch((err: any) =>
+  storePlannedEventMention(input.userId, learned.planned_event, theirLines(input.transcript)).catch((err: any) =>
     console.error("callLearning: planned event write failed (non-fatal):", err?.message ?? err),
   );
   saveCallLessons(input.userId, lessons).catch((err: any) => console.error("callLearning: lesson write failed (non-fatal):", err?.message ?? err));

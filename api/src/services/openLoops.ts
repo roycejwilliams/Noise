@@ -31,6 +31,10 @@ const STATUS_WORDS: Record<LoopStatus, string> = {
   dropped: "dropped",
 };
 
+// An open ask is on file, not work in progress: nothing runs for it unless a task does (2026-10-12, item 3: "still working the intro
+// search" was said off an open ask read as "in progress").
+export const ASK_ON_FILE = "an open ask on file; nothing is being worked on for it right now";
+
 // Pure: the loops implied by what Co already holds.
 export function deriveLoops(src: {
   tasks: { id: number; goal: string; deadline: string | null; awaitingReply: boolean; latest: string | null; theirReplyAt?: Date | null }[];
@@ -70,7 +74,7 @@ export function describeLoops(rows: (Pick<LoopRow, "title" | "status" | "detail"
   const ids = !!opts.withIds;
   const lines = open.map((r) => {
     const fresh = draftable(r);
-    return `${ids && r.id != null ? `[loop ${r.id}] ` : ""}${r.title}: ${STATUS_WORDS[r.status]}${r.detail ? ` (${r.detail})` : ""}${r.dueDate ? `, due ${r.dueDate}` : ""}${fresh ? "" : " [not confirmed lately: check before saying it is current]"}`;
+    return `${ids && r.id != null ? `[loop ${r.id}] ` : ""}${r.title}: ${r.source === "ask" && r.status === "open" ? ASK_ON_FILE : STATUS_WORDS[r.status]}${r.detail ? ` (${r.detail})` : ""}${r.dueDate ? `, due ${r.dueDate}` : ""}${fresh ? "" : " [not confirmed lately: check before saying it is current]"}`;
   });
   return `What you're carrying for them right now, and where each stands (this is what to report when they ask what you're doing or how it's going, and what to move forward${ids ? "; the [loop N] ids are for updateLoop, never for your texts" : ""}): ${lines.join("; ")}.`;
 }

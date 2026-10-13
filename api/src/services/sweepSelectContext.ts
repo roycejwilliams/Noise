@@ -16,6 +16,7 @@
 // The picker's own records stay here either way (the layer doesn't have
 // them): what Co sent first and whether they replied (S#), how they reacted
 // to suggestions (O#) and discovery left this week, stripped like the texts.
+import { isDidResult, isStated, UNCONFIRMED_RULE } from "./provenance.js";
 import { DateTime } from "luxon";
 import type { SelectContext } from "./sweepSelect.js";
 import { memberKnowledge, memberRules, type MemberKnowledge } from "./memberKnowledge.js";
@@ -106,11 +107,12 @@ export async function loadMemberContext(q: Q, userId: string, now: Date, opts: {
     // A match nudge's text names the other member: stripped like the texts (review of #118).
     return { id: `S${i + 1}`, at: DateTime.fromJSDate(new Date(s.sent_at)).setZone(zone).toFormat("LLL d"), what: `${s.type}: ${(safe ? safe(String(s.message ?? "")) ?? "" : "").replace(/\s+/g, " ")}`, reaction: replied ? "they replied within a day" : null };
   });
-  const outcomes = (await q(`SELECT created_at, item_name, result, note FROM suggestion_outcomes WHERE user_id = $1 AND created_at < $2 ORDER BY created_at`, [userId, now])).map((o: any, i: number) => ({
+  const outcomes = (await q(`SELECT created_at, item_name, result, note, provenance FROM suggestion_outcomes WHERE user_id = $1 AND created_at < $2 ORDER BY created_at`, [userId, now])).map((o: any, i: number) => ({
     id: `O${i + 1}`,
     at: DateTime.fromJSDate(new Date(o.created_at)).setZone(zone).toFormat("LLL d"),
     item: safe ? safe(String(o.item_name)) ?? "another member" : "",
-    result: String(o.result),
+    // What they did, only as they stated it (services/provenance.ts).
+    result: isDidResult(String(o.result)) && !isStated(o.provenance) ? `${o.result} (${UNCONFIRMED_RULE})` : String(o.result),
     note: o.note && safe ? safe(String(o.note)) : null,
   }));
   const [{ n: discoverySent }] = await q(

@@ -474,7 +474,7 @@ export const ABILITIES: Ability[] = [
     can: "Co remembers how the things it sent landed (interested, went, loved it, not for them) and leans that way next time.",
     tool: "noteReaction",
     limits: { perTurn: 3 },
-    use: "Record how something Co sent them landed, whenever they react to it: interested, they're going, they went and liked it, they went and didn't, or it's not for them (\"going to the rooftop thing\", \"that talk was great\", \"not my scene\"). Use the name of what Co sent. Then reply as usual.",
+    use: "Record how something Co sent them landed, whenever they react to it: interested, they're going, they went and liked it, they went and didn't, or it's not for them (\"going to the rooftop thing\", \"that talk was great\", \"not my scene\"). Use the name of what Co sent and quote their words. Only what they say outright counts: a question about it (what to bring, where it is) or a word it shares with something they mention is not a reaction, so ask them instead (\"Did you end up going?\"). Then reply as usual.",
   },
   {
     id: "second_contact",
