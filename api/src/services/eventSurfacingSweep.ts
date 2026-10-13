@@ -615,15 +615,18 @@ export function endsBeforeNextPick(match: TierMatch, zone: string | null, now = 
 // exited, and held (never offered) when their page doesn't say when or can't be read; the daily pass reads those again and exits one
 // only after several separate days (services/workingSet.ts UNREAD_DAYS). At most CLASSIFY_PER_SWEEP reads per sweep.
 export const CLASSIFY_PER_SWEEP = 3;
+// And a time cap per run, so a sweep's wait on reads is bounded (each read is itself bounded, findForm.ts CLASSIFY_BUDGET_MS).
+export const CLASSIFY_SWEEP_MS = 90_000;
 async function settleNewFinds(userId: string, items: BacklogItem[], today: string, askText: string, zone: string | null = null): Promise<BacklogItem[]> {
   const W = await import("./workingSet.js");
   const exited = await W.exitedFindKeys(userId, items.map((i) => exitKey(i.match))).catch(() => new Set<string>());
   const out: BacklogItem[] = [];
   let reads = 0;
+  const started = Date.now();
   for (const it of items) {
     if (exited.has(exitKey(it.match))) continue;
     const known = !!formOf(it.match as any);
-    if (!known && reads >= CLASSIFY_PER_SWEEP) {
+    if (!known && (reads >= CLASSIFY_PER_SWEEP || Date.now() - started >= CLASSIFY_SWEEP_MS)) {
       out.push({ ...it, unread: { days: [], why: "unknown" } });
       continue;
     }
