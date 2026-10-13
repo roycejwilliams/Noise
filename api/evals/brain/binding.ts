@@ -269,6 +269,59 @@ const NOW = new Date("2026-10-06T04:48:00Z");
   check("call: the turn's notes come from the decision (the drained note and tools guide in the system, the stop list after their words)", /# This turn: they told you how they are/.test(sys) && /TOOLS GUIDE/.test(sys) && /never to suggest "crypto events"/.test(last) && !/crypto events/.test(sys) && drained.d.turnNote === B.avoidNote(["crypto events"]));
 }
 
+// ======== outgoing drafts (cutover 4): the dispatch acts only on the brain's decision
+{
+  const urgent = B.judgeDailyPick({ urgent: { id: "9", why: "expires before the next slot" }, chosen: { id: "3", why: "Co's pick", source: "co" }, noneHoldHours: 6 });
+  check("draft deliver: a find that would miss its slot is delivered ahead of Co's pick", urgent.kind === "deliver" && urgent.pick === "9" && urgent.source === "code" && B.sends(urgent, "9") && !B.sends(urgent, "3"));
+  const none = B.judgeDailyPick({ urgent: null, chosen: { id: null, why: "nothing eligible", source: "code" }, noneHoldHours: 6 });
+  check("draft wait: Co picking nothing holds the day (6h) and sends nothing", none.kind === "wait" && none.holdHours === 6 && none.why === "pick: none (nothing eligible)" && !B.sends(none, "3"));
+  const co = B.judgeDailyPick({ urgent: null, chosen: { id: "3", why: "Co's pick of 2: fits", source: "co" }, noneHoldHours: 6 });
+  const last = B.lastDayVeto(co, { id: "7", why: "its last day is today" });
+  check("draft guard: a find on its last day goes first after the brain (re-pointed, still deliver)", last.kind === "deliver" && last.pick === "7" && last.source === "code" && B.sends(last, "7") && !B.sends(last, "3"));
+  check("draft guard: the last-day rule never makes a hold send", B.lastDayVeto(none, { id: "7", why: "x" }).kind === "wait");
+  const unanswered = B.afterRelevance(co, null, 2);
+  check("draft wait: an unanswered re-read holds it (2h), no drop, nothing sent", unanswered.kind === "wait" && unanswered.holdHours === 2 && !unanswered.drop && !B.sends(unanswered, "3"));
+  const stale = B.afterRelevance(co, { relevant: false, why: "they already went" }, 2);
+  check("draft wait + drop: a stale answer leaves the queue silently", stale.kind === "wait" && stale.drop === "stale: they already went" && !B.sends(stale, "3"));
+  check("draft: a relevant answer stays deliver", B.afterRelevance(co, { relevant: true, why: "" }, 2).kind === "deliver");
+  const at = new Date("2026-10-12T20:00:00Z");
+  const live = B.afterComposeWait(co, "they're mid-conversation", at);
+  check("draft wait: a live conversation makes the bundle wait until the hour", live.kind === "wait" && live.until === at && !B.sends(live, "3"));
+  const task = B.afterPayloadFirst(co, { handedTo: "41", why: "Co can just do it" });
+  check("draft act: payload first hands the work to a task and sends no question", task.kind === "act" && task.task === "41" && !B.sends(task, "3"));
+  const held = B.afterPayloadFirst(co, { hold: "theirs to decide" });
+  check("draft drop: a question that shouldn't be asked leaves the queue", held.kind === "wait" && held.drop === "payload first: theirs to decide" && !B.sends(held, "3"));
+  check("draft: a later stage never revives a wait", B.afterPayloadFirst(none, null).kind === "wait" && B.afterRelevance(none, { relevant: true, why: "" }, 2).kind === "wait");
+  const { readFileSync } = await import("node:fs");
+  const ps = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
+  const gateAt = ps.indexOf("if (!sends(decision, c.id)) {");
+  check("draft binding: the send is reached only past the decision's check", gateAt > 0 && ps.indexOf("result = await sendWithLedger(", gateAt) > gateAt && ps.indexOf("result = await sendWithLedger(") > gateAt);
+
+  // Companion check-ins: what it's about and whether it may carry anything
+  const P = await import("../../src/harness/proactive.js");
+  const C = await import("../../src/agent/companionCheckin.js");
+  const ask = (o: any) => B.judgeCheckin({ heavy: false, advice: false, story: false, thread: false, curious: false, item: false, ...o });
+  check("check-in ask: the most pressing basis wins (heavy, advice, story, thread, curious, recap)", ask({ heavy: true, thread: true }).basis === "heavy" && ask({ advice: true, story: true }).basis === "advice" && ask({ story: true, thread: true }).basis === "story" && ask({ thread: true, curious: true }).basis === "thread" && ask({ curious: true }).basis === "curious" && ask({}).basis === "recap" && ask({}).kind === "ask");
+  check("check-in: only a thread with one thing found may offer", !B.ruledOut(ask({ thread: true, item: true }), "offer") && !!B.ruledOut(ask({ thread: true }), "offer") && !!B.ruledOut(ask({ heavy: true, item: true }), "offer"));
+  P.setProactiveModelForTests(async () => "How did the pitch sit overnight? This might help: https://example.com/x");
+  const heavy = await C.draftCompanionCheckin("Jordan", "", { text: "the pitch", quote: "", dueDate: null, feeling: null }, { kind: "web", name: "X", url: "https://example.com/x", reason: "r" }, null, null, null, { about: "a hard pitch", quote: null, emotion: "low", when: "yesterday" });
+  check("check-in binding: a heavy check-in that slipped a link in is refused by its own checks", !!heavy && heavy.rules.allowUrl === false && P.checkDraft(heavy.text, heavy.rules).some((c) => !c.pass));
+  const thread = await C.draftCompanionCheckin("Jordan", "", { text: "the pitch", quote: "", dueDate: null, feeling: null }, { kind: "web", name: "X", url: "https://example.com/x", reason: "r" });
+  check("check-in: a thread with its one find keeps its link", !!thread && thread.rules.allowUrl === true && (thread.rules.mustIncludeAny ?? []).includes("https://example.com/x"));
+  P.setProactiveModelForTests(null);
+
+  // Sweep picks: what each guarded verdict does to the queue
+  const S = await import("../../src/services/sweepShadow.js");
+  const m = (name: string) => ({ askId: "a1", askText: "x", fromProfile: false, match: { name } });
+  const k = (n: string) => S.shadowKey(n, null);
+  const plan = S.planPicks(
+    [{ key: k("Send me"), verdict: "send", why: "fits", name: "Send me" }, { key: k("Hold me"), verdict: "hold", why: "later", name: "Hold me" }, { key: k("Drop me"), verdict: "reject", why: "not them", name: "Drop me" }, { key: k("Unseen"), verdict: "no_verdict", why: "", name: "Unseen" }] as any,
+    [m("Send me"), m("Hold me")],
+    [{ id: "h", key: k("Hold me") }, { id: "d", key: k("Drop me") }, { id: "u", key: k("Unseen") }],
+  );
+  check("sweep: deliver queues, a drop comes out, a wait goes back, a never-judged find is left alone", B.judgeSweepItem({ key: "x", verdict: "send" }).kind === "deliver" && plan.queue.map((q: any) => q.match.name).join() === "Send me" && plan.reject.map((r) => r.id).join() === "d" && plan.unqueue.map((r) => r.id).join() === "h");
+}
+
 console.log = quiet;
 console.error = quietErr;
 console.log(`${total - failed}/${total} passed`);

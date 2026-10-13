@@ -13,6 +13,7 @@
 import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import { recordDecision } from "../harness/core.js";
+import { judgeSweepItem } from "../brain/index.js";
 import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
 import { holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
 import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
@@ -312,15 +313,19 @@ export function memberSafeWhy(why: string): string {
 type Queued = Waiting & { why: string; whyMember: string; whyNow: string; lastDay?: string | null };
 export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: Queued[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
   const verdictOf = new Map(judgments.map((j) => [j.key, j]));
+  // What each guarded verdict does is the brain's decision (brain/index.ts judgeSweepItem): deliver queues, a drop comes out for good,
+  // a wait goes back to waiting. The queue acts only on those.
+  const decided = new Map(judgments.map((j) => [j.key, judgeSweepItem(j)]));
   const queue: Queued[] = [];
   const rank = (b: Waiting) => (b.reminder || b.again ? 0 : 1) * 2 + Number(b.fromProfile);
-  for (const j of judgments.filter((x) => x.verdict === "send")) {
+  for (const j of judgments.filter((x) => decided.get(x.key)?.kind === "deliver")) {
     const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => rank(a) - rank(b))[0];
     if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" ")), whyMember: memberSafeWhy(j.why ?? ""), whyNow: memberSafeWhy(j.whyNow ?? ""), lastDay: j.lastDay ?? null });
   }
   const why = (j: { verdict: string; why?: string } | undefined) => `Co's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
-  const reject = waitingKeys.filter((w) => verdictOf.get(w.key)?.verdict === "reject").map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
-  const unqueue = waitingKeys.filter((w) => verdictOf.get(w.key)?.verdict === "hold").map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
+  const reject = waitingKeys.filter((w) => decided.get(w.key)?.drop === true).map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
+  // A hold waits; a find the picker gave no verdict is left alone (never seen).
+  const unqueue = waitingKeys.filter((w) => { const d = decided.get(w.key); return d?.kind === "wait" && !d.drop && !d.leave; }).map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
   return { queue, reject, unqueue };
 }
 

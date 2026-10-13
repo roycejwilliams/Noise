@@ -96,11 +96,13 @@ export type GuardName = keyof typeof GUARDS;
 //   second_question  a call turn says one question; a later one is not spoken (services/callLlmProxy.ts say)
 //   after_question   a call turn ends at its question: nothing after it is spoken (they lead)
 //   end_call         the call isn't ended by Co: they haven't closed it (Co never hangs up first)
-export type DontSay = "tapback" | "call_offer" | "steer" | "first_read" | "event_offer" | "second_question" | "after_question" | "end_call";
+//   offer            a text Co sends first carries no link, event or suggestion (its draft rules allow no URL)
+export type DontSay = "tapback" | "call_offer" | "steer" | "first_read" | "event_offer" | "second_question" | "after_question" | "end_call" | "offer";
 export type Rule = { what: DontSay; why: string; tell?: string };
 
 export type Decision = {
-  surface: Surface;
+  // A member-facing surface, or what Co sends first (proactive).
+  surface: Surface | "proactive";
   kind: DecisionKind;
   why: string;
   // What the surface's model drafts from, in order.
@@ -340,4 +342,97 @@ export function taskFactNote(turnWords: string, tasks: { id: number; goal: strin
   if (!given.length && !MONTH_OR_DAY.test(turnWords)) return null;
   const what = given.length ? given.map((g) => `"${g}"`).join(", ") : "a date";
   return `(A note from Co's own records, not their words: they just gave you ${what}. If that belongs to one of your open tasks, write it on that task with updateTask in this turn, in their words, then answer. Saying it back doesn't write it down.)`;
+}
+
+// ---------- Outgoing drafts (cutover 4): what Co texts first
+// The proactive dispatch (harness/proactive.ts dispatchForUser) gathers the facts and runs the model reads (Co's pick, the
+// re-read of a waiting answer, the composer, payload first); the brain decides from them, one stage at a time, and the dispatch
+// acts only on the decision: a text goes out only when the last decision is deliver, for the candidate it names. Guards keep their
+// veto at every step: the gates (caps, quiet hours, pause, safety hold, spacing) decide what is eligible before the brain sees it,
+// a find on its last day goes first after it (lastDayFirst), and the draft's checks and the send-time ledger can still stop it.
+export type DraftDecision = Decision & {
+  // The candidate this decision is about (the one to send, hold or drop), or null when nothing is picked.
+  pick: string | null;
+  source: "code" | "co";
+  // wait: how long nothing goes (hours), or until when the candidate waits; drop: why it leaves the queue for good.
+  holdHours?: number;
+  until?: Date;
+  drop?: string;
+  // Payload first: the task that does the work instead of asking.
+  task?: string;
+};
+const draftBase = { surface: "proactive" as const, instructions: [] as string[], guards: ["outreach_caps", "quiet_hours", "pause", "safety", "privacy", "grounding"] as GuardName[], dontSay: [] as Rule[] };
+
+// Pure: the day's pick. A find that would miss its next slot goes first (the code read, expiringFind); otherwise Co's pick; Co picking
+// nothing holds the day.
+export function judgeDailyPick(p: { urgent: { id: string; why: string } | null; chosen: { id: string | null; why: string; source: "code" | "co" }; noneHoldHours: number }): DraftDecision {
+  if (p.urgent) return { ...draftBase, kind: "deliver", why: p.urgent.why, pick: p.urgent.id, source: "code" };
+  if (!p.chosen.id) return { ...draftBase, kind: "wait", why: `pick: none (${p.chosen.why})`, pick: null, source: p.chosen.source, holdHours: p.noneHoldHours };
+  return { ...draftBase, kind: "deliver", why: p.chosen.why, pick: p.chosen.id, source: p.chosen.source };
+}
+
+// The last-day guard after the brain (harness/proactive.ts lastDayFirst): a picked find ending today goes ahead of a pick that is
+// still true tomorrow. It only re-points a deliver; it never makes a hold send.
+export function lastDayVeto(d: DraftDecision, lastDay: { id: string; why: string } | null): DraftDecision {
+  if (!lastDay || d.kind !== "deliver") return d;
+  return { ...d, pick: lastDay.id, why: lastDay.why, source: "code" };
+}
+
+// Pure: a waiting answer re-read before it goes. Unanswered: it waits and is read again; no longer true: it leaves the queue.
+export function afterRelevance(d: DraftDecision, r: { relevant: boolean; why: string } | null, retryHours: number): DraftDecision {
+  if (d.kind !== "deliver") return d;
+  if (!r) return { ...d, kind: "wait", why: `relevance check unanswered; held ${retryHours}h`, holdHours: retryHours };
+  if (!r.relevant) return { ...d, kind: "wait", why: `no longer relevant: ${r.why}`, drop: `stale: ${r.why}` };
+  return d;
+}
+
+// Pure: the composer asked to wait (a live conversation about something else): the bundle waits until `until`.
+export function afterComposeWait(d: DraftDecision, why: string, until: Date): DraftDecision {
+  if (d.kind !== "deliver") return d;
+  return { ...d, kind: "wait", why: `waiting on a live conversation: ${why}`, until };
+}
+
+// Pure: payload first (harness/payloadFirst.ts). A text asking whether Co should do what it could just do goes to a task (act);
+// a question that shouldn't be asked leaves the queue.
+export function afterPayloadFirst(d: DraftDecision, pf: { handedTo: string; why: string } | { hold: string } | null): DraftDecision {
+  if (d.kind !== "deliver" || !pf) return d;
+  if ("handedTo" in pf) return { ...d, kind: "act", why: pf.why, task: pf.handedTo };
+  return { ...d, kind: "wait", why: pf.hold, drop: `payload first: ${pf.hold}` };
+}
+
+// Whether the decision lets this candidate go out now: the dispatch's last check before the send.
+export function sends(d: DraftDecision, candidateId: string): boolean {
+  return d.kind === "deliver" && d.pick === candidateId;
+}
+
+// One row per dispatch that reached the brain, with its final decision. Never waits.
+export function logDraftDecision(userId: string, d: DraftDecision, type: string | null): void {
+  recordDecision({ layer: 7, decision: "brain.proactive", userId, outcome: d.kind === "deliver" || d.kind === "act" ? "act" : "skip", action: `${d.kind}${type ? `:${type}` : ""}`, proposal: { why: d.why.slice(0, 300), pick: d.pick, source: d.source, drop: d.drop ?? null, task: d.task ?? null, holdHours: d.holdHours ?? null, until: d.until?.toISOString() ?? null, guards: d.guards } }).catch(() => {});
+}
+
+// ---------- Companion check-ins: what the check-in is about, and what it may carry
+export type CheckinBasis = "heavy" | "advice" | "story" | "thread" | "curious" | "recap";
+export type CheckinDecision = Decision & { basis: CheckinBasis };
+// Pure: the most pressing thing on file decides what the check-in is about: something hard they shared yesterday, then advice Co gave,
+// then a moment worth marking, then an open thread, then what Co is still figuring out, then the recap. Only a thread with one thing
+// found for it may carry an offer (that one link); every other check-in offers nothing.
+export function judgeCheckin(p: { heavy: boolean; advice: boolean; story: boolean; thread: boolean; curious: boolean; item: boolean }): CheckinDecision {
+  const basis: CheckinBasis = p.heavy ? "heavy" : p.advice ? "advice" : p.story ? "story" : p.thread ? "thread" : p.curious ? "curious" : "recap";
+  const why = { heavy: "something hard they shared yesterday: check on them", advice: "advice Co gave: ask how it went", story: "a moment worth marking", thread: "an open thread of theirs: ask where it landed", curious: "something Co is still figuring out, where the conversation leads", recap: "one specific thing from the recap, or nothing" }[basis];
+  // curious may offer one way Co can help, as a question, never a link.
+  const dontSay: Rule[] = basis === "thread" && p.item ? [] : [{ what: "offer", why: basis === "curious" ? "a way to help is offered as a question, never a link" : "this check-in offers nothing" }];
+  return { surface: "proactive", kind: "ask", why, instructions: [], guards: ["outreach_caps", "quiet_hours", "pause", "safety", "grounding"], dontSay, basis };
+}
+
+// ---------- Sweep picks: what each judged find does to the queue
+// The picker's verdicts are the brain's read (services/sweepSelect.ts SELECT_SYSTEM), checked by guardVerdicts (facts: cites that
+// exist, why-member and why-now, not past, the day's send limit). What each guarded verdict does is the brain's decision: send
+// delivers (queued), hold waits (back to the backlog), reject leaves for good, no verdict waits untouched.
+// leave: never judged, so where it waits is left as it is.
+export type SweepDecision = { key: string; kind: DecisionKind; drop: boolean; leave: boolean; why: string };
+export function judgeSweepItem(j: { key: string; verdict: "send" | "hold" | "reject" | "no_verdict"; why?: string }): SweepDecision {
+  const why = j.why ?? "";
+  if (j.verdict === "send") return { key: j.key, kind: "deliver", drop: false, leave: false, why };
+  if (j.verdict === "reject") return { key: j.key, kind: "wait", drop: true, leave: false, why };
+  return { key: j.key, kind: "wait", drop: false, leave: j.verdict === "no_verdict", why };
 }
