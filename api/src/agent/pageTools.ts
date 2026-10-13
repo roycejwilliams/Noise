@@ -31,6 +31,7 @@ export const PAGE_INPUT = z.object({
   cover: imageN("Their own photo as the full-bleed cover, when one of theirs fits. On a change, 0 takes it off."),
   artDirection: ART_DIRECTION,
   coverMood: COVER_MOOD,
+  place: PLACE.describe("The main real place it's about (a venue, a lodge, a gallery), only one they named or you read, with its city: its own credited photo becomes the cover and a map comes in. Pass it whenever it's about a place."),
 });
 export type PageInput = z.infer<typeof PAGE_INPUT>;
 
@@ -95,7 +96,8 @@ export function pageDataFrom(input: PageInput, extras?: { style: unknown | null;
   // The art direction Co chose (kept on an edit unless it chose again): on their style when the page has one, else on the page.
   const grammar = input.artDirection ?? was?.style?.grammar ?? was?.grammar ?? null;
   const style = extras?.style ? { ...(extras.style as object), ...(grammar ? { grammar } : {}) } : null;
-  return { title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(style ? { style } : grammar ? { grammar } : {}), ...(logo ? { logo } : {}), ...(coverImage ? { coverImage } : {}) };
+  const place = typeof input.place === "string" ? input.place.trim() || null : input.place === null ? null : (was?.place ?? null);
+  return { ...(place ? { place } : {}), title: input.title, context: input.context, cover: null, sections, sources: input.sources ?? [], ...(style ? { style } : grammar ? { grammar } : {}), ...(logo ? { logo } : {}), ...(coverImage ? { coverImage } : {}) };
 }
 
 // Words about the page, not its title (review of #148: "take that page down" named no title and missed their only page).
@@ -220,9 +222,9 @@ export function pageTools(
         await DSm.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "page", event: "made", layout: `${(imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial"}/${(imaged as any).style ? "theirs" : "co"}`, tokens: (imaged as any).style ?? null, qa: qa && shipped ? { ran: shipped.ran, findings: shipped.findings, fixed: fixedOk?.ok ? qa.fixed : [], first: qa.first.findings.length } : { ran: false }, turnsToBuild: turns }).catch(() => {});
         const short = shipped ? Q.qaShortfall(shipped.findings) : null;
         // Co's art direction, said in one line with the link (what it chose and what the pictures are).
-        const { GRAMMAR_NAMES } = await import("../services/coPages/art.js");
+        const { GRAMMAR_SAID } = await import("../services/coPages/art.js");
         const g = (imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial";
-        const artLine = AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (imaged as any).logo ? "logo" : "plate" }, (GRAMMAR_NAMES as any)[g]);
+        const artLine = AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (imaged as any).logo ? "logo" : "plate" }, (GRAMMAR_SAID as any)[g]);
         for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
         ctx.facts?.add("known", `The page's art direction, as Co chose it: ${artLine}`);
         // Said when Co chose an art direction for it (a page made without one keeps the one line and the link).

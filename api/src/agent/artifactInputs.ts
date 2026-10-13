@@ -30,11 +30,11 @@ export const imageN = (what: string) => z.number().int().nonnegative().nullable(
 // Art direction (services/coPages/art.ts): Co's own judgment, from who they are and what it's about. Recorded on the artifact's style
 // and said in Co's one line of choices.
 const GRAMMAR_GUIDE =
-  "catalog (art, objects, a show, a studio, a collection: a gallery catalog of large captioned plates and asymmetric spreads), fieldguide (a trip, a weekend, a route, anything moving between places: map, timeline, photo strips), menu (food, a dinner, a chef, a tasting, a bar: courses on a centered column), editorial (a pitch, a story, ideas and arguments: a magazine's headline-led spreads), poster (a launch, a party, one loud idea: oversized type and full-bleed pictures)";
+  "catalog (art, craft, objects, a show, an evening at a studio or gallery, a collection: a gallery catalog of large captioned plates and asymmetric spreads), fieldguide (a trip, a weekend away, a route, a day moving between several places: map, timeline, photo strips), menu (food, a dinner, a chef, a tasting, a bar: courses on a centered column), editorial (a pitch, a story, ideas and arguments: a magazine's headline-led spreads), poster (a launch, a party, one loud idea: oversized type and full-bleed pictures)";
 export const ART_DIRECTION = z
   .enum(["catalog", "fieldguide", "menu", "editorial", "poster"])
   .optional()
-  .describe(`The art direction you choose for this one, from their taste and what it's about: ${GRAMMAR_GUIDE}. Choose it every time; a change keeps it unless they ask for another.`);
+  .describe(`The art direction you choose for this one, from their taste and what it's about (its subject, not its schedule: a ceramics night at a studio is a catalog even with a run of times, a cabin weekend is a field guide, a chef's pitch is a menu): ${GRAMMAR_GUIDE}. Choose it every time; a change keeps it unless they ask for another. Write for it: times as "7:00 PM: ..." for a timeline, a menu's dishes as "Dish: what it is", and only some slides as plain lists.`);
 export const PLACE = z
   .string()
   .nullable()

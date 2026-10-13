@@ -23,6 +23,7 @@ export const DECK_INPUT = z.object({
   cover: imageN("Their own photo as the full-bleed cover, when one of theirs fits."),
   artDirection: ART_DIRECTION,
   coverMood: COVER_MOOD,
+  place: PLACE.describe("The main real place it's about (a venue, a lodge, a gallery), only one they named or you read, with its city: its own credited photo becomes the cover and a map comes in. Pass it whenever it's about a place."),
   slides: z
     .array(
       z.object({
@@ -162,7 +163,7 @@ export async function deckDataFrom(
   input: z.infer<typeof DECK_INPUT>,
   taste: { mood?: string; colors?: { background?: string | null; text?: string | null; accent?: string | null }; type?: string | null } | null,
   assets: Map<number, string> = new Map(),
-  was: { slides?: { headline: string; bullets?: string[]; notes?: string; layout?: string; place?: string }[]; style?: any; coverImage?: string } | null = null,
+  was: { slides?: { headline: string; bullets?: string[]; notes?: string; layout?: string; place?: string }[]; style?: any; coverImage?: string; place?: string } | null = null,
   design: { style?: unknown; theirWords?: string } = {},
 ): Promise<Record<string, unknown>> {
   const { styleFrom } = await import("../services/coPages/deck.js");
@@ -211,6 +212,7 @@ export async function deckDataFrom(
     }),
     // The art direction Co chose (kept on an edit unless it chose again), on the style with their tokens.
     style: { ...(style as object), ...((input as any).artDirection ? { grammar: (input as any).artDirection } : (was as any)?.style?.grammar ? { grammar: (was as any).style.grammar } : {}) },
+    ...(typeof (input as any).place === "string" && (input as any).place.trim() ? { place: (input as any).place.trim() } : (input as any).place !== null && (was as any)?.place ? { place: (was as any).place } : {}),
     ...(at((input as any).cover) ? { coverImage: at((input as any).cover) } : (input as any).cover !== 0 && (was as any)?.coverImage ? { coverImage: (was as any).coverImage } : {}),
   };
 }
@@ -608,7 +610,7 @@ export function deckTools(
             const C = await import("../services/deckCompose.js");
             const selfForBrief = await selfIfAboutCo(ctx, { brief: input.brief, title: input.title });
             const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.theirs}\n\nWhat Co is and does (the deck is about Co; these are facts):\n${selfForBrief}` : source.theirs, input.brief!, null, refused, input.audience ?? null));
-            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides, artDirection: input.artDirection ?? out?.artDirection, coverMood: input.coverMood ?? out?.coverMood, cover: input.cover });
+            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides, artDirection: input.artDirection ?? out?.artDirection, coverMood: input.coverMood ?? out?.coverMood, cover: input.cover, place: input.place ?? out?.place });
             if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
             deckIn = { ...input, ...parsed.data };
           }
@@ -707,9 +709,9 @@ export function deckTools(
           // Co's choices, in one line with the link (fill and state).
           const DS = await import("../services/designSystem.js");
           // The look said is the one stored (design audit: the line must never describe a look the deck doesn't have), in their color words.
-          const { GRAMMAR_NAMES } = await import("../services/coPages/art.js");
+          const { GRAMMAR_SAID } = await import("../services/coPages/art.js");
           const grammar = (toStore as any).style?.grammar ?? "editorial";
-          const choices = `${DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words })} ${AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (toStore as any).logo ? "logo" : "plate" }, (GRAMMAR_NAMES as any)[grammar])}`;
+          const choices = `${DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words })} ${AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (toStore as any).logo ? "logo" : "plate" }, (GRAMMAR_SAID as any)[grammar])}`;
           // A mood image used counts as a download, as Unsplash's guidelines ask.
           for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
           const turns = await DS.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);

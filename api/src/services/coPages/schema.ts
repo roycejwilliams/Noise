@@ -50,6 +50,8 @@ export type CoPageData = {
   coverArt?: ArtImage;
   coverImage?: string;
   map?: ArtMap;
+  // The main real place it's about, as Co named it (its cover photo and the map, when no section names one).
+  place?: string;
 };
 const ASSET_ID_RE = /^[A-Za-z0-9_-]{24}$/;
 
@@ -260,7 +262,7 @@ const sameUrl = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\
 // The one gate.
 export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } | { ok: false; problems: string[] } {
   const problems: string[] = [];
-  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources", "style", "logo", "grammar", "coverArt", "coverImage", "map"], problems);
+  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources", "style", "logo", "grammar", "coverArt", "coverImage", "map", "place"], problems);
   if (!o) return { ok: false, problems: ["a page must be an object of fields"] };
   const title = plain(o.title, "title", L.title, problems, true);
   const context = plain(o.context, "context", L.context, problems, true);
@@ -318,6 +320,7 @@ export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } 
   if (o.coverImage != null && (typeof o.coverImage !== "string" || !ASSET_ID_RE.test(o.coverImage))) problems.push("coverImage must be one of their saved images");
   const coverImage = typeof o.coverImage === "string" && ASSET_ID_RE.test(o.coverImage) ? o.coverImage : null;
   const map = checkArtMap(o.map, "map", problems);
+  const pagePlace = plain(o.place, "place", 90, problems, false);
   if (problems.length) return { ok: false, problems };
-  return { ok: true, data: { title: title!, context: context!, cover, sections, sources, ...(style ? { style } : {}), ...(logo ? { logo } : {}), ...(grammar ? { grammar } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(map ? { map } : {}) } };
+  return { ok: true, data: { title: title!, context: context!, cover, sections, sources, ...(style ? { style } : {}), ...(logo ? { logo } : {}), ...(grammar ? { grammar } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(map ? { map } : {}), ...(pagePlace ? { place: pagePlace } : {}) } };
 }

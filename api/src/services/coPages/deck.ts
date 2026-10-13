@@ -42,7 +42,7 @@ export type Fit = (typeof FIT_STEPS)[number];
 // by code from it (services/artImagery.ts), never written by the model.
 export type Slide = { headline: string; bullets: string[]; image: string | null; notes?: string; layout?: SlideLayout; imageMeta?: ImageMeta; fit?: Fit; place?: string; photos?: ArtImage[]; map?: ArtMap };
 // coverArt: the full-bleed cover picture Co found (a venue's photo, or a mood image said as one). coverImage: their own image as the cover.
-export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: string | null; slides: Slide[]; style: DeckStyle; logoMeta?: ImageMeta; coverArt?: ArtImage; coverImage?: string };
+export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: string | null; slides: Slide[]; style: DeckStyle; logoMeta?: ImageMeta; coverArt?: ArtImage; coverImage?: string; place?: string };
 const ASSET = /^[A-Za-z0-9_-]{24}$/;
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -63,7 +63,7 @@ function imageMeta(v: unknown, field: string, problems: string[]): ImageMeta | u
 // The one gate for a deck, like parseCoPageData for a page: unknown fields refused, every line plain, colors hex only.
 export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | { ok: false; problems: string[] } {
   const problems: string[] = [];
-  const o = obj(input, "the deck", ["kind", "title", "subtitle", "logo", "slides", "style", "logoMeta", "coverArt", "coverImage"], problems);
+  const o = obj(input, "the deck", ["kind", "title", "subtitle", "logo", "slides", "style", "logoMeta", "coverArt", "coverImage", "place"], problems);
   if (!o) return { ok: false, problems: ["a deck must be an object of fields"] };
   if (o.kind !== "deck") problems.push("kind must be deck");
   const L = DECK_LIMITS;
@@ -101,6 +101,7 @@ export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | 
     .filter((x): x is Slide => !!x);
   const coverArt = checkArtImage(o.coverArt, "coverArt", problems);
   const coverImage = asset(o.coverImage, "coverImage");
+  const deckPlace = plain(o.place, "place", 90, problems, false);
   const st = obj(o.style, "style", STYLE_KEYS, problems);
   let extras = {};
   if (st) {
@@ -112,7 +113,7 @@ export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | 
   if (problems.length) return { ok: false, problems };
   // Re-derived, so a stored style can never carry text that doesn't read.
   const style = { ...styleFrom(st!.mood, { background: st!.background, text: st!.text, accent: st!.accent }, st!.type, { field: !!(extras as any).gradient }), ...extras };
-  return { ok: true, data: { kind: "deck", title: title!, subtitle: subtitle!, logo, slides, style, ...(logoMeta ? { logoMeta } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}) } };
+  return { ok: true, data: { kind: "deck", title: title!, subtitle: subtitle!, logo, slides, style, ...(logoMeta ? { logoMeta } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(deckPlace ? { place: deckPlace } : {}) } };
 }
 
 // Pure: the member assets a deck places (its logo and slide images).
@@ -145,7 +146,7 @@ export function readableOn(color: string, ground: string, min: number): string {
 }
 
 // Pure: the last two words of a headline held together, so a headline never ends on one word alone.
-export const noOrphan = (escaped: string) => escaped.replace(/\s+(\S+)\s*$/, "&nbsp;$1");
+export const noOrphan = (escaped: string) => escaped.replace(/(\d) ([AaPp]\.?[Mm]\b)/g, "$1&nbsp;$2").replace(/\s+(\S+)\s*$/, "&nbsp;$1");
 
 // ---------------------------------------------------------------- the renderer
 
@@ -243,7 +244,7 @@ html{scroll-snap-type:none}
 .l-asym .cell:first-child p{font-size:20px!important}
 .l-plate h2,.l-strip h2,.l-map h2,.l-timeline h2,.l-asym h2{font-size:26px}
 .l-strip .top{grid-template-columns:1fr;gap:12px}
-.l-map ol{margin-top:14px}
+.l-map ul{margin-top:14px}
 .credit{font-size:11px;position:absolute}
 .map{aspect-ratio:16/10;height:auto}
 .map .pin b{width:22px;height:22px;font-size:11px}
@@ -413,7 +414,8 @@ ${fitCss(dens)}
 .l-map .mapw{position:absolute;top:0;right:0;bottom:0;width:58%}
 .l-map .in{right:58%}
 .l-map h2{font-size:${dens.h2 * 0.85}cqw}
-.l-map ol{margin:2cqw 0 0;padding:0 0 0 1.6em}
+.l-map ul{list-style:none;margin:2cqw 0 0;padding:0}
+.l-map .foot span:last-child{background:${s.background};padding:0.3cqw 0.6cqw;border-radius:0.3cqw}
 .l-map li{font-size:${dens.li}cqw;line-height:1.45;padding:0 0 ${dens.gap * 0.8}cqw}
 /* timeline */
 .l-timeline h2{font-size:${dens.h2}cqw;max-width:24ch}
@@ -433,7 +435,9 @@ ${fitCss(dens)}
 .l-oversized .in{justify-content:flex-end}
 .l-oversized h2{font-size:${dens.stmt * (grammar === "poster" ? 1.75 : 1.45)}cqw;max-width:${grammar === "poster" ? 10 : 13}ch;line-height:0.98}
 .l-oversized .after{font-size:${dens.li}cqw;line-height:1.45;max-width:40ch;margin:2.4cqw 0 0 auto;text-align:right}
-.g-menu.l-oversized .in{align-items:center;text-align:center;justify-content:center}
+.g-menu.l-oversized .in,.g-menu.l-statement .in{align-items:center;text-align:center;justify-content:center}
+.g-menu.l-statement h2{max-width:20ch}
+.g-menu.l-statement .after,.g-menu.l-statement ul{margin-left:auto;margin-right:auto}
 .g-menu.l-oversized .after{margin:2.4cqw auto 0;text-align:center}
 /* courses: a menu's centered column, between rules */
 .l-courses .in{align-items:center;text-align:center;justify-content:center}
@@ -556,7 +560,7 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
         const row = pics.slice(0, 3);
         inner = `<div class="in">${kicker}<div class="top">${h2}${ul(sl.bullets)}</div></div><div class="strip" style="--n:${row.length}">${row.map((p) => figure(p, "")).join("")}</div>`;
       } else if (l === "map" && sl.map) {
-        inner = `<div class="in">${kicker}${h2}<ol>${sl.bullets.map((b) => `<li data-qa-text="body">${e(b)}</li>`).join("")}</ol></div><div class="mapw">${mapHtml(sl.map, e, tileSrc)}</div>`;
+        inner = `<div class="in">${kicker}${h2}<ul>${sl.bullets.map((b) => `<li data-qa-text="body">${e(b)}</li>`).join("")}</ul></div><div class="mapw">${mapHtml(sl.map, e, tileSrc)}</div>`;
       } else if (l === "timeline") {
         const items = sl.bullets.map((b) => leadOf(b) ?? { lead: "", text: b });
         inner = `<div class="in">${kicker}${h2}<ol class="tl" style="--n:${items.length}">${items.map((x) => `<li><span class="when" data-qa-text="h3">${e(x.lead)}</span><span data-qa-text="body">${e(x.text)}</span></li>`).join("")}</ol></div>`;

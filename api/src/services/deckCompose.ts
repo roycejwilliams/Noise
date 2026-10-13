@@ -36,7 +36,7 @@ ${look ? `- From the look, also choose: mood (one of minimal, bold, warm, dark, 
 - Art direction is yours: choose artDirection from what it's about and who it's for: catalog (art, objects, a show, a studio), fieldguide (a trip, a weekend, places), menu (food, a chef, a dinner), editorial (a pitch, ideas, a story), poster (a launch, one loud idea). Lay the slides out for it: times as "7:00 PM: ...", a menu's dishes as "Dish: what it is", and only some slides as plain lists.
 - place: on a slide about a real place they named, that place with its city ("Heath Ceramics, San Francisco"); never one they didn't name. coverMood: a few plain words for a mood photo for the cover.
 
-Return ONLY JSON: {"title": "...", "subtitle": "...", "artDirection": "catalog|fieldguide|menu|editorial|poster", "coverMood": "...", "slides": [{"headline": "...", "bullets": ["..."], "place": "... or leave out"}]${look ? `, "look": {"mood": "...", "background": "#......", "text": "#......", "accent": "#......", "type": "serif|sans"}` : ""}}
+Return ONLY JSON: {"title": "...", "subtitle": "...", "artDirection": "catalog|fieldguide|menu|editorial|poster", "coverMood": "...", "place": "the main real place they named, with its city, or leave out", "slides": [{"headline": "...", "bullets": ["..."], "place": "... or leave out"}]${look ? `, "look": {"mood": "...", "background": "#......", "text": "#......", "accent": "#......", "type": "serif|sans"}` : ""}}
 The title slide is made from title and subtitle; slides are the content slides only.`;
 }
 

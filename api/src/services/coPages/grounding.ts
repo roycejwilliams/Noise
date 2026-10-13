@@ -13,7 +13,7 @@ export type PageSource = { theirs: string; read: string };
 
 // Pure: every line of text a page shows, with where it is (for the problem message).
 export function pageLines(d: CoPageData): { where: string; text: string }[] {
-  const out: { where: string; text: string }[] = [{ where: "title", text: d.title }, { where: "context", text: d.context }];
+  const out: { where: string; text: string }[] = [{ where: "title", text: d.title }, { where: "context", text: d.context }, ...(d.place ? [{ where: "place", text: d.place }] : [])];
   d.sections.forEach((s, i) => {
     const at = `section ${i + 1}`;
     out.push({ where: `${at} heading`, text: s.heading });
@@ -79,6 +79,7 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
   const lines: { where: string; text: string }[] = [
     { where: "title", text: d.title },
     { where: "subtitle", text: d.subtitle },
+    ...(d.place ? [{ where: "place", text: d.place }] : []),
     ...d.slides.flatMap((s, i) => [{ where: `slide ${i + 2} headline`, text: s.headline }, ...s.bullets.map((b) => ({ where: `slide ${i + 2}`, text: b })), ...(s.notes ? [{ where: `slide ${i + 2} notes`, text: s.notes }] : []), ...(s.place ? [{ where: `slide ${i + 2} place`, text: s.place }] : [])]),
   ];
   const out: string[] = [];

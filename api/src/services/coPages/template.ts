@@ -14,7 +14,7 @@ import { EMAIL_COLORS, escapeHtml } from "../emailDesign.js";
 import type { Block, CoPageData, ComparisonOption, LinkItem } from "./schema.js";
 import { contrast, inkOn, type DeckStyle } from "./style.js";
 import { fontLinks, fontStack } from "../designFonts.js";
-import { creditHtml, googlePhotosIn, leadOf, mapHtml, typePlate, type ArtImage, type Grammar } from "./art.js";
+import { creditHtml, googlePhotosIn, mapHtml, typePlate, type ArtImage, type Grammar } from "./art.js";
 
 export type CoPageView = { id: string; data: CoPageData; version: number; updatedAt: Date };
 

@@ -23,6 +23,8 @@ export const GRAMMAR_NAMES: Record<Grammar, string> = {
   editorial: "an editorial magazine: headline-led spreads",
   poster: "a poster: oversized type, full-bleed pictures",
 };
+// How Co says it in its line of choices: only the grammar's name (what the artifact really has, a map or the cover, is said apart).
+export const GRAMMAR_SAID: Record<Grammar, string> = { catalog: "a gallery catalog", fieldguide: "a field guide", menu: "a menu", editorial: "an editorial magazine", poster: "a poster" };
 // For Co's tool descriptions: what each grammar is for.
 export const GRAMMAR_GUIDE =
   "catalog (art, objects, a show, a studio, a collection: a gallery catalog of large captioned plates and asymmetric spreads), fieldguide (a trip, a weekend, a route, anything moving between places: map, timeline, photo strips), menu (food, a dinner, a chef, a tasting, a bar: courses on a centered column), editorial (a pitch, a story, ideas and arguments: a magazine's headline-led spreads), poster (a launch, a party, one loud idea: oversized type and full-bleed pictures)";
@@ -185,6 +187,9 @@ type Shape = { bullets: string[]; image: string | null; photos?: ArtImage[]; map
 
 // Pure: a bullet's short lead before a colon ("7:00 PM: Dinner", "Friday: Arrive"), or null.
 export function leadOf(b: string): { lead: string; text: string } | null {
+  // A time written last ("Doors 6:30 PM") leads too.
+  const end = b.match(/^(.{2,}?)[,\s]+(?:at\s+)?(\d{1,2}(?::\d{2})?\s?(?:[AaPp]\.?[Mm]\.?))$/);
+  if (end) return { lead: end[2].trim(), text: end[1].trim() };
   const m = b.match(/^(\d{1,2}:\d{2}\s?(?:[AaPp]\.?[Mm]\.?)?|[^:]{1,18}):\s+(.{2,})$/);
   if (!m || /\s{2,}/.test(m[1]) || m[1].split(/\s+/).length > 3) return null;
   return { lead: m[1].trim(), text: m[2].trim() };
@@ -194,14 +199,15 @@ const pictures = (s: Shape) => (s.image ? 1 : 0) + (s.photos?.length ?? 0);
 
 // Pure: whether a slide has what a layout needs (a map needs places, a plate a picture, a strip two pictures, a timeline times).
 export function layoutFits(l: string, s: Shape): boolean {
+  if (l === "statement") return s.bullets.length <= 5;
   if (l === "map") return !!s.map?.pins.length;
   if (l === "plate" || l === "split") return pictures(s) >= 1;
   if (l === "strip") return pictures(s) >= 2;
   if (l === "timeline") return timed(s) && s.bullets.length <= 5;
   if (l === "grid") return s.bullets.length >= 2 && s.bullets.length <= 4 && s.bullets.every((b) => b.length <= 95);
-  if (l === "asym") return s.bullets.length >= 2 && s.bullets.length <= 4;
+  if (l === "asym") return s.bullets.length >= 2 && s.bullets.length <= 5;
   if (l === "courses") return s.bullets.length >= 1 && s.bullets.length <= 5;
-  if (l === "oversized" || l === "statement") return s.bullets.length <= 2;
+  if (l === "oversized") return s.bullets.length <= 2;
   return true;
 }
 
@@ -224,8 +230,10 @@ function byShape(s: Shape, g: Grammar, i: number): string {
       return layoutFits("grid", s) ? "grid" : "points";
     case "menu":
       if (pics) return "plate";
-      if (one) return "oversized";
-      return layoutFits("courses", s) ? "courses" : "points";
+      // Courses are dishes ("Oyster: smoked butter"); the rest of a menu is set as its statements, centered.
+      if (layoutFits("courses", s) && s.bullets.every((b) => leadOf(b))) return "courses";
+      if (s.bullets.length <= 2) return "oversized";
+      return i % 2 ? "asym" : "statement";
     case "poster":
       if (pics) return "plate";
       if (s.bullets.length <= 2) return "oversized";
@@ -269,6 +277,28 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
     relaid.push(i);
     count--;
   }
+  // Variety (founder's brief: "composition variety per deck"): no one layout on more than half the slides of a deck of four or more.
+  if (slides.length >= 4) {
+    for (let guard = 0; guard < slides.length; guard++) {
+      const counts = new Map<string, number>();
+      out.forEach((l) => counts.set(l, (counts.get(l) ?? 0) + 1));
+      const [top, k] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+      if (k <= max) break;
+      // The slide that's easiest to set another way: fewest points first, later slides before earlier ones.
+      const cand = out.map((l, i) => i).filter((i) => out[i] === top).sort((a, b) => slides[a].bullets.length - slides[b].bullets.length || b - a);
+      let moved = false;
+      for (const i of cand) {
+        const to = [...alt[g], "asym", "statement", "points"].find((l) => l !== top && layoutFits(l, slides[i]) && (counts.get(l) ?? 0) < max);
+        if (to) {
+          out[i] = to;
+          relaid.push(i);
+          moved = true;
+          break;
+        }
+      }
+      if (!moved) break;
+    }
+  }
   return { layouts: out, relaid };
 }
 
@@ -281,7 +311,12 @@ export function compositionProblem(layouts: string[]): string | null {
     if (k > Math.floor(n / 2)) return `${k} of ${n} slides use the same title and numbered list layout (${l}); half at most`;
   }
   const lists = layouts.filter((x) => (LIST_LAYOUTS as readonly string[]).includes(x)).length;
-  return lists > Math.floor(n / 2) ? `${lists} of ${n} slides are title and numbered list layouts; half at most` : null;
+  if (lists > Math.floor(n / 2)) return `${lists} of ${n} slides are title and numbered list layouts; half at most`;
+  if (n >= 4) for (const l of new Set(layouts)) {
+    const k = layouts.filter((x) => x === l).length;
+    if (k > Math.floor(n / 2)) return `${k} of ${n} slides share one layout (${l}); half at most`;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------- the craft bar

@@ -175,6 +175,15 @@ export async function fillDeckArt(data: any, o: { mood?: string | null; deadline
   const grammar: Grammar = next.style?.grammar ?? "editorial";
   const work = (async () => {
     const slides: any[] = next.slides;
+    // The deck's main place, when no slide names one: it goes on the slide that names it, else the first that isn't a run of times or
+    // courses (the map then shows where it all happens).
+    if (next.place && !slides.some((s) => s.place)) {
+      const key = String(next.place).split(",")[0].trim().toLowerCase();
+      let at = slides.findIndex((s) => `${s.headline} ${s.bullets.join(" ")}`.toLowerCase().includes(key));
+      if (at < 0) at = slides.findIndex((s) => !["timeline", "courses"].includes(s.layout ?? "") && !s.bullets.every((b: string) => /^[^:]{1,18}:\s/.test(b)));
+      if (at < 0) at = slides.length - 1;
+      slides[at].place = next.place;
+    }
     const found = await Promise.all(slides.map((s) => (s.place ? findPlace(s.place, grammar === "fieldguide" || grammar === "catalog" ? 3 : 2, deps).catch(() => null) : Promise.resolve(null))));
     const pins: MapPin[] = [];
     found.forEach((f, i) => {
@@ -242,6 +251,12 @@ export async function fillPageArt(data: any, o: { mood?: string | null; deadline
   const report: ArtReport = { venues: [], mood: false, map: 0, cover: "none", notes: [], track: [] };
   const grammar: Grammar = next.style?.grammar ?? next.grammar ?? "editorial";
   const work = (async () => {
+    // The page's main place, when no section names one: it goes on the section that names it, else the first.
+    if (next.place && !next.sections.some((s: any) => s.place)) {
+      const key = String(next.place).split(",")[0].trim().toLowerCase();
+      const at = Math.max(0, next.sections.findIndex((s: any) => JSON.stringify(s.blocks).toLowerCase().includes(key) || s.heading.toLowerCase().includes(key)));
+      next.sections[at].place = next.place;
+    }
     const found = await Promise.all(next.sections.map((s: any) => (s.place ? findPlace(s.place, grammar === "fieldguide" ? 3 : 1, deps).catch(() => null) : Promise.resolve(null))));
     const pins: MapPin[] = [];
     found.forEach((f: FoundPlace | null, i: number) => {
