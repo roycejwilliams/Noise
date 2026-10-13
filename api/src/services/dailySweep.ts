@@ -262,11 +262,56 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
 // finds (payload.morningDay: harness/proactive.ts morningFind skips the pacing for them, that day only), and the send step runs for
 // them right away: each find's link, then its description. Hours, opt-out, mid-conversation and the safety checks still hold; a find
 // they hold for goes out at the next send run that day. Failures here are logged, never thrown into the floor.
+// Silence is information (Royce, 2026-10-13: "A club that keeps texting a silent member reads desperate. Keep it gentle: two ignored
+// mornings, drop to every other day. A week silent, pause morning finds until they reply to anything. Any reply resets to daily."):
+// counted from their last reply (any text, or a call where they spoke), over the morning texts sent since. A paced morning still
+// searches and picks; what it picked waits under the normal pacing. Only the morning text slows.
+export const MORNING_PACE = { everyOtherDayAfter: 2, pauseAfterDays: 7 } as const;
+// Pure: may this morning's finds go out, and if not, why.
+export function morningPace(o: { now: Date; zone: string | null; lastReplyAt: Date | null; morningSends: Date[] }): { send: boolean; why: string | null } {
+  const z = hoursZone(o.zone);
+  const dayOf = (d: Date) => DateTime.fromJSDate(d).setZone(z).toISODate()!;
+  const today = dayOf(o.now);
+  const unanswered = o.morningSends.filter((d) => (!o.lastReplyAt || d.getTime() > o.lastReplyAt.getTime()) && dayOf(d) !== today).sort((a, b) => a.getTime() - b.getTime());
+  const days = [...new Set(unanswered.map(dayOf))];
+  if (!days.length) return { send: true, why: null };
+  // Counted in their calendar days: the 9am run seven days after the first unanswered morning is a week.
+  const silentDays = DateTime.fromISO(today, { zone: z }).diff(DateTime.fromISO(days[0], { zone: z }), "days").days;
+  if (silentDays >= MORNING_PACE.pauseAfterDays) return { send: false, why: `paused: no reply in a week of morning texts (first unanswered ${days[0]}); resumes when they reply to anything` };
+  const yesterday = DateTime.fromISO(today, { zone: z }).minus({ days: 1 }).toISODate();
+  if (days.length >= MORNING_PACE.everyOtherDayAfter && days[days.length - 1] === yesterday) return { send: false, why: `every other day: ${days.length} morning texts unanswered (last ${yesterday}); next morning tomorrow` };
+  return { send: true, why: null };
+}
+
 async function sendMorningFinds(userId: string, day: string): Promise<void> {
   // Only what this run's picker queues becomes a morning find (review, 2026-10-13: a retry later in the day must not turn other sweeps'
   // picks into unpaced texts); a pick already waiting from earlier keeps the normal pacing.
   const [{ t0 }] = (await pool.query(`SELECT NOW() AS t0`)).rows;
   await import("./sweepShadow.js").then((S) => S.runPickerAfterSweep(userId, "daily"));
+  // Their silence sets the pace (morningPace), read BEFORE anything is marked, so a send run can't slip a paced morning out. Every
+  // morning text since their last reply counts, however long ago: a paused member stays paused until they reply (review, 2026-10-13).
+  let pace: { send: boolean; why: string | null };
+  try {
+    const [{ at: lastReplyAt }] = (await pool.query(
+      `SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND (content LIKE 'User %' OR content LIKE '[Call]%')`,
+      [userId],
+    )).rows;
+    const { rows: sentMornings } = await pool.query(
+      `SELECT COALESCE(decided_at, updated_at) AS at FROM proactive_candidates
+        WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND payload ? 'morningDay' AND COALESCE(decided_at, updated_at) > COALESCE($2::timestamptz, '-infinity'::timestamptz)`,
+      [userId, lastReplyAt ?? null],
+    );
+    pace = morningPace({ now: new Date(), zone: await memberZone(userId), lastReplyAt: lastReplyAt ? new Date(lastReplyAt) : null, morningSends: sentMornings.map((r: any) => new Date(r.at)) });
+  } catch (err: any) {
+    // Can't tell how they've been answering: no morning text today (their picks wait under the normal pacing), and it's said.
+    console.error(`Daily sweep: reading the morning pace failed for ${userId} (non-fatal):`, err?.message ?? err);
+    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "error", reason: `the pace couldn't be read: ${String(err?.message ?? err).slice(0, 200)}`, proposal: { day } });
+    return;
+  }
+  if (!pace.send) {
+    await recordDecision({ layer: 7, decision: "sweep.morning_finds", userId, outcome: "skip", action: "paced", reason: pace.why, proposal: { day } });
+    return;
+  }
   const { rowCount } = await pool.query(
     `UPDATE proactive_candidates SET payload = payload || jsonb_build_object('morningDay', $2::text), updated_at = NOW()
       WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending' AND payload->>'picked' = 'true'
