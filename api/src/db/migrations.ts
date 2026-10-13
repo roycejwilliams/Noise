@@ -2242,6 +2242,30 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'ask'`))
     .then(() => pool.query(`ALTER TABLE co_tasks ADD COLUMN IF NOT EXISTS deadline DATE, ADD COLUMN IF NOT EXISTS final_check_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS final_told BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS awaiting_reply BOOLEAN NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS their_reply_at TIMESTAMPTZ`))
     .catch((err: Error) => console.error("co_tasks table init failed:", err));
+  // Goals a member handed Co (services/goalOwnership.ts, 2026-10-13): the items, which Co offered to take and which they picked, the
+  // club-world read, and the check-in on the ledger. Co's pieces and the check-in are ordinary co_tasks rows carrying followup.goalId.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS co_goals (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        their_words TEXT NOT NULL,
+        items JSONB NOT NULL DEFAULT '[]'::jsonb,
+        club_world BOOLEAN NOT NULL DEFAULT false,
+        club_why TEXT,
+        status TEXT NOT NULL DEFAULT 'offered',
+        checkin_task_id BIGINT,
+        offered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        accepted_at TIMESTAMPTZ,
+        closed_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_co_goals_user ON co_goals (user_id, status)`))
+    // The dated moment they're counting on (their words), and the file they handed over for it with the words that handed it over.
+    .then(() => pool.query(`ALTER TABLE co_goals ADD COLUMN IF NOT EXISTS moment JSONB, ADD COLUMN IF NOT EXISTS source_file INT, ADD COLUMN IF NOT EXISTS handed_over TEXT`))
+    .catch((err: Error) => console.error("co_goals table init failed:", err));
   // Open loops (Royce, 2026-10-01: "Open loops are first-class state. Every
   // stated ask becomes a tracked outcome with a status"): one row per thing Co
   // is carrying for them, synced from tasks, working notes, asks and offers

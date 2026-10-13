@@ -77,6 +77,9 @@ export type TurnContext = {
   tasks?: string[];
   // Their research briefs: running, held for their hours, or finished lately (services/coTasks.ts briefFactLines).
   briefs?: string[];
+  // Goals they handed Co (services/goalOwnership.ts): offered (waiting on their pick) or active (what Co carries, what's theirs, the
+  // check-in on the ledger). Tool references for Co, never member-facing text.
+  goals?: { kind: "known" | "scheduled"; text: string }[];
   // Whether Co may offer to write something up as a document, and any offer still waiting on an answer (services/documentOffer.ts).
   docOffer?: DocOfferContext | null;
   // Documents Co delivered them, newest version each, outstanding first (services/deliveryReceipts.ts receiptLines).
@@ -402,6 +405,7 @@ export async function assembleContext(
   const recentDocs = newestDocs(receipts, 3);
   const drift = recentDocs.map((d) => receiptDrift(d, { notes, rejected, eventStartsAt: todayEvent?.startAt ? new Date(todayEvent.startAt) : null })).filter((x): x is Drift => !!x);
   const rawTasks = await tasksOnce().catch(() => [] as CoTask[]);
+  const goals = await import("./goalOwnership.js").then(async (G) => G.goalFactLines(await G.openGoals(userId), rawTasks, zone)).catch(() => [] as { kind: "known" | "scheduled"; text: string }[]);
   const rawBriefs = await briefsOnce().catch(() => [] as BriefView[]);
   const windows = new Map(rawTasks.filter((t) => t.status === "open" && t.window && !t.window.closedAt).map((t) => [`task #${t.id}`, { words: t.window!.words, deadline: t.window!.deadline, zone: t.window!.zone ?? null }]));
   const carrying = carryFromKnowledge(knowledge?.carrying ?? [], zone, windows).flatMap((c) => { const label = keep(c.label); return label ? [{ ...c, label }] : []; });
@@ -419,7 +423,7 @@ export async function assembleContext(
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   const coldStart = await coldStartP;
   const door = await doorP;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null };
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

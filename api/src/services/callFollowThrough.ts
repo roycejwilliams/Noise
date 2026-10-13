@@ -92,6 +92,11 @@ export type FollowThroughDeps = {
   runTask: (userId: string, c: Commitment) => Promise<{ ran: boolean; action?: string }>;
   hold: (userId: string, taskIds: number[], until: Date) => Promise<void>;
   record: typeof recordDecision;
+  // The promise guard on calls (services/promiseBinding.ts bindCallPromises): every timed promise Co spoke binds to the ledger, and
+  // what can't is admitted to them in one text (admit). Left out (tests), the call's follow-through runs as before.
+  bind?: (userId: string, transcript: string) => Promise<{ unbound: { sentence: string; why: string }[]; verdicts: unknown[] }>;
+  admit?: (o: { userId: string; transcript: string; unbound: { sentence: string; why: string }[] }) => Promise<{ sent: boolean; queued?: boolean; reason?: string; text?: string }>;
+  ledgerUnbound?: (userId: string, p: { sentence: string; why: string; admitted: boolean }) => Promise<number | null>;
 };
 
 export type FollowThroughResult = {
@@ -132,6 +137,21 @@ export async function followThroughOnCallEnd(o: { userId: string; transcript: st
   try {
     // A commitment said on the direct path has no task yet: open it (the same words never open twice).
     await deps.track(o.userId, o.transcript).catch(() => null);
+    // Bind or admit: each timed promise Co spoke is on the ledger now, or it's taken back in one text. Before anything else, so a
+    // call with no send commitments still has its promises held to.
+    if (deps.bind) {
+      const b = await deps.bind(o.userId, o.transcript).catch((err: any) => {
+        console.error("callFollowThrough: promise binding failed (non-fatal):", err?.message ?? err);
+        return null;
+      });
+      if (b?.verdicts.length) await deps.record({ layer: 8, decision: "call.promise_binding", userId: o.userId, outcome: b.unbound.length ? "skip" : "act", action: b.unbound.length ? "unbound" : "bound", proposal: { verdicts: b.verdicts }, reason: b.unbound.map((u) => u.why).join("; ") || null }).catch(() => {});
+      if (b?.unbound.length && deps.admit) {
+        const a = await deps.admit({ userId: o.userId, transcript: o.transcript, unbound: b.unbound }).catch((err: any) => ({ sent: false, queued: false, reason: String(err?.message ?? err), text: undefined as string | undefined }));
+        // Made and missed, on the ledger, admitted or not (commitmentLog.ts recordUnboundCallPromise).
+        if (deps.ledgerUnbound) for (const u of b.unbound) await deps.ledgerUnbound(o.userId, { ...u, admitted: !!(a.sent || a.queued) }).catch(() => null);
+        await deps.record({ layer: 8, decision: "call.promise_admitted", userId: o.userId, outcome: a.sent || a.queued ? "act" : "skip", action: a.sent ? "sent" : a.queued ? "queued" : "not_sent", proposal: { unbound: b.unbound, text: a.text ?? null }, reason: a.reason ?? null }).catch(() => {});
+      }
+    }
     const since = new Date((o.startedAt ?? new Date(t0.getTime() - 2 * 3_600_000)).getTime() - 60_000);
     const commitments = await deps.commitments(o.userId, since);
     if (!commitments.length) return { action: "none" };
@@ -187,7 +207,7 @@ const realDeps: FollowThroughDeps = {
     const { rows } = await pool.query(`SELECT u.first_name, u.phone_number, u.sms_opted_out, u.archived_at, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [userId]);
     const p = rows[0];
     if (!p) return null;
-    const zone = await (await import("./memberTime.js")).memberZone(userId);
+    const zone = await (await import("./memberTime.js")).memberZone(userId).catch(() => null);
     return { firstName: p.first_name || "them", phone: p.phone_number, zone, reachable: !!p.phone_number && !p.sms_opted_out && !p.archived_at };
   },
   draft: ({ firstName, facts, redo }) => {
@@ -214,6 +234,25 @@ const realDeps: FollowThroughDeps = {
     await pool.query(`UPDATE co_tasks SET next_check_at = $3, updated_at = NOW() WHERE user_id = $1 AND id = ANY($2::bigint[]) AND status = 'open'`, [userId, ids, until]);
   },
   record: recordDecision,
+  bind: async (userId, transcript) => (await import("./promiseBinding.js")).bindCallPromises(userId, transcript),
+  ledgerUnbound: async (userId, p) => (await import("./commitmentLog.js")).recordUnboundCallPromise(userId, p),
+  admit: async ({ userId, transcript, unbound }) => {
+    const { rows } = await pool.query(`SELECT first_name, phone_number, sms_opted_out, archived_at FROM users WHERE id = $1`, [userId]);
+    const p = rows[0];
+    if (!p || p.sms_opted_out || p.archived_at || !p.phone_number) return { sent: false, reason: "unreachable" };
+    const zone = await (await import("./memberTime.js")).memberZone(userId).catch(() => null);
+    const { admissionFallback } = await import("./promiseBinding.js");
+    const facts = { what_you_said_on_the_call: unbound.map((u) => u.sentence).join(" | "), why_you_cant_hold_it: unbound.map((u) => u.why).join(" | ") };
+    const task = `On the call you told them something you can't actually hold yourself to (what_you_said_on_the_call, and why_you_cant_hold_it). Text them one or two plain sentences that take it back honestly, in your own voice: what you said, and that it isn't something you can do or hold; if it's something only they can do, say it's theirs. No new promise or time, no excuse, no apology spiral, no question, no sign-off.`;
+    const bad = (t: string) => checkDraft(t, { maxSentences: 3, maxChars: 320 }).filter((c) => !c.pass);
+    let text = await draftProactive({ functionId: "call.promise.admit", firstName: p.first_name || "them", facts, task, maxSentences: 3 }).catch(() => null);
+    if (text && bad(text).length) text = await draftAgain({ draft: text, failed: bad(text).map((c) => c.reason ?? c.name).join("; ") }, () => draftProactive({ functionId: "call.promise.admit", firstName: p.first_name || "them", facts, task, maxSentences: 3 })).catch(() => null);
+    if (!text || bad(text).length) text = admissionFallback(unbound);
+    // The existing after-call send type (never counted as the promised thing), once per call, held to their morning at night.
+    const { sendExemptWhenAllowed } = await import("../harness/proactive.js");
+    const r = await sendExemptWhenAllowed({ userId, phoneNumber: p.phone_number, type: CONFIRM_TYPE, targetKey: `call_admit:${callKey(transcript)}`, messages: [text], timezone: zone });
+    return { sent: r.sent, queued: r.queued, reason: r.reason, text };
+  },
 };
 
 // The held confirmation's send settled (services/deferredSends.ts): sent, the work starts now, as it would have right after a

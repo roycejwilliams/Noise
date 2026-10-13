@@ -599,16 +599,165 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
     closeTask: tool({
       description: toolUse("closeTask"),
-      inputSchema: z.object({ taskId: z.number(), status: z.enum(["done", "dropped"]), outcome: z.string() }),
-      execute: async ({ taskId, status, outcome }) => {
+      inputSchema: z.object({ taskId: z.number(), status: z.enum(["done", "dropped"]), outcome: z.string(), theirWords: z.string().optional().describe("When they closed it themselves (\"we booked it\", \"don't need it anymore\"): their exact words from this message.") }),
+      execute: async ({ taskId, status, outcome, theirWords }) => {
         if (ctx.dryRun) return { ok: true };
         const T = await import("../services/coTasks.js");
-        if (!(await T.closeTask(ctx.userId, taskId, status, outcome))) {
+        // Their own word, from this message, is what makes a drop theirs; without it a drop counts as a promise Co didn't keep.
+        const theirWord = theirWords && T.wordsAreTheirs(theirWords, ctx.resolvedContent) ? theirWords : null;
+        if (!(await T.closeTask(ctx.userId, taskId, status, outcome, { theirWord }))) {
           notDone(`Task #${taskId} wasn't closed: it isn't one of their open tasks.`);
           return { ok: false, error: "No open task with that id." };
         }
         ctx.facts?.add("did_this_turn", `Closed task #${taskId} (${status}): ${outcome}`);
         return { ok: true };
+      },
+    }),
+
+    // Goal ownership (services/goalOwnership.ts): Co splits a goal they hand it, offers the split once, and works only what they pick.
+    takeOnGoal: tool({
+      description: toolUse("takeOnGoal"),
+      inputSchema: z.object({
+        title: z.string().describe("The goal in a few words, in their terms."),
+        theirWords: z.string().describe("A quote of their own words handing it over, copied exactly from their message."),
+        items: z
+          .array(z.object({ text: z.string().describe("The piece, in a few words."), who: z.enum(["co", "member"]), how: z.enum(["research", "draft", "watch", "reminder"]).optional().describe("Only for who: co.") }))
+          .max(10)
+          .optional()
+          .describe("The goal's pieces. Leave out only when the goal is in a file they sent (file): its pieces come from the file."),
+        moment: z
+          .object({ date: z.string().describe("YYYY-MM-DD"), theirWords: z.string().describe("Their own words naming it, copied exactly (\"the show is Nov 8\").") })
+          .optional()
+          .describe("The dated moment the goal is for, only if they named one (a launch, a show, a decision day)."),
+        file: z.number().int().nonnegative().optional().describe("Only when they sent a file and, in this message, handed it over for you to work through with them (\"hold me accountable on this\"): its number, or 0 for the one they just sent."),
+      }),
+      execute: async ({ title, theirWords, items: given, moment, file }) => {
+        const G = await import("../services/goalOwnership.js");
+        const T = await import("../services/coTasks.js");
+        const recent = ctx.dryRun
+          ? ""
+          : await pool
+              .query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} ORDER BY created_at DESC LIMIT 6`, [ctx.userId])
+              .then((r) => r.rows.map((x: any) => String(x.content)).join("\n"))
+              .catch(() => "");
+        if (!T.wordsAreTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
+          notDone("No goal was taken on: the quote isn't in their words.");
+          return { ok: false, error: "theirWords must be copied exactly from what they wrote. Only a goal they handed you." };
+        }
+        const zone = await memberZone(ctx.userId).catch(() => null);
+        // The moment they're counting on: a real date, in their words, ahead (the same check as a task deadline).
+        const m = moment ? T.planDeadline({ date: moment.date, words: moment.theirWords }, `${ctx.resolvedContent}\n${recent}`, zone, new Date()) : null;
+        if (m && !m.ok) notDone(`The goal's moment wasn't kept: ${m.why}.`);
+        const goalMoment = m?.ok ? { date: m.deadline, words: moment!.theirWords.slice(0, 120) } : null;
+        // A file they handed over (goalOwnership.ts, unsealed by purpose): their words in THIS message must hand it over; then only its
+        // item titles leave the seal, each held to the no-other-person rule. Anything short of that keeps the seal.
+        let items: unknown = given ?? [];
+        let fromFile: { n: number; quote: string; dropped: number } | null = null;
+        if (file !== undefined) {
+          const hand = ctx.dryRun ? { handsOver: false, quote: null, read: false } : await G.handsOverFile(ctx.resolvedContent);
+          if (!hand.handsOver || !hand.quote) {
+            notDone("Their file stayed sealed: this message doesn't hand it over for you to work through with them.");
+            return { ok: false, error: "Their file stays sealed: they haven't handed it over for goal work in this message. Don't describe what's in it. If they want to work through it with you, they can say so, or paste the list." };
+          }
+          const F = await import("../services/memberFiles.js");
+          // Tied to the specific file: the one this message names, or the one they just sent (goalOwnership.ts handoverFile).
+          const on = await F.readableFileTimes(ctx.userId).catch(() => [] as { n: number; at: Date }[]);
+          const which = G.handoverFile(on, file, ctx.resolvedContent, new Date());
+          if (!which.ok) {
+            notDone(`Their file stayed sealed: ${which.why}.`);
+            return { ok: false, error: `Their file stays sealed: ${which.why}. Don't describe what's in it; ask which file they mean, or ask them to paste the list.` };
+          }
+          const f = await F.fileText(ctx.userId, which.n);
+          if (!f) {
+            notDone("No file of theirs was found to work from.");
+            return { ok: false, error: "There's no readable file of theirs on file with you. Ask them to send it again or paste the list." };
+          }
+          const names = await import("../services/memberSafeMemories.js").then((x) => x.memberNamesStrict(ctx.userId)).catch(() => null);
+          if (!names) {
+            notDone("Their file stayed sealed: the member-name check couldn't run.");
+            return { ok: false, error: "Their file stays sealed right now. Ask them to paste the list instead." };
+          }
+          const titles = await G.titlesFromFile(f.text, `${ctx.resolvedContent}\n${recent}`, names, undefined, { memberName: ctx.firstName ?? null });
+          if (!titles.ok) {
+            notDone(`Nothing came out of their file #${f.n}: ${titles.why}.`);
+            return { ok: false, error: `Nothing usable came out of their file (${titles.why}). Ask them to paste the list.` };
+          }
+          items = titles.items;
+          fromFile = { n: f.n, quote: hand.quote, dropped: titles.dropped };
+          await recordDecision({ layer: 3, decision: "goal.file_unsealed", userId: ctx.userId, outcome: "act", action: `file #${f.n}`, reason: hand.quote.slice(0, 200), proposal: { file: f.n, quote: hand.quote.slice(0, 200), kept: titles.items.length, dropped: titles.dropped } }).catch(() => {});
+        }
+        const cleaned = G.cleanItems(items);
+        if (!cleaned.length) {
+          notDone("No goal was taken on: it had no pieces.");
+          return { ok: false, error: "Write the goal's pieces." };
+        }
+        // Co's judgment on the goal and each piece, a fail-safe read: unread means light (no split) and every piece theirs.
+        const read = await G.readGoal(title, theirWords, cleaned);
+        let split = G.splitFor(cleaned.map((i) => ({ ...i, reach: read.reach.get(i.n) ?? "unread" })), read.clubWorld);
+        // Admin and grind (outside the club's world): one reminder for the whole goal and its deadline, always. The deadline is the
+        // moment Co gave, or one in their own words ("before the 30th"), read in code.
+        const lightMoment = goalMoment ?? G.deadlineInTheirWords(ctx.resolvedContent, new Date(), zone);
+        if (!read.clubWorld) split = G.withLightReminder(split, title, lightMoment, { now: new Date(), zone });
+        const mayTake = split.filter((i) => i.owner === "co");
+        const handedBack = cleaned.filter((i) => i.owner === "co" && split.find((x) => x.n === i.n)?.owner === "member");
+        // The light path: Co reads only what it can offer (the reminder and its timing) and the instruction to offer it. Who owns the rest
+        // and why the goal is light stay in the log (goal.offered), never in what Co reads: Co echoed that framing back as a decline.
+        const reminderPiece = !read.clubWorld ? split.find((i) => i.owner === "co" && i.how === "reminder") ?? null : null;
+        const guidance = !read.clubWorld
+          ? reminderPiece?.suggest
+            ? `Open your reply with a plain, warm offer, in your own words and short, to remind them about ${reminderPiece.text.replace(/, ahead of .*$/, "")} on ${reminderPiece.suggest.day}: name what it's for and that day. Make it simply an offer, never framed against a limit (no "what I can do is", "all I can", "the most I can"). A line of real help can follow it. If they say yes, pickGoalItems with piece ${reminderPiece.n} and checkIn "${reminderPiece.suggest.day}" (or the day they pick instead).`
+            : `Open your reply with a plain, warm offer, in your own words and short, to remind them about ${reminderPiece?.text ?? "it"}, and ask what day suits them. Make it simply an offer, never framed against a limit (no "what I can do is", "all I can", "the most I can"). A line of real help can follow it. If they say yes, pickGoalItems with piece ${reminderPiece?.n ?? 1} and the day they give in checkIn.`
+          : mayTake.length
+            ? "Offer the split once, in your own words, naturally, in this reply: what you'd take and what stays with them. No list, no numbers, no form. Nothing starts until they pick."
+            : "Nothing here is yours to take on your own: every piece stays with them. Help in the moment, and offer to draft anything they'd send themselves.";
+        if (ctx.dryRun) {
+          ctx.facts?.add("known", `Goal they handed you, "${title}": ${guidance}`);
+          if (!read.clubWorld) return { ok: true, youMayOffer: reminderPiece ? [{ n: reminderPiece.n, text: reminderPiece.text, how: "reminder", suggestedDay: reminderPiece.suggest?.day ?? null }] : [], guidance };
+          return { ok: true, clubWorld: read.clubWorld, youMayOffer: mayTake.map((i) => ({ n: i.n, text: i.text, how: i.how })), staysTheirs: split.filter((i) => i.owner === "member").map((i) => ({ n: i.n, text: i.text })), guidance };
+        }
+        const r = await G.offerGoal({ userId: ctx.userId, title, theirWords, items: split, clubWorld: read.clubWorld, clubWhy: read.why, moment: goalMoment, sourceFile: fromFile?.n ?? null, handedOver: fromFile?.quote ?? null });
+        if (!r.ok) {
+          notDone(`No new goal split was offered: ${r.why}.`);
+          return { ok: false, error: r.why };
+        }
+        await recordDecision({ layer: 3, decision: "goal.offered", userId: ctx.userId, outcome: "act", action: read.clubWorld ? "split" : "light", reason: read.why, proposal: { goalId: r.goal.id, items: split.map((i) => ({ n: i.n, owner: i.owner, how: i.how, reach: i.reach })), read: read.read } }).catch(() => {});
+        ctx.facts?.add("known", `Goal #${r.goal.id} they handed you, "${r.goal.title}", is on file${fromFile ? `, its pieces from their file #${fromFile.n}, which they handed over ("${fromFile.quote.slice(0, 120)}"); only those piece titles are yours to use, nothing else from the file` : ""}${goalMoment ? `; the moment it's for: ${goalMoment.words}` : ""}. Nothing is started on it until they pick. ${guidance}`);
+        if (!read.clubWorld) return { ok: true, goalId: r.goal.id, youMayOffer: reminderPiece ? [{ n: reminderPiece.n, text: reminderPiece.text, how: "reminder", suggestedDay: reminderPiece.suggest?.day ?? null }] : [], guidance };
+        return {
+          ok: true,
+          goalId: r.goal.id,
+          clubWorld: read.clubWorld,
+          youMayOffer: mayTake.map((i) => ({ n: i.n, text: i.text, how: i.how })),
+          staysTheirs: split.filter((i) => i.owner === "member").map((i) => ({ n: i.n, text: i.text })),
+          handedBack: handedBack.map((i) => ({ n: i.n, text: i.text, why: (read.reach.get(i.n) ?? "unread") === "unread" ? "couldn't be read as safe to do alone" : `it ${read.reach.get(i.n) === "money" ? "spends money" : read.reach.get(i.n) === "public" ? "posts publicly" : "reaches someone other than them"}` })),
+          guidance,
+        };
+      },
+    }),
+    pickGoalItems: tool({
+      description: toolUse("pickGoalItems"),
+      inputSchema: z.object({
+        goalId: z.number(),
+        take: z.array(z.number()).max(10).describe("The item numbers they handed you."),
+        checkIn: z.string().optional().describe("The agreed check-in or reminder time, in words (\"Friday\", \"next Tuesday\", \"Oct 20\"). Only if one was agreed."),
+      }),
+      execute: async ({ goalId, take, checkIn }) => {
+        const G = await import("../services/goalOwnership.js");
+        if (ctx.dryRun) {
+          ctx.facts?.add("did_this_turn", `They picked their split on goal #${goalId} (dry run: nothing started).`);
+          return { ok: true };
+        }
+        const zone = await memberZone(ctx.userId).catch(() => null);
+        const r = await G.acceptGoal({ userId: ctx.userId, goalId, take, theirMessage: ctx.resolvedContent, checkinWords: checkIn ?? null, zone });
+        if (!r.ok) {
+          notDone(`Nothing on goal #${goalId} was started: ${r.why}.`);
+          return { ok: false, error: r.why };
+        }
+        for (const s of r.started) ctx.facts?.add("did_this_turn", `Started task #${s.taskId}: "${s.text}", their goal's piece they handed Co. Co sends it when it lands.`);
+        if (r.checkin) ctx.facts?.add("did_this_turn", `Started task #${r.checkin.taskId}: Co's check-in on their goal "${r.goal.title}", set for ${localStamp(r.checkin.at, zone)}. Co can say it'll check back then.`);
+        for (const x of r.refused) notDone(x.n ? `Item ${x.n} of goal #${goalId} wasn't taken: ${x.why}.` : `${x.why}.`);
+        await recordDecision({ layer: 3, decision: "goal.picked", userId: ctx.userId, outcome: "act", action: `goal:${goalId}`, proposal: { started: r.started, checkin: r.checkin, refused: r.refused } }).catch(() => {});
+        return { ok: true, started: r.started.map((s) => ({ text: s.text })), checkIn: r.checkin ? localStamp(r.checkin.at, zone) : null, notTaken: r.refused };
       },
     }),
 

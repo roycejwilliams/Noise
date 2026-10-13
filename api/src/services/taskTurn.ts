@@ -20,7 +20,7 @@ import { checkDraft, draftAgain, draftProactive, localHourOk, sendExempt } from 
 import { eventCandidates } from "./tieredRecommendation.js";
 import { alreadyFoundOpenings } from "./eventSurfacingSweep.js";
 import { capToFinal, isDoorLook, unspendWake } from "./coTasks.js";
-import { closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
+import { closedOnTheirWord, closeTask, isExhausted, isFinalCheck, markFinalTold, markTexted, mayText, noteOnTask, scheduleTask, scheduleTaskAt, setTaskWindow, taskTextsToday, TASK_LIMITS, clampNextHours, type CoTask } from "./coTasks.js";
 import { describeRead, excerptFact, readLink } from "./linkReader.js";
 import { memberKnowledge, memberRules, restraintRule, type MemberKnowledge, type MemberRules, type Restraint } from "./memberKnowledge.js";
 import { exchangeText } from "./followUps.js";
@@ -50,11 +50,15 @@ export type TaskTurnDeps = {
   zone: string | null;
   note: (text: string, stepDone: string | null) => Promise<void>;
   schedule: (inHours: number, plan: string) => Promise<string | null>;
-  close: (status: "done" | "dropped" | "expired", outcome: string) => Promise<void>;
+  // theirWord: their own quoted words that closed it, when they did (a drop without it counts as missed: commitmentLog.ts).
+  close: (status: "done" | "dropped" | "expired", outcome: string, theirWord?: string | null) => Promise<void>;
   textsToday: () => Promise<number>;
   // owed: a text the member is owed (owedText) goes out exempt; any other waits on the pacing every Co-started text does, and a
   // held one says when it's worth another look (retryAt).
-  send: (messages: string[], o?: { owed: boolean }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date }>;
+  // key: a fixed send key (a slip text's, so it can only go once); otherwise each send gets its own.
+  send: (messages: string[], o?: { owed: boolean; key?: string }) => Promise<{ sent: boolean; reason?: string; retryAt?: Date }>;
+  // The slip exception's one read (goalOwnership.ts pieceNeededFor); a test stands in for it.
+  pieceNeeded?: (piece: string, goalTitle: string, m: { date: string; words: string }) => Promise<{ needed: boolean; read: boolean }>;
   markTexted: () => Promise<void>;
   markFinalTold: () => Promise<void>;
   search: (what: string, when?: string | null) => Promise<{ name: string; url: string | null; date: string | null; tier?: number; details?: string[] }[]>;
@@ -126,6 +130,13 @@ export function documentPromiseLine(t: Pick<CoTask, "source" | "goal" | "theirWo
   return `\nWHAT YOU PROMISED IS A DOCUMENT. Send it with writeDocument (it arrives as a PDF), never as a text or a run of texts. Their points (the sections) only in their own words: what they want, their event, their constraints. Your plan, ideas and recommendations go in suggestions: that's most of a planning doc, and it's fine. Don't name a place, person, number or date they never said or you never read. Once it's sent, finish the task as done.`;
 }
 
+// Pure: a piece of a goal they handed Co (services/goalOwnership.ts): only this piece is Co's, and its delivery is the receipt.
+export function goalPieceLine(t: Pick<CoTask, "followup">): string {
+  const g = t.followup;
+  if (g?.goalId == null || g?.checkin) return "";
+  return `This is the piece of their goal "${String(g.goalTitle ?? "").slice(0, 160)}" that they handed you. Only this piece is yours: their other pieces stay theirs, and you never work, report on or ask about them here. When it lands, send it then (the thing itself, with its link or document), within the usual send rules; tie it back to their goal only where their own words show the connection. Never spend money, post anything publicly or contact anyone for them: if the piece needs that, hand that step back to them.\n`;
+}
+
 // Pure: what else Co knows about them, for a task turn (services/memberKnowledge.ts, already stripped of other members). This
 // task's own entry is left out of what Co carries (it's the task itself). Each section left out when empty; every list capped.
 export function taskKnowledge(k: Pick<MemberKnowledge, "delivered" | "carrying" | "asks" | "corrections" | "lessons" | "preferences" | "claims" | "restraint">, o: { taskId: number; zone: string | null }): string {
@@ -170,7 +181,7 @@ export function taskTurnPrompt(o: { task: CoTask; firstName: string; now: string
   return `${CO_VOICE}
 
 ${t.source === "lookout" && t.lookoutOrigin === "member" ? `Right now you're keeping an eye out for ${o.firstName} because they asked you to, in their words: "${t.theirWords}". They're waiting to hear when something real turns up: look, and text when it does, with the thing itself, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat they asked you to watch for: "${t.goal}"` : t.source === "lookout" && isDoorLook(t) ? `Right now you're keeping an eye out for ${o.firstName} on your own, for what they told you they're after in their first conversation with you. You never promised them a time or a text, and there was no call: never say you told them, promised or said on a call that you would. Nobody is waiting on a message: look, and text only when something real turns up, offered lightly as something you came across for them, never a progress report and never "nothing yet". If it stops making sense (they found it, or moved on), finish it quietly.\n\nWhat you're looking for: "${t.goal.replace(/^First look for them:\s*/i, "")}"\nWhat they had said: "${t.theirWords}"`: t.source === "lookout" ? `Right now you're keeping an eye out for ${o.firstName}, as you told them on a call you would. Nobody is waiting on a message: look, and text only when something real turns up, never a progress report and never "nothing yet". If it stops making sense (it happened, or they moved on), finish it quietly.\n\nWhat you said you'd look out for: "${t.goal.replace(/^Keep an eye out, as promised on a call:\s*/i, "")}"\nWhat they had said just before: "${t.theirWords}"` : t.source === "promise" ? `Right now you're following through on something you told ${o.firstName} you would do. They're expecting it: do what you said and send it when it's done. If it isn't done yet, keep working and say nothing: no progress reports, no "no details yet", no "a few leads". Text before it's done only when you need something from them (ask for exactly that), or when it truly can't be done (say plainly what you couldn't find and what you'd do instead). Never hold their own thing back because you judge it not good enough yet.\n\nWhat you promised: "${t.goal}"\nWhat they had said when you promised: "${t.theirWords}"` : `Right now you're working in the background on something ${o.firstName} asked you to do. Nobody is waiting on this message; you're doing the work, then deciding what's next.\n\nTheir goal: "${t.goal}"\nTheir own words when they asked: "${t.theirWords}"`}
-Steps: ${t.steps.length ? t.steps.map((s) => `${s.done ? "[done]" : "[ ]"} ${s.text}`).join("; ") : "(none written)"}
+${goalPieceLine(t)}Steps: ${t.steps.length ? t.steps.map((s) => `${s.done ? "[done]" : "[ ]"} ${s.text}`).join("; ") : "(none written)"}
 What you planned to do now: ${t.planNext ?? "(nothing written)"}${deadlineLine}${finalLine}${o.onFile?.length ? `\nAlready on file and verified for them (send any of these with tellThem, by their link; no need to find them again):\n${o.onFile.slice(0, 12).map((f) => `- ${f.name} (${f.url})${f.facts.length ? `: ${f.facts.slice(0, 3).join("; ")}` : ""} [${f.checkedAt ? `read ${f.checkedAt.slice(0, 10)}` : "found on an earlier day"}; its page is read again before it's sent]`).join("\n")}` : ""}
 Your notes so far (oldest first):
 ${t.notes.map((n) => `- [${localStamp(n.at, o.zone)}] ${n.text}`).join("\n") || "- (none)"}
@@ -230,7 +241,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   // They already said it's done: close it before any work or text.
   const doneByThem = await memberSaysGoalDone(task.goal, deps.recent).catch(() => ({ done: false, quote: null as string | null }));
   if (doneByThem.done) {
-    await deps.close("done", `They said so: "${(doneByThem.quote ?? "").slice(0, 200)}"`);
+    await deps.close("done", `They said so: "${(doneByThem.quote ?? "").slice(0, 200)}"`, doneByThem.quote);
     return { action: "finished", did: [`closed: they said "${(doneByThem.quote ?? "").slice(0, 120)}"`], texts: [], final };
   }
   const verified: VerifiedResult[] = [];
@@ -492,9 +503,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       },
     }),
     finish: tool({
-      description: "Close the task: done, or they no longer need it.",
-      inputSchema: z.object({ outcome: z.string(), status: z.enum(["done", "dropped"]) }),
-      execute: async ({ outcome, status }) => {
+      description: "Close the task: done, or they no longer need it. For a drop because they said so, put their exact words in theirWords; a drop without their word counts as a promise Co didn't keep.",
+      inputSchema: z.object({ outcome: z.string(), status: z.enum(["done", "dropped"]), theirWords: z.string().optional() }),
+      execute: async ({ outcome, status, theirWords }) => {
         if (status === "done") {
           const kept = await promiseCloseCheck(task, texts, deps, docsSent);
           if (!kept.ok) {
@@ -502,7 +513,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
             return { ok: false, error: `Not closed: ${kept.why}. Do what you said now and send it, or tellThem plainly where it stands, then scheduleNext. Close it as dropped only if they no longer want it.` };
           }
         }
-        await deps.close(status, outcome);
+        // Their word only when it's really in their newest lines (quoteIsTheirs), never Co's say-so.
+        const theirWord = theirWords && quoteIsTheirs(theirWords, newestMemberLines(deps.recent, 6)) ? theirWords : null;
+        await deps.close(status, outcome, theirWord);
         decided = "finished";
         did.push(`finished (${status}): ${outcome.slice(0, 100)}`);
         return { ok: true };
@@ -605,21 +618,59 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
     const re = rescheduledWindow(nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now(), deps.zone, task.window);
     await deps.setWindow?.(re.window);
     did.push(`window: told in the turn's own text; moved to ${re.when}`);
+    await logSlip(task, `told them in the task's own text; moved from ${task.window.words} to ${re.when}`, re.window.deadline);
   }
   // No "not yet" text when the window will be missed (Royce, 2026-10-08: progress reports are forbidden; silence until there's
   // something real, then one message). The window moves quietly to the next check, and the delivery, when it lands, says what
   // they asked for and when (services/speakable.ts deliveryLine).
-  if (decided !== "finished" && !texts.length && !docsSent.length && task.window && !task.window.closedAt && missesWindow(task.window, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now())) {
+  // One exception (Royce, 2026-10-13): a goal piece whose slip strands them before a dated moment they're counting on gets one text,
+  // once per slip, through the paced task-update path (slipException below).
+  const strandText = decided !== "finished" && !texts.length && !docsSent.length && task.window && !task.window.closedAt && missesWindow(task.window, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now())
+    ? await slipException(task, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps).catch(() => null)
+    : null;
+  if (strandText) {
+    warning = strandText;
+    did.push(`window: slip would strand them before their moment; told them once: "${strandText.slice(0, 120)}"`);
+  } else if (decided !== "finished" && !texts.length && !docsSent.length && task.window && !task.window.closedAt && missesWindow(task.window, nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now())) {
     const re = rescheduledWindow(nextAt ?? new Date(deps.now().getTime() + 24 * 3_600_000), deps.now(), deps.zone, task.window);
     await deps.setWindow?.(re.window);
     if (deps.scheduleAt) await deps.scheduleAt(re.checkAt, `You told them ${task.window.words}; it moves to ${re.when}. Do the work and send it then: one message with the thing itself.`);
     did.push(`window: moved quietly to ${re.when}, no "not yet" text`);
+    await logSlip(task, `moved quietly from ${task.window.words} to ${re.when}`, re.window.deadline);
   }
   // Found and checked this turn: stamped, so a later turn knows how old they are (Phase B, B5).
   const checkedAt = deps.now().toISOString();
   const found: OnFile[] = [...events.filter((e) => e.url && !e.onFile).map((e) => ({ name: e.name, url: e.url!, tier: e.tier ?? 2, facts: e.facts, checkedAt })), ...verified.map((v) => ({ name: v.name, url: v.url, tier: 3, facts: v.facts, checkedAt }))];
   if (found.length) await deps.saveFound?.(found).catch(() => {});
   return { action: decided ?? "defaulted_24h", did, texts, final, warning };
+}
+
+// The slip exception: a goal piece (services/goalOwnership.ts) whose new time lands after, or too close to, the dated moment they're
+// counting on. Code decides it strands them (slipStrands); one Haiku read confirms the piece is needed for that moment (a failed read
+// counts as needed). Then the existing miss line (warnIfWindowMissed: what isn't there yet and the new time, checked, once per window)
+// goes through the paced task-update path, keyed to this slip so it can only go once, and its window moves. Returns the text, or null
+// when it stays quiet (no moment, not stranded, not needed, already told, or held by pacing).
+export async function slipException(task: CoTask, nextAt: Date, deps: TaskTurnDeps): Promise<string | null> {
+  const moment = task.followup?.goalMoment;
+  if (task.followup?.goalId == null || !moment || !task.window || task.window.closedAt) return null;
+  if ((task.window.warnedFor ?? []).includes(task.window.deadline)) return null;
+  const G = await import("./goalOwnership.js");
+  const re = rescheduledWindow(nextAt, deps.now(), deps.zone, task.window);
+  if (!G.slipStrands(new Date(re.window.deadline), moment, deps.zone, deps.now())) return null;
+  const need = deps.pieceNeeded ? await deps.pieceNeeded(task.goal, String(task.followup?.goalTitle ?? ""), moment) : await G.pieceNeededFor(task.goal, String(task.followup?.goalTitle ?? ""), moment);
+  if (!need.needed) return null;
+  const key = `task:${task.id}:slip:${task.window.deadline}`;
+  const r = await warnIfWindowMissed(task, task.window, nextAt, { ...deps, warn: async (text) => { const s = await deps.send([text], { owed: false, key }); return { sent: s.sent, reason: s.reason }; } });
+  if (!r.sent || !r.text) return null;
+  await logSlip(task, `stranded them before "${moment.words}" (${moment.date}): told them once, moved to ${re.when}${need.read ? "" : " (needed-read unavailable, counted as needed)"}`, re.window.deadline);
+  return r.text;
+}
+
+// A commitment's window moved past its time: logged as a slip (services/commitmentLog.ts), never a text of its own. Only on a real
+// wake (a dry turn has no user to log against).
+async function logSlip(task: CoTask, why: string, newDeadline: string): Promise<void> {
+  const L = await import("./commitmentLog.js");
+  if (task.userId && L.isCommitment(task)) await L.logCommitment("slipped", { userId: task.userId, taskId: task.id, goalId: task.followup?.goalId ?? null, why, fireAt: newDeadline, what: task.goal, source: task.source ?? null });
 }
 
 // A text that only says the thing isn't there yet (2026-10-08, Royce's call: "No luck yet...", "Nothing solid for this weekend yet").
@@ -848,7 +899,9 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     scheduleAt: async (at, plan) => (await scheduleTaskAt(userId, task.id, at, plan))?.nextCheckAt ?? null,
     // Completion closes its own loop: the task (and its window, coTasks.ts closeTask), then the open loop that mirrors it, now
     // rather than on the next 15-minute sync (services/openLoops.ts closes a task loop only on a direct read of the task).
-    close: async (status, outcome) => {
+    close: async (status, outcome, theirWord) => {
+      // Their quoted word, carried to the close's outcome in the ledger (coTasks.ts closeTask reads it once).
+      if (theirWord) closedOnTheirWord(userId, task.id, theirWord);
       await closeTask(userId, task.id, status, outcome);
       await import("./openLoops.js").then((m) => m.syncOpenLoops(userId)).catch((err: any) => console.error("taskTurn: loop sync after close failed (non-fatal):", err?.message ?? err));
     },
@@ -873,7 +926,10 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
       // Only a text they're owed goes exempt. A look-out from Co's own promise sends finds, counted and held like sweep finds
       // (Royce, 2026-10-09: "without this, lookouts are a spam path around restraint"); one they asked for is owed, never kinded.
       const coInitiated = o?.owed ? undefined : { kind: lookoutKind(task) };
-      const r = await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated });
+      // A slip text (slipException) has its own fixed key, so the same slip can only ever go once.
+      const r = o?.key
+        ? await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: o.key, messages, timezone: zone, respectHours: true, now: clock(), coInitiated })
+        : await sendExempt({ userId, phoneNumber: person.phone_number, type: "task_update", targetKey: `task:${task.id}:${Date.now()}`, messages, timezone: zone, respectHours: true, now: clock(), coInitiated });
       const urls = messages.filter((m) => /^https?:\/\//.test(m));
       if (r.sent && urls.length) await recordSentItems(userId, urls.map((url) => ({ name: url, url })), "taskTurn").catch(() => {});
       return { sent: r.sent, reason: r.reason, retryAt: r.retryAt };
@@ -914,8 +970,13 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
 
 export async function runDueTasks(): Promise<void> {
   const { claimDueTasks } = await import("./coTasks.js");
+  const L = await import("./commitmentLog.js");
   for (const t of await claimDueTasks()) {
-    if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
+    // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
+    if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
+    // A goal's check-in or reminder (services/goalOwnership.ts): real state first, then one text through the task-update path.
+    if (t.kind === "work" && t.followup?.checkin) await import("./goalOwnership.js").then((g) => g.runGoalCheckin(t)).catch((err: any) => console.error("goal check-in failed (non-fatal):", err?.message ?? err));
+    else if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
     else if (t.kind === "research_brief") await import("./researchBrief.js").then((r) => r.runResearchBriefTask(t)).catch((err: any) => console.error("research brief task failed (non-fatal):", err?.message ?? err));
     else await runTaskTurn(t);
   }
