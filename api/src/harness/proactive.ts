@@ -46,6 +46,7 @@ import { capitalizeSentences } from "../services/textStyle.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
+import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext } from "./emotion.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
@@ -2074,38 +2075,53 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // How they've been, from the one emotion read the gates used (null when it failed: no feeling line rather than a second read).
   const feelingText = member.raw.emotional ? renderEmotionalContext(member.raw.emotional) : "";
   const drafting = <T,>(type: ProactiveType, fn: () => Promise<T>): Promise<T> => (OWN_MEMBER_CONTEXT.has(type) ? draftWithKnowledge(null, null, () => feelingForDraft.run(feelingText, fn)) : draftWithKnowledge(known, rules, () => feelingForDraft.run(feelingText, fn)));
+  // The brain decides what goes (brain/index.ts), from the reads here, one stage at a time; this function acts only on its decision,
+  // and a text goes out only when the last decision delivers this candidate (sends). The gates above already vetoed what isn't
+  // eligible; the guards below (last day first, the draft's checks, the send-time ledger) keep their veto after it.
   // A find on its last chance goes before what can wait (expiringFind); otherwise Co picks.
   const urgent = expiringFind(ev.eligible, { now: state.now, zone: person.timezone, sends: state.sends });
-  const chosen = urgent
-    ? { pick: urgent.pick, reason: `expires before the next send slot (ends ${localStamp(urgent.endsAt, person.timezone)}, next slot ${localStamp(urgent.nextSlot, person.timezone)}): it goes ahead of what can wait`, source: "code" as const }
-    : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null, zone: person.timezone, now: state.now });
+  const chosen = urgent ? null : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null, zone: person.timezone, now: state.now });
+  let decision: DraftDecision = judgeDailyPick({
+    urgent: urgent ? { id: urgent.pick.id, why: `expires before the next send slot (ends ${localStamp(urgent.endsAt, person.timezone)}, next slot ${localStamp(urgent.nextSlot, person.timezone)}): it goes ahead of what can wait` } : null,
+    chosen: chosen ? { id: chosen.pick?.id ?? null, why: chosen.reason, source: chosen.source } : { id: null, why: "", source: "code" },
+    noneHoldHours: RULES.pickNoneHoldHours,
+  });
   // Co decides; code guards the fact: a picked find on its last day goes before what is still true tomorrow (lastDayFirst).
-  const lastDay = urgent ? null : lastDayFirst(chosen.pick, ev.eligible, { now: state.now, zone: person.timezone });
-  const picked = lastDay
-    ? { pick: lastDay.pick, reason: `its last day is today (ends ${localStamp(lastDay.endsAt, person.timezone)}), and what else was ready is still true tomorrow: it goes first`, source: "code" as const }
-    : chosen;
-  if (!picked.pick) {
+  const lastDay = urgent ? null : lastDayFirst(chosen?.pick ?? null, ev.eligible, { now: state.now, zone: person.timezone });
+  decision = lastDayVeto(decision, lastDay ? { id: lastDay.pick.id, why: `its last day is today (ends ${localStamp(lastDay.endsAt, person.timezone)}), and what else was ready is still true tomorrow: it goes first` } : null);
+  const picked = { pick: ev.eligible.find((x) => x.id === decision.pick) ?? null, reason: decision.why, source: decision.source };
+  const done = (type: string | null) => {
+    if (opts.dryRun) console.log(`[dispatch dryRun] brain: ${decision.kind}${type ? `:${type}` : ""} pick=${decision.pick} (${decision.why.slice(0, 160)})`);
+    else logDraftDecision(userId, decision, type);
+  };
+  if (decision.kind === "wait" || !picked.pick) {
     await pool.query(
       `INSERT INTO proactive_user_state (user_id, hold_until) VALUES ($1, NOW() + ($2 || ' hours')::interval)
        ON CONFLICT (user_id) DO UPDATE SET hold_until = EXCLUDED.hold_until`,
-      [userId, RULES.pickNoneHoldHours],
+      [userId, decision.holdHours ?? RULES.pickNoneHoldHours],
     );
-    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", proposal, checks: ev.userChecks, reason: `pick: none (${picked.reason})` });
+    await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", proposal, checks: ev.userChecks, reason: decision.why });
+    done(null);
     return;
   }
   const c = leadPick(picked.pick, ev.eligible);
+  // The bundle leads with the most time-bound of the day's picks (leadPick, code): the decision follows it.
+  if (c.id !== decision.pick) decision = { ...decision, pick: c.id };
   const pickChecks = ev.perCandidate.find((p) => p.candidate.id === c.id)?.checks ?? [];
 
   if (needsRelevanceCheck(c, state.now)) {
     const r = await stillRelevant(c, { recentConversation: recentStamped, now: state.now, timezone: person.timezone });
     if (!opts.dryRun) await settleRelevance(c, r);
-    if (!r) {
-      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `relevance check unanswered; held ${RELEVANCE_RETRY_HOURS}h` });
+    decision = afterRelevance(decision, r, RELEVANCE_RETRY_HOURS);
+    if (decision.kind === "wait" && !decision.drop) {
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `recheck:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: decision.why });
+      done(c.type);
       return;
     }
-    if (!r.relevant) {
-      if (!opts.dryRun) await dropCandidate(registry, c, "skipped", `stale: ${r.why}`);
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `archive:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: `no longer relevant: ${r.why}` });
+    if (decision.drop) {
+      if (!opts.dryRun) await dropCandidate(registry, c, "skipped", decision.drop);
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `archive:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks], reason: decision.why });
+      done(c.type);
       return;
     }
   }
@@ -2182,12 +2198,14 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       threadLive: live,
       mayWait,
     }).catch((err: any): import("./bundleComposer.js").ComposeResult => ({ fail: `the composer failed: ${err?.message ?? err}`, calls: 0, notes: [] }));
+    // A live conversation about something else: the whole bundle waits an hour rather than landing on top of it (C5), so the next
+    // tick doesn't lead with a sibling and compose again; each wait is counted (B.mayWait caps them and never waits past expiry).
     if ("wait" in res) {
-      // A live conversation about something else: the whole bundle waits an hour rather than landing on top of it (C5), so the next
-      // tick doesn't lead with a sibling and compose again; each wait is counted (B.mayWait caps them and never waits past expiry).
-      const at = new Date(state.now.getTime() + 3_600_000);
+      decision = afterComposeWait(decision, res.wait, new Date(state.now.getTime() + 3_600_000));
+      done(c.type);
+      const at = decision.until!;
       if (!opts.dryRun) await pool.query(`UPDATE proactive_candidates SET due_at = $2, payload = jsonb_set(payload, '{waits}', to_jsonb(COALESCE((payload->>'waits')::int, 0) + 1)), updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'pending'`, [items.map((b) => b.candidate.id), at]);
-      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: at.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `waiting on a live conversation: ${res.wait}` });
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `defer:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source, deferTo: at.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: decision.why });
       return;
     }
     if ("fail" in res) {
@@ -2276,7 +2294,9 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     console.log(`[dispatch dryRun] payload first: would do the work instead of sending "${draft.text}" (${pf.wouldHandOff})`);
     return;
   }
-  if (pf && "handedTo" in pf) {
+  decision = afterPayloadFirst(decision, pf && "handedTo" in pf ? { handedTo: String(pf.handedTo), why: pf.why } : pf && "hold" in pf ? { hold: pf.hold } : null);
+  if (decision.kind === "act" && pf && "handedTo" in pf) {
+    done(c.type);
     await dropCandidate(registry, c, "skipped", `payload first: handed to task ${pf.handedTo}`);
     // The task's result lands within 15 minutes: nothing else goes out first,
     // the same spacing as between any two texts (review of #59).
@@ -2288,10 +2308,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     await recordDecision({ layer: 7, decision: "proactive.payloadFirst", userId, outcome: "act", action: `task:${pf.handedTo}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text, started: pf.started }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.why });
     return;
   }
-  if (pf && "hold" in pf) {
+  if (decision.drop && pf && "hold" in pf) {
+    done(c.type);
     // Not asked instead: dropped, and its source asks again on its own schedule
     // (a re-queued target is a no-op once dropped, so this can't loop hourly).
-    await dropCandidate(registry, c, "skipped", `payload first: ${pf.hold}`);
+    await dropCandidate(registry, c, "skipped", decision.drop);
     await recordSkipOnce(userId, `payload_first_hold:${c.type}`, { layer: 7, decision: "proactive.payloadFirst", userId, outcome: "skip", action: `hold:${c.type}`, proposal: { ...proposal, picked: c.id, instead_of: draft.text }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: pf.hold });
     return;
   }
@@ -2301,6 +2322,13 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const outgoing = draft.messages;
   const extras: { candidate: Candidate; messages: string[] }[] = composed ? composed.perItem.slice(1) : [];
 
+  // Bound: only a deliver of this candidate goes out (brain/index.ts sends).
+  if (!sends(decision, c.id)) {
+    console.error(`proactive: the decision for ${userId} doesn't deliver ${c.id} (${decision.kind}: ${decision.why}); nothing sent`);
+    done(c.type);
+    return;
+  }
+  done(c.type);
   if (opts.dryRun) {
     console.log(`[dispatch dryRun] would send ${outgoing.length} text(s) for ${c.targetKey} plus ${extras.length} batched:`);
     outgoing.forEach((m, i) => console.log(`  ${i + 1}. ${m.replace(/\n/g, " / ")}`));

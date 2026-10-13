@@ -1,5 +1,6 @@
 import { draftProactive, type OutputRules } from "../harness/proactive.js";
 import { splitRecap } from "../services/claims.js";
+import { judgeCheckin, ruledOut } from "../brain/index.js";
 
 export type CompanionCheckinPerson = {
   userId: string;
@@ -36,11 +37,22 @@ export async function draftCompanionCheckin(
   // What Co is working on for them (harness/memberThreads.ts ownedWorkFor): never handed back to them as a question.
   ownedWork: string[] = [],
 ): Promise<{ text: string; rules: OutputRules } | null> {
-  if (heavy) return draftFromHeavy(firstName, heavy);
-  if (advice) return draftFromAdvice(firstName, advice);
-  if (story) return draftFromStory(firstName, story);
-  if (thread) return draftFromThread(firstName, recap, thread, item ?? null);
-  if (curious) return draftFromCuriosity(firstName, recap, curious, ownedWork);
+  // What the check-in is about, and whether it may carry anything, is the brain's (brain/index.ts judgeCheckin). It binds: the
+  // draft is written from that basis, and a check-in that may offer nothing gets rules that refuse any link (the draft's checks).
+  const d = judgeCheckin({ heavy: !!heavy, advice: !!advice, story: !!story, thread: !!thread, curious: !!curious, item: !!item });
+  const r = await draftFor(d.basis);
+  return r && ruledOut(d, "offer") ? { ...r, rules: { ...r.rules, allowUrl: false, mustIncludeAny: undefined } } : r;
+  function draftFor(basis: typeof d.basis): Promise<{ text: string; rules: OutputRules } | null> {
+    if (basis === "heavy") return draftFromHeavy(firstName, heavy!);
+    if (basis === "advice") return draftFromAdvice(firstName, advice!);
+    if (basis === "story") return draftFromStory(firstName, story!);
+    if (basis === "thread") return draftFromThread(firstName, recap, thread!, item ?? null);
+    if (basis === "curious") return draftFromCuriosity(firstName, recap, curious!, ownedWork);
+    return draftFromRecap(firstName, recap, ownedWork);
+  }
+}
+
+async function draftFromRecap(firstName: string, recap: string, ownedWork: string[]): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
     functionId: "agent.companionCheckin",
     firstName,
