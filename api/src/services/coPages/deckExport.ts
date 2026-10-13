@@ -62,7 +62,7 @@ export async function deckPdf(
   deck: { id: string; data: DeckData; updatedAt: Date; version: number },
   images: Map<string, ExportImage>,
   render?: (html: string, size: { width: string; height: string }) => Promise<Buffer | null>,
-  artSrc?: (ref: string) => string | null,
+  art?: { src: (ref: string) => string | null; credit: (p: any) => { credit: string; creditUrl: string | null } | null },
 ): Promise<DeckFile | null> {
   const key = `${deck.id}:${deck.version}:pdf:${imagesKey(images)}`;
   return once(key, async () => {
@@ -72,7 +72,8 @@ export async function deckPdf(
       showNotes: false,
       print: true,
       // The pictures Co found and the map tiles, inlined (the PDF's browser loads nothing else).
-      artSrc: artSrc ?? (() => null),
+      artSrc: art?.src ?? (() => null),
+      credit: art?.credit ?? (() => null),
       imageSrc: (id) => {
         const img = images.get(id);
         return img ? `data:${img.mediaType};base64,${img.data.toString("base64")}` : null;
@@ -84,7 +85,7 @@ export async function deckPdf(
   });
 }
 
-export async function deckPptx(deck: { id: string; data: DeckData; version: number }, images: Map<string, ExportImage>, o: { withNotes: boolean; artSrc?: (ref: string) => string | null }): Promise<DeckFile | null> {
+export async function deckPptx(deck: { id: string; data: DeckData; version: number }, images: Map<string, ExportImage>, o: { withNotes: boolean; art?: { src: (ref: string) => string | null; credit: (p: any) => { credit: string; creditUrl: string | null } | null } }): Promise<DeckFile | null> {
   const key = `${deck.id}:${deck.version}:pptx:${o.withNotes ? "notes" : "plain"}:${imagesKey(images)}`;
   return once(key, async () => {
     const { default: PptxGenJS } = (await import("pptxgenjs")) as any;
@@ -112,6 +113,11 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     };
     // The field (services/designSystem.ts): their gradient as an image (PowerPoint export has no gradient fill), else the accent
     // solid, which is the gradient's first color. Its ink reads on every stop.
+    // Pictures Co found, fetched at download time with their credits (a venue photo without its credit is left out).
+    const art = o.art?.src ?? (() => null);
+    const credit = o.art?.credit ?? (() => null);
+    const artRef = (p: any) => (p.via === "google" && !credit(p) ? null : art(p.via === "google" ? `g:${p.src}` : `u:${p.src}`));
+    const coverDataFor = () => (deck.data.coverImage ? dataUrl(deck.data.coverImage) : deck.data.coverArt ? artRef(deck.data.coverArt) : null);
     const { inkOn } = await import("./style.js");
     const stops = st.gradient && st.accent2 ? [st.accent, st.accent2] : [st.accent];
     const fieldInk = inkOn(stops, [st.text, st.background]);
@@ -121,17 +127,15 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     // Title slide.
     const t = pptx.addSlide();
     const fieldTitle = st.titleLayout === "field" || (!st.titleLayout && (st.gradient || heavy));
-    const titleInk = (deck.data.coverImage || deck.data.coverArt) && (o.artSrc || deck.data.coverImage) ? "#FFFFFF" : fieldTitle ? fieldInk : st.text;
+    const titleInk = coverDataFor() ? "#FFFFFF" : fieldTitle ? fieldInk : st.text;
     // A cover picture (theirs, or one Co found): full bleed under a dark scrim, the title in white, its credit kept.
-    const art = o.artSrc ?? (() => null);
-    const artRef = (p: { via: string; src: string }) => art(p.via === "google" ? `g:${p.src}` : `u:${p.src}`);
-    const coverData = deck.data.coverImage ? dataUrl(deck.data.coverImage) : deck.data.coverArt ? artRef(deck.data.coverArt) : null;
+    const coverData = coverDataFor();
     const { creditLine } = await import("./art.js");
     if (coverData) {
       t.background = { color: "111111" };
       t.addImage({ data: coverData, x: 0, y: 0, w: 13.333, h: 7.5, sizing: { type: "cover", w: 13.333, h: 7.5 } });
       t.addShape(pptx.ShapeType.rect, { x: 0, y: 3.2, w: 13.333, h: 4.3, fill: { color: "000000", transparency: 35 }, line: { color: "000000", transparency: 100 } });
-      if (deck.data.coverArt) t.addText(creditLine(deck.data.coverArt), { x: 7.3, y: 0.2, w: 5.8, h: 0.35, fontFace: bodyFace, fontSize: 9, color: "FFFFFF", align: "right", fill: { color: "000000", transparency: 40 } });
+      if (deck.data.coverArt) t.addText(creditLine(deck.data.coverArt, credit(deck.data.coverArt)), { x: 7.3, y: 0.2, w: 5.8, h: 0.35, fontFace: bodyFace, fontSize: 9, color: "FFFFFF", align: "right", fill: { color: "000000", transparency: 40 } });
     } else if (fieldTitle) onField(t);
     else t.background = { color: hex(st.background) };
     // A one-ink logo on the field drops its ground, as on the web deck (where it blends); otherwise it sits as it is.
@@ -156,7 +160,7 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     const A = await import("../artImagery.js");
     // A map can't be drawn from tiles in PowerPoint, so it goes in as one picture of the map (rendered from the same tiles).
     const mapPics = new Map<number, string | null>();
-    for (const [i, sl] of deck.data.slides.entries()) if (layouts[i] === "map" && sl.map && o.artSrc) mapPics.set(i, await A.mapPng(sl.map, o.artSrc).catch(() => null));
+    for (const [i, sl] of deck.data.slides.entries()) if (layouts[i] === "map" && sl.map && o.art) mapPics.set(i, await A.mapPng(sl.map, o.art.src).catch(() => null));
     deck.data.slides.forEach((sl, i) => {
       const s = pptx.addSlide();
       const l0 = layouts[i];
@@ -167,8 +171,8 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
       const ink = field ? fieldInk : st.text;
       if (field) onField(s);
       else s.background = { color: hex(st.background) };
-      const firstArt = sl.photos?.[0] ?? null;
-      const pic = dataUrl(sl.image) ?? (firstArt ? art(firstArt.via === "google" ? `g:${firstArt.src}` : `u:${firstArt.src}`) : null) ?? (l === "map" ? mapPics.get(i) ?? null : null);
+      const firstArt = (sl.photos ?? []).find((p) => artRef(p)) ?? null;
+      const pic = dataUrl(sl.image) ?? (firstArt ? artRef(firstArt) : null) ?? (l === "map" ? mapPics.get(i) ?? null : null);
       const textW = pic ? 6.4 : 11.5;
       s.addText(String(i + 2).padStart(2, "0"), { x: 0.9, y: 0.9, w: 2, h: 0.4, fontFace: bodyFace, fontSize: 11, bold: true, charSpacing: 3, color: hex(field ? ink : accOnPaper) });
       if (l === "timeline" || l === "courses") {
@@ -201,7 +205,7 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
         );
         if (pic) s.addImage({ data: pic, x: 7.6, y: 1.3, w: 4.9, h: l === "map" ? 3.06 : 4.9, sizing: { type: "contain", w: 4.9, h: l === "map" ? 3.06 : 4.9 } });
         // Every picture Co found keeps its credit (and the map its OpenStreetMap credit) in the file too.
-        const cr = l === "map" && pic ? "© OpenStreetMap contributors" : firstArt && !sl.image ? creditLine(firstArt) : null;
+        const cr = l === "map" && pic ? "© OpenStreetMap contributors" : firstArt && !sl.image ? creditLine(firstArt, credit(firstArt)) : null;
         if (cr) s.addText(cr, { x: 7.6, y: l === "map" ? 4.45 : 6.25, w: 4.9, h: 0.3, fontFace: bodyFace, fontSize: 9, color: hex(ink), transparency: 30 });
       }
       s.addText(`${String(i + 2).padStart(2, "0")} / ${String(deck.data.slides.length + 1).padStart(2, "0")}`, { x: 11.2, y: 6.9, w: 1.4, h: 0.4, fontFace: bodyFace, fontSize: 10, color: hex(ink), transparency: 45, align: "right" });

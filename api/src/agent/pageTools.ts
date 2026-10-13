@@ -201,13 +201,13 @@ export function pageTools(
         const art = await AI.fillPageArt(og, { mood: input.coverMood ?? null });
         const artOk = store.checkPage(art.data, source);
         const imaged0: any = artOk.ok ? artOk.data : og;
-        const artSrc = await AI.artDataUris(imaged0).catch(() => () => null);
+        const art2 = await AI.artDataUris(imaged0).catch(() => undefined);
         // Design QA before it goes (services/designQa.ts): measured at laptop and phone width with its real pictures; what code can fix
         // is fixed and measured again, what's left is logged and said in one line with the link.
         const Q = await import("../services/designQa.js");
         const { renderCoPage } = await import("../services/coPages/template.js");
         const imageSrc = await qaImageSrc(ctx.userId, imaged0).catch(() => undefined);
-        const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc }), { screenshot: false }).catch(() => null);
+        const qa = await Q.qaPage(imaged0, (d) => renderCoPage({ id: "q".repeat(24), data: d, version: 1, updatedAt: new Date() }, { url: null, ogImageUrl: null, imageSrc, artSrc: art2?.src, credit: art2?.credit }), { screenshot: false }).catch(() => null);
         const fixedOk = qa?.fixed.length ? store.checkPage(qa.data, source) : null;
         const imaged = fixedOk?.ok ? fixedOk.data : imaged0;
         // What ships is what's said: the unfixed page goes with what QA first found (review).
@@ -224,7 +224,7 @@ export function pageTools(
         // Co's art direction, said in one line with the link (what it chose and what the pictures are).
         const { GRAMMAR_SAID } = await import("../services/coPages/art.js");
         const g = (imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial";
-        const artLine = AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (imaged as any).logo ? "logo" : "plate" }, (GRAMMAR_SAID as any)[g]);
+        const artLine = AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (imaged as any).logo ? "logo" : "none" }, (GRAMMAR_SAID as any)[g]);
         for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
         ctx.facts?.add("known", `The page's art direction, as Co chose it: ${artLine}`);
         // Said when Co chose an art direction for it (a page made without one keeps the one line and the link).
@@ -262,9 +262,12 @@ export function pageTools(
         const look = await lookFor(input, was, source.theirs);
         if ("error" in look) return { ok: false, error: look.error };
         const next0 = await withImages(pageDataFrom(input, look), was);
-        if (was?.coverArt && !next0.coverImage) next0.coverArt = was.coverArt;
-        const art = ctx.dryRun ? null : await (await import("../services/artImagery.js")).fillPageArt(next0, { mood: input.coverMood ?? null }).catch(() => null);
-        const next = art && store.checkPage(art.data, source).ok ? art.data : next0;
+        const AI = await import("../services/artImagery.js");
+        // Its imagery as it was rides along (kept when the search runs out of time), then is re-checked against the places on it now.
+        const carried = AI.carryArt(next0, was);
+        const art = ctx.dryRun ? null : await AI.fillPageArt(carried, { mood: input.coverMood ?? null }).catch(() => null);
+        for (const loc of art?.report.track ?? []) AI.trackUnsplash(loc).catch(() => {});
+        const next = art && store.checkPage(art.data, source).ok ? art.data : store.checkPage(carried, source).ok ? carried : next0;
         const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null });
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         // Another change landed after this one read the page (concurrency audit, 2026-10-12): never written over.

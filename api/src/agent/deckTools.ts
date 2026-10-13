@@ -351,7 +351,7 @@ async function cleanedLogo(userId: string, assetId: string, fromN: number): Prom
 }
 
 // Design QA for a deck with its own images (services/designQa.ts qaDeck): fixes what code can and measures again, at 1280 and on a phone.
-async function deckQa(userId: string, data: any, artSrc?: (ref: string) => string | null) {
+async function deckQa(userId: string, data: any) {
   const Q = await import("../services/designQa.js");
   const A = await import("../services/memberAssets.js");
   const imgs = new Map<string, { data: Buffer; mediaType: string }>();
@@ -360,8 +360,8 @@ async function deckQa(userId: string, data: any, artSrc?: (ref: string) => strin
     if (im) imgs.set(id, im);
   }
   // The pictures Co found and the map tiles, inlined so QA measures the real ones.
-  const art = artSrc ?? (await (await import("../services/artImagery.js")).artDataUris(data).catch(() => () => null));
-  return Q.qaDeck(data, imgs, { screenshot: false, artSrc: art });
+  const art = await (await import("../services/artImagery.js")).artDataUris(data).catch(() => undefined);
+  return Q.qaDeck(data, imgs, { screenshot: false, art });
 }
 
 export function deckTools(
@@ -711,7 +711,7 @@ export function deckTools(
           // The look said is the one stored (design audit: the line must never describe a look the deck doesn't have), in their color words.
           const { GRAMMAR_SAID } = await import("../services/coPages/art.js");
           const grammar = (toStore as any).style?.grammar ?? "editorial";
-          const choices = `${DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words })} ${AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (toStore as any).logo ? "logo" : "plate" }, (GRAMMAR_SAID as any)[grammar])}`;
+          const choices = `${DS.choicesLine({ style: (toStore as any).style }, { refs: design.refs, fontNote: design.fontNotes[0] ?? null, words: design.words })} ${AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (toStore as any).logo ? "logo" : "none" }, (GRAMMAR_SAID as any)[grammar])}`;
           // A mood image used counts as a download, as Unsplash's guidelines ask.
           for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
           const turns = await DS.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
@@ -860,8 +860,11 @@ export function deckTools(
           const self = await selfIfAboutCo(ctx, next);
           // Its pictures and map again, from the places on it now (a cover they gave, or a mood image it had, stays).
           if (!ctx.dryRun) {
-            if (was?.coverArt && !next.coverImage) next.coverArt = was.coverArt;
-            const art = await (await import("../services/artImagery.js")).fillDeckArt(next, { mood: input.coverMood ?? null }).catch(() => null);
+            const AI = await import("../services/artImagery.js");
+            Object.assign(next, AI.carryArt(next, was));
+            const art = await AI.fillDeckArt(next, { mood: input.coverMood ?? null }).catch(() => null);
+            // A mood image used on the edit counts as a download too (Unsplash's guidelines).
+            for (const loc of art?.report.track ?? []) AI.trackUnsplash(loc).catch(() => {});
             if (art && store.checkPage(art.data, self ? { ...source, read: `${source.read}\n${self}` } : source).ok) Object.assign(next, art.data);
           }
           // Design QA on a change too (design audit: a corrected look went out with type that didn't read on its field).

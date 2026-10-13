@@ -20,7 +20,7 @@ import { list, obj, plain } from "./schema.js";
 
 import { DECK_MOODS, STYLE_KEYS, checkExtras, contrast, inkOn, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
 import { DEFAULT_FONTS, fontLinks, fontStack } from "../designFonts.js";
-import { checkArtImage, checkArtMap, composeLayouts, creditHtml, googlePhotosIn, leadOf, mapHtml, typePlate, type ArtImage, type ArtMap, type Grammar } from "./art.js";
+import { checkArtImage, checkArtMap, composeLayouts, creditHtml, googlePhotosIn, leadOf, mapHtml, abstractCover, type ArtImage, type ArtMap, type Credit, type Grammar } from "./art.js";
 export { DECK_MOODS, MOOD_STYLES, contrast, styleFrom, type DeckMood, type DeckStyle } from "./style.js";
 
 // The art-direction layouts (art.ts): timeline, map, asym (an asymmetric grid), oversized (oversized type), plate (a captioned plate),
@@ -42,7 +42,7 @@ export type Fit = (typeof FIT_STEPS)[number];
 // by code from it (services/artImagery.ts), never written by the model.
 export type Slide = { headline: string; bullets: string[]; image: string | null; notes?: string; layout?: SlideLayout; imageMeta?: ImageMeta; fit?: Fit; place?: string; photos?: ArtImage[]; map?: ArtMap };
 // coverArt: the full-bleed cover picture Co found (a venue's photo, or a mood image said as one). coverImage: their own image as the cover.
-export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: string | null; slides: Slide[]; style: DeckStyle; logoMeta?: ImageMeta; coverArt?: ArtImage; coverImage?: string; place?: string };
+export type DeckData = { kind: "deck"; title: string; subtitle: string; logo: string | null; slides: Slide[]; style: DeckStyle; logoMeta?: ImageMeta; coverArt?: ArtImage; coverImage?: string; place?: string; coverDesign?: boolean };
 const ASSET = /^[A-Za-z0-9_-]{24}$/;
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -63,7 +63,7 @@ function imageMeta(v: unknown, field: string, problems: string[]): ImageMeta | u
 // The one gate for a deck, like parseCoPageData for a page: unknown fields refused, every line plain, colors hex only.
 export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | { ok: false; problems: string[] } {
   const problems: string[] = [];
-  const o = obj(input, "the deck", ["kind", "title", "subtitle", "logo", "slides", "style", "logoMeta", "coverArt", "coverImage", "place"], problems);
+  const o = obj(input, "the deck", ["kind", "title", "subtitle", "logo", "slides", "style", "logoMeta", "coverArt", "coverImage", "place", "coverDesign"], problems);
   if (!o) return { ok: false, problems: ["a deck must be an object of fields"] };
   if (o.kind !== "deck") problems.push("kind must be deck");
   const L = DECK_LIMITS;
@@ -113,7 +113,7 @@ export function parseCoDeckData(input: unknown): { ok: true; data: DeckData } | 
   if (problems.length) return { ok: false, problems };
   // Re-derived, so a stored style can never carry text that doesn't read.
   const style = { ...styleFrom(st!.mood, { background: st!.background, text: st!.text, accent: st!.accent }, st!.type, { field: !!(extras as any).gradient }), ...extras };
-  return { ok: true, data: { kind: "deck", title: title!, subtitle: subtitle!, logo, slides, style, ...(logoMeta ? { logoMeta } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(deckPlace ? { place: deckPlace } : {}) } };
+  return { ok: true, data: { kind: "deck", title: title!, subtitle: subtitle!, logo, slides, style, ...(logoMeta ? { logoMeta } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(deckPlace ? { place: deckPlace } : {}), ...(o.coverDesign === true ? { coverDesign: true } : {}) } };
 }
 
 // Pure: the member assets a deck places (its logo and slide images).
@@ -228,7 +228,8 @@ html{scroll-snap-type:none}
 .t-bleed .in{min-height:520px}
 .t-bleed h1{font-size:40px}.t-bleed .sub{font-size:17px}
 .t-spread h1{font-size:36px}.t-spread .sub{font-size:17px;margin-top:12px}
-.l-oversized h2,.l-oversized.tight h2,.l-oversized.tighter h2,.l-oversized.tightest h2{font-size:40px}
+.l-oversized h2,.l-oversized.tight h2,.l-oversized.tighter h2,.l-oversized.tightest h2{font-size:40px!important}
+.l-map .foot,.l-plate .foot,.l-split .foot,.g-poster.l-plate .foot,.t-spread .foot,.g-catalog.t-spread .foot{left:auto;right:auto}
 .l-timeline .tl{grid-template-columns:1fr;gap:0;margin-top:22px}
 .l-timeline .tl li{display:grid;grid-template-columns:96px 1fr;gap:12px;padding:12px 0;border-top:1px solid currentColor}
 .l-timeline .tl li::before{display:none}
@@ -262,7 +263,7 @@ html{scroll-snap-type:none}
 // per slide, edge to edge, no downloads bar (the PDF export). downloads: the deck's own export links, relative to its address.
 export function renderDeck(
   page: { id: string; data: DeckData; updatedAt: Date },
-  o: { url: string | null; zone?: string | null; assetBase?: string; showNotes?: boolean; imageSrc?: (assetId: string) => string | null; print?: boolean; downloadBase?: string; artSrc?: (ref: string) => string | null },
+  o: { url: string | null; zone?: string | null; assetBase?: string; showNotes?: boolean; imageSrc?: (assetId: string) => string | null; print?: boolean; downloadBase?: string; artSrc?: (ref: string) => string | null; credit?: (p: ArtImage) => Credit | null },
 ): string {
   const d = page.data;
   const s = d.style;
@@ -288,7 +289,11 @@ export function renderDeck(
   const titleLayout = s.titleLayout ?? (s.gradient || loud ? "field" : "editorial");
   const displayWeight = display.kind === "serif" ? (loud ? 600 : 400) : loud || s.mood === "dark" ? 800 : 650;
   const grammar: Grammar = s.grammar ?? "editorial";
-  const layouts = slideLayouts(d.slides, grammar);
+  // A venue photo shows only with its author's credit, fetched for this view (Google's terms): one without it is left out, and the
+  // slides are laid out from what really shows.
+  const shows = (p: ArtImage) => p.kind === "mood" || !!o.credit?.(p);
+  const shownSlides = d.slides.map((sl) => ({ ...sl, photos: (sl.photos ?? []).filter(shows) }));
+  const layouts = slideLayouts(shownSlides, grammar);
   const ground = (onField: boolean) => (onField ? stops.join(",") : s.background);
 
   const css = `
@@ -415,7 +420,14 @@ ${fitCss(dens)}
 .l-map .in{right:58%}
 .l-map h2{font-size:${dens.h2 * 0.85}cqw}
 .l-map ul{list-style:none;margin:2cqw 0 0;padding:0}
-.l-map .foot span:last-child{background:${s.background};padding:0.3cqw 0.6cqw;border-radius:0.3cqw}
+/* the footer stays on the paper, clear of the picture or map beside it */
+.l-map .foot{right:calc(58% + ${dens.pad * 1.1}cqw)}
+.l-plate .foot{left:calc(58% + ${dens.pad * 0.2}cqw)}
+.l-split .foot{right:calc(44% + ${dens.pad * 1.1}cqw)}
+.t-spread .foot{right:calc(50% + ${dens.pad * 1.1}cqw)}
+.g-catalog.t-spread .foot{right:calc(44% + ${dens.pad * 2.2}cqw)}
+.g-poster.l-plate .foot{left:${dens.pad * 1.1}cqw;right:${dens.pad * 1.1}cqw}
+.g-poster.l-plate .foot span{background:${s.background};padding:0.3cqw 0.6cqw;border-radius:0.3cqw}
 .l-map li{font-size:${dens.li}cqw;line-height:1.45;padding:0 0 ${dens.gap * 0.8}cqw}
 /* timeline */
 .l-timeline h2{font-size:${dens.h2}cqw;max-width:24ch}
@@ -432,9 +444,10 @@ ${fitCss(dens)}
 .l-asym .cell p{margin:0;font-size:${dens.li}cqw;line-height:1.45}
 .l-asym .cell:first-child p{font-family:${fontStack(display)};font-size:${dens.li * 1.3}cqw;line-height:1.2;font-weight:${displayWeight}}
 /* oversized type */
-.l-oversized .in{justify-content:flex-end}
-.l-oversized h2{font-size:${dens.stmt * (grammar === "poster" ? 1.75 : 1.45)}cqw;max-width:${grammar === "poster" ? 10 : 13}ch;line-height:0.98}
+.l-oversized .in{justify-content:center}
+.l-oversized h2{line-height:0.98;max-width:none}
 .l-oversized .after{font-size:${dens.li}cqw;line-height:1.45;max-width:40ch;margin:2.4cqw 0 0 auto;text-align:right}
+.l-oversized .after + .after{margin-top:0.6cqw}
 .g-menu.l-oversized .in,.g-menu.l-statement .in{align-items:center;text-align:center;justify-content:center}
 .g-menu.l-statement h2{max-width:20ch}
 .g-menu.l-statement .after,.g-menu.l-statement ul{margin-left:auto;margin-right:auto}
@@ -501,15 +514,17 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
     }
     if (p.art) {
       const u = artUrl(p.art);
-      return u ? `<figure class="fig ${cls}"${extra}><img class="ph" src="${e(u)}" alt="${e(p.art.alt)}" decoding="async" data-qa-img data-qa-crop="ok">${creditHtml(p.art, e, "credit lab")}</figure>` : "";
+      const c = p.art.kind === "venue" ? o.credit?.(p.art) ?? null : null;
+      if (p.art.kind === "venue" && !c) return "";
+      return u ? `<figure class="fig ${cls}"${extra}><img class="ph" src="${e(u)}" alt="${e(p.art.alt)}" decoding="async" data-qa-img data-qa-crop="ok">${creditHtml(p.art, e, "credit lab", c)}</figure>` : "";
     }
     return "";
   };
-  const picsOf = (sl: Slide): Pic[] => [...(sl.image ? [{ asset: sl.image, alt: sl.headline, meta: sl.imageMeta }] : []), ...(sl.photos ?? []).map((a) => ({ art: a, alt: a.alt }))];
-  // The cover: their own picture, else one Co found; with nothing at all to show (no picture, no map, no logo), a typographic plate.
-  const coverPic: Pic | null = d.coverImage ? { asset: d.coverImage, alt: d.title } : d.coverArt ? { art: d.coverArt, alt: d.coverArt.alt } : null;
-  const anyPicture = !!coverPic || !!d.logo || d.slides.some((sl) => picsOf(sl).length || sl.map);
-  const plate = typePlate(d.title, { ground: mixHex(s.accent, s.background, 0.14), ink: readableOn(s.accent, mixHex(s.accent, s.background, 0.14), 3), accent: accOnPaper, font: fontStack(display) }, e);
+  const picsOf = (sl: Slide): Pic[] => [...(sl.image ? [{ asset: sl.image, alt: sl.headline, meta: sl.imageMeta }] : []), ...(sl.photos ?? []).filter(shows).map((a) => ({ art: a, alt: a.alt }))];
+  // The cover: their own picture, else one Co found (a venue photo only with its credit). A deck made with no picture at all carries
+  // Co's designed cover (coverDesign); an older deck is never given one after the fact.
+  const coverPic: Pic | null = d.coverImage ? { asset: d.coverImage, alt: d.title } : d.coverArt && shows(d.coverArt) ? { art: d.coverArt, alt: d.coverArt.alt } : null;
+  const designed = !coverPic && d.coverDesign ? abstractCover(d.title, { ground: mixHex(s.accent, s.background, 0.1), ink: s.text, accent: s.accent, accent2: s.accent2 ?? null }, e) : "";
   // The editorial title's small label: the subtitle's first clause, whole, or nothing (never cut mid-word).
   const kickWords = d.subtitle.split(/[.:,]/)[0].trim();
   const titleSlide = (() => {
@@ -520,8 +535,8 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
     if (coverPic) {
       return `<section class="slide title"><div class="frame t-bleed g-${grammar}" data-qa-frame data-ground="#666666">${figure(coverPic, "cover")}<div class="scrim"></div><div class="in" data-ground="#666666"><div>${d.logo ? logoHtml(true) : ""}</div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div><div class="foot" data-ground="#333333"><span data-qa-text="label" data-ground="#333333">${mark}</span><span data-qa-text="label" data-ground="#333333">01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
     }
-    if (!anyPicture) {
-      return `<section class="slide title"><div class="frame t-spread g-${grammar} paper" data-qa-frame data-ground="${ground(false)}"><div class="in"><div><span class="lab acc" data-qa-text="label">${e(asOf(page.updatedAt, o.zone ?? null))}</span></div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div><div></div></div><figure class="fig tfig">${plate}</figure>${foot()}</div></section>`;
+    if (designed) {
+      return `<section class="slide title"><div class="frame t-spread g-${grammar} paper" data-qa-frame data-ground="${ground(false)}"><div class="in"><div>${d.logo ? logoHtml(false) : `<span class="lab acc" data-qa-text="label">${e(asOf(page.updatedAt, o.zone ?? null))}</span>`}</div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div><div></div></div><figure class="fig tfig">${designed}</figure>${foot()}</div></section>`;
     }
     if (titleLayout === "field")
       return `<section class="slide title"><div class="frame t-field on-field" data-qa-frame data-ground="${ground(true)}"><div class="in"><div>${logoHtml(true)}</div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div></div><div class="foot"><span data-qa-text="label" data-ground="${scrimGround}">${mark}</span><span data-qa-text="label" data-ground="${scrimGround}">01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
@@ -567,7 +582,11 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
       } else if (l === "asym") {
         inner = `<div class="in"><div>${kicker}${h2}</div><div class="cells">${sl.bullets.slice(0, 4).map((b, k) => `<div class="cell"><p data-qa-text="${k === 0 ? "h3" : "body"}">${e(b)}</p></div>`).join("")}${sl.bullets.length > 4 ? `<div class="cell"><p data-qa-text="body">${e(sl.bullets.slice(4).join(" "))}</p></div>` : ""}</div></div>`;
       } else if (l === "oversized") {
-        inner = `<div class="in">${kicker}${h2}${sl.bullets.length ? `<p class="after" data-qa-text="body">${e(sl.bullets.join(" "))}</p>` : ""}</div>`;
+        // Sized to the line (founder's review: short lines left most of the slide empty): about two lines across the slide's width,
+        // never under the statement size, never over 13cqw.
+        const fitSize = Math.max(dens.stmt * 1.2, Math.min(13, 150 / Math.max(6, sl.headline.length)));
+        const h2o = `<h2 class="disp" data-qa-text="h2" style="font-size:${(fitSize * (sl.fit ? FIT_SCALE[sl.fit] : 1)).toFixed(2)}cqw">${noOrphan(e(sl.headline))}</h2>`;
+        inner = `<div class="in">${kicker}${h2o}${sl.bullets.map((b) => `<p class="after" data-qa-text="body">${e(b)}</p>`).join("")}</div>`;
       } else if (l === "courses") {
         // A course: its name, then what it is, split at its first colon or " - " (never cut).
         const course = (b: string) => {
@@ -579,7 +598,7 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
         inner = `<div class="in"><div>${kicker}${h2}</div>${ul(sl.bullets)}</div>`;
       }
       const notes = sl.notes && o.showNotes !== false ? `<details class="notes"><summary>Speaker notes</summary><p>${e(sl.notes)}</p></details>` : "";
-      return `<section class="slide${notes ? " with-notes" : ""}"><div class="frame l-${l} g-${grammar}${onField ? " on-field" : " paper"}${tight}" data-qa-frame data-qa-slide="${i + 2}" data-qa-layout="${l}" data-ground="${ground(onField)}">${inner}${foot}</div>${notes}</section>`;
+      return `<section class="slide${notes ? " with-notes" : ""}"><div class="frame l-${l} g-${grammar}${onField ? " on-field" : " paper"}${tight}" data-qa-frame data-qa-slide="${i + 2}" data-qa-layout="${l}" data-qa-points="${sl.bullets.length}" data-ground="${ground(onField)}">${inner}${foot}</div>${notes}</section>`;
     })
     .join("\n");
   const links = fontLinks([display, body]);

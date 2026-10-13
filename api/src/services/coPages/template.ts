@@ -14,7 +14,7 @@ import { EMAIL_COLORS, escapeHtml } from "../emailDesign.js";
 import type { Block, CoPageData, ComparisonOption, LinkItem } from "./schema.js";
 import { contrast, inkOn, type DeckStyle } from "./style.js";
 import { fontLinks, fontStack } from "../designFonts.js";
-import { creditHtml, googlePhotosIn, mapHtml, typePlate, type ArtImage, type Grammar } from "./art.js";
+import { abstractCover, creditHtml, googlePhotosIn, mapHtml, type ArtImage, type Credit, type Grammar } from "./art.js";
 
 export type CoPageView = { id: string; data: CoPageData; version: number; updatedAt: Date };
 
@@ -253,6 +253,7 @@ function artCss(t: Palette, g: Grammar): string {
 .cover .credit{position:absolute;right:14px;bottom:12px;left:auto;z-index:2}
 .cover.plate-cover{min-height:260px;padding:0}
 .cover.plate-cover .tplate{position:absolute;inset:0;width:100%;height:100%}
+.cover.plate-cover .credit.design{position:absolute;right:14px;bottom:12px}
 .credit{display:inline-block;font-size:11px;line-height:1.4;letter-spacing:0.04em;color:#FFFFFF;background:rgba(0,0,0,0.66);padding:3px 8px;border-radius:3px;max-width:calc(100% - 28px)}
 .credit a{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .art{margin:24px 0 0;position:relative}
@@ -338,7 +339,7 @@ h2{font-size:40px;line-height:1.02;letter-spacing:-0.02em}
 const keepLastTwo = (escaped: string) => escaped.replace(/\s+(\S+)\s*$/, "&nbsp;$1");
 
 // imageSrc: where an image's bytes come from instead of its address (design QA inlines them, so it measures the real pictures).
-export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageUrl: string | null; zone?: string | null; assetBase?: string; imageSrc?: (ref: { asset?: string; url?: string }) => string | null; artSrc?: (ref: string) => string | null }): string {
+export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageUrl: string | null; zone?: string | null; assetBase?: string; imageSrc?: (ref: { asset?: string; url?: string }) => string | null; artSrc?: (ref: string) => string | null; credit?: (p: ArtImage) => Credit | null }): string {
   const d = page.data;
   const grammar: Grammar = d.style?.grammar ?? d.grammar ?? "editorial";
   const desc = ogDescription(d);
@@ -369,9 +370,13 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
   const gIndex = new Map(googlePhotosIn(d).map((p, k) => [p.src, k]));
   const artUrl = (p: ArtImage): string | null => (o.artSrc ? o.artSrc(p.via === "google" ? `g:${p.src}` : `u:${p.src}`) : p.via === "google" ? (gIndex.has(p.src) ? `${artBase}g/${gIndex.get(p.src)}` : null) : p.src);
   const tileSrc = (key: string) => (o.artSrc ? o.artSrc(`t:${key}`) : `${artBase}t/${key}.png`);
+  const shows = (p: ArtImage) => p.kind === "mood" || !!o.credit?.(p);
   const artImg = (p: ArtImage) => {
     const u = artUrl(p);
-    return u ? `<img src="${e(u)}" alt="${e(p.alt)}" loading="${loading}" decoding="async" data-qa-crop="ok">${creditHtml(p, e)}` : "";
+    // A venue photo shows only with its author's credit, fetched for this view (Google's terms).
+    const c = p.kind === "venue" ? o.credit?.(p) ?? null : null;
+    if (p.kind === "venue" && !c) return "";
+    return u ? `<img src="${e(u)}" alt="${e(p.alt)}" loading="${loading}" decoding="async" data-qa-crop="ok">${creditHtml(p, e, "credit", c)}` : "";
   };
   const pal = d.style ? paletteFor(d.style) : CO_PALETTE;
   const mapFig = d.map ? mapHtml(d.map, e, tileSrc) : "";
@@ -382,7 +387,7 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
       ? `<ol class="tl">${b.items.map((x) => `<li><span class="when">${e(x.lead ?? "")}</span><span class="bt">${e(x.text)}</span></li>`).join("")}</ol>`
       : renderBlock(b);
   const pictureOf = (s: CoPageData["sections"][number], i: number): string => {
-    const photos = s.photos ?? [];
+    const photos = (s.photos ?? []).filter(shows);
     if (grammar === "fieldguide" && photos.length >= 2) return "";
     if (s.asset) return `<figure class="bleed"><img src="${e(assetSrc(s.asset))}" alt="${e(s.heading)}" loading="${loading}" decoding="async"></figure>`;
     if (s.image) return `<figure class="bleed"><img src="${e(urlSrc(s.image.url))}" alt="${e(s.image.alt)}" loading="${loading}" decoding="async"><figcaption>From ${e(hostOf(s.image.sourceUrl))}</figcaption></figure>`;
@@ -391,7 +396,7 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
   };
   const sections = d.sections
     .map((s, i) => {
-      const photos = s.photos ?? [];
+      const photos = (s.photos ?? []).filter(shows);
       const strip = grammar === "fieldguide" && photos.length >= 2 ? `<div class="strip">${photos.slice(0, 3).map((p) => `<figure>${artImg(p)}</figure>`).join("")}</div>` : "";
       const coords = grammar === "fieldguide" && s.place && d.map ? (() => {
         const pin = d.map!.pins.find((p) => s.photos?.[0]?.place === p.label) ?? null;
@@ -412,12 +417,13 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
   const mapTop = mapAfter === -1 ? `<div class="inner mapsec">${mapFig}</div>` : "";
   // The cover: their own picture, the venue's own site image, or a picture Co found, as a real image with its credit; with nothing to
   // show at all (no picture, map or logo anywhere), a typographic plate, said as one.
-  const coverSrc = d.coverImage ? { src: assetSrc(d.coverImage), alt: d.title, credit: "" } : d.cover ? { src: urlSrc(d.cover.url), alt: d.cover.alt, credit: `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` } : d.coverArt && artUrl(d.coverArt) ? { src: artUrl(d.coverArt)!, alt: d.coverArt.alt, credit: creditHtml(d.coverArt, e) } : null;
-  const nothing = !coverSrc && !d.logo && !d.map && !d.sections.some((x) => x.asset || x.image || x.photos?.length);
+  const coverSrc = d.coverImage ? { src: assetSrc(d.coverImage), alt: d.title, credit: "" } : d.cover ? { src: urlSrc(d.cover.url), alt: d.cover.alt, credit: `<div class="cover-credit">From ${e(hostOf(d.cover.sourceUrl))}</div>` } : d.coverArt && shows(d.coverArt) && artUrl(d.coverArt) ? { src: artUrl(d.coverArt)!, alt: d.coverArt.alt, credit: creditHtml(d.coverArt, e, "credit", d.coverArt.kind === "venue" ? o.credit?.(d.coverArt) ?? null : null) } : null;
+  // Co's designed cover only on a page made with it (coverDesign), never added to an older one.
+  const nothing = !coverSrc && !!d.coverDesign;
   const coverHtml = coverSrc
     ? `<div class="cover photo"><img class="cover-img" src="${e(coverSrc.src)}" alt="${e(coverSrc.alt)}" decoding="async" data-qa-crop="ok"><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${coverSrc.credit}</div>`
     : nothing
-      ? `<div class="cover plate-cover">${typePlate(d.title, { ground: pal.coverTop, ink: pal.coverText, accent: pal.coverText, font: pal.serif }, e)}</div>`
+      ? `<div class="cover plate-cover">${abstractCover(d.title, { ground: pal.coverTop, ink: pal.coverText, accent: pal.maroon === pal.coverTop ? pal.coverText : pal.maroon, accent2: pal.gold }, e)}</div>`
       : `<div class="cover${d.logo ? " logo-only" : " slim"}"><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}</div>`;
   const sources = d.sources.length
     ? `<div class="src"><h3>Sources</h3><ol>${d.sources.map((s) => `<li><a href="${e(s.url)}" rel="noopener noreferrer">${e(s.label)}</a> <span class="h">${e(hostOf(s.url))}</span></li>`).join("")}</ol></div>`

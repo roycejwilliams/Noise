@@ -35,7 +35,8 @@ export const ASSET_HEADERS = {
 // Each artifact type has its own renderer (a deck: services/coPages/deck.ts). The preview image is a page's own cover, or none. Seen
 // through a share link, the page names only the share link, never the owner's own. Image paths are relative to the page's own
 // address (/d/<id> or /d/v/<share>), so each resolves under the link it was opened with.
-function render(page: StoredCoPage, v: { shareId?: string }, name: string | null, zone = "America/Los_Angeles"): string {
+// credit: each venue photo's author, fetched for this view (services/artImagery.ts googleCredits); a photo without one isn't shown.
+function render(page: StoredCoPage, v: { shareId?: string }, name: string | null, zone = "America/Los_Angeles", credit: (p: any) => any = () => null): string {
   const base = coPageBase();
   const path = v.shareId ? `v/${v.shareId}` : page.id;
   const url = base ? `${base}/d/${path}` : null;
@@ -47,12 +48,19 @@ function render(page: StoredCoPage, v: { shareId?: string }, name: string | null
     imageUrl: url ? `${url}/og/${previewTag(page, name)}.png` : null,
     iconBase: base,
   });
-  return withPreviewHead(renderArtifact(page, v, url, zone), head);
+  return withPreviewHead(renderArtifact(page, v, url, zone, credit), head);
 }
-function renderArtifact(page: StoredCoPage, v: { shareId?: string }, url: string | null, zone: string): string {
+function renderArtifact(page: StoredCoPage, v: { shareId?: string }, url: string | null, zone: string, credit: (p: any) => any = () => null): string {
   return isDeckData(page.data)
-    ? renderDeck({ id: page.id, data: page.data as DeckData, updatedAt: page.updatedAt }, { url, zone, assetBase: `${v.shareId ?? page.id}/a/`, showNotes: !v.shareId, downloadBase: `${v.shareId ?? page.id}/` })
-    : renderCoPage({ ...page, data: page.data as CoPageData }, { url, ogImageUrl: (page.data as CoPageData).cover?.url ?? null, zone, assetBase: `${v.shareId ?? page.id}/a/` });
+    ? renderDeck({ id: page.id, data: page.data as DeckData, updatedAt: page.updatedAt }, { url, zone, assetBase: `${v.shareId ?? page.id}/a/`, showNotes: !v.shareId, downloadBase: `${v.shareId ?? page.id}/`, credit })
+    : renderCoPage({ ...page, data: page.data as CoPageData }, { url, ogImageUrl: (page.data as CoPageData).cover?.url ?? null, zone, assetBase: `${v.shareId ?? page.id}/a/`, credit });
+}
+
+// Every venue photo's credit for one view, fetched before it's rendered (never stored with the artifact). Pages without venue photos
+// cost nothing.
+async function artCredits(page: StoredCoPage): Promise<(p: any) => any> {
+  const A = await import("../services/artImagery.js");
+  return A.googleCredits(page.data).catch(() => () => null);
 }
 
 export function createCoPageRouter(
@@ -125,11 +133,11 @@ export function createCoPageRouter(
     }
     const X = await import("../services/coPages/deckExport.js");
     // The pictures Co found and the map tiles go into the file too, with their credits.
-    const artSrc = await (await import("../services/artImagery.js")).artDataUris(data).catch(() => () => null);
+    const art = await (await import("../services/artImagery.js")).artDataUris(data).catch(() => undefined);
     const file =
       kind === "pdf"
-        ? await X.deckPdf({ id: page.id, data, updatedAt: page.updatedAt, version: page.version }, images, undefined, artSrc).catch(() => null)
-        : await X.deckPptx({ id: page.id, data, version: page.version }, images, { withNotes: !shared, artSrc }).catch(() => null);
+        ? await X.deckPdf({ id: page.id, data, updatedAt: page.updatedAt, version: page.version }, images, undefined, art).catch(() => null)
+        : await X.deckPptx({ id: page.id, data, version: page.version }, images, { withNotes: !shared, art }).catch(() => null);
     if (!file) return res.status(404).type("text/plain").send("Not found");
     res.set("Content-Disposition", `attachment; filename="${file.filename}"`);
     return res.status(200).type(file.contentType).send(file.data);
@@ -150,12 +158,15 @@ export function createCoPageRouter(
     if (!got) return res.status(404).type("text/plain").send("Not found");
     return res.status(200).type(got.mediaType).send(got.data);
   };
+  // Each uncached venue photo is a paid Google call: the art routes get their own limit, on top of the public-page one (a page view
+  // asks for a few photos and a map's tiles), and misses are cached in artImagery.ts.
+  const artLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false, message: "Too many requests; try again in a few minutes." });
   const gRef = (k: unknown) => (/^\d{1,2}$/.test(String(k)) ? { google: Number(k) } : {});
   const tRef = (p: any) => ({ tile: `${String(p.z)}/${String(p.x)}/${String(p.y ?? "").replace(/\.png$/, "")}` });
-  router.get("/v/:shareId/g/:k", async (req, res) => sendArt(await loadShare(String(req.params.shareId ?? "")).catch(() => null), gRef(req.params.k), res));
-  router.get("/v/:shareId/t/:z/:x/:y", async (req, res) => sendArt(await loadShare(String(req.params.shareId ?? "")).catch(() => null), tRef(req.params), res));
-  router.get("/:id/g/:k", async (req, res) => sendArt(await load(String(req.params.id ?? "")).catch(() => null), gRef(req.params.k), res));
-  router.get("/:id/t/:z/:x/:y", async (req, res) => sendArt(await load(String(req.params.id ?? "")).catch(() => null), tRef(req.params), res));
+  router.get("/v/:shareId/g/:k", artLimit, async (req, res) => sendArt(await loadShare(String(req.params.shareId ?? "")).catch(() => null), gRef(req.params.k), res));
+  router.get("/v/:shareId/t/:z/:x/:y", artLimit, async (req, res) => sendArt(await loadShare(String(req.params.shareId ?? "")).catch(() => null), tRef(req.params), res));
+  router.get("/:id/g/:k", artLimit, async (req, res) => sendArt(await load(String(req.params.id ?? "")).catch(() => null), gRef(req.params.k), res));
+  router.get("/:id/t/:z/:x/:y", artLimit, async (req, res) => sendArt(await load(String(req.params.id ?? "")).catch(() => null), tRef(req.params), res));
   // A share link (store.ts createShareLink): the same artifact, view-only, at its own revocable link. Revoked or unknown: 404.
   router.get("/v/:shareId/a/:assetId", async (req, res) => sendAsset(await loadShare(String(req.params.shareId ?? "")).catch(() => null), String(req.params.assetId ?? ""), res));
   router.get("/v/:shareId", async (req, res) => {
@@ -168,7 +179,7 @@ export function createCoPageRouter(
     viewed(page.id).catch(() => {});
     const name = await nameFor(page.ownerUserId);
     warm(page, name, req);
-    return res.status(200).type("html").send(render(page, { shareId }, name, o.zone));
+    return res.status(200).type("html").send(render(page, { shareId }, name, o.zone, await artCredits(page)));
   });
   router.get("/:id/a/:assetId", async (req, res) => sendAsset(await load(String(req.params.id ?? "")).catch(() => null), String(req.params.assetId ?? ""), res));
   router.get("/:id", async (req, res) => {
@@ -184,7 +195,7 @@ export function createCoPageRouter(
     viewed(page.id).catch(() => {});
     const name = await nameFor(page.ownerUserId);
     warm(page, name, req);
-    return res.status(200).type("html").send(render(page, {}, name, o.zone));
+    return res.status(200).type("html").send(render(page, {}, name, o.zone, await artCredits(page)));
   });
   return router;
 }

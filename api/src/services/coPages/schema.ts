@@ -52,6 +52,8 @@ export type CoPageData = {
   map?: ArtMap;
   // The main real place it's about, as Co named it (its cover photo and the map, when no section names one).
   place?: string;
+  // Co's designed cover (art.ts abstractCover), set when it was made with no picture at all; never added to an older page.
+  coverDesign?: boolean;
 };
 const ASSET_ID_RE = /^[A-Za-z0-9_-]{24}$/;
 
@@ -262,7 +264,7 @@ const sameUrl = (a: string, b: string) => a.replace(/\/+$/, "") === b.replace(/\
 // The one gate.
 export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } | { ok: false; problems: string[] } {
   const problems: string[] = [];
-  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources", "style", "logo", "grammar", "coverArt", "coverImage", "map", "place"], problems);
+  const o = obj(input, "the page", ["title", "context", "cover", "sections", "sources", "style", "logo", "grammar", "coverArt", "coverImage", "map", "place", "coverDesign"], problems);
   if (!o) return { ok: false, problems: ["a page must be an object of fields"] };
   const title = plain(o.title, "title", L.title, problems, true);
   const context = plain(o.context, "context", L.context, problems, true);
@@ -322,5 +324,5 @@ export function parseCoPageData(input: unknown): { ok: true; data: CoPageData } 
   const map = checkArtMap(o.map, "map", problems);
   const pagePlace = plain(o.place, "place", 90, problems, false);
   if (problems.length) return { ok: false, problems };
-  return { ok: true, data: { title: title!, context: context!, cover, sections, sources, ...(style ? { style } : {}), ...(logo ? { logo } : {}), ...(grammar ? { grammar } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(map ? { map } : {}), ...(pagePlace ? { place: pagePlace } : {}) } };
+  return { ok: true, data: { title: title!, context: context!, cover, sections, sources, ...(style ? { style } : {}), ...(logo ? { logo } : {}), ...(grammar ? { grammar } : {}), ...(coverArt ? { coverArt } : {}), ...(coverImage ? { coverImage } : {}), ...(map ? { map } : {}), ...(pagePlace ? { place: pagePlace } : {}), ...(o.coverDesign === true ? { coverDesign: true } : {}) } };
 }

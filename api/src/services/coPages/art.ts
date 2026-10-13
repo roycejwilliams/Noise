@@ -30,19 +30,23 @@ export const GRAMMAR_GUIDE =
   "catalog (art, objects, a show, a studio, a collection: a gallery catalog of large captioned plates and asymmetric spreads), fieldguide (a trip, a weekend, a route, anything moving between places: map, timeline, photo strips), menu (food, a dinner, a chef, a tasting, a bar: courses on a centered column), editorial (a pitch, a story, ideas and arguments: a magazine's headline-led spreads), poster (a launch, a party, one loud idea: oversized type and full-bleed pictures)";
 
 // A picture Co found (never written by the model): a real venue's photo, or mood imagery labelled as such.
-//   venue: src is the Google Places photo name ("places/<id>/photos/<ref>"); placeId re-finds it when the name expires.
-//   mood:  src is the Unsplash image's own https URL (hotlinked, as Unsplash requires).
-export type ArtImage = { kind: "venue" | "mood"; src: string; alt: string; credit: string; creditUrl: string | null; via: "google" | "unsplash"; placeId?: string; place?: string };
+//   venue: only Google's place id and which of its photos (i) are kept (Google's terms: nothing else of theirs is stored). The photo
+//          and its author's credit are fetched each time it's shown (services/artImagery.ts googleArt), and a photo whose credit can't
+//          be had isn't shown. src is the key "gp:<placeId>:<i>"; place and alt are Co's own words for the place, never Google's.
+//   mood:  src is the Unsplash image's own https URL (hotlinked, as Unsplash requires), with its photographer's credit.
+export type ArtImage = { kind: "venue" | "mood"; src: string; alt: string; credit?: string; creditUrl?: string | null; via: "google" | "unsplash"; placeId?: string; i?: number; place?: string };
+export type Credit = { credit: string; creditUrl: string | null };
 export type MapPin = { lat: number; lng: number; label: string };
 export type ArtMap = { pins: MapPin[] };
 
-export const PLACE_PHOTO = /^places\/[A-Za-z0-9_-]{6,300}\/photos\/[A-Za-z0-9_-]{6,1200}$/;
 const UNSPLASH_IMG = /^https:\/\/images\.unsplash\.com\/[A-Za-z0-9_./?=&%-]{4,600}$/;
 const PLACE_ID = /^[A-Za-z0-9_-]{6,300}$/;
+export const venueKey = (placeId: string, i: number) => `gp:${placeId}:${i}`;
 
 // ---------------------------------------------------------------- the gate for code-filled art
 
-// Pure: a stored picture, checked: every field plain and capped, its source only one of the two Co uses, its credit always there.
+// Pure: a stored picture, checked: every field plain and capped, its source only one of the two Co uses. A venue photo carries only
+// its place id and index (no Google data); a mood image carries its photographer's credit.
 export function checkArtImage(v: unknown, field: string, problems: string[]): ArtImage | null {
   if (v === undefined || v === null) return null;
   const o = v as Record<string, unknown>;
@@ -50,13 +54,21 @@ export function checkArtImage(v: unknown, field: string, problems: string[]): Ar
     problems.push(`${field} must be a picture Co found`);
     return null;
   }
-  for (const k of Object.keys(o)) if (!["kind", "src", "alt", "credit", "creditUrl", "via", "placeId", "place"].includes(k)) problems.push(`${field} has unknown field ${k}`);
+  for (const k of Object.keys(o)) if (!["kind", "src", "alt", "credit", "creditUrl", "via", "placeId", "i", "place"].includes(k)) problems.push(`${field} has unknown field ${k}`);
   const text = (x: unknown, max: number) => (typeof x === "string" && x.trim() && x.length <= max && !/[<>\r\n]/.test(x) ? x.trim() : null);
-  const kind = o.kind === "venue" || o.kind === "mood" ? o.kind : null;
-  const via = o.via === "google" || o.via === "unsplash" ? o.via : null;
-  const src = typeof o.src === "string" ? o.src : "";
-  const okSrc = (kind === "venue" && via === "google" && PLACE_PHOTO.test(src)) || (kind === "mood" && via === "unsplash" && UNSPLASH_IMG.test(src));
   const alt = text(o.alt, 140);
+  if (o.kind === "venue" && o.via === "google") {
+    const placeId = typeof o.placeId === "string" && PLACE_ID.test(o.placeId) ? o.placeId : null;
+    const i = Number.isInteger(o.i) && (o.i as number) >= 0 && (o.i as number) < 10 ? (o.i as number) : null;
+    const place = text(o.place, 90);
+    // Google's own data (a photo name, an author) is never kept with the artifact.
+    if (!placeId || i === null || !place || !alt || o.src !== venueKey(placeId, i) || o.credit != null || o.creditUrl != null) {
+      problems.push(`${field} isn't a venue photo Co can show (only its place id and index are kept)`);
+      return null;
+    }
+    return { kind: "venue", via: "google", src: venueKey(placeId, i), placeId, i, place, alt };
+  }
+  const src = typeof o.src === "string" ? o.src : "";
   const credit = text(o.credit, 120);
   let creditUrl: string | null = null;
   if (o.creditUrl != null) {
@@ -65,13 +77,11 @@ export function checkArtImage(v: unknown, field: string, problems: string[]): Ar
       if (u.protocol === "https:" && !/["'<>\s\\]/.test(String(o.creditUrl)) && String(o.creditUrl).length <= 400) creditUrl = u.toString();
     } catch {}
   }
-  const placeId = o.placeId == null ? undefined : typeof o.placeId === "string" && PLACE_ID.test(o.placeId) ? o.placeId : null;
-  const place = o.place == null ? undefined : text(o.place, 90);
-  if (!kind || !via || !okSrc || !alt || !credit || placeId === null || place === null) {
-    problems.push(`${field} isn't a picture Co can show (a credited venue photo or a labelled mood image)`);
+  if (o.kind !== "mood" || o.via !== "unsplash" || !UNSPLASH_IMG.test(src) || !alt || !credit || o.placeId != null || o.i != null) {
+    problems.push(`${field} isn't a picture Co can show (a venue photo by its place id, or a credited mood image)`);
     return null;
   }
-  return { kind, src, alt, credit, creditUrl, via, ...(placeId ? { placeId } : {}), ...(place ? { place } : {}) };
+  return { kind: "mood", via: "unsplash", src, alt, credit, creditUrl };
 }
 
 export function checkArtMap(v: unknown, field: string, problems: string[]): ArtMap | null {
@@ -160,12 +170,15 @@ export function mapHtml(m: ArtMap, e: (s: string) => string, tileSrc: (key: stri
   return `<figure class="map${o.cls ? ` ${o.cls}` : ""}" role="img" aria-label="${e(`Map: ${m.pins.map((p) => p.label).join(", ")}`)}" data-art="map"><div class="mapc">${tiles}${pins}</div><figcaption class="osm"><a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer">© OpenStreetMap contributors</a></figcaption></figure>`;
 }
 
-// Pure: a picture's credit line, said as what it is (a mood image is never passed off as the place).
-export function creditLine(p: ArtImage): string {
-  return p.kind === "mood" ? `Mood image · Photo by ${p.credit} on Unsplash` : `${p.place ? `${p.place} · ` : ""}Photo: ${p.credit} · Google Maps`;
+// Pure: a picture's credit line, said as what it is (a mood image is never passed off as the place). A venue photo's credit is the one
+// fetched for it now (c), never a stored one.
+export function creditLine(p: ArtImage, c: Credit | null = null): string {
+  return p.kind === "mood" ? `Mood image · Photo by ${p.credit} on Unsplash` : `${p.place ? `${p.place} · ` : ""}Photo: ${c?.credit ?? ""} · Google Maps`;
 }
-export function creditHtml(p: ArtImage, e: (s: string) => string, cls = "credit"): string {
-  const who = p.creditUrl ? `<a href="${e(p.creditUrl)}" rel="noopener noreferrer">${e(p.credit)}</a>` : e(p.credit);
+export function creditHtml(p: ArtImage, e: (s: string) => string, cls = "credit", c: Credit | null = null): string {
+  const name = p.kind === "mood" ? p.credit ?? "" : c?.credit ?? "";
+  const url = p.kind === "mood" ? p.creditUrl ?? null : c?.creditUrl ?? null;
+  const who = url ? `<a href="${e(url)}" rel="noopener noreferrer">${e(name)}</a>` : e(name);
   const inner =
     p.kind === "mood"
       ? `Mood image · Photo by ${who} on <a href="https://unsplash.com/?utm_source=co&amp;utm_medium=referral" rel="noopener noreferrer">Unsplash</a>`
@@ -173,16 +186,31 @@ export function creditHtml(p: ArtImage, e: (s: string) => string, cls = "credit"
   return `<span class="${cls}" data-qa-text="credit">${inner}</span>`;
 }
 
-// A typographic plate (when no picture is available at all): the title's initial set large in their colors, framed like a plate,
-// and said as what it is. An honest image: it's type, never a stand-in photo.
-export function typePlate(title: string, c: { ground: string; ink: string; accent: string; font: string }, e: (s: string) => string): string {
-  const letter = (title.trim().match(/[A-Za-z0-9]/)?.[0] ?? "C").toUpperCase();
-  return `<svg class="tplate" viewBox="0 0 400 500" role="img" aria-label="Typographic plate" data-art="plate" preserveAspectRatio="xMidYMid meet" style="background:${c.ground}"><rect width="400" height="500" fill="${c.ground}"/><rect x="22" y="22" width="356" height="456" fill="none" stroke="${c.accent}" stroke-width="1.5"/><text x="200" y="330" text-anchor="middle" font-family="${e(c.font)}" font-size="300" fill="${c.ink}">${e(letter)}</text><line x1="150" y1="400" x2="250" y2="400" stroke="${c.accent}" stroke-width="2"/></svg>`;
+// A designed cover (founder's review, 2026-10-12: a type plate isn't an image): when there's no photo of theirs, no venue's and no mood
+// image, an abstract composition Co makes in their palette, seeded from the title so it's the same each time, and labelled as Co's
+// design, never as a photo. Only on artifacts made with it (coverDesign), never added to older ones.
+export function abstractCover(title: string, c: { ground: string; ink: string; accent: string; accent2?: string | null }, e: (s: string) => string): string {
+  let h = 2166136261;
+  for (const ch of title) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  const r = (n: number) => ((h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0) % 1000) / 1000 * n;
+  const a2 = c.accent2 ?? c.ink;
+  const cx = 120 + r(160), cy = 150 + r(200), rad = 110 + r(70);
+  const bandY = 280 + r(120), tilt = -18 + r(36);
+  const arcs = Array.from({ length: 4 }, (_, k) => `<circle cx="${(cx + 40).toFixed(0)}" cy="${(cy + 30).toFixed(0)}" r="${(rad + 34 + k * 26).toFixed(0)}" fill="none" stroke="${c.ink}" stroke-opacity="${(0.22 - k * 0.04).toFixed(2)}" stroke-width="1.5"/>`).join("");
+  return `<svg class="tplate" viewBox="0 0 400 500" role="img" aria-label="Abstract cover design by Co" data-art="design" preserveAspectRatio="xMidYMid slice" style="background:${c.ground}"><rect width="400" height="500" fill="${c.ground}"/><g transform="rotate(${tilt.toFixed(1)} 200 250)"><rect x="-60" y="${bandY.toFixed(0)}" width="520" height="${(60 + r(50)).toFixed(0)}" fill="${a2}" fill-opacity="0.85"/></g><circle cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" r="${rad.toFixed(0)}" fill="${c.accent}"/>${arcs}<rect x="${(40 + r(220)).toFixed(0)}" y="${(40 + r(60)).toFixed(0)}" width="${(40 + r(60)).toFixed(0)}" height="${(40 + r(60)).toFixed(0)}" fill="none" stroke="${c.ink}" stroke-width="2"/></svg><span class="credit design" data-qa-text="credit">${e("Cover design by Co, not a photo")}</span>`;
 }
 
 // ---------------------------------------------------------------- slide layouts per grammar
 
 export const LIST_LAYOUTS = ["points", "grid"] as const;
+// Pure: whether a slide, as laid out, is really a title over a list (founder's review: a statement carrying a list, or an asymmetric
+// grid of points, is a list too). A statement with one line, a timeline, a map, a plate, a strip, courses or oversized type isn't.
+export function listLike(layout: string, bullets: number): boolean {
+  if ((LIST_LAYOUTS as readonly string[]).includes(layout)) return true;
+  if (layout === "asym") return bullets >= 2;
+  if (layout === "statement") return bullets >= 2;
+  return false;
+}
 type Shape = { bullets: string[]; image: string | null; photos?: ArtImage[]; map?: ArtMap | null; layout?: string };
 
 // Pure: a bullet's short lead before a colon ("7:00 PM: Dinner", "Friday: Arrive"), or null.
@@ -259,7 +287,8 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
   });
   const relaid: number[] = [];
   const max = Math.floor(slides.length / 2);
-  const isList = (l: string) => (LIST_LAYOUTS as readonly string[]).includes(l);
+  if (slides.length < 2) return { layouts: out, relaid };
+  const isList = (l: string, i: number) => listLike(l, slides[i].bullets.length);
   const alt: Record<Grammar, string[]> = {
     catalog: ["asym", "oversized", "statement"],
     fieldguide: ["asym", "statement", "oversized"],
@@ -267,13 +296,15 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
     editorial: ["asym", "statement", "oversized"],
     poster: ["oversized", "asym", "statement"],
   };
-  const order = out.map((l, i) => i).filter((i) => isList(out[i])).sort((a, b) => slides[a].bullets.length - slides[b].bullets.length);
+  const order = out.map((l, i) => i).filter((i) => isList(out[i], i)).sort((a, b) => slides[a].bullets.length - slides[b].bullets.length);
   let count = order.length;
   for (const i of order) {
     if (count <= max) break;
-    const to = alt[g].find((l) => layoutFits(l, slides[i]));
-    // A slide with more points than any other form holds still sheds a list slot as an asymmetric grid of its first four.
-    out[i] = to ?? "asym";
+    // Only a form that isn't itself a list counts (oversized type, a timeline, a picture or a map, courses); a slide with no such form
+    // stays as it is, and the rule goes back to Co to rewrite (designQa.ts contentFindings).
+    const to = [...alt[g], "timeline", "courses", "plate", "strip", "map"].find((l) => layoutFits(l, slides[i]) && !listLike(l, slides[i].bullets.length) && (l !== "courses" || slides[i].bullets.every((b) => leadOf(b))));
+    if (!to) continue;
+    out[i] = to;
     relaid.push(i);
     count--;
   }
@@ -288,7 +319,9 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
       const cand = out.map((l, i) => i).filter((i) => out[i] === top).sort((a, b) => slides[a].bullets.length - slides[b].bullets.length || b - a);
       let moved = false;
       for (const i of cand) {
-        const to = [...alt[g], "asym", "statement", "points"].find((l) => l !== top && layoutFits(l, slides[i]) && (counts.get(l) ?? 0) < max);
+        // Never back over the list rule: a list form only while lists are under half.
+        const lists = out.filter((l, j) => listLike(l, slides[j].bullets.length)).length - (listLike(top, slides[i].bullets.length) ? 1 : 0);
+        const to = [...alt[g], "timeline", "plate", "strip", "asym", "statement", "points"].find((l) => l !== top && layoutFits(l, slides[i]) && (counts.get(l) ?? 0) < max && (!listLike(l, slides[i].bullets.length) || lists < max));
         if (to) {
           out[i] = to;
           relaid.push(i);
@@ -302,18 +335,17 @@ export function composeLayouts(slides: Shape[], g: Grammar = "editorial"): { lay
   return { layouts: out, relaid };
 }
 
-// Pure: the composition rule, as QA reads it from the layouts actually rendered.
-export function compositionProblem(layouts: string[]): string | null {
-  const n = layouts.length;
+// Pure: the composition rule, as QA reads it from the layouts laid out (each with its number of points): no more than half the slides
+// are a title over a list (points, grid, a statement or an asymmetric grid carrying points), and no one layout holds more than half a
+// deck of four or more. The slides to rewrite are named.
+export function compositionProblem(items: (string | { layout: string; bullets: number })[]): string | null {
+  const xs = items.map((x) => (typeof x === "string" ? { layout: x, bullets: 3 } : x));
+  const n = xs.length;
   if (n < 2) return null;
-  for (const l of LIST_LAYOUTS) {
-    const k = layouts.filter((x) => x === l).length;
-    if (k > Math.floor(n / 2)) return `${k} of ${n} slides use the same title and numbered list layout (${l}); half at most`;
-  }
-  const lists = layouts.filter((x) => (LIST_LAYOUTS as readonly string[]).includes(x)).length;
-  if (lists > Math.floor(n / 2)) return `${lists} of ${n} slides are title and numbered list layouts; half at most`;
-  if (n >= 4) for (const l of new Set(layouts)) {
-    const k = layouts.filter((x) => x === l).length;
+  const lists = xs.map((x, i) => (listLike(x.layout, x.bullets) ? i : -1)).filter((i) => i >= 0);
+  if (lists.length > Math.floor(n / 2)) return `${lists.length} of ${n} slides are a title over a list (slides ${lists.map((i) => i + 2).join(", ")}); half at most, so set some as one strong line, a run of times, or with a picture`;
+  if (n >= 4) for (const l of new Set(xs.map((x) => x.layout))) {
+    const k = xs.filter((x) => x.layout === l).length;
     if (k > Math.floor(n / 2)) return `${k} of ${n} slides share one layout (${l}); half at most`;
   }
   return null;
