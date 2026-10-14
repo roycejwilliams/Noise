@@ -989,6 +989,12 @@ export async function onEventOfferDropped(userId: string, payload: EventOfferPay
     if (S.windowCycleAction(ended) === "hold") await holdInBacklog(userId, payload.askId, payload.askText, payload.match, `${S.HELD_MARK}: its queue window ended unsent ${ended} times`);
     return;
   }
+  // A queued find whose send window ended while they're quiet (tapered) goes back to the backlog, not out: it surfaces when they write
+  // (Royce, 2026-10-14: the taper "never deletes ... finds"). One whose date passed can't surface; the picker's quiet prune says so.
+  if (status === "expired" && !isPastEvent(payload.match, await memberZone(userId)) && (await import("./dailySweep.js").then((D) => D.memberTapered(userId)).catch(() => true))) {
+    await recordDecision({ layer: 5, decision: "sweep.held_quiet", userId, outcome: "skip", action: "expired_offer_kept", reason: "its send window ended while they're quiet: back in the backlog for when they write", proposal: { name: payload.match?.name ?? null, candidateId } }).catch(() => {});
+    return;
+  }
   await removeFromBacklog(userId, payload.askId, payload.match);
 }
 

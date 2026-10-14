@@ -122,7 +122,7 @@ const searched = (fp: { plan: any }) => (fp.plan ? goalItemsFromPlan(fp.plan, (e
   const cadenceSrc = DS.searchCadence.toString();
   check("structural: the taper's inputs are their last message and the floor's last search; nothing Co sent", !/send|sent|unanswered|cooldown|surfaced/i.test(cadenceSrc.replace(/lastSearchAt|lastInboundAt/g, "")) && /lastInboundAt/.test(cadenceSrc) && /lastSearchAt/.test(cadenceSrc));
   const rd = DS.runDailySweep.toString().replace(/\s+/g, "");
-  check("structural: the floor's day reads the taper from their last message and its own last search record, never a send", rd.includes("searchCadence({now,zone,lastInboundAt:awaitlastInboundAt(userId),lastSearchAt:") && rd.includes("decision='sweep.daily'") && !/proactive_sends|proactive_candidates|last_surfaced/.test(rd));
+  check("structural: the floor's day reads the taper from their last message and its own last search record, never a send", rd.includes("constinboundAt=awaitlastInboundAt(userId);") && rd.includes("searchCadence({now,zone,lastInboundAt:inboundAt,lastSearchAt:") && rd.includes("decision='sweep.daily'") && !/proactive_sends|proactive_candidates|last_surfaced/.test(rd));
   const fp1 = await floorGoalPlan({ user_id: "u1", cooldown_cleared: false, last_surfaced_at: day("2026-10-14") }, day("2026-10-14"), world({ stored: stored(GOALS, day("2026-10-12")) }).deps);
   const fp2 = await floorGoalPlan({ user_id: "u1", cooldown_cleared: true, last_surfaced_at: null }, day("2026-10-14"), world({ stored: stored(GOALS, day("2026-10-12")) }).deps);
   check("a goal find going out this morning changes nothing about tomorrow's floor plan", JSON.stringify(searched(fp1)) === JSON.stringify(searched(fp2)) && searched(fp1).length === 3);

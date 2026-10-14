@@ -146,7 +146,7 @@ async function writeDaily(userId: string, outcome: "act" | "skip", action: strin
 // skip"). How: "reused" (the plan was read from the goals they have now), "built" (read now), "fallback" (the build failed, so their
 // last plan is used: a stale plan beats searching nothing, and it's said), "none" (no live goals). failed: why no plan could be had.
 // uncovered: on a fallback, the live goals the old plan doesn't hold (new since it): each is a failed item, retried (review of the tier PR).
-export type FloorGoalPlan = { plan: any | null; live: string[]; how: "reused" | "built" | "fallback" | "none"; why: string; note: string | null; failed: string | null; uncovered?: string[] };
+export type FloorGoalPlan = { plan: any | null; live: string[]; how: "reused" | "built" | "fallback" | "none" | "kept_quiet"; why: string; note: string | null; failed: string | null; uncovered?: string[] };
 export type FloorPlanDeps = {
   inputs: (row: any) => Promise<Awaited<ReturnType<typeof import("./goalSweep.js").planInputs>>>;
   states: (userId: string) => Promise<Map<string, import("./goalEdges.js").GoalStateRow>>;
@@ -159,7 +159,9 @@ export const realFloorPlanDeps = async (): Promise<FloorPlanDeps> => {
   const [GS, GE] = await Promise.all([import("./goalSweep.js"), import("./goalEdges.js")]);
   return { inputs: GS.planInputs, states: GE.goalStates, stored: GS.latestPlan, build: GE.buildFloorPlan, model: GE.realGoalDeps.model, log: GE.realGoalDeps.log };
 };
-export async function floorGoalPlan(row: any, now: Date, deps?: FloorPlanDeps): Promise<FloorGoalPlan> {
+// quiet: a tapered search day. No plan is written: their last plan is searched as it is (however old, whatever changed), and with none,
+// the search list is read for this search only, never logged as their plan (Royce, 2026-10-14: no goal or plan changes while tapered).
+export async function floorGoalPlan(row: any, now: Date, deps?: FloorPlanDeps, o: { quiet?: boolean } = {}): Promise<FloorGoalPlan> {
   const d = deps ?? (await realFloorPlanDeps());
   const GE = await import("./goalEdges.js");
   const userId = String(row.user_id);
@@ -178,11 +180,12 @@ export async function floorGoalPlan(row: any, now: Date, deps?: FloorPlanDeps): 
   const live = GE.liveGoals(inputs.goals, inputs.direction, states);
   // No live goals: nothing to search, and no old plan is searched in their place.
   if (!live.length) return { plan: null, live, how: "none", why: "no_live_goals", note: null, failed: null };
+  if (o.quiet && stored) return { plan: withoutPassedWindows(stored.proposal, now, inputs.zone), live, how: "kept_quiet", why: "tapered: their plan is kept as it is", note: null, failed: null };
   const sig = GE.goalsSignature(live);
   const cur = GE.planCurrent(stored ? { goalsSig: stored.proposal?.goalsSig ?? null, builtAt: stored.proposal?.builtAt ?? null, at: stored.created_at } : null, sig, now);
   if (cur.reuse) return { plan: withoutPassedWindows(stored!.proposal, now, inputs.zone), live, how: "reused", why: cur.why, note: null, failed: null };
-  const built = await d.build(userId, live, { city: inputs.city, zone: inputs.zone, now, firstName: inputs.firstName, direction: inputs.direction, record: inputs.record, why: cur.why }, { model: d.model, log: d.log }).catch((err: any) => ({ proposal: null as any, read: "failed" as const, err }));
-  if (built.proposal && built.read !== "failed" && built.read !== "cut_off") return { plan: built.proposal, live, how: "built", why: cur.why, note: `their goal plan was built at 9am (${cur.why.replace(/_/g, " ")})`, failed: null };
+  const built = await d.build(userId, live, { city: inputs.city, zone: inputs.zone, now, firstName: inputs.firstName, direction: inputs.direction, record: inputs.record, why: cur.why }, { model: d.model, log: o.quiet ? async () => {} : d.log }).catch((err: any) => ({ proposal: null as any, read: "failed" as const, err }));
+  if (built.proposal && built.read !== "failed" && built.read !== "cut_off") return { plan: built.proposal, live, how: "built", why: cur.why, note: o.quiet ? "tapered: the search list was read for this search only, not kept as their plan" : `their goal plan was built at 9am (${cur.why.replace(/_/g, " ")})`, failed: null };
   const r = { ...fallback(cur.why, `the 9am plan build (${cur.why.replace(/_/g, " ")}) couldn't read their goals${built.read === "cut_off" ? " whole" : ""}`), live };
   if (r.plan) {
     // The old plan searches what it holds; a goal it doesn't hold (new since) is a failed item, retried next hour.
@@ -244,6 +247,43 @@ export function searchCadence(o: { now: Date; zone: string | null; lastInboundAt
   return { search: false, quietDays, everyDays, next, why: `tapered: quiet ${quietDays} days, next search ${next}` };
 }
 
+// ------------------------------------------------------------------ while tapered, nothing is lost (Royce, 2026-10-14: "The taper only
+// slows searching. It never deletes goals, plans, or finds. Anything found while tapered is held and surfaces on resume ... Instant
+// resume: any reply or activity from the member restores full daily searching on the very next run"). Tapered: their own silence puts
+// their search cadence past daily (quiet more than SEARCH_TAPER.dailyUpToDays days). While tapered:
+//   - the floor searches on its tapered days and holds what it finds in the backlog: no picker run, no send, no goal plan written;
+//   - no picker run at all (sweepShadow.ts holdWhileQuiet): no aging tick, no fit-only exit, no reject exit; only a find whose date has
+//     passed leaves, logged "passed while quiet";
+//   - the hourly goal sweep holds their goals (no recheck idling, no lifecycle, no ask retiring: goalSweep.ts);
+//   - an ask with no time frame doesn't expire on its 30 days (askExpiry.ts); one whose named time passed does, "passed while quiet";
+//   - a queued find whose send window ended goes back to the backlog, not out (eventSurfacingSweep.ts onEventOfferDropped).
+// Engaged members (quiet 7 days or less) go through none of it.
+// Pure: tapered, from their own last message only.
+export function quietTapered(o: { now: Date; zone: string | null; lastInboundAt: Date | null }): boolean {
+  if (!o.lastInboundAt) return false;
+  const z = hoursZone(o.zone);
+  const quietDays = Math.floor(DateTime.fromJSDate(o.now).setZone(z).startOf("day").diff(DateTime.fromJSDate(o.lastInboundAt).setZone(z).startOf("day"), "days").days);
+  return quietDays > SEARCH_TAPER.dailyUpToDays;
+}
+// Tapered now, read from their record. A read that fails counts as tapered: holding loses nothing, an exit can't be undone.
+export async function memberTapered(userId: string, now = new Date()): Promise<boolean> {
+  try {
+    const [{ lastInboundAt }, zone] = await Promise.all([import("../harness/proactive.js"), memberZone(userId).catch(() => null)]);
+    return quietTapered({ now, zone, lastInboundAt: await lastInboundAt(userId) });
+  } catch {
+    return true;
+  }
+}
+// Pure: whether today's floor is done. A quiet day's record (tapered, or a search whose finds were held) no longer counts once they've
+// written since it: the next hourly tick runs today's floor in full (instant resume, the same day).
+export function floorDoneToday(earlier: { action: string; created_at: Date | string; proposal?: any }[], lastInboundAt: Date | null): boolean {
+  return earlier.some((e) => {
+    if (e.action === "error") return false;
+    const quiet = e.action === "tapered" || e.proposal?.heldQuiet === true;
+    return !(quiet && lastInboundAt && lastInboundAt.getTime() > new Date(String(e.created_at)).getTime());
+  });
+}
+
 let floorRunning = false;
 export async function runDailySweepAll(run: <T>(items: T[], limit: number, fn: (i: T) => Promise<void>) => Promise<void>, now = new Date()): Promise<void> {
   // Never overlaps itself: a run still going when the next tick comes keeps going, and the tick says so.
@@ -277,10 +317,13 @@ export async function runDailySweep(row: any, now = new Date()): Promise<void> {
   const { day, phase } = dailySweepWindow(now, zone);
   if (phase === "before") return; // not 9am for them yet: nothing is decided
   const { rows: earlier } = await pool.query(
-    `SELECT action, proposal FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND proposal->>'day' = $2 AND COALESCE(proposal->>'trigger', '') <> 'manual' ORDER BY created_at`,
+    `SELECT action, proposal, created_at FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND proposal->>'day' = $2 AND COALESCE(proposal->>'trigger', '') <> 'manual' ORDER BY created_at`,
     [userId, day],
   );
-  if (earlier.some((e: any) => e.action !== "error")) return; // today's run is done and logged (an on-demand run never counts as it)
+  // Their last message (any channel): the taper's one input, and what lets a quiet day's record give way to a same-day full run.
+  const { lastInboundAt } = await import("../harness/proactive.js");
+  const inboundAt = await lastInboundAt(userId);
+  if (floorDoneToday(earlier, inboundAt)) return; // today's run is done and logged (an on-demand run never counts as it)
   const errorsToday = earlier.filter((e: any) => e.action === "error").length;
   if (errorsToday >= DAILY_SWEEP_ERRORS_PER_DAY) return; // the day's failed runs are logged; the retry cap is reached
   const base = { day, zone: hoursZone(zone) };
@@ -294,12 +337,11 @@ export async function runDailySweep(row: any, now = new Date()): Promise<void> {
     return;
   }
   // Search cadence follows their engagement (searchCadence): a tapered day is said, never silent, and searches nothing.
-  const { lastInboundAt } = await import("../harness/proactive.js");
   const [lastSearch] = (await pool.query(
     `SELECT MAX(created_at) AS at FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND outcome = 'act' AND COALESCE(proposal->>'trigger', '') <> 'manual'`,
     [userId],
   )).rows;
-  const cadence = searchCadence({ now, zone, lastInboundAt: await lastInboundAt(userId), lastSearchAt: lastSearch?.at ? new Date(lastSearch.at) : null });
+  const cadence = searchCadence({ now, zone, lastInboundAt: inboundAt, lastSearchAt: lastSearch?.at ? new Date(lastSearch.at) : null });
   if (!cadence.search) {
     await writeDaily(userId, "skip", "tapered", cadence.why, { ...base, items: [], taper: { quietDays: cadence.quietDays, everyDays: cadence.everyDays, next: cadence.next } });
     return;
@@ -307,7 +349,8 @@ export async function runDailySweep(row: any, now = new Date()): Promise<void> {
   // The hourly ask sweep is on them right now: next hour (nothing decided yet, so nothing to log).
   if (!claimMember(userId)) return;
   try {
-    await sweepMember(row, userId, now, base, earlier, errorsToday);
+    // A tapered search day (they're still quiet, and it's the day the cadence searches): what it finds is held, nothing else changes.
+    await sweepMember(row, userId, now, base, earlier, errorsToday, { quiet: quietTapered({ now, zone, lastInboundAt: inboundAt }) });
   } finally {
     releaseMember(userId);
   }
@@ -340,7 +383,8 @@ export async function runDailySweepNow(userId: string, now = new Date()): Promis
   return { ran: true, why: "ran; its summary is on the dashboard" };
 }
 
-export async function sweepMember(row: any, userId: string, now: Date, base: { day: string; zone: string; trigger?: "manual" }, earlier: any[], errorsToday: number): Promise<void> {
+// quiet: a tapered search day (runDailySweep): the goal plan isn't written, and what's found waits in the backlog (no picker, no send).
+export async function sweepMember(row: any, userId: string, now: Date, base: { day: string; zone: string; trigger?: "manual" }, earlier: any[], errorsToday: number, o: { quiet?: boolean } = {}): Promise<void> {
   const E = await import("./eventSurfacingSweep.js");
   const { sweepHold } = await import("../harness/proactive.js");
   const { goalTexts } = await import("./goalJourney.js");
@@ -404,7 +448,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
 
   // ---- goals: each one their current plan holds, on its own, in all three places (floorGoalPlan: reused while their goals are the
   // same, built now when they changed, there's none, or it's past the backstop)
-  const fp = goals.length || row.long_term_direction ? await floorGoalPlan(row, now) : null;
+  const fp = goals.length || row.long_term_direction ? await floorGoalPlan(row, now, undefined, { quiet: !!o.quiet }) : null;
   const goalNote = fp?.note ?? null;
   const planned = fp?.plan ? goalItemsFromPlan(fp.plan, (e) => edgeSearchText([e])) : [];
   // No plan could be had (the build failed and there was none before): each goal is a failed item, never a quiet skip, so the day is
@@ -434,19 +478,20 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
   }
 
   const { action, totals } = dailySummary(items);
-  const proposal = { ...base, items, totals, picker, ...(fp ? { goalPlan: { how: fp.how, why: fp.why } } : {}), ...(goalNote ? { goalNote } : {}), ...(asks.length || planned.length || goals.length ? {} : { note: "no open asks and no active goals: nothing to search" }) };
+  const proposal = { ...base, items, totals, picker, ...(o.quiet ? { heldQuiet: true, note: "tapered search day: what was found is held for when they write" } : {}), ...(fp ? { goalPlan: { how: fp.how, why: fp.why } } : {}), ...(goalNote ? { goalNote } : {}), ...(asks.length || planned.length || goals.length ? {} : { note: "no open asks and no active goals: nothing to search" }) };
   const failed = items.filter((i) => i.status === "error").map((i) => `${i.kind} "${i.text.slice(0, 60)}": ${i.why}`);
   if (failed.length) {
     const last = errorsToday + 1 >= DAILY_SWEEP_ERRORS_PER_DAY;
     await writeDaily(userId, "skip", "error", `${failed.join(" | ").slice(0, 800)}${last ? " (the day's last retry: no more runs today)" : " (run again next hour)"}`, proposal);
     // What did get searched is in the pool: the picker still runs for it.
-    if (totals.asksSearched + totals.goalsSearched > 0) await sendMorningFinds(userId, base.day);
+    if (totals.asksSearched + totals.goalsSearched > 0 && !o.quiet) await sendMorningFinds(userId, base.day);
     return;
   }
   const searchedAny = totals.asksSearched + totals.goalsSearched > 0;
   await writeDaily(userId, searchedAny ? "act" : "skip", action, searchedAny ? goalNote : [(proposal as any).note, goalNote].filter(Boolean).join("; ") || "nothing searched; each item says why", proposal);
   // The sweep discovers, the picker decides (sweepShadow.ts runPickerAfterSweep): right after, for what this run put in the pool.
-  if (searchedAny) await sendMorningFinds(userId, base.day);
+  // While quiet, what was found is held in the backlog: it competes in the first full morning after they write (never dumped at once).
+  if (searchedAny && !o.quiet) await sendMorningFinds(userId, base.day);
 }
 
 // The morning's finds go to them now (Royce, 2026-10-13: the 9am sweep "should be what it found ... in this order link then description";
