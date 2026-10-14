@@ -2840,6 +2840,11 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE goal_states ADD COLUMN IF NOT EXISTS idle_note TEXT`)
     .catch((err: Error) => console.error("goal_states.idle_note init failed:", err));
+  // Own work and mixed requests (Royce, 2026-10-13, services/askSplit.ts): the split read of an own-work ask, kept so the 9am floor and
+  // the hourly sweep read it once, not every run; read again only when the ask's text changes (split_read.text) or the read's version does.
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS split_read JSONB`)
+    .catch((err: Error) => console.error("ask_checkins.split_read init failed:", err));
   // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
   // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.

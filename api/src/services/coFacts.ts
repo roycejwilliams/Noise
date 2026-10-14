@@ -122,7 +122,8 @@ export function toolAction(tool: string, input: any): { relation: string; label:
 
 export async function recordToolAction(userId: string, tool: string, input: any): Promise<void> {
   for (const a of toolAction(tool, input) ?? []) {
-    await recordFact({ ownerUserId: userId, subject: "co", relation: a.relation, label: a.label, url: a.url, visibility: "owner", source: `tool.${tool}` });
+    // A start made in the background from their request (services/askSplit.ts), not chosen in a reply: its own source, for audits.
+    await recordFact({ ownerUserId: userId, subject: "co", relation: a.relation, label: a.label, url: a.url, visibility: "owner", source: input?.background === true ? `tool.${tool}.background` : `tool.${tool}` });
   }
 }
 

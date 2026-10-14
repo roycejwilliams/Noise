@@ -531,6 +531,8 @@ export function registerJobs(io: Server) {
       // Asks Co has answered or delivered close here, on evidence (services/askLifecycle.ts), before anything searches them.
       await import("../services/askLifecycle.js").then((m) => m.closeAnsweredAsksAll()).catch((err: any) => console.error("Ask lifecycle: closing answered asks failed (non-fatal):", err?.message ?? err));
       await classifyOpenAsks().catch((err: any) => console.error("Ask kinds: classify failed (non-fatal):", err?.message ?? err));
+      // Asks the old morning job likely switched off (services/askSplit.ts): logged once each for the team's list, never corrected.
+      await import("../services/askSplit.js").then((m) => m.logLegacyFlips()).catch((err: any) => console.error("Ask kinds: listing legacy flips failed (non-fatal):", err?.message ?? err));
       // The working set (services/workingSet.ts): a member who's gone has nothing live; an ask that came back empty too many times
       // exits as "searched, nothing found". Each exit writes its fact to the member's record first.
       await import("../services/workingSet.js")
@@ -543,7 +545,7 @@ export function registerJobs(io: Server) {
         .catch((err: any) => console.error("Working set: exits failed (non-fatal):", err?.message ?? err));
       await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));
       const due = await pool.query(
-        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, ac.kind, ac.empty_runs, u.id AS user_id, u.first_name, u.phone_number, cp.city,
+        `SELECT ac.id, ac.ask_id, ac.ask_text, ac.last_attempted_at, ac.kind, ac.empty_runs, ac.split_read, u.id AS user_id, u.first_name, u.phone_number, cp.city,
                 cp.goals, cp.intent, cp.activity_preferences,
                 (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
          FROM ask_checkins ac
@@ -618,6 +620,17 @@ export function registerJobs(io: Server) {
           // An ask that keeps coming back empty backs off (services/workingSet.ts askSearchDue): every few days, not every morning.
           const { askSearchDue } = await import("../services/workingSet.js");
           if (!askSearchDue(row)) continue;
+          // Co's own work (services/askSplit.ts, Royce 2026-10-13: "nothing wasted"): followed as its task only when a task really is it,
+          // never searched then and not counted as a search; otherwise searched (a mixed one, its find part only), and a part with no
+          // task is listed for the team. Each logged once on their day. Kind never changes.
+          let askText = String(row.ask_text ?? "");
+          if (row.kind === "find") {
+            const AS = await import("../services/askSplit.js");
+            const sp = await AS.askSearchPlan(row.user_id, row).catch(() => null);
+            if (sp) await AS.notePlan(sp.plan, row, { taskId: sp.taskId, day: localToday ?? "", sweep: "hourly" }).catch(() => {});
+            if (sp && sp.plan.search === null) continue; // followed as its task, or Co's own promise with no task (noted above)
+            if (sp?.plan.search && sp.plan.search !== askText) askText = sp.plan.search;
+          }
           if (searchedToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY) break;
           searchedToday++;
 
@@ -634,7 +647,7 @@ export function registerJobs(io: Server) {
               userId: row.user_id,
               firstName: row.first_name,
               phoneNumber: row.phone_number,
-              askText: row.ask_text,
+              askText,
               city: row.city ?? null,
               // Offers are judged against the ask AND where they are headed: profile goals plus goal-typed entries (services/goalJourney.ts).
               goals: goalTexts(row.intent, row.goals).length ? goalTexts(row.intent, row.goals) : null,

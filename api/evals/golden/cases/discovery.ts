@@ -176,6 +176,79 @@ const oneOffResearch: GoldenCase = {
   },
 };
 
+// ---------------------------------------------------------------- 24, 25 (Royce, 2026-10-13: own work follows its task; mixed requests split)
+const MIXED_ASK = "Draft the launch plan for the Sequin party and keep an eye out for venues";
+const mixedSplit: GoldenCase = {
+  n: 24,
+  id: "mixed-split",
+  title: "A request that is half Co's work, half a lookout is split: the work part a task, the find part a lookout, never binned whole",
+  status: { live: true },
+  from: "Royce 2026-10-13: \"'Draft the launch plan and keep an eye out for venues' is half task, half lookout - split those\"",
+  run: async () => {
+    // The real Haiku split read (services/askSplit.ts readSplit), then the creation step with its writes stubbed (splitAsks).
+    const AS = await import("../../../src/services/askSplit.js");
+    const read = await AS.readSplit(MIXED_ASK, MIXED_ASK);
+    const followed: string[] = [];
+    const saved = await AS.splitAsks("u-golden", [{ text: MIXED_ASK, type: "seeking" as const }], { transcript: `user: ${MIXED_ASK}`, message: MIXED_ASK }, { kindOf: async () => "ask", read: async () => read, follow: async (_u, sp) => (followed.push(sp.work), { ok: true, taskId: 1, existing: false }), log: async () => {} });
+    const misses: string[] = [];
+    if (!read.read) misses.push(`the split read failed: ${read.why}`);
+    if (read.kind !== "mixed" || !read.split) misses.push(`not read as mixed (kind ${read.kind})`);
+    else {
+      if (!/draft|launch plan|plan/i.test(read.split.work)) misses.push(`the work part isn't the drafting: "${read.split.work}"`);
+      if (!/venue/i.test(read.split.find)) misses.push(`the find part isn't the venues: "${read.split.find}"`);
+      if (/draft|plan\b/i.test(read.split.find)) misses.push(`the find part carries the work: "${read.split.find}"`);
+      if (!read.split.findIsLookout) misses.push("the find part isn't read as a lookout (their words say keep an eye out)");
+    }
+    if (followed.length !== 1) misses.push("the work part wasn't followed as a task");
+    if (saved.length !== 1 || saved[0].ask.text === MIXED_ASK) misses.push("the whole request was saved as one ask (binned wholesale)");
+    // And the floor: the find part is searched, the work part never.
+    const D = await import("../../../src/services/dailySweep.js");
+    const plan = D.planAsk({ kind: "ask", id: "x", text: MIXED_ASK }, MIXED_ASK, read, { id: 1 }, AS.floorPlan);
+    if (!plan.search || !/venue/i.test(plan.search)) misses.push(`the 9am run wouldn't search the venues part (planned: ${plan.search ?? "nothing"})`);
+    return result(misses, `read=${read.kind} ${JSON.stringify(read.split)} (${read.why}); saved=${JSON.stringify(saved.map((x) => x.ask.text))}; floor searches: ${plan.search}`);
+  },
+};
+const OWN_WORK_ASK = "Draft the launch plan for the Sequin party";
+const FIND_VIA_CO = "Have Co look for venues for the launch party";
+const ownWorkNotInSpend: GoldenCase = {
+  n: 25,
+  id: "own-work-not-in-spend",
+  title: "Co's own work with its task is followed, never in the 9am web or X spend; a find worded around Co is still searched",
+  status: { live: true },
+  from: "Royce 2026-10-13: \"for requests that are Co's own work the 9am run skips web and X searches - they're logged as 'followed as its task'\"; review: \"Nothing silently switches off\"",
+  run: async () => {
+    // The real sweep planning (services/askSplit.ts askSearchPlan, with the real split read) and the floor's per-ask decision
+    // (services/dailySweep.ts planAsk): no network search and no database (the kept read and the open tasks are stubbed).
+    const AS = await import("../../../src/services/askSplit.js");
+    const D = await import("../../../src/services/dailySweep.js");
+    const TASK = { id: 52, goal: "Draft the launch plan for the Sequin party", source: "ask" };
+    AS.setPlanDepsForTests({ store: async () => {}, work: async () => [TASK] });
+    const misses: string[] = [];
+    const items: import("../../../src/services/dailySweep.js").ItemResult[] = [];
+    const seen: string[] = [];
+    try {
+      for (const text of [OWN_WORK_ASK, FIND_VIA_CO]) {
+        const b = { kind: "ask" as const, id: text === OWN_WORK_ASK ? "own" : "find", text };
+        const sp = await AS.askSearchPlan("u-golden", { id: b.id, ask_text: text, split_read: null });
+        const p = D.planAsk(b, text, sp.read, sp.taskId != null ? { id: sp.taskId } : null, AS.floorPlan);
+        seen.push(`${b.id}: read=${sp.read?.kind ?? "none"} task=${sp.taskId} search=${p.search ?? "none"}`);
+        // What the floor would spend: a searched ask looks in all three places; a followed one in none.
+        items.push(p.item ?? { ...b, status: "searched", sources: { events: true, web: true, x: true } });
+      }
+    } finally {
+      AS.setPlanDepsForTests(null);
+    }
+    const own = items.find((i) => i.id === "own")!;
+    const found = items.find((i) => i.id === "find")!;
+    if (own.status !== "followed_as_task" || own.taskId !== 52) misses.push(`the own-work request with its task isn't followed (${JSON.stringify(own)})`);
+    if (own.sources?.web || own.sources?.x) misses.push("the own-work request is in the web or X spend");
+    if (found.status !== "searched") misses.push(`"${FIND_VIA_CO}" isn't searched (${JSON.stringify(found)})`);
+    const sum = D.dailySummary(items);
+    if (sum.totals.sources.web !== 1 || sum.totals.sources.x !== 1 || sum.totals.followed !== 1) misses.push(`the day's spend is wrong: ${sum.action}`);
+    return result(misses, `${seen.join(" | ")}; day: ${sum.action}`);
+  },
+};
+
 export const CASES: GoldenCase[] = [
   closingAQuestion,
   replacedGoal,
@@ -188,4 +261,6 @@ export const CASES: GoldenCase[] = [
   pending("phase 5 (lane transitions)", "lane transitions aren't built", "Co proposes moving an input between lanes (e.g. a goal to a lookout) and the member doesn't confirm: nothing changes (no lane change, no member-visible note); a task becomes a lookout only on the member's own words; a confirmed change leaves exactly one member-visible line (\"moved X from goals to lookouts\")", 20, "lane-change-needs-confirmation", "A lane change needs the member's yes", "Royce 2026-10-13: lane changes need the member's confirmation"),
   pending("phase 5 (stale-goal recheck)", "the stale-goal recheck isn't built", "a goal with no new signal for 14 days gets one check-in question from Co; no answer within 7 days and the goal goes idle and the next 9am run doesn't search it; never a second ask", 21, "stale-goal-goes-idle", "A quiet goal gets one check-in, then goes idle", "Royce 2026-10-13: stale goals are rechecked once, then idle"),
   pending("phase 5 (stale-goal recheck)", "the stale-goal recheck isn't built", "any reply about an idle goal brings it back to active, and the next 9am run searches it again", 22, "reply-revives-goal", "A reply about an idle goal revives it", "Royce 2026-10-13: an idle goal comes back on any reply about it"),
+  mixedSplit,
+  ownWorkNotInSpend,
 ];

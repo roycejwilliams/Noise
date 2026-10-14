@@ -1331,15 +1331,24 @@ export async function persistIntentFrom(
     // the loop a call runs. Sequential on purpose — each ask dedupes against
     // what's on file INCLUDING the one written an iteration ago, so a call
     // that circles back to the same request twice still lands one ask row.
+    // A request that reads as Co's own work is read once (services/askSplit.ts, Royce 2026-10-13): a mixed one is split (its work part
+    // the task it is, its find part its own ask); one that wasn't split cleanly keeps its find row (keepSearchRow), so nothing is lost;
+    // clean work is today's behavior. Anything else is written as before; a step that fails writes everything as before.
+    // If the step itself fails, a request that reads as Co's own promise still keeps its find row (never dropped for want of a split).
+    let toWrite: import("./askSplit.js").ToWrite<CapturedAsk>[] = asks.map((ask) => ({ ask, ...(ask.type === "seeking" && isCoCommitment(ask.text) ? { keepSearchRow: true } : {}) }));
+    if (asks.length) {
+      const split = await import("./askSplit.js").then((AS) => AS.splitAsks(user_id, asks, { transcript, message: message ?? null })).catch(() => null);
+      if (split) toWrite = split;
+    }
     const written: ExtractedIntent[] = [];
     if (!asks.length) {
       written.push(await persistCapturedIntent(user_id, null, extras));
     } else {
-      for (const [i, ask] of asks.entries()) {
+      for (const [i, w] of toWrite.entries()) {
         // Preferences/wants/availability describe the member, not one
         // particular ask — hang them on the first record so they're stored
         // once, exactly as they were when there was only ever one record.
-        written.push(await persistCapturedIntent(user_id, ask, i === 0 ? extras : NO_EXTRAS));
+        written.push(await persistCapturedIntent(user_id, w.ask, i === 0 ? extras : NO_EXTRAS, { kind: w.kind, keepSearchRow: w.keepSearchRow }));
       }
     }
 
@@ -1398,10 +1407,13 @@ export function dropKnownExtras(extras: IntentExtras, existing: any[]): IntentEx
 // record) to co_profiles.intent + co_memories + ask_checkins. Split out of
 // captureIntent so a call transcript's several asks and a text turn's single
 // ask go through exactly the same storage and dedupe code.
+// opts.kind: the entry kind already read (services/askSplit.ts splitAsks), so it isn't read twice. opts.keepSearchRow: an own-work
+// request that wasn't split cleanly keeps a find row even when its text reads as Co's own promise, so the sweeps read it again.
 export async function persistCapturedIntent(
   user_id: string,
   ask: CapturedAsk | null,
   extras: IntentExtras,
+  opts: { kind?: "ask" | "goal"; keepSearchRow?: boolean } = {},
 ): Promise<ExtractedIntent> {
   const { concrete_preferences, wants, availability } = extras;
 
@@ -1419,7 +1431,7 @@ export async function persistCapturedIntent(
   let existingIntent: any[] = [];
   // Errand or direction, decided before anything lands (services/entryKind.ts). An ask goes on to the ask lifecycle; a goal never gets an
   // ask_checkins row, so nothing that searches or checks in can ever reach it.
-  const kind: "ask" | "goal" | null = ask ? await classifyEntryKind(ask.text) : null;
+  const kind: "ask" | "goal" | null = ask ? (opts.kind ?? (await classifyEntryKind(ask.text))) : null;
   if (ask) {
     const [{ rows: openRows }, { rows: profileRows }] = await Promise.all([
       pool.query(`SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL`, [user_id]),
@@ -1535,8 +1547,8 @@ export async function persistCapturedIntent(
   // captures of the same text racing each other.
   // Co's own promises and deliverables ("draft and text a plan", "will be delivered once ready") are tasks Co tracks
   // elsewhere, never a member's ask to check in on or search for (2026-10-08 sweep review, askKind.ts isCoCommitment).
-  if (ask && !deduped && kind === "ask" && !isCoCommitment(ask.text)) {
-    const [expiresAt, askKind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), classifyAsk(ask.text)]);
+  if (ask && !deduped && kind === "ask" && (opts.keepSearchRow || !isCoCommitment(ask.text))) {
+    const [expiresAt, askKind] = await Promise.all([askExpiresAtForUser(user_id, ask.text).catch(() => null), opts.keepSearchRow ? Promise.resolve("find" as const) : classifyAsk(ask.text)]);
     await pool
       .query(
         `INSERT INTO ask_checkins (user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at)

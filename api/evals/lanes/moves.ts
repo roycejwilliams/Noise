@@ -284,7 +284,8 @@ check("any other ask still gets the kind it's read as", L.askKindAfter({ kind: "
   check("the kind job leaves a lookout's kind alone (and marks it checked, so it isn't read every run)", by(1).kind === "find" && by(1).kind_checked_at !== null, by(1));
   check("…gives a never-read lookout find, without a model call", by(2).kind === "find" && !asked.includes(by(2).ask_text), { row: by(2), asked });
   check("…still classifies everything else", by(3).kind === "help");
-  check("…and never moves a lookout that reads like Co's own promise to help", by(4).kind === "find" && by(5).kind === "help", [by(4), by(5)]);
+  // Royce, 2026-10-13: an already-classified find ask that reads as Co's own work isn't switched off either (status-check lane).
+  check("…and never moves a lookout that reads like Co's own promise to help, nor an already-read ask (the search keeps running)", by(4).kind === "find" && by(5).kind === "find", [by(4), by(5)]);
   check("every kind write is guarded on the row it read", sqls.filter((q) => /UPDATE ask_checkins/.test(q)).every((q) => /intent IS NOT DISTINCT FROM \$6/.test(q)));
 }
 {

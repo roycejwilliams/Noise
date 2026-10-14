@@ -154,11 +154,17 @@ export function parseTurnLearning(text: string): TurnLearning | null {
   }
 }
 
+// Pure: the turn's transcript, as every learning read sees it: the thread's log ("User said:" / "Co replied:" lines; the caller leaves
+// out teammate lines), then their message and Co's reply (services/askSplit.ts exchangeFromTranscript reads both forms).
+export function turnTranscript(thread: string, message: string, coReply: string): string {
+  return `${thread}\nuser: ${message}\nassistant: ${coReply}`.trim();
+}
+
 // Background, after the reply. Non-fatal throughout.
 export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnLearning | null> {
   const started = Date.now();
   // The same transcript the separate calls read before.
-  const transcript = `${withoutTeammateLines(input.recentConversation)}\nuser: ${input.message}\nassistant: ${input.coReply}`.trim();
+  const transcript = turnTranscript(withoutTeammateLines(input.recentConversation), input.message, input.coReply);
   try {
     const [{ rows: profileRows }, { rows: askRows }] = await Promise.all([
       pool.query(

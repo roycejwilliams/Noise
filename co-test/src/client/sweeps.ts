@@ -69,3 +69,47 @@ async function loadPromises() {
 loadPromises().catch(() => {
   if (promisesStatus) promisesStatus.textContent = "Couldn't load promises.";
 });
+
+// Possible legacy flips (team only, read-only): asks the old morning job may have switched off.
+type FlipRow = { firstName: string; text: string; createdAt: string; checkedAt: string };
+const flipsStatus = document.getElementById("flips-status") as HTMLElement | null;
+const flipsTable = document.getElementById("flips") as HTMLTableElement | null;
+async function loadFlips() {
+  if (!flipsStatus || !flipsTable) return;
+  const res = await fetch("/api/sweeps/legacy-flips", { credentials: "same-origin" });
+  if (!res.ok) {
+    flipsStatus.textContent = res.status === 404 ? "Not available." : "Couldn't load the list.";
+    return;
+  }
+  const { rows } = (await res.json()) as { rows: FlipRow[] };
+  flipsStatus.textContent = rows.length ? `${rows.length} possible` : "None found.";
+  if (!rows.length) return;
+  let html = `<thead><tr><th>Member</th><th>Ask</th><th>Made</th><th>Marked</th></tr></thead><tbody>`;
+  for (const r of rows) html += `<tr><td>${esc(r.firstName)}</td><td>${esc(r.text)}</td><td class="detail">${esc(r.createdAt.slice(0, 10))}</td><td class="detail">${esc(r.checkedAt.slice(0, 10))}</td></tr>`;
+  flipsTable.innerHTML = html + "</tbody>";
+}
+loadFlips().catch(() => {
+  if (flipsStatus) flipsStatus.textContent = "Couldn't load the list.";
+});
+
+// Own work with no task (team only, read-only): searched meanwhile, listed so someone can decide.
+type OwnWorkRow = { what: string; firstName: string; text: string; work: string | null; at: string };
+const ownStatus = document.getElementById("ownwork-status") as HTMLElement | null;
+const ownTable = document.getElementById("ownwork") as HTMLTableElement | null;
+async function loadOwnWork() {
+  if (!ownStatus || !ownTable) return;
+  const res = await fetch("/api/sweeps/own-work", { credentials: "same-origin" });
+  if (!res.ok) {
+    ownStatus.textContent = res.status === 404 ? "Not available." : "Couldn't load the list.";
+    return;
+  }
+  const { rows } = (await res.json()) as { rows: OwnWorkRow[] };
+  ownStatus.textContent = rows.length ? `${rows.length} in the last week` : "None in the last week.";
+  if (!rows.length) return;
+  let html = `<thead><tr><th>Member</th><th>What</th><th>Request</th><th>Work part</th><th>Last seen</th></tr></thead><tbody>`;
+  for (const r of rows) html += `<tr><td>${esc(r.firstName)}</td><td>${esc(r.what)}</td><td>${esc(r.text)}</td><td class="detail">${esc(r.work ?? "")}</td><td class="detail">${esc(r.at.slice(0, 10))}</td></tr>`;
+  ownTable.innerHTML = html + "</tbody>";
+}
+loadOwnWork().catch(() => {
+  if (ownStatus) ownStatus.textContent = "Couldn't load the list.";
+});
