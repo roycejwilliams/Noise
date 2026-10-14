@@ -1,0 +1,38 @@
+{
+  "_note": "Invented, same shape as the live 2026-10-13 case: the reply check replaced Co's true answer with a false 'Nothing's running' line three times, then the member pushed back. Member: Jordan (fictional).",
+  "message": "That's not what I asked",
+  "pushback": "Co offered to start something instead of saying what it looks for",
+  "lesson": "describe it in their terms",
+  "theirs": [
+    { "at": "2026-10-13T18:02:00.000Z", "text": "What do you actually look for for me?" },
+    { "at": "2026-10-13T18:05:00.000Z", "text": "No, I mean what are you looking for right now" },
+    { "at": "2026-10-13T18:09:00.000Z", "text": "Like what kinds of things" },
+    { "at": "2026-10-13T18:12:00.000Z", "text": "That's not what I asked" }
+  ],
+  "logs": [
+    {
+      "at": "2026-10-13T18:02:30.000Z",
+      "outcome": "stripped",
+      "draft": "I look for events and openings that fit what you're after, like the jazz nights you asked about and small founder dinners. I'll text you when one is worth your evening.",
+      "sent": "Nothing's running on that right now. Want me to start on it?",
+      "why": "work_status claim not backed by a running task",
+      "failed": [{ "name": "claim_work_status", "reason": "work_status: \"I look for events and openings that fit what you're after, like the jazz nights you asked about and small founder dinners.\"" }]
+    },
+    {
+      "at": "2026-10-13T18:05:30.000Z",
+      "outcome": "cut",
+      "draft": "Right now I'm watching for jazz nights and small founder dinners in the city, the kind you said you'd actually go to.",
+      "sent": "Nothing's running on that right now. Want me to start on it?",
+      "why": "work_status claim not backed by a running task",
+      "failed": [{ "name": "claim_work_status", "reason": "work_status: \"Right now I'm watching for jazz nights and small founder dinners in the city, the kind you said you'd actually go to.\"" }]
+    },
+    {
+      "at": "2026-10-13T18:09:30.000Z",
+      "outcome": "stripped",
+      "draft": "Live music nights, jazz mostly, and founder dinners with eight to twelve people. That's what I keep an eye on for you.",
+      "sent": "Nothing's running on that right now. Want me to start on it?",
+      "why": "work_status claim not backed by a running task",
+      "failed": [{ "name": "claim_work_status", "reason": "work_status: \"That's what I keep an eye on for you.\"" }]
+    }
+  ]
+}

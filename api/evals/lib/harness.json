@@ -19,5 +19,6 @@
   "evals/replay/cases.ts",
   "evals/sweepSelect/grading.ts",
   "evals/sweepSelect/score.ts",
-  "evals/testEnv.ts"
+  "evals/testEnv.ts",
+  "evals/golden/types.ts"
 ]
