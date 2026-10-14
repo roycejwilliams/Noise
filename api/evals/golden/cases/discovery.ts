@@ -146,7 +146,7 @@ const replacedGoal: GoldenCase = {
     };
     const misses: string[] = [];
     if (oldState.state !== "stale" || !/^replaced by a newer goal/.test(oldState.reason)) misses.push(`fixture: the older goal didn't read as replaced (${oldState.state}: ${oldState.reason})`);
-    if ((facts.goalsPast ?? []).some((g) => g.startsWith(older))) misses.push(`the replaced goal reached the picker as history: ${facts.goalsPast!.join("; ")}`);
+    if ((facts.goalsPast ?? []).some((g) => g.text.startsWith(older))) misses.push(`the replaced goal reached the picker as history: ${facts.goalsPast!.map((g) => g.text).join("; ")}`);
     const r = await selectForMember(c, { userId: "u-jordan" });
     if (r.error) misses.push(`picker error: ${r.error}`);
     const j = r.judgments.find((x) => x.id === "C1");

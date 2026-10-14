@@ -1,0 +1,86 @@
+{
+  "hash": "78e6b368745e41a7",
+  "case": "already-applied-cited",
+  "recorded_at": "2026-10-14T17:35:25.105Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2848,
+    "system": "",
+    "messages": 1,
+    "last": "user: You check Co's reasons for leaving something out of a member's day. Answer only from what's written here. Their active goals (what they're working toward now): - apply to South Park Commons or a founder residency this winter RECORDS. For each, does the cited record show that the member already knows...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2848,
+      "messages": [
+        {
+          "content": "You check Co's reasons for leaving something out of a member's day. Answer only from what's written here.\n\nTheir active goals (what they're working toward now):\n- apply to South Park Commons or a founder residency this winter\n\nRECORDS. For each, does the cited record show that the member already knows about, is going to, said no to, or finished THIS specific thing? A finished or closed record about a different program, ask or goal does not count, even if it is the same kind.\nR1: this thing: a16z Speedrun Residency (SR008) (2026-11-01): 12-week residency in SF for early consumer and AI founders; applications close Nov 1\n    the record: their own text T1: \"Already applied to a16z Speedrun last week, the SR008 residency. Waiting to hear back, so no need to send it.\"\n\nAnswer only with JSON: {\"answers\":[{\"id\":\"R1\",\"yes\":false},{\"id\":\"W1\",\"yes\":true}]}, one entry per id.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5",
+      "thinking": {
+        "type": "disabled"
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"answers\":[{\"id\":\"R1\",\"yes\":true}]}",
+      "usage": {
+        "input_tokens": 307,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 23,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2Xsx78svuhS9vCQzfwC",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answers\":[{\"id\":\"R1\",\"yes\":true}]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 307,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 23,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

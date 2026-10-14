@@ -81,7 +81,9 @@ export type Identity = {
 // planned from; Phase A4).
 // hash: goalHash of the goal as written, before the strip (a goal naming a linked member is rewritten by it), so a reader can match
 // the goal to its state row and to its own words (Phase A4).
-export type Goal = { text: string; state: GoalState; reason: string | null; told: boolean; onFile: boolean; hash: string };
+// source: who set its state on goal_states (goalEdges.ts GoalStateRow: "context" is Co's own read, "member" and "co" were said in
+// conversation); null when no state row exists. Readers that need to know whether the member closed a goal read it (sweepSelectContext.ts).
+export type Goal = { text: string; state: GoalState; reason: string | null; told: boolean; onFile: boolean; hash: string; source?: "context" | "member" | "co" | null };
 export type Ask = { id: string; text: string; kind: "find" | "help" };
 
 // Where a delivered item was seen: a document receipt (document_deliveries), Co's action record (co_facts relation 'sent'), or a
@@ -411,7 +413,7 @@ export function goalsOf(profile: RawProfile | null, states: GoalStateRow[]): Fac
     const s = byHash.get(h);
     // A stored state wins over "active from the profile"; a closed entry stays done whatever the stored row says.
     const state: GoalState = base.state !== "active" ? base.state : s?.state ?? "active";
-    out.set(h, { text: t, state, reason: s?.reason || base.reason || null, told: s ? !!s.toldAt || s.source !== "context" : true, onFile, hash: h, verifiedAt: latest(base.at, s?.changedAt) });
+    out.set(h, { text: t, state, reason: s?.reason || base.reason || null, told: s ? !!s.toldAt || s.source !== "context" : true, onFile, hash: h, source: s?.source ?? null, verifiedAt: latest(base.at, s?.changedAt) });
   };
   // Goal entries: active is active, resolved is done (goalJourney.ts goalHistory), anything else (set aside, replaced) is stale.
   for (const e of Array.isArray(profile?.intent) ? (profile!.intent as any[]) : []) {

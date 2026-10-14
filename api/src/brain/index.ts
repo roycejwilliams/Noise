@@ -426,8 +426,10 @@ export function judgeCheckin(p: { heavy: boolean; advice: boolean; story: boolea
 
 // ---------- Sweep picks: what each judged find does to the queue
 // The picker's verdicts are the brain's read (services/sweepSelect.ts SELECT_SYSTEM), checked by guardVerdicts (facts: cites that
-// exist, why-member and why-now, not past, the day's send limit). What each guarded verdict does is the brain's decision: send
-// delivers (queued), hold waits (back to the backlog), reject leaves for good, no verdict waits untouched.
+// exist, why-member and why-now, not past, the day's send limit, and a closed or already_known reject citing a record that carries
+// it). What each guarded verdict does is the brain's decision: send delivers (queued), hold waits (back to the backlog), reject leaves
+// for good, no verdict waits untouched. A reject the guard couldn't back with a record arrives here as a hold, so it waits: only a
+// verdict that survived the guard can take a find out for good (2026-10-14).
 // leave: never judged, so where it waits is left as it is.
 export type SweepDecision = { key: string; kind: DecisionKind; drop: boolean; leave: boolean; why: string };
 export function judgeSweepItem(j: { key: string; verdict: "send" | "hold" | "reject" | "no_verdict"; why?: string }): SweepDecision {

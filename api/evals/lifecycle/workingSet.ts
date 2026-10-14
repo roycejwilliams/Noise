@@ -124,7 +124,8 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("its fact keeps the picker's reason and is scoped to the find and the ask", w.facts[0]?.state === "rejected" && /air show doesn't fit/.test(w.facts[0].reason) && /this find, for: events this weekend; nothing broader/.test(w.facts[0].scope), w.facts[0]);
   const ess = src("services/eventSurfacingSweep.ts");
   check("an exited find found again by a sweep stays out (never re-queued)", /exitedFindKeys\(userId, items\.map\(\(i\) => exitKey\(i\.match\)\)\)/.test(ess) && /if \(exited\.has\(exitKey\(it\.match\)\)\) continue;/.test(ess) && /exitedFindKeys\(userId, \[exitKey\(item\.match\)\]\)/.test(ess));
-  check("every picker reject runs the exit, not only queued rows", /\.filter\(\(j\) => j\.verdict === "reject"\)[\s\S]{0,800}exitRejectedFinds/.test(src("services/sweepShadow.ts")));
+  // The rejects are picked by rejectedFindsOf (pure, sweepShadow.ts); a reject the guard held is a hold there, so it never exits.
+  check("every picker reject runs the exit, not only queued rows", /export function rejectedFindsOf[\s\S]{0,400}\.filter\(\(j\) => j\.verdict === "reject"\)/.test(src("services/sweepShadow.ts")) && /const uniq = rejectedFindsOf\(judgments, backlog, ids\);\s*await import\("\.\/workingSet\.js"\)\.then\(\(W\) => W\.exitRejectedFinds\(userId, uniq, realPruneDeps\)\)/.test(src("services/sweepShadow.ts")));
 }
 
 // ---------------------------------------------------------------- lifecycle (c): only live items count
@@ -233,7 +234,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("#8 a prune merges into the current row: a find added mid-run survives", merged.length === 2 && merged.some((i: any) => /^C /.test(i.match.name)) && merged.find((i: any) => i.match.name === "B")?.unread?.why === "unknown", merged.map((i: any) => i.match.name));
   check("#8 the merge locks the row it changes", /SELECT items FROM event_backlogs[\s\S]{0,200}FOR UPDATE/.test(src("services/sweepShadow.ts")));
   // 9. Exit facts: member-safe reasons, kept out of the reply ledger.
-  check("#9 a picker reject's reason goes through the member-safe filter", /why: memberSafeWhy\(String\(j\.why \?\? j\.reason \?\? ""\)\)/.test(src("services/sweepShadow.ts")));
+  check("#9 a picker reject's reason goes through the member-safe filter", /why: memberSafeWhy\(String\(j\.why \?\? j\.reason \?\? ""\), ids\)/.test(src("services/sweepShadow.ts")));
   check("#9 exit facts stay out of what replies read", /relation <> 'exited'/.test(src("services/coFacts.ts")) && /relation <> 'exited'/.test(src("services/followThrough.ts")));
   // 10. A send error is a failed attempt.
   check("#10 a send error is a failed attempt, not a decision", W.isFailedAttempt("send error: 502") && !W.decidedByRows([{ skip_reason: "send error: 502" }]));
