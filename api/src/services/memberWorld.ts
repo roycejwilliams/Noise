@@ -344,11 +344,11 @@ export function threadCandidates(w: MemberWorld | null | undefined, text: string
       return own.length ? own.some((x) => words.has(x)) : sharedWords(t.name!, s) >= 2;
     });
 }
-// Pure: did the cut take out a sentence that names their live thread (threadCandidates' match)? Then the cut was about their thread,
-// never Co's own work: nothing of Co's should "start" on it (harness/replyGrounding.ts, the nothing-running line).
-export function cutNamesThread(w: MemberWorld | null | undefined, draft: string, cut: string): boolean {
-  const kept = cut.replace(/[’‘]/g, "'").replace(/\s+/g, " ").toLowerCase();
-  return threadCandidates(w, draft).some((s) => !kept.includes(s.replace(/\s+/g, " ").toLowerCase()));
+// Pure: do the cut work claims themselves name their live thread (threadCandidates' match), every one of them? Then the cut was about
+// their thread, never Co's own work: nothing of Co's should "start" on it (harness/replyGrounding.ts, the nothing-running line). Another
+// cut sentence naming the thread doesn't count; a cut claim about Co's own work keeps the line.
+export function workClaimsNameThread(w: MemberWorld | null | undefined, claims: string[]): boolean {
+  return claims.length > 0 && claims.every((c) => threadCandidates(w, c).length > 0);
 }
 export const sentenceKey = (s: string) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
 // The read's question, for every candidate in one reply at once.
@@ -416,7 +416,7 @@ export function worldStatement(l: WorldItem, clock: WorldClock): string | null {
     case "brief":
       return `I'm still on "${n}".`;
     case "scheduled":
-      return l.at ? `Next on my side: "${n}", ${localStamp(l.at, clock.zone)}.` : null;
+      return l.at ? `Next up: "${n}", ${localStamp(l.at, clock.zone)}.` : null;
     default:
       return null;
   }
@@ -437,6 +437,24 @@ export function deadAirLine(o: { checkin: boolean | null; world: MemberWorld | n
   }
   return null;
 }
+// Pure: a repair after a thread report was cut keeps every remaining sentence: the same sentences in the same order, each word for word
+// or changed only by a few words (a dangling "it" made to stand alone). Anything else (a sentence dropped, merged, added or rewritten)
+// isn't a repair, and the cut goes out instead (review, 2026-10-14: the forced redraft must never shrink a good reply).
+export function keepsEverySentence(cut: string, repaired: string): boolean {
+  const split = (t: string) => t.replace(/[’‘]/g, "'").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
+  const words = (t: string) => t.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+  const a = split(cut);
+  const b = split(repaired);
+  if (!a.length || a.length !== b.length) return false;
+  return a.every((x, i) => {
+    if (x === b[i]) return true;
+    const wa = words(x);
+    const wb = words(b[i]);
+    const kept = wa.filter((w) => wb.includes(w)).length;
+    return wa.length - kept <= 3 && wb.length - kept <= 4 && kept / Math.max(wa.length, 1) >= 0.6;
+  });
+}
+
 // Pure: the dead-air redraft's answer, {"checkin": true|false, "reply": "..."}, or null when it isn't that.
 export function parseWorldRedraft(text: string | null | undefined): { checkin: boolean; reply: string } | null {
   const t = String(text ?? "").trim();

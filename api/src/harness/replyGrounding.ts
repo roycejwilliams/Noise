@@ -40,7 +40,7 @@ import { tasteSummary } from "../services/outcomes.js";
 import { TEAM_BUILDER_LINE, handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { NO_COVERAGE, type SearchCoverage } from "../services/searchCoverage.js";
-import { CHECKIN_RULE, cutNamesThread, deadAir, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
+import { CHECKIN_RULE, deadAir, keepsEverySentence, workClaimsNameThread, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
 import { SAFETY_INSTRUCTION } from "../services/safetyText.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
 import { memberZone, validZone, wordsZone } from "../services/memberTime.js";
@@ -1950,7 +1950,8 @@ async function bindThisReply(draft: string, rf: ReplyFacts, src: GroundingSource
 // named the member's own thread (services/memberWorld.ts cutNamesThread): it's theirs, so "want me to start on it?" would offer to take
 // over something only they own (case 30, 2026-10-14). #190 is unchanged for Co's own work.
 export function nothingRunningLineApplies(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts }): boolean {
-  return o.failed.some((c) => c.name === "claim_work_status") && nothingRunsAt(o.rf) && !startedThisTurn(o.rf) && !cutNamesThread(o.rf.world, o.draft, o.cut);
+  const workClaims = o.failed.filter((c) => c.name === "claim_work_status");
+  return workClaims.length > 0 && nothingRunsAt(o.rf) && !startedThisTurn(o.rf) && !workClaimsNameThread(o.rf.world, workClaims.map((c) => claimWords(c) ?? ""));
 }
 // Pure: a turn no redraft of these two kinds runs on (dead air, a cut thread report): a safety turn, a discreet turn, an invite cut.
 export function redraftHeldBack(rf: ReplyFacts, failed: GateCheck[]): boolean {
@@ -1960,6 +1961,30 @@ export function redraftHeldBack(rf: ReplyFacts, failed: GateCheck[]): boolean {
 // place." left "I'll be glad to hear it the second you do.", its "it" pointing at nothing). One Sonnet call, only on such a cut.
 export function threadRedraftAt(o: { failed: GateCheck[]; rf: ReplyFacts }): boolean {
   return o.failed.some((c) => c.name === "no_thread_report") && !redraftHeldBack(o.rf, o.failed);
+}
+// When enough is left after a thread report was cut, the one redraft only repairs: every remaining sentence stays, and only words that
+// pointed back at the cut one change (keepsEverySentence checks it in code). The smallest-true-reply redraft is only for too little left.
+export const THREAD_REPAIR_NOTE = "A sentence saying where their own thread stands was cut: only they know that. Keep every remaining sentence exactly as it is, in the same order, and change only words that refer back to the cut sentence (a dangling \"it\" or \"that\") so each stands on its own. Add nothing and drop nothing.";
+async function repairAfterThreadCut(cut: string, rf: ReplyFacts, src: GroundingSources): Promise<string | null> {
+  const { text } = await generateText({
+    model: anthropic(LAYER3_MODELS.redraft),
+    maxOutputTokens: 1000,
+    providerOptions: { anthropic: { effort: GROUNDING_EFFORT } },
+    abortSignal: AbortSignal.timeout(GROUNDING_CALL_TIMEOUT_MS),
+    experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.thread_repair" },
+    prompt: `${CO_TEXT_CHANNEL}
+
+${renderReplyFacts(rf)}
+
+They just said: "${src.message}"
+
+Your reply, after a line was cut:
+"${cut}"
+
+${THREAD_REPAIR_NOTE} Return ONLY the message.`,
+  });
+  const out = text.trim().replace(/^"|"$/g, "");
+  return out || null;
 }
 export const THREAD_REDRAFT_NOTE = "A sentence saying where their own thread stands was cut: only they know that. Don't say where it stands; ask about it, or leave it out, and make sure nothing left points back at what was cut.";
 export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts; src: GroundingSources }): boolean {
@@ -2027,8 +2052,31 @@ export async function groundReply(
     const threadCut = threadRedraftAt({ failed: effectiveFailed1, rf });
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
-    if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent && !threadCut) {
+    const cutStands = enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent;
+    if (cutStands && !threadCut) {
       result = { final: nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf }) ? await withNothingRunningLine(cut, effectiveFailed1, rf) : cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+    } else if (cutStands) {
+      // A thread report was cut and enough is left: one repair that keeps every remaining sentence (keepsEverySentence), rechecked
+      // like any rewrite; anything else, the cut goes out. Never a second try.
+      const t0 = Date.now();
+      let repaired: string | null = null;
+      try {
+        const raw = await repairAfterThreadCut(cut, rf, src);
+        stages.redraftMs = Date.now() - t0;
+        const cleaned = raw ? cleanCoMessage(raw) : null;
+        const allowed = [...rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text), theirOwnWords(src.recentMemories)].join("\n");
+        if (cleaned && cleaned.trim() !== cut.trim() && keepsEverySentence(cut, cleaned) && rewriteAddsNothing(draft, cleaned, allowed).ok) {
+          const t1 = Date.now();
+          const r = await recheck(cut, cleaned, effectiveFailed1, rf, src);
+          stages.secondCheckMs = Date.now() - t1;
+          const failed2 = claimReadUnavailable(cleaned, r) ? [...r.checks.filter((c) => !c.pass), CLAIM_READ_FAILED_CHECK] : r.checks.filter((c) => !c.pass);
+          if (!failed2.length) repaired = cleaned;
+        } else if (cleaned && cleaned.trim() !== cut.trim()) console.error("replyGrounding: thread repair changed more than the words pointing back, sending the cut");
+      } catch (err: any) {
+        console.error("replyGrounding: thread repair failed (non-fatal, sending the cut):", err?.message ?? err);
+      }
+      const base = repaired ?? cut;
+      result = { final: nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf }) ? await withNothingRunningLine(base, effectiveFailed1, rf) : base, outcome: repaired ? "redrafted" : "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
       let kept: { text: string; checks: GateCheck[] } | null = null;
