@@ -17,12 +17,12 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 700)}` : ""}`); } };
 const SF = "America/Los_Angeles";
 const PLAN = DS.resolveDocument({
-  title: "Co Presence Plan: After the Sequin AI November Event",
-  note: "How Co stays present after the November event, from what you told me.",
+  title: "Cue Presence Plan: After the Sequin AI November Event",
+  note: "How Cue stays present after the November event, from what you told me.",
   kind: "partnership_plan",
   sections: [
-    { heading: "What you want", bullets: ["People from the Sequin AI event still thinking about Co a week later", "Not a one night thing"] },
-    { heading: "Budget", paragraphs: ["Split the cost with Sequin AI, as Jacqueline agreed."], bullets: ["Venue at House of AI shared 50/50", "Co covers the follow-up dinner"] },
+    { heading: "What you want", bullets: ["People from the Sequin AI event still thinking about Cue a week later", "Not a one night thing"] },
+    { heading: "Budget", paragraphs: ["Split the cost with Sequin AI, as Jacqueline agreed."], bullets: ["Venue at House of AI shared 50/50", "Cue covers the follow-up dinner"] },
     { heading: "Timeline", bullets: ["Recap text the morning after", "Small dinner within two weeks"] },
   ],
   suggestions: ["Send each new contact a short personal note within two days"],
@@ -34,7 +34,7 @@ const pdfDeps: any = { render: async () => Buffer.from("%PDF"), cache: (_b: Buff
 const deliver = (doc: any, to: any, target: any) => DD.deliverDocument(doc, to, target, pdfDeps);
 const NOW = new Date("2026-10-08T19:00:00Z");
 const to = { userId: "u1", firstName: "Jordan", phone: "+14155550123", zone: SF, now: NOW };
-const v1 = await DD.deliverAndRecord(PLAN, { ...to, line: "Here's the Co Presence Plan." }, { askedForGoogle: false, source: "test" }, { deliver, receipts, now: () => NOW, log: async () => {} });
+const v1 = await DD.deliverAndRecord(PLAN, { ...to, line: "Here's the Cue Presence Plan." }, { askedForGoogle: false, source: "test" }, { deliver, receipts, now: () => NOW, log: async () => {} });
 const docId = v1.receipts[0].id;
 
 const tools: Anthropic.Tool[] = [
@@ -73,7 +73,7 @@ async function run(question: string): Promise<{ text: string; calls: { name: str
 
 // A question about one section.
 const q = await run("Quick question on the plan you sent, what did the budget part say about splitting costs with Sequin?");
-check("the question: Co read the delivered document first", q.calls.some((c) => c.name === "readDocument" && Number(c.input.doc) === docId), q.calls);
+check("the question: Cue read the delivered document first", q.calls.some((c) => c.name === "readDocument" && Number(c.input.doc) === docId), q.calls);
 check(`the answer quotes the document ("${q.text.slice(0, 200)}")`, R.quotesDocument(q.text, PLAN), q.text);
 check("...and nothing was re-sent for a question", wire.length === 1);
 

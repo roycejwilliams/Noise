@@ -17,12 +17,12 @@ const RULES = `Rules:
 - Never a hard fact they didn't give: no partnership, deal, customer or user count, number, price, date, named event, award, or named person or company stated as fact. If a line leans on one, write the stance instead ("Built for live rooms", not "Partnering with X").
 - Plain words: no markdown, no links, no em dashes, no exclamation points. Headline at most 90 characters, each bullet at most 160, 1 to 4 bullets a slide, 2 to 15 slides.
 - Numbers they spoke as words ("fourteen", "eighty nine dollars", "six hundred K") are written as figures ("14", "$89", "$600k").
-- Headlines in sentence case: the first word and real names capitalized, every other word lowercase ("Why Co wins against parties"). Never Title Case, never all lowercase.
+- Headlines in sentence case: the first word and real names capitalized, every other word lowercase ("Why Cue wins against parties"). Never Title Case, never all lowercase.
 - One idea per slide: a headline that says the point, then at most 4 short bullets (under 20 words each) that back it. A slide with a single strong line is a statement: give it one bullet. Two to four short parallel points read as a grid.`;
 
 // Pure: the prompt for a new deck.
 export function newDeckPrompt(callWords: string, request: string, look: string | null, refused: string | null, audience: string | null = null): string {
-  return `A member asked Co for a slide deck. Write it as JSON.
+  return `A member asked Cue for a slide deck. Write it as JSON.
 
 What they said (their texts, or the call):
 """
@@ -42,7 +42,7 @@ The title slide is made from title and subtitle; slides are the content slides o
 
 // Pure: the prompt for a change to a deck they have.
 export function changeDeckPrompt(callWords: string, current: unknown, change: string, refused: string | null): string {
-  return `A member asked for a change to a slide deck Co made them. Write the whole new version as JSON.
+  return `A member asked for a change to a slide deck Cue made them. Write the whole new version as JSON.
 
 What they said (their texts, or the call):
 """

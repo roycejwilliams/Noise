@@ -31,8 +31,8 @@ const lineFor = (name: string, description: string) => renderEventDetails(name, 
 
 // ---- the fact Co reads: the page's text only, a fact to judge, never a verdict or a requirement
 check("the real Hot Girl Hike page shows the line", /Who it's for: the page's text uses the word "girls"/.test(lineFor("HOT GIRL HIKE", HIKE) ?? ""));
-check("the line tells Co to judge it and that it may be nothing", /Read it yourself/.test(lineFor("x", HIKE) ?? "") && /or it may be nothing/.test(lineFor("x", HIKE) ?? ""));
-check("and that Co doesn't know who the member is", /does not know whether this member is in any group unless they have said so in their own words/.test(lineFor("x", HIKE) ?? "") && /never guesses from a name, a voice/.test(lineFor("x", HIKE) ?? ""));
+check("the line tells Cue to judge it and that it may be nothing", /Read it yourself/.test(lineFor("x", HIKE) ?? "") && /or it may be nothing/.test(lineFor("x", HIKE) ?? ""));
+check("and that Cue doesn't know who the member is", /does not know whether this member is in any group unless they have said so in their own words/.test(lineFor("x", HIKE) ?? "") && /never guesses from a name, a voice/.test(lineFor("x", HIKE) ?? ""));
 check("a title alone never shows it: Men in Black screening", lineFor("Men in Black screening", "Outdoor movie night.") === null);
 check("a title alone never shows it: Gone Girl book club", lineFor("Gone Girl book club", "We discuss the novel over wine.") === null);
 check("an open event shows nothing", lineFor("Founders Hike", "A walk with founders. All welcome. Bring water.") === null);
@@ -41,7 +41,7 @@ check("singular titles in a description are not addresses", A.addressedAs("", "W
 
 // ---- nothing forces a note from page words alone (the false positives the review found)
 const hikeNoJudgment: any = { tier: 2, kind: "public_event", event_api_id: "e", event_date: "2026-10-11", name: "HOT GIRL HIKE CLUB: SESSION 6", url: "https://lu.ma/x", reason: "A public event.", details: details(HIKE) };
-check("with no judgment from Co, nothing is required", Object.keys(D.whoItIsFor(hikeNoJudgment)).length === 0);
+check("with no judgment from Cue, nothing is required", Object.keys(D.whoItIsFor(hikeNoJudgment)).length === 0);
 for (const [label, desc] of [["Hey guys! Trivia is back", "Hey guys! Trivia is back at the pub."], ["Mad Men trivia", "Join us for Mad Men trivia."], ["Spice Girls tribute", "Spice Girls and Backstreet Boys tribute night."], ["women founders panel", "Panels by women founders."], ["gala", "Ladies and gentlemen, welcome to the gala."], ["co-ed", "Men and women welcome, co-ed."]] as const) {
   check(`never forced from the page's words: ${label}`, Object.keys(D.whoItIsFor({ ...hikeNoJudgment, name: label, details: details(desc) })).length === 0);
 }
@@ -49,9 +49,9 @@ for (const [label, desc] of [["Hey guys! Trivia is back", "Hey guys! Trivia is b
 // ---- Co's own judgment is what requires the note, and a member's words never switch it off
 const judged: any = { ...hikeNoJudgment, audience: "women" };
 const req = D.whoItIsFor(judged);
-check("Co's judgment of a group requires the note", !!req.mustAlsoIncludeAny && req.mustAlsoIncludeAny.words.includes("women") && req.mustAlsoIncludeAny.words.includes("women's"));
+check("Cue's judgment of a group requires the note", !!req.mustAlsoIncludeAny && req.mustAlsoIncludeAny.words.includes("women") && req.mustAlsoIncludeAny.words.includes("women's"));
 check("the requirement takes only the match: nothing the member said can turn it off", D.whoItIsFor.length === 1);
-check("Co's judgment of 'open' is not a group", A.isGroupAimed("open to everyone") === false && A.isGroupAimed("women") === true && A.isGroupAimed(undefined) === false && Object.keys(D.whoItIsFor({ ...judged, audience: "open" })).length === 0);
+check("Cue's judgment of 'open' is not a group", A.isGroupAimed("open to everyone") === false && A.isGroupAimed("women") === true && A.isGroupAimed(undefined) === false && Object.keys(D.whoItIsFor({ ...judged, audience: "open" })).length === 0);
 
 const rules = (extra: any) => ({ maxSentences: 2, maxChars: 300, mustIncludeAny: ["hike"], ...extra });
 const verdict = (text: string, r: any = req) => checkDraft(text, rules(r)).filter((c: any) => !c.pass).map((c: any) => c.name);
@@ -85,15 +85,15 @@ check("the member's 'thinking about a move' is allowed", !forbidden("You mention
 void implies;
 
 // ---- nothing is held back, and the other offer paths hear it too
-check("the shared event facts carry Co's audience judgment", (() => {
+check("the shared event facts carry Cue's audience judgment", (() => {
   const rf = baseReplyFacts();
   addEventFacts(rf, { name: "HOT GIRL HIKE", url: "https://lu.ma/x", kind: "public_event", audience: "women" } as any);
-  return rf.facts.some((f: any) => /Who "HOT GIRL HIKE" is for, as Co judged it when it found it: women/.test(f.text) && /never say or imply what they are/.test(f.text));
+  return rf.facts.some((f: any) => /Who "HOT GIRL HIKE" is for, as Cue judged it when it found it: women/.test(f.text) && /never say or imply what they are/.test(f.text));
 })());
 check("an event with no judgment adds no such fact", (() => {
   const rf = baseReplyFacts();
   addEventFacts(rf, { name: "Founders Hike", url: "https://lu.ma/y", kind: "public_event" } as any);
-  return !rf.facts.some((f: any) => /is for, as Co judged/.test(f.text));
+  return !rf.facts.some((f: any) => /is for, as Cue judged/.test(f.text));
 })());
 check("the audience never reaches the match gate (nothing is held back)", !/audience/.test(read("src/harness/matchGate.ts")));
 check("a woman's offer is the same text, so nothing differs by who the member is", D.AUDIENCE_RULE.includes("Every time, even if their ask uses that group's words"));
@@ -101,8 +101,8 @@ check("a woman's offer is the same text, so nothing differs by who the member is
 // ---- the sweep: judged by Co, the audience travels with the match
 const sweep = read("src/services/sweepFind.ts");
 check("the keep tool takes the audience and stores it on the match", /audience: z\.string\(\)\.optional\(\)/.test(sweep) && /audience: audience\.trim\(\)\.slice\(0, 60\)/.test(sweep));
-check("Co is told never to hold something back for who it assumes they are", /Never hold something back for who you assume they are/.test(sweep) && /never from a name or a voice/.test(sweep));
-check("Co is told to prefer an open event when two fit about equally", /Prefer an open event when two fit about equally/.test(sweep));
+check("Cue is told never to hold something back for who it assumes they are", /Never hold something back for who you assume they are/.test(sweep) && /never from a name or a voice/.test(sweep));
+check("Cue is told to prefer an open event when two fit about equally", /Prefer an open event when two fit about equally/.test(sweep));
 check("the reveal's task carries all three rules", /\$\{IDENTITY_RULE\} \$\{AUDIENCE_RULE\} \$\{OFFER_HONESTY\}/.test(read("src/agent/eventDiscoverySurfacing.ts")) && /forbidden: \[OFFER_FORBIDDEN, IMPLIES_IDENTITY[\],]/.test(read("src/agent/eventDiscoverySurfacing.ts")) && /\.\.\.whoItIsFor\(match\),/.test(read("src/agent/eventDiscoverySurfacing.ts")));
 
 console.log(`event audience rules: ${total - failed}/${total} passed`);

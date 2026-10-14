@@ -74,11 +74,11 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
   // The composer: a tier pick is told it goes when skipped; only a second skip drops it (and flags it for the tier's next best).
   const m = (name: string, url: string) => ({ tier: 3, kind: "opportunity", name, url, deadline: "2026-11-01", whyItFits: "" }) as any;
   const cand = (id: string, match: any) => ({ id, userId: "u", type: "event_offer", targetKey: `event_offer:${id}`, topicKey: id, summary: "", priority: 50, dueAt: new Date(), expiresAt: null, payload: { askId: "profile", askText: "x", fromProfile: true, match, picked: true, morningDay: TODAY, pick: { whyMember: "", whyNow: "", set: null, tierPick: true } }, attempts: 0, createdAt: new Date() }) as any;
-  const f1 = m("Co Supper", "https://lu.ma/supper"), f2 = m("BCLT Workshop", "https://law.berkeley.edu/bclt");
+  const f1 = m("Cue Supper", "https://lu.ma/supper"), f2 = m("BCLT Workshop", "https://law.berkeley.edu/bclt");
   const items = [{ candidate: cand("c1", f1), item: E.revealItem("x", false, f1), pick: null, again: false, tierPick: true }, { candidate: cand("c2", f2), item: E.revealItem("x", false, f2), pick: null, again: false, tierPick: true }];
   const input = { firstName: "Marcus", items, set: null, leadWhy: null, memberBlock: null, feeling: null, thread: "", recent: "", threadLive: false };
-  const skip2 = { opening: "Two things for this week.", items: [{ n: 1, caption: "Co Supper, a small table of people building things." }, { n: 2, skip: "transactional law isn't his practice area" }], closing: "Either one?" };
-  const ok = { opening: "Two things for this week.", items: [{ n: 1, caption: "Co Supper, a small table of people building things." }, { n: 2, caption: "BCLT Workshop with Freshfields lawyers, a skills day for law students." }], closing: "Either one?" };
+  const skip2 = { opening: "Two things for this week.", items: [{ n: 1, caption: "Cue Supper, a small table of people building things." }, { n: 2, skip: "transactional law isn't his practice area" }], closing: "Either one?" };
+  const ok = { opening: "Two things for this week.", items: [{ n: 1, caption: "Cue Supper, a small table of people building things." }, { n: 2, caption: "BCLT Workshop with Freshfields lawyers, a skills day for law students." }], closing: "Either one?" };
   const prompts: string[] = [];
   const stub = (answers: any[]) => ({ model: async (p: string) => { prompts.push(p); return JSON.stringify(answers[Math.min(prompts.length - 1, answers.length - 1)]); } });
   const once: any = await B.composeBundle(input as any, stub([skip2, ok]));

@@ -29,7 +29,7 @@ check("not without a Gemini key", !voiceFlagsAllowed(TEST, env({ VOICE_FLAGS: "t
 
 // The call.
 const turns = [
-  { role: "agent", message: "Hey Jordan, it's Co. How's the week going?", time_in_call_secs: 0 },
+  { role: "agent", message: "Hey Jordan, it's Cue. How's the week going?", time_in_call_secs: 0 },
   { role: "user", message: "Yeah, I'm fine. Work's been good.", time_in_call_secs: 4 },
   { role: "agent", message: "Good. Anything on your mind?", time_in_call_secs: 9 },
   { role: "user", message: "Oh, the launch got pushed again. Perfect, just perfect.", time_in_call_secs: 12 },
@@ -38,9 +38,9 @@ const turns = [
 const lines = callerLines(turns);
 check("only the caller's lines, with their times", lines.length === 2 && lines[0].atSecs === 4 && lines[1].text.startsWith("Oh, the launch"));
 const t = transcriptForListening(turns);
-check("the transcript Gemini reads marks Caller and Co with times", /\[0:04\] Caller: Yeah, I'm fine/.test(t) && /\[0:00\] Co: Hey Jordan/.test(t) && !/Caller: $/m.test(t));
+check("the transcript Gemini reads marks Caller and Cue with times", /\[0:04\] Caller: Yeah, I'm fine/.test(t) && /\[0:00\] Cue: Hey Jordan/.test(t) && !/Caller: $/m.test(t));
 check("a quote counts when it's the caller's words, re-punctuated", !!quoteFromCaller("yeah im fine", lines) && !!quoteFromCaller("Perfect, just perfect", lines));
-check("Co's words or invented words don't count as the caller's", !quoteFromCaller("How's the week going", lines) && !quoteFromCaller("I'm devastated about it", lines));
+check("Cue's words or invented words don't count as the caller's", !quoteFromCaller("How's the week going", lines) && !quoteFromCaller("I'm devastated about it", lines));
 // Review of #60: whole words, in order, and what's kept is what they said.
 const L = (text: string) => [{ atSecs: 0, text }];
 check("whole words only: 'no' isn't in 'I know', 'fine' isn't in 'finest'", !quoteFromCaller("no", L("I know")) && !quoteFromCaller("fine", L("the finest day")));
@@ -81,7 +81,7 @@ check("confidence is clamped to 0..1", checkFlags({ flags: [flag({ confidence: 7
 // What Co sees: beside the text read, never naming it back.
 const shown = { at: new Date("2026-10-03T18:00:00Z"), flags: [{ quote: "Yeah, I'm fine.", cue: "sigh" as const, feeling: "worn down", reading: "" }] };
 const line = renderVoiceFlags(shown, "2 hours ago") ?? "";
-check("Co reads what the voice added, on what words", /sighed when they said "Yeah, I'm fine\." \(worn down\)/.test(line) && /On your call 2 hours ago/.test(line));
+check("Cue reads what the voice added, on what words", /sighed when they said "Yeah, I'm fine\." \(worn down\)/.test(line) && /On your call 2 hours ago/.test(line));
 check("framed as one read, never named back", /one read of their tone/.test(line) && /never name it back/.test(line));
 check("nothing to show, no line", renderVoiceFlags(null, "now") === null && renderVoiceFlags({ at: new Date(), flags: [] }, "now") === null);
 const now = new Date("2026-10-03T20:00:00Z");
@@ -90,7 +90,7 @@ const ctx = { ...summarizeSignals(callRead, now), voice: shown };
 const rendered = renderEmotionalContext(ctx, now);
 check("the text read's call line and the voice line both show", /their voice showed: stressed/.test(rendered) && /their voice said more than their words/.test(rendered));
 const noVoice = summarizeSignals(callRead, now);
-check("voice flags change nothing else Co computes (care, recurring, current)", JSON.stringify(summarizeSignals(callRead, now)) === JSON.stringify(noVoice) && renderEmotionalContext(noVoice, now) === rendered.split("\n").filter((l) => !/said more than their words/.test(l)).join("\n"));
+check("voice flags change nothing else Cue computes (care, recurring, current)", JSON.stringify(summarizeSignals(callRead, now)) === JSON.stringify(noVoice) && renderEmotionalContext(noVoice, now) === rendered.split("\n").filter((l) => !/said more than their words/.test(l)).join("\n"));
 
 // Wiring.
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");

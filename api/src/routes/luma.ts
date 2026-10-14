@@ -23,7 +23,7 @@ async function reachOutToSubscriber(email: string, name?: string): Promise<void>
   const { rows } = await pool.query(`SELECT id, first_name, phone_number FROM users WHERE email = $1`, [email]);
   const user = rows[0];
   if (!user) {
-    console.log(`luma/webhook: calendar.person_subscribed (${email}) — not a Co user, reaching out by email instead`);
+    console.log(`luma/webhook: calendar.person_subscribed (${email}) — not a Cue user, reaching out by email instead`);
     await sendEmail({ email, calendarFollow: true, firstName: name }).catch((err: any) =>
       console.error(`luma/webhook: calendar.person_subscribed (${email}) — sendEmail failed:`, err?.message ?? err),
     );
@@ -127,7 +127,7 @@ function runScoringPass(eventId: string, eventName: string | undefined, triggere
   scoreGuestListForEvent(eventId, eventName)
     .then(({ scoredCount, solicitedCount, matchedCount }) => {
       console.log(
-        `luma/webhook: ${triggeredBy} (${eventId}) — matched ${matchedCount} Co user(s), scored ${scoredCount}, solicited an ask from ${solicitedCount}`,
+        `luma/webhook: ${triggeredBy} (${eventId}) — matched ${matchedCount} Cue user(s), scored ${scoredCount}, solicited an ask from ${solicitedCount}`,
       );
     })
     .catch((err: any) => {

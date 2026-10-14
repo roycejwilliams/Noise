@@ -128,7 +128,7 @@ const deps = (): Deps => ({
   ]),
   lessons: async () => (calls.push("lessons"), [{ text: "Don't text before 9am.", at: ago(100) }]),
   corrections: async () => (calls.push("corrections"), [{ field: "city", old_value: "San Francisco", new_value: "Oakland", corrected_at: ago(200) }]),
-  taste: async () => (calls.push("taste"), { text: "From what they've told Co about things it sent, they went to or liked: Founder Dinner.", at: ago(12) }),
+  taste: async () => (calls.push("taste"), { text: "From what they've told Cue about things it sent, they went to or liked: Founder Dinner.", at: ago(12) }),
   claims: async () => (calls.push("claims"), [
     { text: "Training for the Oakland marathon", provenance: "user_said", kind: "plan", quote: "Maya says I should run Austin too", saidOn: "2026-10-01", confirmedOn: "2026-10-05", expiresOn: "2026-10-12" },
     { text: "Meeting Maya, who is leaving Stripe, on Friday.", provenance: "co_inferred", kind: "meeting", quote: null, saidOn: "2026-10-07", confirmedOn: "2026-10-07", expiresOn: "2026-10-10" },
@@ -147,9 +147,9 @@ const deps = (): Deps => ({
     { content: "Co replied: Maya is leaving Stripe for Austin, so worth catching her before.", at: ago(41) },
     { content: "User said: Maya told me she's moving to Austin, crazy", at: ago(40) },
     { content: "[Call] Talked about the marathon and the pitch plan.", at: ago(35) },
-    { content: "Co message failed to deliver", at: ago(34) },
+    { content: "Cue message failed to deliver", at: ago(34) },
   ]),
-  person: async () => (calls.push("person"), "Who they are:\nJordan is training for a marathon.\nMaya, who left Stripe, is someone Co matched them with."),
+  person: async () => (calls.push("person"), "Who they are:\nJordan is training for a marathon.\nMaya, who left Stripe, is someone Cue matched them with."),
 });
 
 const k = await memberKnowledge("u1", { now: NOW, exchanges: 5, exchangeDays: 3 }, deps());
@@ -198,7 +198,7 @@ check("lessons: with their time", k.lessons[0]?.text === "Don't text before 9am.
 check("corrections: was and now", k.corrections[0]?.field === "city" && k.corrections[0]?.was === "San Francisco" && k.corrections[0]?.now === "Oakland");
 check("preferences: the taste summary, stamped", k.preferences[0]?.source === "taste" && k.preferences[0]?.verifiedAt === ago(12).toISOString());
 check("claims: stamped with when they last confirmed it", k.claims[0]?.verifiedAt === new Date("2026-10-05").toISOString() && k.claims[0]?.provenance === "user_said");
-check("exchanges: oldest first, member and Co apart, a call summary marked, a non-exchange dropped", k.exchanges.length === 3 && k.exchanges[0].from === "co" && k.exchanges[1].from === "member" && k.exchanges[2].call === true);
+check("exchanges: oldest first, member and Cue apart, a call summary marked, a non-exchange dropped", k.exchanges.length === 3 && k.exchanges[0].from === "co" && k.exchanges[1].from === "member" && k.exchanges[2].call === true);
 check("exchanges: the window is passed through", exchangeArgs?.limit === 5 && exchangeArgs?.days === 3);
 
 // ---------------------------------------------------------------- stripping: every text field
@@ -268,7 +268,7 @@ check("rules: quiet hours are 8am to 9pm in their zone, with where now sits", /b
   const late = memberRules({ ...k, asOf: new Date("2026-10-10T03:30:00Z").toISOString() });
   check("rules: 11:30pm their time is inside quiet hours", /11:30pm there now, inside their quiet hours/.test(late.quietHours));
 }
-check("rules: restraint is read from their state", /space/.test(rules.restraint) && /goal_nudge/.test(rules.restraint) && /hard time/.test(rules.restraint) && !rules.restraint.includes("Co starts nothing on its own until"));
+check("rules: restraint is read from their state", /space/.test(rules.restraint) && /goal_nudge/.test(rules.restraint) && /hard time/.test(rules.restraint) && !rules.restraint.includes("Cue starts nothing on its own until"));
 check("rules: no restraint read, no restraint rule", memberRules({ ...k, restraint: null }).restraint === "");
 
 // Fails closed (PR #118): a failed name read rejects the whole call; nothing unstripped comes back.
@@ -281,17 +281,17 @@ check("rules: no restraint read, no restraint rule", memberRules({ ...k, restrai
   // An unsent call promise isn't dropped because another promise naming a deliverable was sent (no "Oct 8:" prefix before).
   const items = MK.carryingOf({ tasks: [], briefs: [], receipts: [], loops: [], ledger: [], zone: "America/Los_Angeles", now: new Date("2026-10-09T18:00:00Z"),
     promises: [
-      { at: new Date("2026-10-08T23:00:00Z"), content: 'Co said on the call it would send "the dinner spot document for Friday" and sent it.' },
-      { at: new Date("2026-10-08T23:01:00Z"), content: 'Looked into "the investor update outline document" after the call, as Co said it would, and found nothing good enough to send yet.' },
+      { at: new Date("2026-10-08T23:00:00Z"), content: 'Cue said on the call it would send "the dinner spot document for Friday" and sent it.' },
+      { at: new Date("2026-10-08T23:01:00Z"), content: 'Looked into "the investor update outline document" after the call, as Cue said it would, and found nothing good enough to send yet.' },
     ] } as any);
   check(`an unsent call promise stays outstanding next to a sent one (${items.map((i: any) => `${i.state}: ${i.what}`).join(" | ")})`, items.some((i: any) => /investor update outline/.test(i.what) && i.state === "outstanding"));
   // Their voice memos and Co's hold texts are exchanges too.
   check("a member's voice memo is their exchange", MK.exchangeOf({ content: "User sent a voice memo: running late, sorry", at: new Date() })?.from === "member");
-  check("Co's own 'Co is looking:' line is Co's exchange", MK.exchangeOf({ content: "Co is looking: a caterer for the open house", at: new Date() })?.from === "co");
+  check("Cue's own 'Co is looking:' line is Cue's exchange", MK.exchangeOf({ content: "Co is looking: a caterer for the open house", at: new Date() })?.from === "co");
   // The restraint rule states the count, never an invented pause date.
   const rr = MK.restraintRule({ holdUntil: null, spaceUntil: null, safetyHold: false, needsCare: false, frustratedWithCo: false, feeling: null, suppressedKinds: [], trialKinds: [], unanswered: { count: 4, lastInboundAt: null, lastSentAt: new Date().toISOString() }, verifiedAt: new Date().toISOString() } as any, "America/Los_Angeles");
-  check(`the restraint rule gives the unanswered count, no pause date ("${rr.slice(0, 120)}")`, /4 of Co's own texts/.test(rr) && !/pause runs to/.test(rr));
+  check(`the restraint rule gives the unanswered count, no pause date ("${rr.slice(0, 120)}")`, /4 of Cue's own texts/.test(rr) && !/pause runs to/.test(rr));
 }
-check("a failed-send note is not an exchange", MK.exchangeOf({ content: "Co message failed to deliver: 30001 — Unknown", at: new Date() }) === null);
+check("a failed-send note is not an exchange", MK.exchangeOf({ content: "Cue message failed to deliver: 30001 — Unknown", at: new Date() }) === null);
 console.log(`member knowledge: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

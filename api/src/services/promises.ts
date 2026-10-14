@@ -38,7 +38,7 @@ export function promiseProblem(s: string): string | null {
   if (/\?\s*$/.test(s)) return "a question";
   if (INSTANT.test(s)) return "promises an instant result";
   if (THIS_TURN.test(s)) return "happens this turn";
-  if (CANT.test(s) || OFFERS_WHAT_CO_CANT.test(s)) return "something Co can't do";
+  if (CANT.test(s) || OFFERS_WHAT_CO_CANT.test(s)) return "something Cue can't do";
   return null;
 }
 
@@ -145,4 +145,4 @@ export async function dropPromise(userId: string, taskId: number): Promise<void>
 
 // In their local time (the window's zone, or the fallback), never bare UTC.
 export const promiseFact = (t: CoTask) =>
-  `Started task #${t.id}: ${t.goal}. Co will work on it first around ${t.nextCheckAt ? localStamp(t.nextCheckAt, t.window?.zone ?? null) : "soon"}, and tell them if there's anything to say.${t.window ? ` They'll have it ${t.window.words} (by ${localStamp(t.window.deadline, t.window.zone)}), or hear before then that it's moving and to when.` : ""}`;
+  `Started task #${t.id}: ${t.goal}. Cue will work on it first around ${t.nextCheckAt ? localStamp(t.nextCheckAt, t.window?.zone ?? null) : "soon"}, and tell them if there's anything to say.${t.window ? ` They'll have it ${t.window.words} (by ${localStamp(t.window.deadline, t.window.zone)}), or hear before then that it's moving and to when.` : ""}`;

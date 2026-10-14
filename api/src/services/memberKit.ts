@@ -50,7 +50,7 @@ export function kitLines(kit: Kit): string[] {
   if (kit.role) shown.push(`role: ${kit.role}`);
   if (kit.linkedin) shown.push(`LinkedIn: ${kit.linkedin}`);
   if (kit.city) shown.push(`city: ${kit.city}`);
-  if (shown.length) lines.push(`What they've told Co about themselves for this: ${shown.join("; ")}.`);
+  if (shown.length) lines.push(`What they've told Cue about themselves for this: ${shown.join("; ")}.`);
   return lines;
 }
 

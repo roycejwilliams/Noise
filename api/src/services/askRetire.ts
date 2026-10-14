@@ -60,7 +60,7 @@ export function gerund(verb: string): string {
 // NOTE_LABEL_CHARS on a word boundary.
 export function fallbackLabel(text: string): string {
   let t = String(text ?? "").replace(/[“”"]/g, "").replace(/\s*[—–]\s*/g, ", ").replace(/!/g, "").replace(/\s+/g, " ").trim().replace(/[.,;:?]+$/, "");
-  t = t.replace(/\s*\b(?:with|for|via|through|by|from|and) Co\b('s)?/gi, "").replace(/\bCo's\s+/gi, "").replace(/\s+/g, " ").trim();
+  t = t.replace(/\s*\b(?:with|for|via|through|by|from|and) (?:Co|Cue)\b('s)?/gi, "").replace(/\bCo's\s+/gi, "").replace(/\s+/g, " ").trim();
   t = t.replace(/^(?:(?:can|could|would) you |please |pls |help me |i(?:'d| would) like to |i want to |wants to |want to |would like to |hoping to |trying to |looking to |i'm |im |i am )+/i, "");
   t = t.replace(/^(?:looking for |look(?:ing)? out for |keep an eye out for |find(?:ing)? |look for |search(?:ing)? for |get me |watch for |track down |seeking )(?:me )?/i, "");
   // "Getting into pottery" is about getting into it; "Getting a dog" is the dog.
@@ -257,9 +257,9 @@ export function askTextSignals(lines: { at: Date; text: string }[], asks: Pick<R
 // ---------- pure: their answer to the question, and to the note
 
 export function retireAnswerPrompt(askText: string, lastCo: string, reply: string): string {
-  return `Co asks a member of a private club, at most once, whether they still want Co looking for this: "${askText.slice(0, 300)}".
+  return `Cue asks a member of a private club, at most once, whether they still want Cue looking for this: "${askText.slice(0, 300)}".
 
-Co's last text to them:
+Cue's last text to them:
 """
 ${lastCo.slice(0, 1500)}
 """
@@ -269,8 +269,8 @@ Their reply:
 ${reply.slice(0, 1500)}
 """
 
-question_in_last_text: does Co's last text ask whether they still want Co looking for that thing (not an offer of something else, not another topic)?
-answer: if it does, does their reply say "yes" (keep looking), "no" (stop, or it's no longer needed), or "neither" (about something else, or unclear)? A "no thanks" to something else Co offered is "neither".
+question_in_last_text: does Cue's last text ask whether they still want Cue looking for that thing (not an offer of something else, not another topic)?
+answer: if it does, does their reply say "yes" (keep looking), "no" (stop, or it's no longer needed), or "neither" (about something else, or unclear)? A "no thanks" to something else Cue offered is "neither".
 
 Answer only with JSON: {"question_in_last_text": true or false, "answer": "yes" or "no" or "neither", "reason": "a few words"}`;
 }
@@ -285,9 +285,9 @@ export function readRetireAnswer(raw: string): "yes" | "no" | "neither" {
   }
 }
 export function reviveReadPrompt(note: string, lastCo: string, reply: string): string {
-  return `Co told a member of a private club: "${note.slice(0, 300)}"
+  return `Cue told a member of a private club: "${note.slice(0, 300)}"
 
-Co's last text to them:
+Cue's last text to them:
 """
 ${lastCo.slice(0, 1500)}
 """
@@ -297,7 +297,7 @@ Their reply:
 ${reply.slice(0, 1500)}
 """
 
-Does their reply ask Co to pick that back up and keep looking for it (yes), or not (no: anything else, unclear, or about something different)?
+Does their reply ask Cue to pick that back up and keep looking for it (yes), or not (no: anything else, unclear, or about something different)?
 
 Answer only with JSON: {"revive": true or false, "reason": "a few words"}`;
 }
@@ -508,7 +508,7 @@ export async function flagRetire(userId: string, id: string, intent: string | nu
   if (!rows[0]) return;
   const text = String(rows[0].ask_text ?? "");
   if (isCoTaskGoal(text)) {
-    await realRetireDeps.log({ userId, decision: "ask.retire_skipped", outcome: "skip", action: "co_task_unchanged", reason: "status-check lane: Co's own work, the search keeps running (no kind change, no note)", proposal: { ask: text.slice(0, 200), askId: id, intent } }).catch(() => {});
+    await realRetireDeps.log({ userId, decision: "ask.retire_skipped", outcome: "skip", action: "co_task_unchanged", reason: "status-check lane: Cue's own work, the search keeps running (no kind change, no note)", proposal: { ask: text.slice(0, 200), askId: id, intent } }).catch(() => {});
     return;
   }
   const tied = new Set(goals.map((g) => goalHash(g)));
@@ -670,7 +670,7 @@ export const realRetireDeps: RetireDeps = {
       type: "goal_recheck",
       targetKey: `goal_recheck:ask:${row.id}:${localDay(new Date(), zone)}`,
       topicKey: `ask:${row.id}`,
-      summary: `Ask once whether they still want Co looking for "${row.text.slice(0, 60)}"`,
+      summary: `Ask once whether they still want Cue looking for "${row.text.slice(0, 60)}"`,
       payload: { kind: "ask", askId: row.id, text: row.text.slice(0, 300), queuedAt: new Date().toISOString() },
       dueAt: new Date(),
       expiresAt: new Date(Date.now() + RECHECK_TEXT_AFTER_DAYS * DAY),

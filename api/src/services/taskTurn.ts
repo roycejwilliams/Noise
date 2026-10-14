@@ -221,7 +221,7 @@ export async function memberSaysGoalDone(goal: string, recent: string): Promise<
     model: anthropic(MODELS.haiku),
     maxOutputTokens: 200,
     experimental_telemetry: { isEnabled: true, functionId: "taskTurn.goalDone" },
-    prompt: `Co is working on this for a member: "${goal}".\nTheir newest messages, oldest first:\n${lines.map((l) => `- ${l}`).join("\n")}\n\nDid they say THIS goal is done, handled themselves (booked it, found it, sorted it), or no longer wanted? Only this goal: a different goal they mention doesn't count. Return ONLY JSON: {"done": true|false, "quote": "their exact words that say so, or null"}.`,
+    prompt: `Cue is working on this for a member: "${goal}".\nTheir newest messages, oldest first:\n${lines.map((l) => `- ${l}`).join("\n")}\n\nDid they say THIS goal is done, handled themselves (booked it, found it, sorted it), or no longer wanted? Only this goal: a different goal they mention doesn't count. Return ONLY JSON: {"done": true|false, "quote": "their exact words that say so, or null"}.`,
   });
   const m = text.match(/\{[\s\S]*\}/);
   let j: any = null;
@@ -293,7 +293,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         if (task.source === "promise" && (await promiseCloseCheck(task, texts, deps, docsSent).catch(() => ({ ok: false }))).ok) return { ok: false, error: "Not sent: this promise was already delivered in one message. Nothing more goes for it; finish the task." };
         // Never a failure nobody checked (Royce, 2026-10-09: "the link wasn't working" was invented): leave it off and say nothing.
         if (inventedFailure(what)) return { ok: false, error: "Not sent: it says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
-        if (namesRejected(what)) return { ok: false, error: "Not sent: it names something Co's daily pick rejected for them. Leave it off." };
+        if (namesRejected(what)) return { ok: false, error: "Not sent: it names something Cue's daily pick rejected for them. Leave it off." };
         // Away (2026-10-11, tasks 164/165 kept looking for SF rooms while Jacqueline was traveling): an event it found, by its link or
         // its name, is tied to where they live and waits until they're back. Anything else (a role, a program) still goes.
         // Only a look-out Co started on its own word waits (awayHoldsTask): what they asked for, and owed deliveries, always go.
@@ -310,7 +310,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         const owed = task.source === "promise" || task.lookoutOrigin === "member" || owedText(asOfNow, deps.now());
         const held = (r: { reason?: string; retryAt?: Date }) => {
           if (r.retryAt && (!heldUntil || r.retryAt > heldUntil)) heldUntil = r.retryAt;
-          return `Held, not sent: ${r.reason ?? "pacing"}. This is Co starting a text, so it waits like every other one.${r.retryAt ? ` Your next look is set for ${r.retryAt.toISOString()}.` : ""} Note it; send the same thing then if it still holds.`;
+          return `Held, not sent: ${r.reason ?? "pacing"}. This is Cue starting a text, so it waits like every other one.${r.retryAt ? ` Your next look is set for ${r.retryAt.toISOString()}.` : ""} Note it; send the same thing then if it still holds.`;
         };
         const known = (links ?? []).filter(linkOk);
         // Only verified fields: web results that proved themselves, events from Co's
@@ -414,9 +414,9 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         const places = placesBacked(text, Object.values(facts).join(" "));
         if (!places.ok) return { ok: false, error: `The draft named places no verified fact backs (${places.missing.join(", ")}). Tell them only verified facts.` };
         const offer = text.match(OFFERS_WHAT_CO_CANT);
-        if (offer) return { ok: false, error: `The draft offered something Co can't do ("${offer[0]}"): Co can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
+        if (offer) return { ok: false, error: `The draft offered something Cue can't do ("${offer[0]}"): Cue can't call, book or contact anyone for them. Suggest they do it, or ask what they'd like next.` };
         if (inventedFailure(text)) return { ok: false, error: "Not sent: the draft says something is broken, failed or unavailable, and no check in your record says so. Leave that thing off and say nothing about it." };
-        if (namesRejected(text)) return { ok: false, error: "Not sent: the draft names something Co's daily pick rejected for them. Leave it off." };
+        if (namesRejected(text)) return { ok: false, error: "Not sent: the draft names something Cue's daily pick rejected for them. Leave it off." };
         // A plain text carries no links, so it isn't the delivery: a question, or saying plainly what can't be done, may go. One
         // that hands over found things without their links is a partial delivery, and waits for the one message with the links.
         if (task.source === "promise" && !final && !/\?\s*["')\]]*$/.test(text.trim())) {
@@ -438,7 +438,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   const tools = {
     search: tool({
       description:
-        "Look up events for this task: Co's own events and the public feed, in the days you name, plus openings Co's daily search already found. You get real events with their details, closest to what you asked first, and you judge which fit, because they're candidates, not answers. Put `when` in their words (\"this weekend\", \"Oct 10\") so the dates come out right. The feed is short (a few events a day), so when it's thin, use webSearch for the same thing.",
+        "Look up events for this task: Cue's own events and the public feed, in the days you name, plus openings Cue's daily search already found. You get real events with their details, closest to what you asked first, and you judge which fit, because they're candidates, not answers. Put `when` in their words (\"this weekend\", \"Oct 10\") so the dates come out right. The feed is short (a few events a day), so when it's thin, use webSearch for the same thing.",
       inputSchema: z.object({ what: z.string(), when: z.string().optional() }),
       execute: async ({ what, when }) => {
         did.push(`search: ${what}${when ? `, ${when}` : ""}`);
@@ -503,7 +503,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
       },
     }),
     finish: tool({
-      description: "Close the task: done, or they no longer need it. For a drop because they said so, put their exact words in theirWords; a drop without their word counts as a promise Co didn't keep.",
+      description: "Close the task: done, or they no longer need it. For a drop because they said so, put their exact words in theirWords; a drop without their word counts as a promise Cue didn't keep.",
       inputSchema: z.object({ outcome: z.string(), status: z.enum(["done", "dropped"]), theirWords: z.string().optional() }),
       execute: async ({ outcome, status, theirWords }) => {
         if (status === "done") {

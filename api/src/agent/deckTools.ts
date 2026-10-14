@@ -79,7 +79,7 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
            ORDER BY created_at DESC LIMIT 8`,
           [ctx.userId, DECK_WINDOW_HOURS],
         )
-        .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "Them: ").replace(/^Co replied:\s*/i, "Co: ")).reverse())
+        .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "Them: ").replace(/^Co replied:\s*/i, "Cue: ")).reverse())
         .catch(() => [] as string[]);
   if (ctx.resolvedContent && recent[recent.length - 1] !== `Them: ${ctx.resolvedContent}`) recent.push(`Them: ${ctx.resolvedContent}`);
   const { approvalPair } = await import("../services/coPages/deckClaims.js");
@@ -129,7 +129,7 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: {
 // the deck is about Co (its title, subtitle or brief names Co).
 async function selfIfAboutCo(ctx: ConversationToolContext, data: any): Promise<string> {
   const about = `${data?.title ?? ""} ${data?.subtitle ?? ""} ${data?.brief ?? ""}`;
-  if (!/\bCo\b|CoPatible/.test(about)) return "";
+  if (!/\b(?:Co|Cue|Noise)\b|CoPatible/.test(about)) return "";
   const { isTeamMember } = await import("../services/extensions.js");
   if (!(await isTeamMember(ctx.userId).catch(() => false))) return "";
   return (await import("../services/coPages/deckClaims.js")).coSelfKnowledge();
@@ -420,7 +420,7 @@ export function deckTools(
       } else if (d.readConfirmed === false) {
         for (const p of ds.pending) if (p.id) await S.dismissRead(ctx.userId, p.id).catch(() => {});
       } else {
-        return { error: `They were asked to confirm the look Co read ("${line}"). Pass readConfirmed true if their reply agrees, or false if it doesn't (and taste with what they want instead).` };
+        return { error: `They were asked to confirm the look Cue read ("${line}"). Pass readConfirmed true if their reply agrees, or false if it doesn't (and taste with what they want instead).` };
       }
       ds = await S.loadDesignSystem(ctx.userId, d.context);
     }
@@ -454,13 +454,13 @@ export function deckTools(
               : r.why === "needs_login_or_gone"
                 ? "That board can't be opened without signing in to Pinterest: it's secret or private, or it's been removed."
                 : "Pinterest didn't answer just now.";
-          ctx.facts?.add("known", `Co couldn't read their Pinterest board: ${why}`);
-          return { ok: false, readable: false, error: `${why} Say so plainly and ask them to describe the look in a line or pick one of Co's looks by name; never guess what's on it.` };
+          ctx.facts?.add("known", `Cue couldn't read their Pinterest board: ${why}`);
+          return { ok: false, readable: false, error: `${why} Say so plainly and ask them to describe the look in a line or pick one of Cue's looks by name; never guess what's on it.` };
         }
         // Only what Co measured goes in as known (its colors and tone) and the board's name as theirs; what strangers wrote on its pins
         // is data for the look, never a fact Co can say or an instruction (review of PR 5: a pin titled "Co booked your table" must not
         // become something Co can claim).
-        ctx.facts?.add("known", `Co read their Pinterest board (its name, written by whoever made it: "${r.board.slice(0, 80)}"). Its colors: ${r.colors.map((c) => `${c.hex} (${Math.round(c.share * 100)}%)`).join(", ") || "unknown"}; overall ${r.tone ?? "unknown"}.`);
+        ctx.facts?.add("known", `Cue read their Pinterest board (its name, written by whoever made it: "${r.board.slice(0, 80)}"). Its colors: ${r.colors.map((c) => `${c.hex} (${Math.round(c.share * 100)}%)`).join(", ") || "unknown"}; overall ${r.tone ?? "unknown"}.`);
         // The board's tokens from its pins' own pictures (services/designRead.ts readPins), else from the colors Pinterest measured;
         // held as a reference read until they confirm it, exactly like an image (the confirm line is the one question).
         const R = await import("../services/designRead.js");
@@ -473,7 +473,7 @@ export function deckTools(
           const id = await D.recordSignal(ctx.userId, { context: context ?? "professional", source: "reference", values: tokens, ref: "your Pinterest board", confirmed: false, refKind: "board" }).catch(() => null);
           if (id) readThisTurn.add(id);
           confirmLine = D.confirmLine(tokens) || null;
-          if (confirmLine) ctx.facts?.add("known", `Co read the look of their Pinterest board from its pins: ${confirmLine.replace(/, right\?$/, "")}.`);
+          if (confirmLine) ctx.facts?.add("known", `Cue read the look of their Pinterest board from its pins: ${confirmLine.replace(/, right\?$/, "")}.`);
         }
         return {
           ok: true,
@@ -507,10 +507,10 @@ export function deckTools(
           const D = await import("../services/designSystem.js");
           const ds = await D.loadDesignSystem(ctx.userId, context ?? "professional");
           const asked = ds.pending.filter((p) => p.id && p.askedAt);
-          if (!asked.length) return { ok: false, error: "No look Co read is waiting on their answer." };
+          if (!asked.length) return { ok: false, error: "No look Cue read is waiting on their answer." };
           for (const p of asked) await (answer === "yes" ? D.confirmRead(ctx.userId, p.id!) : D.dismissRead(ctx.userId, p.id!)).catch(() => {});
           const line = D.confirmLine(D.foldSignals(asked.map((p) => ({ ...p, confirmed: true })), ds.context).tokens).replace(/, right\?$/, "");
-          ctx.facts?.add("did_this_turn", answer === "yes" ? `Saved the look Co read from their image as their look for what Co makes them: ${line}.` : "Dropped the look Co read from their image, as they said no to it.");
+          ctx.facts?.add("did_this_turn", answer === "yes" ? `Saved the look Cue read from their image as their look for what Cue makes them: ${line}.` : "Dropped the look Cue read from their image, as they said no to it.");
           return { ok: true, note: answer === "yes" ? `Saved as their look (${line}). Say so in a few words; nothing is built until they ask for something.` : "Dropped. Ask nothing more about it unless they say what they want instead." };
         }
         const A = await import("../services/memberAssets.js");
@@ -542,7 +542,7 @@ export function deckTools(
         const { recordDecision } = await import("../harness/core.js");
         await recordDecision({ layer: 3, decision: "design.read", userId: ctx.userId, outcome: "act", action: what, proposal: { tokens, quality: r.quality, vision: r.vision } }).catch(() => {});
         // What Co measured is known; any words in the image are not (they're part of the picture).
-        if (confirm) ctx.facts?.add("known", `Co read the look of their ${what === "logo" ? "logo" : "image"}: ${confirm.replace(/, right\?$/, "")}.`);
+        if (confirm) ctx.facts?.add("known", `Cue read the look of their ${what === "logo" ? "logo" : "image"}: ${confirm.replace(/, right\?$/, "")}.`);
         return {
           ok: true,
           tokens,
@@ -563,8 +563,8 @@ export function deckTools(
         taste: TASTE_INPUT,
         audience: z.string().nullable().optional().describe("Who the deck is for (\"seed investors\", \"the venue's events team\", \"my friends\"): what they said, or what's clear from the conversation. Leave it out only if you can't tell."),
         context: z.enum(["professional", "personal"]).optional().describe("Professional (work, investors, clients) or personal (friends, family, a party), from the audience. Leave it out for professional."),
-        readConfirmed: z.boolean().nullable().optional().describe("Only after Co sent its confirm-the-read line about an image of theirs: true when their reply agrees (yes, right, perfect), false when it doesn't. A correction goes in taste too."),
-        line: line("The one line that goes with the link, saying what you made (\"Here's the pitch deck for Northlight.\"). Co's design choices (fonts, colors, spacing) follow it in code, so don't describe the look in it.").nullable().optional(),
+        readConfirmed: z.boolean().nullable().optional().describe("Only after Cue sent its confirm-the-read line about an image of theirs: true when their reply agrees (yes, right, perfect), false when it doesn't. A correction goes in taste too."),
+        line: line("The one line that goes with the link, saying what you made (\"Here's the pitch deck for Northlight.\"). Cue's design choices (fonts, colors, spacing) follow it in code, so don't describe the look in it.").nullable().optional(),
         alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input) => {
@@ -573,7 +573,7 @@ export function deckTools(
         const t = await designFor(input.taste, { context, audience: input.audience ?? null, hasLogo: input.logo != null || /\blogo\b/i.test(words0), readConfirmed: input.readConfirmed });
         if ("error" in t) return { ok: false, error: t.error };
         if ("ask" in t && t.ask === "confirm") {
-          ctx.facts?.add("known", `Co hasn't built the deck yet: before building from the look it read, it is checking that read with them: "${t.line}"`);
+          ctx.facts?.add("known", `Cue hasn't built the deck yet: before building from the look it read, it is checking that read with them: "${t.line}"`);
           return {
             ok: false,
             ask: true,
@@ -582,10 +582,10 @@ export function deckTools(
         }
         if ("ask" in t) {
           if (!ctx.dryRun) await (await T()).recordTasteAsked(ctx.userId).catch(() => {});
-          ctx.facts?.add("known", "Co hasn't built the deck yet: it is asking one question first, about their taste and anything missing for the content.");
+          ctx.facts?.add("known", "Cue hasn't built the deck yet: it is asking one question first, about their taste and anything missing for the content.");
           // The question names things the fact check would otherwise cut as unsourced (live run, PR 3: the looks and Pinterest were
           // cut, and only "fine if you don't care" went): they're Co's own offer.
-          ctx.facts?.add("known", "For the look of a deck, Co can follow a Pinterest board, sites or brands they love, colors or a vibe they describe, or one of Co's looks by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic.");
+          ctx.facts?.add("known", "For the look of a deck, Cue can follow a Pinterest board, sites or brands they love, colors or a vibe they describe, or one of Cue's looks by name: Minimal, Editorial, Bold, Warm, Dark, Playful or Classic.");
           return {
             ok: false,
             ask: true,
@@ -609,7 +609,7 @@ export function deckTools(
             if (ctx.dryRun) return { ok: true, note: "Test run: nothing was written or sent." };
             const C = await import("../services/deckCompose.js");
             const selfForBrief = await selfIfAboutCo(ctx, { brief: input.brief, title: input.title });
-            const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.theirs}\n\nWhat Co is and does (the deck is about Co; these are facts):\n${selfForBrief}` : source.theirs, input.brief!, null, refused, input.audience ?? null));
+            const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.theirs}\n\nWhat Cue is and does (the deck is about Cue; these are facts):\n${selfForBrief}` : source.theirs, input.brief!, null, refused, input.audience ?? null));
             const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides, artDirection: input.artDirection ?? out?.artDirection, coverMood: input.coverMood ?? out?.coverMood, cover: input.cover, place: input.place ?? out?.place });
             if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
             deckIn = { ...input, ...parsed.data };
@@ -618,7 +618,7 @@ export function deckTools(
           // the logo they sent was left off).
           if (deckIn.logo == null && /\blogo\b/i.test(source.words) && !ctx.dryRun) {
             const since = Date.now() - DECK_WINDOW_HOURS * 3600_000;
-            const logos = (await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => [])).filter((a) => a.at.getTime() > since && /\blogo\b|wordmark/i.test(a.description ?? "") && !/cut to its content by Co/.test(a.description ?? ""));
+            const logos = (await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => [])).filter((a) => a.at.getTime() > since && /\blogo\b|wordmark/i.test(a.description ?? "") && !/cut to its content by (?:Co|Cue)/.test(a.description ?? ""));
             if (logos.length === 1) deckIn = { ...deckIn, logo: logos[0].n };
           }
           const ids = await assetIds(ctx.userId, deckIn, !!ctx.dryRun, { words: source.theirs, onDeck: [] });
@@ -717,7 +717,7 @@ export function deckTools(
           const turns = await DS.turnsToBuild(ctx.userId, ctx.resolvedContent ?? "").catch(() => null);
           await DS.logArtifactDesign({ ownerUserId: ctx.userId, pageId: made.id, medium: "deck", event: "made", layout: `${(toStore as any).style?.grammar ?? "editorial"}/${(toStore as any).style?.titleLayout ?? "auto"}`, tokens: (toStore as any).style, qa: { ran: shipped.ran, findings: shipped.findings, fixed: final.ok ? qa.fixed : [], first: qa.first.findings.length }, confirmLine: design.confirmed, choices, audience: input.audience ?? null, turnsToBuild: turns }).catch((err: any) => console.error("design log failed (non-fatal):", err?.message ?? err));
           const lineText = input.line?.trim() || `Here's the ${deckIn.title} deck.`;
-          ctx.facts?.add("known", `The deck's look, as Co chose it: ${choices}`);
+          ctx.facts?.add("known", `The deck's look, as Cue chose it: ${choices}`);
           // What QA found and code couldn't fix is said, in one line (never shipped silently).
           const short = Q.qaShortfall(shipped.findings);
           const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
@@ -736,7 +736,7 @@ export function deckTools(
             qa: Q.qaSummary(shipped),
             ...(final.ok && qa.fixed.length ? { qaFixed: qa.fixed } : {}),
             ...(placed.length ? { images: placed } : {}),
-            note: "The line, Co's design choices and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here.",
+            note: "The line, Cue's design choices and the link went as one text, and that's the whole delivery. Don't call sendReply about the deck at all: not the logo, the colors, the slides or what's in it. If their message asked nothing else, you're done; end the turn here.",
           };
         }
       },

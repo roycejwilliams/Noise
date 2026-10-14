@@ -82,7 +82,7 @@ export async function timelineFor(userId: string, _city: string | null, now: Dat
     loadBrief(userId).catch(() => null),
   ]);
   const items: TimelineItem[] = [
-    ...calls.map((c: any) => ({ at: new Date(c.scheduled_for).toISOString(), allDay: false, what: "a call with you (Co) they scheduled" })),
+    ...calls.map((c: any) => ({ at: new Date(c.scheduled_for).toISOString(), allDay: false, what: "a call with you (Cue) they scheduled" })),
     ...tasks.map((t: any) => ({ at: String(t.deadline instanceof Date ? t.deadline.toISOString() : t.deadline).slice(0, 10), allDay: true, what: `the deadline they gave for "${String(t.goal).slice(0, 80)}"` })),
     ...((busy[0]?.busy ?? []) as { start: string; end: string }[])
       .filter((b) => new Date(b.start).getTime() - now.getTime() < 24 * 3600_000)

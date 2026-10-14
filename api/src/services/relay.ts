@@ -61,7 +61,7 @@ export function matchConnection(name: string, connections: Connection[]): { ok: 
 // The one answer for anyone Co can't reach: the same whether or not they're a
 // member, so it never tells anyone who's in Co.
 export const NOT_REACHABLE =
-  "Co can only pass messages to people they're already connected to through Co (introduced after both said yes). It can't reach this person, and must not say whether they're a member.";
+  "Cue can only pass messages to people they're already connected to through Cue (introduced after both said yes). It can't reach this person, and must not say whether they're a member.";
 
 export function relayText(fromFirstName: string, message: string): string {
   return `${fromFirstName} asked me to pass this along: "${message.trim()}"\n\nIf you want me to send anything back, just tell me what to say.`;
@@ -141,7 +141,7 @@ export async function relayMessage(opts: { fromUserId: string; fromFirstName: st
   const to = found.person;
   if ((await relaysToday(opts.fromUserId, to.userId)) >= RELAY_PER_PAIR_PER_DAY) {
     await log("skip", "rate_limited", { toUser: to.userId });
-    return { ok: false, reason: "rate_limited", error: `Co already passed a message to ${to.firstName} for them today. It can pass another tomorrow.` };
+    return { ok: false, reason: "rate_limited", error: `Cue already passed a message to ${to.firstName} for them today. It can pass another tomorrow.` };
   }
   const { rows: phoneRows } = await pool.query(`SELECT u.phone_number, cp.city FROM users u LEFT JOIN co_profiles cp ON cp.user_id = u.id WHERE u.id = $1`, [to.userId]);
   const phone = phoneRows[0]?.phone_number;
@@ -201,17 +201,17 @@ export async function relayFacts(userId: string): Promise<string[]> {
   for (const r of rows) {
     // Queued for the recipient's morning: the sender hears it's waiting; the recipient's Co knows nothing until it reaches them.
     if (r.status === "queued") {
-      if (r.from_user === userId) out.push(`Co has queued their message to ${r.to_name} ("${r.message}") for ${r.to_name}'s morning, since it was outside ${r.to_name}'s hours. It has NOT reached ${r.to_name} yet.`);
+      if (r.from_user === userId) out.push(`Cue has queued their message to ${r.to_name} ("${r.message}") for ${r.to_name}'s morning, since it was outside ${r.to_name}'s hours. It has NOT reached ${r.to_name} yet.`);
       continue;
     }
     if (r.to_user === userId) {
-      out.push(`${r.from_name} asked Co to pass this along to them on ${day(r.created_at)}: "${r.message}". Co sends nothing back to ${r.from_name} unless they explicitly ask it to, in their own words.`);
+      out.push(`${r.from_name} asked Cue to pass this along to them on ${day(r.created_at)}: "${r.message}". Cue sends nothing back to ${r.from_name} unless they explicitly ask it to, in their own words.`);
     } else {
       const back = rows.find((x: any) => x.status === "sent" && x.from_user === r.to_user && x.to_user === userId && x.created_at > r.created_at);
       out.push(
         back
-          ? `Co passed their message to ${r.to_name} on ${day(r.created_at)} ("${r.message}"), and ${r.to_name} asked Co to send back: "${back.message}".`
-          : `Co passed their message to ${r.to_name} on ${day(r.created_at)} ("${r.message}"). ${r.to_name} hasn't sent anything back through Co, and Co knows nothing else about their reply.`,
+          ? `Cue passed their message to ${r.to_name} on ${day(r.created_at)} ("${r.message}"), and ${r.to_name} asked Cue to send back: "${back.message}".`
+          : `Cue passed their message to ${r.to_name} on ${day(r.created_at)} ("${r.message}"). ${r.to_name} hasn't sent anything back through Cue, and Cue knows nothing else about their reply.`,
       );
     }
   }

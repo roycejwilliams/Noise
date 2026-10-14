@@ -22,31 +22,31 @@ const haiku: Judge = async (prompt) =>
 // so a line Co proposed and they approved ("Ok create the doc", 2026-10-12 audit) is theirs; whether they approved it is the
 // judge's read, never a word list.
 export function claimsPrompt(lines: string[], theirWords: string, self = "", thread = ""): string {
-  return `A member asked for a slide deck. Below is everything they said for it${self ? ", what Co knows about itself (the deck is about Co)" : ""}${thread ? ", Co's last text and their reply to it" : ""}, then every line on the deck.
+  return `A member asked for a slide deck. Below is everything they said for it${self ? ", what Cue knows about itself (the deck is about Cue)" : ""}${thread ? ", Cue's last text and their reply to it" : ""}, then every line on the deck.
 
 A pitch deck's job is rhetoric. A line PASSES when it is:
 - what they said, rephrased, tightened, sharpened, reordered or combined;
 - positioning, framing, a contrast, a tagline, a stance, a mission or a call to action ("Not another social club", "Built on understanding, not a form", "The room is curated"), even in words they never used;
-- any positioning at all when they asked Co to work out the positioning;
-${self ? "- anything that matches what Co knows about itself, below;\n" : ""}${thread ? "- the stance or positioning in Co's last text, below, when their reply to it approved it (said yes, ok, go with it, or asked Co to make the deck or doc from it), said the same or tightened;\n" : ""}- only a label ("The problem", "Why now", "The ask").
+- any positioning at all when they asked Cue to work out the positioning;
+${self ? "- anything that matches what Cue knows about itself, below;\n" : ""}${thread ? "- the stance or positioning in Cue's last text, below, when their reply to it approved it (said yes, ok, go with it, or asked Cue to make the deck or doc from it), said the same or tightened;\n" : ""}- only a label ("The problem", "Why now", "The ask").
 
-A line FAILS only when it states a verifiable hard fact they never gave${self ? " and Co doesn't know about itself" : ""}: a partnership or deal ("Partnering with X" when they only named X), a customer or user count, a number, price, metric or date, a named event ("our November launch"), a named person or company presented as fact, or a result or award. Also a FACTUAL claim
+A line FAILS only when it states a verifiable hard fact they never gave${self ? " and Cue doesn't know about itself" : ""}: a partnership or deal ("Partnering with X" when they only named X), a customer or user count, a number, price, metric or date, a named event ("our November launch"), a named person or company presented as fact, or a result or award. Also a FACTUAL claim
 about the market, the industry or the world, with or without a number ("Most retired EV batteries are landfilled", "Demand is
 doubling", "No one recycles X at scale", a market size, a share, a trend stated as fact) that nothing in what they said or what
 was read for it backs: it fails even when it sounds like framing. A stance about the market ("The next wave of X needs Y") is still
-rhetoric and passes; a statement of what is true out there needs their words or a source.${thread ? " Their approval of Co's last text never backs a hard fact: names of people, numbers, partners, counts, dates and events must still come from their own words, never from Co's text. A Co text they didn't clearly approve (a question back, a doubt, a change of subject) backs nothing." : ""}
+rhetoric and passes; a statement of what is true out there needs their words or a source.${thread ? " Their approval of Cue's last text never backs a hard fact: names of people, numbers, partners, counts, dates and events must still come from their own words, never from Cue's text. A Cue text they didn't clearly approve (a question back, a doubt, a change of subject) backs nothing." : ""}
 
 What they said (and what was read for this deck, when anything was):
 """
 ${theirWords.slice(0, 6000)}
 """
 ${self ? `
-What Co knows about itself (facts):
+What Cue knows about itself (facts):
 """
 ${self.slice(0, 3000)}
 """
 ` : ""}${thread ? `
-Co's last text and their reply (Co's words are Co's, not theirs; approval backs only stance or positioning):
+Cue's last text and their reply (Cue's words are Cue's, not theirs; approval backs only stance or positioning):
 """
 ${thread.slice(-3000)}
 """
@@ -102,7 +102,7 @@ export function deckClaimLines(d: { subtitle: string; slides: { headline: string
 
 // What Co knows about itself, for a deck the team makes about Co: who Co is (the opening of its own prompt,
 // prompts/co-system-prompt.md) and what it can do (the capability sheet). Facts from Co's own code, never from a member.
-export const CO_IS = "Co gets to know people over time and brings the right people and moments into their lives. Co is invite-only: being here means something. Co is a genuine, ongoing companion, by text and by phone call.";
+export const CO_IS = "Cue gets to know people over time and brings the right people and moments into their lives. Cue is invite-only: being here means something. Cue is a genuine, ongoing companion, by text and by phone call.";
 export async function coSelfKnowledge(): Promise<string> {
   const { capabilitySheet } = await import("../capabilities.js");
   return [CO_IS, ...capabilitySheet()].join("\n");
@@ -116,7 +116,7 @@ export function approvalPair(rows: string[]): string {
   if (!last?.startsWith("Them: ")) return "";
   let i = rows.length - 2;
   while (i >= 0 && rows[i].startsWith("Them: ")) i--;
-  if (i < 0 || !rows[i].startsWith("Co: ")) return "";
+  if (i < 0 || !/^(?:Co|Cue): /.test(rows[i])) return "";
   // Their texts between that Co text and the latest are part of the reply.
   return [rows[i], ...rows.slice(i + 1)].join("\n");
 }

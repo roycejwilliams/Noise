@@ -92,7 +92,7 @@ export function documentText(doc: Doc): string {
     part.push(...s.bullets.map((b) => `• ${b}`));
     out.push(part.join("\n"));
   }
-  if (doc.suggestions.length) out.push(["Co's suggestions", ...doc.suggestions.map((b) => `• ${b}`)].join("\n"));
+  if (doc.suggestions.length) out.push(["Cue's suggestions", ...doc.suggestions.map((b) => `• ${b}`)].join("\n"));
   return out.join("\n\n");
 }
 
@@ -102,7 +102,7 @@ const STOP = new Set(["the", "a", "an", "and", "or", "of", "to", "in", "on", "fo
 // The section a question is about: the one whose heading and lines share the most words with it. Each section's text verbatim.
 export function sectionsOf(doc: Doc): { heading: string; text: string }[] {
   const out = doc.sections.map((s, i) => ({ heading: s.heading ?? `Section ${i + 1}`, text: [...s.paragraphs, ...s.bullets].join("\n") }));
-  if (doc.suggestions.length) out.push({ heading: "Co's suggestions", text: doc.suggestions.join("\n") });
+  if (doc.suggestions.length) out.push({ heading: "Cue's suggestions", text: doc.suggestions.join("\n") });
   return out;
 }
 export function findSection(doc: Doc, query: string): { heading: string; text: string } | null {

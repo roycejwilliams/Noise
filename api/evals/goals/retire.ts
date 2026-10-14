@@ -72,7 +72,7 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
   const mark2 = calls.find((c) => /UPDATE ask_checkins SET retire_due_at/.test(c.sql));
   check("the goal it serves is tied only while that goal is active", !!mark2 && mark2.args[2].join() === G.goalHash(WORK), mark2?.args);
   calls.length = 0;
-  await withPool(store(null, "Have Co draft the launch plan with Sequin AI"), () => A.flagRetire("u1", UUID, null, [WORK]));
+  await withPool(store(null, "Have Cue draft the launch plan with Sequin AI"), () => A.flagRetire("u1", UUID, null, [WORK]));
   check("a Co-task ask is left exactly as it is: no kind change, no mark, no question, no note, logged", !calls.some((c) => /UPDATE ask_checkins SET kind/.test(c.sql)) && !calls.some((c) => /retire_due_at/.test(c.sql)) && calls.some((c) => /INSERT INTO harness_decisions/.test(c.sql) && c.args.includes("co_task_unchanged")), calls.map((c) => c.sql.slice(0, 60)));
   // The planner hands the UUID and the tied goals through, and re-evaluates the marks only on a whole read.
   const helped: any[] = [];
@@ -133,7 +133,7 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
     idle: async (_u: string, r: Row, how: any) => { calls.push(`idle:${r.id}:${Object.keys(how)[0]}`); return true; }, queueText: async () => true, log: async () => {},
   });
   const answerRead = (answer: "yes" | "no") => async (p: string) => {
-    const last = p.split("Co's last text to them:")[1]?.split("Their reply:")[0] ?? "";
+    const last = p.split("Cue's last text to them:")[1]?.split("Their reply:")[0] ?? "";
     return JSON.stringify({ question_in_last_text: /still want me looking for/i.test(last), answer, reason: "stub" });
   };
   const open = [ask({ askedAt: ago(1) })];
@@ -147,7 +147,7 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
     await A.noteAskText("u1", "no thanks", { lastCoText: "Want the link for the founder supper on Thursday?", now: NOW }, stub(open), { answer: answerRead("no") });
     check("a 'no thanks' to an event offer inside the window doesn't stop the ask", calls.length === 0, calls);
     await A.noteAskText("u1", "no", { lastCoText: "Sounds like a big week.", now: NOW }, stub(open), { answer: async () => { calls.push("read"); return "{}"; } });
-    check("Co's last text has no question: no read at all", calls.length === 0);
+    check("Cue's last text has no question: no read at all", calls.length === 0);
     await A.noteAskText("u1", "hmm", { lastCoText: QUESTION, now: NOW }, stub(open), { answer: async () => { throw new Error("down"); } });
     await A.noteAskText("u1", "ok", { lastCoText: QUESTION, now: NOW }, stub(open), { answer: async () => "not json" });
     check("a failed or unreadable read changes nothing", calls.length === 0, calls);
@@ -168,10 +168,10 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
     await A.noteAskText("u1", "please pick it back up", { lastCoText: gNote, now: NOW }, stub([], [goal({ state: "stale", reason: R.RECHECK_IDLE_REASON, toldAt: ago(1), changedAt: ago(2), idleNote: gNote })]), { revive: yesRevive });
     check("a goal's note answered 'pick it back up' brings the goal back (and its asks with it)", calls.join() === `reviveGoal:${G.goalHash(WORK)}` && /if \(rowCount\) await reviveAsksWithGoal\(userId, g\.goalHash\)/.test(src("services/askRetire.ts")), calls);
   });
-  check("the reads are strict: only a read that says Co's last text asked it acts", A.readRetireAnswer('{"question_in_last_text": true, "answer": "no"}') === "no" && A.readRetireAnswer('{"question_in_last_text": false, "answer": "no"}') === "neither" && A.readRetireAnswer('{"answer":"yes"}') === "neither" && A.readRevive('{"revive": true}') && !A.readRevive('{"revive": "yes"}') && !A.readRevive("yes"));
-  check("the answer read sees Co's last text, and a 'no thanks' to something else is neither", /Co's last text to them:/.test(A.retireAnswerPrompt(ASK, "x?", "y")) && /A "no thanks" to something else Co offered is "neither"/.test(A.retireAnswerPrompt(ASK, "x?", "y")));
-  check("the text route hands the answer read Co's last text", /A\.noteAskText\(user\.id, content, \{ lastCoText: A\.lastCoBlock\(recentConversation\) \}\)/.test(src("routes/sendblue.ts")));
-  check("Co's last text is the run of Co lines at the end, a question in an earlier beat included", A.lastCoBlock("User said: hi\nCo replied: Here's the link\nCo replied: Still want me looking for venues?") === "Here's the link\nStill want me looking for venues?" && A.lastCoBlock("Co replied: Old\nUser said: x\nCo replied: New") === "New");
+  check("the reads are strict: only a read that says Cue's last text asked it acts", A.readRetireAnswer('{"question_in_last_text": true, "answer": "no"}') === "no" && A.readRetireAnswer('{"question_in_last_text": false, "answer": "no"}') === "neither" && A.readRetireAnswer('{"answer":"yes"}') === "neither" && A.readRevive('{"revive": true}') && !A.readRevive('{"revive": "yes"}') && !A.readRevive("yes"));
+  check("the answer read sees Cue's last text, and a 'no thanks' to something else is neither", /Cue's last text to them:/.test(A.retireAnswerPrompt(ASK, "x?", "y")) && /A "no thanks" to something else Cue offered is "neither"/.test(A.retireAnswerPrompt(ASK, "x?", "y")));
+  check("the text route hands the answer read Cue's last text", /A\.noteAskText\(user\.id, content, \{ lastCoText: A\.lastCoBlock\(recentConversation\) \}\)/.test(src("routes/sendblue.ts")));
+  check("Cue's last text is the run of Cue lines at the end, a question in an earlier beat included", A.lastCoBlock("User said: hi\nCo replied: Here's the link\nCo replied: Still want me looking for venues?") === "Here's the link\nStill want me looking for venues?" && A.lastCoBlock("Co replied: Old\nUser said: x\nCo replied: New") === "New");
 }
 
 // ---- 4. one question at a time; the note
@@ -198,12 +198,12 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
     ["Wants to meet more climate founders in SF", "I've stopped looking for things for meeting more climate founders in SF; say the word and I'll pick it back up"],
     ["Getting into pottery", "I've stopped looking for things for getting into pottery; say the word and I'll pick it back up"],
     ["Seeking a lead investor for the pre-seed round", "I've stopped looking for a lead investor for the pre-seed round; say the word and I'll pick it back up"],
-    ["Find AI events with Co", "I've stopped looking for AI events; say the word and I'll pick it back up"],
+    ["Find AI events with Cue", "I've stopped looking for AI events; say the word and I'll pick it back up"],
     ["Pottery classes near the Mission that run on weekday evenings after work hours", "I've stopped looking for pottery classes near the Mission that run on weekday evenings; say the word and I'll pick it back up"],
   ];
   const got = labels.map(([t]) => A.fallbackNote(t));
-  check("the fallback reads plainly for six awkward labels (no 'I want to', 'Wants to', leading Getting/Seeking, no Co, first word lower, capped)", got.every((g, i) => g === labels[i][1]), got);
-  check("...and every fallback label stays under the cap, with no Co, dash, quote or exclamation point", labels.every(([t]) => A.fallbackLabel(t).length <= A.NOTE_LABEL_CHARS && !/\bCo\b|[—–"!]/.test(A.fallbackLabel(t))));
+  check("the fallback reads plainly for six awkward labels (no 'I want to', 'Wants to', leading Getting/Seeking, no Cue, first word lower, capped)", got.every((g, i) => g === labels[i][1]), got);
+  check("...and every fallback label stays under the cap, with no Cue, dash, quote or exclamation point", labels.every(([t]) => A.fallbackLabel(t).length <= A.NOTE_LABEL_CHARS && !/\bCue\b|[—–"!]/.test(A.fallbackLabel(t))));
   // The written line: Co's voice, stored once; any rule broken, the fallback.
   const writer = (text: string, written = true) => async () => ({ text, written });
   check("a written line that keeps the rules is used, stored without its period", (await A.writeStopLine(ASK, writer("I've set the Sequin AI venue search aside for now. Say the word and I'll pick it back up."))) === "I've set the Sequin AI venue search aside for now. Say the word and I'll pick it back up");
@@ -217,7 +217,7 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
   const strip = (t: string) => (/Jordan/.test(t) ? t.replace(/Jordan's /, "") : t);
   check("fenced: a note the strip would change is skipped, and the next one goes (never blocked by it)", A.firstSurviving(owed, strip)?.key === UUID && A.firstSurviving(owed, () => null) === null);
   check("a paced text may carry notes owed 3+ days", A.notesToRide(owed, NOW).length === 2 && A.noteToRide([{ ...owed[1], since: ago(1) }], NOW) === null);
-  check("never on a heavy check-in, never while they're struggling, only Co's own companion and offer texts", !A.noteMayRide({ type: "companion", payload: { heavy: { endedAt: ago(1) } } }, false) && !A.noteMayRide({ type: "companion", payload: {} }, true) && A.noteMayRide({ type: "companion", payload: {} }, false) && !A.noteMayRide({ type: "goal_recheck", payload: {} }, false) && !A.noteMayRide({ type: "pre_arrival", payload: {} }, false));
+  check("never on a heavy check-in, never while they're struggling, only Cue's own companion and offer texts", !A.noteMayRide({ type: "companion", payload: { heavy: { endedAt: ago(1) } } }, false) && !A.noteMayRide({ type: "companion", payload: {} }, true) && A.noteMayRide({ type: "companion", payload: {} }, false) && !A.noteMayRide({ type: "goal_recheck", payload: {} }, false) && !A.noteMayRide({ type: "pre_arrival", payload: {} }, false));
   const rode = A.rideAlong(["https://lu.ma/abc", "A small founder supper Thursday, worth a look?"], owed[1].line, (d, p) => L.carryLaneNotes(d, p));
   check("riding in the last message that isn't a bare link, once", rode[0] === "https://lu.ma/abc" && rode[1].split(owed[1].line).length === 2 && A.noteCarried(rode.join("\n"), owed[1]), rode);
   const ps = src("harness/proactive.ts");

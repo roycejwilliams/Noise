@@ -79,9 +79,9 @@ const capped = mergeProfileList(["ship the Series B deck for Sequoia by March 3"
 check("cap holds", capped.length === 12, `${capped.length}`);
 check("a specific goal still gets in at the cap", capped.includes("ship the Series B deck for Sequoia by March 3"), JSON.stringify(capped));
 
-check("Co complaint", isAboutCo("lack of information from Co"));
-check("Co's", isAboutCo("Co's links were broken"));
-check("co-founder isn't Co", !isAboutCo("finding a technical co-founder"));
+check("Cue complaint", isAboutCo("lack of information from Cue"));
+check("Cue's", isAboutCo("Cue's links were broken"));
+check("co-founder isn't Cue", !isAboutCo("finding a technical co-founder"));
 check("unrelated", !isAboutCo("raising a Series A"));
 
 // An intent entry with no text is never an open ask (2026-09-20 — one real
@@ -166,7 +166,7 @@ const cityCases: [boolean, string][] = [
   [!cityChangeAllowed("San Francisco", null, "user: I'm in NYC"), "no new city means no change"],
   // 2026-09-17 fixes below.
   [!cityChangeAllowed("San Francisco", "Austin", "user: I'm in the middle of raising\nassistant: how's that going?"), "'in the middle of' isn't a place"],
-  [!cityChangeAllowed("San Francisco", "NYC", "assistant: I'm in your corner, we'll figure it out\nuser: thanks"), "only Co's own line said it, not the person's"],
+  [!cityChangeAllowed("San Francisco", "NYC", "assistant: I'm in your corner, we'll figure it out\nuser: thanks"), "only Cue's own line said it, not the person's"],
   [!cityChangeAllowed("San Francisco", "Austin", "user: we moved fast on the offer"), "'moved fast' isn't a move"],
   [!cityChangeAllowed("San Francisco", "Austin", "user: I am heading to a meeting, can we talk later"), "'heading to a meeting' isn't a place"],
   [cityChangeAllowed("San Francisco", "NYC", "user: im in nyc now"), "missing apostrophe still counts"],

@@ -287,13 +287,13 @@ export function speechStats(text: string): { words: number; dashes: number; semi
 export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
   // Co's pipeline, not the thing (Royce, 2026-10-09: "From the call: two confirmed for Tech Week... Left the run club off").
   { pattern: /^(?:from (?:the|our|that) call|per (?:the|our) call)\s*:/i, why: "opens on where it came from, not the thing" },
-  { pattern: /\b(?:one|two|three|four|five|\d+) (?:are |is )?(?:confirmed|verified) (?:for|on|so far)\b|\b(?:i |i've |i have )?left (?:the |it |them |that )?(?:\w+ ){0,3}off (?:since|because|as)\b|\bi (?:couldn'?t|could not) (?:confirm|verify)\b/i, why: "talks about Co's checking, not the thing" },
+  { pattern: /\b(?:one|two|three|four|five|\d+) (?:are |is )?(?:confirmed|verified) (?:for|on|so far)\b|\b(?:i |i've |i have )?left (?:the |it |them |that )?(?:\w+ ){0,3}off (?:since|because|as)\b|\bi (?:couldn'?t|could not) (?:confirm|verify)\b/i, why: "talks about Cue's checking, not the thing" },
   // A sentence that opens on Co's own activity: "Starting the plan", "Working on it now", "Digging into it".
-  { pattern: /^(?:(?:ok(?:ay)?|got it|on it|sure|great|perfect|alright)[,.!]?\s+)?(?:now\s+|already\s+|still\s+)?(?:starting|started|working on|beginning|kicking off|getting started on|digging into|looking into|in the middle of)\b/i, why: "opens on Co's own activity (task-tracker language)" },
+  { pattern: /^(?:(?:ok(?:ay)?|got it|on it|sure|great|perfect|alright)[,.!]?\s+)?(?:now\s+|already\s+|still\s+)?(?:starting|started|working on|beginning|kicking off|getting started on|digging into|looking into|in the middle of)\b/i, why: "opens on Cue's own activity (task-tracker language)" },
   // First person, in progress: "I'm starting", "I've started on it", "I'm still working on the draft", "I started the plan".
-  { pattern: /\b(?:i'?m|i am|i'?ve|i have|i)\s+(?:now\s+|just\s+|still\s+|already\s+|officially\s+)?(?:started|starting|begun|beginning|working on|kicking off|kicked off|getting started|in the middle of)\b/i, why: "narrates what Co is doing instead of what they get" },
+  { pattern: /\b(?:i'?m|i am|i'?ve|i have|i)\s+(?:now\s+|just\s+|still\s+|already\s+|officially\s+)?(?:started|starting|begun|beginning|working on|kicking off|kicked off|getting started|in the middle of)\b/i, why: "narrates what Cue is doing instead of what they get" },
   // Their own thing held behind Co's judgment: "once it's worth sending", "once it's in good shape", "nothing worth sending yet".
-  { pattern: /\bonce (?:it'?s|it is|they'?re|they are|there'?s|i have|i'?ve got)\s+(?:\w+\s+){0,2}?(?:worth|good enough|ready to send|in good shape|solid)\b/i, why: "holds their own thing behind Co's judgment" },
+  { pattern: /\bonce (?:it'?s|it is|they'?re|they are|there'?s|i have|i'?ve got)\s+(?:\w+\s+){0,2}?(?:worth|good enough|ready to send|in good shape|solid)\b/i, why: "holds their own thing behind Cue's judgment" },
   { pattern: /\b(?:worth (?:sending|sharing|passing along|texting)|good enough to (?:send|share))\b/i, why: "judges whether their own thing is worth sending" },
   // A status report on not having it yet (2026-10-08 live: "No confirmed details yet... Have a few leads, just nothing solid enough to
   // send you. I'll have it soon."): say what's missing or say nothing until it's done.
@@ -303,7 +303,7 @@ export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
   // Co's own machinery, said aloud (2026-10-08 live call: "The search hit a limit on my end ... I'm retrying it now").
   // "My systems" too (Royce, 2026-10-14: machinery talk like "nothing new on my end" or "my systems" stays cut on a check-in), and a
   // bare "my end" or "my side" ("no news my end", golden 29's first try).
-  { pattern: /\b(?:hit a (?:limit|snag|wall|cap)|ran into a (?:limit|snag|cap)|(?:(?:on|at)\s+)?my (?:end|side)|my (?:systems?|pipeline|backend))\b|\b(?:i'?m|i am)\s+(?:now\s+)?(?:retrying|re-?running|trying (?:it|that) again|still (?:searching|looking|loading))\b/i, why: "narrates Co's own machinery" },
+  { pattern: /\b(?:hit a (?:limit|snag|wall|cap)|ran into a (?:limit|snag|cap)|(?:(?:on|at)\s+)?my (?:end|side)|my (?:systems?|pipeline|backend))\b|\b(?:i'?m|i am)\s+(?:now\s+)?(?:retrying|re-?running|trying (?:it|that) again|still (?:searching|looking|loading))\b/i, why: "narrates Cue's own machinery" },
   // Tracker words.
   { pattern: /\b(?:status update|in progress|on my (?:list|queue)|in my queue|queued (?:it|up)|my task list)\b/i, why: "task-tracker words" },
 ];
@@ -352,7 +352,7 @@ export function narratesInternalState(text: string, opts: { allow?: (sentence: s
 //   3. two clauses asserting opposite states of one thing: done and not done, locked and open, heard back and still waiting.
 // An either-or question ("Is the date locked, or still open?") asks; it doesn't assert both, so its alternatives are not compared.
 // Pure, a few regexes over one or two sentences.
-const OWED = /\b(?:i|co)\s+(?:still\s+)?owes?\s+you\b|\bi\s+(?:still\s+)?(?:haven't|have not|didn't|did not)\s+(?:yet\s+)?(?:sent|finished|shared|delivered|written|drafted)\b|\bstill\s+(?:owed|pending|to come|on (?:my|its) way)\b|\bnot (?:sent|finished|done|ready) yet\b/i;
+const OWED = /\b(?:i|co|cue)\s+(?:still\s+)?owes?\s+you\b|\bi\s+(?:still\s+)?(?:haven't|have not|didn't|did not)\s+(?:yet\s+)?(?:sent|finished|shared|delivered|written|drafted)\b|\bstill\s+(?:owed|pending|to come|on (?:my|its) way)\b|\bnot (?:sent|finished|done|ready) yet\b/i;
 const THEY_HAD = /\b(?:had|get|got|getting|have)\s+(?:a\s+)?(?:chance|minute|moment|time)\s+to\s+(?:review|read|look|go through|check|dig|open)\b|\b(?:did|have|has)\s+you\s+(?:get\s+to\s+|got\s+to\s+)?(?:review(?:ed)?|read|receive[d]?|get|got(?:ten)?|see|seen|like[d]?|love[d]?|look(?:ed)?\s+(?:at|over|through)|go(?:ne)?\s+through|check(?:ed)?\s+out|open(?:ed)?|sign(?:ed)?\s+off)\b|\byou(?:'ve| have)?\s+(?:already\s+)?(?:reviewed|received|gotten|seen|liked|loved|looked (?:at|over)|gone through|checked out|opened|signed off on)\b|\bwhat\s+did\s+you\s+think\s+of\b|\bhow\s+did\s+you\s+like\b|\b(?:your|any)\s+(?:feedback|notes|edits)\s+on\b/i;
 const CO_SENT = /\bi(?:'ve| have)?\s+(?:already\s+|just\s+)?(?:sent|delivered|shared|finished|wrapped up|handed over)\b/i;
 const STILL_DONE = /\bstill\s+(?:(?:been|being|have|has|had|is|are|was|were)\s+)?(?:already\s+)?(?:finished|completed|delivered|sent|reviewed|signed off|wrapped up)\b/i;
@@ -408,7 +408,7 @@ export function selfContradiction(line: string): string | null {
   const had = clauses.filter((c) => THEY_HAD.test(c.text) || CO_SENT.test(c.text));
   for (const o of owed) for (const h of had) {
     if (o === h || shares(nounsOf(o.text), nounsOf(h.text)) || (h.sentence >= o.sentence && POINTS_BACK.test(h.text))) {
-      return `something Co still owes is also something they had or Co sent: "${o === h ? o.text : `${o.text} / ${h.text}`}"`;
+      return `something Cue still owes is also something they had or Cue sent: "${o === h ? o.text : `${o.text} / ${h.text}`}"`;
     }
   }
   // 3. Opposite states of one thing.

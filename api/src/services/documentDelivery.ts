@@ -522,7 +522,7 @@ export async function sendDocumentForTask(
   const now = deps.now();
   let claimed: number | null = null;
   if (o.coInitiated) {
-    if (!deps.claim) return { ok: false, blocked: true, why: "Not sent: a document Co starts itself needs the proactive ledger, and it isn't available here." };
+    if (!deps.claim) return { ok: false, blocked: true, why: "Not sent: a document Cue starts itself needs the proactive ledger, and it isn't available here." };
     const c = await deps.claim({ userId: o.userId, targetKey: `task:${o.taskId}:doc:${now.getTime()}`, message: `[document] ${doc.title}`, kind: o.coInitiated.kind, zone: o.zone, now });
     if (!c.ok) return { ok: false, blocked: true, nextAt: c.retryAt, why: `Not sent: ${c.reason}.` };
     claimed = c.ledgerId;

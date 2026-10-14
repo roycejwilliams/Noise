@@ -19,15 +19,15 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
 // ---------- the scenario, replayed through the real post-call draft
 // What the call actually held: the scarcity angle, building to be acquired, an advisor paid in equity. No pitch, no day.
 const TRANSCRIPT = [
-  "assistant: Hey Royce, it's Co. How did the advisor conversation land?",
-  "user: Good. I think the angle is scarcity. Co is built to create scarcity around the rooms, so it's something worth acquiring, not another app.",
+  "assistant: Hey Royce, it's Cue. How did the advisor conversation land?",
+  "user: Good. I think the angle is scarcity. Cue is built to create scarcity around the rooms, so it's something worth acquiring, not another app.",
   "assistant: And the advisor piece?",
   "user: I want to bring on an advisor with equity instead of just picking their brain. Someone who has done a consumer social pre-seed raise before.",
   "assistant: That sounds like a real structure.",
   "user: Yeah. I'm just not sure how to ask for it yet.",
 ].join("\n");
 // What the member context said: the stale recap line that carried a week-old relative date forward.
-const BACKGROUND = "Royce is building Co, a pre-seed social club platform. He's preparing to pitch investors Friday and has been working through freezing on \"the ask\", and is looking for an advisor with equity.";
+const BACKGROUND = "Royce is building Cue, a pre-seed social club platform. He's preparing to pitch investors Friday and has been working through freezing on \"the ask\", and is looking for an advisor with equity.";
 const FABRICATED = "The scarcity angle, building to acquire, bringing on an advisor with equity instead of just picking their brain. You're not thinking about this casually, you've got a real structure in your head already. That's going to come through Friday even if the ask part feels shaky.";
 const ASKS = "The scarcity angle and the advisor-with-equity structure sound like a real plan. Anything coming up this week I should know about?";
 const invented = (t: string | null) => !!t && /\bfriday\b|\bpitch|\binvestor/i.test(t);
@@ -61,7 +61,7 @@ const invented = (t: string | null) => !!t && /\bfriday\b|\bpitch|\binvestor/i.t
   const t3 = `${TRANSCRIPT}\nassistant: Good luck with the pitch Friday.`;
   P.setProactiveModelForTests(async () => "Hope the pitch goes well Friday. You've got the structure.");
   const no = await draftPostCallText("Royce", t3, "");
-  check("a Friday or a pitch that only Co said on the call (repeating its background) is not backed", no === null);
+  check("a Friday or a pitch that only Cue said on the call (repeating its background) is not backed", no === null);
 }
 
 // ---------- the guard itself
@@ -69,7 +69,7 @@ const U = (text: string, facts: any, o: any = {}) => S.unbackedSpecifics(text, f
 check("a day in the background is never backed", U("Good luck Friday.", { background_you_already_knew: "preparing to pitch Friday" }).includes("friday"));
 check("a day they said earlier, in an older text, is not backed (it has long since passed)", U("Good luck Friday.", { their_own_words_about_it: "I am pitching investors Friday" }).includes("friday"));
 check("a day in a source marked fresh (the call that just ended) is backed", U("Good luck Friday.", { call_transcript: "user: it's Friday" }, { freshKeys: ["call_transcript"] }).length === 0);
-check("a fresh transcript backs only what the MEMBER said, not what Co said in it", U("Good luck Friday.", { call_transcript: "assistant: Friday\nuser: ok" }, { freshKeys: ["call_transcript"] }).includes("friday"));
+check("a fresh transcript backs only what the MEMBER said, not what Cue said in it", U("Good luck Friday.", { call_transcript: "assistant: Friday\nuser: ok" }, { freshKeys: ["call_transcript"] }).includes("friday"));
 check("a future date in a structured field backs its weekday and its month and day", U("It's on Friday, October 9.", { the_date_they_gave: "2026-10-09" }).length === 0 && U("See you Oct 9.", { due: "2026-10-09" }).length === 0);
 check("a past date backs nothing (the Friday that already went by)", U("Good luck Friday.", { the_date_they_gave: "2026-10-02" }).includes("friday"));
 check("a date on a different day than the one on file is not backed", U("It's Saturday.", { the_date_they_gave: "2026-10-09" }).includes("saturday"));
@@ -97,12 +97,12 @@ check("the pre-arrival text gives its date as a date, so today and tonight are b
 check("an evening event stored as a UTC timestamp backs its LOCAL weekday (7pm PT Friday is Saturday in UTC)", U("See you Friday.", { event_start: "2026-10-10T02:00:00Z" }).length === 0 && U("See you Saturday.", { event_start: "2026-10-10T02:00:00Z" }).includes("saturday"));
 {
   const { splitRecap } = await import("../../src/services/claims.js");
-  const live = "Who they are (they said):\n- They are building Co.\n\nWhat is going on right now (they said it, and it is still inside its lifetime):\n- They are weighing an investor meeting. (they said, Oct 5, until Oct 12)\n\nCo's read (inference: orientation only, never state it back as something they told you):\n- They seem to be raising.";
+  const live = "Who they are (they said):\n- They are building Cue.\n\nWhat is going on right now (they said it, and it is still inside its lifetime):\n- They are weighing an investor meeting. (they said, Oct 5, until Oct 12)\n\nCue's read (inference: orientation only, never state it back as something they told you):\n- They seem to be raising.";
   const sp = splitRecap(live);
-  check("a rebuilt recap splits into what they said and what Co read into it", /investor meeting/.test(sp.theySaid) && /building Co/.test(sp.theySaid) && !/raising/.test(sp.theySaid) && /raising/.test(sp.coRead) && !/investor meeting/.test(sp.coRead));
+  check("a rebuilt recap splits into what they said and what Cue read into it", /investor meeting/.test(sp.theySaid) && /building Cue/.test(sp.theySaid) && !/raising/.test(sp.theySaid) && /raising/.test(sp.coRead) && !/investor meeting/.test(sp.coRead));
   const facts = (r: { theySaid: string; coRead: string }) => ({ live_things_they_said_about_themselves: r.theySaid || null, recap_of_what_you_know_about_them: r.coRead || null });
   check("a live thing they said backs the event in a companion check-in ('how did the investor meeting go?')", U("How did the investor meeting go?", facts(sp)).length === 0);
-  check("what only Co read into it does not back one (('how is the raising going?')", U("How is the raising going?", facts(sp)).length > 0);
+  check("what only Cue read into it does not back one (('how is the raising going?')", U("How is the raising going?", facts(sp)).length > 0);
   const old = splitRecap("Preparing to pitch investors Friday and working through the ask.");
   check("an old unlabelled prose recap is all background: it backs no event", old.theySaid === "" && U("How did the pitch go?", facts(old)).includes("pitch"));
   check("the companion check-in hands the recap over split", /splitRecap\(recap\.slice\(0, 3000\)\)/.test(fs.readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8")));

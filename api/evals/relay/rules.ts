@@ -26,9 +26,9 @@ check("off unless CO_RELAY=on", !R.relayEnabled({} as any) && !R.relayEnabled({ 
   delete process.env.CO_RELAY;
   const { ABILITIES } = await import("../../src/services/capabilities.js");
   const a = ABILITIES.find((x) => x.id === "relay")!;
-  check("while off, Co says it can't pass messages yet", /can't pass messages to other people or other members yet/.test(a.can));
+  check("while off, Cue says it can't pass messages yet", /can't pass messages to other people or other members yet/.test(a.can));
   process.env.CO_RELAY = "on";
-  check("once on, Co says exactly what it can and can't do", /already connected to through Co/.test(a.can) && /never says whether someone is a member/.test(a.can) && /never starts a group text/.test(a.can) && /never contacts anyone on its own/.test(a.can));
+  check("once on, Cue says exactly what it can and can't do", /already connected to through Cue/.test(a.can) && /never says whether someone is a member/.test(a.can) && /never starts a group text/.test(a.can) && /never contacts anyone on its own/.test(a.can));
   if (saved === undefined) delete process.env.CO_RELAY;
   else process.env.CO_RELAY = saved;
 }
@@ -56,8 +56,8 @@ check("the relay is labeled as theirs and adds nothing about them", R.relayText(
 check("the own-words check runs before anything is sent", rs.indexOf("isOwnWords(opts.message") < rs.indexOf("sendExemptWhenAllowed({ userId: to.userId"));
 
 // Consent out: nothing comes back without their yes
-check("the sender only learns what the recipient chose to send back", /hasn't sent anything back through Co, and Co knows nothing else about their reply/.test(rs) && /asked Co to send back:/.test(rs));
-check("the recipient is told Co sends nothing back unless they ask", /Co sends nothing back to \$\{r\.from_name\} unless they explicitly ask it to, in their own words/.test(rs));
+check("the sender only learns what the recipient chose to send back", /hasn't sent anything back through Cue, and Cue knows nothing else about their reply/.test(rs) && /asked Cue to send back:/.test(rs));
+check("the recipient is told Cue sends nothing back unless they ask", /Cue sends nothing back to \$\{r\.from_name\} unless they explicitly ask it to, in their own words/.test(rs));
 check("replies back are themselves relays from the recipient's own words", /From the other side, when someone who got a message from them asks you to send something back, relay that in their own words too/.test(src("services/capabilities.ts")));
 
 // Limits

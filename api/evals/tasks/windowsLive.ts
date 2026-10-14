@@ -71,7 +71,7 @@ if ((process.env.ONLY ?? "AB").includes("B")) {
   const r = await runTaskTurn(task, { now: () => wake, override: nothing });
   show("turn", { action: r.action, did: r.did, warning: r.warning });
   const facts = await pool.query(`SELECT relation, object_label, source, meta FROM co_facts WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' ORDER BY created_at`, [userId]);
-  show("co_facts (Co's record of the send)", facts.rows);
+  show("co_facts (Cue's record of the send)", facts.rows);
   const mem = await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'Co replied: [sent a document%' ORDER BY created_at`, [userId]);
   show("their thread (text_exchange)", mem.rows.map((x: any) => x.content));
   const out = await pool.query(`SELECT content, sender FROM outbound_messages WHERE user_id = $1 ORDER BY sent_at`, [userId]).catch(() => ({ rows: [] }));

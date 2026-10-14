@@ -43,25 +43,25 @@ const Q = {
     instructions: "Right now, does `latest_message` show they clearly want a real answer or help deciding something, not just to be listened to?",
     criteria: {
       true: "They're weighing options out loud, stuck on a decision, or asking what to do (even without a question mark).",
-      false: "Ordinary sharing, updates, venting, reactions, logistics, or asking Co to find or do something.",
+      false: "Ordinary sharing, updates, venting, reactions, logistics, or asking Cue to find or do something.",
     },
   },
   issue: {
     type: "noul",
-    instructions: "Someone is testing an AI texting companion called Co. Does `latest_message` report a problem with Co itself, or say how Co should work differently?",
+    instructions: "Someone is testing an AI texting companion called Cue. Does `latest_message` report a problem with Cue itself, or say how Cue should work differently?",
     criteria: {
-      true: "They point out something Co did wrong or badly (sent the same thing twice, wrong or made-up info, a broken link, ignored what they said, too slow, confusing), or say how Co should behave.",
-      false: "The problem is in their own life, they're just asking Co for something or changing what they want, or they're reacting normally.",
+      true: "They point out something Cue did wrong or badly (sent the same thing twice, wrong or made-up info, a broken link, ignored what they said, too slow, confusing), or say how Cue should behave.",
+      false: "The problem is in their own life, they're just asking Cue for something or changing what they want, or they're reacting normally.",
     },
   },
   feeling: {
     type: "noul",
-    instructions: "Does `latest_message` carry a real feeling Co should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use `recent_conversation`: \"fine\" after bad news isn't fine.",
+    instructions: "Does `latest_message` carry a real feeling Cue should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use `recent_conversation`: \"fine\" after bad news isn't fine.",
     criteria: { false: "Plain logistics, greetings, short acknowledgments, or tone you can't be confident about." },
   },
   aboutCo: {
     type: "noul",
-    instructions: "If `latest_message` carries a feeling, is it about Co itself (what Co found or didn't find, Co's suggestions, replies, speed, or mistakes) rather than their own life?",
+    instructions: "If `latest_message` carries a feeling, is it about Cue itself (what Cue found or didn't find, Cue's suggestions, replies, speed, or mistakes) rather than their own life?",
   },
 };
 

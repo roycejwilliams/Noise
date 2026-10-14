@@ -76,7 +76,7 @@ export function understandingGaps(
 // How the gap reads to Co.
 export function gapDescription(g: Gap): string {
   const what = RAPPORT_TOPIC_DESCRIPTIONS[g.topic];
-  return g.kind === "stale" ? `what's changed with ${what} (Co last heard about it on ${g.lastHeard}, so it may be different now)` : what;
+  return g.kind === "stale" ? `what's changed with ${what} (Cue last heard about it on ${g.lastHeard}, so it may be different now)` : what;
 }
 
 // Nothing new learned about them in this long reads as Co no longer paying

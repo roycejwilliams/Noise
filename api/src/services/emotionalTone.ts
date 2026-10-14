@@ -33,7 +33,7 @@ async function haikuSeekingMode(message: string, recentConversation: string, fun
       model: anthropic(MODELS.haiku),
       abortSignal,
       experimental_telemetry: { isEnabled: true, functionId },
-      prompt: `Read this text conversation with Co, and their latest message.
+      prompt: `Read this text conversation with Cue, and their latest message.
 
 Recent conversation, in order:
 ${recentConversation || "(start of the conversation)"}

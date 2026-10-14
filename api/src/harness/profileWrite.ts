@@ -230,7 +230,7 @@ export function gateResolutions(
   const rejected: { proposal: ProposedResolution; reason: string }[] = [];
   // Only the person's own lines can support retiring something; Co's lines
   // ("Co replied:", "assistant:") are excluded.
-  const isCoLine = (l: string) => /^\s*(co replied:|assistant:|co:)/i.test(l);
+  const isCoLine = (l: string) => /^\s*((?:co|cue) replied:|assistant:|(?:co|cue):)/i.test(l);
   const lines = transcript.split("\n");
   const hay = squash(lines.join(" "));
   const theirs = squash(lines.filter((l) => !isCoLine(l)).join(" "));
@@ -247,7 +247,7 @@ export function gateResolutions(
     if (!exists) reason = "item isn't on file";
     else if (q.split(" ").filter(Boolean).length < 3) reason = "no real supporting quote";
     else if (!hay.includes(q)) reason = "quote isn't in the conversation";
-    else if (!theirs.includes(q)) reason = "quote is something Co said, not them";
+    else if (!theirs.includes(q)) reason = "quote is something Cue said, not them";
     if (reason) rejected.push({ proposal: p, reason });
     else accepted.push(p);
   }
@@ -389,7 +389,7 @@ export function gateCorrections(
 ): { accepted: Correction[]; rejected: { proposal: ProposedCorrection; reason: string }[]; checks: GateCheck[] } {
   const accepted: Correction[] = [];
   const rejected: { proposal: ProposedCorrection; reason: string }[] = [];
-  const isCoLine = (l: string) => /^\s*(co replied:|assistant:|co:)/i.test(l);
+  const isCoLine = (l: string) => /^\s*((?:co|cue) replied:|assistant:|(?:co|cue):)/i.test(l);
   const theirs = squash(newWords.split("\n").filter((l) => !isCoLine(l)).join(" "));
   for (const p of proposals) {
     const field = CORRECTABLE_FIELDS.find((f) => f === p.field);
@@ -471,7 +471,7 @@ export function agreesWith(line: string): boolean {
 // message (second review, 2026-09-24: a yes to "How was your weekend?"
 // claimed the plan Co had stated two lines earlier).
 export function lastAskedSentence(coMessage: string): string | null {
-  const body = coMessage.replace(/^\s*(co replied:|assistant:|co:)\s*/i, "");
+  const body = coMessage.replace(/^\s*((?:co|cue) replied:|assistant:|(?:co|cue):)\s*/i, "");
   const sentences = body.match(/[^.!?\n]+[.!?]*/g) ?? [];
   // Only an offer or an ask of theirs, not a check-in question ("did it go well?"): a yes to that is not a want.
   for (let i = sentences.length - 1; i >= 0; i--) if (coAskedQuestion(sentences[i]) && OFFER.test(sentences[i])) return sentences[i].trim();
@@ -483,18 +483,18 @@ export function splitSpeakers(transcript: string): { theirs: string; cos: string
   const cos: string[] = [];
   let lastCo: string | null = null;
   for (const line of transcript.split("\n")) {
-    if (/^\s*(co replied:|assistant:|co:)/i.test(line)) {
+    if (/^\s*((?:co|cue) replied:|assistant:|(?:co|cue):)/i.test(line)) {
       cos.push(line);
       // Co's reply is several texts, one 'Co replied:' line each (a link last, often): with no member line
       // between them they are one message, and the offer it ends on is what a yes answers.
-      lastCo = lastCo ? `${lastCo} ${line.replace(/^\s*(co replied:|assistant:|co:)\s*/i, "")}` : line;
+      lastCo = lastCo ? `${lastCo} ${line.replace(/^\s*((?:co|cue) replied:|assistant:|(?:co|cue):)\s*/i, "")}` : line;
     } else if (/^\s*(user said:|user:|user sent a voice memo:)/i.test(line)) {
       theirs.push(line);
       // The question or offer they said yes to is theirs too; only that one.
       const asked = lastCo ? lastAskedSentence(lastCo) : null;
       if (asked && agreesWith(line)) theirs.push(asked);
       lastCo = null;
-    } else if (/^\s*(user (said|sent)\b|co (replied|called)\b|\[)/i.test(line)) {
+    } else if (/^\s*(user (said|sent)\b|(?:co|cue) (replied|called)\b|\[)/i.test(line)) {
       // Any other labeled line ("User sent a photo...", "Co called...",
       // "[Call] ...", a gap marker) ends Co's message.
       lastCo = null;

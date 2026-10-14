@@ -60,7 +60,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(`        old: wow ${s.tally.old.wow}, fine ${s.tally.old.fine}, no ${s.tally.old.no} (unmarked ${s.tally.old.unmarked})`);
   console.log(`days    rather have new ${s.prefs.new}, old ${s.prefs.old}, same ${s.prefs.same}, neither ${s.prefs.neither}, not picked ${s.prefs.unpicked}`);
   console.log(`quiet days with something you wanted: ${s.silentMisses.length ? s.silentMisses.map((x) => `${x.day} (${x.wanted.join("; ")})`).join(", ") : "none"}`);
-  console.log(`things you engaged with that were in a pool: ${s.inPool}; Co sent ${s.caught} no later than the old rules`);
+  console.log(`things you engaged with that were in a pool: ${s.inPool}; Cue sent ${s.caught} no later than the old rules`);
   for (const r of s.recall) console.log(`  ${r.inPool ? "" : "(not in any pool) "}${r.name} [${r.result}]: new ${r.newDay ?? "never"}, old ${r.oldDay ?? "never"}`);
   console.log(`\nPASS BAR  more wow, fewer no: ${s.pass.moreWowFewerNo ? "yes" : "NO"} | quiet days right: ${s.pass.quietDaysRight ? "yes" : "NO"} | keeps what worked: ${s.pass.keepsWhatWorked ? "yes" : "NO"}`);
 }

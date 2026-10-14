@@ -75,7 +75,7 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   const said = RG.heldClaimsFrom(k, NOW)!;
   check("claims: enduring things they said, dated the day they said it (never a day off in their zone)", said.enduring.length === 1 && /climate startup\. \(they said, Oct 3\)/.test(said.enduring[0]), said);
   check("claims: a plan they said, with until", said.theySaid.length === 1 && /pitch on Friday\. \(they said, Oct 7, until Oct 10\)/.test(said.theySaid[0]), said);
-  check("claims: Co's own read is never 'they said'", said.coInferred.length === 1 && ![...said.enduring, ...said.theySaid].some((l) => /tired of events/.test(l)));
+  check("claims: Cue's own read is never 'they said'", said.coInferred.length === 1 && ![...said.enduring, ...said.theySaid].some((l) => /tired of events/.test(l)));
   check("claims: an expired claim is gone", ![...said.enduring, ...said.theySaid, ...said.coInferred].some((l) => /ended/.test(l)));
   check("claims: no knowledge, nothing to answer from (fails closed)", RG.heldClaimsFrom(null) === null);
 }
@@ -129,7 +129,7 @@ const knowledge = (o: Partial<MemberKnowledge> = {}): MemberKnowledge => ({
   const pending = knowledge({ restraint: { ...calm, unanswered: { count: 2, lastInboundAt: iso(30), lastSentAt: iso(4) } } });
   const rf = RG.createReplyFacts();
   RG.addMemberKnowledge(rf, pending, MK.memberRules(pending));
-  check("rules: Co's unanswered texts bring the restraint line (a count, no pause date)", RG.restraintOn(pending.restraint) && rf.instructions.some((i) => /^Restraint:/.test(i)), rf.instructions);
+  check("rules: Cue's unanswered texts bring the restraint line (a count, no pause date)", RG.restraintOn(pending.restraint) && rf.instructions.some((i) => /^Restraint:/.test(i)), rf.instructions);
   const blanked = knowledge({
     claims: [{ text: "", provenance: "user_said", kind: "building", quote: "x", expiresOn: null, verifiedAt: "2026-10-03T00:00:00.000Z" }],
     goals: [{ text: " ", state: "active", reason: null, told: true, verifiedAt: iso(1) }],

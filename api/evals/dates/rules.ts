@@ -52,9 +52,9 @@ check("over, with the day", D.dateNote(r({ event_date: "2026-09-26" })) === " (a
 check("coming up, said plainly", D.dateNote(r({ event_date: "2026-10-07" })) === " (coming up: Wednesday, October 7, so it hasn't happened yet)");
 check("outside the asked dates, said plainly", /outside the dates they asked about\)$/.test(D.dateNote(r({ statedDates: { start: "2026-10-05", end: "2026-10-11" } }, weekend))));
 check("no date, no note", D.dateNote(r({})) === "");
-check("a recorded send carries its status", ledgerLine({ relation: "sent", label: "Mahjong After Dark", url: "https://lu.ma/m", at: new Date("2026-09-24T23:00:00Z"), when: "2026-09-26" }, today) === 'On 2026-09-24 Co sent them "Mahjong After Dark" (https://lu.ma/m) (already over: it was Saturday, September 26).');
-check("an earlier search says it's earlier", /^On Thursday, September 24, Co searched .* That was an earlier search: a new ask needs a new one\.$/.test(searchNoteLine("[search] Co searched for \"weekend\" and sent 1 thing: \"Mahjong After Dark\".", new Date("2026-09-24T20:00:00Z"), today)));
-check("today's search doesn't", /^Earlier today, /.test(searchNoteLine("[search] Co searched.", new Date(), D.localToday())) && !/earlier search/.test(searchNoteLine("[search] Co searched.", new Date(), D.localToday())));
+check("a recorded send carries its status", ledgerLine({ relation: "sent", label: "Mahjong After Dark", url: "https://lu.ma/m", at: new Date("2026-09-24T23:00:00Z"), when: "2026-09-26" }, today) === 'On 2026-09-24 Cue sent them "Mahjong After Dark" (https://lu.ma/m) (already over: it was Saturday, September 26).');
+check("an earlier search says it's earlier", /^On Thursday, September 24, Cue searched .* That was an earlier search: a new ask needs a new one\.$/.test(searchNoteLine("[search] Cue searched for \"weekend\" and sent 1 thing: \"Mahjong After Dark\".", new Date("2026-09-24T20:00:00Z"), today)));
+check("today's search doesn't", /^Earlier today, /.test(searchNoteLine("[search] Cue searched.", new Date(), D.localToday())) && !/earlier search/.test(searchNoteLine("[search] Cue searched.", new Date(), D.localToday())));
 
 // Wiring
 check("event facts carry the status", /const note = dateNote\(readDates\(itemDays\(match, zone\), localToday\(zone\), asked\)\);/.test(src("harness/replyGrounding.ts")));

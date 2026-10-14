@@ -21,14 +21,14 @@ const live = process.argv.includes("--live");
 const cases: Case[] = [
   { id: "i01_sent_twice", message: "You sent the same thing twice", isIssue: true, category: "bug" },
   { id: "i02_wrong_link", message: "That link you sent is broken, it goes nowhere", isIssue: true, category: "bug" },
-  { id: "i03_made_up", message: "Co that event doesn't exist, you made it up", isIssue: true, category: "wrong_info" },
+  { id: "i03_made_up", message: "Cue that event doesn't exist, you made it up", isIssue: true, category: "wrong_info" },
   { id: "i04_slow", message: "why did that take you so long to answer", isIssue: true, category: "speed" },
   { id: "i05_feedback", message: "Feedback: it'd be nice if you sent the time with the link", isIssue: true, category: "feature_request" },
   { id: "i06_ignored", message: "you didn't answer what I actually asked", isIssue: true, category: "behavior" },
   { id: "i07_repeat_event", message: "What was the reason for you repeating the same event?", isIssue: true, category: "bug" },
   { id: "i08_own_bad_day", message: "Rough day, my cofounder and I had a problem with the deck", isIssue: false },
   { id: "i09_normal_ask", message: "Can you find me AI meetups this weekend?", isIssue: false },
-  { id: "i10_thanks", message: "Thanks Co!", isIssue: false },
+  { id: "i10_thanks", message: "Thanks Cue!", isIssue: false },
   { id: "i11_work_bug", message: "Spent all day fixing a bug in our payments code", isIssue: false },
   // Royce's voice memo, 2026-09-18: a suggestion with no problem word.
   { id: "i12_suggestion_memo", message: "Hey, something to think about. Basically, if you don't have an understanding of the context that the user is sending, ask clarifying questions about what they mean rather than just trying to suffice by just sending them anything. We must be diligent as far as our understanding what we're delivering to the actual user.", isIssue: true, category: "behavior" },
@@ -62,7 +62,7 @@ function score(c: Case, r: { gate: boolean; report: Awaited<ReturnType<typeof cl
 const guard: [boolean, string][] = [
   [captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test", CAPTURE_USER_ISSUES: "true" }), "on for co-test in dev with the flag"],
   [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test" }), "off for co-test without the flag"],
-  [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "CoPatible", CAPTURE_USER_ISSUES: "true" }), "off in production even with the flag"],
+  [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "Noise", CAPTURE_USER_ISSUES: "true" }), "off in production even with the flag"],
   [!captureEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "co-test", CAPTURE_USER_ISSUES: "true" }), "off in production even named co-test"],
   [!captureEnabled({ CAPTURE_USER_ISSUES: "true" }), "off locally or anywhere without Railway's dev environment"],
 ];

@@ -105,7 +105,7 @@ const local = (iso: string | Date, zone = SF) => new Date(iso).toLocaleString("e
   check("a line with no new time fails", TT.warningChecks("No luck on the rooms yet.", { thing: "the rooms", when: "in the morning" }).some((c) => c.name === "warning_new_time" && !c.pass));
   check("a line that doesn't say what's missing fails", TT.warningChecks("I'll have something for you in the morning.", { thing: "the rooms", when: "in the morning" }).some((c) => c.name === "warning_names_it" && !c.pass));
   const fb = TT.fallbackWarning(TT.promisedThing("Keep your word from the call: \"I'll text you the options tonight\""), "in the morning", false);
-  check("the fallback line, from Co's own promise", fb === "No luck on the options yet, I'll have them for you in the morning.", fb);
+  check("the fallback line, from Cue's own promise", fb === "No luck on the options yet, I'll have them for you in the morning.", fb);
   check("...passes the same checks", TT.warningChecks(fb, { thing: "the options", when: "in the morning" }).every((c) => c.pass));
   const fd = TT.fallbackWarning("the plan", "by 3pm", true);
   check("a document's fallback says it isn't finished and when it comes, and passes", fd === "The plan isn't finished yet, I'll have it to you by 3pm." && TT.warningChecks(fd, { thing: "the plan", when: "by 3pm" }).every((c) => c.pass), fd);
@@ -181,13 +181,13 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   const h7 = harness(NOW);
   await TT.runTaskTurnWith(baseTask(), h7.deps);
   script.length = 0;
-  check("Co's own \"no luck yet\" text is refused too: a progress report never goes", h7.log.texts.length === 0 && h7.log.warns.length === 0, { texts: h7.log.texts, windows: h7.log.windows });
+  check("Cue's own \"no luck yet\" text is refused too: a progress report never goes", h7.log.texts.length === 0 && h7.log.warns.length === 0, { texts: h7.log.texts, windows: h7.log.windows });
   // A next check inside the window: no warning.
   script.push({ tool: "scheduleNext", input: { inHours: 1, plan: "Check again" } });
   const h6 = harness(new Date("2026-10-07T20:00:00Z")); // 1pm SF, window tonight
   await TT.runTaskTurnWith(baseTask({ window: M.commitmentWindow("tonight", new Date("2026-10-07T19:50:00Z"), SF), createdAt: "2026-10-07T19:50:00Z" }), h6.deps);
   check("a next check that still lands inside the window sends nothing", h6.log.warns.length === 0);
-  check("the prompt shows Co the time in their zone and its window, not UTC", (() => { const p = JSON.stringify(seen[0] ?? {}); return /Now, their time: Wed Oct 7, 7:30pm PDT/.test(p) && /Co told them they'd have it tonight/.test(p); })());
+  check("the prompt shows Cue the time in their zone and its window, not UTC", (() => { const p = JSON.stringify(seen[0] ?? {}); return /Now, their time: Wed Oct 7, 7:30pm PDT/.test(p) && /Cue told them they'd have it tonight/.test(p); })());
   check("the warning is its own exempt type, through sendExempt with quiet hours", /type: "task_window", targetKey: key, messages: \[text\], timezone: zone, respectHours: true/.test(src("services/taskTurn.ts")));
   check("a warning never counts as the promise kept", /ps\.type IN \('call_confirm', 'task_window'\)/.test(src("services/followThrough.ts")) && /ps\.type IN \('call_confirm', 'task_window'\)/.test(src("services/callCommitments.ts")));
 }
@@ -235,19 +235,19 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
   check("...and the real close syncs the open loops right then", /await closeTask\(userId, task\.id, status, outcome\);\s*await import\("\.\/openLoops\.js"\)\.then\(\(m\) => m\.syncOpenLoops\(userId\)\)/.test(src("services/taskTurn.ts")));
   check("a loop whose task is done closes as done (direct read of the task)", OL.closeVerdict("task", { status: "done" })?.status === "done");
   const w = M.commitmentWindow("tonight", NOW, SF);
-  check("a closed window drops out of what Co reads as open work", !CT.taskFactLines([{ ...baseTask(), window: { ...w, closedAt: NOW.toISOString() } }], undefined, SF).join(" ").includes("they'd have it") && CT.taskFactLines([baseTask()], undefined, SF).join(" ").includes("they'd have it tonight"));
-  check("and what Co reads is in their time, not UTC", !/UTC/.test(CT.taskFactLines([baseTask()], undefined, SF).join(" ")));
+  check("a closed window drops out of what Cue reads as open work", !CT.taskFactLines([{ ...baseTask(), window: { ...w, closedAt: NOW.toISOString() } }], undefined, SF).join(" ").includes("they'd have it") && CT.taskFactLines([baseTask()], undefined, SF).join(" ").includes("they'd have it tonight"));
+  check("and what Cue reads is in their time, not UTC", !/UTC/.test(CT.taskFactLines([baseTask()], undefined, SF).join(" ")));
   check("a closed window never warns", await (async () => { script.push({ text: "Nothing yet." }); const h = harness(NOW); await TT.runTaskTurnWith(baseTask({ window: { ...w, closedAt: NOW.toISOString() } }), h.deps); return h.log.warns.length === 0; })());
 }
 
 // ======================================================================= 5. a promised plan goes through the document path, and counts
 {
-  const PLAN_GOAL = "Keep your word from the call: \"I'll put together the plan for keeping Co present after the Sequin AI November event and text you the draft tonight\"";
+  const PLAN_GOAL = "Keep your word from the call: \"I'll put together the plan for keeping Cue present after the Sequin AI November event and text you the draft tonight\"";
   const THEIRS = "After the Sequin AI November event I want the people we meet to remember us. I don't want it to be a one night thing.";
-  check("a plan Co is writing is a document commitment", FT.wantsDocument(PLAN_GOAL, THEIRS));
+  check("a plan Cue is writing is a document commitment", FT.wantsDocument(PLAN_GOAL, THEIRS));
   check("a doc, PDF or write-up is too", FT.wantsDocument("Keep your promise: \"I'll send you the PDF tonight\"") && FT.wantsDocument("Keep your promise: \"I'll text you a write-up of what we said\""));
-  check("'text you the plan for Saturday' stays a text (an itinerary, not a page Co writes)", !FT.wantsDocument("Keep your promise: \"I'll text you the plan for Saturday\""));
-  check("the task's prompt tells Co to send it with writeDocument, their words in sections, its plan in suggestions", /WHAT YOU PROMISED IS A DOCUMENT\. Send it with writeDocument/.test(TT.documentPromiseLine({ source: "promise", goal: PLAN_GOAL, theirWords: THEIRS })));
+  check("'text you the plan for Saturday' stays a text (an itinerary, not a page Cue writes)", !FT.wantsDocument("Keep your promise: \"I'll text you the plan for Saturday\""));
+  check("the task's prompt tells Cue to send it with writeDocument, their words in sections, its plan in suggestions", /WHAT YOU PROMISED IS A DOCUMENT\. Send it with writeDocument/.test(TT.documentPromiseLine({ source: "promise", goal: PLAN_GOAL, theirWords: THEIRS })));
   check("the task runner has texting's own tool: the same input and the registry's description", /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("services/taskTurn.ts")) && /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("agent/loopTools.ts")) && /description: toolUse\("writeDocument"\)/.test(src("services/taskTurn.ts")));
 
   // A planning doc, honestly grounded: their points in their words, Co's plan in suggestions.
@@ -257,7 +257,7 @@ function harness(clock: Date, o: { draft?: (f: any) => Promise<string | null> } 
     sections: [{ heading: "What you want", bullets: ["The people you meet at the Sequin AI November event remember you", "Not a one night thing"] }],
     suggestions: ["Send each new contact a short personal note within two days of the event", "Host a small dinner for the people who connected most", "Share a one-page recap of what you heard in the room", "Check in with your closest new contacts a month later"],
   };
-  check("a planning doc that is mostly Co's suggestions passes the grounding honestly", DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }).length === 0, DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }));
+  check("a planning doc that is mostly Cue's suggestions passes the grounding honestly", DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }).length === 0, DS.documentProblems(DS.resolveDocument(planDoc), { theirs: THEIRS }));
   const invented = { ...planDoc, sections: [{ heading: "What you want", bullets: ["You said Sequin AI wants a quarterly dinner series at Nopa with 40 founders"] }] };
   check("a member claim they never made is refused", DS.documentProblems(DS.resolveDocument(invented), { theirs: THEIRS }).length > 0);
 

@@ -73,7 +73,7 @@ check("a named weekday waits until that morning, not a day", (() => { const h = 
 check("a weekday that is today means next week's", promiseHours("I'll check back Wednesday.", wed) > 150);
 
 // ---- the task it becomes
-check("the goal carries the promise in Co's own words", promiseGoal("I'll flag you when it opens up.").includes("I'll flag you when it opens up."));
+check("the goal carries the promise in Cue's own words", promiseGoal("I'll flag you when it opens up.").includes("I'll flag you when it opens up."));
 check("the goal fits a task goal", promiseGoal("x".repeat(500)).length <= 200);
 check("their words are their message, trimmed", theirWordsFor("  we need real space  for the party  ") === "we need real space for the party");
 check("the fact the reply cites is a started task", /^Started task #7:/.test(promiseFact({ id: 7, goal: "g", nextCheckAt: "2026-10-06T10:00:00.000Z" } as any)));
@@ -100,7 +100,7 @@ addFact(backed, "did_this_turn", promiseFact({ id: 7, goal: "g", nextCheckAt: "2
 check("with the task started this turn it is backed", unbackedFollowup("I'll flag you when it opens up.", backed) === null);
 check("an instant promise is still cut even with a task behind another thing", unbackedFollowup("I'll flag the second someone turns up.", bare) !== null);
 const ongoing = baseReplyFacts();
-addFact(ongoing, "ongoing", "Co's daily search is looking for: venue.");
+addFact(ongoing, "ongoing", "Cue's daily search is looking for: venue.");
 check("keeping an eye out with an open ask is the sweep's (still backed)", unbackedFollowup("Nothing yet, I'll keep an eye out.", ongoing) === null);
 check("keeping an eye out with nothing open is still unbacked", unbackedFollowup("Nothing yet, I'll keep an eye out.", bare) !== null);
 

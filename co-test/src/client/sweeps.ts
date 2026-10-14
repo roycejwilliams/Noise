@@ -129,7 +129,7 @@ async function loadRhythm() {
   const { rows } = (await res.json()) as { rows: RhythmRow[] };
   rhythmStatus.textContent = rows.length ? `${rows.length} member(s) with texts in the last 28 days` : "No texts in the last 28 days.";
   if (!rows.length) return;
-  let html = `<thead><tr><th>Member</th><th>Opened</th><th>Busiest hours</th><th>Busiest day</th><th>Co texted first</th><th>Texted back</th><th>Median wait</th><th>Zone</th></tr></thead><tbody>`;
+  let html = `<thead><tr><th>Member</th><th>Opened</th><th>Busiest hours</th><th>Busiest day</th><th>Cue texted first</th><th>Texted back</th><th>Median wait</th><th>Zone</th></tr></thead><tbody>`;
   for (const r of rows) html += `<tr><td>${esc(r.name)}</td><td class="num">${r.started}</td><td>${esc(r.peakHours ?? "too few to say")}</td><td>${esc(r.peakDay ?? "")}</td><td class="num">${r.proactive}</td><td class="num">${r.replied}</td><td class="num">${esc(mins(r.medianReplyMin))}</td><td class="detail">${esc(r.zone)}</td></tr>`;
   rhythmTable.innerHTML = html + "</tbody>";
 }

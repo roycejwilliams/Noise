@@ -9,7 +9,7 @@ const c = (id: string, type: string, summary: string, priority: number) => ({ id
 const eligible = [
   c("1", "event_offer", "Offer AgentFi demo day at The Avalon, Oct 7, founders and sponsors", 60),
   c("2", "debrief", "Ask how Mahjong After Dark went on Sep 24", 90),
-  c("3", "window_followup", "Ask how Oct 10 went for them (they asked Co to look for sponsors)", 35),
+  c("3", "window_followup", "Ask how Oct 10 went for them (they asked Cue to look for sponsors)", 35),
   c("4", "companion", "Ask how the sponsor deck for the Oct 10 event is coming along (they said it was stressing them out)", 10),
 ];
 const convo = Array.from({ length: 30 }, (_, i) => (i % 2 ? `Co replied: Here's what I found for this weekend, a couple of founder dinners in SF and one in Oakland ${i}.` : `User said: can you find me events with sponsors for my event on the 10th ${i}`)).join("\n");
@@ -24,4 +24,4 @@ for (let i = 0; i < runs; i++) {
   console.log(`${Date.now() - t}ms ${r.source} -> ${r.pick?.type}: ${r.reason.slice(0, 100)}`);
 }
 times.sort((a, b) => a - b);
-console.log(`Co picked ${co}/${runs}; median ${times[Math.floor(runs / 2)]}ms, max ${times[runs - 1]}ms`);
+console.log(`Cue picked ${co}/${runs}; median ${times[Math.floor(runs / 2)]}ms, max ${times[runs - 1]}ms`);

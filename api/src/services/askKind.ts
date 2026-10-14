@@ -20,7 +20,7 @@ export type AskKind = "find" | "help" | "person";
 // is the model's call below.
 const CO_COMMITMENT: RegExp[] = [
   // Co, or Co speaking as "I"/"we", saying what it will do or hand over.
-  /\b(?:co|i|we)(?:'ll| will| is going to| am going to| are going to)\s+(?:(?:draft|write|send|text|share|deliver|email|put together|pull together|get back|follow up|circle back|prepare|outline|check back)\b)/i,
+  /\b(?:co|cue|i|we)(?:'ll| will| is going to| am going to| are going to)\s+(?:(?:draft|write|send|text|share|deliver|email|put together|pull together|get back|follow up|circle back|prepare|outline|check back)\b)/i,
   // The deliverable as the subject: "the plan will be delivered", "draft to be sent".
   /\b(?:will|to) be (?:delivered|sent|shared|texted|emailed|drafted|written)\b|\bwill be ready\b/i,
   // "once it's ready", "when ready": a status, not something to find.
@@ -35,15 +35,15 @@ export function isCoCommitment(text: string): boolean {
 }
 
 export function askKindPrompt(text: string): string {
-  return `Someone asked Co for this: "${text.slice(0, 300)}"
+  return `Someone asked Cue for this: "${text.slice(0, 300)}"
 
-Answer "find" if Co could meet it by finding something out in the world: an event, a group or community (including researching which ones exist), people to meet or befriend (even when it's worded as wanting to connect with a kind of person), a program or an opportunity.
+Answer "find" if Cue could meet it by finding something out in the world: an event, a group or community (including researching which ones exist), people to meet or befriend (even when it's worded as wanting to connect with a kind of person), a program or an opportunity.
 
-Answer "help" only if it's asking Co to work something out with them: advice, deciding, planning, writing, organizing, figuring out what to offer. Finding sponsors or investors by name is "help": Co's search can't find those.
+Answer "help" only if it's asking Cue to work something out with them: advice, deciding, planning, writing, organizing, figuring out what to offer. Finding sponsors or investors by name is "help": Cue's search can't find those.
 
-Answer "help" as well when it isn't something to find at all: something Co said it would do or deliver (a plan, a draft, a text, an intro), a status ("will be delivered once ready"), or a statement of what they're doing themselves (offering to partner with a company, launching, hosting, a deal in progress) with nothing in it to go and find.
+Answer "help" as well when it isn't something to find at all: something Cue said it would do or deliver (a plan, a draft, a text, an intro), a status ("will be delivered once ready"), or a statement of what they're doing themselves (offering to partner with a company, launching, hosting, a deal in progress) with nothing in it to go and find.
 
-Answer "help" too when it asks Co to take an action for them (email, call, text, book, reserve, contact someone or somewhere): that's something to do, not something to find.
+Answer "help" too when it asks Cue to take an action for them (email, call, text, book, reserve, contact someone or somewhere): that's something to do, not something to find.
 
 Answer "person" if it's asking for one particular kind of person to meet or talk to one on one (an advisor, a founder who has done something, a mentor, someone to introduce them to). People in general (a community, friends, a crowd to be around) are "find".
 

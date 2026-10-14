@@ -347,7 +347,7 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
     `<meta property="og:type" content="article">`,
     `<meta property="og:title" content="${e(d.title)}">`,
     `<meta property="og:description" content="${e(desc)}">`,
-    `<meta property="og:site_name" content="Co">`,
+    `<meta property="og:site_name" content="Cue">`,
     o.url ? `<meta property="og:url" content="${e(o.url)}">` : "",
     o.ogImageUrl ? `<meta property="og:image" content="${e(o.ogImageUrl)}">` : "",
     `<meta name="twitter:card" content="${o.ogImageUrl ? "summary" : "summary"}">`,
@@ -421,10 +421,10 @@ export function renderCoPage(page: CoPageView, o: { url: string | null; ogImageU
   // Co's designed cover only on a page made with it (coverDesign), never added to an older one.
   const nothing = !coverSrc && !!d.coverDesign;
   const coverHtml = coverSrc
-    ? `<div class="cover photo"><img class="cover-img" src="${e(coverSrc.src)}" alt="${e(coverSrc.alt)}" decoding="async" data-qa-crop="ok"><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${coverSrc.credit}</div>`
+    ? `<div class="cover photo"><img class="cover-img" src="${e(coverSrc.src)}" alt="${e(coverSrc.alt)}" decoding="async" data-qa-crop="ok"><div class="cover-mark">Cue.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}${coverSrc.credit}</div>`
     : nothing
       ? `<div class="cover plate-cover">${abstractCover(d.title, { ground: pal.coverTop, ink: pal.coverText, accent: pal.maroon === pal.coverTop ? pal.coverText : pal.maroon, accent2: pal.gold }, e)}</div>`
-      : `<div class="cover${d.logo ? " logo-only" : " slim"}"><div class="cover-mark">Co.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}</div>`;
+      : `<div class="cover${d.logo ? " logo-only" : " slim"}"><div class="cover-mark">Cue.</div>${d.logo ? `<img class="cover-logo" src="${e(assetSrc(d.logo))}" alt="${e(d.title)}" decoding="async">` : ""}</div>`;
   const sources = d.sources.length
     ? `<div class="src"><h3>Sources</h3><ol>${d.sources.map((s) => `<li><a href="${e(s.url)}" rel="noopener noreferrer">${e(s.label)}</a> <span class="h">${e(hostOf(s.url))}</span></li>`).join("")}</ol></div>`
     : "";
@@ -448,7 +448,7 @@ ${coverHtml}
 <header class="open"><h1>${keepLastTwo(e(d.title))}</h1><p class="ctx">${e(d.context)}</p></header>
 ${mapTop}${sections}
 <div class="inner">${sources}</div>
-<footer><div class="sign">Made by Co</div><span class="asof">As of ${e(asOfLine(page.updatedAt, o.zone ?? null))}</span></footer>
+<footer><div class="sign">Made by Cue</div><span class="asof">As of ${e(asOfLine(page.updatedAt, o.zone ?? null))}</span></footer>
 </main>
 </body>
 </html>`;

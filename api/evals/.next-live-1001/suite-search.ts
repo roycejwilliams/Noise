@@ -51,12 +51,12 @@ export const search: Case[] = [
     run: async () => {
       await member("A"); await geo();
       feeds(
-        [{ id: "evt-own-1", name: "Co Founders Supper", start: day(1), end: day(1, 22), slug: "co-supper", city: "San Francisco" }],
+        [{ id: "evt-own-1", name: "Cue Founders Supper", start: day(1), end: day(1, 22), slug: "co-supper", city: "San Francisco" }],
         [
           { id: "pub-dinner", name: "Small Founder Dinner: Climate Builders", start: day(2), slug: "climate-dinner", city: "San Francisco" },
           { id: "pub-nyc", name: "NYC Founder Dinner", start: day(2), slug: "nyc-dinner", city: "New York" },
           { id: "pub-past", name: "Founder Dinner (last week)", start: day(-6), slug: "old-dinner", city: "San Francisco" },
-          { id: "evt-own-1", name: "Co Founders Supper", start: day(1), slug: "co-supper", city: "San Francisco" },
+          { id: "evt-own-1", name: "Cue Founders Supper", start: day(1), slug: "co-supper", city: "San Francisco" },
         ],
       );
       const { eventCandidates } = await import("../../src/services/tieredRecommendation.js");
@@ -66,7 +66,7 @@ export const search: Case[] = [
       const reply = await agent("any small founder dinners in SF this week?");
       return {
         checks: [
-          ck("Co's own event comes back as Tier 1 (co_event) with its id and date", !!own && own.match.tier === 1 && (own.match as any).kind === "co_event" && !!(own.match as any).event_date, own?.match),
+          ck("Cue's own event comes back as Tier 1 (co_event) with its id and date", !!own && own.match.tier === 1 && (own.match as any).kind === "co_event" && !!(own.match as any).event_date, own?.match),
           ck("the same id from the public feed isn't added again", ids.filter((x: string) => x === "evt-own-1").length === 1, ids),
           ck("the fitting public dinner is a Tier 2 candidate with its id", r.candidates.some((c: any) => (c.match as any).event_api_id === "pub-dinner" && c.match.tier === 2), ids),
           ck("past and distant-city events are left out", !ids.includes("pub-past") && !ids.includes("pub-nyc"), ids),
@@ -181,7 +181,7 @@ export const search: Case[] = [
           ck("taskWebSearch says so plainly and calls no provider", /^No web search right now/.test(tw.note) && tw.kept.length === 0, tw.note),
           ck("duplicate queries count once", afterDup === 1, { afterDup }),
           ck(`at most the turn's web budget, then a plain refusal`, s1.loop.webQueries <= 4 && r4?.ok === false && /No web searches left/i.test(r4?.error ?? ""), { webQueries: s1.loop.webQueries, r4 }),
-          ck("budget-exhausted tool result tells Co to say so, not 'nothing found'", r1?.ok === false && /used up/i.test(r1?.error ?? ""), r1),
+          ck("budget-exhausted tool result tells Cue to say so, not 'nothing found'", r1?.ok === false && /used up/i.test(r1?.error ?? ""), r1),
           ck("a failed reservation means no search", !failRes.ok && /couldn't be checked/.test(failRes.reason ?? ""), failRes),
           ck("past 75 seconds: no new search", r5?.ok === false && /Out of time/i.test(r5?.error ?? ""), r5),
           ck("zero provider calls in this case", providerCalls === 0, { providerCalls }),

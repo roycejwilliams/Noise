@@ -19,20 +19,20 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 
 const GOALS = [
   "partnering with Sequin AI for a November launch party",
-  "have Co draft planning docs for branding and launch strategy with Sequin AI",
+  "have Cue draft planning docs for branding and launch strategy with Sequin AI",
   "Connected with Jeremy Toce/House of AI for a November event",
 ];
 const terms = Q.memberTerms({ firstName: "Royce", goals: GOALS });
 
 // ---- 1. no member or company identifiers
 {
-  check("the member's identifiers: their name, Co, and the names in their own work", ["Royce", "Co", "Sequin AI", "House of AI", "Jeremy Toce"].every((t) => terms.includes(t)), terms);
-  const t2 = Q.memberTerms({ goals: ["Launch the Oct 10 DJ night at Rick & Roxy's", "Sequin AI wants a launch", "Get Co in front of users"] });
-  check("a goal's sentence-starting word isn't a name (Get, Launch), a month abbreviation isn't either, a company starting a goal still is", !t2.some((t) => /^(?:Get|Get Co|Launch|Launch the Oct|Oct)$/.test(t)) && t2.includes("Rick & Roxy's") && t2.includes("Sequin AI"), t2);
-  check("Co is matched as a word, never inside co-working", Q.queryProblems("co-working spaces SF", { terms: ["Co"], source: "web" }).length === 0 && Q.queryProblems("Co-working spaces SF", { terms: ["Co"], source: "web" }).length === 0 && Q.queryProblems("events like Co SF", { terms: ["Co"], source: "web" }).length > 0);
+  check("the member's identifiers: their name, Cue, and the names in their own work", ["Royce", "Cue", "Sequin AI", "House of AI", "Jeremy Toce"].every((t) => terms.includes(t)), terms);
+  const t2 = Q.memberTerms({ goals: ["Launch the Oct 10 DJ night at Rick & Roxy's", "Sequin AI wants a launch", "Get Cue in front of users"] });
+  check("a goal's sentence-starting word isn't a name (Get, Launch), a month abbreviation isn't either, a company starting a goal still is", !t2.some((t) => /^(?:Get|Get Cue|Launch|Launch the Oct|Oct)$/.test(t)) && t2.includes("Rick & Roxy's") && t2.includes("Sequin AI"), t2);
+  check("Cue is matched as a word, never inside co-working", Q.queryProblems("co-working spaces SF", { terms: ["Cue"], source: "web" }).length === 0 && Q.queryProblems("Co-working spaces SF", { terms: ["Cue"], source: "web" }).length === 0 && Q.queryProblems("events like Cue SF", { terms: ["Cue"], source: "web" }).length > 0);
   check("the X guidance's own recommended shape passes the bound", Q.queryProblems("(accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply) consumer AI", { terms: [], source: "x" }).length === 0);
   check("months, cities and category acronyms are never identifiers", !terms.some((t) => /^(?:November|SF|AI|San Francisco)$/.test(t)));
-  for (const q of ["Sequin AI House of AI November launch party sponsors", "Royce founder dinners SF", "events like CoPatible", "AI events for someone building a private social club"]) {
+  for (const q of ["Sequin AI House of AI November launch party sponsors", "Royce founder dinners SF", "events like Cue", "AI events for someone building a private social club"]) {
     check(`refused, names or describes the member: "${q}"`, Q.queryProblems(q, { terms, source: "web" }).some((p) => /member/.test(p)));
   }
   for (const q of ["SF AI founder events November", "consumer AI pre-seed open calls", "founder wellness community SF"]) {
@@ -87,7 +87,7 @@ const terms = Q.memberTerms({ firstName: "Royce", goals: GOALS });
 {
   const L = new Q.QueryLedger(Q.memberTerms({ firstName: "Royce", goals: GOALS }));
   const bad = L.check("web", "Sequin AI November launch sponsors");
-  check("a refused query costs nothing and tells Co what to fix", bad.length > 0 && /Rewrite it and search again; it cost nothing/.test(L.refusal("Sequin AI November launch sponsors", bad)));
+  check("a refused query costs nothing and tells Cue what to fix", bad.length > 0 && /Rewrite it and search again; it cost nothing/.test(L.refusal("Sequin AI November launch sponsors", bad)));
   L.ran("web", "SF AI founder events November", 3);
   L.ran("x", "AI founders SF tonight", 2);
   L.ran("events", "AI founder gatherings", 2);

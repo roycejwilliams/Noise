@@ -130,11 +130,11 @@ export function googleTools(ctx: Ctx, notDone: (text: string) => void, deps: { i
         }
         if (action === "disconnect") {
           const done = await disconnectGoogle(ctx.userId).catch(() => false);
-          ctx.facts?.add(done ? "did_this_turn" : "known", done ? "Disconnected their Google: revoked with Google and deleted everything Co had from it." : "Their Google wasn't connected, so there was nothing to disconnect.");
+          ctx.facts?.add(done ? "did_this_turn" : "known", done ? "Disconnected their Google: revoked with Google and deleted everything Cue had from it." : "Their Google wasn't connected, so there was nothing to disconnect.");
           return { ok: true, disconnected: done };
         }
         if (!googleConfigured()) {
-          notDone("No Google link was sent: Google connection isn't set up on Co yet.");
+          notDone("No Google link was sent: Google connection isn't set up on Cue yet.");
           return { ok: false, error: "Google connection isn't set up yet. Say it isn't available yet; don't promise when." };
         }
         const link = await createConnectLink(ctx.userId).catch(() => null);
@@ -147,8 +147,8 @@ export function googleTools(ctx: Ctx, notDone: (text: string) => void, deps: { i
           notDone("The Google connect link didn't send.");
           return { ok: false, error: "The link didn't go through." };
         }
-        ctx.facts?.add("did_this_turn", "Sent them a one-time link (good for 15 minutes) to connect Google: read-only calendar busy times and which sent emails await a reply, and saving documents they ask for as Google Docs in their Drive (Co sees only the files it creates). Co never sends email or changes their calendar.");
-        return { ok: true, note: "Sent the link as its own text. Tell them what Co will and won't see, in a sentence." };
+        ctx.facts?.add("did_this_turn", "Sent them a one-time link (good for 15 minutes) to connect Google: read-only calendar busy times and which sent emails await a reply, and saving documents they ask for as Google Docs in their Drive (Cue sees only the files it creates). Cue never sends email or changes their calendar.");
+        return { ok: true, note: "Sent the link as its own text. Tell them what Cue will and won't see, in a sentence." };
       },
     }),
   };

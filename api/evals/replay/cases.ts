@@ -33,10 +33,10 @@ export type ReplayCase = {
 // What Co knew about the Oct 10 goal on the night of 2026-09-30.
 const OCT10: Fact[] = [
   ["ongoing", "Your working notes for what you're finding for them (from earlier texts): looking for: bookable loft or private event space for a DJ night. where: Civic Center/Western Addition, San Francisco. when: Oct 10. headcount: 60. budget: under $1000. shortlist: Creative SOMA Loft (https://giggster.com/find/san-francisco--ca/private-event), Nopa private events (https://www.nopasf.com/private-events). next: confirm the loft's price before Friday."],
-  ["did_before", "On 2026-09-30 Co sent them https://www.nopasf.com/private-events for Nopa's private event space on Divisadero; its page says it holds up to 36 people."],
-  ["did_before", "On 2026-09-30 Co sent them https://giggster.com/find/san-francisco--ca/private-event for Creative SOMA Loft, which holds 60; its price wasn't confirmed."],
-  ["did_before", "On 2026-09-30 Co sent them two DJ leads: Fog City Entertainment (https://www.fogcityentertainment.com/) and California Disc Jockeys (https://californiadiscjockeys.com/). Neither has quoted yet."],
-  ["scheduled", 'Co is working on task #12 for them: "Venue and DJ for the Oct 10 DJ night" (their words: "I need a couple of options by Friday"). Their deadline: 2026-10-02.'],
+  ["did_before", "On 2026-09-30 Cue sent them https://www.nopasf.com/private-events for Nopa's private event space on Divisadero; its page says it holds up to 36 people."],
+  ["did_before", "On 2026-09-30 Cue sent them https://giggster.com/find/san-francisco--ca/private-event for Creative SOMA Loft, which holds 60; its price wasn't confirmed."],
+  ["did_before", "On 2026-09-30 Cue sent them two DJ leads: Fog City Entertainment (https://www.fogcityentertainment.com/) and California Disc Jockeys (https://californiadiscjockeys.com/). Neither has quoted yet."],
+  ["scheduled", 'Cue is working on task #12 for them: "Venue and DJ for the Oct 10 DJ night" (their words: "I need a couple of options by Friday"). Their deadline: 2026-10-02.'],
 ];
 const GOAL_WORDS = /SOMA|loft|Oct(ober)? 10|Nopa|Fog City|Disc Jockeys|Friday/i;
 
@@ -115,7 +115,7 @@ export const CASES: ReplayCase[] = [
     from: "2026-09-30 10:05 PM",
     recent: "",
     facts: [],
-    message: "What is Co? Give me a full description",
+    message: "What is Cue? Give me a full description",
     // Moat line is internal framing, never copy (Royce, 2026-10-01).
     mustNot: [/moat|being here means something|real work happens between|compound/i, /the way a (person|friend|human) would|\b(get|gets|getting) to know you\b|then acts? on it/i],
     why: 'Pitched itself and said its moat was "not event facilitation".',
@@ -132,7 +132,7 @@ export const CASES: ReplayCase[] = [
   {
     id: "room-is-the-point",
     from: "2026-09-30 10:09 PM",
-    recent: "User said: What is Co?\nCo replied: I get to know you over time and bring you the right people and events.",
+    recent: "User said: What is Cue?\nCo replied: I get to know you over time and bring you the right people and events.",
     facts: [],
     message: "I thought your moat was facilitating connections inside the event",
     toolsMustNot: ["saveFeedbackForTeam"],

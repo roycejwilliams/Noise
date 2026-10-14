@@ -20,11 +20,11 @@ export async function draftAskCheckin(firstName: string, p: AskCheckinPayload): 
     facts: {
       what_they_told_you_they_want: p.askText,
       times_you_have_checked_in_on_this: p.checkinCount,
-      open_leads: p.hasMatches ? "Co has some possible leads but nothing to introduce yet" : "none yet",
+      open_leads: p.hasMatches ? "Cue has some possible leads but nothing to introduce yet" : "none yet",
     },
     task: escalate
       ? `You've checked in on this ${p.checkinCount} times already. Ask, lightly, whether it's still something they want, and make it easy to say no. Name what it is in plain words.`
-      : `Check that this is still what they want, naming it in plain words, so Co keeps looking for the right thing ("Still looking for Series A operators, or has that changed?"). Don't imply anything is lined up. If there's nothing worth asking right now, return SKIP.`,
+      : `Check that this is still what they want, naming it in plain words, so Cue keeps looking for the right thing ("Still looking for Series A operators, or has that changed?"). Don't imply anything is lined up. If there's nothing worth asking right now, return SKIP.`,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 260 } };

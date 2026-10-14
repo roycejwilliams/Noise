@@ -70,7 +70,7 @@ export function resolvePlan(input: PlanInput, zone: string, records: (link: stri
   };
 }
 
-const NOT_NAMES = new Set(["i", "i'm", "i'll", "i've", "co", "the", "a", "an", "and", "or", "but", "to", "for", "at", "on", "in", "if", "it", "it's", "we", "you", "your", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "am", "pm"]);
+const NOT_NAMES = new Set(["i", "i'm", "i'll", "i've", "co", "cue", "the", "a", "an", "and", "or", "but", "to", "for", "at", "on", "in", "if", "it", "it's", "we", "you", "your", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "am", "pm"]);
 
 // Pure: capitalised words (names, places) in the text: any not at the start of a sentence, and the first
 // word of a sentence when a capitalised word follows it ("Zuni Cafe for dinner"). A lone sentence-opening
@@ -174,7 +174,7 @@ const utc = (d: DateTime) => d.toUTC().toFormat("yyyyLLdd'T'HHmmss'Z'");
 
 // Pure: the .ics for every timed step. A step with no end is held for an hour.
 export function buildIcs(plan: Plan, o: { seed: string; now: Date }): string {
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Co//Plan//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", `X-WR-CALNAME:${esc(plan.title)}`];
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Cue//Plan//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", `X-WR-CALNAME:${esc(plan.title)}`];
   plan.steps.forEach((s, i) => {
     if (!s.start) return;
     const end = s.end ?? s.start.plus({ hours: 1 });
@@ -256,7 +256,7 @@ ${plan.note ? `<p class="lede">${e(plan.note)}</p>` : ""}
 ${body}
 ${notes}
 <div class="spacer"></div>
-<div class="close">If anything shifts, tell me and I'll rework it.<span class="co">Co</span></div>
+<div class="close">If anything shifts, tell me and I'll rework it.<span class="co">Cue</span></div>
 </div></div></body></html>`;
 }
 
@@ -269,6 +269,6 @@ export function planEmail(plan: Plan, o: { firstName: string; calendar: boolean 
   return {
     subject: plan.title,
     html: quietEmail({ preview: plan.note || plan.title, headline: plan.title, lines: [...lines, attached] }),
-    text: `${o.firstName ? `${o.firstName}, ` : ""}${lines.join(" ")}\n\n${attached}\n\nCo`,
+    text: `${o.firstName ? `${o.firstName}, ` : ""}${lines.join(" ")}\n\n${attached}\n\nCue`,
   };
 }

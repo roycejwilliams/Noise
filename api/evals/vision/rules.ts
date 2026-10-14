@@ -54,7 +54,7 @@ function literals(text: string, isMarkdown: boolean): string[] {
 }
 const ROLE = "(?:an?\\s+|the\\s+|your\\s+)?(?:event[- ]finder|event[- ]finding (?:tool|app|service)|events? app|matchmak(?:er|ing (?:tool|app|service|platform))|networking (?:tool|app|platform|service)|recommendation (?:engine|bot))";
 // "You are Co, an event finder" and "I'm Co, your matchmaker" name Co before the role.
-const SELF = new RegExp(`\\b(?:you are|you're|i am|i'm|co is|co's just|as)\\s+(?:co,?\\s+)?${ROLE}`, "gi");
+const SELF = new RegExp(`\\b(?:you are|you're|i am|i'm|co is|cue is|co's just|cue's just|as)\\s+(?:(?:co|cue),?\\s+)?${ROLE}`, "gi");
 const NEGATED = /\b(not|never|isn't|aren't|no longer|instead of|rather than)\b[^.]{0,40}$/i;
 function selfDescriptions(text: string): string[] {
   const hits: string[] = [];
@@ -66,11 +66,11 @@ function selfDescriptions(text: string): string[] {
 }
 {
   // The detector itself behaves (so a pass below means something).
-  c(selfDescriptions("You are Co, an event finder for founders.").length === 1, "detector: 'an event finder' is caught");
+  c(selfDescriptions("You are Cue, an event finder for founders.").length === 1, "detector: 'an event finder' is caught");
   c(selfDescriptions("I'm a matchmaker who knows everyone").length === 1, "detector: 'a matchmaker' is caught");
-  c(selfDescriptions("Co is a networking tool").length === 1, "detector: 'a networking tool' is caught");
-  c(selfDescriptions("I'm Co, your matchmaker.").length === 1, "detector: 'I'm Co, your matchmaker' is caught");
-  c(selfDescriptions("Co is not a matchmaker or an event finder; it's a companion.").length === 0, "detector: a negation is allowed");
+  c(selfDescriptions("Cue is a networking tool").length === 1, "detector: 'a networking tool' is caught");
+  c(selfDescriptions("I'm Cue, your matchmaker.").length === 1, "detector: 'I'm Cue, your matchmaker' is caught");
+  c(selfDescriptions("Cue is not a matchmaker or an event finder; it's a companion.").length === 0, "detector: a negation is allowed");
   c(selfDescriptions("Never describe yourself as an event finder.").length === 0, "detector: an instruction not to say it is allowed");
 
   const scanned: string[] = [];
@@ -84,7 +84,7 @@ function selfDescriptions(text: string): string[] {
     scanned.push(f);
   }
   c(scanned.length > 50, `scanned the prompts and source (${scanned.length} files)`);
-  c(offenders.length === 0, `no prompt describes Co as an event finder, matchmaker or networking tool${offenders.length ? `: ${offenders.slice(0, 5).join("; ")}` : ""}`);
+  c(offenders.length === 0, `no prompt describes Cue as an event finder, matchmaker or networking tool${offenders.length ? `: ${offenders.slice(0, 5).join("; ")}` : ""}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ function selfDescriptions(text: string): string[] {
   for (const f of files("src")) {
     for (const lit of literals(read(f), false)) for (const hit of leads(lit)) offenders.push(`${relative(".", f)}: "${hit}"`);
   }
-  c(offenders.length === 0, `no prompt tells Co to lead with an offer${offenders.length ? `: ${offenders.slice(0, 5).join("; ")}` : ""}`);
+  c(offenders.length === 0, `no prompt tells Cue to lead with an offer${offenders.length ? `: ${offenders.slice(0, 5).join("; ")}` : ""}`);
 }
 
 const failed = cases.filter(([ok]) => !ok);

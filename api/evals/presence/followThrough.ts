@@ -28,7 +28,7 @@ check("a number with a sign or a suffix, or a lowercase-start name after a colon
 check("an em dash or an exclamation point fails", F.noteProblem("Maya, great meeting you — coffee soon?", ctx) !== null && F.noteProblem("Maya, great meeting you! Coffee soon?", ctx) !== null);
 check("a third party in their message can't ride into this person's note (grounded in their words about THIS person only)", F.noteProblem("Maya, great meeting you. I heard Stripe is going through a rough patch.", ctx) !== null);
 check("a link, email or number fails", F.noteProblem("Maya, great meeting you. Mine is rae@example.com", ctx) !== null && F.noteProblem("Great meeting you, see https://x.co", ctx) !== null && F.noteProblem("Call me on 415 555 1234", ctx) !== null);
-check("a claim about what the other person said fails", F.noteProblem("Maya, you told me she wanted to meet investors.", ctx) !== null && F.noteProblem("Maya, Co will follow up with you.", ctx) !== null);
+check("a claim about what the other person said fails", F.noteProblem("Maya, you told me she wanted to meet investors.", ctx) !== null && F.noteProblem("Maya, Cue will follow up with you.", ctx) !== null);
 check("too long fails", F.noteProblem("Maya, nice meeting you. ".repeat(40), ctx) !== null);
 check("empty fails", F.noteProblem("  ", ctx) !== null);
 check("their own ask and the names given are fair game", F.noteProblem("Maya, I'm looking for seed investors in robotics, and your studio could help. Coffee?", ctx) === null);
@@ -46,7 +46,7 @@ const steps = (over: Partial<import("../../src/services/eventFollowThrough.js").
 const o = { userId: "u1", firstName: "Rae", eventId: "ev1", eventName: "Founders Night", theirMessage: msg };
 const r: any = await F.buildFollowThrough(o, steps());
 check("a recap in their words, then one note each for Maya and Priya (not Jordan, not the invented name)", r.people === 2 && r.messages.length === 3 && /Maya \(we clicked\)/.test(r.messages[0]) && /^Maya:\n/.test(r.messages[1]) && /^Priya:\n/.test(r.messages[2]) && !r.messages.some((m: string) => /Jordan|Ellis/.test(m)));
-check("the recap says Co won't send them", /I won't send them for you/.test(r.messages[0]));
+check("the recap says Cue won't send them", /I won't send them for you/.test(r.messages[0]));
 let calls = 0;
 const redo: any = await F.buildFollowThrough(o, steps({ draftNote: async (x: any) => { calls++; return calls % 2 === 1 ? `${x.other.name}, loved hearing about Acme.` : `${x.other.name}, great meeting you. Coffee?`; } }));
 check("a draft that fails is redrafted once with the reason, and used when it then passes", redo.people === 2 && calls === 4);
@@ -54,7 +54,7 @@ const never: any = await F.buildFollowThrough(o, steps({ draftNote: async () => 
 check("a draft that fails twice is dropped, and with none passing nothing is sent", "skip" in never);
 const exc: any = await F.buildFollowThrough(o, steps({ draftNote: async () => { throw new Error("model down"); } }));
 check("a model failure sends nothing", "skip" in exc);
-check("nothing for someone who told Co they weren't going", "skip" in ((await F.buildFollowThrough(o, steps({ notGoing: async () => true }))) as any));
+check("nothing for someone who told Cue they weren't going", "skip" in ((await F.buildFollowThrough(o, steps({ notGoing: async () => true }))) as any));
 check("only once per event", "skip" in ((await F.buildFollowThrough(o, steps({ alreadySent: async () => true }))) as any));
 check("nothing when they named no one worth a note", "skip" in ((await F.buildFollowThrough(o, steps({ extractMet: async () => [met("Jordan", "critical")] }))) as any));
 check("nothing when the model finds no one", "skip" in ((await F.buildFollowThrough(o, steps({ extractMet: async () => [] }))) as any));
@@ -64,14 +64,14 @@ check("nothing when the model finds no one", "skip" in ((await F.buildFollowThro
   const { default: pool } = await import("../../src/db/db.js");
   const realQ = (pool as any).query;
   (pool as any).query = async () => ({ rows: [
-    { content: `User said: ok [Replying to Co's text: "Maya: looking for seed investors in robotics"]` },
+    { content: `User said: ok [Replying to Cue's text: "Maya: looking for seed investors in robotics"]` },
     { content: `User said: sounds good [They also sent a photo showing: a whiteboard with Acme]` },
     { content: `User said: [sent a photo showing: a menu]` },
     { content: `User said: can't do thursday` },
   ] });
   try {
     const v = await F.theirVoice("u1");
-    check("quoted Co text and photo descriptions never reach the draft as the member's voice", v.join("|") === "ok|sounds good|can't do thursday" && !v.some((l) => /Maya|investors|Acme|menu|Replying/.test(l)));
+    check("quoted Cue text and photo descriptions never reach the draft as the member's voice", v.join("|") === "ok|sounds good|can't do thursday" && !v.some((l) => /Maya|investors|Acme|menu|Replying/.test(l)));
   } finally {
     (pool as any).query = realQ;
   }

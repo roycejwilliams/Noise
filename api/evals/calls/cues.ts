@@ -45,28 +45,28 @@ check("the prompt line after the guide starts its own paragraph", /\n\nShort sen
 
 // Never in a transcript Co stores, never in a text.
 const turns = [
-  { role: "agent", message: "[warmly] Hey Jordan, it's Co." },
+  { role: "agent", message: "[warmly] Hey Jordan, it's Cue." },
   { role: "user", message: "Hey. Rough week, honestly." },
   { role: "agent", message: "[softly] I'm sorry. What happened?" },
   { role: "agent", message: "[laughs]" },
 ];
 const t = transcriptFromTurns(turns);
-check("the stored transcript has no cues", !/\[[a-z]/.test(t) && /assistant: Hey Jordan, it's Co\./.test(t) && /assistant: I'm sorry\. What happened\?/.test(t));
+check("the stored transcript has no cues", !/\[[a-z]/.test(t) && /assistant: Hey Jordan, it's Cue\./.test(t) && /assistant: I'm sorry\. What happened\?/.test(t));
 check("a line that was only a cue leaves no empty line", t.split("\n").length === 3);
 check("the caller's words are untouched", /user: Hey\. Rough week, honestly\./.test(t));
 check("the live conversation history is stripped too", !/\[softly\]/.test(transcriptFromHistory(JSON.stringify(turns))));
 check("a text never carries a cue (cleanCoMessage, every send)", cleanCoMessage("[warmly] Glad you made it. [softly] Talk soon.") === "Glad you made it. Talk soon.");
 
 // The guide reaches the call prompt only.
-check("the call prompt carries the cue guide", promptForElevenLabs("You are Co.").includes(CUE_GUIDE));
+check("the call prompt carries the cue guide", promptForElevenLabs("You are Cue.").includes(CUE_GUIDE));
 const realPrompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
 const callPrompt = promptForElevenLabs(realPrompt);
 check("in the real call prompt the guide sits in How you sound, with the spoken-aloud exception, before the opening note", callPrompt.includes("Everything you write is spoken aloud, except a cue in square brackets (below).") && callPrompt.indexOf(CUE_GUIDE) > callPrompt.indexOf("# On the phone") && callPrompt.indexOf(CUE_GUIDE) < callPrompt.indexOf("# What you know about") && callPrompt.trimEnd().endsWith(OPENING_NOTE));
 check("the shared prompt file itself never mentions cues (texts read it)", !/square brackets|CUE|\[warmly\]/.test(realPrompt));
 check("the guide names exactly the allowed cues, at most one, most replies none", VOICE_CUES.every((c) => CUE_GUIDE.includes(`[${c}]`)) && /Most replies have no cue, fewer than half\. Never more than one in a reply/.test(CUE_GUIDE));
-check("the guide keeps Co's voice and the no-label rule", /never theatrical, never flirtatious/.test(CUE_GUIDE) && /never name it/.test(CUE_GUIDE) && /never said aloud/.test(CUE_GUIDE) && /mirror/.test(CUE_GUIDE));
+check("the guide keeps Cue's voice and the no-label rule", /never theatrical, never flirtatious/.test(CUE_GUIDE) && /never name it/.test(CUE_GUIDE) && /never said aloud/.test(CUE_GUIDE) && /mirror/.test(CUE_GUIDE));
 const persona = readFileSync(new URL("../../src/services/coPersona.ts", import.meta.url), "utf8");
-check("Co's text persona never gets the cue guide", !/CUE_GUIDE|promptForElevenLabs|voiceCues/.test(persona));
+check("Cue's text persona never gets the cue guide", !/CUE_GUIDE|promptForElevenLabs|voiceCues/.test(persona));
 
 // The audit.
 const a = cueAudit(["[warmly] Hey Jordan.", "What's going on?", "[softly] [laughs] Okay.", "[sighs] Right.", ""]);

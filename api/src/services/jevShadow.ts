@@ -15,11 +15,11 @@ export const JEV_TURN_QUESTIONS: Record<string, JevBool> = {
   small_talk: { type: "boolean", instructions: "Is `latest_message` only small talk that closes or acknowledges (thanks, ok, cool, a laugh, a sign-off), needing nothing back?" },
   logistics: { type: "boolean", instructions: "Is `latest_message` a question or note about logistics: a time, date, place, address, price, or how to get somewhere?" },
   sharing: { type: "boolean", instructions: "Is `latest_message` them sharing something about their own life, work, or feelings?" },
-  reacting: { type: "boolean", instructions: "Is `latest_message` a reaction to something Co sent them (an event, a link, an offer): interested, going, not for them, how it went?" },
-  feedback: { type: "boolean", instructions: "Is `latest_message` feedback about how Co itself works, or a request to pass something to the team?" },
-  pushback: { type: "boolean", instructions: "Does `latest_message` correct or push back on what Co just said in `co_last_message`?" },
-  wants_search: { type: "boolean", instructions: "Is `latest_message` asking Co to find, look for, or recommend events, people, communities, or opportunities now?" },
-  wants_call: { type: "boolean", instructions: "Is `latest_message` asking Co for a phone call, now or at a set time?" },
+  reacting: { type: "boolean", instructions: "Is `latest_message` a reaction to something Cue sent them (an event, a link, an offer): interested, going, not for them, how it went?" },
+  feedback: { type: "boolean", instructions: "Is `latest_message` feedback about how Cue itself works, or a request to pass something to the team?" },
+  pushback: { type: "boolean", instructions: "Does `latest_message` correct or push back on what Cue just said in `co_last_message`?" },
+  wants_search: { type: "boolean", instructions: "Is `latest_message` asking Cue to find, look for, or recommend events, people, communities, or opportunities now?" },
+  wants_call: { type: "boolean", instructions: "Is `latest_message` asking Cue for a phone call, now or at a set time?" },
 };
 
 export type JevTurnLabels = Record<keyof typeof JEV_TURN_QUESTIONS, number>;

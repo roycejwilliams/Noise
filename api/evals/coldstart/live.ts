@@ -42,7 +42,7 @@ const { text: raw } = await generateText({ model: anthropic(MODELS.haikuPinned),
 let asks: { text: string; type: string }[] = [];
 try { asks = normalizeCapturedAsks(parseModelJson(raw), "last_user_message"); } catch {}
 console.log(`\ncaptured: ${JSON.stringify(asks)}\n`);
-check("an interest named in answer to Co's question lands as a seeking ask", asks.length === 1 && asks[0].type === "seeking" && /dinner/i.test(asks[0].text), asks);
+check("an interest named in answer to Cue's question lands as a seeking ask", asks.length === 1 && asks[0].type === "seeking" && /dinner/i.test(asks[0].text), asks);
 
 console.log(failed ? `cold start live: ${failed} failed` : "cold start live: all passed");
 if (failed) process.exit(1);

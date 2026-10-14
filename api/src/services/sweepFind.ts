@@ -27,12 +27,12 @@ export const SWEEP_BUDGET = { steps: 7, allSourcesSteps: 9, webQueries: 2, xSear
 // knew (proposeOpportunityQuery): search X once for the asks X covers, written
 // the way such posts are written, with OR for the words people post with. Co
 // still decides; this is guidance, not a rule in code.
-export const SWEEP_X_GUIDANCE = `X is where programs and gatherings are announced first. When the ask is one X covers (a program, cohort, accelerator, fellowship, residency or grant taking applications; an open call or a speaking or demo slot; founder or builder gatherings; investors or people looking for exactly what they want), search X once in this sweep. Write the query the way those posts are written, not the way they asked: the kind of thing, with OR for the real words people post with, grouped in parentheses, for example (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply). Keep it broad: two groups, the kind of thing and how it's announced, and a third only for a stage or field posts would carry (pre-seed, AI, fintech); never four. Their niche words make it come back empty; you judge the 20 posts that come back. Leave out their city and any year they didn't say, because posts rarely name either and those words make you miss them. Don't use X for venues, vendors, services or plain things to do; posts don't list those. And don't spend it on something that isn't a thing to find at all (a plan or draft Co owes them, a status, a deal they're working on): skip X for that sweep.`;
+export const SWEEP_X_GUIDANCE = `X is where programs and gatherings are announced first. When the ask is one X covers (a program, cohort, accelerator, fellowship, residency or grant taking applications; an open call or a speaking or demo slot; founder or builder gatherings; investors or people looking for exactly what they want), search X once in this sweep. Write the query the way those posts are written, not the way they asked: the kind of thing, with OR for the real words people post with, grouped in parentheses, for example (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply). Keep it broad: two groups, the kind of thing and how it's announced, and a third only for a stage or field posts would carry (pre-seed, AI, fintech); never four. Their niche words make it come back empty; you judge the 20 posts that come back. Leave out their city and any year they didn't say, because posts rarely name either and those words make you miss them. Don't use X for venues, vendors, services or plain things to do; posts don't list those. And don't spend it on something that isn't a thing to find at all (a plan or draft Cue owes them, a status, a deal they're working on): skip X for that sweep.`;
 
 // Every place Co can look, named in the brief (2026-10-08: sweeps ended without
 // ever looking at Co's own events for an event-shaped ask). Guidance, not a
 // forced call: Co still picks the tools.
-export const SWEEP_TIERS = `Where you can look, in order: (1) Co's own events and (2) the public event feed and openings Co already found, both through searchEvents; (3) the web (webSearch) and X (searchPosts) for programs, places and people. When the ask is something to go to or join (an event, a dinner, a meetup, a class, a community gathering), look at searchEvents before you finish, even if you expect it thin: Co's own events come first when they fit.`;
+export const SWEEP_TIERS = `Where you can look, in order: (1) Cue's own events and (2) the public event feed and openings Cue already found, both through searchEvents; (3) the web (webSearch) and X (searchPosts) for programs, places and people. When the ask is something to go to or join (an event, a dinner, a meetup, a class, a community gathering), look at searchEvents before you finish, even if you expect it thin: Cue's own events come first when they fit.`;
 
 // The 9am daily sweep looks in all three places (Royce, 2026-10-13: "Search all three sources (events, web, X) for every open ask ...
 // No per-ask source selectivity"): Co's own events and the public feed (searchEvents), the web (webSearch) and X (searchPosts). Co
@@ -81,7 +81,7 @@ export async function seenBefore(userId: string, askText: string, db: { query: (
 // What Co looked at and passed over, for the log (sweep.find), so "why did
 // nothing from X go out" can be answered from the record.
 export const SWEEP_PASS_TOOL =
-  "Note what you looked at closely and decided against, each with its link and a few words on why (wrong kind, already past, spam or promotion, not for them, too far). Call it once, alongside your keeps, when you're done. Nothing is sent; it's how Co's choices are reviewed.";
+  "Note what you looked at closely and decided against, each with its link and a few words on why (wrong kind, already past, spam or promotion, not for them, too far). Call it once, alongside your keeps, when you're done. Nothing is sent; it's how Cue's choices are reviewed.";
 export const PASSED_OVER_CAP = 10;
 
 // query: the search that brought it back (the tuning log: which phrasings produce keeps, 2026-10-08).
@@ -115,7 +115,7 @@ export function xFailure(err: unknown): { kind: "not_configured" | "auth" | "rat
 
 // What Co is told when X failed: not "no posts", which reads as "nothing out there".
 export function xFailedNote(f: ReturnType<typeof xFailure>): string {
-  const why = f.kind === "rate_limited" ? "X is rate limiting us right now" : f.kind === "auth" || f.kind === "not_configured" ? "Co's X access isn't working right now" : "X didn't answer";
+  const why = f.kind === "rate_limited" ? "X is rate limiting us right now" : f.kind === "auth" || f.kind === "not_configured" ? "Cue's X access isn't working right now" : "X didn't answer";
   return `The X search failed (${why}), so there are no posts to judge. This says nothing about whether posts exist. Use webSearch for this ask instead.`;
 }
 
@@ -180,18 +180,18 @@ export function sweepRecord(k: MemberKnowledge, askText: string): SweepRecord {
 export function sweepPrompt(c: SweepCandidate, o: { today: string; record: SweepRecord; allSources?: boolean; seen?: { name: string; url: string }[] }): string {
   const r = o.record;
   const section = (title: string, lines: string[]) => (lines.length ? `${title}\n${lines.map((l) => `- ${l}`).join("\n")}\n` : "");
-  return `You're Co, finding things worth texting ${c.firstName} about over the next couple of weeks. Nothing is sent now: what you keep goes into a queue, and Co texts at most one a day, so keep only what genuinely fits.
+  return `You're Cue, finding things worth texting ${c.firstName} about over the next couple of weeks. Nothing is sent now: what you keep goes into a queue, and Cue texts at most one a day, so keep only what genuinely fits.
 
-${c.fromProfile ? "They haven't asked for something specific; this is what they've shared they want" : "What they asked Co to keep an eye out for"}: "${c.askText}"
+${c.fromProfile ? "They haven't asked for something specific; this is what they've shared they want" : "What they asked Cue to keep an eye out for"}: "${c.askText}"
 ${c.homeCity !== undefined && c.city && c.homeCity && c.city.toLowerCase() !== c.homeCity.toLowerCase() ? `Where this is for: ${c.city} (they live in ${c.homeCity}; for this, look in ${c.city}).` : `Where they are: ${c.city ?? "unknown"}.`} Today: ${o.today}.
 
-What Co knows about them (their record):
+What Cue knows about them (their record):
 ${r.person || "(little known yet)"}
-${section("Where they're headed now:", r.goals)}${section("Goals since done or set aside (history, not what to look for):", r.goalsPast)}${section("Their other open asks (each gets its own sweep; context only):", r.otherAsks)}${section("What they've corrected or Co has learned (only the corrected version exists):", r.learned)}${section("What they've told Co, still holding:", r.claims)}${r.observedTaste ? `How what Co sent has landed: ${r.observedTaste}\n` : ""}${r.feeling ? `How they've been: ${r.feeling} (this shapes how Co says it, never whether they hear about something)\n` : ""}${r.frustratedWithCo ? "They've been frustrated with what Co has found: look wider and try harder.\n" : ""}
-${r.statedTaste.length ? `THE KIND OF ROOM THEY'VE TOLD CO THEY WANT (their own words, newest first; the strongest signal you have about fit):\n${r.statedTaste.map((t) => `- ${t}`).join("\n")}\nJudge every result against it and give each keep a taste: "matches", "neutral" or "clashes". Keep the ones that match first. Something that clashes isn't kept.\n` : ""}${r.avoid.length ? `They told Co to stop suggesting these kinds of things: ${r.avoid.map((a) => `"${a}"`).join(", ")}. Never search for them and never keep one, judged by its main activity (a chess night full of founders is a chess night).\n` : ""}${r.availability ? `When they've said they're free, in their words: "${r.availability}". Weigh an event's day and time against it as they said it: a limit when they said only, a leaning when they said more or prefer.\n` : ""}Already sent to them recently (don't keep these again): ${r.shown.length ? r.shown.join("; ") : "(nothing)"}
+${section("Where they're headed now:", r.goals)}${section("Goals since done or set aside (history, not what to look for):", r.goalsPast)}${section("Their other open asks (each gets its own sweep; context only):", r.otherAsks)}${section("What they've corrected or Cue has learned (only the corrected version exists):", r.learned)}${section("What they've told Cue, still holding:", r.claims)}${r.observedTaste ? `How what Cue sent has landed: ${r.observedTaste}\n` : ""}${r.feeling ? `How they've been: ${r.feeling} (this shapes how Cue says it, never whether they hear about something)\n` : ""}${r.frustratedWithCo ? "They've been frustrated with what Cue has found: look wider and try harder.\n" : ""}
+${r.statedTaste.length ? `THE KIND OF ROOM THEY'VE TOLD CO THEY WANT (their own words, newest first; the strongest signal you have about fit):\n${r.statedTaste.map((t) => `- ${t}`).join("\n")}\nJudge every result against it and give each keep a taste: "matches", "neutral" or "clashes". Keep the ones that match first. Something that clashes isn't kept.\n` : ""}${r.avoid.length ? `They told Cue to stop suggesting these kinds of things: ${r.avoid.map((a) => `"${a}"`).join(", ")}. Never search for them and never keep one, judged by its main activity (a chess night full of founders is a chess night).\n` : ""}${r.availability ? `When they've said they're free, in their words: "${r.availability}". Weigh an event's day and time against it as they said it: a limit when they said only, a leaning when they said more or prefer.\n` : ""}Already sent to them recently (don't keep these again): ${r.shown.length ? r.shown.join("; ") : "(nothing)"}
 
 Search only for this one ask. Other things they're working on (in who they are) are context for judging fit, not things to look for in this sweep, because each ask gets its own sweep (2026-10-01: a founder-events sweep kept a venue from another ask).
-Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Co will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
+Who a thing is for matters. Read each one for the group it speaks to (a hike club for women, a men's group, a moms' brunch) and say it in the audience field of keep. Never hold something back for who you assume they are: you only know what they have said in their own words, never from a name or a voice. A group-aimed thing fits them when what you know says they belong; when you don't know, you may still keep it if it fits strongly, and Cue will say plainly who it's for so they can tell. Prefer an open event when two fit about equally.
 
 Look with the tools: events first when it's something to go to, the web for programs, places and people. ${SWEEP_TIERS} ${SWEEP_X_GUIDANCE}${o.allSources ? ` ${SWEEP_ALL_SOURCES} ${SWEEP_RECENT}${o.seen?.length ? ` ${seenBeforeLine(o.seen)}` : ""}` : ""}
 ${SWEEP_QUERY_RULES}
@@ -264,7 +264,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const sourceFailures: string[] = [];
   const tools = {
     searchEvents: tool({
-      description: "Co's own events, the public event feed, and openings Co already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",
+      description: "Cue's own events, the public event feed, and openings Cue already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",
       inputSchema: z.object({ what: z.string(), when: z.string().optional() }),
       execute: async ({ what, when }) => {
         called.add("events");
@@ -423,7 +423,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         link: z.string(),
         name: z.string().optional(),
         why: z.string(),
-        taste: z.enum(["matches", "neutral", "clashes"]).optional().describe("Against the kind of room they've told Co they want, when they have: matches, neutral or clashes."),
+        taste: z.enum(["matches", "neutral", "clashes"]).optional().describe("Against the kind of room they've told Cue they want, when they have: matches, neutral or clashes."),
         audience: z.string().optional().describe("Only if the thing is aimed at a particular group (women, men, moms, a community): who, in a few words. Leave out when it is open to everyone."),
         date: z.string().optional().describe("The day it happens (YYYY-MM-DD), only when the result or its page shows that day. Leave out when it doesn't say."),
       }),

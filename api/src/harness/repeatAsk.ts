@@ -33,7 +33,7 @@ export function turnsFromConversation(conversation: string): Turn[] {
   const out: Turn[] = [];
   for (const raw of conversation.split("\n")) {
     const line = raw.trim();
-    const co = line.match(/^(?:Co replied|Co):\s*(.*)$/i);
+    const co = line.match(/^(?:Co replied|Cue replied|Co|Cue):\s*(.*)$/i);
     const them = line.match(/^(?:User said|User|Them):\s*(.*)$/i);
     if (co) out.push({ from: "co", text: co[1] });
     else if (them) out.push({ from: "them", text: them[1].replace(/\s*\[Replying to[^\]]*\]\s*$/i, "") });

@@ -38,12 +38,12 @@ const cases: [string, string | null, string][] = [
   ["I'll let you know as soon as I hear back.", "no_followup_promise", "follow-up promise"],
   ["Waiting to hear back, will let you know.", "no_followup_promise", "follow-up promise without I"],
   ["I can keep an eye out for one.", "no_followup_promise", "keep an eye out"],
-  ["Let me know if anything changes.", null, "their follow-up, not Co's"],
+  ["Let me know if anything changes.", null, "their follow-up, not Cue's"],
   ["Will do.", null, "bare will do"],
   // Advice about their own event's invites is not Co claiming a membership invite (2026-09-22).
   ["Have a handful of founders each sending invites to 3 people they actually want there.", null, "event invite advice is not an invite claim"],
-  ["Sending your invite now, one sec.", "no_invite_sent_claim", "Co claiming an invite is still caught"],
-  ["I'll send an invite link to your friend.", "no_invite_sent_claim", "Co promising an invite is still caught"],
+  ["Sending your invite now, one sec.", "no_invite_sent_claim", "Cue claiming an invite is still caught"],
+  ["I'll send an invite link to your friend.", "no_invite_sent_claim", "Cue promising an invite is still caught"],
   // Co can't start a group text (Sendblue only replies to numbers that texted
   // in), and group chats are out of the product (2026-09-20).
   ["Sure, I'll start a group text with you both.", "no_group_chat_claim", "offers a group text"],
@@ -55,7 +55,7 @@ const cases: [string, string | null, string][] = [
   ["I'll email you both once you've each said yes.", null, "the email introduction is fine"],
   ["If a good one turns up in Oakland I'll send it your way.", "no_followup_promise", "send it your way"],
   ["I'll pass it along if I hear anything.", "no_followup_promise", "pass it along"],
-  ["Send it my way whenever.", null, "their send, not Co's"],
+  ["Send it my way whenever.", null, "their send, not Cue's"],
   ["Will do. If a good Oakland running group turns up, I'll text you.", "no_followup_promise", "conditional promise first"],
   ["When you get there, I'll text you the address?", "no_followup_promise", "when-clause promise"],
   ["If you want, I can look now.", null, "offer to act now, not later"],
@@ -70,7 +70,7 @@ const cases: [string, string | null, string][] = [
 // With an open ask the daily search really runs: keeping looking is true,
 // a timing commitment still isn't.
 const rfOngoing = baseReplyFacts();
-addFact(rfOngoing, "ongoing", 'Co\'s daily search is looking for: "friends to hang out with in SF". If something real fits, Co may text them about it (at most one text a day).');
+addFact(rfOngoing, "ongoing", 'Cue\'s daily search is looking for: "friends to hang out with in SF". If something real fits, Cue may text them about it (at most one text a day).');
 const ongoingCases: [string, string | null, string][] = [
   ["Nothing real yet, but I'll keep looking and text you if something fits.", null, "keep looking with open ask"],
   ["I'll keep an eye out for people worth meeting.", null, "keep an eye out with open ask"],
@@ -98,8 +98,8 @@ const closingCases: [string, string | null][] = [
   ["ok call me now", null],
   ["Tell me more", null],
   ["no", null],
-  ["Thanks Co.", "like"],
-  ["Co thank you!", "like"],
+  ["Thanks Cue.", "like"],
+  ["Cue thank you!", "like"],
   ["love it co", "love"],
   ["co can you look again", null],
 ];
@@ -195,11 +195,11 @@ const windowCases: [boolean, string][] = [
   [isBrowseAsk("what's happening thursday night?"), "a weekday alone is still a browse ask"],
   [!isBrowseAsk("anything tech happening thursday?"), "tech is a subject"],
   // Receipts: what didn't happen is marked, and can't be claimed as done.
-  [renderReplyFacts((() => { const r = baseReplyFacts(); addFact(r, "not_done", "Co's contact card was not sent (the send failed)."); return r; })()).includes("NOT DONE: Co's contact card was not sent"), "a receipt is shown to Co as NOT DONE"],
-  [(() => { const r = baseReplyFacts(); addFact(r, "not_done", "Co's contact card was not sent (the send failed)."); return codeChecks("Here you go.", r, { message: "v card?", recentConversation: "", sentThisTurn: ["https://lu.ma/abc123"] }).some((c) => c.name === "no_handover_claim" && !c.pass); })(), "a failed card can't be claimed even when a link went out"],
+  [renderReplyFacts((() => { const r = baseReplyFacts(); addFact(r, "not_done", "Cue's contact card was not sent (the send failed)."); return r; })()).includes("NOT DONE: Cue's contact card was not sent"), "a receipt is shown to Cue as NOT DONE"],
+  [(() => { const r = baseReplyFacts(); addFact(r, "not_done", "Cue's contact card was not sent (the send failed)."); return codeChecks("Here you go.", r, { message: "v card?", recentConversation: "", sentThisTurn: ["https://lu.ma/abc123"] }).some((c) => c.name === "no_handover_claim" && !c.pass); })(), "a failed card can't be claimed even when a link went out"],
   // "Here you go" with nothing handed over this turn.
   [codeChecks("Here you go, Jacqueline. Save it so I'm easy to find.", rf, { message: "can you send me a v card", recentConversation: "" }).some((c) => c.name === "no_handover_claim" && !c.pass), "\"here you go\" with nothing sent is caught"],
-  [!codeChecks("Here you go, save it so I'm easy to find.", rf, { message: "can you send me a v card", recentConversation: "", sentThisTurn: ["[sent Co's contact card]"] }).some((c) => c.name === "no_handover_claim"), "after a real card, \"here you go\" is fine"],
+  [!codeChecks("Here you go, save it so I'm easy to find.", rf, { message: "can you send me a v card", recentConversation: "", sentThisTurn: ["[sent Cue's contact card]"] }).some((c) => c.name === "no_handover_claim"), "after a real card, \"here you go\" is fine"],
   [!codeChecks("Here it is.", rf, { message: "link?", recentConversation: "Co replied: https://lu.ma/abc123", sentThisTurn: ["https://lu.ma/abc123"] }).some((c) => c.name === "no_handover_claim"), "after a real link, \"here it is\" is fine"],
   [(() => { const r = baseReplyFacts(); addFact(r, "did_this_turn", "Sent the link https://lu.ma/abc123 for \"Mixer\" as its own message just before this reply."); return !codeChecks("There you go, that's the one.", r, src).some((c) => c.name === "no_handover_claim"); })(), "a link the turn sent first counts as handed over"],
   [!codeChecks("Sounds good, talk soon.", rf, src).some((c) => c.name === "no_handover_claim"), "an ordinary reply isn't a handover claim"],
@@ -246,11 +246,11 @@ onboardingCaseCases.push(
 // goes out (2026-09-16 onboarding: "I'm ready to be Co. Send me what you'd
 // like me to say, and I'll write a single message.").
 onboardingCaseCases.push(
-  [looksLikeMetaReply("I'm ready to be Co. Send me what you'd like me to say, and I'll write a single message."), "the onboarding leak is caught"],
+  [looksLikeMetaReply("I'm ready to be Cue. Send me what you'd like me to say, and I'll write a single message."), "the onboarding leak is caught"],
   [looksLikeMetaReply("Send me what you'd like me to say."), "asking for what to say is caught"],
   [!looksLikeMetaReply("Save my contact so we can keep talking."), "the real line passes"],
   [!looksLikeMetaReply("Would you like me to look for more founder events this week?"), "a normal offer passes"],
-  [!looksLikeMetaReply("You and your co-founder should both come."), "co-founder is not being Co"],
+  [!looksLikeMetaReply("You and your co-founder should both come."), "co-founder is not being Cue"],
   [!looksLikeMetaReply("I'll text you if something real turns up."), "a normal promise passes"],
   [capitalizeSentences("what's your full name and email so i can get started?") === "What's your full name and email so I can get started?", "a lone i is capitalized"],
   [capitalizeSentences("i'm in. i'll text you") === "I'm in. I'll text you", "i'm and i'll are capitalized"],
@@ -276,7 +276,7 @@ onboardingCaseCases.push(
     [!shouldCacheSearch([]), "an empty search result is not cached"],
     [shouldCacheSearch([{ name: "x" }]), "a search with a result is cached"],
     [keeps("Can you help me find a founder or builder meetup this weekend?", "Find a founder or builder meetup this weekend"), "rewrite that only drops filler is kept"],
-    [!keeps("That sounds interesting maybe you can help me find that founder/builder meetup this weekend", "a weekend founder/builder meetup at a casual cafe setting"), "rewrite that adds Co's invented words is refused"],
+    [!keeps("That sounds interesting maybe you can help me find that founder/builder meetup this weekend", "a weekend founder/builder meetup at a casual cafe setting"), "rewrite that adds Cue's invented words is refused"],
     [!keeps("Any AI meetups in SF on Thursday?", "AI meetups on Thursday"), "rewrite that drops the place is refused"],
     [!keeps("Any AI meetups in SF on Thursday?", "AI meetups in SF this weekend"), "rewrite that changes the time frame is refused"],
     [!keeps("looking for climate tech founders near Oakland", "climate tech founders"), "rewrite that drops a named city is refused"],
@@ -296,9 +296,9 @@ onboardingCaseCases.push(
     [!messageIsOnlyTheAsk("any founder events this weekend 😭", "Find founder events this weekend"), "a feeling shown only as an emoji still gets a reply"],
     [canSkipReplyAfterResults({ sentResults: 1, original: "Any design events in SF next week?", rewritten: "Find design events in SF next week", ruledOut: 0, firstRealMessage: false }), "a plain ask with a result and nothing ruled out skips the reply"],
     [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI engineer events Thursday?", rewritten: "Find AI engineer events Thursday", ruledOut: 1, firstRealMessage: false }), "something ruled out keeps the reply, so a wrong earlier pick gets corrected"],
-    [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI events in SF this week?", rewritten: "Find AI events in SF this week", ruledOut: 0, firstRealMessage: true }), "a first real message keeps the reply, so Co opens the conversation"],
+    [!canSkipReplyAfterResults({ sentResults: 1, original: "Any AI events in SF this week?", rewritten: "Find AI events in SF this week", ruledOut: 0, firstRealMessage: true }), "a first real message keeps the reply, so Cue opens the conversation"],
     [!canSkipReplyAfterResults({ sentResults: 0, original: "Any design events in SF next week?", rewritten: "Find design events in SF next week", ruledOut: 0, firstRealMessage: false }), "nothing sent means a reply"],
-    [isOnlyUpdatesAsk("Updates?") && isOnlyUpdatesAsk("any updates") && isOnlyUpdatesAsk("What's new?") && isOnlyUpdatesAsk("hey, any new updates on Co?"), "a bare updates question is only the ask (2026-09-18)"],
+    [isOnlyUpdatesAsk("Updates?") && isOnlyUpdatesAsk("any updates") && isOnlyUpdatesAsk("What's new?") && isOnlyUpdatesAsk("hey, any new updates on Cue?"), "a bare updates question is only the ask (2026-09-18)"],
     [!isOnlyUpdatesAsk("Updates? also did you find anything for Sunday") && !isOnlyUpdatesAsk("any updates on the grants?"), "updates plus something else still gets a reply"],
     // The router's split of the ask from everything else (2026-09-18).
     [canSkipReplyAfterResults({ sentResults: 1, original: "What does the SF tech week look like? Oct 5th - Oct 11th?", rewritten: "What tech events are happening during SF tech week Oct 5th - Oct 11th", ruledOut: 0, firstRealMessage: false, beyondAsk: null }), "router: a date range is part of the ask, so no restating reply"],
@@ -309,10 +309,10 @@ onboardingCaseCases.push(
     [!messageIsOnlyTheAsk("anything this weekend 🙏🏾", "Find events this weekend"), "any emoji counts as more than the ask"],
     [messageIsOnlyTheAsk("Any AI/ML talks in SF next week?", "Find AI/ML talks in SF next week"), "ordinary punctuation like a slash is still just the ask"],
     [offerScore(0.5, null, false) === 0.5, "no profile: order by the ask alone"],
-    [resolveCoEventCity("Oakland", "San Francisco", "Austin").city === "Oakland", "a Co event's own calendar city wins"],
+    [resolveCoEventCity("Oakland", "San Francisco", "Austin").city === "Oakland", "a Cue event's own calendar city wins"],
     [resolveCoEventCity(null, "Brooklyn", "Austin").source === "event_page", "no calendar city: the event page's city"],
     [resolveCoEventCity(null, null, "Austin", "San Francisco, CA").source === "event_address", "no city field: the page's venue text"],
-    [resolveCoEventCity(null, null, "Austin").city === "Austin", "no city anywhere: Co's home city"],
+    [resolveCoEventCity(null, null, "Austin").city === "Austin", "no city anywhere: Cue's home city"],
     [resolveCoEventCity("", null, undefined).city === "San Francisco", "no home city set: San Francisco"],
     [(() => {
       const people = [
@@ -324,7 +324,7 @@ onboardingCaseCases.push(
       ];
       const ids = announcementAudience(people, (c) => c !== "New York").map((p) => p.id);
       return ids.length === 1 && ids[0] === "near";
-    })(), "a new Co event goes to everyone nearby, never far away, opted out, mid-onboarding or with no city"],
+    })(), "a new Cue event goes to everyone nearby, never far away, opted out, mid-onboarding or with no city"],
     [offerScore(0.4, 0.6, false) > offerScore(0.45, 0.2, false), "with a profile, a slightly weaker ask match that suits them better comes first"],
     [offerScore(0.6, 0.1, false) > offerScore(0.35, 0.3, false), "a much stronger ask match still beats a small profile edge"],
     [offerScore(0.1, 0.7, true) === 0.7, "a what's-on ask is ordered by the profile"],
@@ -342,7 +342,7 @@ onboardingCaseCases.push(
   [coAskedQuestion("I'm here if you'd ever want to hop on a call and talk it through."), "an offer phrased as availability still counts"],
   [!coAskedQuestion("Here's what's new:\n\nWe added dark mode."), "a plain statement is not an ask"],
   [!coAskedQuestion(null), "no last message means no ask"],
-  [!coAskedQuestion("Check it out here: https://lu.ma/abc123?ref=co"), "a query string's ? doesn't count as Co asking something"],
+  [!coAskedQuestion("Check it out here: https://lu.ma/abc123?ref=co"), "a query string's ? doesn't count as Cue asking something"],
 );
 
 // LEAKED_METACOMMENTARY / looksLikeMetaReply (services/sendblue.ts,
@@ -359,8 +359,8 @@ onboardingCaseCases.push(
   [isLeakedMetaCommentary("Here's a message: {{first_name}}, want to grab coffee?"), "an unfilled template variable is still caught"],
   [isLeakedMetaCommentary("As an AI I can't form opinions about that."), "a real AI self-reference is still caught"],
   [isLeakedMetaCommentary("I don't have access to our conversation history before this."), "a real memory/context leak is still caught"],
-  [isLeakedMetaCommentary("I can't actually send you a text message right now."), "claiming Co can't text at all is still caught"],
-  [isLeakedMetaCommentary("I'm ready to be Co. Send me what you'd like me to say."), "the looksLikeMetaReply leak is still caught (delegated)"],
+  [isLeakedMetaCommentary("I can't actually send you a text message right now."), "claiming Cue can't text at all is still caught"],
+  [isLeakedMetaCommentary("I'm ready to be Cue. Send me what you'd like me to say."), "the looksLikeMetaReply leak is still caught (delegated)"],
 );
 
 // Sendblue's webhook secret comparison (services/sendblue.ts
@@ -427,8 +427,8 @@ onboardingCaseCases.push(
     ]);
     return p.length === 2 && p[0].caption?.includes("Love Potion") === true && p[1].caption === null;
   })(), "each sent link keeps the description sent right after it; a lone link has none"],
-  [needsClaimCheck("Co keeps an eye on that for you."), "a claim about how Co works gets checked"],
-  [needsClaimCheck("Already ran that search, those two were the results."), "a spelled-out count of Co's own results gets checked (2026-09-25: went out unchecked when there were 4)"],
+  [needsClaimCheck("Cue keeps an eye on that for you."), "a claim about how Cue works gets checked"],
+  [needsClaimCheck("Already ran that search, those two were the results."), "a spelled-out count of Cue's own results gets checked (2026-09-25: went out unchecked when there were 4)"],
   [countOf(4, "result") === "4 results" && countOf(1, "thing") === "1 thing", "search notes lead with the count in words"],
   // (2026-10-01) The old reply search (routes/sendblue.ts searchAndSend) is gone: what Co sends, and what it turns away and why, is now its own loop (evals/loop/rules.ts).
   [/A number must match its source exactly/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "the claim check compares numbers, not just topics"],
@@ -436,13 +436,13 @@ onboardingCaseCases.push(
   [/debounceWaitMs = Math\.max\(0, burstWaitMs\(resolvedContent \?\? ""\) - \(Date\.now\(\) - new Date\(myInboundAt\)\.getTime\(\)\)\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: the debounce runs from when their text arrived, not after the router"],
   [(() => { const r = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8"); return r.indexOf("const seekingAndEmotion = hasText") < r.indexOf("routeMessage(routeInput)") && r.indexOf("await seekingAndEmotion") > r.indexOf("routeMessage(routeInput)"); })(), "latency: mood and seeking reads run alongside the router"],
   [/Promise\.all\(\[recentMemoriesP, coverageP, buildContextSummary\(user\.id\)\]\)/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: memories, coverage and context summary run together"],
-  [/firstSentMs: firsts\.firstSentMs, firstAnswerMs: firsts\.firstAnswerMs/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: time to Co's first text and first real answer are recorded, whichever path sent them"],
+  [/firstSentMs: firsts\.firstSentMs, firstAnswerMs: firsts\.firstAnswerMs/.test(readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8")), "latency: time to Cue's first text and first real answer are recorded, whichever path sent them"],
   [(() => { const t0 = new Date("2026-09-27T00:31:47Z"); const r = firstSendTimes([{ text: "https://lu.ma/full-moon", at: new Date("2026-09-27T00:32:11Z") }, { text: "Let me look, one sec.", at: new Date("2026-09-27T00:31:56Z") }], t0, ["Let me look, one sec."]); return r.firstSentMs === 9000 && r.firstAnswerMs === 24000; })(), "latency: a hold line counts as the first text, not as the answer"],
   [firstSendTimes([], new Date(), []).firstSentMs === null, "latency: nothing sent, nothing recorded"],
   [/\?\? "medium";/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "latency: replies draft at medium effort (won blind 22-16, faster)"],
   [/Never a heading or a label with a colon/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")) && !/labeled part \("Arrival:"\)/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "voice: walkthroughs read as spoken steps, not labeled sections"],
-  [/including a yes or no to whether it did \("Still no", "Yep, I did"\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a yes or no about what Co did is a claim"],
-  [/What they're asking about is in Co's record as sent: \$\{ledger\.named\.join\(" "\)\} Answer from that record\./.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "record: when they ask about something Co sent, the record answers, over earlier messages"],
+  [/including a yes or no to whether it did \("Still no", "Yep, I did"\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a yes or no about what Cue did is a claim"],
+  [/What they're asking about is in Cue's record as sent: \$\{ledger\.named\.join\(" "\)\} Answer from that record\./.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "record: when they ask about something Cue sent, the record answers, over earlier messages"],
   // Remove-only (2026-09-28): the unsupported sentences are cut first; one rewrite only when too little is left, kept only if it adds nothing.
   [/let cut = stripUnsupported\(draft, effectiveFailed1, allowArrival\);/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /const cutStands = enoughLeft\(cut, draft\) && !apologyOnly\(cut\) && !inviteCut && !deniesWhatTheyToldCo\(effectiveFailed1, src\) && !silent;\s+if \(cutStands && !threadCut\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")) && /const guard = cleaned \? rewriteAddsNothing\(draft, cleaned, allowed\)/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: cut first; a rewrite only when too little is left (or a false \"nothing on file\" about their own life, or dead air while their world has a true line, or a cut thread report, evals/checkins/rules.ts), and only if it adds nothing"],
   [(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8").match(/abortSignal: AbortSignal\.timeout\(GROUNDING_CALL_TIMEOUT_MS\)/g) ?? []).length === 3, "grounding: the check, the rewrite and the thread repair can't stall a reply"],
@@ -455,10 +455,10 @@ onboardingCaseCases.push(
   [sentencesToRecheck("I sent it Tuesday. It's casual.", "I sent it Tuesday. It's casual.", [{ name: "claim_past_action", pass: false, reason: 'past_action: "I sent it Tuesday"' }]).length === 1, "grounding: a kept sentence with a failed claim is re-read"],
   [isTimeout({ name: "TimeoutError" }) && isTimeout({ lastError: { cause: { name: "AbortError" } } }) && !isTimeout(new Error("rate limited")), "stalls: a timeout is recognized however it's wrapped"],
   [/if \(!isTimeout\(err\)\) throw err;/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")) && /REPLY_CALL_TIMEOUT_MS = Number\(process\.env\.REPLY_CALL_TIMEOUT_MS \?\? 40_000\)/.test(readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8")), "stalls: each reply model call is capped at 40s and a timeout doesn't fail the turn"],
-  [/What Co did or didn't do \(past_action, including "I never sent that"\) needs a FACT/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: what Co did needs a fact, not its own earlier words"],
+  [/What Cue did or didn't do \(past_action, including "I never sent that"\) needs a FACT/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: what Cue did needs a fact, not its own earlier words"],
   [/No promises, no "let me look" or "one sec"/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")), "grounding: a rewrite never promises a search it can't run"],
   [needsClaimCheck("That's on my radar now."), "'on my radar' gets checked"],
-  [needsClaimCheck("I save everything you tell me."), "a present-tense claim about what Co does gets checked"],
+  [needsClaimCheck("I save everything you tell me."), "a present-tense claim about what Cue does gets checked"],
   [!needsClaimCheck("That sounds hard. What's been the toughest part?"), "a plain conversational reply still skips the check"],
 );
 
@@ -539,7 +539,7 @@ for (const [message, lastCoMessage, expected] of closingWithLastCoMessageCases) 
   const got = closingReaction(message, lastCoMessage);
   if (got !== expected) {
     failed++;
-    console.log(`FAIL closing (Co asked "${lastCoMessage}") "${message}" -> ${got ?? "(reply)"} , expected ${expected ?? "(reply)"}`);
+    console.log(`FAIL closing (Cue asked "${lastCoMessage}") "${message}" -> ${got ?? "(reply)"} , expected ${expected ?? "(reply)"}`);
   }
 }
 
@@ -562,7 +562,7 @@ for (const [draft, expected, label] of ongoingCases) {
 // Remove-only fact check and hints (2026-09-28).
 {
   const G = await import("../../src/harness/replyGrounding.js");
-  const facts = 'Details on file for "Grok Bot x Notion for Product Builders night (SF)", which Co sent them: starts Tuesday, September 29 at 5:00 PM (America/Los_Angeles).';
+  const facts = 'Details on file for "Grok Bot x Notion for Product Builders night (SF)", which Cue sent them: starts Tuesday, September 29 at 5:00 PM (America/Los_Angeles).';
   const removeOnly: [boolean, string][] = [
     [!G.rewriteAddsNothing("Both on the same night though, so it's one or the other. Since you already called the daytonaio demo night your pick, I'd stick with that.", "Given you're leaning toward taking a break from building, I'd pick this one.", facts).ok, "a rewrite that flips the pick and names his burnout is rejected"],
     [!G.rewriteAddsNothing("Still no, same as I said before.", "Yes, sent it Friday with the Luma link.", facts).ok, "a rewrite can't add a day or name that isn't in the draft or facts"],
@@ -573,7 +573,7 @@ for (const [draft, expected, label] of ongoingCases) {
   for (const [ok, label] of removeOnly) { total2++; if (!ok) { failed++; console.log(`FAIL grounding: ${label}`); } }
   const rf = G.createReplyFacts();
   G.addHint(rf, "Why it fits: this is their people");
-  check2(/YOUR READ, NOT A FACT/.test(G.renderReplyFacts(rf)), "grounding: hints are shown to Co as its read, not as facts");
+  check2(/YOUR READ, NOT A FACT/.test(G.renderReplyFacts(rf)), "grounding: hints are shown to Cue as its read, not as facts");
   const src2 = readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
   check2(/rf\.facts\.filter\(\(f\) => f\.kind !== "hint"\)\.map\(\(f\) => `\[\$\{f\.id\}\] \$\{f\.text\}`\)/.test(src2) && /that came from a model's read, which is a hint, not a source/.test(src2), "grounding: a hint is never listed or accepted as a source");
   check2(/addHint\(rf, `Why "\$\{match\.name\}" may fit them/.test(src2), "grounding: a search's fit reason is a hint, not a fact");

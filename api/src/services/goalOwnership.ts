@@ -143,8 +143,8 @@ export const OFFERED_NOT_SET_WORDS = "offered in this reply, only if they say ye
 export function offerFactLines(pieces: Pick<GoalItem, "text" | "how" | "suggest">[]): string[] {
   return pieces.map((p) =>
     p.how === "reminder"
-      ? `Co can hold a reminder for them about ${p.text.replace(/, ahead of .*$/, "")} and text them ${p.suggest ? `on ${p.suggest.day}` : "on a day they pick"} (${OFFERED_NOT_SET_WORDS}).`
-      : `Co can ${p.how === "draft" ? "draft" : p.how === "watch" ? "watch for" : "research"} ${p.text} for them (${OFFERED_NOT_SET_WORDS}).`,
+      ? `Cue can hold a reminder for them about ${p.text.replace(/, ahead of .*$/, "")} and text them ${p.suggest ? `on ${p.suggest.day}` : "on a day they pick"} (${OFFERED_NOT_SET_WORDS}).`
+      : `Cue can ${p.how === "draft" ? "draft" : p.how === "watch" ? "watch for" : "research"} ${p.text} for them (${OFFERED_NOT_SET_WORDS}).`,
   );
 }
 
@@ -152,14 +152,14 @@ export function offerFactLines(pieces: Pick<GoalItem, "text" | "how" | "suggest"
 
 export type GoalRead = { clubWorld: boolean; why: string; reach: Map<number, ItemReach>; read: boolean };
 export function goalReadPrompt(title: string, theirWords: string, items: { n: number; text: string }[]): string {
-  return `A member of a private social club handed their companion, Co, a goal. Co's energy goes to goals in the club's world: launches, events, creative projects, city life, meeting people, anything that ends with people in a room. Pure productivity grind (taxes, expense reports, inbox management, chores, admin) is not the club's world.
+  return `A member of a private social club handed their companion, Cue, a goal. Cue's energy goes to goals in the club's world: launches, events, creative projects, city life, meeting people, anything that ends with people in a room. Pure productivity grind (taxes, expense reports, inbox management, chores, admin) is not the club's world.
 
 Their goal: "${title}"
 Their words: "${theirWords.slice(0, 400)}"
 Its pieces:
 ${items.map((i) => `${i.n}. ${i.text}`).join("\n")}
 
-For each piece, say what doing it would reach beyond the member and Co: "money" if it spends or commits money (buying, booking, paying, deposits, signing up for something paid), "public" if it posts or publishes anything publicly (social posts, a website, a listing), "others" if it contacts, emails, messages, invites or commits anyone other than the member, "internal" if it's research, drafting, watching for things or a reminder for the member alone. When unsure, choose the one that needs the member.
+For each piece, say what doing it would reach beyond the member and Cue: "money" if it spends or commits money (buying, booking, paying, deposits, signing up for something paid), "public" if it posts or publishes anything publicly (social posts, a website, a listing), "others" if it contacts, emails, messages, invites or commits anyone other than the member, "internal" if it's research, drafting, watching for things or a reminder for the member alone. When unsure, choose the one that needs the member.
 
 Return ONLY JSON: {"clubWorld": true|false, "why": "one short line", "items": [{"n": 1, "reach": "internal"|"money"|"public"|"others"}]}`;
 }
@@ -257,7 +257,7 @@ export function pickedItems(goal: Pick<Goal, "items" | "clubWorld">, take: numbe
   for (const n of [...new Set(take)]) {
     const i = goal.items.find((x) => x.n === n);
     if (!i) refused.push({ n, why: "isn't one of the goal's items" });
-    else if (i.reach !== "internal") refused.push({ n, why: i.reach === "unread" ? "it couldn't be read as safe for Co to do alone, so it stays theirs" : `it ${i.reach === "money" ? "spends money" : i.reach === "public" ? "posts publicly" : "reaches someone other than them"}, so it stays theirs (you can offer to draft it for them to send)` });
+    else if (i.reach !== "internal") refused.push({ n, why: i.reach === "unread" ? "it couldn't be read as safe for Cue to do alone, so it stays theirs" : `it ${i.reach === "money" ? "spends money" : i.reach === "public" ? "posts publicly" : "reaches someone other than them"}, so it stays theirs (you can offer to draft it for them to send)` });
     else if (i.status !== "offered" || i.owner !== "co") refused.push({ n, why: "you didn't offer to take that one, so it stays theirs" });
     else taken.push(i);
   }
@@ -274,13 +274,13 @@ export function planCheckin(words: string, now: Date, zone: string | null): { ok
     return eve.toMillis() > now.getTime() + 15 * 60_000 ? { ok: true, at: eve.toJSDate(), words: "tonight" } : { ok: false, why: "this evening has already passed: offer tomorrow instead" };
   }
   const w = deadlineFromWhen(words, now, zone);
-  if (!w) return { ok: false, why: `"${words}" isn't a time Co can schedule` };
+  if (!w) return { ok: false, why: `"${words}" isn't a time Cue can schedule` };
   const day = DateTime.fromJSDate(w.deadline).setZone(z).startOf("day");
   let at = day.set({ hour: GOAL_LIMITS.checkinHour });
   // Today or "tonight": an hour from now, inside their hours.
   if (at.toMillis() <= now.getTime() + HOUR) at = DateTime.fromJSDate(new Date(Math.min(w.deadline.getTime(), now.getTime() + HOUR))).setZone(z);
   if (at.toMillis() <= now.getTime()) return { ok: false, why: "that time has already passed" };
-  if (at.toMillis() - now.getTime() > GOAL_LIMITS.checkinMaxDays * 24 * HOUR) return { ok: false, why: `that's further out than Co can hold (${GOAL_LIMITS.checkinMaxDays} days): offer a nearer check-in instead` };
+  if (at.toMillis() - now.getTime() > GOAL_LIMITS.checkinMaxDays * 24 * HOUR) return { ok: false, why: `that's further out than Cue can hold (${GOAL_LIMITS.checkinMaxDays} days): offer a nearer check-in instead` };
   const when = sendableAt(at.toJSDate(), zone) ? at.toJSDate() : nextSendable(at.toJSDate(), zone);
   return { ok: true, at: when, words: w.words };
 }
@@ -314,7 +314,7 @@ export async function acceptGoal(input: { userId: string; goalId: number; take: 
   if (plan && !plan.ok) return { ok: false, why: `no check-in was set: ${plan.why}` };
   if (reminders.length && !plan) return { ok: false, why: "a reminder needs a time: ask them when, then pick it with that time" };
   const open = await openTasks(input.userId);
-  if (open.length + work.length + (plan ? 1 : 0) > TASK_LIMITS.maxOpen) return { ok: false, why: `that's more than Co can carry for them at once (${TASK_LIMITS.maxOpen} open pieces of work); take fewer` };
+  if (open.length + work.length + (plan ? 1 : 0) > TASK_LIMITS.maxOpen) return { ok: false, why: `that's more than Cue can carry for them at once (${TASK_LIMITS.maxOpen} open pieces of work); take fewer` };
 
   const started: { n: number; taskId: number; text: string }[] = [];
   const items = goal.items.map((i) => ({ ...i }));
@@ -399,7 +399,7 @@ function privateGen(functionId: string, maxOutputTokens: number) {
 }
 
 export async function handsOverFile(message: string, gen: (prompt: string) => Promise<string> = defaultGen("goal.file.handover", 200)): Promise<{ handsOver: boolean; quote: string | null; read: boolean }> {
-  const text = await gen(`A member texted their companion, Co, after sending a document. Their message:\n"""${message.slice(0, 800)}"""\n\nAre they handing that document over for Co to work through with them as a goal, checklist or plan (for example "hold me accountable on this", "help me get through this", "can you take this on with me")? Asking Co to just summarize, rewrite or make a document from it is NOT handing it over for goal work. Return ONLY JSON: {"handsOver": true|false, "quote": "their exact words that hand it over, or null"}`).catch(() => "");
+  const text = await gen(`A member texted their companion, Cue, after sending a document. Their message:\n"""${message.slice(0, 800)}"""\n\nAre they handing that document over for Cue to work through with them as a goal, checklist or plan (for example "hold me accountable on this", "help me get through this", "can you take this on with me")? Asking Cue to just summarize, rewrite or make a document from it is NOT handing it over for goal work. Return ONLY JSON: {"handsOver": true|false, "quote": "their exact words that hand it over, or null"}`).catch(() => "");
   try {
     const j: any = parseModelJson(text);
     const quote = typeof j?.quote === "string" ? j.quote.trim() : "";
@@ -535,7 +535,7 @@ export function slipStrands(newDeadline: Date, m: GoalMoment | null | undefined,
 // The one read, only when code says the new time strands them: is this piece something they need in hand for that moment? A read
 // that fails says yes: a stray text costs less than stranding them.
 export async function pieceNeededFor(piece: string, goalTitle: string, m: GoalMoment, gen: (prompt: string) => Promise<string> = defaultGen("goal.slip.needed", 200)): Promise<{ needed: boolean; read: boolean }> {
-  const text = await gen(`A member's goal: "${goalTitle}". The moment they're counting on: "${m.words}" (${m.date}).\nOne piece Co is doing for them: "${piece}".\n\nDo they need this piece in hand before that moment (for a decision, to send, to use there)? Return ONLY JSON: {"needed": true|false}`).catch(() => "");
+  const text = await gen(`A member's goal: "${goalTitle}". The moment they're counting on: "${m.words}" (${m.date}).\nOne piece Cue is doing for them: "${piece}".\n\nDo they need this piece in hand before that moment (for a decision, to send, to use there)? Return ONLY JSON: {"needed": true|false}`).catch(() => "");
   try {
     const j: any = parseModelJson(text);
     if (typeof j?.needed === "boolean") return { needed: j.needed, read: true };
@@ -650,11 +650,11 @@ export function checkinChecks(text: string, o: { recent: string; coLines: string
     { name: "checkin_no_dash", pass: !/[—–]|\s-{1,2}\s/.test(text), reason: "uses a dash" },
     { name: "checkin_no_exclamation", pass: !/!/.test(text), reason: "uses an exclamation point" },
     { name: "checkin_not_a_tracker", pass: !TRACKER_SPEAK.test(text), reason: `reads like a project manager ("${text.match(TRACKER_SPEAK)?.[0] ?? ""}"); talk like a person about their actual thing` },
-    { name: "checkin_no_role_noun", pass: !ROLE_NOUN.test(text), reason: "calls Co by a role" },
+    { name: "checkin_no_role_noun", pass: !ROLE_NOUN.test(text), reason: "calls Cue by a role" },
     { name: "checkin_no_list", pass: !/^\s*(?:[-*•]|\d+[.)])\s/m.test(text), reason: "is a list; say it in sentences" },
     { ...rep, name: "checkin_no_repeat_question" },
-    { name: "checkin_new_closing", pass: !repeatsClosing(text, o.coLines), reason: "closes on the same line Co closed on lately; end it differently" },
-    { name: "checkin_no_invented_work", pass: !(o.didNothing && CLAIMS_WORK.test(text)), reason: "says Co did something when the record shows nothing done" },
+    { name: "checkin_new_closing", pass: !repeatsClosing(text, o.coLines), reason: "closes on the same line Cue closed on lately; end it differently" },
+    { name: "checkin_no_invented_work", pass: !(o.didNothing && CLAIMS_WORK.test(text)), reason: "says Cue did something when the record shows nothing done" },
   ];
 }
 

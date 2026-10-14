@@ -74,8 +74,8 @@ export function coLinesOf(transcript: string): string[] {
   let inCo = false;
   for (const l of transcript.split("\n")) {
     const m = l.match(/^(\w+):\s*(.*)$/);
-    if (m && /^(?:assistant|co|user|caller|member|human)$/i.test(m[1])) {
-      inCo = /^(?:assistant|co)$/i.test(m[1]);
+    if (m && /^(?:assistant|co|cue|user|caller|member|human)$/i.test(m[1])) {
+      inCo = /^(?:assistant|co|cue)$/i.test(m[1]);
       if (inCo && m[2].trim()) out.push(m[2].trim());
     } else if (inCo && l.trim()) out[out.length - 1] = `${out[out.length - 1] ?? ""} ${l.trim()}`.trim();
   }

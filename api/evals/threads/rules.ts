@@ -54,7 +54,7 @@ const lines: OwnLine[] = [
   const t = "assistant: How did the pitch go?\nuser: It went fine honestly\nit was long though\nassistant: Glad to hear it.\nuser: yeah";
   const own = userLinesFromTranscript(t);
   check("call transcript: only the member's lines count as their words", own.length === 2 && own[0] === "It went fine honestly it was long though" && own[1] === "yeah");
-  check("call transcript: Co's lines are never their words", !own.some((l) => /pitch go|Glad/.test(l)));
+  check("call transcript: Cue's lines are never their words", !own.some((l) => /pitch go|Glad/.test(l)));
 }
 
 // ------------------------------------------------ threads close only on a quote
@@ -62,7 +62,7 @@ const lines: OwnLine[] = [
   const onFile = [thread()];
   const close = (quote: string, status: "resolved" | "changed" = "resolved") => gateThreadChanges([], [{ id: "t1", status, quote }], onFile, lines, LA).closed.length;
   check("closes with a newer quote of theirs", close("the pitch went really well") === 1);
-  check("never closes on words they didn't say (Co's or invented)", close("glad the pitch went great") === 0);
+  check("never closes on words they didn't say (Cue's or invented)", close("glad the pitch went great") === 0);
   check("never closes on the quote that opened it", close("I pitch the investor on Friday") === 0);
   check("never closes on a too-short quote", close("went well") === 0);
   check("never closes a thread that isn't theirs / on file", gateThreadChanges([], [{ id: "other", status: "resolved", quote: "the pitch went really well" }], onFile, lines, LA).closed.length === 0);
@@ -100,7 +100,7 @@ const lines: OwnLine[] = [
   check("commitment follow-ups use the existing window_followup type", /type: "window_followup",\s*targetKey: `thread:\$\{threadId\}`/.test(t));
   check("closing a thread drops its pending follow-up", t.includes("target_key = $2 AND status = 'pending'`, [userId, `thread:${c.id}`]"));
   const w = src("agent/windowFollowUp.ts");
-  check("commitment follow-up is about them, never a pitch", /No advice, no suggestions, no events, no offer to help, nothing Co will do/.test(w));
+  check("commitment follow-up is about them, never a pitch", /No advice, no suggestions, no events, no offer to help, nothing Cue will do/.test(w));
   check("commitment follow-up still has the invented-day check", /if \(mentionsUnknownDay\(text, p\.dates \?\? p\.label\)\) return null;/.test(w));
 }
 
@@ -121,7 +121,7 @@ const lines: OwnLine[] = [
   check("with an item, the text must carry its link", /mustIncludeAny: \[item!\.url\]/.test(cc) && /const carriesItem = Boolean\(item\) && text\.includes\(item!\.url\);/.test(cc));
   check("an item that doesn't help is left out, not forced", /If it wouldn't actually help with this, leave it out and offer nothing\./.test(cc));
   check("without an item, the check-in offers nothing", /Offer nothing: no events, no links, no suggestions\./.test(cc));
-  check("the check-in never promises later work", /Never promise anything Co will do later\./.test(cc));
+  check("the check-in never promises later work", /Never promise anything Cue will do later\./.test(cc));
   const mt = src("harness/memberThreads.ts");
   check("a web item passes the grounding gate and the web budget first", /reserveWebSearch\(userId, "sweep"/.test(mt) && /if \(found && g\?\.pass\) item =/.test(mt));
   const jobs = src("jobs/index.ts");

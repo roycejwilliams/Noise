@@ -15,7 +15,7 @@ const d = (iso: string) => new Date(`${iso}T20:00:00Z`);
 // ---- states and dating
 const base = { id: "i1", user_id: "u1", ask_id: "a1", ask_text: "Seeking the link to Pitch Protocol again", kind: "find", created_at: d("2026-10-02"), last_mentioned_at: null, resolved_at: null, expired_at: null, closed_reason: null, awaiting_response_since: null } as any;
 check("an ask nobody has dealt with is open", A.askState(base) === "open" && A.askIsLive(base));
-check("once a check-in went out and Co awaits their reply, it is waiting (still live)", A.askState({ ...base, awaiting_response_since: d("2026-10-05") }) === "waiting" && A.askIsLive({ ...base, awaiting_response_since: d("2026-10-05") }));
+check("once a check-in went out and Cue awaits their reply, it is waiting (still live)", A.askState({ ...base, awaiting_response_since: d("2026-10-05") }) === "waiting" && A.askIsLive({ ...base, awaiting_response_since: d("2026-10-05") }));
 check("closed at their word, or on evidence, is closed", ["member", "answered", "delivered", "moved_on", "co"].every((r) => A.askState({ ...base, resolved_at: d("2026-10-05"), closed_reason: r }) === "closed") && !A.askIsLive({ ...base, resolved_at: d("2026-10-05"), closed_reason: "answered" }));
 check("one whose window passed, or that sat 30 days, is expired (not closed)", A.askState({ ...base, resolved_at: d("2026-10-30"), expired_at: d("2026-10-30"), closed_reason: "expired" }) === "expired");
 check("an ask is dated by when they last said it, else when it was first said", +A.askLastConfirmed({ ...base, last_mentioned_at: d("2026-10-05") }) === +d("2026-10-05") && +A.askLastConfirmed(base) === +d("2026-10-02"));
@@ -32,12 +32,12 @@ const convo = [
   { at: d("2026-10-05"), side: "co", text: "Good call killing it if the squeeze wasn't there." },
 ] as any;
 const ok1 = A.verifyClosures([{ ask: "A1", how: "answered", quote: "Here is the Pitch Protocol link again: https://www.pitchprotocol.vc/" }], asks, convo);
-check("answered: the quote is in a Co message sent after the ask, so it closes, with the quote as proof", ok1.length === 1 && ok1[0].how === "answered" && /pitchprotocol/.test(ok1[0].evidence));
+check("answered: the quote is in a Cue message sent after the ask, so it closes, with the quote as proof", ok1.length === 1 && ok1[0].how === "answered" && /pitchprotocol/.test(ok1[0].evidence));
 check("a quote the model made up closes nothing", A.verifyClosures([{ ask: "A1", how: "answered", quote: "I sent you the full Pitch Protocol deck yesterday afternoon" }], asks, convo).length === 0);
-check("a Co message from BEFORE the ask can't answer it", A.verifyClosures([{ ask: "A1", how: "answered", quote: "Here is the Pitch Protocol link from before: https://www.pitchprotocol.vc/ and what it does." }], asks, convo).length === 0);
+check("a Cue message from BEFORE the ask can't answer it", A.verifyClosures([{ ask: "A1", how: "answered", quote: "Here is the Pitch Protocol link from before: https://www.pitchprotocol.vc/ and what it does." }], asks, convo).length === 0);
 check("moved_on needs THEIR words: the member saying it's off closes it", A.verifyClosures([{ ask: "A2", how: "moved_on", quote: "we are not doing the event anymore" }], asks, convo).length === 1);
-check("Co's words can't stand in for theirs, nor theirs for Co's", A.verifyClosures([{ ask: "A2", how: "moved_on", quote: "Good call killing it if the squeeze wasn't there" }], asks, convo).length === 0 && A.verifyClosures([{ ask: "A2", how: "answered", quote: "we are not doing the event anymore" }], asks, convo).length === 0);
-check("an ask that asks Co to keep watching is never closed by one answer", A.verifyClosures([{ ask: "A3", how: "answered", quote: "Here is the Pitch Protocol link again: https://www.pitchprotocol.vc/" }], asks, convo).length === 0);
+check("Cue's words can't stand in for theirs, nor theirs for Cue's", A.verifyClosures([{ ask: "A2", how: "moved_on", quote: "Good call killing it if the squeeze wasn't there" }], asks, convo).length === 0 && A.verifyClosures([{ ask: "A2", how: "answered", quote: "we are not doing the event anymore" }], asks, convo).length === 0);
+check("an ask that asks Cue to keep watching is never closed by one answer", A.verifyClosures([{ ask: "A3", how: "answered", quote: "Here is the Pitch Protocol link again: https://www.pitchprotocol.vc/" }], asks, convo).length === 0);
 check("a too-short quote, an unknown ask, or an unknown way closes nothing", A.verifyClosures([{ ask: "A1", how: "answered", quote: "link" }, { ask: "A9", how: "answered", quote: "Here is the Pitch Protocol link again: https://www.pitchprotocol.vc/" }, { ask: "A1", how: "gone", quote: "Here is the Pitch Protocol link again: https://www.pitchprotocol.vc/" }], asks, convo).length === 0);
 
 // ---- the flow, with a fake store
@@ -67,7 +67,7 @@ const full = (r: any, extra: any = {}) => ({ user_id: "u1", kind: "find", last_m
 {
   const { deps, rec } = fake({ open: [full(rowA)], delivered: { a1: 'Sent them "Pitch Protocol" for this ask' } });
   const got = await A.proposeClosures("u1", deps);
-  check("delivered: when Co sent the thing for this ask it closes on that alone (no model needed), and nothing is written by a proposal", got.length === 1 && got[0].how === "delivered" && rec.judged === 0 && rec.closed.length === 0);
+  check("delivered: when Cue sent the thing for this ask it closes on that alone (no model needed), and nothing is written by a proposal", got.length === 1 && got[0].how === "delivered" && rec.judged === 0 && rec.closed.length === 0);
   const ongoing = fake({ open: [full(rowC)], delivered: { a3: "Sent them a dinner" } });
   check("an ask meant to keep going is not closed by one find", (await A.proposeClosures("u1", ongoing.deps)).length === 0);
 }
@@ -92,7 +92,7 @@ P.setProactiveModelForTests(async () => { drafted++; return "Still looking for t
   A.setAskDepsForTests(deps);
   drafted = 0;
   const r: any = await proactiveRegistry.ask_checkin.draft(cand, { firstName: "Jordan", userId: "u1" } as any);
-  check("REGRESSION: Co already answered the ask, so the check-in is skipped, the ask is closed 'answered' with the proof, and no text is written", !!r.skip && /ask closed: answered/.test(r.skip) && drafted === 0 && rec.closed.length === 1 && rec.closed[0].how === "answered");
+  check("REGRESSION: Cue already answered the ask, so the check-in is skipped, the ask is closed 'answered' with the proof, and no text is written", !!r.skip && /ask closed: answered/.test(r.skip) && drafted === 0 && rec.closed.length === 1 && rec.closed[0].how === "answered");
 }
 {
   const { deps, rec } = fake({ open: [], convo, raw: [] });

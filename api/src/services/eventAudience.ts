@@ -31,7 +31,7 @@ export function addressedAs(name: string, description: string | null | undefined
 export function audienceLine(_name: string, description: string | null | undefined): string | null {
   const words = addressedAs("", description);
   if (!words.length) return null;
-  return `Who it's for: the page's text uses the word${words.length > 1 ? "s" : ""} "${words.join('", "')}" for its guests. Read it yourself: it may mean the event is meant for a particular group, or it may be nothing (a title, a greeting, "all welcome"). Co does not know whether this member is in any group unless they have said so in their own words, and never guesses from a name, a voice or anything else.`;
+  return `Who it's for: the page's text uses the word${words.length > 1 ? "s" : ""} "${words.join('", "')}" for its guests. Read it yourself: it may mean the event is meant for a particular group, or it may be nothing (a title, a greeting, "all welcome"). Cue does not know whether this member is in any group unless they have said so in their own words, and never guesses from a name, a voice or anything else.`;
 }
 
 // Pure: words a text should use to say who an event is for, from Co's judgment of

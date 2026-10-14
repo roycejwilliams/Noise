@@ -229,7 +229,7 @@ export function loopTools(
     if (!l?.avoid.length) return null;
     const { avoidFor, avoidHits } = await import("../services/memberLimits.js");
     const hit = avoidHits(query, avoidFor(l.avoid, askWords()))[0];
-    return hit ? `Not searched: they told Co to stop suggesting ${hit}. Look for something else they want. If they're asking for it now, it lifts for this once when their own words ask for it; only use steerAwayFrom with undo if they say they're open to it again in general.` : null;
+    return hit ? `Not searched: they told Cue to stop suggesting ${hit}. Look for something else they want. If they're asking for it now, it lifts for this once when their own words ask for it; only use steerAwayFrom with undo if they say they're open to it again in general.` : null;
   };
   // A receipt for every search, empty or not, so "I looked and nothing turned
   // up" is backed (2026-10-01: with no record, the fact check cut it).
@@ -315,7 +315,7 @@ export function loopTools(
         const openings = earlier.filter((m) => "url" in m && m.url).slice(0, 4).map((m) => {
           const facts = `${m.reason} ${(m as any).evidence ?? ""}`.trim().slice(0, 600);
           loop.found.set((m as any).url, { name: m.name, url: (m as any).url, facts, match: m, blocked: null });
-          ctx.facts?.add("known", `Found earlier by Co's daily search: "${m.name}", link ${(m as any).url}. ${facts}`);
+          ctx.facts?.add("known", `Found earlier by Cue's daily search: "${m.name}", link ${(m as any).url}. ${facts}`);
           return { name: m.name, link: (m as any).url, details: facts };
         });
         return {
@@ -611,7 +611,7 @@ export function loopTools(
     emailPlan: tool({
       description: toolUse("emailPlan"),
       inputSchema: z.object({
-        title: z.string().describe("A short title for the plan, in Co's voice, using only words they said or you read: no place, name or number you didn't read."),
+        title: z.string().describe("A short title for the plan, in Cue's voice, using only words they said or you read: no place, name or number you didn't read."),
         note: z.string().describe("One or two plain sentences for the top of the sheet and the email, in your voice."),
         steps: z
           .array(

@@ -6,7 +6,7 @@
 import "../lib/requireMeter.js";
 const { draftAgain, checkDraft } = await import("../../src/harness/proactive.js");
 const { draftCompanionCheckin } = await import("../../src/agent/companionCheckin.js");
-const recap = "Joined Co recently. Gave her name and email. Co asked what she's into and what keeps her busy; she hasn't said yet.";
+const recap = "Joined Cue recently. Gave her name and email. Cue asked what she's into and what keeps her busy; she hasn't said yet.";
 const failed = [
   "Hey Jacqueline, still meaning to get a real sense of you, what's been keeping you busy these days?",
   "Hey Jacqueline, still curious what you're into these days, work, hobbies, what's keeping you busy lately. Whenever you feel like sharing, I'm here.",

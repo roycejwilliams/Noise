@@ -68,16 +68,16 @@ const norm = (s: string) => String(s).toLowerCase().replace(/[’‘]/g, "'").re
 export type Msg = { at: Date | string; side: "member" | "co"; text: string };
 
 export function judgePrompt(asks: { n: string; text: string; kind: string | null; since: string }[], convo: Msg[], zone: string | null = null): string {
-  const lines = convo.map((m) => `[${localStamp(new Date(m.at), zone)}] ${m.side === "co" ? "Co" : "Member"}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n").slice(-14000);
-  return `A member asked Co for things. For each ask below, decide from the conversation AFTER it whether it is finished, and say how, with a QUOTE.
+  const lines = convo.map((m) => `[${localStamp(new Date(m.at), zone)}] ${m.side === "co" ? "Cue" : "Member"}: ${m.text.replace(/\s+/g, " ").slice(0, 400)}`).join("\n").slice(-14000);
+  return `A member asked Cue for things. For each ask below, decide from the conversation AFTER it whether it is finished, and say how, with a QUOTE.
 
 Asks:
 ${asks.map((a) => `${a.n}. (said ${a.since}) ${a.text}`).join("\n")}
 
 How an ask is finished:
-- "answered": Co's own message gave what the ask wanted (the answer, the guidance, the link, the draft, the shortlist). The quote is copied from that Co message. A question back, an offer to help, or a partial answer does not count.
+- "answered": Cue's own message gave what the ask wanted (the answer, the guidance, the link, the draft, the shortlist). The quote is copied from that Cue message. A question back, an offer to help, or a partial answer does not count.
 - "moved_on": the MEMBER said after the ask that it is done, found, cancelled, off, or no longer wanted. The quote is copied from the member's message.
-An ask that asks Co to keep watching or keep looking ("keep an eye out", "let me know when") is never finished by one answer. If you are not sure, leave it out. Never use a message from before the ask was said.
+An ask that asks Cue to keep watching or keep looking ("keep an eye out", "let me know when") is never finished by one answer. If you are not sure, leave it out. Never use a message from before the ask was said.
 
 Conversation:
 ${lines}
@@ -123,12 +123,12 @@ export function intentFor(a: Pick<AskRow, "id" | "ask_text">, read: Map<string, 
 }
 
 export function intentPrompt(asks: { n: string; ask: string; words: string[] }[]): string {
-  return `A member asked Co for things. For each ask, read THEIR OWN WORDS and say which it is:
+  return `A member asked Cue for things. For each ask, read THEIR OWN WORDS and say which it is:
 - "question": they want an answer or a thing now, and one good reply finishes it (what's a good spot for dinner tonight, how do I word this, send me the link).
-- "lookout": they want Co to keep watching and tell them when something comes up (look out for, find me, keep an eye out, let me know when, any X coming up). It stays open until its date passes, they say stop, or they have what they wanted.
-Judge from their words, not from Co's summary of the ask. If their words don't show it either way, leave that ask out.
+- "lookout": they want Cue to keep watching and tell them when something comes up (look out for, find me, keep an eye out, let me know when, any X coming up). It stays open until its date passes, they say stop, or they have what they wanted.
+Judge from their words, not from Cue's summary of the ask. If their words don't show it either way, leave that ask out.
 
-${asks.map((a) => `${a.n}. Co's summary: ${a.ask}\n   Their words: ${a.words.length ? a.words.map((w) => `"${w.slice(0, 300)}"`).join(" ") : "(not found)"}`).join("\n")}
+${asks.map((a) => `${a.n}. Cue's summary: ${a.ask}\n   Their words: ${a.words.length ? a.words.map((w) => `"${w.slice(0, 300)}"`).join(" ") : "(not found)"}`).join("\n")}
 
 Return ONLY JSON: {"asks": [{"ask": "A1", "intent": "question" or "lookout", "why": "a few words, quoting them"}]}`;
 }
@@ -292,7 +292,7 @@ async function readIntents(userId: string, asks: AskRow[]): Promise<Map<string, 
       const why = typeof r?.why === "string" ? r.why.slice(0, 300) : "";
       out.set(x.row.id, intent);
       if (!intent) {
-        await recordDecision({ layer: 5, decision: "ask.intent", userId, outcome: "skip", action: "unread", reason: "Co's reading of the ask came back without a clear answer; read again next time", proposal: { askId: x.row.id, ask: x.row.ask_text.slice(0, 200) } });
+        await recordDecision({ layer: 5, decision: "ask.intent", userId, outcome: "skip", action: "unread", reason: "Cue's reading of the ask came back without a clear answer; read again next time", proposal: { askId: x.row.id, ask: x.row.ask_text.slice(0, 200) } });
         continue;
       }
       // The one way an ask becomes a lookout: this read of their own words (laneMoves.ts settleAskIntent, Royce 2026-10-13).

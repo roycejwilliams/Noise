@@ -29,7 +29,7 @@ async function alertTeamAccountLocked(userId: string, lockMinutes: number): Prom
     const { rows } = await pool.query(`SELECT first_name, email, phone_number FROM users WHERE id = $1`, [userId]);
     const u = rows[0];
     const to = reportRecipient();
-    const subject = `Co account locked: ${u?.first_name ?? "unknown"} (${u?.phone_number ?? userId})`;
+    const subject = `Cue account locked: ${u?.first_name ?? "unknown"} (${u?.phone_number ?? userId})`;
     const html = `<p>An account hit 5 wrong verification codes and is locked for ${lockMinutes} minutes. It unlocks on its own after that.</p><p>Name: ${u?.first_name ?? "—"}<br>Email: ${u?.email ?? "—"}<br>Phone: ${u?.phone_number ?? "—"}<br>User id: ${userId}</p>`;
     if (!ALLOW_REAL_SENDS) {
       console.log(`[alertTeamAccountLocked stub] to ${to}: ${subject}`);

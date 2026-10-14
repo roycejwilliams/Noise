@@ -84,11 +84,11 @@ const { CO_LISTENING } = await import("../../src/services/coCore.js");
 const { promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
 const prompt = promptForElevenLabs(readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8"));
 const rule = CO_LISTENING.split("\n").find((l) => /never name the feeling you notice in them/.test(l)) ?? "";
-check("the core says Co never names the feeling it notices, and what to do instead", !!rule && /Show you got it by how you respond/.test(rule));
-check("the rule doesn't quote a bad example (Co copies quoted examples)", !/"/.test(rule) && !/hearing frustration/i.test(prompt));
+check("the core says Cue never names the feeling it notices, and what to do instead", !!rule && /Show you got it by how you respond/.test(rule));
+check("the rule doesn't quote a bad example (Cue copies quoted examples)", !/"/.test(rule) && !/hearing frustration/i.test(prompt));
 // Measured (evals/emotion/labelSim.ts, 20 simulated calls each, a frustrated caller who never says how they feel):
 // the lines that primed it were removed, not just a rule added. The rule alone left 9 of 20 calls with a label.
-check("nothing in the prompt tells Co to read the energy under their words or models the stock lines", !/read the energy underneath/.test(prompt) && !/Not "I hear you\."/.test(prompt) && !/Never says "I hear you"/.test(prompt));
+check("nothing in the prompt tells Cue to read the energy under their words or models the stock lines", !/read the energy underneath/.test(prompt) && !/Not "I hear you\."/.test(prompt) && !/Never says "I hear you"/.test(prompt));
 check("no example in the prompt is itself a label frame (\"It sounds like you're ...\")", !/"It sounds like you're/.test(prompt));
 // 2026-10-08: the call's voice is Hume's prompt, which carries its own form of the rule (the text listening block stays out of calls).
 check("the call prompt carries the rule, in Hume's words", /Never tells them what they're feeling or names the emotion it notices in them/.test(prompt));
@@ -96,7 +96,7 @@ check("the call prompt carries the rule, in Hume's words", /Never tells them wha
 // Calls can't be filtered mid-call: every call is checked after it ends.
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
 const post = co.slice(co.indexOf('event.type !== "post_call_transcription"'));
-check("every call's Co lines are checked after it ends, and a label is logged", /const labelled = turns\.filter\([^;]*role !== "user"[^;]*checkNoEmotionLabelOnCall\(m\)\.pass\)/.test(post) && /if \(labelled\.length\) recordDecision\(\{[^}]*decision: "call\.emotion_label"/.test(post));
+check("every call's Cue lines are checked after it ends, and a label is logged", /const labelled = turns\.filter\([^;]*role !== "user"[^;]*checkNoEmotionLabelOnCall\(m\)\.pass\)/.test(post) && /if \(labelled\.length\) recordDecision\(\{[^}]*decision: "call\.emotion_label"/.test(post));
 check("the audit never fails or slows the webhook", /decision: "call\.emotion_label"[\s\S]*?\}\)\.catch\(\(\) => \{\}\);/.test(post) && !/await recordDecision\(\{ layer: 8, decision: "call\.emotion_label"/.test(post));
 
 console.log(`emotion label rules: ${total - failed}/${total} passed`);

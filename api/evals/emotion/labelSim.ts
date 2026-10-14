@@ -24,11 +24,11 @@ const api = async (path: string, init: RequestInit = {}) => {
 };
 
 // A member who's frustrated and sarcastic and never says how they feel.
-const CALLER = `You are Jordan, on a phone call with Co, an AI companion you've used for a few weeks. Your week has gone badly: your cofounder pushed the product launch again without telling you, an investor ghosted you, and you're running on little sleep. You're irritated and a bit sarcastic, but you never say how you feel in words like "frustrated" or "stressed": you say things like "oh, perfect", "great, just great", "it's fine, whatever", "yeah, sure", sigh, and give short answers. Answer what Co asks in one or two short sentences. Stay in character the whole call.`;
+const CALLER = `You are Jordan, on a phone call with Cue, an AI companion you've used for a few weeks. Your week has gone badly: your cofounder pushed the product launch again without telling you, an investor ghosted you, and you're running on little sleep. You're irritated and a bit sarcastic, but you never say how you feel in words like "frustrated" or "stressed": you say things like "oh, perfect", "great, just great", "it's fine, whatever", "yeah, sure", sigh, and give short answers. Answer what Cue asks in one or two short sentences. Stay in character the whole call.`;
 
 async function agentFor(promptPath: string, label: string): Promise<string> {
   const prompt = readFileSync(promptPath, "utf8");
-  const config = buildAgentConfig({ name: `Co label test ${label} (dev, temporary)`, prompt, voiceId: process.env.ELEVENLABS_VOICE_ID!, apiUrl: process.env.API_URL! });
+  const config = buildAgentConfig({ name: `Cue label test ${label} (dev, temporary)`, prompt, voiceId: process.env.ELEVENLABS_VOICE_ID!, apiUrl: process.env.API_URL! });
   return (await api("/convai/agents/create", { method: "POST", body: JSON.stringify(config) })).agent_id;
 }
 
@@ -57,7 +57,7 @@ try {
       const sr = stockReport(coLines);
       const cueLines = coLines.filter((l) => cuesIn(l).length > 1);
       runs.push({ prompt: which, sim: i, coLines, labelled, stock: sr.stock, repeated: sr.repeated, cueLines });
-      console.log(`${which} #${i + 1}: ${coLines.length} Co lines, ${labelled.length} labelled, ${sr.stock.length} stock, ${sr.repeated.length} repeated openers, ${cueLines.length} multi-cue${(out as any).error ? ` (error: ${(out as any).error.slice(0, 400)})` : ""}${labelled.length ? ` | ${labelled.map((l) => `"${l.slice(0, 90)}"`).join(" ; ")}` : ""}`);
+      console.log(`${which} #${i + 1}: ${coLines.length} Cue lines, ${labelled.length} labelled, ${sr.stock.length} stock, ${sr.repeated.length} repeated openers, ${cueLines.length} multi-cue${(out as any).error ? ` (error: ${(out as any).error.slice(0, 400)})` : ""}${labelled.length ? ` | ${labelled.map((l) => `"${l.slice(0, 90)}"`).join(" ; ")}` : ""}`);
     }
   }
 } finally {
@@ -68,5 +68,5 @@ for (const which of ["before", "after"]) {
   const r = runs.filter((x) => x.prompt === which);
   const lines = r.reduce((a, x) => a + x.coLines.length, 0);
   const lab = r.reduce((a, x) => a + x.labelled.length, 0);
-  console.log(`${which}: ${lab} labelled of ${lines} Co lines across ${r.length} calls; calls with any label: ${r.filter((x) => x.labelled.length).length}/${r.length}; stock lines: ${r.reduce((a, x) => a + x.stock.length, 0)} (calls with any: ${r.filter((x) => x.stock.length).length}); calls with a repeated opener: ${r.filter((x) => x.repeated.length).length}; multi-cue lines: ${r.reduce((a, x) => a + x.cueLines.length, 0)}`);
+  console.log(`${which}: ${lab} labelled of ${lines} Cue lines across ${r.length} calls; calls with any label: ${r.filter((x) => x.labelled.length).length}/${r.length}; stock lines: ${r.reduce((a, x) => a + x.stock.length, 0)} (calls with any: ${r.filter((x) => x.stock.length).length}); calls with a repeated opener: ${r.filter((x) => x.repeated.length).length}; multi-cue lines: ${r.reduce((a, x) => a + x.cueLines.length, 0)}`);
 }

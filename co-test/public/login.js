@@ -34,7 +34,7 @@
       const data = await (await fetch("/api/login/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone }) })).json();
       if (!data.success && data.error) throw new Error(data.error);
       if (!data.success || !data.text_in_number) throw new Error("Couldn't start sign-in. Refresh to try again.");
-      const message = `Hi Co! (test site code: ${data.code})`;
+      const message = `Hi Cue! (test site code: ${data.code})`;
       const separator = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? "&" : "?";
       textCoButton.href = `sms:${data.text_in_number}${separator}body=${encodeURIComponent(message)}`;
       textCoButton.removeAttribute("aria-disabled");
@@ -53,12 +53,12 @@
           waitingEl.classList.add("hidden");
           textCoButton.classList.add("hidden");
           confirmForm.classList.remove("hidden");
-          statusEl.textContent = "Co just texted you a code. Enter it here.";
+          statusEl.textContent = "Cue just texted you a code. Enter it here.";
           confirmInput.focus();
         } else if (data.status === "expired") {
           window.clearInterval(pollTimer);
           waitingEl.classList.add("hidden");
-          statusEl.textContent = "That took a while. Tap Text Co again.";
+          statusEl.textContent = "That took a while. Tap Text Cue again.";
           await prepareCode();
         }
       } catch (err) {
@@ -83,7 +83,7 @@
         statusEl.textContent = "Signed in.";
         window.location.href = "/phone";
       } else if (data.status === "wrong") {
-        showError("That code doesn't match. Check the text from Co and try again.");
+        showError("That code doesn't match. Check the text from Cue and try again.");
       } else {
         confirmForm.classList.add("hidden");
         textCoButton.classList.remove("hidden");
@@ -98,7 +98,7 @@
     phone = phoneInput.value.trim();
     if (!phone) return;
     await prepareCode();
-    if (errorEl.classList.contains("hidden")) statusEl.textContent = "Now text Co from that phone.";
+    if (errorEl.classList.contains("hidden")) statusEl.textContent = "Now text Cue from that phone.";
   });
   (async () => {
     await redirectIfAlreadyLoggedIn();

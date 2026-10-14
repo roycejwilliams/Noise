@@ -70,7 +70,7 @@ const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: 
   // The words reach Co the same way as before: the delivery's why, into the tool's error.
   const stub: any = { render: async () => Buffer.alloc(10), cache: () => "", send: async () => ({}), from: "+1", googleToken: async () => "tok", uploadDoc: async () => cfg, shareDoc: async () => ({ ok: true }) };
   const via = await X.deliverDocument(doc, to, "google_docs", stub);
-  check("the delivery passes our-side words through to Co unchanged", !via.ok && via.why === (cfg as any).why);
+  check("the delivery passes our-side words through to Cue unchanged", !via.ok && via.why === (cfg as any).why);
 }
 
 console.log(`google audit fixes: ${total - failed}/${total} passed`);

@@ -51,13 +51,13 @@ export async function readReaction<T extends { name: string }>(message: string, 
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
       experimental_telemetry: { isEnabled: true, functionId: "reactionCatchup" },
-      prompt: `A member texted: "${message.slice(0, 400)}"${repliedToCo ? `\n(They sent it as a reply to this text from Co: "${repliedToCo.slice(0, 400)}")` : ""}
+      prompt: `A member texted: "${message.slice(0, 400)}"${repliedToCo ? `\n(They sent it as a reply to this text from Cue: "${repliedToCo.slice(0, 400)}")` : ""}
 
-Things Co sent them earlier:
+Things Cue sent them earlier:
 ${named.map((n, i) => `${i}. ${n.name}`).join("\n")}
 
-Are they EXPLICITLY telling Co how one of these landed? "interested" (they say they want to go or look into it), "going" (they say they're going, RSVPed or signed up), "went_liked" (they say they went and liked it), "went_disliked" (they say they went and didn't), "not_for_me" (they say they're passing on it).
-Only their own explicit words count: an RSVP, "I'm going", "signed up", "I went", "not for me", or a plain yes to Co offering that exact thing. Everything else is "none": a question about it or about any event (what to bring, where, when, how to get there), an event of their own that only shares a word with one of these, a plan that doesn't name it, or anything you would have to infer. When unsure, "none".
+Are they EXPLICITLY telling Cue how one of these landed? "interested" (they say they want to go or look into it), "going" (they say they're going, RSVPed or signed up), "went_liked" (they say they went and liked it), "went_disliked" (they say they went and didn't), "not_for_me" (they say they're passing on it).
+Only their own explicit words count: an RSVP, "I'm going", "signed up", "I went", "not for me", or a plain yes to Cue offering that exact thing. Everything else is "none": a question about it or about any event (what to bring, where, when, how to get there), an event of their own that only shares a word with one of these, a plan that doesn't name it, or anything you would have to infer. When unsure, "none".
 
 Return ONLY JSON: {"item": <number or null>, "reaction": "interested" | "going" | "went_liked" | "went_disliked" | "not_for_me" | "none", "explicit": true | false, "quote": "their exact words that say it, copied from their message" or null}`,
     });

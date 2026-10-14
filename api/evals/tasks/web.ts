@@ -76,7 +76,7 @@ check("the verified lines carry kept facts only", !W.verifiedFactLines([v.kept!]
   const fs = await import("node:fs");
   const tt = fs.readFileSync(new URL("../../src/services/taskTurn.ts", import.meta.url), "utf8");
   const facts = tt.slice(tt.indexOf("const facts = {"), tt.indexOf("};", tt.indexOf("const facts = {")));
-  check("tellThem's draft facts hold only verified fields, never raw page text or Co's own intent line", /verified_results: verifiedFactLines\(verified\)/.test(facts) && !/pages|pageText|what_co_wants|what_the_pages_say/.test(facts));
+  check("tellThem's draft facts hold only verified fields, never raw page text or Cue's own intent line", /verified_results: verifiedFactLines\(verified\)/.test(facts) && !/pages|pageText|what_co_wants|what_the_pages_say/.test(facts));
   check("a draft is checked for unbacked numbers before it sends", /numbersBacked\(text, Object\.values\(facts\)\.join\(" "\)\)/.test(tt));
   check("links must come from results that passed", /const linkOk = \(l: string\) => verified\.some\(\(v\) => v\.url === l\) \|\| events\.some/.test(tt));
   check("every web search is logged as task.webSearch with kept and dropped", /decision: "task\.webSearch"/.test(fs.readFileSync(new URL("../../src/services/taskWeb.ts", import.meta.url), "utf8")));
@@ -87,7 +87,7 @@ check("a place the facts don't back is caught, a backed one passes", !W.placesBa
 check("an offer to call, book or contact anyone is caught", ["Want me to call and check before Friday?", "I'll book it for you.", "Should I reach out to them?"].every((t) => W.OFFERS_WHAT_CO_CANT.test(t)) && !W.OFFERS_WHAT_CO_CANT.test("You could call them to confirm the date."));
 {
   const tt2 = (await import("node:fs")).readFileSync(new URL("../../src/services/taskTurn.ts", import.meta.url), "utf8");
-  check("a task text is blocked for unbacked places or an offer Co can't keep", /placesBacked\(text, Object\.values\(facts\)\.join\(" "\)\)/.test(tt2) && /text\.match\(OFFERS_WHAT_CO_CANT\)/.test(tt2));
+  check("a task text is blocked for unbacked places or an offer Cue can't keep", /placesBacked\(text, Object\.values\(facts\)\.join\(" "\)\)/.test(tt2) && /text\.match\(OFFERS_WHAT_CO_CANT\)/.test(tt2));
 }
 
 // Link first, then its description, in tier order (Royce, 2026-09-30)
@@ -96,12 +96,12 @@ check("an offer to call, book or contact anyone is caught", ["Want me to call an
   const items = M.orderByTier([
     { url: "https://web.example/a", name: "Web A", tier: 3, facts: [] },
     { url: "https://lu.ma/b", name: "Public B", tier: 2, facts: [] },
-    { url: "https://co.example/c", name: "Co C", tier: 1, facts: [] },
+    { url: "https://co.example/c", name: "Cue C", tier: 1, facts: [] },
     { url: "https://web.example/d", name: "Web D", tier: 3, facts: [] },
   ]);
-  check("things are sent in tier order: Co's own, then public events, then the web (stable within a tier)", items.map((i) => i.name).join(",") === "Co C,Public B,Web A,Web D");
+  check("things are sent in tier order: Cue's own, then public events, then the web (stable within a tier)", items.map((i) => i.name).join(",") === "Cue C,Public B,Web A,Web D");
   const msgs = M.assembleMessages(items.slice(0, 2).map((i) => ({ url: i.url, caption: `about ${i.name}` })), "Want me to keep going?");
-  check("several things: each link followed by its own caption, closing last, no lead line narrating the send", JSON.stringify(msgs) === JSON.stringify(["https://co.example/c", "about Co C", "https://lu.ma/b", "about Public B", "Want me to keep going?"]));
+  check("several things: each link followed by its own caption, closing last, no lead line narrating the send", JSON.stringify(msgs) === JSON.stringify(["https://co.example/c", "about Cue C", "https://lu.ma/b", "about Public B", "Want me to keep going?"]));
   check("one thing: its link, then its caption, no heads-up", JSON.stringify(M.assembleMessages([{ url: "https://x.example", caption: "It fits." }], null)) === JSON.stringify(["https://x.example", "It fits."]));
   check("a caption can only use its own item's verified facts", !M.captionOk("Seats 80 in SoMa, from $900.", "The Loft capacity: seated 60 price: from $1,200").ok && M.captionOk("Seats 60, from $1,200.", "The Loft capacity: seated 60 price: from $1,200").ok);
   const tt3 = (await import("node:fs")).readFileSync(new URL("../../src/services/taskTurn.ts", import.meta.url), "utf8");

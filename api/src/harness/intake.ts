@@ -191,13 +191,13 @@ export function decideIntake(
 }
 
 export function buildIntakeExtractionPrompt(state: Pick<IntakeState, "knownName" | "knownEmail" | "partialEmail">, reply: string | null): string {
-  return `Co asked a new contact for their full name and email. Extract what's in their reply.
+  return `Cue asked a new contact for their full name and email. Extract what's in their reply.
 
 Already known — name: ${state.knownName ?? "not yet given"}, email: ${state.knownEmail ?? state.partialEmail ?? "not yet given"}
 
 Their reply: "${reply ?? "[no text — sent a photo or voice memo instead]"}"
 
-Return ONLY strict JSON: {"full_name": string or null, "email": string or null, "is_acknowledgment": boolean}. Only set full_name/email when this reply actually contains them — don't repeat an already-known value and don't guess at a missing one. A first name alone counts as a name. Set is_acknowledgment true when the reply is just a social acknowledgment of Co's welcome (e.g. "thanks", "ok", "sounds good") with no attempt to give a name or email — false otherwise, including when they did attempt an answer that just didn't parse.`;
+Return ONLY strict JSON: {"full_name": string or null, "email": string or null, "is_acknowledgment": boolean}. Only set full_name/email when this reply actually contains them — don't repeat an already-known value and don't guess at a missing one. A first name alone counts as a name. Set is_acknowledgment true when the reply is just a social acknowledgment of Cue's welcome (e.g. "thanks", "ok", "sounds good") with no attempt to give a name or email — false otherwise, including when they did attempt an answer that just didn't parse.`;
 }
 
 export function parseIntakeProposal(raw: string): IntakeProposal {

@@ -78,7 +78,7 @@ export function closingReaction(rawText: string, lastCoMessage?: string | null):
   if (coAskedQuestion(lastCoMessage)) return null;
   // Addressing Co by name doesn't change a closing ("Thanks Co." got a full
   // reply instead of a tapback, 2026-09-18).
-  const text = normalize(rawText).replace(/(^|\s)co(?=\s|$)/g, " ").replace(/\s+/g, " ").trim();
+  const text = normalize(rawText).replace(/(^|\s)(?:co|cue)(?=\s|$)/g, " ").replace(/\s+/g, " ").trim();
   if (!text || text.includes("?")) return null;
   if (text.split(" ").length > 5) return null;
   for (const { re, reaction } of CLOSINGS) if (re.test(text)) return reaction;

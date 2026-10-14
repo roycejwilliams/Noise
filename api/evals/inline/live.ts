@@ -10,7 +10,7 @@ const inn = arr(await c.messages.list({ is_outbound: false, order_by: "createdAt
 const phone = inn.from_number ?? inn.number;
 const out = arr(await c.messages.list({ number: phone, is_outbound: true, order_by: "createdAt", order_direction: "desc", limit: 1 } as any))[0];
 console.log("fields:", Object.keys(out ?? {}).join(","));
-for (const [label, m] of [["Co's text", out], ["their text", inn]] as const) {
+for (const [label, m] of [["Cue's text", out], ["their text", inn]] as const) {
   const r = await repliedTo({ reply_to: { message_handle: m?.message_handle } }, phone);
   console.log(label, "->", r ? `fromCo=${r.fromCo}, ${r.text.length} chars` : "null");
   const other = await repliedTo({ reply_to: { message_handle: m?.message_handle } }, "+15550001111");

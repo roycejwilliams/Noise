@@ -84,7 +84,7 @@ export function tasteFrom(rows: { item_name: string; result: string; provenance?
     keen.length ? `were interested in: ${keen.join(", ")}` : null,
     not.length ? `said weren't for them or didn't help: ${not.join(", ")}` : null,
   ].filter(Boolean);
-  const head = parts.length ? `From what they've told Co about things it sent, they ${parts.join("; and ")}.` : "";
+  const head = parts.length ? `From what they've told Cue about things it sent, they ${parts.join("; and ")}.` : "";
   const tail = unconfirmed.length ? ` Possibly went to or signed up for (${UNCONFIRMED_RULE}): ${unconfirmed.join(", ")}.` : "";
   return head || tail ? `${head}${tail}`.trim() : null;
 }

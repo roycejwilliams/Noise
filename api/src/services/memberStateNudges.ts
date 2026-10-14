@@ -627,7 +627,7 @@ export async function runMemberStateNudges(now = new Date()): Promise<{ members:
 type Facts = Record<string, string | number | null>;
 const TASKS: Record<NudgeType, (f: Facts) => string> = {
   intro_nudge: (f) =>
-    `Co introduced them to ${f.their_name} by email a few days ago and they haven't brought it up since. Write one short text about it, from what's above: either ask lightly whether the two of them got a chance to connect, or offer one concrete thing you could do for it right now (for example, drafting a short note they could send ${f.their_name}). Say nothing at all about ${f.their_name}: not whether they saw the email, replied, are waiting, or did anything, and nothing they said or want. Name ${f.their_name}. If nothing natural comes, SKIP.`,
+    `Cue introduced them to ${f.their_name} by email a few days ago and they haven't brought it up since. Write one short text about it, from what's above: either ask lightly whether the two of them got a chance to connect, or offer one concrete thing you could do for it right now (for example, drafting a short note they could send ${f.their_name}). Say nothing at all about ${f.their_name}: not whether they saw the email, replied, are waiting, or did anything, and nothing they said or want. Name ${f.their_name}. If nothing natural comes, SKIP.`,
   deadline_nudge: (f) =>
     `They told you they were interested in "${f.the_thing}". Its ${f.the_event_date ? "date" : "deadline"} is close (${f.when_relative_to_today}). Write one short heads-up so it doesn't slip by: name it and when, and if it needs an RSVP, a ticket or an application, say so plainly. No pitch, nothing new, no promise. At most one yes or no question, only if there's something you could do for them with it.`,
   goal_nudge: () =>
@@ -690,7 +690,7 @@ export async function onStateNudgeSent(c: Cand, messages: string[]): Promise<voi
   // want the goal: one covers both.
   if (c.type === "goal_nudge" && c.payload?.meta?.goalHash) await import("./goalRecheck.js").then((R) => R.noteRecheckSent(c.userId, String(c.payload.meta.goalHash), String(c.payload?.facts?.the_goal_in_their_words ?? ""), messages.join("\n"), "goal_nudge")).catch(() => {});
   const { writeMemory } = await import("./memory.js");
-  await writeMemory(c.userId, "check_in", `Co noticed on its own (${c.type.replace(/_nudge$/, "")}): ${messages[0] ?? ""}`).catch(() => {});
+  await writeMemory(c.userId, "check_in", `Cue noticed on its own (${c.type.replace(/_nudge$/, "")}): ${messages[0] ?? ""}`).catch(() => {});
 }
 
 export async function onStateNudgeDropped(c: Cand, status: string, reason?: string): Promise<void> {

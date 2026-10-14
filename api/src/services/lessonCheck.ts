@@ -47,7 +47,7 @@ const haikuRead: LessonReader = async (prompt) =>
 
 export function lessonPrompt(i: { message: string; pushback: string; lesson: string; logs: ReplyLog[]; theirs?: TheirText[] }): string {
   const entries = [
-    ...i.logs.map((l) => ({ at: l.at.getTime(), text: `Co's reply (${l.outcome}):\nCo drafted: "${l.draft.slice(0, 600)}"\nWhat went out: "${l.sent.slice(0, 600)}"${l.why ? `\nWhy the check changed it: ${l.why.slice(0, 400)}` : ""}` })),
+    ...i.logs.map((l) => ({ at: l.at.getTime(), text: `Cue's reply (${l.outcome}):\nCue drafted: "${l.draft.slice(0, 600)}"\nWhat went out: "${l.sent.slice(0, 600)}"${l.why ? `\nWhy the check changed it: ${l.why.slice(0, 400)}` : ""}` })),
     ...(i.theirs ?? []).map((t) => ({ at: t.at.getTime(), text: `They texted: "${t.text.slice(0, 300)}"` })),
   ].sort((a, b) => a.at - b.at);
   const logs = entries.map((e) => e.text).join("\n\n");
@@ -64,7 +64,7 @@ Decide what caused the thing they pushed back on. Follow the chain, not just the
 - "check": it is in what went out but not in what the companion drafted (the reply check cut, replaced or added it), or it follows from an earlier reply the check changed. The companion's own behavior didn't start it.
 - "co": the companion drafted it, and it went out as drafted.
 - "unknown": the log doesn't show the thing they pushed back on.
-Then write the lesson that fits the real cause, in one short sentence: for "check", say which line came from the reply check and what was true instead, if the log shows it; for "co", keep or correct the guess so it addresses what the draft actually did; for "unknown", keep the guess. causeLine: one short plain line naming the cause from the log (for example "the reply check replaced Co's answer with 'Nothing's running on that right now' (claim_work_status)"), or null for unknown.
+Then write the lesson that fits the real cause, in one short sentence: for "check", say which line came from the reply check and what was true instead, if the log shows it; for "co", keep or correct the guess so it addresses what the draft actually did; for "unknown", keep the guess. causeLine: one short plain line naming the cause from the log (for example "the reply check replaced Cue's answer with 'Nothing's running on that right now' (claim_work_status)"), or null for unknown.
 
 Return ONLY JSON: {"cause": "check" | "co" | "unknown", "lesson": "...", "causeLine": "..." or null}`;
 }

@@ -47,5 +47,5 @@ for (const [i, ask] of asks.entries()) {
   for (const d of r.droppedDetails) console.log(`  dropped detail (${d.name}) ${d.detail}: ${d.why}`);
   if (!r.kept.length && !r.dropped.length) console.log(`  ${r.note}`);
 }
-console.log(`\nkept ${kept}, dropped ${dropped}; facts Co could repeat: ${facts}, confirmed on their page by re-reading: ${onPage}/${facts}`);
+console.log(`\nkept ${kept}, dropped ${dropped}; facts Cue could repeat: ${facts}, confirmed on their page by re-reading: ${onPage}/${facts}`);
 process.exit(0);

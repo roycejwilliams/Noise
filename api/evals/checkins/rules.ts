@@ -26,7 +26,7 @@ let repairText: string | null = null;
 const THEIR_NEWS = /\b(said yes|confirmed|booked|heard back|got back to me)\b/i;
 const backedByThem = (prompt: string) => {
   const p = prompt.replace(/\\"/g, '"');
-  const theirs = (p.replace(/\\n/g, "\n").match(/What they texted Co before that[^\n]*\n((?:- "[^\n]*"\n)+)/)?.[1] ?? "") + (p.match(/What they just told Co: "([^"]*)"/)?.[1] ?? "");
+  const theirs = (p.replace(/\\n/g, "\n").match(/What they texted Cue before that[^\n]*\n((?:- "[^\n]*"\n)+)/)?.[1] ?? "") + (p.match(/What they just told Cue: "([^"]*)"/)?.[1] ?? "");
   return THEIR_NEWS.test(theirs);
 };
 const prior = globalThis.fetch;
@@ -34,7 +34,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const url = typeof input === "string" ? input : input?.url ?? String(input);
   if (!/api\.anthropic\.com/.test(url)) return prior(input, init);
   const body = String(init?.body ?? "");
-  const kind = /Only the member knows where it stands/.test(body) ? "thread_read" : /You check a text message Co is about to send/.test(body) ? "claims" : /Does this line assert anything that happened/.test(body) ? "admission" : "other";
+  const kind = /Only the member knows where it stands/.test(body) ? "thread_read" : /You check a text message Cue is about to send/.test(body) ? "claims" : /Does this line assert anything that happened/.test(body) ? "admission" : "other";
   starts.push(kind);
   if (holds[kind]) {
     settled[kind] = false;
@@ -45,9 +45,9 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (/Does this line assert anything that happened/.test(body)) {
     calls.push("admission");
     text = JSON.stringify({ onlyAdmission: false });
-  } else if (/You check a text message Co is about to send/.test(body)) {
+  } else if (/You check a text message Cue is about to send/.test(body)) {
     calls.push("claims");
-    const about = body.split("Message Co is about to send:").pop() ?? "";
+    const about = body.split("Message Cue is about to send:").pop() ?? "";
     text = JSON.stringify({ claims: /Nothing new on my end/.test(about) ? [{ text: "Nothing new on my end since this morning.", type: "work_status", supported: false, factId: null, quote: null }] : /booked Nopa/.test(about) ? [{ text: "Yes, I booked Nopa for you.", type: "past_action", supported: false, factId: null, quote: null }] : /Hayes Valley myself/.test(about) ? [{ text: "Still waiting to hear from Hayes Valley myself.", type: "work_status", supported: false, factId: null, quote: null }] : /searching for jazz bars/.test(about) ? [{ text: "Still searching for jazz bars for you.", type: "work_status", supported: false, factId: null, quote: null }] : [] });
   } else if (/Only the member knows where it stands/.test(body)) {
     calls.push("thread_read");
@@ -115,13 +115,13 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
 // ------------------------------------------------------------------ 1. what waits on them: only what Co raised (review item 4)
 {
   const q = M.unansweredQuestion(EXCHANGE, NOW, SENT);
-  check("the question Co sent with its find, before this conversation, is waiting on them", q?.question === "Worth a look before you decide on funding timing?" && q?.name === "Harbor Light Fellowship" && !q.raisedAgain, q);
-  check("a Co line inside this conversation is never 'before it'", q?.at === "2026-10-14T00:30:37.000Z" && q?.sessionStart === "2026-10-14T07:04:20.000Z", q);
+  check("the question Cue sent with its find, before this conversation, is waiting on them", q?.question === "Worth a look before you decide on funding timing?" && q?.name === "Harbor Light Fellowship" && !q.raisedAgain, q);
+  check("a Cue line inside this conversation is never 'before it'", q?.at === "2026-10-14T00:30:37.000Z" && q?.sessionStart === "2026-10-14T07:04:20.000Z", q);
   const answered = [...EXCHANGE.slice(0, 7), { at: at("2026-10-14T01:00:00Z"), from: "member" as const, text: "maybe later" }, ...EXCHANGE.slice(7)];
   check("a text from them between the question and this conversation: not waiting", M.unansweredQuestion(answered, NOW, SENT) === null);
-  check("Co's last line before the conversation isn't a question: nothing waits", M.unansweredQuestion(EXCHANGE.map((l, i) => (i === 6 ? { ...l, text: "No deadline pressure on this one." } : l)), NOW, SENT) === null);
+  check("Cue's last line before the conversation isn't a question: nothing waits", M.unansweredQuestion(EXCHANGE.map((l, i) => (i === 6 ? { ...l, text: "No deadline pressure on this one." } : l)), NOW, SENT) === null);
   check("a question older than the waiting window is history", M.unansweredQuestion(EXCHANGE, at("2026-10-17T08:00:00Z"), SENT) === null);
-  check("a question with no find of Co's sent beside it never waits (a rhetorical closer)", M.unansweredQuestion(EXCHANGE, NOW, [SENT[0]]) === null);
+  check("a question with no find of Cue's sent beside it never waits (a rhetorical closer)", M.unansweredQuestion(EXCHANGE, NOW, [SENT[0]]) === null);
   const closer = [...QUIET, { at: at("2026-10-14T00:30:37Z"), from: "co" as const, text: "Big day tomorrow?" }];
   check("\"Big day tomorrow?\" on its own is never waiting", M.unansweredQuestion(closer, NOW, [SENT[0]]) === null && base({ exchange: closer, sent: [SENT[0]] }).waiting.length === 0);
   check("a send beside an earlier reply in the same block isn't what the question is about", M.unansweredQuestion(EXCHANGE, NOW, [{ name: "Founder Feast", sentAt: at("2026-10-13T23:12:30Z") }]) === null);
@@ -136,18 +136,18 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const unknownHold = base({ safetyHold: null });
   check("a safety hold that can't be read: nothing waits, and it's counted as withheld", unknownHold.waiting.length === 0 && unknownHold.withheld >= 1);
   const raised = [...EXCHANGE, { at: at("2026-10-14T07:04:50Z"), from: "co" as const, text: "Good to hear from you. Harbor Light Fellowship is there whenever you want it." }];
-  check("once Co raised it again (its own later text names it), it doesn't wait again: no repeat asks", M.unansweredQuestion(raised, at("2026-10-14T07:06:00Z"), SENT)?.raisedAgain === true && base({ exchange: raised, now: at("2026-10-14T07:06:00Z") }).waiting.length === 0);
+  check("once Cue raised it again (its own later text names it), it doesn't wait again: no repeat asks", M.unansweredQuestion(raised, at("2026-10-14T07:06:00Z"), SENT)?.raisedAgain === true && base({ exchange: raised, now: at("2026-10-14T07:06:00Z") }).waiting.length === 0);
   check("a call between the question and this conversation means it isn't waiting", reWaiting({ activity: [...ACTIVE, at("2026-10-14T03:15:00Z")] }) === 0);
   check("a voice memo or a text to a teammate in between counts too (any channel, timestamps only)", reWaiting({ activity: [at("2026-10-14T05:40:00Z"), ...ACTIVE] }) === 0);
   check("activity inside this conversation doesn't count against it", reWaiting({ activity: [...ACTIVE, at("2026-10-14T07:04:40Z")] }) === 1);
   const noActivity = base({ activity: null });
   check("activity that can't be read is withheld, never read as waiting", noActivity.waiting.length === 0 && noActivity.withheld >= 1);
   check("a goal split whose moment has passed doesn't wait", base({ exchange: QUIET, offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: "2026-10-12T20:00:00Z", momentOn: "2026-10-13" }] }).waiting.length === 0);
-  check("a goal split Co already raised again doesn't wait", base({ exchange: [...QUIET, { at: at("2026-10-13T23:30:00Z"), from: "co" as const, text: "No rush on the pre-seed round split." }], offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: "2026-10-12T20:00:00Z" }] }).waiting.length === 0);
-  check("a doc offer Co already raised again doesn't wait", base({ exchange: [...QUIET, { at: at("2026-10-13T23:30:00Z"), from: "co" as const, text: "The venue shortlist write-up offer stands." }], docOffer: { topic: "the venue shortlist", at: "2026-10-12T20:00:00Z" } }).waiting.length === 0);
+  check("a goal split Cue already raised again doesn't wait", base({ exchange: [...QUIET, { at: at("2026-10-13T23:30:00Z"), from: "co" as const, text: "No rush on the pre-seed round split." }], offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: "2026-10-12T20:00:00Z" }] }).waiting.length === 0);
+  check("a doc offer Cue already raised again doesn't wait", base({ exchange: [...QUIET, { at: at("2026-10-13T23:30:00Z"), from: "co" as const, text: "The venue shortlist write-up offer stands." }], docOffer: { topic: "the venue shortlist", at: "2026-10-12T20:00:00Z" } }).waiting.length === 0);
   // Only what Co raised (Royce: "Co shouldn't nag about a draft it never actually raised").
   const draftTold = [...QUIET, { at: at("2026-10-14T00:30:37Z"), from: "co" as const, text: "Here's the email to the Hayes Valley venue, ready for you to send: mailto:events@hayes.example" }];
-  check("a draft Co sent without asking anything isn't waiting on them", base({ exchange: draftTold, searching: NOTHING, sent: [{ name: "Email to the Hayes Valley venue", sentAt: at("2026-10-14T00:30:40Z") }] }).waiting.length === 0);
+  check("a draft Cue sent without asking anything isn't waiting on them", base({ exchange: draftTold, searching: NOTHING, sent: [{ name: "Email to the Hayes Valley venue", sentAt: at("2026-10-14T00:30:40Z") }] }).waiting.length === 0);
   check("the world has no other door into waiting", Object.keys(base()).sort().join(",") === "clock,lead,next,running,theirWords,thread,waiting,withheld" && [...M.WAITS].sort().join(",") === "doc_offer,goal_split,question");
   const tcSrc = fs.readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8");
   const call = tcSrc.slice(tcSrc.indexOf("M.buildMemberWorld({"), tcSrc.indexOf("unreadable: !safe"));
@@ -159,13 +159,13 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const w = base();
   check("waiting on them leads, ahead of work that's running", w.lead?.kind === "question" && w.running.length === 1 && w.running[0].kind === "search_goal", w.lead);
   const fact = M.memberWorldFact(w);
-  check("the fact names the find and its question once, marked as the check-in's one item", /Waiting on them \(a check-in's one item\): "Harbor Light Fellowship", which Co sent Tue Oct 13, 5:30pm PDT asking "Worth a look before you decide on funding timing\?"; nothing from them on any channel since\./.test(fact) && fact.split("Harbor Light Fellowship").length === 2, fact);
-  check("running work is background while something waits", /Running \(background while something waits\): Co's daily search for their goal: "a rooftop for the Sequin AI launch party"/.test(fact), fact);
+  check("the fact names the find and its question once, marked as the check-in's one item", /Waiting on them \(a check-in's one item\): "Harbor Light Fellowship", which Cue sent Tue Oct 13, 5:30pm PDT asking "Worth a look before you decide on funding timing\?"; nothing from them on any channel since\./.test(fact) && fact.split("Harbor Light Fellowship").length === 2, fact);
+  check("running work is background while something waits", /Running \(background while something waits\): Cue's daily search for their goal: "a rooftop for the Sequin AI launch party"/.test(fact), fact);
   check("the fact is the one the reply check knows", M.WORLD_FACT.test(fact));
   const running = M.memberWorldFact(base({ exchange: QUIET }));
-  check("with nothing waiting, running work is the check-in's one item", /Nothing waits on them \(not a thing to say\)\. Running \(a check-in's one item\): Co's daily search/.test(running), running);
-  check("a goal split Co offered waits on their pick, ahead of running work", base({ exchange: QUIET, offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: "2026-10-13T20:00:00Z" }] }).lead?.kind === "goal_split");
-  check("a document Co offered waits on their yes", base({ exchange: QUIET, docOffer: { topic: "the launch venue shortlist" } }).lead?.kind === "doc_offer");
+  check("with nothing waiting, running work is the check-in's one item", /Nothing waits on them \(not a thing to say\)\. Running \(a check-in's one item\): Cue's daily search/.test(running), running);
+  check("a goal split Cue offered waits on their pick, ahead of running work", base({ exchange: QUIET, offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: "2026-10-13T20:00:00Z" }] }).lead?.kind === "goal_split");
+  check("a document Cue offered waits on their yes", base({ exchange: QUIET, docOffer: { topic: "the launch venue shortlist" } }).lead?.kind === "doc_offer");
   const nothing = base({ exchange: QUIET, searching: NOTHING });
   const nf = M.memberWorldFact(nothing);
   check("genuinely nothing (all read): no lead, and the fact says so", nothing.lead === null && nothing.withheld === 0 && /Nothing waits on them \(not a thing to say\)\. Nothing is running \(not a thing to say\)\./.test(nf), nf);
@@ -173,8 +173,8 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("a live thread shows, marked theirs to tell, and is never the lead", thread.thread?.kind === "thread" && thread.lead === null && /Their thread \(theirs to tell: ask, never report\): Waiting to hear back from the Hayes Valley venue/.test(M.memberWorldFact(thread)));
   const next = base({ exchange: QUIET, searching: NOTHING, ahead: { tasks: [{ id: 41, goal: "Weekly branding check-in", kind: "followup", nextCheckAt: "2026-10-16T16:00:00Z", deadline: null }], queuedFinds: 0 } });
   check("the soonest scheduled check-in is what's next", next.next?.kind === "scheduled" && /a check-in with them, "Weekly branding check-in", Fri Oct 16, 9am PDT/.test(next.next.fact), next.next);
-  check("running work is listed by the same items the running-work line uses", G.runningWorkLine([], [], COVERAGE).includes(`Co's daily search for their goal: "a rooftop for the Sequin AI launch party"`) && M.runningItems([], [], COVERAGE)[0].label === `Co's daily search for their goal: "a rooftop for the Sequin AI launch party"`);
-  const task = 'Co is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "draft docs").';
+  check("running work is listed by the same items the running-work line uses", G.runningWorkLine([], [], COVERAGE).includes(`Cue's daily search for their goal: "a rooftop for the Sequin AI launch party"`) && M.runningItems([], [], COVERAGE)[0].label === `Cue's daily search for their goal: "a rooftop for the Sequin AI launch party"`);
+  const task = 'Cue is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "draft docs").';
   check("an open task runs, said by its goal", M.runningItems([task], [], NOTHING)[0]?.name === "Draft the Sequin AI planning docs" && G.runningWorkLine([task], [], NOTHING).includes('task #52: "Draft the Sequin AI planning docs"'));
 }
 
@@ -189,7 +189,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     check("with anything withheld, the fact never says nothing waits or nothing runs", e.withheld >= 1 && !/\bNothing (waits|is running)\b/i.test(f) && /never say there's nothing/.test(f), f);
   }
   const hidden = base({ exchange: QUIET, searching: { asks: [], goals: [], held: [], hidden: 2 } });
-  check("searches the strip hid still run: a check-in never hears nothing's on", hidden.running[0]?.kind === "searching" && /Co's daily search for 2 things they want \(details not shown here\)/.test(M.memberWorldFact(hidden)));
+  check("searches the strip hid still run: a check-in never hears nothing's on", hidden.running[0]?.kind === "searching" && /Cue's daily search for 2 things they want \(details not shown here\)/.test(M.memberWorldFact(hidden)));
   const rows = [
     { at: at("2026-10-13T23:00:00Z"), content: "User said: what about Ellis's party?" },
     { at: at("2026-10-13T23:01:00Z"), content: "User said: tell Jordan the plan [to Mo]" },
@@ -201,7 +201,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const fenced = SF.fenceExchange({ strip }, rows);
   check("the exchange read drops talk with a teammate, strips other members, keeps both sides", fenced.map((l) => `${l.from}:${l.text}`).join("|") === "co:Worth a look?|co:one sec", fenced);
   const src = fs.readFileSync(new URL("../../src/services/sourceFence.ts", import.meta.url), "utf8");
-  check("the exchange and activity are declared sources of the fence", /exchange: "a: their recent texts with Co/.test(src) && /activity: "a: when they were last active on any channel/.test(src) && /export async function readExchange\(f: Fence/.test(src));
+  check("the exchange and activity are declared sources of the fence", /exchange: "a: their recent texts with Cue/.test(src) && /activity: "a: when they were last active on any channel/.test(src) && /export async function readExchange\(f: Fence/.test(src));
   const act = src.slice(src.indexOf("export async function readActivityTimes"), src.indexOf("export async function readLessonOriginals"));
   check("the activity read returns timestamps only, scoped to the member, every channel", /SELECT created_at FROM co_memories WHERE user_id = \$1/.test(act) && /call_transcript/.test(act) && /voice memo/.test(act) && /rows\.map\(\(r: any\) => new Date\(r\.created_at\)\)/.test(act) && !/content AS|SELECT[^`]*content,/.test(act));
   const mw = fs.readFileSync(new URL("../../src/services/memberWorld.ts", import.meta.url), "utf8");
@@ -225,7 +225,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const dst = M.worldClock(at("2026-11-02T08:04:00Z"), ZONE);
   check("after DST ends the clock follows the zone (12:04 AM PST)", dst.local.startsWith("12:04 AM") && dst.hour === 0, dst);
   check("before 9 their time the next search is this morning; after, tomorrow", M.worldClock(NOW, ZONE).sweepToday && !M.worldClock(at("2026-10-14T17:00:00Z"), ZONE).sweepToday && DAILY_SWEEP_HOUR === 9);
-  check("the next look is said from the sweep hour", /Next from Co: the daily search, this morning from 9\./.test(M.memberWorldFact(base())));
+  check("the next look is said from the sweep hour", /Next from Cue: the daily search, this morning from 9\./.test(M.memberWorldFact(base())));
   check("the check-in rule reads their local time for the soft late-night register", /Late at night their time \(about 11pm to 5am\) open soft/.test(M.CHECKIN_RULE));
   check("dates are read in their zone: an ISO instant is their day, a bare date is that day, junk is no date", M.dayOf("2026-10-14T06:00:00Z", ZONE) === "2026-10-13" && M.dayOf("2026-12-15", ZONE) === "2026-12-15" && M.dayOf("Dec 15, 2026", ZONE) === "2026-12-15" && M.dayOf("soon", ZONE) === null);
   // Never the process's zone (PR #201: CI runs in UTC and read "Dec 15, 2026" as Dec 14 for a Pacific member). This file runs under
@@ -247,13 +247,13 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const rgSrc = fs.readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8");
   check("every text turn with a world gets it (gatherReplyFacts)", /if \(opts\.turn\?\.world\) addMemberWorld\(rf, opts\.turn\.world\);/.test(rgSrc));
   const r = M.CHECKIN_RULE;
-  check("the rule: Co judges whether it's a check-in; presence plus at most one item", /you judge that from the thread/.test(r) && /presence plus at most one item from "Their world right now"/.test(r));
+  check("the rule: Cue judges whether it's a check-in; presence plus at most one item", /you judge that from the thread/.test(r) && /presence plus at most one item from "Their world right now"/.test(r));
   check("the rule: waiting first, else running; a warm thread asked about, never reported; presence and an open question when nothing", /what waits on them first, else what's running/.test(r) && /a warm thread is asked about \("any word from that venue\?"\), never reported/.test(r) && /with nothing running or waiting, presence and an open question/.test(r));
   check("the rule: with nothing, presence and an open question only, never a line saying nothing is waiting or running", /presence and an open question only \("good to hear from you, what's on your mind\?"\), never a line saying nothing is waiting or running/.test(r));
   check("the rule: the one item as something there for them, never an answer they owe; one breath, no list, no machinery", /That one item only, as something there for them \("the Harbor Light fellowship is there if funding's on your mind"\), never as an answer they owe/.test(r) && /One breath: no list, no status report, never your own machinery/.test(r));
   check("the rule: feelings shape the tone, never whether they hear their world", /Recent feelings shape the tone, never whether they hear their world/.test(r));
   check("the rule: tell me more expands the same item without a greeting", /"Tell me more" expands that same item, with no new greeting/.test(r));
-  check("the rule and the fact are in Co's voice: no em dash, no exclamation, no role noun, never the old brand", [r, M.memberWorldFact(base()), G.WORLD_REDRAFT_NOTE].every((t) => !/[—–]/.test(t) && !/!/.test(t) && !/\b(assistant|concierge)\b/i.test(t) && !/copatible/i.test(t)));
+  check("the rule and the fact are in Cue's voice: no em dash, no exclamation, no role noun, never the old brand", [r, M.memberWorldFact(base()), G.WORLD_REDRAFT_NOTE].every((t) => !/[—–]/.test(t) && !/!/.test(t) && !/\b(assistant|concierge)\b/i.test(t) && !/copatible/i.test(t)));
   // Size, by characters (no tokenizer offline; about 4 characters a token for English prose): the rule plus the fact, on the rich and
   // the empty state.
   const rich = r.length + M.memberWorldFact(base({ threads: [THREAD], ahead: { tasks: [{ id: 41, goal: "Weekly branding check-in", kind: "followup", nextCheckAt: "2026-10-16T16:00:00Z", deadline: null }], queuedFinds: 0 } })).length;
@@ -289,12 +289,12 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("the same line without their world is still cut (the world is what backs it)", !!narr(backed, noWorld));
   check("a search said with progress or results gets no pass", !!narr("Still looking, and I found two promising rooftops for the Sequin launch."));
   const withTask = G.createReplyFacts();
-  G.addMemberWorld(withTask, base({ exchange: QUIET, searching: NOTHING, tasks: ['Co is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] }));
+  G.addMemberWorld(withTask, base({ exchange: QUIET, searching: NOTHING, tasks: ['Cue is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] }));
   check("a task line naming the task passes", !narr("I'm still working on the Sequin AI planning docs.", withTask));
   check("a bare \"my end\" is machinery: \"No news my end.\"", !!narr("No news my end."));
   check("\"my side\" is machinery: \"Nothing new from my side.\"", !!narr("Nothing new from my side."));
   for (const m of ["Good to hear from you. Nothing new on my end since this morning.", "All quiet in my systems tonight.", "The Sequin rooftop search hit a limit on my end.", "The Sequin rooftop search is in my queue."]) check(`machinery stays cut, whatever it names: "${m}"`, !!narr(m), m);
-  check("holding their thing behind Co's judgment stays cut even when it names it", !!narr("I'll send the Sequin rooftop options once they're worth sending."));
+  check("holding their thing behind Cue's judgment stays cut even when it names it", !!narr("I'll send the Sequin rooftop options once they're worth sending."));
   check("a sentence naming nothing of theirs gets no pass", !!narr("Still looking into a few things."));
   const oneWord = G.createReplyFacts();
   G.addMemberWorld(oneWord, base({ exchange: QUIET, searching: { asks: [], goals: ["fundraising"], held: [] } }));
@@ -321,13 +321,13 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const cut = G.stripUnsupported("Good to hear from you. No real news yet from the Hayes Valley venue.", G.codeChecks("Good to hear from you. No real news yet from the Hayes Valley venue.", cutRun.f, src).filter((c) => !c.pass));
   check("the thread report is cut sentence for sentence", cut === "Good to hear from you.", cut);
   const prompt = M.threadReadPrompt(THREAD.text, "Just checking in", ["No word yet from the Hayes Valley venue."]);
-  check("the read asks where the thread stands, against advice, a plan, a question or their own words", /does it state where that thread stands, as a fact \(news, a reply, still waiting, nothing back, confirmed, booked, cancelled\), rather than advice, a plan, a question, or saying back what the member themselves told Co\?/.test(prompt) && /\{"reports":/.test(prompt));
-  check("their message this turn comes first, labelled, and an echo of their news is named as not a report, with one example each way", prompt.indexOf('What they just told Co: "Just checking in"') < prompt.indexOf("Sentences:") && /A sentence that repeats, reacts to or builds on news the member gave \(just now or before\) is NOT a status report/.test(prompt) && /"Great that the venue said yes" is not a report; with no news from them, "No word yet from the venue" is a report/.test(prompt));
-  check("a thread-report cut is Co's own wording: the fence keeps the draft readable for lessons", SF.redactCuts("x", [{ name: "no_thread_report", reason: 'thread_report: "x"' }]) === "x");
+  check("the read asks where the thread stands, against advice, a plan, a question or their own words", /does it state where that thread stands, as a fact \(news, a reply, still waiting, nothing back, confirmed, booked, cancelled\), rather than advice, a plan, a question, or saying back what the member themselves told Cue\?/.test(prompt) && /\{"reports":/.test(prompt));
+  check("their message this turn comes first, labelled, and an echo of their news is named as not a report, with one example each way", prompt.indexOf('What they just told Cue: "Just checking in"') < prompt.indexOf("Sentences:") && /A sentence that repeats, reacts to or builds on news the member gave \(just now or before\) is NOT a status report/.test(prompt) && /"Great that the venue said yes" is not a report; with no news from them, "No word yet from the venue" is a report/.test(prompt));
+  check("a thread-report cut is Cue's own wording: the fence keeps the draft readable for lessons", SF.redactCuts("x", [{ name: "no_thread_report", reason: 'thread_report: "x"' }]) === "x");
   // Their news from an earlier turn may be said back; a status they never gave is still cut (review, 2026-10-14).
   const told = [...QUIET, { at: at("2026-10-14T05:00:00Z"), from: "member" as const, text: "Hayes Valley said yes for the 14th" }, { at: at("2026-10-14T05:00:20Z"), from: "co" as const, text: "That's a relief." }, { at: at("2026-10-14T05:02:00Z"), from: "member" as const, text: "ok what next" }];
   const echoWorld = base({ threads: [THREAD], exchange: told });
-  check("their recent texts reach the read (fenced, theirs only)", echoWorld.theirWords.includes("Hayes Valley said yes for the 14th") && !echoWorld.theirWords.includes("That's a relief.") && /What they texted Co before that, oldest first \(their own words\):\n(?:.*\n)*- "Hayes Valley said yes for the 14th"/.test(M.threadReadPrompt(THREAD.text, "ok what next", ["x"], echoWorld.theirWords)));
+  check("their recent texts reach the read (fenced, theirs only)", echoWorld.theirWords.includes("Hayes Valley said yes for the 14th") && !echoWorld.theirWords.includes("That's a relief.") && /What they texted Cue before that, oldest first \(their own words\):\n(?:.*\n)*- "Hayes Valley said yes for the 14th"/.test(M.threadReadPrompt(THREAD.text, "ok what next", ["x"], echoWorld.theirWords)));
   check("an echo of their news from two turns ago is kept: \"Since Hayes Valley confirmed, let's plan the menu.\"", !(await reportRun("Since Hayes Valley confirmed, let's plan the menu.", { message: "ok what next", recentConversation: "" }, judge, echoWorld)).check);
   check("the same line with no news from them is still cut", !!(await reportRun("Since Hayes Valley confirmed, let's plan the menu.", { message: "ok what next", recentConversation: "" }, judge, base({ threads: [THREAD], exchange: QUIET }))).check);
   check("an unbacked status line is still cut even when they talked about the venue", !!(await reportRun("Still nothing back from Hayes Valley.", { message: "ok what next", recentConversation: "" }, judge, base({ threads: [THREAD], exchange: [...QUIET, { at: at("2026-10-14T05:00:00Z"), from: "member" as const, text: "I emailed Hayes Valley about the 14th" }] }))).check);
@@ -404,7 +404,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     ["goal_split", base({ exchange: QUIET, offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: null }] })],
     ["doc_offer", base({ exchange: QUIET, docOffer: { topic: "the launch venue shortlist" } })],
     ["search_goal", base({ exchange: QUIET })],
-    ["task", base({ exchange: QUIET, searching: NOTHING, tasks: ['Co is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] })],
+    ["task", base({ exchange: QUIET, searching: NOTHING, tasks: ['Cue is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] })],
   ];
   const ASKS = /\?|^\s*(?:say|tell|let me know|pick|choose|decide|reply|text|send|check|look|take a look|read|open|click|tap|confirm|grab|apply|go|think)\b|\b(?:let me know|say the word|your call|when you decide|whenever you(?:'re| are) ready|want me to|would you|could you|can you|do you|are you|should you|you should|you need to|make sure|don't forget|remember to|get back to me)\b/i;
   const every: [string, string | null][] = [
@@ -413,7 +413,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     ["scheduled", M.worldStatement({ kind: "scheduled", name: "Weekly branding check-in", at: "2026-10-16T16:00:00Z", fact: "" }, clock)],
   ];
   for (const [kind, line] of every) {
-    check(`the fallback line for ${kind} is a statement naming only what's on file: no question, no ask, no machinery, Co's voice`, !!line && !line.split(/(?<=[.])\s+/).some((x) => ASKS.test(x)) && !/[—–!]/.test(line) && !/\b(assistant|concierge)\b|copatible/i.test(line) && /[.]$/.test(line) && !SP.NARRATION_RULES.some((r) => (r.why === "narrates Co's own machinery" || r.why === "task-tracker words") && r.pattern.test(line)), { kind, line });
+    check(`the fallback line for ${kind} is a statement naming only what's on file: no question, no ask, no machinery, Cue's voice`, !!line && !line.split(/(?<=[.])\s+/).some((x) => ASKS.test(x)) && !/[—–!]/.test(line) && !/\b(assistant|concierge)\b|copatible/i.test(line) && /[.]$/.test(line) && !SP.NARRATION_RULES.some((r) => (r.why === "narrates Cue's own machinery" || r.why === "task-tracker words") && r.pattern.test(line)), { kind, line });
   }
   for (const [kind, world] of lines) {
     const line = M.worldLine(world)!;
@@ -424,7 +424,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("a find still ahead gets its line; with no date on file, none (Mahjong invite, no date)", !!M.worldStatement({ kind: "question", name: "Harbor Light Fellowship", endsOn: "2026-12-15", fact: "" }, clock) && M.worldStatement({ kind: "question", name: "Mahjong After Dark", fact: "" }, clock) === null && M.worldLine(base({ sent: [{ name: "Mahjong After Dark", sentAt: FELLOWSHIP.sentAt }] })) === null);
   const T = await import("../../src/services/turnContext.js");
   const revealed = T.mergeSent([{ item_key: "name:harbor light fellowship", item_name: "Harbor Light Fellowship", kind: "opportunity", url: null, sent_at: FELLOWSHIP.sentAt, reaction: null }], [], [], [{ name: "Harbor Light Fellowship", when: "2026-11-30", when_end: "2026-12-15" }]);
-  check("a find shown in a reply carries its date from Co's sent record, and gets the line", revealed[0]?.endsOn === "2026-12-15" && !!M.worldStatement({ kind: "question", name: revealed[0].name, endsOn: revealed[0].endsOn, fact: "" }, clock), revealed);
+  check("a find shown in a reply carries its date from Cue's sent record, and gets the line", revealed[0]?.endsOn === "2026-12-15" && !!M.worldStatement({ kind: "question", name: revealed[0].name, endsOn: revealed[0].endsOn, fact: "" }, clock), revealed);
   check("a find's date is read the way findForm reads it (statedDates included)", T.endsOnOf({ statedDates: { start: "2026-11-02" } }) === "2026-11-02" && T.endsOnOf({ deadline: "2026-12-15", event_date: "2026-11-01" }) === "2026-12-15" && T.endsOnOf({}) === null);
   check("no template from the hidden or unreadable search state", M.worldLine(base({ exchange: QUIET, searching: { asks: [], goals: [], held: [], hidden: 2 } })) === null && M.worldStatement({ kind: "searching", name: null, fact: "" }, clock) === null);
   check("no template from an ask in their own words (no label on file)", M.worldStatement({ kind: "search_ask", name: "I'm looking for a jazz bar with a good piano in the Mission", fact: "" }, clock) === null && M.worldStatement({ kind: "search_ask", name: "live jazz nights", fact: "" }, clock) === null);
@@ -451,7 +451,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("after: the draft is retried with their world and the true line goes out", after.r.outcome === "redrafted" && after.r.final === retried && after.calls.includes("redraft"), after);
   check("after: the machinery line is still gone", !/on my end/.test(after.r.final));
   const fallback = await turn(w, asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday."));
-  check("00:04 \"Just checking in\": Co said check-in, its reply failed the checks, so the lead's true line is said from their world", fallback.r.outcome === "stripped" && fallback.r.final === `${cut} Harbor Light Fellowship is there whenever you want it.` && fallback.r.checks.some((c) => c.name === "world_line"), fallback.r);
+  check("00:04 \"Just checking in\": Cue said check-in, its reply failed the checks, so the lead's true line is said from their world", fallback.r.outcome === "stripped" && fallback.r.final === `${cut} Harbor Light Fellowship is there whenever you want it.` && fallback.r.checks.some((c) => c.name === "world_line"), fallback.r);
   const noTemplate = await turn(base({ sent: [{ ...FELLOWSHIP }], searching: { asks: ["I'm looking for a jazz bar with a good piano"], goals: [], held: [] }, exchange: QUIET }), asJson(true, "Good to hear from you. Your Zephyr Capital meeting is set for Friday."));
   check("with no line code can prove, the cut goes out alone", noTemplate.r.final === cut && !noTemplate.r.checks.some((c) => c.name === "world_line"), noTemplate.r);
   const appended = fallback.r.final;
@@ -485,7 +485,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     G.addMemberWorld(of, threadOnly);
     redraftText = null;
     const own = await G.groundReply("Hey Jordan, good to hear from you. Still searching for jazz bars for you.", of, { message: "hey", recentConversation: "" }, { userId: null, record: false });
-    check("a cut work claim about Co's own search, nothing running: the nothing-running line fires as before", /Nothing's running on that right now/.test(own.final) && G.nothingRunningLineApplies({ draft: "Hey Jordan, good to hear from you. Still searching for jazz bars for you.", cut: "Hey Jordan, good to hear from you.", failed: [{ name: "claim_work_status", pass: false }] as any, rf: of }), own);
+    check("a cut work claim about Cue's own search, nothing running: the nothing-running line fires as before", /Nothing's running on that right now/.test(own.final) && G.nothingRunningLineApplies({ draft: "Hey Jordan, good to hear from you. Still searching for jazz bars for you.", cut: "Hey Jordan, good to hear from you.", failed: [{ name: "claim_work_status", pass: false }] as any, rf: of }), own);
   }
   // A cut thread report always gets one try (case 30's exact draft, 2026-10-14). With enough left it only repairs: every remaining
   // sentence stays, and only the words that pointed back at the cut one change (keepsEverySentence); anything else, the cut goes out.
@@ -547,7 +547,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     check("a cut that isn't a thread report gets no try from this path", !calls.includes("redraft") && !calls.includes("repair") && other.final === "Night Jordan, sleep well." && !G.threadRedraftAt({ failed: [{ name: "time_on_file", pass: false }] as any, rf: f }), other);
     // #190 skips only when the cut WORK CLAIM itself names their thread.
     const mixed = await run("No word yet from Hayes Valley. Still searching for jazz bars for you.", null);
-    check("a cut thread sentence beside a cut work claim about Co's own search: the nothing-running line still fires", /Nothing's running on that right now/.test(mixed.r.final), mixed.r);
+    check("a cut thread sentence beside a cut work claim about Cue's own search: the nothing-running line still fires", /Nothing's running on that right now/.test(mixed.r.final), mixed.r);
     check("workClaimsNameThread: only when every cut work claim names the thread", M.workClaimsNameThread(threadOnly, ["Still waiting to hear from Hayes Valley myself."]) && !M.workClaimsNameThread(threadOnly, ["Still searching for jazz bars for you."]) && !M.workClaimsNameThread(threadOnly, ["Still waiting to hear from Hayes Valley myself.", "Still searching for jazz bars for you."]) && !M.workClaimsNameThread(threadOnly, []));
   }
   // The reviewer's probes: not check-ins, no status cut.
@@ -557,19 +557,19 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("\"ok thanks, night\": a cut time claim leaves the goodnight alone, nothing appended", night.r.final === "Night Jordan, sleep well." && !night.r.checks.some((c) => c.name === "world_line"), night.r);
   // Co decides whether it was a check-in; code acts only on that (review, 2026-10-14).
   const nightStatus = "Night Jordan, sleep well. Nothing new on my end since this morning.";
-  for (const [label, rewrite] of [["Co says not a check-in, and its reply fails", asJson(false, "Night Jordan, sleep well. Your Zephyr Capital meeting is set for Friday.")], ["the redraft comes back empty", ""], ["the redraft isn't JSON", "Night Jordan, sleep well."]] as const) {
+  for (const [label, rewrite] of [["Cue says not a check-in, and its reply fails", asJson(false, "Night Jordan, sleep well. Your Zephyr Capital meeting is set for Friday.")], ["the redraft comes back empty", ""], ["the redraft isn't JSON", "Night Jordan, sleep well."]] as const) {
     const r = await turn(w, rewrite, nightStatus, "ok thanks, night");
     check(`"ok thanks, night" with a work-status line cut never gets the lead line (${label})`, r.r.final === "Night Jordan, sleep well." && !/Harbor Light|whenever you want it/.test(r.r.final), r.r);
   }
   const dadDraft = "I'm so sorry about your dad. Nothing new on my end since this morning.";
-  for (const [label, rewrite] of [["Co says not a check-in", asJson(false, "I'm so sorry about your dad. Your Zephyr Capital meeting is set for Friday.")], ["the redraft comes back empty", ""]] as const) {
+  for (const [label, rewrite] of [["Cue says not a check-in", asJson(false, "I'm so sorry about your dad. Your Zephyr Capital meeting is set for Friday.")], ["the redraft comes back empty", ""]] as const) {
     const r = await turn(w, rewrite, dadDraft, "my dad's in the hospital");
     check(`"my dad's in the hospital" never gets the lead line (${label})`, r.r.final === "I'm so sorry about your dad." && !/Harbor Light|whenever you want it/.test(r.r.final), r.r);
   }
   const notCheckinKept = await turn(w, asJson(false, "Night Jordan, sleep well."), nightStatus, "ok thanks, night");
-  check("when Co says it isn't a check-in and its reply is true, that reply goes out, with nothing from their world", notCheckinKept.r.outcome === "redrafted" && notCheckinKept.r.final === "Night Jordan, sleep well.", notCheckinKept.r);
+  check("when Cue says it isn't a check-in and its reply is true, that reply goes out, with nothing from their world", notCheckinKept.r.outcome === "redrafted" && notCheckinKept.r.final === "Night Jordan, sleep well.", notCheckinKept.r);
   // Not a check-in, or unread: at most a statement about the running item the cut sentence itself named.
-  const withTask = base({ exchange: QUIET, searching: NOTHING, tasks: ['Co is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] });
+  const withTask = base({ exchange: QUIET, searching: NOTHING, tasks: ['Cue is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] });
   const named = M.deadAirLine({ checkin: false, world: withTask, draft: "Night Jordan. Nothing new on the Sequin AI planning docs on my end.", cut: "Night Jordan." });
   check("not a check-in: only the running item the cut sentence named, said as a statement", named === `I'm still on "Draft the Sequin AI planning docs".`, named);
   check("unread: never the lead, at most the named item", M.deadAirLine({ checkin: null, world: w, draft, cut }) === null && M.deadAirLine({ checkin: true, world: w, draft, cut }) === "Harbor Light Fellowship is there whenever you want it.");
@@ -593,7 +593,7 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   ];
   const r = R.rhythmOf(lines, [at("2026-10-06T16:00:00Z"), at("2026-10-09T16:00:00Z")], ZONE);
   check("a conversation they opened is counted once, by their local hour and weekday", r.started === 3 && r.byHour[21] === 3 && r.byWeekday[6] === 1 && r.byWeekday[1] === 1 && r.byWeekday[2] === 1, r);
-  check("their reply to a text Co sent first counts its wait; a text never answered in the window doesn't", r.proactive === 2 && r.replied === 1 && r.medianReplyMin === 45, r);
+  check("their reply to a text Cue sent first counts its wait; a text never answered in the window doesn't", r.proactive === 2 && r.replied === 1 && r.medianReplyMin === 45, r);
   check("busiest hours are said only with enough to say", r.peakHours === "9pm" && R.rhythmOf(lines.slice(0, 3), [], ZONE).peakHours === null);
   // The pin: nothing that times a send reads it yet (Royce: "Measure first ... before changing any send timing").
   const root = new URL("../../src/", import.meta.url).pathname;

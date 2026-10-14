@@ -395,7 +395,7 @@ export function planPicks(judgments: (Pick<Judgment, "key" | "verdict" | "why" |
     const tierNext = j.tierPick ? (j.tierAlternates ?? []).map((id) => judgments.find((x) => x.id === id)).filter((x): x is NonNullable<typeof x> => !!x).map((x) => ({ key: x.key, why: memberSafeWhy(memberWhyOf(x as any), ids) })) : undefined;
     if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" "), ids), whyMember: memberSafeWhy(j.why ?? "", ids), whyNow: memberSafeWhy(j.whyNow ?? "", ids), lastDay: j.lastDay ?? null, ...(tierNext ? { tierNext } : {}) });
   }
-  const why = (j: { verdict: string; why?: string } | undefined) => `Co's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
+  const why = (j: { verdict: string; why?: string } | undefined) => `Cue's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
   const reject = waitingKeys.filter((w) => decided.get(w.key)?.drop === true).map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
   // A hold waits; a find the picker gave no verdict is left alone (never seen).
   const unqueue = waitingKeys.filter((w) => { const d = decided.get(w.key); return d?.kind === "wait" && !d.drop && !d.leave; }).map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
@@ -688,17 +688,17 @@ export function renderShadowReport(sections: ShadowSection[]): string {
     lines.push(`Old rules queued: ${s.oldQueued.length ? s.oldQueued.join("; ") : "nothing"}`);
     lines.push(`Old rules texted: ${s.oldTexted.length ? s.oldTexted.map((t) => `"${t}"`).join(" | ") : "nothing"}`);
     if (s.skipped) {
-      lines.push(`Co: skipped (${s.skipped})`);
+      lines.push(`Cue: skipped (${s.skipped})`);
       continue;
     }
     const by = (v: string) => s.judgments.filter((j) => j.verdict === v);
     const date = (key: string) => s.pool.find((p) => p.id === key)?.date;
-    lines.push(`Co would send (${by("send").length}):`);
+    lines.push(`Cue would send (${by("send").length}):`);
     for (const j of by("send")) lines.push(`  + ${j.name}${date(j.id) ? ` (${date(j.id)})` : ""}\n      why them: ${j.why}${j.cites?.length ? ` [${j.cites.join(", ")}]` : ""}\n      why now: ${j.whyNow ?? ""}`);
-    lines.push(`Co would hold (${by("hold").length}):`);
+    lines.push(`Cue would hold (${by("hold").length}):`);
     // A reject the guard held shows what the picker claimed and why, beside the guard.
-    for (const j of by("hold")) lines.push(`  ~ ${j.name}${j.until ? ` until ${j.until}` : ""}: ${j.claimed ? `Co said reject [${j.claimed}${j.cites?.length ? `: ${j.cites.join(", ")}` : ""}]: ` : ""}${j.why}${j.guard ? ` (${j.guard}${j.guardedRuns && j.guardedRuns > 1 ? `, ${j.guardedRuns} runs in a row` : ""})` : ""}`);
-    lines.push(`Co would reject (${by("reject").length}):`);
+    for (const j of by("hold")) lines.push(`  ~ ${j.name}${j.until ? ` until ${j.until}` : ""}: ${j.claimed ? `Cue said reject [${j.claimed}${j.cites?.length ? `: ${j.cites.join(", ")}` : ""}]: ` : ""}${j.why}${j.guard ? ` (${j.guard}${j.guardedRuns && j.guardedRuns > 1 ? `, ${j.guardedRuns} runs in a row` : ""})` : ""}`);
+    lines.push(`Cue would reject (${by("reject").length}):`);
     for (const j of by("reject")) lines.push(`  - ${j.name} [${j.reason}${j.cites?.length ? `: ${j.cites.join(", ")}` : ""}]: ${j.guard ? `guard: ${j.guard}` : j.why}`);
     const none = by("no_verdict");
     if (none.length) lines.push(`No verdict (${none.length}): ${none.map((j) => j.name).join("; ")}`);

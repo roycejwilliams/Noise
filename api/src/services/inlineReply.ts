@@ -83,10 +83,10 @@ async function lookUp(handle: unknown, memberPhone: string): Promise<RepliedTo |
 }
 
 export function repliedToFact(r: RepliedTo): string {
-  const what = r.what ? ` (that's the link Co sent for: ${r.what})` : "";
+  const what = r.what ? ` (that's the link Cue sent for: ${r.what})` : "";
   const later = r.alsoInThread ? ` Later in that same thread: "${r.alsoInThread}".` : "";
   return r.fromCo
-    ? `They pressed Reply on this earlier text from Co (iMessage inline reply), so their message is about it: "${r.text}"${what}.${later}`
+    ? `They pressed Reply on this earlier text from Cue (iMessage inline reply), so their message is about it: "${r.text}"${what}.${later}`
     : `They pressed Reply on their own earlier text (iMessage inline reply), so their message is about it: "${r.text}".${later}`;
 }
 
@@ -100,7 +100,7 @@ export function bareLink(text: string): string | null {
 export function inlineNote(r: RepliedTo): string {
   const t = r.text.length > 200 ? `${r.text.slice(0, 200)}…` : r.text;
   const what = r.what ? ` (${r.what.slice(0, 160)})` : "";
-  return r.fromCo ? `[Replying to Co's text: "${t}"${what}]` : `[Replying to their own earlier text: "${t}"]`;
+  return r.fromCo ? `[Replying to Cue's text: "${t}"${what}]` : `[Replying to their own earlier text: "${t}"]`;
 }
 
 // Whether Co's first text this turn should thread, and under what: their

@@ -111,7 +111,7 @@ export async function invitesLeftFor(userId: string): Promise<number> {
 // The first text a friend sends, pre-filled by the link.
 export function inviteGreeting(inviterFirstName: string | null, code: string): string {
   const name = inviterFirstName?.trim();
-  return name ? `Hi Co, ${name} invited me. Code: ${code}` : `Hi Co, I was invited. Code: ${code}`;
+  return name ? `Hi Cue, ${name} invited me. Code: ${code}` : `Hi Cue, I was invited. Code: ${code}`;
 }
 
 // Opens Messages to Co with the greeting filled in. "?&body=" works on both

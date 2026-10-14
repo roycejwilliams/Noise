@@ -47,7 +47,7 @@ function buildFacts(d: Dump[number], old: boolean) {
   RG.addFact(rf, "known", `Today is ${today.toFormat("cccc, LLLL d, yyyy")} (Pacific time).`);
   if (old) {
     const asks = (d.asks ?? []).slice(0, 3).map((a) => `"${a.text}"`);
-    if (asks.length) RG.addFact(rf, "ongoing", `Co's daily search is looking for: ${asks.join("; ")}. If something real fits, Co may text them about it (at most one text a day). Co can't promise it will find anything, or when.`);
+    if (asks.length) RG.addFact(rf, "ongoing", `Cue's daily search is looking for: ${asks.join("; ")}. If something real fits, Cue may text them about it (at most one text a day). Cue can't promise it will find anything, or when.`);
     for (const s of d.searches ?? []) RG.addFact(rf, "did_before", s.replace("[search] ", ""));
   } else {
     for (const f of RG.ongoingFactsFor((d.asks ?? []).map((a) => ({ text: a.text, kind: a.kind === "help" ? "help" : "find" })))) RG.addFact(rf, f.kind, f.text);
@@ -70,30 +70,30 @@ if (mode === "judge") {
         const flagged = (d.failed ?? []).filter((f) => f.name.startsWith("claim_") || f.name.includes("claim"));
         if (!flagged.length) continue;
         const today = DateTime.fromISO(d.created_at).setZone("America/Los_Angeles").toFormat("cccc, LLLL d, yyyy");
-        const prompt = `You're auditing a fact check on texts from Co (an AI companion) to a member. The check flagged some claims in Co's draft as unsupported. Using ONLY the context below, decide for each flagged claim whether it was actually true.
+        const prompt = `You're auditing a fact check on texts from Cue (an AI companion) to a member. The check flagged some claims in Cue's draft as unsupported. Using ONLY the context below, decide for each flagged claim whether it was actually true.
 
 Today: ${today}
 
-What Co can do:
+What Cue can do:
 ${capabilitySheet().map((c) => `- ${c}`).join("\n")}
 
-Everything Co had sent or done for them before this, from its record:
+Everything Cue had sent or done for them before this, from its record:
 ${rows(d).map((r: any) => `- ${ledgerLine(r, dayOf(d.created_at))}`).join("\n") || "(nothing)"}
 
 Their open asks: ${(d.asks ?? []).map((a) => `"${a.text}" (${a.kind === "help" ? "kept on file, not searched" : "in the daily search"})`).join("; ") || "(none)"}
 
-Recent searches Co ran: ${(d.searches ?? []).join(" | ") || "(none)"}
+Recent searches Cue ran: ${(d.searches ?? []).join(" | ") || "(none)"}
 
 The conversation just before (oldest first):
 ${(d.convo ?? []).join("\n")}
 
-Co's draft:
+Cue's draft:
 "${d.draft}"
 
 Flagged claims:
 ${flagged.map((f, i) => `${i}. ${f.reason}`).join("\n")}
 
-For each: "true" if the context shows it was accurate, "false" if the context shows it wasn't or it's something Co had no basis for, "unclear" if you can't tell. For a true one, say what backs it: "record" (Co's sends/actions), "conversation", "capability", "asks_or_searches", or "other".
+For each: "true" if the context shows it was accurate, "false" if the context shows it wasn't or it's something Cue had no basis for, "unclear" if you can't tell. For a true one, say what backs it: "record" (Cue's sends/actions), "conversation", "capability", "asks_or_searches", or "other".
 
 Return ONLY JSON: {"verdicts": [{"i": 0, "verdict": "true" | "false" | "unclear", "backedBy": "record" | "conversation" | "capability" | "asks_or_searches" | "other" | null, "why": "one short line"}]}`;
         try {

@@ -49,7 +49,7 @@ async function run(repeat: number, candidate: boolean) {
   // The agent under test: the live one (read back from ElevenLabs) or the config THIS CODE builds, either way with the webhook tools
   // removed so the next thing Co does is speak. (Simulation tests ignore overrides, so these are single-reply tests.)
   let cfg: any;
-  if (candidate) cfg = buildAgentConfig({ name: "Co", prompt: process.env.CALL_TEST_PROMPT_REPLACE ?? fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8"), voiceId: process.env.ELEVENLABS_VOICE_ID ?? "jzMiJCYezeDWXr1X4jwM", apiUrl: process.env.API_URL ?? "https://test.copatible.com" });
+  if (candidate) cfg = buildAgentConfig({ name: "Cue", prompt: process.env.CALL_TEST_PROMPT_REPLACE ?? fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8"), voiceId: process.env.ELEVENLABS_VOICE_ID ?? "jzMiJCYezeDWXr1X4jwM", apiUrl: process.env.API_URL ?? "https://test.copatible.com" });
   else cfg = await api(`/v1/convai/agents/${agentId}`);
   const conversation_config = JSON.parse(JSON.stringify(cfg.conversation_config));
   const p = conversation_config.agent.prompt;

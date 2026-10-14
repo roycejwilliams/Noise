@@ -33,7 +33,7 @@ check("...a 1am ask delivered at 9am: last night", S.askedWhenWords(new Date("20
 check("...a 2pm ask delivered at 9am next day: yesterday", S.askedWhenWords(new Date("2026-10-07T21:00:00Z"), MORNING, SF) === "yesterday");
 check("...a 10am ask delivered at 3pm: earlier today", S.askedWhenWords(new Date("2026-10-08T17:00:00Z"), new Date("2026-10-08T22:00:00Z"), SF) === "earlier today");
 check("...three days back: by weekday", S.askedWhenWords(new Date("2026-10-05T20:00:00Z"), MORNING, SF) === "on Monday");
-check("the line for a later delivery: the thing and when it was asked for", S.deliveryLine({ title: "Co Presence Plan: After the Sequin AI November Event", askedAt: CALL_END, sendAt: MORNING, zone: SF }) === "Here's the Co Presence Plan you asked for last night.");
+check("the line for a later delivery: the thing and when it was asked for", S.deliveryLine({ title: "Cue Presence Plan: After the Sequin AI November Event", askedAt: CALL_END, sendAt: MORNING, zone: SF }) === "Here's the Cue Presence Plan you asked for last night.");
 check("a title that isn't a document noun is named by its kind (the attachment shows the title)", S.deliveryLine({ title: "Staying present after the Sequin AI event", kind: "partnership_plan", askedAt: CALL_END, sendAt: MORNING, zone: SF }) === "Here's the plan you asked for last night.");
 check("the line for a fresh ask: just the thing", S.deliveryLine({ title: "Venue Brief: Hayes Valley", askedAt: new Date(MORNING.getTime() - 60_000), sendAt: MORNING, zone: SF }) === "Here's the Venue Brief.");
 check("a stale 'Got it' breaks the shape; a fresh one doesn't", S.deliveryShapeProblems("Got it, I'll send it.", { askedAt: CALL_END, sendAt: MORNING }).length === 1 && S.deliveryShapeProblems("Got it, I'll send it.", { askedAt: new Date(MORNING.getTime() - 30_000), sendAt: MORNING }).length === 0);
@@ -48,7 +48,7 @@ check("held sends go through it at send time (deferred_sends)", /dropStaleAck\(m
   const deps: any = {
     now: () => CALL_END,
     track: async () => {},
-    commitments: async () => [{ taskId: 111, sentence: "I'll text you what I put together on how Co keeps its presence after the November event.", wakes: 0 }],
+    commitments: async () => [{ taskId: 111, sentence: "I'll text you what I put together on how Cue keeps its presence after the November event.", wakes: 0 }],
     person: async () => ({ firstName: "Jordan", phone: "+14155550123", zone: SF, reachable: true }),
     draft: async (x: any) => { drafted.push(x); return "Got it, I'll send the presence plan this morning."; },
     send: async (x: any) => { sent.push(x); return { sent: true }; },
@@ -65,7 +65,7 @@ check("held sends go through it at send time (deferred_sends)", /dropStaleAck\(m
 {
   const THEIRS = "After the Sequin AI November event I want the people we meet to remember us. I don't want it to be a one night thing.";
   const planDoc = {
-    title: "Co Presence Plan: After the Sequin AI November Event",
+    title: "Cue Presence Plan: After the Sequin AI November Event",
     note: "A plan for after the November event, from what you told me.",
     sections: [{ heading: "What you want", bullets: ["The people you meet at the Sequin AI November event remember you", "Not a one night thing"] }],
     suggestions: ["Send each new contact a short personal note within two days of the event", "Host a small dinner for the people who connected most", "Share a one-page recap of what you heard in the room", "Check in with your closest new contacts a month later"],
@@ -78,7 +78,7 @@ check("held sends go through it at send time (deferred_sends)", /dropStaleAck\(m
   check("morning: the document went", r.ok, r);
   check(`morning: one send, the attachment with its line (${wire.length} sent)`, wire.length === 1 && !!wire[0].media_url, wire);
   const line = wire[0]?.content ?? "";
-  check(`morning: the line says what was asked and when ("${line}")`, line === "Here's the Co Presence Plan you asked for last night.");
+  check(`morning: the line says what was asked and when ("${line}")`, line === "Here's the Cue Presence Plan you asked for last night.");
   check("morning: never 'Got it', never the bare title as its own text", !S.opensWithAck(line) && line !== planDoc.title);
   check("morning: one sentence", (line.match(/[.!?](?:\s|$)/g) ?? []).length === 1);
 }

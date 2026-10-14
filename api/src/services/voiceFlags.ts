@@ -74,11 +74,11 @@ const clock = (s: number | null | undefined) => (typeof s === "number" ? `${Math
 export function transcriptForListening(turns: TimedTurn[]): string {
   return turns
     .filter((t) => typeof t.message === "string" && t.message.trim())
-    .map((t) => `[${clock(t.time_in_call_secs)}] ${t.role === "user" ? "Caller" : "Co"}: ${t.message!.trim()}`)
+    .map((t) => `[${clock(t.time_in_call_secs)}] ${t.role === "user" ? "Caller" : "Cue"}: ${t.message!.trim()}`)
     .join("\n");
 }
 
-export const LISTEN_PROMPT = `You're listening to a phone call between Co (an AI companion) and a caller. The transcript, with times, is below the audio.
+export const LISTEN_PROMPT = `You're listening to a phone call between Cue (an AI companion) and a caller. The transcript, with times, is below the audio.
 
 Listen only to the CALLER. Find moments where the caller's voice says something their words don't:
 - sigh: an audible sigh, or a heavy, deflated delivery on words that read fine on paper ("yeah, I'm fine")

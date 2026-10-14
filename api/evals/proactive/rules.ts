@@ -213,9 +213,9 @@ check("three pause a week, four or more two weeks (brand fix 3)", unansweredPaus
   const where = jobs.slice(jobs.indexOf("WHERE u.sms_opted_out = false\n           AND u.archived_at IS NULL\n           AND u.identity_captured"), jobs.indexOf("LIMIT 50", jobs.indexOf("No paid subscription needed")));
   check("companion check-ins need a recap, not life chapters (text-only members qualify)", where.length > 0 && !/life_chapters/.test(where) && /cp\.last_recap_at IS NOT NULL/.test(where));
   const cc = readFileSync(new URL("../../src/agent/companionCheckin.ts", import.meta.url), "utf8");
-  check("a member Co barely knows gets a warm check-in instead of SKIP", /if the recap shows Co barely knows them yet[\s\S]{0,80}don't SKIP/.test(cc));
-  check("that check-in carries no events, offers, pitch or promises", /No events, no offers, no pitch, no promise of anything Co will do/.test(cc));
-  check("a member Co knows well with nothing open still gets SKIP, never a generic check-in", /a generic "thinking of you" is never acceptable/.test(cc));
+  check("a member Cue barely knows gets a warm check-in instead of SKIP", /if the recap shows Cue barely knows them yet[\s\S]{0,80}don't SKIP/.test(cc));
+  check("that check-in carries no events, offers, pitch or promises", /No events, no offers, no pitch, no promise of anything Cue will do/.test(cc));
+  check("a member Cue knows well with nothing open still gets SKIP, never a generic check-in", /a generic "thinking of you" is never acceptable/.test(cc));
 }
 
 // Every tier that has something goes out together, then one question
@@ -263,9 +263,9 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("scheduling and queueing both use it", /const eventDate = followUpDate\(match\);/.test(ro) && /const eventDate: string \| undefined = followUpDate\(match\) \?\? undefined;/.test(ro));
   const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
   check("a follow-up before its day is deferred, not sent or dropped", /if \(end\.getTime\(\) > Date\.now\(\)\) return \{ defer: nextLocalHour\(end, tz, 10\)/.test(reg));
-  check("no record of sending it, no follow-up about it", /if \(onlyAboutASend && !sent\) return skip\("no record of Co sending it to them"\);/.test(reg));
-  check("the draft knows when Co sent it and what it said", /co_sent_it_on: sent\?\.date/.test(reg) && /what_co_said_when_it_sent_it/.test(reg) && !/"a few days ago"/.test(reg));
-  check("the send is remembered for Co's next replies", /writeMemory\(c\.userId, "followup_context"/.test(reg) && /memory_type = 'followup_context'/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
+  check("no record of sending it, no follow-up about it", /if \(onlyAboutASend && !sent\) return skip\("no record of Cue sending it to them"\);/.test(reg));
+  check("the draft knows when Cue sent it and what it said", /co_sent_it_on: sent\?\.date/.test(reg) && /what_co_said_when_it_sent_it/.test(reg) && !/"a few days ago"/.test(reg));
+  check("the send is remembered for Cue's next replies", /writeMemory\(c\.userId, "followup_context"/.test(reg) && /memory_type = 'followup_context'/.test(readFileSync(new URL("../../src/harness/replyGrounding.ts", import.meta.url), "utf8")));
   const pr = readFileSync(new URL("../../src/harness/proactive.ts", import.meta.url), "utf8");
   check("a deferred candidate moves, it isn't dropped", /if \("defer" in draft\) \{[\s\S]{0,200}?if \(!opts\.dryRun\) await pool\.query\(\s*`UPDATE proactive_candidates SET due_at = \$2/.test(pr));
 }
@@ -303,7 +303,7 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("the pick has room to answer, and time", /maxOutputTokens: 1000,\s*experimental_telemetry: \{ isEnabled: true, functionId: "proactive.choosePick" \}/.test(pr) && /"pick timed out"\)\), 15_000\)/.test(pr));
   check("a failed draft gets one rewrite, told what it broke", /draftAgain\(first, \(\) => registry\[c\.type\]\.draft\(c, person\)\)/.test(pr) && /It broke: \$\{redo\.failed\}/.test(pr));
   const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", import.meta.url), "utf8");
-  check("only Co's own skip holds check-ins for 14 days; a failed draft retries in about 2", /const coChoseSkip = \/\^model chose SKIP\//.test(reg) && /coChoseSkip \? "0" : "12"/.test(reg) && /onDropped\?\.\(c, status, reason\)/.test(pr) && /skip\("model chose SKIP/.test(reg));
+  check("only Cue's own skip holds check-ins for 14 days; a failed draft retries in about 2", /const coChoseSkip = \/\^model chose SKIP\//.test(reg) && /coChoseSkip \? "0" : "12"/.test(reg) && /onDropped\?\.\(c, status, reason\)/.test(pr) && /skip\("model chose SKIP/.test(reg));
   const U = await import("../../src/services/understanding.js");
   const now = new Date("2026-09-28T12:00:00Z");
   const daysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000).toISOString();
@@ -313,7 +313,7 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
   check("what's going on goes stale after five weeks; who they are lasts longer", (() => { const g = U.understandingGaps(all(40), {}, now); return g.some((x) => x.topic === "current_situation" && x.kind === "stale") && !g.some((x) => x.topic === "personality"); })());
   check("never asks the same thing twice in two weeks", U.understandingGaps({}, { current_situation: daysAgo(3) }, now)[0]?.topic !== "current_situation");
   check("unknown comes before stale", (() => { const c = all(40); delete (c as any).people_to_meet; return U.understandingGaps(c, {}, now)[0]?.kind === "unknown"; })());
-  check("a stale topic reads as what's changed, with when Co last heard", /^what's changed with .*last heard about it on 2026-08-19/.test(U.gapDescription({ topic: "goals_challenges", kind: "stale", lastHeard: "2026-08-19" })));
+  check("a stale topic reads as what's changed, with when Cue last heard", /^what's changed with .*last heard about it on 2026-08-19/.test(U.gapDescription({ topic: "goals_challenges", kind: "stale", lastHeard: "2026-08-19" })));
   check("last learned is the newest stamp", U.lastLearned({ a: "2026-09-01T00:00:00Z", b: "2026-09-20T00:00:00Z" }) === "2026-09-20T00:00:00Z" && U.lastLearned({}) === null);
   check("companion texts can come every ~4 days, not 14", TYPE_POLICY.companion.typeGapDays === 4);
   const pe = readFileSync(new URL("../../src/services/profileExtraction.ts", import.meta.url), "utf8");
@@ -366,9 +366,9 @@ check("no follow-up line has an em dash or exclamation", [...OFFER_FOLLOWUP_MANY
     // Phase B (B6, 2026-10-10): a goal find (discovery) is re-judged too, against its page as it is now; a fresh one isn't.
     check("a goal find queued over a day ago is re-checked too (B6); a fresh one isn't", P.needsRelevanceCheck(aged(72, discovery), now3) && !P.needsRelevanceCheck(aged(10, discovery), now3));
     const triedAgo = (h: number) => aged(48, asked, { ...asked.payload, relevanceTriedAt: new Date(now3.getTime() - h * 3_600_000).toISOString() });
-    check("when Co couldn't say, the item sits out 2h (others go), then is checked again, never sent unchecked", !P.evaluateCandidates({ ...spaced, candidates: [triedAgo(1)] }).eligible.length && P.evaluateCandidates({ ...spaced, candidates: [triedAgo(3)] }).eligible.length === 1 && P.needsRelevanceCheck(triedAgo(3), now3) && P.evaluateCandidates({ ...spaced, candidates: [triedAgo(1), reminder] }).eligible.length === 1);
+    check("when Cue couldn't say, the item sits out 2h (others go), then is checked again, never sent unchecked", !P.evaluateCandidates({ ...spaced, candidates: [triedAgo(1)] }).eligible.length && P.evaluateCandidates({ ...spaced, candidates: [triedAgo(3)] }).eligible.length === 1 && P.needsRelevanceCheck(triedAgo(3), now3) && P.evaluateCandidates({ ...spaced, candidates: [triedAgo(1), reminder] }).eligible.length === 1);
     check("a 'still relevant' answer is remembered for a day, so it isn't paid for twice", !P.needsRelevanceCheck(aged(30, asked, { ...asked.payload, relevantAt: new Date(now3.getTime() - 2 * 3_600_000).toISOString() }), now3) && P.needsRelevanceCheck(aged(30, asked, { ...asked.payload, relevantAt: new Date(now3.getTime() - 25 * 3_600_000).toISOString() }), now3));
-    check("Co's relevance answer is read; anything else holds it (null), never sends or archives", P.readRelevance('{"relevant": false, "why": "Oct 1 has passed"}')?.relevant === false && P.readRelevance('```json\n{"relevant": true, "why": "still open"}\n```')?.relevant === true && P.readRelevance("not sure") === null && P.readRelevance('{"relevant": "maybe"}') === null);
+    check("Cue's relevance answer is read; anything else holds it (null), never sends or archives", P.readRelevance('{"relevant": false, "why": "Oct 1 has passed"}')?.relevant === false && P.readRelevance('```json\n{"relevant": true, "why": "still open"}\n```')?.relevant === true && P.readRelevance("not sure") === null && P.readRelevance('{"relevant": "maybe"}') === null);
     check("unsolicited discovery stays held at the weekly cap", !ok("discovery") && ev.perCandidate.find((p: any) => p.candidate.id === "discovery").checks.some((k: any) => k.name === "weekly_cap" && !k.pass));
     check("the text after a call they were on is an answer", P.isAnswering({ type: "post_call", payload: {} } as any));
     check("a network tease (always for an open ask) and a debrief are answers; a profile offer and a guest-match nudge are discovery", P.isAnswering({ type: "network_tease", payload: { askId: "a" } } as any) && P.isAnswering({ type: "debrief", payload: {} } as any) && !P.isAnswering(discovery) && !P.isAnswering({ type: "event_match_nudge", payload: {} } as any) && !P.isAnswering({ type: "companion", payload: {} } as any));

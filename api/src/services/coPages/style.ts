@@ -122,7 +122,7 @@ export function inkOn(stops: string[], prefer: string[]): string {
 // The gate's half for the extras (deck.ts and schema.ts): each one present must be well formed, else it's refused by name.
 export function checkExtras(st: Record<string, unknown>, problems: string[]): StyleExtras {
   const got = extrasFrom(st);
-  for (const k of ["display", "body", "accent2", "density", "titleLayout", "context", "grammar"] as const) if (st[k] !== undefined && st[k] !== null && got[k] === undefined) problems.push(`style.${k} isn't one Co can use`);
+  for (const k of ["display", "body", "accent2", "density", "titleLayout", "context", "grammar"] as const) if (st[k] !== undefined && st[k] !== null && got[k] === undefined) problems.push(`style.${k} isn't one Cue can use`);
   if (st.gradient !== undefined && st.gradient !== false && !got.gradient) problems.push("style.gradient needs a second color (accent2)");
   return got;
 }

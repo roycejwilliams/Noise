@@ -94,8 +94,8 @@ const NOT_PLAIN: { test: RegExp; why: string }[] = [
   { test: /\*\*|__|~~|`/, why: "has markdown emphasis or code" },
   { test: /\[[^\]]*\]\([^)]*\)/, why: "has a markdown link" },
   { test: /^\s*(#{1,6}\s|[-*+]\s|>\s|\d+[.)]\s)/, why: "starts with a markdown heading, bullet or number (use a bullets block)" },
-  { test: /—/, why: "has an em dash (Co doesn't use them)" },
-  { test: /!/, why: "has an exclamation point (Co doesn't use them)" },
+  { test: /—/, why: "has an em dash (Cue doesn't use them)" },
+  { test: /!/, why: "has an exclamation point (Cue doesn't use them)" },
 ];
 
 export function plain(v: unknown, field: string, max: number, problems: string[], required: boolean): string | null {

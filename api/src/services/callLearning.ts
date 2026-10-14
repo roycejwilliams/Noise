@@ -51,13 +51,13 @@ export function callLearningPrompt(o: {
         .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
         .join("\n")
     : "";
-  return `Read one phone call between Co (an assistant, "assistant" lines) and a person ("user" lines), and extract everything below in one pass. The whole call is new: every "user" line counts. Only what the PERSON said (the "user" lines) can fill anything. Something Co suggested, asked about, or offered is never the person's own goal, blocker, preference, plan or activity unless the person's own reply actually confirms it. Never guess or infer beyond what's said.
+  return `Read one phone call between Cue (an assistant, "assistant" lines) and a person ("user" lines), and extract everything below in one pass. The whole call is new: every "user" line counts. Only what the PERSON said (the "user" lines) can fill anything. Something Cue suggested, asked about, or offered is never the person's own goal, blocker, preference, plan or activity unless the person's own reply actually confirms it. Never guess or infer beyond what's said.
 
 Transcript (oldest first):
 "${o.transcript}"
 Today's date: ${o.today}
 
-What Co already has on file about them:
+What Cue already has on file about them:
 ${fileLines || "(nothing yet)"}
 ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}. ${a.text}`).join("\n")}\n` : ""}
 1. profile: psychographic fields from the whole call.
@@ -67,22 +67,22 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
   - activity_preferences: activities they mentioned or implied enjoying.
   - goals: things they are working toward.
   - goals and activity_preferences come only from what they say about themselves or want for themselves, never from the subject of a one-off request (research, a document, advice, a single search): "find me venues for my launch party" alone is not a goal or an interest; "I'm launching in November, find me venues" gives the goal "launch in November".
-  - blockers: challenges or struggles in their life they mentioned (never frustrations with Co itself).
+  - blockers: challenges or struggles in their life they mentioned (never frustrations with Cue itself).
   - availability_pattern: how often and when they want to connect (e.g. "weekday evenings").
   - city: ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target ("roles in NYC", "investors in NYC", "events in Miami"). Empty string if they didn't say.
   - emotional_state: one word for their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout), from what the conversation showed, never one voice moment.
   - long_term_direction: a sentence capturing their longer-term personal and career direction, distinct from immediate goals. Empty string if not discussed.
   Write about them as "they", never "he" or "she", unless they said their pronouns on the call.
 
-2. resolved: which of the EXACT on-file goals or blockers has the person said is now achieved, resolved, or no longer relevant, and which numbered open asks they said are now resolved, no longer needed, or no longer true. Only when the person clearly says so; restating it, still wanting it, or Co mentioning it does not count. For each, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Co's). Reuse the exact on-file text for goals and blockers and the number for asks.
+2. resolved: which of the EXACT on-file goals or blockers has the person said is now achieved, resolved, or no longer relevant, and which numbered open asks they said are now resolved, no longer needed, or no longer true. Only when the person clearly says so; restating it, still wanting it, or Cue mentioning it does not count. For each, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Cue's). Reuse the exact on-file text for goals and blockers and the number for asks.
 
 3. corrections: anywhere in the call, did they correct or contradict something on file? Only a real correction: they say an item is wrong, no longer true, or has changed ("I'm not a founder", "I moved to Oakland", "I don't run anymore"). A new detail that doesn't contradict anything isn't a correction; a goal they achieved isn't a correction either. Don't guess from tone. For each: the field, the EXACT on-file text it replaces (for a list, the one item), what's true now if they said it (otherwise null), and their exact words (at least a few words, from their line).
 
-4. cadence: near the end of a call Co may ask how often they'd like Co to call on its own. Did they state a preference? "weekly" (roughly every week), "biweekly" (roughly every two weeks, or anything looser but still wanting proactive calls, e.g. "every so often"), "none" (they said not to call proactively, or they'd rather reach out themselves), or "unstated" (it never came up, or no clear answer).
+4. cadence: near the end of a call Cue may ask how often they'd like Cue to call on its own. Did they state a preference? "weekly" (roughly every week), "biweekly" (roughly every two weeks, or anything looser but still wanting proactive calls, e.g. "every so often"), "none" (they said not to call proactively, or they'd rather reach out themselves), or "unstated" (it never came up, or no clear answer).
 
-5. planned_event: did they mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering, not a vague "I should get out more")? event_name in their own words; event_date resolved to YYYY-MM-DD from today's date only when you can resolve it confidently, else null, never a guess; event_location as city or venue if mentioned, else null. Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is), something Co offered, or an event you would have to infer is none. quote: their exact words that say they are going, copied from their line. All null if none.
+5. planned_event: did they mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering, not a vague "I should get out more")? event_name in their own words; event_date resolved to YYYY-MM-DD from today's date only when you can resolve it confidently, else null, never a guess; event_location as city or venue if mentioned, else null. Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is), something Cue offered, or an event you would have to infer is none. quote: their exact words that say they are going, copied from their line. All null if none.
 
-6. lessons: moments where they corrected or pushed back on Co itself: something Co said, assumed, suggested, or how Co was talking to them ("that's not what I asked", "this has nothing to do with my event", "you already told me that", "slow down"). Not a correction of their own details (that's #3), and not disagreement with a normal answer. For each, one short standing note to Co about how to be with them from now on, general enough to apply next time ("when he asks about logistics, answer the logistics; don't tie it to his own event"), and their exact words (at least a few words, from their line). None when there were none.
+6. lessons: moments where they corrected or pushed back on Cue itself: something Cue said, assumed, suggested, or how Cue was talking to them ("that's not what I asked", "this has nothing to do with my event", "you already told me that", "slow down"). Not a correction of their own details (that's #3), and not disagreement with a normal answer. For each, one short standing note to Cue about how to be with them from now on, general enough to apply next time ("when he asks about logistics, answer the logistics; don't tie it to his own event"), and their exact words (at least a few words, from their line). None when there were none.
 
 Return ONLY valid JSON, no preamble:
 {"profile": {"life_chapters": [], "social_energy": null, "connection_style": "", "activity_preferences": [], "goals": [], "blockers": [], "availability_pattern": "", "city": "", "emotional_state": "", "long_term_direction": ""},

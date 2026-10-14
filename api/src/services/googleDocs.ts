@@ -17,7 +17,7 @@ export function docsHtml(doc: Doc, o: { firstName: string; date: string }): stri
   const sections = doc.sections
     .map((s) => `${s.heading ? `<h2>${e(s.heading)}</h2>` : ""}${s.paragraphs.map((p) => `<p>${e(p)}</p>`).join("")}${s.bullets.length ? `<ul>${s.bullets.map((b) => `<li>${e(b)}</li>`).join("")}</ul>` : ""}`)
     .join("");
-  const sug = doc.suggestions.length ? `<h2>Co's suggestions</h2><ul>${doc.suggestions.map((x) => `<li>${e(x)}</li>`).join("")}</ul>` : "";
+  const sug = doc.suggestions.length ? `<h2>Cue's suggestions</h2><ul>${doc.suggestions.map((x) => `<li>${e(x)}</li>`).join("")}</ul>` : "";
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${e(doc.title)}</title></head><body><h1>${e(doc.title)}</h1><p>${e(`Prepared for ${o.firstName.trim() || "you"}, ${o.date}`)}</p>${doc.note ? `<p>${e(doc.note)}</p>` : ""}${sections}${sug}</body></html>`;
 }
 
@@ -60,7 +60,7 @@ export async function uploadGoogleDoc(accessToken: string, name: string, html: s
       const cause = res.ok ? "other" : googleRefusal(res.status, j);
       if (cause === "our_config") {
         console.error(`googleDocs: OUR CONFIG, not the member's: the Drive API refused the upload (${res.status}): ${String(j?.error?.message ?? "").slice(0, 300)}`);
-        return { ok: false, cause, why: "a Google setting on Co's side isn't switched on yet; that's ours to fix, not theirs. Tell them it's on our end and we'll fix it, nothing they need to do (never ask them to reconnect)" };
+        return { ok: false, cause, why: "a Google setting on Cue's side isn't switched on yet; that's ours to fix, not theirs. Tell them it's on our end and we'll fix it, nothing they need to do (never ask them to reconnect)" };
       }
       if (cause === "reconnect") return { ok: false, cause, why: "Google didn't allow it (they need to reconnect Google and allow Docs)" };
       return { ok: false, cause, why: "Google didn't take the document" };
@@ -104,7 +104,7 @@ export async function updateGoogleDoc(accessToken: string, fileId: string, html:
     if (!res.ok || !j.id) {
       const cause = res.ok ? "other" : googleRefusal(res.status, j);
       if (cause === "our_config") console.error(`googleDocs: OUR CONFIG, not the member's: the Drive API refused an update (${res.status}): ${String(j?.error?.message ?? "").slice(0, 300)}`);
-      return { ok: false, cause, why: cause === "our_config" ? "a Google setting on Co's side isn't switched on yet; that's ours to fix, not theirs. Tell them it's on our end and we'll fix it, nothing they need to do (never ask them to reconnect)" : cause === "reconnect" ? "Google didn't allow it (they need to reconnect Google and allow Docs)" : "Google didn't take the update" };
+      return { ok: false, cause, why: cause === "our_config" ? "a Google setting on Cue's side isn't switched on yet; that's ours to fix, not theirs. Tell them it's on our end and we'll fix it, nothing they need to do (never ask them to reconnect)" : cause === "reconnect" ? "Google didn't allow it (they need to reconnect Google and allow Docs)" : "Google didn't take the update" };
     }
     return { ok: true, id: String(j.id), link: String(j.webViewLink ?? `https://docs.google.com/document/d/${j.id}/edit`) };
   } catch {

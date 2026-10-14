@@ -59,13 +59,13 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   const k = await MK.memberKnowledge("u", { now: NOW, include: SF.SWEEP_KNOWLEDGE }, deps());
   const r = SF.sweepRecord(k, "AI founder events this month");
   const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "AI founder events this month", city: "San Francisco" }, { today: "2026-10-10", record: r });
-  check("A1: the sweep reads the record: who they are, active goals, done goals as history, what they corrected and Co learned", /technical founder in SF/.test(p) && /Where they're headed now:\n- meet other founders/.test(p) && /history, not what to look for\):\n- run a marathon/.test(p) && /Corrected city: San Francisco/.test(p) && /Lesson: big mixers land badly/.test(p), p.slice(0, 1600));
+  check("A1: the sweep reads the record: who they are, active goals, done goals as history, what they corrected and Cue learned", /technical founder in SF/.test(p) && /Where they're headed now:\n- meet other founders/.test(p) && /history, not what to look for\):\n- run a marathon/.test(p) && /Corrected city: San Francisco/.test(p) && /Lesson: big mixers land badly/.test(p), p.slice(0, 1600));
   check("test: the sweep is told the room they've said they want, and to judge every keep against it", /THE KIND OF ROOM THEY'VE TOLD CO THEY WANT[\s\S]*drop their guard[\s\S]*give each keep a taste: "matches", "neutral" or "clashes"[\s\S]*Something that clashes isn't kept/.test(p));
   check("test: the sweep is told what they ruled out and when they're free", /stop suggesting these kinds of things: "hackathons", "crypto events"\. Never search for them and never keep one/.test(p) && /When they've said they're free, in their words: "weeknights only"\. Weigh an event's day and time against it as they said it/.test(p));
   check("what was already sent comes from the record (one list), and their other asks are context only", /Already sent to them recently \(don't keep these again\): Founder Dinner at Zuni/.test(p) && /other open asks[\s\S]*a quiet coworking spot/.test(p) && !/other open asks[\s\S]*- AI founder events this month/.test(p));
-  check("how what Co sent landed is in, as context", /How what Co sent has landed: small dinners got a yes/.test(p));
+  check("how what Cue sent landed is in, as context", /How what Cue sent has landed: small dinners got a yes/.test(p));
   const ledger = new Q.QueryLedger([], "AI founder events this month", r.avoid);
-  check("test: a query for a kind they ruled out is refused before it runs (web and X), in their words", ledger.check("web", "SF hackathon this weekend").some((x) => /told Co to stop suggesting/.test(x)) && ledger.check("x", "(crypto OR web3) events SF").length > 0 && !ledger.check("web", "SF AI founder dinners October").length);
+  check("test: a query for a kind they ruled out is refused before it runs (web and X), in their words", ledger.check("web", "SF hackathon this weekend").some((x) => /told Cue to stop suggesting/.test(x)) && ledger.check("x", "(crypto OR web3) events SF").length > 0 && !ledger.check("web", "SF AI founder dinners October").length);
   check("an ask that names a ruled-out kind gets it back for that ask (the ask is newer than the rule)", L.avoidFor(["hackathons", "crypto events"], "find me a hackathon this month").join() === "crypto events" && SF.sweepRecord(k, "any good hackathons?").avoid.join() === "crypto events");
   check("the regex mood guess is gone from the code", !/roomPreferenceFromFeelings/.test(src("harness/emotion.ts") + src("services/eventSurfacingSweep.ts") + src("services/sweepFind.ts")) && !/ROOM_FOR_FEELING/.test(src("harness/emotion.ts")));
   check("the sweep reads the record itself, and runs no sweep when it (or the limits in it) can't be read", /const k = await read\(c\.userId\)/.test(src("services/sweepFind.ts")) && /if \(!k \|\| !k\.limits\) return \{ matches: \[\], did, searched: false, frustratedWithCo: false \};/.test(src("services/sweepFind.ts")));
@@ -179,7 +179,7 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
 {
   const rec = { person: "a technical founder", statedTaste: ["a room where they can drop their guard"], avoid: ["hackathons"], openAsks: ["a quiet coworking spot"] };
   const p = G.edgePrompt(["meet other founders"], { city: "San Francisco", today: "2026-10-10", record: rec });
-  check("A4: edges see who they are, the room they want, what they ruled out and what their asks already search", /Who they are \(Co's record\): a technical founder/.test(p) && /drop their guard[\s\S]*Write edges for that kind of room/.test(p) && /stop suggesting: "hackathons"\. Never an edge/.test(p) && /don't write an edge that repeats one: "a quiet coworking spot"/.test(p));
+  check("A4: edges see who they are, the room they want, what they ruled out and what their asks already search", /Who they are \(Cue's record\): a technical founder/.test(p) && /drop their guard[\s\S]*Write edges for that kind of room/.test(p) && /stop suggesting: "hackathons"\. Never an edge/.test(p) && /don't write an edge that repeats one: "a quiet coworking spot"/.test(p));
   const e = G.parseEdges(["meet other founders"], '[{"n":1,"kind":"findable","edges":["SF founder hackathons October","small SF founder dinners"],"why":""}]', "Jordan", { today: "2026-10-10", avoid: ["hackathons"] });
   check("an edge for a ruled-out kind is dropped in code, however the model wrote it", e[0].edges.join() === "small SF founder dinners", e[0].edges);
   const gs = src("services/goalSweep.ts");
@@ -205,7 +205,7 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   const sf = src("services/sweepFind.ts");
   check("the sweep's keep carries a taste, refuses what clashes, and orders its keeps matches first", /taste: z\.enum\(\["matches", "neutral", "clashes"\]\)/.test(sf) && /if \(fit === "clashes"\) \{[\s\S]{0,200}isn't kept/.test(sf) && /const gated = limits\.kept\.map\(\(m, i\) => \(\{ m, i \}\)\)\.sort\(\(a, b\) => rankOf\(a\.m\) - rankOf\(b\.m\)/.test(sf));
   const fit = ED.fitPrompt({ name: "Startup Expo", kind: "public_event" } as any, { firstName: "Jordan", askText: "founder events", roomTaste: ["a room where they can drop their guard"] }, "");
-  check("the reveal's fit read sees their stated taste too", /The kind of room they've told Co they want, in their words: "a room where they can drop their guard"/.test(fit));
+  check("the reveal's fit read sees their stated taste too", /The kind of room they've told Cue they want, in their words: "a room where they can drop their guard"/.test(fit));
   check("goal planning and the picker already read it (edges above; sweepSelect roomTaste)", /roomTaste: k\.preferences\.filter\(\(p\) => p\.source === "stated"\)/.test(src("services/sweepSelectContext.ts")));
 }
 

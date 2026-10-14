@@ -593,7 +593,7 @@ export function exchangeOf(row: { content: string; at: Date }): Fact<Exchange> |
   if (member) return { from: "member", text: member[1].trim(), call: false, verifiedAt: at };
   const call = c.match(/^\s*\[Call\]\s*([\s\S]*)$/);
   if (call) return { from: "co", text: call[1].trim(), call: true, verifiedAt: at };
-  const co = c.match(/^\s*Co\b[^:\n]{0,40}:\s*([\s\S]*)$/i);
+  const co = c.match(/^\s*(?:Co|Cue)\b[^:\n]{0,40}:\s*([\s\S]*)$/i);
   if (co) return { from: "co", text: co[1].trim(), call: false, verifiedAt: at };
   return null;
 }
@@ -716,7 +716,7 @@ const hourWords = (h: number) => DateTime.fromObject({ hour: h }).toFormat("ha")
 export function quietHoursRule(zone: string | null, now: Date): string {
   const tz = wordsZone(zone);
   const local = DateTime.fromJSDate(now).setZone(tz).toFormat("h:mma").toLowerCase();
-  return `Quiet hours: Co starts nothing on its own (no text, call or delivery) before ${hourWords(REASONABLE_HOUR_START)} or from ${hourWords(REASONABLE_HOUR_END)} their time (${tz}${zone ? "" : ", their zone isn't known"}). It's ${local} there now${sendableAt(now, zone) ? "" : ", inside their quiet hours"}.`;
+  return `Quiet hours: Cue starts nothing on its own (no text, call or delivery) before ${hourWords(REASONABLE_HOUR_START)} or from ${hourWords(REASONABLE_HOUR_END)} their time (${tz}${zone ? "" : ", their zone isn't known"}). It's ${local} there now${sendableAt(now, zone) ? "" : ", inside their quiet hours"}.`;
 }
 
 // Pure: the restraint rule from this member's state.
@@ -725,18 +725,18 @@ export function restraintRule(r: Restraint | null, zone: string | null): string 
   const when = (at: string) => localStamp(at, zone);
   const lines = [
     r.safetyHold ? "A safety hold is on: no offers, finds or nudges; only care." : null,
-    r.holdUntil ? `Co starts nothing on its own until ${when(r.holdUntil)}.` : null,
-    r.spaceUntil ? `Co is giving them space after handing work to a task: nothing new on its own until ${when(r.spaceUntil)}.` : null,
+    r.holdUntil ? `Cue starts nothing on its own until ${when(r.holdUntil)}.` : null,
+    r.spaceUntil ? `Cue is giving them space after handing work to a task: nothing new on its own until ${when(r.spaceUntil)}.` : null,
     // The count only: the real pause is decided per lane by the send gate (harness/proactive.ts userLevelChecks), so no date is
     // stated as fact here (review of #119).
-    r.unanswered.count ? `${r.unanswered.count} of Co's own texts since they last wrote ${r.unanswered.count === 1 ? "has" : "have"} no reply yet: go lighter, and let them lead.` : null,
+    r.unanswered.count ? `${r.unanswered.count} of Cue's own texts since they last wrote ${r.unanswered.count === 1 ? "has" : "have"} no reply yet: go lighter, and let them lead.` : null,
     r.suppressedKinds.length
-      ? `Kinds of message they keep letting pass, which Co doesn't start (off ${RESTRAINT.offDays} days, then one trial): ${r.suppressedKinds.join(", ")}${r.trialKinds.length ? ` (a trial may go now: ${r.trialKinds.join(", ")})` : ""}. Answers to their own asks still go.`
+      ? `Kinds of message they keep letting pass, which Cue doesn't start (off ${RESTRAINT.offDays} days, then one trial): ${r.suppressedKinds.join(", ")}${r.trialKinds.length ? ` (a trial may go now: ${r.trialKinds.join(", ")})` : ""}. Answers to their own asks still go.`
       : r.trialKinds.length
         ? `Kinds of message they had let pass, now off ${RESTRAINT.offDays} days: one trial may go now (${r.trialKinds.join(", ")}). Answers to their own asks still go.`
         : null,
-    r.needsCare ? "They're having a hard time lately: it shapes how Co says things, never whether they get events or people." : null,
-    r.frustratedWithCo ? "They've been frustrated with Co lately: look wider and try harder." : null,
+    r.needsCare ? "They're having a hard time lately: it shapes how Cue says things, never whether they get events or people." : null,
+    r.frustratedWithCo ? "They've been frustrated with Cue lately: look wider and try harder." : null,
   ].filter(Boolean);
   return `Restraint: ${lines.length ? lines.join(" ") : "no hold, pause or muted kind is on right now; the usual caps and spacing still apply."}`;
 }

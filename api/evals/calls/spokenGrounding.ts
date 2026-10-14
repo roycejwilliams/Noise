@@ -20,7 +20,7 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 
 // The live call's second half (evals/calls/callToolsLive.ts), with its real prompt: the test member, a planning-doc task open.
 const base = fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-const system = E.promptForElevenLabs(base).replace(/\{\{first_name\}\}/g, "Jordan").replace("{{context_summary}}", "Jordan is a founder in San Francisco who runs a small design community. New to Co.").replace(/\{\{[a-z_]+\}\}/g, "");
+const system = E.promptForElevenLabs(base).replace(/\{\{first_name\}\}/g, "Jordan").replace("{{context_summary}}", "Jordan is a founder in San Francisco who runs a small design community. New to Cue.").replace(/\{\{[a-z_]+\}\}/g, "");
 const ELLIS = "Also, note that the studio is called Ellis Works and the date's not locked yet, so keep that open on your side.";
 const tasks = [{ id: 119, goal: "Planning doc for the November partner dinner with a design studio" }];
 const records = CT.callRecords({ tasks, loops: null }, []);
@@ -28,8 +28,8 @@ const body = (their = ELLIS, extra: any[] = []) => ({
   model: "co", stream: true,
   messages: [
     { role: "system", content: system },
-    { role: "assistant", content: "Hey Jordan, it's Co again." },
-    { role: "user", content: "Hey Co. Following up on the partner dinner." },
+    { role: "assistant", content: "Hey Jordan, it's Cue again." },
+    { role: "user", content: "Hey Cue. Following up on the partner dinner." },
     { role: "assistant", content: "Good, I'm on it. What's on your mind?" },
     ...extra,
     { role: "user", content: their },
@@ -41,7 +41,7 @@ const src = (b = body(), toolResults = "") => P.callSources(b as any, records, t
 {
   const s = src();
   check("Ellis Works: the member's own name, said back, passes", G.spokenProblem("Got it, Ellis Works, and the date stays open.", s) === null, G.spokenProblem("Got it, Ellis Works, and the date stays open.", s));
-  check("Co's own open task backs keeping the doc moving", G.spokenProblem("I'll keep the planning doc moving with that in mind.", s) === null, G.spokenProblem("I'll keep the planning doc moving with that in mind.", s));
+  check("Cue's own open task backs keeping the doc moving", G.spokenProblem("I'll keep the planning doc moving with that in mind.", s) === null, G.spokenProblem("I'll keep the planning doc moving with that in mind.", s));
   const venues = G.spokenProblem("I'll text you what I find on venues.", s);
   check("the live call's unasked promise ('what I find on venues') is caught as a promise nobody asked for", venues?.kind === "promise" && venues.missing.includes("venues"), venues);
   check("...even though the prompt's own examples mention venues (a promise stands on what was asked, not the instructions)", /venue/i.test(system));
@@ -50,7 +50,7 @@ const src = (b = body(), toolResults = "") => P.callSources(b as any, records, t
   check("an unbacked number is caught", G.spokenProblem("So about 80 people then.", s)?.kind === "number");
   check("a number has to be a whole one on record: the 20 inside a year, or a number in the prompt's own examples, backs nothing", G.spokenProblem("Is it still on November 20th?", src(body("It's set for 2026, sometime in November."))) ?.kind === "number" && /\b30\b/.test(system) && G.spokenProblem("So 30 people then.", s)?.kind === "number");
   check("their written-out number backs the digit (\"about sixty\" backs 60)", G.spokenProblem("60 is a good size for a talk.", src(body("We're expecting about sixty people."))) === null);
-  check("only the context block counts as what Co knows, not the guides that follow it without a heading", !/COACHING/.test(G.knownSections(system)) && /# What you know about Jordan/.test(G.knownSections(system)) && /# Right now/.test(G.knownSections(system)));
+  check("only the context block counts as what Cue knows, not the guides that follow it without a heading", !/COACHING/.test(G.knownSections(system)) && /# What you know about Jordan/.test(G.knownSections(system)) && /# Right now/.test(G.knownSections(system)));
   check("an unbacked clock time places an event and is held, as before", G.spokenProblem("Let's say the walkthrough is at 3:45pm.", s)?.kind === "event");
   const asked = src(body("Can you look into venues near the studio for the dinner? It's Ellis Works."));
   check("the same venue promise passes when they asked for venues on the call", G.spokenProblem("I'll text you what I find on venues.", asked) === null, G.spokenProblem("I'll text you what I find on venues.", asked));
@@ -91,14 +91,14 @@ const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: s
   // Co answers again, once, in its own words, told what it couldn't back and, if they asked for it, to say it doesn't know.
   const unk = scripted([text("It's Harbor Lane Studio. They're great for dinners."), text("I don't have the studio's name on file, and I'd rather not guess.")]);
   const unknown = await go(body("What's the studio called again? I forgot."), { stream: unk.stream });
-  check("unknown stays unknown: the unbacked name never reaches the voice; Co says it doesn't know, in its own words", !/Harbor Lane/.test(unknown.content) && /don't have the studio's name/.test(unknown.content) && !/I'm not sure of the name\./.test(unknown.content), unknown);
-  check("the retry tells Co what it couldn't back and to say it doesn't know (they asked)", unk.reqs.length === 2 && JSON.stringify(unk.reqs[1].system).includes("names what nothing backs") && JSON.stringify(unk.reqs[1].system).includes("say plainly that you don't know it"));
+  check("unknown stays unknown: the unbacked name never reaches the voice; Cue says it doesn't know, in its own words", !/Harbor Lane/.test(unknown.content) && /don't have the studio's name/.test(unknown.content) && !/I'm not sure of the name\./.test(unknown.content), unknown);
+  check("the retry tells Cue what it couldn't back and to say it doesn't know (they asked)", unk.reqs.length === 2 && JSON.stringify(unk.reqs[1].system).includes("names what nothing backs") && JSON.stringify(unk.reqs[1].system).includes("say plainly that you don't know it"));
   const tw = scripted([text("Maybe Harbor Lane Studio. Or Brightline Loft."), text("Maybe Harbor Lane again."), text("x")]);
   const twice = await go(body("Who else could host?"), { stream: tw.stream });
   check("one retry per turn, never a loop; if the retry is held too, one plain line, never silence", tw.reqs.length === 2 && !/Brightline|Harbor/.test(twice.content) && twice.content.trim().length > 0, twice.content);
   const nm = scripted([text("You said 85."), text("I don't have the number you gave me, so tell me again?")]);
   const num = await go(body("How many people did I say?"), { stream: nm.stream });
-  check("an unbacked number never reaches the voice; Co says so in its own words", !/85/.test(num.content) && /don't have the number/.test(num.content), num.content);
+  check("an unbacked number never reaches the voice; Cue says so in its own words", !/85/.test(num.content) && /don't have the number/.test(num.content), num.content);
   const only = await go(body(), { stream: scripted([text("I'll text you what I find on venues.")]).stream });
   check("a turn that was only an unasked promise says a plain 'Got it.', never a new promise in its place", only.content.trim() === G.HELD_LINE && only.spoken.join(" ") === G.HELD_LINE, only);
   const ev = await go(body("Anything happening this week?"), { stream: scripted([text("There's a mixer at Foundry Hall on Friday.")]).stream });
@@ -137,19 +137,19 @@ const go = async (b: any, deps: any) => { const out: any[] = []; const spoken: s
   // The live case: Co said "Got it, Ellis Works" and called no tool.
   await go(body(), { stream: scripted([text("Got it, Ellis Works, and the date stays open.")]).stream, tools: build() });
   await settle();
-  check("Co said the name back and wrote nothing: their own words go on task #119", writes.length === 1 && writes[0].taskId === 119 && writes[0].note === `On the call they said: "${ELLIS}"`, writes);
-  check("the backstop records only the member's words, never Co's", !/Got it|stays open/.test(writes[0]?.note ?? ""));
+  check("Cue said the name back and wrote nothing: their own words go on task #119", writes.length === 1 && writes[0].taskId === 119 && writes[0].note === `On the call they said: "${ELLIS}"`, writes);
+  check("the backstop records only the member's words, never Cue's", !/Got it|stays open/.test(writes[0]?.note ?? ""));
   writes.length = 0;
   // Co wrote it itself: no second write.
   const up3 = scripted([[...text("Got it."), ...toolEv("u1", "updateTask", '{"taskId":119,"note":"The studio is Ellis Works; the date is not locked."}')], text("Ellis Works is on the plan.")]);
   await go(body(), { stream: up3.stream, tools: build() });
   await settle();
-  check("when Co calls updateTask itself, the backstop does nothing more (one write, Co's)", writes.length === 1 && /Ellis Works/.test(writes[0].note) && !/On the call they said/.test(writes[0].note), writes);
+  check("when Cue calls updateTask itself, the backstop does nothing more (one write, Cue's)", writes.length === 1 && /Ellis Works/.test(writes[0].note) && !/On the call they said/.test(writes[0].note), writes);
   writes.length = 0;
   // Co didn't take it up (said nothing about it): Co decides, nothing is written for it.
   await go(body(), { stream: scripted([text("Good. How's the rest of your week?")]).stream, tools: build() });
   await settle();
-  check("Co didn't say the specific back: nothing is written (guard the fact, not the intent)", writes.length === 0, writes);
+  check("Cue didn't say the specific back: nothing is written (guard the fact, not the intent)", writes.length === 0, writes);
   // Two open tasks, their words belong to neither by any shared word: nothing is written.
   const two = [{ id: 1, goal: "Find a photographer for the launch" }, { id: 2, goal: "Sponsor list for October" }];
   check("with several open tasks and no clear one, the backstop picks none", CT.taskFactBackstop({ turnWords: ELLIS, spoken: ["Got it, Ellis Works."], ran: [], tasks: two }) === null);
@@ -166,7 +166,7 @@ for (const l of [G.UNSURE_NAME, G.UNSURE_NUMBER, G.HELD_LINE]) check(`"${l}" is 
   check("a plural of an everyday word is backed ('PDFs')", G.spokenProblem("Should I keep sending PDFs for now?", s2) === null, G.spokenProblem("Should I keep sending PDFs for now?", s2));
   check("a plural of a backed name is backed", G.spokenProblem("I'll keep the Google Docs for you.", s2) === null);
   const proxy = fs.readFileSync(new URL("../../src/services/callLlmProxy.ts", import.meta.url), "utf8");
-  check("no line is written for Co: the proxy never substitutes a sentence for a held one", !/UNSURE_NAME|UNSURE_NUMBER/.test(proxy.replace(/^import .*$/m, "")) && /Answer them again, in your own words, without it/.test(proxy));
+  check("no line is written for Cue: the proxy never substitutes a sentence for a held one", !/UNSURE_NAME|UNSURE_NUMBER/.test(proxy.replace(/^import .*$/m, "")) && /Answer them again, in your own words, without it/.test(proxy));
 }
 console.log(`spokenGrounding: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

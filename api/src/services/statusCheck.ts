@@ -22,7 +22,7 @@ const NOT_THE_THING = [
   "keep", "eye", "out", "watch", "watching", "track", "let", "know", "when", "if", "ping", "text", "for", "how", "going", "update", "updates",
   "status", "progress", "coming", "news", "where", "stand", "stands", "done", "yet", "still", "ready", "already", "again", "also", "hey",
   "quick", "check", "on", "do", "doing", "work", "working", "started", "start", "are", "we", "did", "luck", "anything", "along", "with",
-  "me", "have", "co",
+  "me", "have", "co", "cue",
 ];
 
 export type OpenWork = { id: number; goal: string; steps: { text: string; done: boolean }[]; notes: { at: string; text: string }[]; planNext: string | null; nextCheckAt: string | null; kind?: string | null; source?: string | null };
@@ -62,7 +62,7 @@ export function whereItStands(t: OpenWork, zone: string | null, strip: Strip | n
     last ? `latest, ${bare(last)} (${localStamp(lastNote!.at, zone)}).` : lastNote ? null : "started, no progress noted yet.",
     t.steps.length ? `Steps done: ${done.length ? done.map(bare).join("; ") : "none yet"} (${t.steps.filter((s) => s.done).length} of ${t.steps.length}).` : null,
     next ? `Next: ${bare(next)}.` : null,
-    t.nextCheckAt ? `Co's next work session on it (not a delivery time): around ${localStamp(t.nextCheckAt, zone)}.` : null,
+    t.nextCheckAt ? `Cue's next work session on it (not a delivery time): around ${localStamp(t.nextCheckAt, zone)}.` : null,
   ];
   return parts.filter(Boolean).join(" ");
 }

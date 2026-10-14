@@ -56,7 +56,7 @@ const rules = MK.memberRules(k);
 {
   const plain = P.exchangeTranscript(k);
   const turns = turnsFromConversation(plain);
-  check("transcript: the stored form parses as Co's question then their yes (repeat-question check)", turns.length >= 2 && turns[0].from === "co" && /angels/.test(turns[0].text) && turns[1].from === "them" && turns[1].text.startsWith("yes please"));
+  check("transcript: the stored form parses as Cue's question then their yes (repeat-question check)", turns.length >= 2 && turns[0].from === "co" && /angels/.test(turns[0].text) && turns[1].from === "them" && turns[1].text.startsWith("yes please"));
   check("transcript: payload first reads only their own lines from it", theirText(plain) === "yes please");
   check("transcript: a call line keeps its [Call] mark", /^\[Call\] We talked through the raise\.$/m.test(plain));
   const stamped = P.exchangeTranscript(k, { stamped: true });
@@ -102,7 +102,7 @@ check("block: nothing on file still renders", /nothing more on file/.test(P.memb
   const ps = src("harness/proactive.ts");
   check("dispatch: the gates and the record share one restraint read (needsCare, safety hold, kind restraint, hold/space)", /const member = await memberSendState\(userId, person, now\);/.test(body) && /MK\.realKnowledgeDeps\.restraint\(userId, now\)/.test(ps) && /needsCare: !!raw\.emotional\?\.needsCare,/.test(ps) && /safetyHold: raw\.safetyHold,/.test(ps) && /suppressedKinds: raw\.suppressed,/.test(ps) && /\{ restraint: async \(\) => member\.raw \}/.test(body) && !/getEmotionalContext\(userId\)|safetyHoldActive\(userId\)|hold_until, space_until FROM proactive_user_state/.test(body));
   check("dispatch: the knowledge read comes after the gates, never before them", body.indexOf("memberKnowledge(") > body.indexOf("evaluateCandidates(state, opts)"));
-  check("dispatch: the model reads get the stamped transcript, the parsers the stored one", /choosePick\(ev\.eligible, \{ recentConversation: recentStamped/.test(body) && (body.match(/stillRelevant\([^)]*recentConversation: recentStamped/g) ?? []).length === 2 && /repeatQuestionCheck\(text, recent\)/.test(body) && /payloadFirst\(\{[^}]*recent,/.test(body));
+  check("dispatch: the model reads get the stamped transcript, the parsers the stored one", /choosePick\(pickable, \{ recentConversation: recentStamped/.test(body) && (body.match(/stillRelevant\([^)]*recentConversation: recentStamped/g) ?? []).length === 2 && /repeatQuestionCheck\(text, recent\)/.test(body) && /payloadFirst\(\{[^}]*recent,/.test(body));
   check("dispatch: every draft (first, redraft, batched offers) runs through drafting, by its type", /drafting\(c\.type, \(\) => registry\[c\.type\]\.draft/.test(body) && /drafting\(c\.type, \(\) => draftAgain/.test(body) && /memberBlock: known && rules \? memberDraftBlock\(known, rules\) : null,\s*feeling: feelingText \|\| null,/.test(body) && !/feelingForDraft\.run\(renderEmotionalContext\(emotional\), \(\) => registry/.test(body));
   // post_call builds its own member section (PR #121): no dispatch block for it, so nothing is in its prompt twice.
   check("dispatch: post_call drafts get no member block; every other type does", P.OWN_MEMBER_CONTEXT.has("post_call") && P.OWN_MEMBER_CONTEXT.size === 1 && /OWN_MEMBER_CONTEXT\.has\(type\) \? draftWithKnowledge\(null, null,/.test(body));

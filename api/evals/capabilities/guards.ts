@@ -79,9 +79,9 @@ check("their yes has to be in their message", yesIsTheirs("Yes please!", "yes pl
 
 // Registry: hard limits and confirmation are declared, not implied
 check("the card is limited to one a day, plus a resend if missing", JSON.stringify(ABILITIES.find((a) => a.id === "contact_card")!.limits) === JSON.stringify({ perTurn: 1, perDay: 1, resendIfMissing: true }));
-check("searches are capped per turn (Co's own loop: agent/loop.ts LOOP_BUDGET)", ABILITIES.find((a) => a.id === "web_search")!.limits!.perTurn === 3 && ABILITIES.find((a) => a.id === "search_events")!.limits!.perTurn === 3 && ABILITIES.find((a) => a.id === "read_page")!.limits!.perTurn === 6);
+check("searches are capped per turn (Cue's own loop: agent/loop.ts LOOP_BUDGET)", ABILITIES.find((a) => a.id === "web_search")!.limits!.perTurn === 3 && ABILITIES.find((a) => a.id === "search_events")!.limits!.perTurn === 3 && ABILITIES.find((a) => a.id === "read_page")!.limits!.perTurn === 6);
 check("intros: never twice for the same person, and need a yes", !!ABILITIES.find((a) => a.id === "event_intro")!.limits!.oncePerPerson && ABILITIES.find((a) => a.id === "event_intro")!.confirm === "affects_another_member");
-check("Co knows the confirm-first rule", LIMITS.some((l) => /needs their clear yes first/.test(l)));
+check("Cue knows the confirm-first rule", LIMITS.some((l) => /needs their clear yes first/.test(l)));
 
 // Drift signals
 const keys = SIGNALS.map((s: any) => s.key);
@@ -93,7 +93,7 @@ check("the old card-veto signal is gone", !keys.includes("card_misfire"));
 // Lines Co writes itself (services/voiceLine.ts) keep to what they were given.
 {
   const { lineKeepsRules } = await import("../../src/services/voiceLine.js");
-  const ask = { facts: ["Noor joined Co on their invite.", "They have 3 invites left; one only counts once someone joins."], mustInclude: ["Noor"] };
+  const ask = { facts: ["Noor joined Cue on their invite.", "They have 3 invites left; one only counts once someone joins."], mustInclude: ["Noor"] };
   check("a line that keeps to the facts is used", lineKeepsRules("Noor's in on your invite. You've got 3 left.", ask));
   check("a number it wasn't given is refused", !lineKeepsRules("Noor's in. You've got 4 left.", ask));
   check("a missing name is refused", !lineKeepsRules("Your friend's in. Good taste.", ask));
@@ -101,7 +101,7 @@ check("the old card-veto signal is gone", !keys.includes("card_misfire"));
   check("a link or placeholder is refused", !lineKeepsRules("Noor's in: https://x.co {name}", ask));
   check("an empty line is refused", !lineKeepsRules("  ", ask));
   const sb = (await import("fs")).readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
-  check("the welcome, friend-joined and first call offer are written by Co", (sb.match(/await lineInVoice\(\{/g) ?? []).length === 3);
+  check("the welcome, friend-joined and first call offer are written by Cue", (sb.match(/await lineInVoice\(\{/g) ?? []).length === 3);
   check("the invite-code gate lines stay fixed", /pickLine\(GATE_ASK\)/.test(sb) && /pickLine\(WRONG_CODE\)/.test(sb));
 }
 

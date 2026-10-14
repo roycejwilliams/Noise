@@ -65,8 +65,8 @@ const CO_HOMEWORK: RegExp[] = [
   // "the brief is ready", "the summary is still coming": only what Co makes (their plan or deck being done is their news)
   new RegExp(String.raw`(?<!\b(?:my|our|his|her|their)\s+(?:\w+\s+){0,2})\b${CO_MADE}\b[^.?!]{0,30}\b(?:is ready|is done|is finished|is (?:still )?(?:coming|on its way|in the works))\b`, "i"),
   // Co as the one who sent or made it: "I sent you", "I emailed over", "the plan I put together", "what I sent"
-  /\b(?:i|co|we)(?:'ve| have)?\s+(?:just\s+|already\s+)?(?:sent|emailed|texted|shared|dropped|forwarded|delivered|passed along)\s+(?:you|over|along|it|that|this|the|your|a|an)\b/i,
-  new RegExp(String.raw`\b(?:the|that|this|my|your)\s+(?:\w+\s+){0,3}${DELIVERABLE}\s+(?:i|co|we)\s+(?:sent|put together|pulled together|drafted|wrote|made|shared|owe|promised)\b`, "i"),
+  /\b(?:i|co|cue|we)(?:'ve| have)?\s+(?:just\s+|already\s+)?(?:sent|emailed|texted|shared|dropped|forwarded|delivered|passed along)\s+(?:you|over|along|it|that|this|the|your|a|an)\b/i,
+  new RegExp(String.raw`\b(?:the|that|this|my|your)\s+(?:\w+\s+){0,3}${DELIVERABLE}\s+(?:i|co|cue|we)\s+(?:sent|put together|pulled together|drafted|wrote|made|shared|owe|promised)\b`, "i"),
   /\bwhat i sent\b|\b(?:i|we) (?:put|pulled) together for you\b/i,
   // "did you get / see / have a chance to read the doc"
   new RegExp(String.raw`\bdid you (?:get|see|receive|open|read|check out|have a (?:chance|minute|moment) to (?:look|read|go through|review))\b[^.?!]{0,40}\b(?:${DELIVERABLE}|what i sent)\b`, "i"),
@@ -74,7 +74,7 @@ const CO_HOMEWORK: RegExp[] = [
   /\bi (?:still )?owe you\b/i,
   new RegExp(String.raw`\bfollow(?:ing)?[ -]up on (?:the|that|my|your)\s+(?:\w+\s+){0,3}${DELIVERABLE}\b`, "i"),
   // Delivery receipts as a topic
-  /\b(?:delivery|delivered|receipt)\b.*\b(?:co|plan|doc|pdf|brief)\b|\bplan delivered\b/i,
+  /\b(?:delivery|delivered|receipt)\b.*\b(?:co|cue|plan|doc|pdf|brief)\b|\bplan delivered\b/i,
 ];
 
 // Pure: true when the line is about Co's homework (a deliverable sent, owed, or in progress). With what the line was written from
@@ -86,28 +86,28 @@ export function leadsWithCoHomework(line: string, known = ""): boolean {
   const m = t.match(STATE_OF);
   if (!m || !known) return false;
   const noun = m[1].toLowerCase().replace(/s$/, "");
-  return new RegExp(String.raw`\b(?:co owes|i owe|promised|co (?:sent|drafted|delivered|wrote)|not sent yet|still owe)\b[^.]{0,160}\b${noun}s?\b`, "i").test(known);
+  return new RegExp(String.raw`\b(?:(?:co|cue) owes|i owe|promised|(?:co|cue) (?:sent|drafted|delivered|wrote)|not sent yet|still owe)\b[^.]{0,160}\b${noun}s?\b`, "i").test(known);
 }
 
 // Pure: why a candidate reason is Co's own work, or null. `theirsByConstruction`: a commitment they made in their own words
 // ("I'll send them the deck Friday", member_threads kind commitment) is theirs; the ask guards would read its "I'll send" as Co's.
-const CO_SUBJECT = /\bco(?:'s)?\s+(?:is|was|will|'ll|has|had|would|said|promised|putting|drafting|making|finding|sending|researching)\b|\bfrom co\b|\bco's\s+(?:plan|doc|document|research|brief|draft|list|options|shortlist|notes)\b/i;
+const CO_SUBJECT = /\b(?:co|cue)(?:'s)?\s+(?:is|was|will|'ll|has|had|would|said|promised|putting|drafting|making|finding|sending|researching)\b|\bfrom (?:co|cue)\b|\b(?:co|cue)'s\s+(?:plan|doc|document|research|brief|draft|list|options|shortlist|notes)\b/i;
 const WAITING_ON_CO_WORK = /\b(?:waiting (?:on|for)|excited (?:to get|for)|looking forward to (?:getting|the))\b[^.]{0,60}\b(?:plan|doc(?:ument)?|pdf|research|brief|draft|options|shortlist|list|write-?up|outline|notes)\b/i;
 export function coWorkWhy(text: string, coWork: string[], theirsByConstruction = false): string | null {
   const t = String(text ?? "").trim();
   if (!t) return "empty";
-  if (!theirsByConstruction && isCoCommitment(t)) return "Co's own commitment (askKind isCoCommitment)";
-  if (!theirsByConstruction && isCoTaskGoal(t)) return "Co's own task (goalEdges isCoTaskGoal)";
-  if (leadsWithCoHomework(t)) return "reads as Co's homework (a deliverable sent, owed or in progress)";
+  if (!theirsByConstruction && isCoCommitment(t)) return "Cue's own commitment (askKind isCoCommitment)";
+  if (!theirsByConstruction && isCoTaskGoal(t)) return "Cue's own task (goalEdges isCoTaskGoal)";
+  if (leadsWithCoHomework(t)) return "reads as Cue's homework (a deliverable sent, owed or in progress)";
   // Co as the subject, or waiting on something Co makes (review of #110: "waiting on the dinner plan Co is putting together" and
   // "excited to get the research on coworking spaces" were reasons to call).
-  if (CO_SUBJECT.test(t)) return "about Co's own work (Co is the subject)";
-  if (WAITING_ON_CO_WORK.test(t)) return "waiting on something Co makes (a plan, research, a doc)";
+  if (CO_SUBJECT.test(t)) return "about Cue's own work (Cue is the subject)";
+  if (WAITING_ON_CO_WORK.test(t)) return "waiting on something Cue makes (a plan, research, a doc)";
   // The same thing as a doc Co delivered or a task Co carries: Co's work, even when worded as theirs.
   const words = t.split(/\s+/).filter((w) => w.length > 3).length;
   if (words >= 2) {
     const hit = coWork.find((w) => w.split(/\s+/).filter((x) => x.length > 3).length >= 2 && overlap(t, w) >= 0.6);
-    if (hit) return `matches Co's own deliverable or task: "${hit.slice(0, 80)}"`;
+    if (hit) return `matches Cue's own deliverable or task: "${hit.slice(0, 80)}"`;
   }
   return null;
 }
@@ -199,7 +199,7 @@ const PRIORITY: Record<CallReasonKind, number> = {
 // Pure: every candidate from their own record, each kept or excluded (with why), and the one the call is about.
 export function callReasonFor(s: CallReasonState): CallReasonResult {
   if (s.kind === "auto_intake") {
-    const reason: CallReason = { kind: "intake", key: "intake", text: "their first conversation with Co: getting to know them, their life and what they're after", at: null };
+    const reason: CallReason = { kind: "intake", key: "intake", text: "their first conversation with Cue: getting to know them, their life and what they're after", at: null };
     return { reason, considered: [{ kind: "intake", key: "intake", text: reason.text, kept: true }] };
   }
   const today = localDay(s.now, s.zone);
@@ -277,8 +277,8 @@ export function callReasonFor(s: CallReasonState): CallReasonResult {
     seen.add(c.key);
     const why =
       coWorkWhy(c.text, s.coWork, c.kind === "their_commitment") ??
-      (c.theirWords && leadsWithCoHomework(c.theirWords) ? "their words are about Co's homework, not their life" : null) ??
-      (s.recentReasonKeys.includes(c.key) ? "the last call Co placed was about this" : null);
+      (c.theirWords && leadsWithCoHomework(c.theirWords) ? "their words are about Cue's homework, not their life" : null) ??
+      (s.recentReasonKeys.includes(c.key) ? "the last call Cue placed was about this" : null);
     if (why) {
       considered.push({ kind: c.kind, key: c.key, text: c.text.slice(0, 160), kept: false, why });
       continue;
@@ -296,10 +296,10 @@ export function callReasonFor(s: CallReasonState): CallReasonResult {
 export function memberAskedReason(kind: CallAuthKind): CallReason {
   const text =
     kind === "scheduled_call"
-      ? "they asked Co to call them at this time"
+      ? "they asked Cue to call them at this time"
       : kind === "user_initiated"
         ? "they asked for this call (they pressed call)"
-        : "they asked Co to call them (by text, just now)";
+        : "they asked Cue to call them (by text, just now)";
   return { kind: "member_asked", key: `asked:${kind}`, text, at: null };
 }
 
@@ -307,11 +307,11 @@ export function memberAskedReason(kind: CallAuthKind): CallReason {
 export function renderCallReason(r: CallReason | null): string {
   if (!r) return "";
   if (r.kind === "member_asked") return `They asked for this call: ${r.text}. Let them lead; it's their call.`;
-  if (r.kind === "intake") return "This is their first conversation with Co: Co called to get to know them, their life and what they're after. Nothing of Co's to report.";
+  if (r.kind === "intake") return "This is their first conversation with Cue: Cue called to get to know them, their life and what they're after. Nothing of Cue's to report.";
   const words = r.theirWords ? ` They said: "${r.theirWords.slice(0, 160)}".` : "";
   const felt = r.feeling ? ` (how they felt when they said it: ${r.feeling}; never name it to them)` : "";
   const quiet = r.sensitive ? " It's personal: don't name it in the first line (whoever picks up hears it); let them bring it up, or ask gently once they're on." : "";
-  return `Co called because of something in their life: ${r.text}${felt}.${words}${quiet} Lead with them, never with Co's own work.`;
+  return `Cue called because of something in their life: ${r.text}${felt}.${words}${quiet} Lead with them, never with Cue's own work.`;
 }
 
 // ---------------------------------------------------------------- held from the gate to the call

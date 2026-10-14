@@ -47,7 +47,7 @@ export function exchangeText(turns: Turn[]): string {
     if (last && last.side === t.side) last.text = `${last.text} / ${text}`;
     else g.push({ side: t.side, text });
   }
-  const out = g.slice(-EXCHANGE_LIMITS.groups).map((t) => `${t.side === "co" ? "Co" : "Member"}: ${t.text}`).join("\n");
+  const out = g.slice(-EXCHANGE_LIMITS.groups).map((t) => `${t.side === "co" ? "Cue" : "Member"}: ${t.text}`).join("\n");
   return out.length > EXCHANGE_LIMITS.chars ? `…${out.slice(-EXCHANGE_LIMITS.chars)}` : out;
 }
 // Pure: the turns in a text thread's log ("User said:", "Co replied:", Mo's lines; a line with no prefix continues the one before;
@@ -55,7 +55,7 @@ export function exchangeText(turns: Turn[]): string {
 export function turnsFromLog(log: string): Turn[] {
   const out: Turn[] = [];
   for (const line of String(log ?? "").split("\n")) {
-    const m = line.match(/^(User said|User sent[^:]*|Co replied|Co said|Mo said|Mo replied):\s*(.*)$/);
+    const m = line.match(/^(User said|User sent[^:]*|Co replied|Co said|Cue replied|Cue said|Mo said|Mo replied):\s*(.*)$/);
     if (m) out.push({ side: /^User/.test(m[1]) ? "member" : "co", text: m[2] });
     else if (/^\s*\[/.test(line)) continue;
     else if (out.length && line.trim()) out[out.length - 1].text += ` ${line.trim()}`;
@@ -63,15 +63,17 @@ export function turnsFromLog(log: string): Turn[] {
   return out;
 }
 export const exchangeFromLog = (log: string): string => exchangeText(turnsFromLog(log));
+// An agent line in an exchange: "Cue: ...", or "Co: ..." from before the rename (2026-10-14).
+const AGENT_LINE = /^(?:Co|Cue): /;
 // Pure: Co's lines a yes can answer: Co's turn since their previous message, and Co's turn before that.
 export function offerLines(recent: string | null | undefined): string[] {
-  const all = String(recent ?? "").split("\n").filter((l) => /^(Co|Member): /.test(l));
+  const all = String(recent ?? "").split("\n").filter((l) => /^(Co|Cue|Member): /.test(l));
   // In production the thread already ends with their current message (routes/sendblue.ts saves it before the reply reads the thread):
   // that one is the answer, not "their previous message", so it's left off before looking for the offer (fourth review of the lanes).
   const groups = all.length && all[all.length - 1].startsWith("Member: ") ? all.slice(0, -1) : all;
-  const co = groups.filter((l) => l.startsWith("Co: ")).map((l) => l.slice(4));
+  const co = groups.filter((l) => AGENT_LINE.test(l)).map((l) => l.replace(AGENT_LINE, ""));
   const lastMember = groups.map((l) => l.startsWith("Member: ")).lastIndexOf(true);
-  const since = groups.slice(lastMember + 1).filter((l) => l.startsWith("Co: ")).map((l) => l.slice(4));
+  const since = groups.slice(lastMember + 1).filter((l) => AGENT_LINE.test(l)).map((l) => l.replace(AGENT_LINE, ""));
   return since.length ? co.slice(-(since.length + 1)) : co.slice(-1);
 }
 
@@ -82,15 +84,15 @@ export type YesJudge = (r: YesRead) => Promise<YesVerdict>;
 export const YES_LIMITS = { timeoutMs: 6000, maxTokens: 300 } as const;
 
 export function yesPrompt(r: YesRead): string {
-  return `Co is a texting companion. This is the recent exchange between Co and a member, oldest first, then the member's latest message.
+  return `Cue is a texting companion. This is the recent exchange between Cue and a member, oldest first, then the member's latest message.
 
 ${r.recent.trim() || "(nothing before it)"}
 
 Member's latest message: "${r.message.slice(0, 600)}"
 
-The action Co is about to take on their yes: ${r.ability.slice(0, 300)}
+The action Cue is about to take on their yes: ${r.ability.slice(0, 300)}
 
-In this recent exchange, did Co offer THIS action (not a different one: an offer to draft an email is not an offer to move an item, book something or send an intro), and is the member's latest message a yes to it? A yes to a different offer, a maybe, a not-now, a question back, or a plain acknowledgment that doesn't accept ("I know", "got it", "noted") is no. If no offer of this action appears in the exchange, no. Casual or enthusiastic yeses count ("why not", "no problem, go ahead", "Yes! Can't wait"), and a word about timing doesn't make a yes a maybe ("Sure, no rush", "yes, whenever"). Match the action by what it does in plain terms, not by its wording here ("an intro to Maya" is the introduction action; "keep it as a lookout" is the move). Judge only whether it was offered and whether they said yes: whether they qualify for it, or the details of the action, are checked elsewhere.
+In this recent exchange, did Cue offer THIS action (not a different one: an offer to draft an email is not an offer to move an item, book something or send an intro), and is the member's latest message a yes to it? A yes to a different offer, a maybe, a not-now, a question back, or a plain acknowledgment that doesn't accept ("I know", "got it", "noted") is no. If no offer of this action appears in the exchange, no. Casual or enthusiastic yeses count ("why not", "no problem, go ahead", "Yes! Can't wait"), and a word about timing doesn't make a yes a maybe ("Sure, no rush", "yes, whenever"). Match the action by what it does in plain terms, not by its wording here ("an intro to Maya" is the introduction action; "keep it as a lookout" is the move). Judge only whether it was offered and whether they said yes: whether they qualify for it, or the details of the action, are checked elsewhere.
 
 Return ONLY JSON: {"yes": true or false, "why": "under 15 words"}`;
 }

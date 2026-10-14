@@ -13,8 +13,8 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
 
-const TODAY_BAD = "On it. Starting the post-event branding plan for how Co stays present after the Sequin AI launch, and I'll text you what I put together once it's worth sending.";
-const GOOD = "Got it, I'll put together the plan for keeping Co visible after the Sequin launch and text you the draft tonight.";
+const TODAY_BAD = "On it. Starting the post-event branding plan for how Cue stays present after the Sequin AI launch, and I'll text you what I put together once it's worth sending.";
+const GOOD = "Got it, I'll put together the plan for keeping Cue visible after the Sequin launch and text you the draft tonight.";
 
 // ---------- the narration detector (calls and texts share it)
 {
@@ -62,22 +62,22 @@ const GOOD = "Got it, I'll put together the plan for keeping Co visible after th
 }
 
 // ---------- the confirmation's shape: what Co understood, what they get, when
-const COMMIT = [{ taskId: 111, sentence: "I'll text you what I put together on how Co keeps its presence after the November event", wakes: 0 }];
+const COMMIT = [{ taskId: 111, sentence: "I'll text you what I put together on how Cue keeps its presence after the November event", wakes: 0 }];
 {
   const ok = F.confirmationChecks(GOOD, COMMIT).filter((c) => !c.pass);
   check(`a good confirmation passes every check (${ok.map((c) => c.reason ?? c.name).join("; ")})`, ok.length === 0);
   check("today's text fails the confirmation checks", F.confirmationChecks(TODAY_BAD, COMMIT).some((c) => !c.pass));
-  check("no 'when': missing when", F.confirmationShape("Got it, I'll put together the plan for keeping Co present after the November event.", COMMIT).some((m) => /when/.test(m)));
+  check("no 'when': missing when", F.confirmationShape("Got it, I'll put together the plan for keeping Cue present after the November event.", COMMIT).some((m) => /when/.test(m)));
   check("no 'what they get': missing it", F.confirmationShape("Thanks for the call, the November event plan sounds great tonight.", COMMIT).some((m) => /what they get/.test(m)));
-  check("nothing from the call: missing what Co understood", F.confirmationShape("Got it, I'll send it over tonight.", COMMIT).some((m) => /understood/.test(m)));
-  check("a dash still fails (texting voice: commas)", F.confirmationChecks("Got it - I'll put together the plan for Co's presence after the November event and text you the draft tonight.", COMMIT).some((c) => !c.pass && /dash/.test(c.reason ?? "")) || F.confirmationChecks("Got it — I'll put together the plan for Co's presence after the November event and text you the draft tonight.", COMMIT).some((c) => !c.pass && /dash/.test(c.reason ?? "")));
+  check("nothing from the call: missing what Cue understood", F.confirmationShape("Got it, I'll send it over tonight.", COMMIT).some((m) => /understood/.test(m)));
+  check("a dash still fails (texting voice: commas)", F.confirmationChecks("Got it - I'll put together the plan for Cue's presence after the November event and text you the draft tonight.", COMMIT).some((c) => !c.pass && /dash/.test(c.reason ?? "")) || F.confirmationChecks("Got it — I'll put together the plan for Cue's presence after the November event and text you the draft tonight.", COMMIT).some((c) => !c.pass && /dash/.test(c.reason ?? "")));
   check("a confirmation may name when it's coming (the later-action rule doesn't veto it)", F.confirmationChecks("Got it, I'll text you the November event plan tomorrow.", COMMIT).every((c) => c.pass));
   check("delivery window: afternoon in SF", F.deliveryWindow(new Date("2026-10-07T21:00:00Z"), "America/Los_Angeles") === "this afternoon");
   check("delivery window: evening in SF is tonight", F.deliveryWindow(new Date("2026-10-08T01:00:00Z"), "America/Los_Angeles") === "tonight");
   check("delivery window: held to 9am is this morning", F.deliveryWindow(new Date("2026-10-08T16:00:00Z"), "America/Los_Angeles") === "this morning");
-  check("goal back to Co's sentence", F.sentenceOfGoal('Keep your word from the call: "I\'ll text you the links"') === "I'll text you the links");
+  check("goal back to Cue's sentence", F.sentenceOfGoal('Keep your word from the call: "I\'ll text you the links"') === "I'll text you the links");
   const fb = F.fallbackConfirmation([{ sentence: "I'll text you the links right after we hang up" }], "tonight");
-  check(`fallback is Co's own words, with a when and no narration: "${fb}"`, !!fb && /^Got it, I'll text you the links/.test(fb) && /tonight\.$/.test(fb) && !narratesInternalState(fb) && !/hang up/.test(fb));
+  check(`fallback is Cue's own words, with a when and no narration: "${fb}"`, !!fb && /^Got it, I'll text you the links/.test(fb) && /tonight\.$/.test(fb) && !narratesInternalState(fb) && !/hang up/.test(fb));
 }
 
 // ---------- the trigger: call end -> confirmation now -> the deliverable on its own completion
@@ -106,8 +106,8 @@ function harness(o: { nowIso: string; zone?: string | null; drafts?: (string | n
 }
 
 const TRANSCRIPT = `assistant: What do you want the November event to leave behind?
-user: Honestly I want people to still be thinking about Co a week later. Can you help me plan that?
-assistant: Yes. I'll text you what I put together on how Co keeps its presence after the November event.
+user: Honestly I want people to still be thinking about Cue a week later. Can you help me plan that?
+assistant: Yes. I'll text you what I put together on how Cue keeps its presence after the November event.
 user: Perfect, thank you.`;
 
 {

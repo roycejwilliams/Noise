@@ -107,10 +107,10 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   contradiction_or_unbacked_claim: "Contradiction or unbacked claim about itself",
   off_voice: "Robotic or off-voice reply",
   promise_without_ask: "Promise with no saved ask behind it",
-  member_frustrated_with_co: "Member frustrated with Co",
+  member_frustrated_with_co: "Member frustrated with Cue",
   member_reported_issue: "Member reported an issue",
   member_called_out_miss: "Member called out a miss",
-  questionable_tool_choice: "Questionable tool choice (Jev's read of Co's judgment)",
+  questionable_tool_choice: "Questionable tool choice (Jev's read of Cue's judgment)",
   held_back: "Ready texts held 2+ days with nothing sent",
 };
 
@@ -324,7 +324,7 @@ export function reactionFlags(data: ReviewData): ReviewFlag[] {
       severity: e.intensity === "high" ? "high" : "medium",
       snippet: clip(`${e.emotion} (${e.intensity})${e.about ? ` about ${e.about}` : ""}${e.quote ? `: "${e.quote}"` : ""}`),
       decisionIds: turnRowIds(data.decisions, e.at, data.messages),
-      cause: "emotion read targeted at Co",
+      cause: "emotion read targeted at Cue",
       causeConfirmed: true,
       source: "reaction",
     });
@@ -352,7 +352,7 @@ export function reactionFlags(data: ReviewData): ReviewFlag[] {
       at: m.at,
       type: "member_called_out_miss",
       severity: "high",
-      snippet: clip(`${lastCo ? `Co: "${clip(lastCo.text, 120)}" → ` : ""}member: "${m.text}"`, 300),
+      snippet: clip(`${lastCo ? `Cue: "${clip(lastCo.text, 120)}" → ` : ""}member: "${m.text}"`, 300),
       decisionIds: turnRowIds(data.decisions, lastCo?.at ?? m.at, data.messages),
       cause: "their reply calls out the message before it",
       causeConfirmed: false,
@@ -380,7 +380,7 @@ export function findQuoted(quote: string, messages: ReviewMessage[]): ReviewMess
 
 export function transcriptFor(data: ReviewData): string {
   return data.messages
-    .map((m) => `[${new Date(m.at).toISOString().slice(11, 16)}] ${m.from === "member" ? data.firstName : m.from === "call" ? "Call" : "Co"}: ${m.text}`)
+    .map((m) => `[${new Date(m.at).toISOString().slice(11, 16)}] ${m.from === "member" ? data.firstName : m.from === "call" ? "Call" : "Cue"}: ${m.text}`)
     .join("\n");
 }
 
@@ -405,35 +405,35 @@ export function earlierRecord(data: ReviewData): string {
   const e = data.earlier;
   if (!e || (!e.sent.length && !e.theySaid.length)) return "(nothing earlier)";
   return [
-    e.sent.length ? `What Co sent them:\n${e.sent.join("\n")}` : null,
-    e.theySaid.length ? `What ${data.firstName} told Co:\n${e.theySaid.join("\n")}` : null,
-    e.coSaid?.length ? `What Co texted them (how it described what it sent):\n${e.coSaid.join("\n")}` : null,
+    e.sent.length ? `What Cue sent them:\n${e.sent.join("\n")}` : null,
+    e.theySaid.length ? `What ${data.firstName} told Cue:\n${e.theySaid.join("\n")}` : null,
+    e.coSaid?.length ? `What Cue texted them (how it described what it sent):\n${e.coSaid.join("\n")}` : null,
   ].filter(Boolean).join("\n\n");
 }
 
 export function modelReviewPrompt(data: ReviewData): string {
   return `${CO_VOICE}
 
-You're reviewing a day of texts between Co (above) and ${data.firstName}, a test user, to find Co's bad responses so a developer can fix them. Flag only what the conversation itself shows. Never infer a problem you can't point to.
+You're reviewing a day of texts between Cue (above) and ${data.firstName}, a test user, to find Cue's bad responses so a developer can fix them. Flag only what the conversation itself shows. Never infer a problem you can't point to.
 
-What Co can do and its standing rules (true; Co may state these):
+What Cue can do and its standing rules (true; Cue may state these):
 ${capabilitySheet().map((c) => `- ${c}`).join("\n")}
 
-What Co's decision log says it did today:
+What Cue's decision log says it did today:
 ${loggedActions(data)}
 
-The ${EARLIER_DAYS} days before today (also real, from the record; Co can rightly refer back to any of it):
+The ${EARLIER_DAYS} days before today (also real, from the record; Cue can rightly refer back to any of it):
 ${earlierRecord(data)}
 
 The conversation (times UTC):
 ${transcriptFor(data)}
 
 Flag these, and only these:
-- repeat_question: Co asks something it already asked today, or something the conversation already answered.
-- answer_missed_question: Co's reply doesn't answer what ${data.firstName} just asked (answers a different question, or ignores part of it).
-- contradiction_or_unbacked_claim: Co contradicts itself; or claims something about its own actions ("I sent you", "I found", "I checked", "I saved") that neither today's decision log nor the earlier record backs up; or says something about ${data.firstName} that they never said, today or in the earlier record, and that isn't one of their open asks. Co naming or describing something it sent in its own words (as it did in the earlier record) is backed; a loose "yesterday" for something sent in the last few days is not worth flagging.
-- off_voice: a reply that's robotic, templated, or breaks Co's voice described at the top (reads like a system, points at its own messages, lists, hype, filler).
-- promise_without_ask: Co promises to keep looking or text later, but nothing in the log above (an open ask, whenever it was saved, or an ask saved that day before the promise) covers that topic.
+- repeat_question: Cue asks something it already asked today, or something the conversation already answered.
+- answer_missed_question: Cue's reply doesn't answer what ${data.firstName} just asked (answers a different question, or ignores part of it).
+- contradiction_or_unbacked_claim: Cue contradicts itself; or claims something about its own actions ("I sent you", "I found", "I checked", "I saved") that neither today's decision log nor the earlier record backs up; or says something about ${data.firstName} that they never said, today or in the earlier record, and that isn't one of their open asks. Cue naming or describing something it sent in its own words (as it did in the earlier record) is backed; a loose "yesterday" for something sent in the last few days is not worth flagging.
+- off_voice: a reply that's robotic, templated, or breaks Cue's voice described at the top (reads like a system, points at its own messages, lists, hype, filler).
+- promise_without_ask: Cue promises to keep looking or text later, but nothing in the log above (an open ask, whenever it was saved, or an ask saved that day before the promise) covers that topic.
 
 Every flag must quote the exact words from the conversation that show it, copied character for character from the messages (one or two short quotes). If you can't quote it, don't flag it. Empty is a fine answer.
 
@@ -615,7 +615,7 @@ export async function judgmentFlags(data: ReviewData): Promise<ReviewFlag[]> {
       severity: p < 0.1 ? "high" : "medium",
       snippet: `"${String(d.proposal?.message ?? "").slice(0, 120)}" → ${d.decision.slice(5)}`,
       decisionIds: [d.id],
-      cause: `Jev thinks this was a mismatch (${Math.round(p * 100)}% sensible). Co's reason: ${d.reason || "none given"}`,
+      cause: `Jev thinks this was a mismatch (${Math.round(p * 100)}% sensible). Cue's reason: ${d.reason || "none given"}`,
       causeConfirmed: false,
       source: "model",
     });
@@ -751,13 +751,13 @@ const pacific = (iso: string) => new Date(iso).toLocaleString("en-US", { timeZon
 export const DIGEST_MAX_TYPES = 6;
 export function renderDigest(flags: ReviewFlag[], names: Record<string, string>, label: string, maxGroups = DIGEST_MAX_TYPES): string[] {
   const groups = groupFlags(flags);
-  if (!groups.length) return [`Co review, ${label}: nothing flagged.`];
+  if (!groups.length) return [`Cue review, ${label}: nothing flagged.`];
   const lines = groups.slice(0, maxGroups).map((g) => {
     const ex = [...g.flags].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
     return `• ${FLAG_LABELS[g.type]} ×${g.count} (${g.worst})\n  ${names[ex.userId] ?? "?"}, ${pacific(ex.at)}: ${clip(ex.snippet, 140)}\n  Cause: ${clip(ex.cause, 110)}${ex.causeConfirmed ? "" : ex.cause.endsWith("(guess)") ? "" : " (guess)"}`;
   });
   const more = groups.length > maxGroups ? `\nPlus ${groups.length - maxGroups} less frequent type${groups.length - maxGroups === 1 ? "" : "s"} in the full review.` : "";
-  return [`Co review, ${label}: ${flags.length} flag${flags.length === 1 ? "" : "s"} in ${groups.length} type${groups.length === 1 ? "" : "s"}.`, `${lines.join("\n")}${more}`, `Full detail with decision-log rows: ask Claude "what broke since ${label.replace(/^last /, "")}".`];
+  return [`Cue review, ${label}: ${flags.length} flag${flags.length === 1 ? "" : "s"} in ${groups.length} type${groups.length === 1 ? "" : "s"}.`, `${lines.join("\n")}${more}`, `Full detail with decision-log rows: ask Claude "what broke since ${label.replace(/^last /, "")}".`];
 }
 
 // Events the fit check turned down, so a wrongly rejected good one is visible (2026-09-21: we
@@ -770,7 +770,7 @@ export function renderRejectedSample(items: RejectedEvent[], max = 6): string | 
   if (!unique.length) return null;
   const shown = unique.slice(0, max).map((i) => `• ${clip(i.name, 60)}${i.why ? `: ${clip(i.why, 80)}` : ""}`);
   const more = unique.length > max ? `\nPlus ${unique.length - max} more.` : "";
-  return `Events Co turned down as not fitting (${unique.length}). Skim for a good one it missed:\n${shown.join("\n")}${more}`;
+  return `Events Cue turned down as not fitting (${unique.length}). Skim for a good one it missed:\n${shown.join("\n")}${more}`;
 }
 
 // Before-the-event numbers for the morning report (services/preArrival.ts), the
@@ -812,8 +812,8 @@ export function renderDigestEmail(
   const day = opts.date.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "long", month: "long", day: "numeric" });
   const high = groups.filter((g) => g.worst === "high").length;
   const subject = groups.length
-    ? `Co morning report, ${day}: ${flags.length} flag${flags.length === 1 ? "" : "s"}${high ? `, ${high} high` : ""}`
-    : `Co morning report, ${day}: nothing flagged`;
+    ? `Cue morning report, ${day}: ${flags.length} flag${flags.length === 1 ? "" : "s"}${high ? `, ${high} high` : ""}`
+    : `Cue morning report, ${day}: nothing flagged`;
   const seenRejected = new Set<string>();
   const rejected = (opts.rejected ?? []).filter((i) => i.name && !seenRejected.has(i.name.toLowerCase()) && seenRejected.add(i.name.toLowerCase())).slice(0, 10);
 
@@ -838,7 +838,7 @@ export function renderDigestEmail(
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F3F4F6"><tr><td align="center" style="padding:28px 12px">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
 <tr><td style="padding:0 4px 18px 4px">
-<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6B7280">Co morning report</div>
+<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6B7280">Cue morning report</div>
 <div style="font-size:22px;font-weight:700;color:#111827;margin-top:4px">${esc(day)}</div>
 <div style="font-size:14px;color:#4B5563;margin-top:6px">Last 24 hours on co-test: ${groups.length ? `${flags.length} flag${flags.length === 1 ? "" : "s"} in ${groups.length} type${groups.length === 1 ? "" : "s"}${high ? `, ${high} of them high` : ""}.` : "nothing flagged."}</div>
 </td></tr>
@@ -848,7 +848,7 @@ ${groups.length ? `<tr><td style="padding:0 0 16px 0"><table role="presentation"
 <tr><td style="padding:4px 4px 10px 4px;font-size:13px;font-weight:600;color:#6B7280">One example of each, worst first</td></tr>
 ${groups.map(card).join("\n")}` : ""}
 ${rejected.length ? `<tr><td style="padding:8px 0 12px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:10px"><tr><td style="padding:14px 18px">
-<div style="font-size:15px;font-weight:600;color:#111827">Events Co turned down <span style="color:#6B7280;font-weight:400">× ${rejected.length}</span></div>
+<div style="font-size:15px;font-weight:600;color:#111827">Events Cue turned down <span style="color:#6B7280;font-weight:400">× ${rejected.length}</span></div>
 <div style="font-size:13px;color:#6B7280;margin:4px 0 8px 0">Skim for a good one it missed.</div>
 ${rejected.map((r) => `<div style="font-size:14px;color:#1F2937;padding:5px 0;border-top:1px solid #F3F4F6"><b>${esc(clip(r.name, 70))}</b>${r.why ? `<br><span style="color:#6B7280;font-size:13px">${esc(clip(r.why, 120))}</span>` : ""}</div>`).join("")}
 </td></tr></table></td></tr>` : ""}
@@ -859,7 +859,7 @@ ${opts.preArrival ? `<tr><td style="padding:8px 0 12px 0"><table role="presentat
 <tr><td style="padding:8px 4px;font-size:12px;color:#9CA3AF">Full detail with decision-log rows: ask Claude "what broke since 24h".</td></tr>
 </table></td></tr></table></body></html>`;
   const text = [
-    `Co morning report, ${day}`,
+    `Cue morning report, ${day}`,
     groups.length ? `${flags.length} flags in ${groups.length} types.` : "Nothing flagged.",
     ...groups.map((g) => {
       const ex = [...g.flags].sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity])[0];
@@ -869,7 +869,7 @@ ${FLAG_LABELS[g.type]} x${g.count} (${g.worst})
   Cause: ${clip(ex.cause, 160)}`;
     }),
     ...(rejected.length ? [`
-Events Co turned down (${rejected.length}):`, ...rejected.map((r) => `- ${r.name}${r.why ? `: ${r.why}` : ""}`)] : []),
+Events Cue turned down (${rejected.length}):`, ...rejected.map((r) => `- ${r.name}${r.why ? `: ${r.why}` : ""}`)] : []),
   ].join("\n");
   return { subject, html, text };
 }

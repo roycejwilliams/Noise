@@ -54,7 +54,7 @@ const REBUILD_MIN_INTERVAL_MS = 10 * 60 * 1000;
 
 export function snapshotPrompt(input: SnapshotInputs, now: Date = new Date()): string {
   // Today's date, with the year: the stamps on their words carry none, and a picture once came back dated 2025 (2026-10-12 audit).
-  return `Keep Co's short, current picture of ${input.firstName}. Rebuild it from what they've actually said.
+  return `Keep Cue's short, current picture of ${input.firstName}. Rebuild it from what they've actually said.
 Today is ${DateTime.fromJSDate(now).setZone(wordsZone(input.zone ?? null)).toFormat("cccc, LLLL d, yyyy")}.
 
 ${input.previous ? `Your previous picture (may be out of date):\n${JSON.stringify(input.previous, null, 2)}` : "No previous picture."}
@@ -62,7 +62,7 @@ ${input.previous ? `Your previous picture (may be out of date):\n${JSON.stringif
 What ${input.firstName} has said recently, oldest first (their own words and call summaries):
 ${input.recentStatements.map((s) => `- [${localStamp(`${s.at}:00Z`, input.zone)}] ${s.text}`).join("\n") || "(nothing recent)"}
 
-What they're asking Co to look for right now (errands, not who they are):
+What they're asking Cue to look for right now (errands, not who they are):
 ${input.openAsks.map((a) => `- ${a}`).join("\n") || "(nothing open)"}
 
 Where they say they are headed (direction):
@@ -74,8 +74,8 @@ ${input.outcomes.map((o) => `- ${o}`).join("\n") || "(no results yet)"}
 Rules:
 - Newer statements replace older ones. If they said they're Series A, they're not pre-seed anymore, whatever the old picture says.
 - Only what they actually said or what's listed above. No guesses about their feelings or circumstances.
-- Only about them. Never about Co, Co's mistakes, or complaints about Co.
-- Refer to them by name or as "they". Never "he" or "she" unless they told Co their pronouns (2026-09-22: a picture called a member "he" from their name alone).
+- Only about them. Never about Cue, Cue's mistakes, or complaints about Cue.
+- Refer to them by name or as "they". Never "he" or "she" unless they told Cue their pronouns (2026-09-22: a picture called a member "he" from their name alone).
 - Keep every list short (at most 4 items), specific, and current. Drop anything resolved or contradicted.
 
 Return ONLY JSON:
@@ -196,7 +196,7 @@ async function loadOutcomeLines(userId: string): Promise<string[]> {
 // from the last 48 hours. A problem means the snapshot kept something they've
 // since changed, or dropped a new fact they stated.
 export function snapshotCheckPrompt(snapshot: PersonSnapshot, recent: { at: string; text: string }[], zone: string | null = null): string {
-  return `Here is Co's current picture of someone, and what they've said in the last 48 hours.
+  return `Here is Cue's current picture of someone, and what they've said in the last 48 hours.
 
 Picture:
 ${renderSnapshot(snapshot) || "(empty)"}
@@ -205,7 +205,7 @@ What they said, oldest first:
 ${recent.map((s) => `- [${localStamp(`${s.at}:00Z`, zone)}] ${s.text}`).join("\n")}
 
 The picture also draws on things they said before this window, so a line these messages don't mention is fine. Only list:
-- a line their recent words contradict (they said something newer that changes it), or anything about Co itself rather than them ("contradicted");
+- a line their recent words contradict (they said something newer that changes it), or anything about Cue itself rather than them ("contradicted");
 - an important new fact about them they stated here that the picture is missing: their work or stage, where they are, or something they want ("missing").
 
 Before calling anything missing, read the whole picture, not one line. If any

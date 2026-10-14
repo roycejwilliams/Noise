@@ -332,11 +332,11 @@ function sentLines(ctx: Pick<TurnContext, "sent">, cutoff: number, now = new Dat
     .slice(0, 5)
     .map((s) => {
       if (s.read) return describeRead(s.name, s.read).facts.join(" ");
-      if (!s.details) return `Co sent them "${s.name}"${s.url ? ` (${s.url})` : ""}; its page hasn't been read yet, so Co has no start time or address for it.`;
+      if (!s.details) return `Cue sent them "${s.name}"${s.url ? ` (${s.url})` : ""}; its page hasn't been read yet, so Cue has no start time or address for it.`;
       // Stale volatile lines say so (Phase B, B3): a reply never states a days-old spot count or time as current.
       const known = renderDetailsAsOf(s.name, s.details, s.checkedAt ?? null, now).join(" ");
       const missing = [s.details.startAt ? null : "start time", s.details.venue || s.details.address ? null : "address"].filter(Boolean);
-      return `Details on file for "${s.name}", which Co sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`;
+      return `Details on file for "${s.name}", which Cue sent them: ${known}${missing.length ? ` Not on file: ${missing.join(", ")}.` : ""}`;
     });
 }
 
@@ -498,7 +498,7 @@ export async function assembleContext(
   const keptAsks = keepAll(rawSearching.asks), keptGoals = keepAll(rawSearching.goals);
   // With the fence failed, their open tasks and running briefs are left out of the facts (keep withholds them); they still run, so
   // they're counted here and the running-work line never says nothing is running.
-  const withheldWork = safe ? 0 : tasks.length + briefs.filter((b) => /^Co is putting together|hasn't reached them yet/.test(b)).length;
+  const withheldWork = safe ? 0 : tasks.length + briefs.filter((b) => /^(?:Co|Cue) is putting together|hasn't reached them yet/.test(b)).length;
   const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: (rawSearching.hidden ?? 0) + rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length + withheldWork };
   const rawAhead = await aheadP;
   const ahead = rawAhead ? await import("./whatsAhead.js").then((W) => W.aheadLine(rawAhead, searching, zone, keep)).catch(() => undefined) : undefined;

@@ -58,7 +58,7 @@ async function labelCo(t: Txt): Promise<CoLabel | null> {
   const msg = t.content.replace(/^User said:\s*/, "");
   const { text } = await generateText({
     model: JUDGE, headers: GRADER_HEADERS,
-    prompt: `You're labelling one text a member sent to Co, an AI texting companion, for a test. Read it with the conversation before it.
+    prompt: `You're labelling one text a member sent to Cue, an AI texting companion, for a test. Read it with the conversation before it.
 
 Conversation before it, oldest first:
 ${(t.convo ?? "").split("\n").reverse().join("\n") || "(none)"}
@@ -66,9 +66,9 @@ ${(t.convo ?? "").split("\n").reverse().join("\n") || "(none)"}
 Latest message: "${msg}"
 
 Answer three separate questions:
-1. solving: Right now, do they clearly want a real answer or help deciding something, not just to be listened to? True when they're weighing options out loud, stuck on a decision, or asking what to do (even without a question mark). False for ordinary sharing, updates, venting, reactions, logistics, or asking Co to find, look up or do something.
-2. issue: Does the latest message report a problem with Co itself (something Co did wrong or badly: repeated itself, wrong or made-up info, broken or missing link, ignored them, too slow, confusing) or say how Co should work differently? False when the problem is in their own life, they're asking Co for something, or they're pushing back on a normal answer.
-3. feeling: Does the latest message carry a real feeling Co should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. False for plain logistics, greetings, short acknowledgments, or tone you can't be confident about.
+1. solving: Right now, do they clearly want a real answer or help deciding something, not just to be listened to? True when they're weighing options out loud, stuck on a decision, or asking what to do (even without a question mark). False for ordinary sharing, updates, venting, reactions, logistics, or asking Cue to find, look up or do something.
+2. issue: Does the latest message report a problem with Cue itself (something Cue did wrong or badly: repeated itself, wrong or made-up info, broken or missing link, ignored them, too slow, confusing) or say how Cue should work differently? False when the problem is in their own life, they're asking Cue for something, or they're pushing back on a normal answer.
+3. feeling: Does the latest message carry a real feeling Cue should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: "fine" after bad news isn't fine. False for plain logistics, greetings, short acknowledgments, or tone you can't be confident about.
 
 Return ONLY JSON: {"solving": true|false, "issue": true|false, "feeling": true|false}`,
   });
@@ -107,7 +107,7 @@ async function partCo() {
   const jev = await runCoArm(used, true);
   writeFileSync(`${DIR}/co_results.json`, JSON.stringify({ haiku, jev }, null, 1));
   say(`\n=== CO: ${used.length} real member texts, labels by Claude Opus (blind) ===`);
-  say(`Label counts: wants real help ${used.filter((t) => labels[t.id].solving).length}, problem with Co ${used.filter((t) => labels[t.id].issue).length}, real feeling ${used.filter((t) => labels[t.id].feeling).length}`);
+  say(`Label counts: wants real help ${used.filter((t) => labels[t.id].solving).length}, problem with Cue ${used.filter((t) => labels[t.id].issue).length}, real feeling ${used.filter((t) => labels[t.id].feeling).length}`);
   let pass = true;
   const disagreements: string[] = [];
   for (const k of ["solving", "issue", "feeling"] as const) {

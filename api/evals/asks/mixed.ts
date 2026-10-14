@@ -24,7 +24,7 @@ const src = (p: string) => fs.readFileSync(path.join(root, p), "utf8");
 const OWN = "Draft the launch plan for the Sequin party";
 const MIXED = "Draft the launch plan for the Sequin party and keep an eye out for venues";
 const FIND = "founder dinners in SF";
-const work = { kind: "work", split: null, read: true, why: "Co's own work" } as const;
+const work = { kind: "work", split: null, read: true, why: "Cue's own work" } as const;
 const find = { kind: "find", split: null, read: true, why: "something to find" } as const;
 const unread = { kind: null, split: null, read: false, why: "the read failed: timeout" } as const;
 const mixedRead = { kind: "mixed" as const, split: { work: "Draft the launch plan for the Sequin party", find: "venues for the Sequin party", findIsLookout: true }, read: true, why: "work and something to find" };
@@ -37,10 +37,10 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   // Own work with no task is never followed. Co's own promise ("Draft the launch plan") isn't searched either (nothing on the web
   // finds Co's own work; the same as a clean read at creation), but it's noted and listed, never silent. Other own work is searched.
   const noTask = D.planAsk(b(OWN), OWN, work, null, AS.floorPlan);
-  check("Co's own promise with no task: not followed, not searched, said why, noted for the team", noTask.search === null && noTask.item?.status === "skipped" && /not searched, listed for the team/.test(noTask.item?.why ?? "") && noTask.plan.note === "own_work_no_task" && !noTask.plan.followed, noTask);
-  const HAVE = "Have Co keep watching for Bay Area hackathons";
+  check("Cue's own promise with no task: not followed, not searched, said why, noted for the team", noTask.search === null && noTask.item?.status === "skipped" && /not searched, listed for the team/.test(noTask.item?.why ?? "") && noTask.plan.note === "own_work_no_task" && !noTask.plan.followed, noTask);
+  const HAVE = "Have Cue keep watching for Bay Area hackathons";
   const noTaskOther = D.planAsk(b(HAVE), HAVE, work, null, AS.floorPlan);
-  check("other own work with no task (not Co's promise): searched whole, noted for the team", noTaskOther.search === HAVE && noTaskOther.item === null && noTaskOther.plan.note === "own_work_no_task", noTaskOther);
+  check("other own work with no task (not Cue's promise): searched whole, noted for the team", noTaskOther.search === HAVE && noTaskOther.item === null && noTaskOther.plan.note === "own_work_no_task", noTaskOther);
   check("an ask that isn't own work is searched as before", D.planAsk(b(FIND), FIND, null, null, AS.floorPlan).search === FIND);
   const mixedTask = D.planAsk(b(MIXED), MIXED, mixedRead, { id: 52 }, AS.floorPlan);
   check("a mixed one with a task for its work: its find part is searched, no note", mixedTask.search === "venues for the Sequin party" && !mixedTask.plan.note, mixedTask);
@@ -48,11 +48,11 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   check("a mixed one with no task for its work: its find part is searched and the work part noted unclaimed (never started from a sweep)", mixedNoTask.search === "venues for the Sequin party" && mixedNoTask.plan.note === "work_part_unclaimed", mixedNoTask);
   check("a read that failed: searched whole", D.planAsk(b(OWN), OWN, unread, { id: 52 }, AS.floorPlan).search === OWN);
   // Requests worded around Co that are something to find: always searched.
-  for (const t of ["Wants Co to find climate founder dinners in SF", "Have Co keep watching for Bay Area hackathons", "Asked Co to keep an eye out for rooftop venues"]) {
+  for (const t of ["Wants Cue to find climate founder dinners in SF", "Have Cue keep watching for Bay Area hackathons", "Asked Cue to keep an eye out for rooftop venues"]) {
     check(`searched, read as a find: "${t}"`, D.planAsk(b(t), t, find, null, AS.floorPlan).search === t);
     check(`…and searched even if a read called it work, with no task: "${t}"`, D.planAsk(b(t), t, work, null, AS.floorPlan).search === t);
   }
-  check("a lookout with no task is searched", D.planAsk(b("Have Co keep watching for Bay Area hackathons"), "Have Co keep watching for Bay Area hackathons", find, null, AS.floorPlan).search !== null);
+  check("a lookout with no task is searched", D.planAsk(b("Have Cue keep watching for Bay Area hackathons"), "Have Cue keep watching for Bay Area hackathons", find, null, AS.floorPlan).search !== null);
   const sum = D.dailySummary([{ ...b(OWN), status: "followed_as_task", why: "followed as its task", taskId: 52 }, { kind: "ask", id: "a2", text: FIND, status: "searched", sources: { events: true, web: true, x: true } }]);
   check("the day's line counts the followed one, with no web or X for it", sum.totals.followed === 1 && sum.totals.sources.web === 1 && sum.totals.sources.x === 1 && /followed as tasks 1/.test(sum.action), sum);
   const ds = src("services/dailySweep.ts");
@@ -86,15 +86,15 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   reads = 0;
   for (const t of ["Raise a pre-seed round and meet angel investors", "Plan my birthday dinner", "Plan the launch with Sequin", "find a pottery class"]) {
     const out = await AS.splitAsks("u1", T(t), { transcript: `user: ${t}`, message: t }, deps(mixedRead));
-    check(`not Co's own work, never read or split: "${t}"`, out[0].ask.text === t && !out[0].keepSearchRow && out[0].kind === undefined);
+    check(`not Cue's own work, never read or split: "${t}"`, out[0].ask.text === t && !out[0].keepSearchRow && out[0].kind === undefined);
   }
   check("…no read was made for any of them", reads === 0, reads);
   const goal = await AS.splitAsks("u1", T(OWN), o, deps(mixedRead, undefined, async () => "goal"));
   check("a goal-typed entry is never read", reads === 0 && goal[0].kind === "goal" && goal[0].ask.text === OWN);
   const asWork = await AS.splitAsks("u1", T(OWN), o, deps(work));
   check("a clean work read: today's behavior (no find row forced; the reply's task carries it), and the kind isn't read twice", asWork[0].ask.text === OWN && !asWork[0].keepSearchRow && asWork[0].kind === "ask");
-  const asFind = await AS.splitAsks("u1", T("Have Co look for venues for the launch party"), { transcript: "", message: null }, deps(find));
-  check("a find worded around Co keeps its find row", asFind[0].keepSearchRow === true);
+  const asFind = await AS.splitAsks("u1", T("Have Cue look for venues for the launch party"), { transcript: "", message: null }, deps(find));
+  check("a find worded around Cue keeps its find row", asFind[0].keepSearchRow === true);
   logs.length = 0;
   const failedRead = await AS.splitAsks("u1", T(MIXED), o, deps(unread));
   check("a read that failed on a mixed Co-promise request: written whole, its find row kept, logged", failedRead[0].ask.text === MIXED && failedRead[0].keepSearchRow === true && logs.some((l) => l.action === "unread"), { failedRead, logs });
@@ -105,7 +105,7 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   const unclaimed = await AS.splitAsks("u1", T(MIXED), o, deps(mixedRead, async () => ({ ok: false, why: "they didn't ask for that work outright", unclaimed: true })));
   check("work part unclaimed: written whole, its find row kept, logged unclaimed with the work part", unclaimed[0].keepSearchRow === true && logs.some((l) => l.action === "unclaimed" && l.proposal.work), logs);
   let offerReads = 0;
-  await AS.splitAsks("u1", [{ text: "I can help with design for the launch, Co will draft", type: "offering" as const }], o, { ...deps(mixedRead), read: async () => (offerReads++, mixedRead) });
+  await AS.splitAsks("u1", [{ text: "I can help with design for the launch, Cue will draft", type: "offering" as const }], o, { ...deps(mixedRead), read: async () => (offerReads++, mixedRead) });
   check("an offer of theirs is never read", offerReads === 0);
   const pe = src("services/profileExtraction.ts");
   check("the find row is kept when not split cleanly: keepSearchRow overrides the Co-promise skip and writes kind find", /\(opts\.keepSearchRow \|\| !isCoCommitment\(ask\.text\)\)/.test(pe) && /opts\.keepSearchRow \? Promise\.resolve\("find" as const\)/.test(pe) && /opts\.kind \?\? \(await classifyEntryKind\(ask\.text\)\)/.test(pe) && /keepSearchRow: w\.keepSearchRow/.test(pe));
@@ -129,11 +129,11 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   const transcript = TL.turnTranscript(thread, "yes please", "On it.");
   check("the fixture is turnLearning's own join", transcript === `${thread}\nuser: yes please\nassistant: On it.`);
   const ex = await AS.exchangeFromTranscript(transcript);
-  check("Co's offer in a 'Co replied:' line reaches the exchange the outright read sees, and Co's reply after their message doesn't", /Co: Want me to draft the launch plan for the Sequin party/.test(ex.recent) && /Member: hey, launch is in three weeks/.test(ex.recent) && !/On it/.test(ex.recent) && ex.message === "yes please", ex);
+  check("Cue's offer in a 'Co replied:' line reaches the exchange the outright read sees, and Cue's reply after their message doesn't", /Cue: Want me to draft the launch plan for the Sequin party/.test(ex.recent) && /Member: hey, launch is in three weeks/.test(ex.recent) && !/On it/.test(ex.recent) && ex.message === "yes please", ex);
   let seen: any = null;
   const answering = await AS.followWorkPart("u1", mixedRead.split, { transcript, message: "yes please" }, { open: async () => [], outright: async (w, m, r) => ((seen = { w, m, r }), false), start });
-  check("answering Co's offer: no task starts, the work part is unclaimed", answering.ok === false && (answering as any).unclaimed === true && started === 0, answering);
-  check("…the read saw Co's offer in the exchange and their message", !!seen && /Want me to draft the launch plan/.test(seen.r) && seen.m === "yes please", seen);
+  check("answering Cue's offer: no task starts, the work part is unclaimed", answering.ok === false && (answering as any).unclaimed === true && started === 0, answering);
+  check("…the read saw Cue's offer in the exchange and their message", !!seen && /Want me to draft the launch plan/.test(seen.r) && seen.m === "yes please", seen);
   const failedOutright = await AS.followWorkPart("u1", mixedRead.split, { transcript, message: "yes please" }, { open: async () => [], outright: async () => { throw new Error("timeout"); }, start });
   check("a read that fails is 'don't start'", failedOutright.ok === false && started === 0);
   const outright = await AS.followWorkPart("u1", mixedRead.split, { transcript: `user: ${MIXED}`, message: MIXED }, { open: async () => [], outright: async () => true, start });
@@ -147,10 +147,10 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   const logs: any[] = [];
   const saved = await AS.splitAsks("u1", [{ text: MIXED, type: "seeking" as const }], { transcript: `user: ${MIXED}`, message: null }, { kindOf: async () => "ask", read: async () => mixedRead, follow: (u, s2, o2) => AS.followWorkPart(u, s2, o2, { open: async () => [], outright: async () => (outrightReads++, true), start }), log: async (d) => { logs.push(d); } });
   check("…through creation: the whole request keeps its find row, logged unclaimed with the work part", saved[0].ask.text === MIXED && saved[0].keepSearchRow === true && logs.some((l) => l.action === "unclaimed" && l.proposal.work) && outrightReads === 0 && started === 1, { saved, logs });
-  check("a background start is tagged in the tool log and in Co's record", /why: BACKGROUND_START_WHY, background: true/.test(src("services/askSplit.ts")) && AS.BACKGROUND_START_WHY === "background: member asked outright, split work part" && /input\?\.background === true \? `tool\.\$\{tool\}\.background`/.test(src("services/coFacts.ts")));
+  check("a background start is tagged in the tool log and in Cue's record", /why: BACKGROUND_START_WHY, background: true/.test(src("services/askSplit.ts")) && AS.BACKGROUND_START_WHY === "background: member asked outright, split work part" && /input\?\.background === true \? `tool\.\$\{tool\}\.background`/.test(src("services/coFacts.ts")));
   const sp = src("services/askSplit.ts");
   check("a start goes only through the startTask tool (its quote check, the status-check candidate and toolGuard), never coTasks directly", /\(tools as any\)\.startTask\.execute\(/.test(sp) && !/coTasks/.test(sp));
-  check("the outright read fails closed and says no to an answer to Co's offer", /Answer no if they're answering a question or an offer from Co/.test(AS.outrightPrompt("x", "y", "z")));
+  check("the outright read fails closed and says no to an answer to Cue's offer", /Answer no if they're answering a question or an offer from Cue/.test(AS.outrightPrompt("x", "y", "z")));
 }
 
 // ---- 5. one kept read per ask; once-a-day notes; the team lists
@@ -167,8 +167,8 @@ const b = (text: string) => ({ kind: "ask" as const, id: "a1", text });
   check("a read kept under the old version is read again (SPLIT_VERSION bumped)", AS.SPLIT_VERSION === 2 && AS.cachedRead({ ...stored[0], version: 1 }, OWN) === null && AS.cachedRead({ at: "x", version: 2, text: OWN, split: null, why: "old" }, OWN) === null);
   AS.setPlanDepsForTests({ read: async () => (reads++, work), store: async () => {}, work: async () => [] });
   const closed = await AS.askSearchPlan("u1", { id: "a1", ask_text: OWN, split_read: stored[0] });
-  check("the task is checked fresh each run: once it's gone, it's no longer followed (Co's promise: noted, not searched)", !closed.plan.followed && closed.plan.search === null && closed.plan.note === "own_work_no_task" && closed.taskId === null, closed);
-  const HAVE2 = "Have Co draft the Sequin planning docs";
+  check("the task is checked fresh each run: once it's gone, it's no longer followed (Cue's promise: noted, not searched)", !closed.plan.followed && closed.plan.search === null && closed.plan.note === "own_work_no_task" && closed.taskId === null, closed);
+  const HAVE2 = "Have Cue draft the Sequin planning docs";
   const closedOther = await AS.askSearchPlan("u1", { id: "a4", ask_text: HAVE2, split_read: null });
   check("…and other own work with no task is searched again", closedOther.plan.search === HAVE2 && closedOther.plan.note === "own_work_no_task", closedOther);
   AS.setPlanDepsForTests({ read: async () => (reads++, unread), store: async (_id, st) => { stored.push(st); } });

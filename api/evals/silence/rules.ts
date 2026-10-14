@@ -27,13 +27,13 @@ check("a crashed turn gets the note", turnFailedNoteBlocked(base) === null);
 check("never to someone who opted out", turnFailedNoteBlocked({ ...base, member: { optedOut: true, archived: false } }) === "opted_out");
 check("never to an archived account", turnFailedNoteBlocked({ ...base, member: { optedOut: false, archived: true } }) === "archived");
 check("never to an unknown number", turnFailedNoteBlocked({ ...base, member: null }) === "no_member");
-check("not when Co answered anyway", turnFailedNoteBlocked({ ...base, coRepliedSince: true }) === "already_answered");
+check("not when Cue answered anyway", turnFailedNoteBlocked({ ...base, coRepliedSince: true }) === "already_answered");
 check("one note per outage, not a string of apologies", turnFailedNoteBlocked({ ...base, lastNoteAt: new Date(now.getTime() - 60_000) }) === "just_told_them");
 check("a later failure gets a fresh note", turnFailedNoteBlocked({ ...base, lastNoteAt: new Date(now.getTime() - TURN_FAILED_NOTE_COOLDOWN_MS - 1000) }) === null);
 check("a text from hours ago isn't answered out of nowhere", turnFailedNoteBlocked({ ...base, receivedAt: new Date(now.getTime() - 3 * 3600_000) }) === "too_old");
 
 check("the note owns the miss without asking them to redo anything, and promises no retry", !/send it again|resend/i.test(TURN_FAILED_NOTE) && !/\b(I'll|I will|retry|trying again|give me a)\b/i.test(TURN_FAILED_NOTE));
-check("the note survives Co's send cleanup unchanged (so the cooldown can find it)", cleanCoMessage(TURN_FAILED_NOTE) === TURN_FAILED_NOTE);
+check("the note survives Cue's send cleanup unchanged (so the cooldown can find it)", cleanCoMessage(TURN_FAILED_NOTE) === TURN_FAILED_NOTE);
 check("no em dashes", !/[—–]/.test(TURN_FAILED_NOTE));
 
 const sb = src("src/routes/sendblue.ts");

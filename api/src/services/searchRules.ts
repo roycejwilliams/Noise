@@ -215,7 +215,7 @@ export function alreadySentNames(gatedOut: { name: string; reasons: string[] }[]
 // A message that only asks what's new with Co ("Updates?", "any updates",
 // "what's new?"), with nothing else to answer.
 export function isOnlyUpdatesAsk(text: string): boolean {
-  return /^\s*(hey\s*,?\s*|yo\s*,?\s*)?(any\s+(new\s+)?updates|updates|what'?s\s+new|anything\s+new)(\s+(with|on)\s+(you|co))?\s*[?!.]*\s*$/i.test(text);
+  return /^\s*(hey\s*,?\s*|yo\s*,?\s*)?(any\s+(new\s+)?updates|updates|what'?s\s+new|anything\s+new)(\s+(with|on)\s+(you|co|cue))?\s*[?!.]*\s*$/i.test(text);
 }
 
 // ---------- A named event in an ask (2026-09-21)

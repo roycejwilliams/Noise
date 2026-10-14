@@ -47,7 +47,7 @@ function buildMessageEntry(role: "user" | "assistant", content: string, timestam
   row.className = "transcript-entry";
   row.innerHTML = `
     <div class="entry-meta">
-      <span class="entry-speaker">${role === "assistant" ? "Co" : "You"}</span>
+      <span class="entry-speaker">${role === "assistant" ? "Cue" : "You"}</span>
       <span class="entry-time">${formatClock(timestamp)}</span>
     </div>
     <div class="entry-text"></div>

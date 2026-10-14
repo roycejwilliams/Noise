@@ -32,7 +32,7 @@ import { notToTeammate } from "../services/teamLines.js";
 // to an intro (seen by another person); an in-room match nudge is an intro; a
 // lapse notice is about paying. A companion check-in is the companion touch
 // itself (companion first): swapping it for a task update would lose it.
-export const PAYLOAD_FIRST_EXEMPT = new Set(["event_offer", "network_tease", "event_match_nudge", "artifact_expiry", "bounce_proposal", "bounce_watch", "bounce_calendar_offer", "companion", "brief_name_ask", "event_brief", "event_followthrough", "loop_check", "goal_checkin", "goal_closed", "goal_recheck", "room_share_ask"]);
+export const PAYLOAD_FIRST_EXEMPT = new Set(["event_offer", "network_tease", "event_match_nudge", "artifact_expiry", "bounce_proposal", "bounce_watch", "bounce_calendar_offer", "companion", "brief_name_ask", "event_brief", "event_followthrough", "loop_check", "goal_checkin", "goal_closed", "goal_recheck", "room_share_ask", "name_change"]);
 
 // Work Co can do on its own and undo by saying nothing, and that a task turn
 // can deliver: it texts only verified results (taskTurn.ts). Drafting and
@@ -96,28 +96,28 @@ export function decidePayloadFirst(read: OfferRead | null, draft: string, theirs
 }
 
 export function payloadFirstPrompt(o: { draft: string; recent: string; theirAsk?: string | null; tasks: Pick<CoTask, "id" | "goal">[] }): string {
-  return `Co (an AI companion that texts its members) is about to send this text on its own initiative:
+  return `Cue (an AI companion that texts its members) is about to send this text on its own initiative:
 "${o.draft}"
 
-Their recent texts with Co, oldest first:
+Their recent texts with Cue, oldest first:
 ${o.recent.slice(-2500) || "(none)"}
-${o.theirAsk ? `\nWhat they asked Co for, as Co noted it: "${o.theirAsk}"\n` : ""}
-Things Co is already working on for them:
+${o.theirAsk ? `\nWhat they asked Cue for, as Cue noted it: "${o.theirAsk}"\n` : ""}
+Things Cue is already working on for them:
 ${o.tasks.map((t) => `- [${t.id}] ${t.goal}`).join("\n") || "(none)"}
 
-Does this text ask whether Co should do something, or whether they still want something Co would get them ("still want those caterer options?", "want me to dig into X?", "should I pull a few venues?")? If it does, could Co simply do that itself and send the result instead of asking?
+Does this text ask whether Cue should do something, or whether they still want something Cue would get them ("still want those caterer options?", "want me to dig into X?", "should I pull a few venues?")? If it does, could Cue simply do that itself and send the result instead of asking?
 
 Classify the work the question offers:
 - research: looking something up, checking a fit, finding out facts
 - gather_options: finding venues, vendors, events, people, prices to choose from
-- draft: writing something for them to review (Co doesn't send it)
+- draft: writing something for them to review (Cue doesn't send it)
 - shortlist: narrowing options they already have
 - member_action: something only they can do (practice a pitch, go to an event, decide)
 - irreversible_or_visible: sending an intro or a message in their name, booking, paying, anything another person sees
 - only_they_know: asking how they are, how something went, what they want
 - none: the text asks no question like this
 
-Return ONLY JSON: {"question": "the exact question from the text, or null", "kind": one of the kinds above, "work": "what Co would do, as a short goal (e.g. find three caterers for 60 people by Friday), or null", "theirWords": "the member's own words this work is for, copied exactly from one of their texts (a "User said:" line), or null", "sameAsTask": the [id] of the matching thing Co is already working on, or null}`;
+Return ONLY JSON: {"question": "the exact question from the text, or null", "kind": one of the kinds above, "work": "what Cue would do, as a short goal (e.g. find three caterers for 60 people by Friday), or null", "theirWords": "the member's own words this work is for, copied exactly from one of their texts (a "User said:" line), or null", "sameAsTask": the [id] of the matching thing Cue is already working on, or null}`;
 }
 
 export async function readOffer(draft: string, recent: string, tasks: Pick<CoTask, "id" | "goal">[], theirAsk: string | null = null): Promise<OfferRead | null> {

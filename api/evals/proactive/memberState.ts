@@ -153,7 +153,7 @@ const cand = (type: any, over: Partial<import("../../src/harness/proactive.js").
   check("goal: the draft facts are their goal in their words only", Object.keys(one.queue[0].facts).join(",") === "the_goal_in_their_words");
   check("goal: never for a done goal", N.detectGoalNudge(base(now, { goals: [{ ...g1, state: "done" }] })).length === 0);
   check("goal: never for a stale (set-aside) goal", N.detectGoalNudge(base(now, { goals: [{ ...g1, state: "stale" }] })).length === 0);
-  check("goal: never for a goal that is Co's own task", N.detectGoalNudge(base(now, { goals: [{ ...g1, coTask: true }] })).length === 0);
+  check("goal: never for a goal that is Cue's own task", N.detectGoalNudge(base(now, { goals: [{ ...g1, coTask: true }] })).length === 0);
   check("goal: none within the seasonal window (a goal check-in or nudge 20 days ago)", N.detectGoalNudge(base(now, { goals: [g1], lastGoalSurfaceAt: new Date(now.getTime() - 20 * DAY) })).length === 0);
   check("goal: one again after the season", N.detectGoalNudge(base(now, { goals: [g1], lastGoalSurfaceAt: new Date(now.getTime() - 60 * DAY) })).length === 1);
   check("goal: none when they mentioned it lately", N.detectGoalNudge(base(now, { goals: [g1], ownLines: [{ at: new Date(now.getTime() - 5 * DAY), text: "pre-seed raise is going slowly, two more investor calls" }] })).length === 0);
@@ -256,7 +256,7 @@ const cand = (type: any, over: Partial<import("../../src/harness/proactive.js").
   sql.length = 0;
   await K.syncKindPreferences("u-jordan", loved, [{ kind: "intro_followup", state: "suppressed", suppressedAt: s2.sentAt, enabledAt: null, evidence: ["s1", "s2"] }]);
   check("re-enable: the row goes back to enabled and the decision says enable", sql.some((q) => /^INSERT INTO member_kind_preferences/.test(q.text) && q.args[2] === "enabled") && sql.some((q) => q.args[4] === "enable:intro_followup"));
-  const threaded = K.evaluateKindRestraint({ sends: [s1, s2], inbound: [{ at: new Date(t0.getTime() + 10 * DAY), text: `yes please [Replying to Co's text: "Did you and Ellis get a chance to connect?"]` }], now: new Date(t0.getTime() + 11 * DAY) });
+  const threaded = K.evaluateKindRestraint({ sends: [s1, s2], inbound: [{ at: new Date(t0.getTime() + 10 * DAY), text: `yes please [Replying to Cue's text: "Did you and Ellis get a chance to connect?"]` }], now: new Date(t0.getTime() + 11 * DAY) });
   check("re-enable: a threaded reply to one of them, however late, turns it back on", !threaded.get("intro_followup")!.suppressed);
   const f1 = { id: "a1", kind: "find" as const, sentAt: t0, message: "The Climate Fellowship" };
   const f2 = { id: "a2", kind: "find" as const, sentAt: new Date(t0.getTime() + 3 * DAY), message: "Gallery Night" };
@@ -279,7 +279,7 @@ const cand = (type: any, over: Partial<import("../../src/harness/proactive.js").
     check(`${type}: eligible inside their hours`, ev({}).eligible.length === 1);
     check(`${type}: never outside 8am-9pm their time`, ev({ now: pt("2026-10-07T21:30:00") }).eligible.length === 0 && ev({ now: pt("2026-10-07T07:30:00") }).eligible.length === 0);
     check(`${type}: never after opt-out`, ev({ optedOut: true }).eligible.length === 0);
-    check(`${type}: spaced from any text Co sent (3h)`, ev({ sends: [{ type: "companion", targetKey: "k", topicKey: null, sentAt: new Date(now.getTime() - HOUR), exempt: false }] }).eligible.length === 0);
+    check(`${type}: spaced from any text Cue sent (3h)`, ev({ sends: [{ type: "companion", targetKey: "k", topicKey: null, sentAt: new Date(now.getTime() - HOUR), exempt: false }] }).eligible.length === 0);
     check(`${type}: registered (draft, purpose, policy)`, typeof (proactiveRegistry as any)[type]?.draft === "function" && !!(PROACTIVE_PURPOSE as any)[type] && !!(P.TYPE_POLICY as any)[type]);
   }
   // 2026-10-08 review: a deadline heads-up is Co's own, so it counts against the daily cap too (three yeses, not three texts a day).

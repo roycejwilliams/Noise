@@ -183,14 +183,14 @@ export function renderEventDetails(name: string, d: EventDetails): string[] {
 
 // What's still missing, stated as gaps so "I don't have that" stays grounded.
 export function missingEventDetails(name: string, d: EventDetails | undefined): string | null {
-  if (!d) return `For "${name}", Co does not have the start time, address, host, price, or format.`;
+  if (!d) return `For "${name}", Cue does not have the start time, address, host, price, or format.`;
   const missing = [
     !d.startAt && "start time",
     !d.online && !d.venue && !d.address && !d.city && "location",
     !d.hosts.length && "host",
     !d.price && "price",
   ].filter(Boolean);
-  return missing.length ? `For "${name}", Co does not have: ${missing.join(", ")}.` : null;
+  return missing.length ? `For "${name}", Cue does not have: ${missing.join(", ")}.` : null;
 }
 
 // avoid and availability (2026-09-22) are loaded by explainFit itself from userId, through the member record (services/memberKnowledge.ts
@@ -234,31 +234,31 @@ function detailLinesFor(match: EnrichedMatch): string[] {
 function fitContext(person: PersonForFit, picture: string): { intro: string; rules: string } {
   const avoidList = (person.avoid ?? []).filter((a) => a && a.trim());
   const latest = person.latestText && person.latestText.trim() && person.latestText.trim() !== (person.askText ?? "").trim() ? person.latestText.trim() : null;
-  const intro = `What ${person.firstName} asked Co to find (the search Co just ran for them):
+  const intro = `What ${person.firstName} asked Cue to find (the search Cue just ran for them):
 ${person.askText ?? "(no specific ask)"}${latest ? `\nTheir latest text, for context: "${latest.slice(0, 300)}"` : ""}
 
 Background on them:
 ${picture ? picture : person.goals?.length ? `Goals: ${person.goals.slice(0, 4).join("; ")}` : "(none)"}
 ${person.city ? `Based in: ${person.city}` : ""}
-${person.roomTaste?.length ? `The kind of room they've told Co they want, in their words: ${person.roomTaste.map((t) => `"${t}"`).join("; ")}. Something that clearly clashes with it isn't worth their time unless this search asked for exactly that.` : ""}
+${person.roomTaste?.length ? `The kind of room they've told Cue they want, in their words: ${person.roomTaste.map((t) => `"${t}"`).join("; ")}. Something that clearly clashes with it isn't worth their time unless this search asked for exactly that.` : ""}
 ${person.feeling ? `How they've been feeling: ${person.feeling}` : ""}`;
   const rules = `Rules:
 - ${IDENTITY_RULE}
 - Two tests, both must pass:
-  1. It's the kind of thing they asked Co to find. The search decides: if they asked for a pottery class, a founder event doesn't fit however good it is for them. Older asks in the background are context, not this search.
+  1. It's the kind of thing they asked Cue to find. The search decides: if they asked for a pottery class, a founder event doesn't fit however good it is for them. Older asks in the background are context, not this search.
   2. It's worth their time given who they are right now: their work and stage, what they want, what matters to them in people, and what has or hasn't worked before. Something clearly aimed at a different audience or stage (a beginner coding workshop for an experienced technical founder, a job fair for someone not looking) doesn't fit. When the background says nothing either way, this test passes.
 - Judge the event by its own main activity. Who attends, hosts, or sponsors never changes what kind of event it is: a chess night full of AI researchers is a chess night, not an AI meetup.
 - If they're asking about a new or possible direction ("if I start something new", "if I decide to build something else"), judge it for that new thing. A new company starts from zero, so pre-seed and seed programs fit it. Their current company's stage, funding, or other asks never make it a misfit.
 - Say it doesn't fit when it fails either test: the wrong kind of thing, the wrong place or time, or clearly not worth their time for who they are now. Your answer and your explanation must agree: if your explanation says it matches what they asked, it fits unless you name the test it fails.
 - ${person.timeFrame ? `They asked about ${person.timeFrame}. Something clearly happening outside that time frame doesn't fit, however good it is otherwise.` : "They didn't name a time frame."}
-- How they've been feeling never makes something a misfit: it changes how Co brings it up, not whether they hear about it.
+- How they've been feeling never makes something a misfit: it changes how Cue brings it up, not whether they hear about it.
 ${
     // Only present when there's something to apply (2026-09-22): an
     // always-present "avoided" field made the model mark ordinary matches
     // as avoided (a hackathon fit 1 in 5 times with nothing ruled out,
     // against 3 in 3 before).
     avoidList.length
-      ? `- They told Co to stop suggesting these kinds of things: ${avoidList.map((a) => `"${a}"`).join(", ")}. If it is clearly one of those kinds (judged by its main activity, the same way as above), it does not fit, it is not the right kind, and "avoided" is true, however good it is otherwise. Anything else is not avoided.\n`
+      ? `- They told Cue to stop suggesting these kinds of things: ${avoidList.map((a) => `"${a}"`).join(", ")}. If it is clearly one of those kinds (judged by its main activity, the same way as above), it does not fit, it is not the right kind, and "avoided" is true, however good it is otherwise. Anything else is not avoided.\n`
       : ""
   }${person.availability ? `- When they've said they're usually free: "${person.availability}". Check the day of the week and the time it starts, from the details above, against that. If it's on a day or at a time outside what they said (a Saturday for "weeknights only", a weekday afternoon for "evenings"), it doesn't fit, though it can still be the right kind. When the event's time isn't known, this test passes.\n` : ""}- Connect a specific thing about them (their ask, or who they are right now) to a specific real detail above. Use only what's written here.
 
@@ -274,7 +274,7 @@ function fitFields(person: PersonForFit): string {
 
 export function fitPrompt(match: EnrichedMatch, person: PersonForFit, picture: string): string {
   const { intro, rules } = fitContext(person, picture);
-  return `Decide whether "${match.name}" fits ${person.firstName}, and explain why in one or two plain sentences, to Co's own notes.
+  return `Decide whether "${match.name}" fits ${person.firstName}, and explain why in one or two plain sentences, to Cue's own notes.
 
 ${intro}
 

@@ -51,7 +51,7 @@ export async function claimTextLogin(phoneNumber: string, content: string): Prom
   try {
     if (isRateLimited(phoneNumber)) {
       console.error(`claimTextLogin: rate limited ${phoneNumber} after too many code attempts.`);
-      return content.replace(CODE_RE, " ").replace(/\s+/g, " ").trim() || "Hi Co!";
+      return content.replace(CODE_RE, " ").replace(/\s+/g, " ").trim() || "Hi Cue!";
     }
     // Single-use, expiry-bound and bound to the number the browser typed, in
     // one atomic statement: claimed only by a text from that number, before
@@ -64,5 +64,5 @@ export async function claimTextLogin(phoneNumber: string, content: string): Prom
   } catch (err: any) {
     console.error("claimTextLogin failed (non-fatal):", err?.message ?? err);
   }
-  return content.replace(CODE_RE, " ").replace(/\s+/g, " ").trim() || "Hi Co!";
+  return content.replace(CODE_RE, " ").replace(/\s+/g, " ").trim() || "Hi Cue!";
 }

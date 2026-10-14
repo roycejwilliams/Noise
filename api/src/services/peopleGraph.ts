@@ -31,7 +31,7 @@ export function peopleFactsPrompt(p: PeopleInput): string {
     p.lifeChapters.length ? `Where they are in life: ${p.lifeChapters.join("; ")}` : null,
     p.goals.length ? `Goals: ${p.goals.join("; ")}` : null,
     p.wantsNow.length ? `Wants right now: ${p.wantsNow.join("; ")}` : null,
-    p.findAsks.length ? `Asked Co to find: ${p.findAsks.join("; ")}` : null,
+    p.findAsks.length ? `Asked Cue to find: ${p.findAsks.join("; ")}` : null,
     p.offering ? `Said they can offer: ${p.offering}` : null,
     p.valuesInPeople.length ? `What they value in people: ${p.valuesInPeople.join("; ")}` : null,
   ].filter(Boolean);

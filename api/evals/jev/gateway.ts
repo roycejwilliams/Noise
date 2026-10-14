@@ -30,11 +30,11 @@ const coTest = { AI_GATEWAY_API_KEY: "k", RAILWAY_ENVIRONMENT_NAME: "dev", RAILW
 check("member text goes to Jev only with the gateway key and JEV_MEMBER=on", jevForMemberText(coTest));
 check("off by default, even on co-test with the key", !jevForMemberText({ ...coTest, JEV_MEMBER: undefined }));
 check("never without the gateway key (no direct TypeSafe route for member text)", !jevForMemberText({ ...coTest, AI_GATEWAY_API_KEY: "", TYPESAFE_API_KEY: "t" }));
-check("never in production unless explicitly turned on", !jevForMemberText({ AI_GATEWAY_API_KEY: "k", RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "CoPatible" } as any));
+check("never in production unless explicitly turned on", !jevForMemberText({ AI_GATEWAY_API_KEY: "k", RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "Noise" } as any));
 check("JEV_MEMBER=off turns it off anywhere", !jevForMemberText({ ...coTest, JEV_MEMBER: "off" }));
 {
   const direct = src("services/emotionalTone.ts") + src("services/issueReports.ts") + src("harness/emotion.ts");
-  check("Co's checks only reach Jev through the zero-retention gateway", !/typesafe-ai\/sdk|TYPESAFE_API_KEY|jev_co|askJevZdr/.test(direct) && (direct.match(/readTextSignals\(message, recentConversation\)/g) ?? []).length === 3);
+  check("Cue's checks only reach Jev through the zero-retention gateway", !/typesafe-ai\/sdk|TYPESAFE_API_KEY|jev_co|askJevZdr/.test(direct) && (direct.match(/readTextSignals\(message, recentConversation\)/g) ?? []).length === 3);
   check("each check races Jev against Haiku (never waits on one then the other)", (direct.match(/await raceWithJev</g) ?? []).length === 3);
   check("every Haiku call can be cancelled when Jev wins", (direct.match(/abortSignal,\n/g) ?? []).length === 3);
   check("the three questions go in ONE Jev request per text", /askJevZdr\(\{ latest_message: message, recent_conversation: convo \}, TEXT_SIGNAL_QUESTIONS\)/.test(g) && /memo\.set\(key/.test(g));

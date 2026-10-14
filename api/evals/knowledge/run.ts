@@ -23,8 +23,8 @@ type Case = EvalCase & Record<string, any>;
 const here = dirname(fileURLToPath(import.meta.url));
 
 const stale: PersonSnapshot = {
-  work: "solo pre-seed cleantech founder building Co", place: "Fargo", wantsNow: ["meet cleantech investors", "get into ERA Winter 2027"],
-  weighingOn: ["lack of information from Co"], valuesInPeople: [], worked: [], didntWork: [], asOf: "2026-09-08T10:00",
+  work: "solo pre-seed cleantech founder building Cue", place: "Fargo", wantsNow: ["meet cleantech investors", "get into ERA Winter 2027"],
+  weighingOn: ["lack of information from Cue"], valuesInPeople: [], worked: [], didntWork: [], asOf: "2026-09-08T10:00",
 };
 const cases: Case[] = [
   {
@@ -54,7 +54,7 @@ const cases: Case[] = [
   },
   {
     id: "s01_check_catches_stale", kind: "check",
-    snapshot: { work: "solo pre-seed cleantech founder", place: "Fargo", wantsNow: ["meet cleantech investors"], weighingOn: ["lack of information from Co"], valuesInPeople: [], worked: [], didntWork: [], asOf: "2026-09-08T10:00" },
+    snapshot: { work: "solo pre-seed cleantech founder", place: "Fargo", wantsNow: ["meet cleantech investors"], weighingOn: ["lack of information from Cue"], valuesInPeople: [], worked: [], didntWork: [], asOf: "2026-09-08T10:00" },
     recent: [{ at: "2026-09-15T19:24", text: "We are a series A company building AI infrastructure for B2B. We just landed a 35 million dollar deal on a team of 8" }],
     expectProblems: true,
   },

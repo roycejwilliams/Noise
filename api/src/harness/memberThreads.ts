@@ -193,7 +193,7 @@ export function gateThreadChanges(
 }
 
 export function threadsPrompt(firstName: string, onFile: MemberThread[], lines: OwnLine[], zone: string | null = null): string {
-  return `You keep the list of things ${firstName} is in the middle of: what they're working toward, deciding, waiting on, or looking forward to. Only their own life, never anything about Co.
+  return `You keep the list of things ${firstName} is in the middle of: what they're working toward, deciding, waiting on, or looking forward to. Only their own life, never anything about Cue.
 
 Open now:
 ${onFile.map((t) => `- [${t.id}] ${t.text}${t.dueDate ? ` (date: ${t.dueDate})` : ""}`).join("\n") || "(none)"}
@@ -463,7 +463,7 @@ export async function companionPayloadFor(userId: string): Promise<CompanionPayl
   const threads = await listThreads(userId);
   const thread = pickThreadForCheckin(threads, today, owned);
   const held = threads.filter((t) => coOwns(t.text, owned)).map((t) => t.text.slice(0, 60));
-  if (held.length) checks.push({ name: "co_owns_thread", pass: true, reason: `left for Co's own task: ${held.join("; ")}` });
+  if (held.length) checks.push({ name: "co_owns_thread", pass: true, reason: `left for Cue's own task: ${held.join("; ")}` });
   if (!thread) return { threadId: null, thread: null, item: null, checks: [...checks, { name: "open_thread", pass: false, reason: "no open thread due" }] };
   checks.push({ name: "open_thread", pass: true, reason: thread.text.slice(0, 80) });
   let item: CompanionPayloadParts["item"] = null;

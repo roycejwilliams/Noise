@@ -824,7 +824,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
     // next sweep looks again (2026-10-01).
     if (!item.match.whyItFits) {
       await removeFromBacklog(candidate.userId, candidate.askId, item.match);
-      skipped.push({ name: item.match.name, why: "found before Co judged sweeps; the next sweep looks again" });
+      skipped.push({ name: item.match.name, why: "found before Cue judged sweeps; the next sweep looks again" });
       continue;
     }
     const match = await enrichMatch(item.match);
@@ -903,7 +903,7 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
     userId,
     type: "event_offer",
     targetKey: offerTargetKey(item),
-    summary: `${o.reminder ? "Reminder, already shown to them: " : ""}${o.match.kind === "opportunity" ? "An opportunity" : "An event"} Co's daily pick chose for them: ${o.match.name}`,
+    summary: `${o.reminder ? "Reminder, already shown to them: " : ""}${o.match.kind === "opportunity" ? "An opportunity" : "An event"} Cue's daily pick chose for them: ${o.match.name}`,
     // When this pick was made: the 9am sweep's morning finds are this run's picks, merged ones too (services/dailySweep.ts).
     payload: { ...payload, pickedAt: new Date().toISOString() },
     // Whichever comes first: an event still expires at its start (the 2026-10-07 rule), a pick at the end of its last day.

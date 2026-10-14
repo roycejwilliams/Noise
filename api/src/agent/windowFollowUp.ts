@@ -31,7 +31,7 @@ export async function draftWindowFollowUp(firstName: string, p: WindowFollowUpPa
       what_they_asked_co_to_look_for: p.asked,
       what_co_sent_them: p.sent.length ? p.sent.join("; ") : "nothing that fit",
     },
-    task: `That time frame has passed. Write a short, warm text asking how it went for them, like a friend would ("how'd ${p.label} end up going?"). It arrives out of the blue, so say which day it was and what it was about in a few words ("Saturday the 19th, the day you asked me to look for something on. How'd it go?"), using only the dates in time_frame_they_asked_about and never any other date or day number. It's about them and their time, not about Co's suggestions. You may mention something Co sent only if it's natural to ask whether they made it. Never suggest anything new, never offer to search, never pitch an event. Start with the question itself, not a greeting like "Hey".`,
+    task: `That time frame has passed. Write a short, warm text asking how it went for them, like a friend would ("how'd ${p.label} end up going?"). It arrives out of the blue, so say which day it was and what it was about in a few words ("Saturday the 19th, the day you asked me to look for something on. How'd it go?"), using only the dates in time_frame_they_asked_about and never any other date or day number. It's about them and their time, not about Cue's suggestions. You may mention something Cue sent only if it's natural to ask whether they made it. Never suggest anything new, never offer to search, never pitch an event. Start with the question itself, not a greeting like "Hey".`,
   });
   if (!text) return null;
   // A date the follow-up names must be one of the real ones (2026-09-21: "How'd
@@ -50,6 +50,6 @@ function draftCommitment(firstName: string, p: WindowFollowUpPayload): Promise<s
       what_they_said_they_would_do: p.asked,
       the_day_they_named: p.dates ?? p.label,
     },
-    task: `They told Co they'd do this by that day, and the day has passed. Write a short, warm text asking how it went, like a friend who remembered ("How'd sending the deck go on Friday?"). Name the thing in a few words and the day, using only the_day_they_named and never any other date or day number. No advice, no suggestions, no events, no offer to help, nothing Co will do. Start with the question itself, not a greeting like "Hey".`,
+    task: `They told Cue they'd do this by that day, and the day has passed. Write a short, warm text asking how it went, like a friend who remembered ("How'd sending the deck go on Friday?"). Name the thing in a few words and the day, using only the_day_they_named and never any other date or day number. No advice, no suggestions, no events, no offer to help, nothing Cue will do. Start with the question itself, not a greeting like "Hey".`,
   });
 }

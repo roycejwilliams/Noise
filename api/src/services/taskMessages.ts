@@ -39,7 +39,7 @@ export function captionOk(caption: string, itemFacts: string): { ok: boolean; wh
   // Scarcity, "free" and "sold out" with no number behind them (Phase B, B4): the same rule a find's caption is held to.
   const said = captionNumbersBacked(caption, itemFacts);
   if (!said.ok) return { ok: false, why: said.problems.join("; ") };
-  if (OFFERS_WHAT_CO_CANT.test(caption)) return { ok: false, why: "offers something Co can't do" };
+  if (OFFERS_WHAT_CO_CANT.test(caption)) return { ok: false, why: "offers something Cue can't do" };
   return { ok: true, why: null };
 }
 

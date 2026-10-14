@@ -16,14 +16,14 @@ const { ledgerLine } = await import("../../src/services/coFacts.js");
 type Scenario = { name: string; today: string; todayIso: string; message: string; recent: string; before: string[]; after: string[]; wantsSearch?: boolean; bad: (reply: string, tools: string[]) => string | null };
 const mahjongSend = { relation: "sent", label: "Mahjong After Dark", url: "https://lu.ma/mahjongafterdark", at: new Date("2026-09-24T23:00:00Z"), when: "2026-09-26" };
 const agentfi = { relation: "sent", label: "AgentFi demo day at The Avalon", url: "https://x.com/i/status/2099242239721406895", at: new Date("2026-09-21T16:25:00Z"), when: "2026-10-07" };
-const oldNote = `Co searched for "Anything good this weekend?" and sent: "Mahjong After Dark" from its Luma event page.`;
+const oldNote = `Cue searched for "Anything good this weekend?" and sent: "Mahjong After Dark" from its Luma event page.`;
 const S: Scenario[] = [
   {
     name: "past event offered (Sunday, Mahjong was Saturday)",
     today: "Sunday, September 27, 2026", todayIso: "2026-09-27",
     message: "Anything happening tonight?",
     recent: "User said: Anything happening this weekend?\nCo replied: Still just Mahjong After Dark from what I sent earlier.",
-    before: [`On 2026-09-24 Co sent them "Mahjong After Dark" (https://lu.ma/mahjongafterdark).`, oldNote],
+    before: [`On 2026-09-24 Cue sent them "Mahjong After Dark" (https://lu.ma/mahjongafterdark).`, oldNote],
     after: [ledgerLine(mahjongSend as any, "2026-09-27"), searchNoteLine(`[search] ${oldNote}`, new Date("2026-09-24T23:00:00Z"), "2026-09-27")],
     wantsSearch: true,
     bad: (r) => (/mahjong/i.test(r) && !/(was|over|last night|yesterday|passed|already)/i.test(r) ? "offered Mahjong as if it's still ahead" : null),
@@ -33,7 +33,7 @@ const S: Scenario[] = [
     today: "Sunday, September 27, 2026", todayIso: "2026-09-27",
     message: "Back from a crazy week. What's up?",
     recent: "Co replied: AgentFi demo day at The Avalon, Oct 7, right in your tech week window. Want it on your radar?",
-    before: [`On 2026-09-21 Co sent them "AgentFi demo day at The Avalon" (https://x.com/i/status/2099242239721406895).`],
+    before: [`On 2026-09-21 Cue sent them "AgentFi demo day at The Avalon" (https://x.com/i/status/2099242239721406895).`],
     after: [ledgerLine(agentfi as any, "2026-09-27")],
     bad: (r) => (/agentfi|demo day/i.test(r) && /(how (was|did)|did you (go|make it)|how'?d it go|went)/i.test(r) ? "asked how it went before it happened" : null),
   },
@@ -42,7 +42,7 @@ const S: Scenario[] = [
     today: "Saturday, September 26, 2026", todayIso: "2026-09-26",
     message: "got anything else this weekend?",
     recent: "Co replied: Mahjong After Dark this Saturday in SF, casual, live DJ.",
-    before: [`On 2026-09-24 Co sent them "Mahjong After Dark" (https://lu.ma/mahjongafterdark).`, oldNote],
+    before: [`On 2026-09-24 Cue sent them "Mahjong After Dark" (https://lu.ma/mahjongafterdark).`, oldNote],
     after: [ledgerLine(mahjongSend as any, "2026-09-26"), searchNoteLine(`[search] ${oldNote}`, new Date("2026-09-24T23:00:00Z"), "2026-09-26")],
     wantsSearch: true,
     bad: (_r, tools) => (tools.includes("searchEvents") || tools.includes("webSearch") ? null : "answered from the earlier search without searching"),

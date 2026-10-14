@@ -179,11 +179,11 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     const d = await deps.luma(lumaUrl).catch(() => null);
     if (!d) return { ok: false, exit: false, why: "its event page couldn't be read just now" };
     // Luma's own flags are certain.
-    if (d.soldOut === true) return { ok: false, exit: true, state: "expired", why: `sold out when Co read its page on ${today}` };
-    if (d.spotsRemaining === 0) return { ok: false, exit: true, state: "expired", why: `no spots left when Co read its page on ${today}` };
+    if (d.soldOut === true) return { ok: false, exit: true, state: "expired", why: `sold out when Cue read its page on ${today}` };
+    if (d.spotsRemaining === 0) return { ok: false, exit: true, state: "expired", why: `no spots left when Cue read its page on ${today}` };
     // Over: past its end when it has one (a festival that started yesterday still runs), else past its start.
     const over = d.endAt ? d.endAt : d.startAt;
-    if (over && new Date(over).getTime() <= now.getTime()) return { ok: false, exit: true, state: "expired", why: `it was already ${d.endAt ? "over" : "under way"} (${over}) when Co read its page` };
+    if (over && new Date(over).getTime() <= now.getTime()) return { ok: false, exit: true, state: "expired", why: `it was already ${d.endAt ? "over" : "under way"} (${over}) when Cue read its page` };
     const old = match.details ?? null;
     const changed: string[] = [];
     if (old?.startAt && d.startAt && old.startAt !== d.startAt) changed.push(`start moved from ${old.startAt} to ${d.startAt}`);
@@ -201,7 +201,7 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   if (!url || isX(url) || match.kind !== "opportunity") return { ok: true, match, checkedAt: match.checkedAt ?? "", changed: [], verified: false };
   const r = await deps.page(url).catch((): PageRead => ({ text: null, gone: false }));
   // A dead link is certain.
-  if (r.gone) return { ok: false, exit: true, state: "cancelled", why: `its page is gone (a dead link when Co checked on ${today})` };
+  if (r.gone) return { ok: false, exit: true, state: "cancelled", why: `its page is gone (a dead link when Cue checked on ${today})` };
   if (!r.text) return { ok: false, exit: false, why: "its page couldn't be read just now" };
   // Words are never certain: held and read again.
   const onFile = eventDateOf(match, zone) ?? (isOpening && "deadline" in match ? match.deadline ?? null : null);

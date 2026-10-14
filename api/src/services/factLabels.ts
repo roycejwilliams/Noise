@@ -249,7 +249,7 @@ export function renderLive(claims: (Claim & { id?: string })[], now: Date, zone 
   const fmt = (c: Claim) => {
     const day = DateTime.fromISO(c.saidOn, { zone }).toFormat("LLL d");
     const until = c.expiresOn ? `, until ${DateTime.fromISO(c.expiresOn, { zone }).minus({ days: 1 }).toFormat("LLL d")}` : "";
-    return `${c.text} (${c.provenance === "user_said" ? `they said, ${day}` : `Co's read, ${day}`}${until})`;
+    return `${c.text} (${c.provenance === "user_said" ? `they said, ${day}` : `Cue's read, ${day}`}${until})`;
   };
   return {
     enduring: live.filter((c) => c.kind && KINDS[c.kind].lifetime === "enduring" && c.provenance === "user_said").map(fmt),

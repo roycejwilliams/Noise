@@ -32,7 +32,7 @@ check("test handles are recognized", T.isTestHandle(T.testHandle()) && !T.isTest
   check("a tapback on a test message counts as given without a network call, and read receipts are skipped", reacted === true && called === 0);
 }
 check("calls are never placed to a test number", /if \(isTestNumber\(user\.phone_number\)\) return \{ success: false/.test(src("services/callTrigger.ts")));
-check("an inline reply on a test member reads Co's own send log", /if \(isTestHandle\(handle\)\) \{/.test(src("services/inlineReply.ts")));
+check("an inline reply on a test member reads Cue's own send log", /if \(isTestHandle\(handle\)\) \{/.test(src("services/inlineReply.ts")));
 check("the reset archives, never deletes", /UPDATE users SET archived_at = NOW\(\)/.test(src("scripts/testMember.ts")) && !/DELETE FROM/i.test(src("scripts/testMember.ts")));
 
 console.log(`test member rules: ${total - failed}/${total} passed`);

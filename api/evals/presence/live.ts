@@ -14,7 +14,7 @@ const upcoming = events.filter((e) => new Date(e.start_at).getTime() > Date.now(
 console.log(`events: ${events.length} on the calendar, ${upcoming.length} today or later`);
 let located = 0;
 for (const e of events) if (await venueFor(e)) located++;
-console.log(`  with a venue Co can locate (Luma coordinates or a street address): ${located}`);
+console.log(`  with a venue Cue can locate (Luma coordinates or a street address): ${located}`);
 console.log(`  with a time zone: ${events.filter((e) => e.timezone).length}`);
 console.log(`  with a venue line: ${events.filter((e) => e.venue).length}`);
 const next = upcoming.sort((a, b) => a.start_at.localeCompare(b.start_at))[0];
@@ -25,5 +25,5 @@ if (next) {
   console.log(`next event: coords ${next.latitude != null ? "yes" : "no"}, tz ${next.timezone ?? "none"}; guest statuses ${JSON.stringify(statuses)}`);
 }
 const { sharing, fixes } = await fetchSharedLocations();
-console.log(`sendblue: ${sharing.size} sharing a location with Co's number, ${fixes.size} with a fresh fix`);
+console.log(`sendblue: ${sharing.size} sharing a location with Cue's number, ${fixes.size} with a fresh fix`);
 process.exit(0);

@@ -121,15 +121,15 @@ export type ConversationToolContext = {
 
 // The exchange a yes answers: the caller's, else Co's last line alone.
 // Pure: their words, when the quote is copied from what they said: this message, or on a call this turn and the call's last turns (their
-// lines only, never Co's). Anything else is null: a place, a window or a free time is never kept on Co's paraphrase.
+// lines only, never Cue's). Anything else is null: a place, a window or a free time is never kept on Cue's paraphrase.
 export function theirQuote(message: string, recent: string | null | undefined, quote: string | null | undefined): string | null {
   const q = String(quote ?? "").trim();
   if (q.length < 3) return null;
   const norm = (t: string) => t.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ");
-  // The exchange may start mid-line ("…<tail>", exchangeText trims long ones): that fragment could be Co's, so it never counts.
+  // The exchange may start mid-line ("…<tail>", exchangeText trims long ones): that fragment could be Cue's, so it never counts.
   const lines = String(recent ?? "").split("\n");
   if (/^\s*…/.test(lines[0] ?? "")) lines.shift();
-  const theirs = [message, ...lines.filter((l) => !/^\s*Co:/i.test(l))].filter(Boolean);
+  const theirs = [message, ...lines.filter((l) => !/^\s*(Co|Cue):/i.test(l))].filter(Boolean);
   return theirs.some((t) => norm(t).includes(norm(q))) ? q : null;
 }
 
@@ -162,17 +162,17 @@ export async function wantWhereFromWords(ctx: Pick<ConversationToolContext, "use
   const read = place ? null : await W.placeFor(ctx.userId, { key, text, createdAt: new Date() }).catch(() => null);
   const where = place ?? read?.place ?? null;
   if (!place && read?.place) notes.push(`It's for ${read.place}, from ${read.source === "their_words" ? "their words" : "what they've told you about where they go for this"}.`);
-  if (!where) notes.push(`No place on it: Co looks near their home${home ? ` (${home})` : ""}. Say that in a line, or ask where if it's not clear.`);
-  return { fact: `Co's daily search is now looking for: "${text}"${where ? ` in ${where}` : ""}${until ? `, ${WW.describeWindow(null, until)}` : ""}. If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`, note: notes.join(" ") };
+  if (!where) notes.push(`No place on it: Cue looks near their home${home ? ` (${home})` : ""}. Say that in a line, or ask where if it's not clear.`);
+  return { fact: `Cue's daily search is now looking for: "${text}"${where ? ` in ${where}` : ""}${until ? `, ${WW.describeWindow(null, until)}` : ""}. If something real fits, Cue may text them (at most one text a day). Cue can't promise it will find anything, or when.`, note: notes.join(" ") };
 }
 
-const recentOf = (ctx: Pick<ConversationToolContext, "recentExchange" | "lastCoMessage">): string | null => ctx.recentExchange ?? (ctx.lastCoMessage ? `Co: ${ctx.lastCoMessage}` : null);
+const recentOf = (ctx: Pick<ConversationToolContext, "recentExchange" | "lastCoMessage">): string | null => ctx.recentExchange ?? (ctx.lastCoMessage ? `Cue: ${ctx.lastCoMessage}` : null);
 
 // Whether this turn needs words, not a reaction: the brain's decision when there is one (its tapback rule), else the turn's flags.
 function wordsDue(ctx: Pick<ConversationToolContext, "decision" | "safetyConcern" | "replyOwed">): { why: string; tell?: string } | null {
   if (ctx.decision) return ctx.decision.dontSay.find((r) => r.what === "tapback") ?? null;
-  if (ctx.safetyConcern) return { why: "they may not be safe, so Co has to reply", tell: "They may not be safe. Reply to them properly." };
-  if (ctx.replyOwed) return { why: "Co still owes them an answer from before, so it has to reply", tell: "You still owe them an answer from before. Reply properly instead." };
+  if (ctx.safetyConcern) return { why: "they may not be safe, so Cue has to reply", tell: "They may not be safe. Reply to them properly." };
+  if (ctx.replyOwed) return { why: "Cue still owes them an answer from before, so it has to reply", tell: "You still owe them an answer from before. Reply properly instead." };
   return null;
 }
 
@@ -427,9 +427,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         theirWords: z.string().describe("Their words that asked for it."),
       }),
       execute: async ({ theirWords }) => {
-        if (state.sentMessages.includes("[sent Co's contact card]")) return { ok: true, note: "Already sent this turn." };
+        if (state.sentMessages.includes("[sent Cue's contact card]")) return { ok: true, note: "Already sent this turn." };
         if (!process.env.CO_VCARD_URL) {
-          notDone("Co's contact card was not sent (it isn't available right now).");
+          notDone("Cue's contact card was not sent (it isn't available right now).");
           return { ok: false, error: "The card isn't available right now, so it was NOT sent. Tell them plainly." };
         }
         if (ctx.dryRun) {
@@ -438,13 +438,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
           try {
             await sendblue.messages.send({ number: ctx.phoneNumber, content: "Here's my card.", media_url: process.env.CO_VCARD_URL, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
           } catch (err: any) {
-            notDone("Co's contact card was not sent (the send failed).");
+            notDone("Cue's contact card was not sent (the send failed).");
             return { ok: false, error: "The card did NOT go through. Tell them plainly." };
           }
-          await logDelivered("Co replied: [sent Co's contact card]");
+          await logDelivered("Co replied: [sent Cue's contact card]");
         }
-        state.sentMessages.push("[sent Co's contact card]");
-        ctx.facts?.add("did_this_turn", "Sent Co's contact card as its own message just before this reply.");
+        state.sentMessages.push("[sent Cue's contact card]");
+        ctx.facts?.add("did_this_turn", "Sent Cue's contact card as its own message just before this reply.");
         return { ok: true };
       },
     }),
@@ -482,7 +482,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return null;
         });
         if (!got) {
-          notDone("What Co knows about them couldn't be read just now.");
+          notDone("What Cue knows about them couldn't be read just now.");
           return { ok: false, error: "Couldn't read it right now. Say so plainly and offer to try again in a bit." };
         }
         ctx.facts?.add("known", W.knownFact(got.view));
@@ -513,9 +513,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const W = await import("../services/whatCoKnows.js");
         const r = await W.applyKnowledgeChanges(ctx.userId, changes, { message: ctx.resolvedContent, theirWords: String(input?.theirYes ?? ctx.resolvedContent), lastCoMessage: ctx.lastCoMessage ?? null });
         for (const a of r.applied) {
-          ctx.facts?.add("did_this_turn", a.now == null ? `Removed from what Co knows about them, everywhere Co uses it: "${a.was.slice(0, 120)}".` : `Corrected what Co knows about them, everywhere Co uses it: "${a.was.slice(0, 80)}" is now "${a.now.slice(0, 80)}".`);
+          ctx.facts?.add("did_this_turn", a.now == null ? `Removed from what Cue knows about them, everywhere Cue uses it: "${a.was.slice(0, 120)}".` : `Corrected what Cue knows about them, everywhere Cue uses it: "${a.was.slice(0, 80)}" is now "${a.now.slice(0, 80)}".`);
         }
-        if (!r.applied.length) notDone("Nothing Co knows about them was changed.");
+        if (!r.applied.length) notDone("Nothing Cue knows about them was changed.");
         return {
           ok: r.ok,
           ...(r.ok ? {} : { error: r.refused.map((x) => x.why).join("; ") || "nothing matched" }),
@@ -599,7 +599,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           else notDone(`The deadline wasn't kept on the task: ${d.why}.`);
         }
         if (ctx.dryRun) {
-          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Co will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Co's last check before it is ${localStamp(dl.finalCheckAt, zone)}.` : ""}`);
+          ctx.facts?.add("did_this_turn", `Started task: "${goal}". Cue will work on it first in about ${T.clampNextHours(inHours)} hours: ${firstStep}.${dl ? ` Their deadline: ${dl.deadline}; Cue's last check before it is ${localStamp(dl.finalCheckAt, zone)}.` : ""}`);
           return { ok: true, deadline: dl };
         }
         // A look-out's origin, recorded now so the send path never guesses (Royce, 2026-10-09): theirs only when this message asks Co
@@ -607,12 +607,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const offer = lookout ? T.watchOfferIn(String(ctx.lastCoMessage ?? "")) : null;
         const offerLogged = offer ? await import("../harness/proactive.js").then((P) => P.replyWatchOfferLogged(ctx.userId, String(ctx.lastCoMessage ?? ""))).catch(() => false) : false;
         const origin = lookout ? T.lookoutOriginAt({ message: ctx.resolvedContent, quote: theirWords, lastCoMessage: ctx.lastCoMessage, offerLogged }) : null;
-        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Co's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}) });
+        const r = await T.startTask({ userId: ctx.userId, goal, theirWords: yesToOffer ? `${ctx.resolvedContent.trim()} (to Cue's offer: ${String(ctx.lastCoMessage ?? "").slice(0, 160)})` : theirWords, steps, firstPlan: firstStep, inHours, deadline: dl, ...(origin ? { source: "lookout" as const, lookoutOrigin: origin } : {}) });
         if (!r.ok) {
           notDone(`No task was started: ${r.why}.`);
           return { ok: false, error: r.why };
         }
-        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt ? localStamp(r.task.nextCheckAt, zone) : "soon"}: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Co's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt ? localStamp(r.task.finalCheckAt, zone) : "the day before"}.` : ""}`);
+        ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Cue will work on it first around ${r.task.nextCheckAt ? localStamp(r.task.nextCheckAt, zone) : "soon"}: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Cue's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt ? localStamp(r.task.finalCheckAt, zone) : "the day before"}.` : ""}`);
         return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt, ...(alsoOpen ? { note: alsoOpen } : {}) };
       },
     }),
@@ -823,8 +823,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         // Picking pieces of a goal is a signal for the goals on file it names (services/goalRecheck.ts).
         await import("../services/goalRecheck.js").then((R) => R.noteGoalActionText(ctx.userId, `${r.goal.title} ${r.goal.theirWords ?? ""}`)).catch(() => {});
-        for (const s of r.started) ctx.facts?.add("did_this_turn", `Started task #${s.taskId}: "${s.text}", their goal's piece they handed Co. Co sends it when it lands.`);
-        if (r.checkin) ctx.facts?.add("did_this_turn", `Started task #${r.checkin.taskId}: Co's check-in on their goal "${r.goal.title}", set for ${localStamp(r.checkin.at, zone)}. Co can say it'll check back then.`);
+        for (const s of r.started) ctx.facts?.add("did_this_turn", `Started task #${s.taskId}: "${s.text}", their goal's piece they handed Cue. Cue sends it when it lands.`);
+        if (r.checkin) ctx.facts?.add("did_this_turn", `Started task #${r.checkin.taskId}: Cue's check-in on their goal "${r.goal.title}", set for ${localStamp(r.checkin.at, zone)}. Cue can say it'll check back then.`);
         for (const x of r.refused) notDone(x.n ? `Item ${x.n} of goal #${goalId} wasn't taken: ${x.why}.` : `${x.why}.`);
         await recordDecision({ layer: 3, decision: "goal.picked", userId: ctx.userId, outcome: "act", action: `goal:${goalId}`, proposal: { started: r.started, checkin: r.checkin, refused: r.refused } }).catch(() => {});
         return { ok: true, started: r.started.map((s) => ({ text: s.text })), checkIn: r.checkin ? localStamp(r.checkin.at, zone) : null, notTaken: r.refused };
@@ -854,7 +854,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: false, error: "Nothing moved: your last text didn't ask them about this move. Offer it first in one line; move it on their yes." };
           }
           if (rule !== "confirmed") {
-            notDone(`Nothing moved: ${rule === "their_words" ? "a task becomes a lookout only on their own words" : `${LANE_WORDS[from]} to ${LANE_WORDS[to]} isn't a move Co makes`}.`);
+            notDone(`Nothing moved: ${rule === "their_words" ? "a task becomes a lookout only on their own words" : `${LANE_WORDS[from]} to ${LANE_WORDS[to]} isn't a move Cue makes`}.`);
             return { ok: false, error: "Nothing moved: that isn't a move you offer. Don't offer it again." };
           }
           // A task's number is never said to them: "that task" when Co gave no name.
@@ -888,11 +888,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
         if (!today) {
-          notDone("Their location wasn't turned on: they have no Co event today.");
-          return { ok: false, error: "They aren't going to a Co event today, so there's nothing to use it for." };
+          notDone("Their location wasn't turned on: they have no Cue event today.");
+          return { ok: false, error: "They aren't going to a Cue event today, so there's nothing to use it for." };
         }
         if (!ctx.dryRun) await P.recordLocationYes(today.eventApiId, ctx.userId, theirYes);
-        ctx.facts?.add("did_this_turn", `They said yes to sharing their location for "${today.name}" only. Co will use it just to know when they've arrived. They share it themselves in Messages (Share My Location with Co), and "stop sharing" ends it.`);
+        ctx.facts?.add("did_this_turn", `They said yes to sharing their location for "${today.name}" only. Cue will use it just to know when they've arrived. They share it themselves in Messages (Share My Location with Cue), and "stop sharing" ends it.`);
         return { ok: true, event: today.name };
       },
     }),
@@ -906,7 +906,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`Nothing about sharing their asks was recorded: ${r.why}.`);
           return { ok: false, error: r.why === "their answer isn't a clear choice" ? "Ask which numbers they're happy to share (or all, or none)." : r.why };
         }
-        ctx.facts?.add("did_this_turn", r.shared.length ? `Recorded which asks Co may tell a good match in the room: ${r.shared.map((t) => `"${t}"`).join(", ")}. The rest stay private.` : "Recorded that none of their asks are to be shared. They stay private.");
+        ctx.facts?.add("did_this_turn", r.shared.length ? `Recorded which asks Cue may tell a good match in the room: ${r.shared.map((t) => `"${t}"`).join(", ")}. The rest stay private.` : "Recorded that none of their asks are to be shared. They stay private.");
         return { ok: true, shared: r.shared };
       },
     }),
@@ -929,7 +929,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`Nothing was marked shareable: ${r.why}.`);
           return { ok: false, error: r.options ? `Ask which one they mean: ${r.options.join(" / ")}` : "That isn't one of their open asks." };
         }
-        ctx.facts?.add("did_this_turn", answer === "yes" ? `They said Co may mention "${r.text}" in their own words when introducing them. Their other asks stay private.` : `They said not to mention "${r.text}" to anyone. It stays private.`);
+        ctx.facts?.add("did_this_turn", answer === "yes" ? `They said Cue may mention "${r.text}" in their own words when introducing them. Their other asks stay private.` : `They said not to mention "${r.text}" to anyone. It stays private.`);
         return { ok: true, ask: r.text, shareable: answer === "yes" };
       },
     }),
@@ -952,7 +952,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("Their answer about being named wasn't recorded: there's no brief question open for them.");
           return { ok: false, error: "There's no open question about the member brief for them." };
         }
-        ctx.facts?.add("did_this_turn", answer === "yes" ? "They said yes: Co may mention them by name in the member brief for that event, with only what they're looking for as the reason. They can change that any time." : "They said no: Co won't name them in the member brief for that event.");
+        ctx.facts?.add("did_this_turn", answer === "yes" ? "They said yes: Cue may mention them by name in the member brief for that event, with only what they're looking for as the reason. They can change that any time." : "They said no: Cue won't name them in the member brief for that event.");
         return { ok: true, answer };
       },
     }),
@@ -966,9 +966,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "Quote their own words." };
         }
         const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
-        if (!today) return { ok: false, error: "No Co event of theirs today." };
+        if (!today) return { ok: false, error: "No Cue event of theirs today." };
         if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(today.eventApiId, ctx.userId, going));
-        ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Co won't send them anything more about it.`);
+        ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Cue won't send them anything more about it.`);
         return { ok: true };
       },
     }),
@@ -1010,7 +1010,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           const { recordSafetyConcern } = await import("../services/safety.js");
           await recordSafetyConcern(ctx.userId, ctx.firstName ?? null, "co", what);
         }
-        ctx.facts?.add("did_this_turn", "Flagged that they may not be safe: offers are on hold, and Co may check in on them tomorrow.");
+        ctx.facts?.add("did_this_turn", "Flagged that they may not be safe: offers are on hold, and Cue may check in on them tomorrow.");
         return { ok: true, note: "Flagged. Now reply with sendReply: stay with them, ask plainly if they're safe right now, and share 988 once." };
       },
     }),
@@ -1055,17 +1055,17 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         // The safety guard, whatever the decision said: their words this turn, or Co flagged it mid-turn.
         if (ctx.safetyConcern || state.safetyFlagged) {
-          notDone("No tapback: they may not be safe, so Co has to reply.");
+          notDone("No tapback: they may not be safe, so Cue has to reply.");
           return { ok: false, error: "They may not be safe. Reply to them properly." };
         }
         // An owed answer is a guard too: no decision can lift it. Then what the brain's decision rules out (the list, an ask).
-        const due = ctx.replyOwed ? { why: "Co still owes them an answer from before, so it has to reply", tell: "You still owe them an answer from before. Reply properly instead." } : wordsDue(ctx);
+        const due = ctx.replyOwed ? { why: "Cue still owes them an answer from before, so it has to reply", tell: "You still owe them an answer from before. Reply properly instead." } : wordsDue(ctx);
         if (due) {
           notDone(`No tapback: ${due.why}.`);
           return { ok: false, error: due.tell ?? "They need words this time. Reply properly." };
         }
         if (coAskedQuestion(ctx.lastCoMessage)) {
-          notDone("No tapback: Co had just asked them something, so their message is an answer.");
+          notDone("No tapback: Cue had just asked them something, so their message is an answer.");
           return { ok: false, error: "You just asked them something, so this is their answer. Reply properly." };
         }
         // One reaction per message (services/tapbacks.ts): the early "on it" read may
@@ -1104,7 +1104,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({}),
       execute: async () => {
         const left = ctx.dryRun ? 5 : await invitesLeftFor(ctx.userId);
-        ctx.facts?.add("known", left > 0 ? `They have ${left} invite${left === 1 ? "" : "s"} left. One only counts once someone joins. (Co told them how many invites they have left; no invite link was sent.)` : "All 5 of their invites are used.");
+        ctx.facts?.add("known", left > 0 ? `They have ${left} invite${left === 1 ? "" : "s"} left. One only counts once someone joins. (Cue told them how many invites they have left; no invite link was sent.)` : "All 5 of their invites are used.");
         return { ok: true, left, note: left > 0 ? `They have ${left} left; one only counts once someone joins.` : "All 5 are used." };
       },
     }),
@@ -1123,15 +1123,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const arrived = await recordTextArrival(ctx.userId);
         if (!arrived) {
-          notDone("No arrival was recorded: there's no Co event of theirs on right now.");
-          return { ok: false, error: "There's no Co event of theirs on right now, so nothing was recorded. Don't welcome them to an event." };
+          notDone("No arrival was recorded: there's no Cue event of theirs on right now.");
+          return { ok: false, error: "There's no Cue event of theirs on right now, so nothing was recorded. Don't welcome them to an event." };
         }
         if (arrived.isNew) {
           scoreGuestListForEvent(arrived.eventApiId, arrived.eventName).catch((err: any) =>
             console.error("markArrived: arrival re-score failed (non-fatal):", err?.message ?? err),
           );
         }
-        ctx.facts?.add("did_this_turn", `They've arrived at "${arrived.eventName}" and Co recorded it.`);
+        ctx.facts?.add("did_this_turn", `They've arrived at "${arrived.eventName}" and Cue recorded it.`);
         return {
           ok: true,
           note: `Recorded. Welcome them to "${arrived.eventName}" in a line. If there's someone for them to meet, that comes in its own text, so don't name anyone or promise a person here.`,
@@ -1188,7 +1188,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would send an invite link to ${ctx.userId}`);
           state.sentMessages.push("https://example.com/i/DRYRUN");
-          ctx.facts?.add("did_this_turn", "Co just texted them an invite link for a friend, as its own message before this reply. They have 4 left; one only counts once someone joins.");
+          ctx.facts?.add("did_this_turn", "Cue just texted them an invite link for a friend, as its own message before this reply. They have 4 left; one only counts once someone joins.");
           return { ok: true };
         }
         const invite = await getMemberInvite(ctx.userId);
@@ -1208,7 +1208,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         await logDelivered(`Co replied: ${message}`);
         state.sentMessages.push(link ?? message);
         await record("act", invite.reused ? "resent_open_code" : "made_code", { left: invite.left, link: Boolean(link), sent: true });
-        ctx.facts?.add("did_this_turn", `Co just texted them an invite link for a friend, as its own message before this reply. They have ${invite.left} left; one only counts once someone joins.`);
+        ctx.facts?.add("did_this_turn", `Cue just texted them an invite link for a friend, as its own message before this reply. They have ${invite.left} left; one only counts once someone joins.`);
         return { ok: true, left: invite.left };
       },
     }),
@@ -1233,7 +1233,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         } else {
           const saved = await captureIntentForTurn(ctx.userId, `user: ${what}`, { timeoutMs: 6000 }).catch(() => null);
           if (!saved?.ask?.text) {
-            notDone(`Saving "${what.slice(0, 120)}" for the daily search didn't work, so Co is NOT looking for it.`);
+            notDone(`Saving "${what.slice(0, 120)}" for the daily search didn't work, so Cue is NOT looking for it.`);
             return { ok: false, error: "couldn't save that as something to look for" };
           }
           await recordDecision({ layer: 3, decision: "reply.saveAsk", userId: ctx.userId, outcome: "act", action: saved.deduped ? "updated_ask" : "saved_ask", proposal: { what, saved: saved.ask.text } });
@@ -1244,7 +1244,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: true, note: `Saved. ${where.note} You can say you'll keep looking and text them if something real fits. Don't promise a time.` };
           }
         }
-        ctx.facts?.add("ongoing", `Co's daily search is now looking for: "${what}". If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`);
+        ctx.facts?.add("ongoing", `Cue's daily search is now looking for: "${what}". If something real fits, Cue may text them (at most one text a day). Cue can't promise it will find anything, or when.`);
         return { ok: true, note: "Saved. You can say you'll keep looking and text them if something real fits. Don't promise a time." };
       },
     }),
@@ -1343,7 +1343,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         await (await import("../services/roomTaste.js")).recordRoomTaste(ctx.userId, taste);
         // Re-rank today (services/sweepShadow.ts), in the background: the reply never waits on it.
         void import("../services/sweepShadow.js").then((m) => m.rerunPickerForTaste(ctx.userId)).catch(() => {});
-        ctx.facts?.add("did_this_turn", "Noted the kind of room they want, so what Co picks for them leans that way.");
+        ctx.facts?.add("did_this_turn", "Noted the kind of room they want, so what Cue picks for them leans that way.");
         return { ok: true };
       },
     }),
@@ -1351,7 +1351,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     noteReaction: tool({
       description: toolUse("noteReaction"),
       inputSchema: z.object({
-        item: z.string().describe("The name of the event or opportunity Co sent them."),
+        item: z.string().describe("The name of the event or opportunity Cue sent them."),
         reaction: z.enum(["interested", "going", "went_liked", "went_disliked", "not_for_me"]),
         note: z.string().optional().describe("Their words, briefly, if they said why."),
         quote: z.string().describe("Their exact words that say it (\"I'm going\", \"signed up\", \"not for me\", or their yes to you offering it), copied from what they said."),
@@ -1363,8 +1363,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const sent = ctx.dryRun ? [] : (ctx.turn?.sent ?? (await sentItems(ctx.userId)));
         const match = findSent(sent, item);
         if (!ctx.dryRun && !match) {
-          notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Co sent them recently.`);
-          return { ok: false, error: "That isn't something Co sent them recently (check listSentOffers)." };
+          notDone(`No reaction was recorded: "${item.slice(0, 80)}" isn't something Cue sent them recently.`);
+          return { ok: false, error: "That isn't something Cue sent them recently (check listSentOffers)." };
         }
         // What they did or will do is theirs to say (services/provenance.ts, 2026-10-12): only their own explicit words record it.
         if (!ctx.dryRun && !quoteIsTheirs(quote, `${ctx.resolvedContent}\n${ctx.isVoice ? String(ctx.turn?.message ?? "") : ""}`)) {
@@ -1376,11 +1376,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
           console.log(`[conversationReply dryRun] would record ${result} for "${item}" (${ctx.userId})`);
           return { ok: true };
         }
-        if (!match) return { ok: false, error: "That isn't something Co sent them recently." };
+        if (!match) return { ok: false, error: "That isn't something Cue sent them recently." };
         await recordSuggestionOutcome(ctx.userId, match.kind, match.key, match.name, result, note ?? null, { provenance: "stated", quote: quote.trim() });
         // Their answer settles the sent find everywhere it waits: the router's reveal and the offer's loop (2026-10-11, loop 53372).
         await import("../services/offerReactions.js").then((O) => O.settleSentOffer(ctx.userId, match.name, reaction, note ?? null)).catch(() => {});
-        ctx.facts?.add("did_this_turn", `Noted how "${match.name}" landed with them (${reaction.replace(/_/g, " ")}), so Co leans that way next time.`);
+        ctx.facts?.add("did_this_turn", `Noted how "${match.name}" landed with them (${reaction.replace(/_/g, " ")}), so Cue leans that way next time.`);
         return { ok: true };
       },
     }),
@@ -1390,7 +1390,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     noteMetAgain: tool({
       description: toolUse("noteMetAgain"),
       inputSchema: z.object({
-        person: z.string().describe("The first name of someone Co introduced them to."),
+        person: z.string().describe("The first name of someone Cue introduced them to."),
         outcome: z.enum(["met_again", "talked_again", "not_yet", "not_going_to"]).describe("What they said: they met up again, talked again (call, text, email), haven't yet, or don't plan to."),
         note: z.string().optional().describe("Their words, briefly."),
         metOn: z.string().optional().describe("When they met or talked, as YYYY-MM-DD, only if they said (\"last Tuesday\" with today's date). Leave it out otherwise."),
@@ -1399,10 +1399,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const SC = await import("../services/secondContact.js");
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was recorded." };
         const pick = SC.pickIntro(await SC.introducedTo(ctx.userId).catch(() => []), person);
-        if (pick === "ambiguous") return { ok: false, error: `More than one person Co introduced them to is called ${person}. Ask which one, then try again.` };
+        if (pick === "ambiguous") return { ok: false, error: `More than one person Cue introduced them to is called ${person}. Ask which one, then try again.` };
         if (!pick) {
-          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Co introduced them to.`);
-          return { ok: false, error: "That isn't someone Co introduced them to (only Co's own introductions count)." };
+          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue introduced them to.`);
+          return { ok: false, error: "That isn't someone Cue introduced them to (only Cue's own introductions count)." };
         }
         await SC.recordSecondContact(ctx.userId, pick, outcome, note ?? null, new Date(), metOn ?? null);
         ctx.facts?.add("did_this_turn", `Noted that they ${outcome === "met_again" ? "saw" : outcome === "talked_again" ? "talked with" : outcome === "not_yet" ? "haven't seen" : "don't plan to see"} ${pick.firstName} again.`);
@@ -1416,7 +1416,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     noteRoomMeeting: tool({
       description: toolUse("noteRoomMeeting"),
       inputSchema: z.object({
-        person: z.string().describe("The first name of someone Co pointed them to or introduced them to at a Co event."),
+        person: z.string().describe("The first name of someone Cue pointed them to or introduced them to at a Cue event."),
         outcome: z.enum(["met_good", "met_fine", "met_not_a_fit", "did_not_meet"]).describe("They met and it was worth it, met and it was fine, met and it wasn't a fit, or didn't meet."),
         note: z.string().optional().describe("Their words, briefly."),
       }),
@@ -1426,13 +1426,13 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const wanted = person.trim().toLowerCase().split(/\s+/)[0] ?? "";
         const told = (await RM.pairsToldAbout(ctx.userId).catch(() => [])).filter((p) => p.firstName.toLowerCase() === wanted);
         const people = [...new Set(told.map((p) => p.otherId))];
-        if (people.length > 1) return { ok: false, error: `More than one person Co pointed them to is called ${person}. Ask which one, then try again.` };
+        if (people.length > 1) return { ok: false, error: `More than one person Cue pointed them to is called ${person}. Ask which one, then try again.` };
         if (!told.length) {
-          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Co pointed them to at a Co event.`);
-          return { ok: false, error: "That isn't someone Co pointed them to at a Co event (only Co's own suggestions count)." };
+          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue pointed them to at a Cue event.`);
+          return { ok: false, error: "That isn't someone Cue pointed them to at a Cue event (only Cue's own suggestions count)." };
         }
         await RM.notePairMet(ctx.userId, told[0].pairId, outcome, note ?? null);
-        ctx.facts?.add("did_this_turn", `Noted how meeting ${told[0].firstName} went for them, so Co's next introductions learn from it.`);
+        ctx.facts?.add("did_this_turn", `Noted how meeting ${told[0].firstName} went for them, so Cue's next introductions learn from it.`);
         return { ok: true };
       },
     }),
@@ -1443,7 +1443,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     closeAsk: tool({
       description: toolUse("closeAsk"),
       inputSchema: z.object({
-        ask: z.string().describe("The ask to close, as it appears in what Co has on file for them (listOpenAsks)."),
+        ask: z.string().describe("The ask to close, as it appears in what Cue has on file for them (listOpenAsks)."),
         reason: z.string().describe("Why, in a few words: done, found it, no longer wanted, replaced by a newer ask."),
       }),
       execute: async ({ ask, reason }) => {
@@ -1460,8 +1460,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`No ask was closed: "${ask.slice(0, 80)}" didn't match exactly one open ask.`);
           return { ok: false, error: hits.length ? "That matches more than one open ask. Check listOpenAsks and use the exact one." : "That isn't one of their open asks. Check listOpenAsks first." };
         }
-        await closeAsk(ctx.userId, hits[0].id as string, `closed by Co: ${reason}`);
-        ctx.facts?.add("did_this_turn", `Closed their ask "${hits[0].text}" (${reason.slice(0, 80)}). Co stops looking for it.`);
+        await closeAsk(ctx.userId, hits[0].id as string, `closed by Cue: ${reason}`);
+        ctx.facts?.add("did_this_turn", `Closed their ask "${hits[0].text}" (${reason.slice(0, 80)}). Cue stops looking for it.`);
         return { ok: true, closed: hits[0].text };
       },
     }),
@@ -1486,11 +1486,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const offering = asks.filter((a) => a.type === "offering");
         const line = (a: (typeof asks)[number]) => `"${a.text}"${a.openSince ? ` (since ${a.openSince})` : ""}`;
         const parts = [
-          seeking.length ? `Looking out for them: ${seeking.map(line).join("; ")}.` : "Nothing open that Co is looking out for on their behalf.",
-          offering.length ? `What they've offered to others, which Co matches to people who want it: ${offering.map(line).join("; ")}.` : null,
-          avoid.length ? `Kinds of things they asked Co to stop suggesting: ${avoid.map((a) => `"${a}"`).join(", ")}.` : null,
+          seeking.length ? `Looking out for them: ${seeking.map(line).join("; ")}.` : "Nothing open that Cue is looking out for on their behalf.",
+          offering.length ? `What they've offered to others, which Cue matches to people who want it: ${offering.map(line).join("; ")}.` : null,
+          avoid.length ? `Kinds of things they asked Cue to stop suggesting: ${avoid.map((a) => `"${a}"`).join(", ")}.` : null,
         ].filter(Boolean);
-        ctx.facts?.add("known", `What Co currently has on file for them, the real complete list. ${parts.join(" ")} Never add, drop, or invent anything beyond this.`);
+        ctx.facts?.add("known", `What Cue currently has on file for them, the real complete list. ${parts.join(" ")} Never add, drop, or invent anything beyond this.`);
         return { ok: true, asks, avoid };
       },
     }),
@@ -1525,7 +1525,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         ctx.facts?.add(
           "did_this_turn",
-          undo ? `Co will suggest "${k}" again when something fits.` : `Co will stop suggesting "${k}" in every search and sweep from now on, until they say otherwise.`,
+          undo ? `Cue will suggest "${k}" again when something fits.` : `Cue will stop suggesting "${k}" in every search and sweep from now on, until they say otherwise.`,
         );
         return { ok: true };
       },
@@ -1544,14 +1544,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const cutoff = Date.now() - 30 * 86_400_000;
         const items = (ctx.turn?.sent ?? (await sentItems(ctx.userId))).filter((x) => x.sentAt.getTime() > cutoff).slice(0, 15);
         if (!items.length) {
-          ctx.facts?.add("known", "Co hasn't sent them any events or opportunities in the last 30 days.");
+          ctx.facts?.add("known", "Cue hasn't sent them any events or opportunities in the last 30 days.");
           return { ok: true, sent: [] };
         }
         const fmt = await memberDate(ctx.userId);
         const sent = items.map((r) => ({ name: r.name, kind: r.kind, link: r.url, sentOn: fmt(r.sentAt), reaction: r.reaction }));
         ctx.facts?.add(
           "known",
-          `What Co actually sent them in the last 30 days, newest first, the real complete list: ${sent
+          `What Cue actually sent them in the last 30 days, newest first, the real complete list: ${sent
             .map((x) => `"${x.name}"${x.link ? `, link ${x.link}` : ""}${x.sentOn ? `, sent ${x.sentOn}` : ""}${x.reaction ? `, they said: ${x.reaction.replace(/_/g, " ")}` : ""}`)
             .join("; ")}. Never add, drop, or invent anything beyond this list.`,
         );
@@ -1616,7 +1616,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // same answer too (no one is contacted).
           return {
             ok: true,
-            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list, and don't say whether you found them.",
+            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Cue member, or was on the guest list, and don't say whether you found them.",
           };
         }
         const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
@@ -1643,11 +1643,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // them whether the person is a Co member (see the note above).
         ctx.facts?.add(
           "did_this_turn",
-          `Co will check with the person they named whether they're open to an intro, only if that's someone Co knows from that event. Nothing happens unless both say yes. Don't confirm whether Co knows the person.`,
+          `Cue will check with the person they named whether they're open to an intro, only if that's someone Cue knows from that event. Nothing happens unless both say yes. Don't confirm whether Cue knows the person.`,
         );
         return {
           ok: true,
-          note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Co member, or was on the guest list.",
+          note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Cue member, or was on the guest list.",
         };
       },
     }),
@@ -1697,7 +1697,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           if (!relay.isOwnWords(message, [ctx.resolvedContent])) return { ok: false, error: "Only their own words can be passed along. Ask them exactly what they want sent, then pass that." };
           const found = relay.matchConnection(person, await relay.connectionsFor(ctx.userId).catch(() => []));
           if (!found.ok) {
-            notDone("No message was passed along: Co can't reach that person.");
+            notDone("No message was passed along: Cue can't reach that person.");
             return { ok: false, error: relay.NOT_REACHABLE };
           }
           ctx.facts?.add("did_this_turn", `(dry run) Would pass their words to ${found.person.firstName}: "${message.slice(0, 160)}".`);
@@ -1705,7 +1705,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const r = await relay.relayMessage({ fromUserId: ctx.userId, fromFirstName: ctx.firstName ?? "A member", to: person, message, currentText: ctx.resolvedContent });
         if (!r.ok) {
-          notDone(r.reason === "not_reachable" ? "No message was passed along: Co can't reach that person." : `No message was passed along (${r.reason}).`);
+          notDone(r.reason === "not_reachable" ? "No message was passed along: Cue can't reach that person." : `No message was passed along (${r.reason}).`);
           return { ok: false, error: r.error };
         }
         ctx.facts?.add("did_this_turn", r.queued ? `Queued their words for ${r.to}: "${message.slice(0, 200)}". ${r.note}` : `Passed their words to ${r.to}: "${message.slice(0, 200)}". ${r.note}`);

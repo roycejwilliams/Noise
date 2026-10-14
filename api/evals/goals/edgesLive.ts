@@ -8,8 +8,8 @@ const goals = [
   "pivoting to a partnership with Sequin AI after canceling the October launch date",
   "partnering with Sequin AI for a November launch party",
   "build alignment with Sequin AI for event partnership",
-  "have Co draft planning docs for branding and launch strategy with Sequin AI",
-  "maintain Co's presence after the November event",
+  "have Cue draft planning docs for branding and launch strategy with Sequin AI",
+  "maintain Cue's presence after the November event",
   "find a builder or founder community in SF",
 ];
 const logs: any[] = [];
@@ -22,7 +22,7 @@ for (const e of p.active) console.log(`  ${e.kind.padEnd(8)} ${e.goal.slice(0, 6
 for (const x of p.passed) console.log(`  passed   ${x.goal.slice(0, 60)}  (${x.why})`);
 console.log(`  search: ${p.searchText}`);
 check("never a goal's own words in the search", !!p.searchText && !goals.some((g) => p.searchText!.toLowerCase().includes(g.toLowerCase())), p.searchText);
-check("Co's own tasks are co_task", [...p.active, ...p.passed.map((x) => ({ goal: x.goal, kind: x.why.split(":")[0] }))].filter((e: any) => /have Co draft|maintain Co's/.test(e.goal)).every((e: any) => e.kind === "co_task"));
+check("Cue's own tasks are co_task", [...p.active, ...p.passed.map((x) => ({ goal: x.goal, kind: x.why.split(":")[0] }))].filter((e: any) => /have Cue draft|maintain Cue's/.test(e.goal)).every((e: any) => e.kind === "co_task"));
 check("the findable goal has a findable edge", p.active.some((e) => /builder or founder community/.test(e.goal)));
 console.log(`goal edges (live): ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

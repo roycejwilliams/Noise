@@ -71,11 +71,11 @@ const moved = (facts: { kind: string; text: string }[]) => facts.some((f) => f.k
 
 // ---- 1. the rules
 check("a task becomes a lookout only on their own words", L.ruleFor("task", "lookout") === "their_words");
-check("task to goal, goal to lookout and lookout to goal are Co's to propose and theirs to confirm", (["task>goal", "goal>lookout", "lookout>goal"] as const).every((m) => L.ruleFor(m.split(">")[0] as any, m.split(">")[1] as any) === "confirmed"));
+check("task to goal, goal to lookout and lookout to goal are Cue's to propose and theirs to confirm", (["task>goal", "goal>lookout", "lookout>goal"] as const).every((m) => L.ruleFor(m.split(">")[0] as any, m.split(">")[1] as any) === "confirmed"));
 check("nothing else moves: no lookout or goal back into tasks, nothing into or out of interests", [["lookout", "task"], ["goal", "task"], ["goal", "interest"], ["task", "interest"], ["interest", "goal"], ["interest", "lookout"]].every(([f, t]) => L.ruleFor(f as any, t as any) === null));
 const ability = ABILITIES.find((a) => a.tool === "moveLane");
 check("moveLane is in the registry and needs their own yes in this message", !!ability && ability.confirm === "their_yes" && !!ability.limits?.perTurn);
-check("what Co reads about moving lanes has no em dash or exclamation point and no role noun", !!ability && !/[—–!]/.test(`${ability.can} ${ability.use}`) && !/\b(assistant|matchmaker|concierge|coach|secretary)\b/i.test(`${ability.can} ${ability.use}`));
+check("what Cue reads about moving lanes has no em dash or exclamation point and no role noun", !!ability && !/[—–!]/.test(`${ability.can} ${ability.use}`) && !/\b(assistant|matchmaker|concierge|coach|secretary)\b/i.test(`${ability.can} ${ability.use}`));
 
 // ---- 2. no yes, no move, no line
 {
@@ -88,11 +88,11 @@ check("what Co reads about moving lanes has no em dash or exclamation point and 
   const madeUp = await tools.moveLane.execute({ item: "jazz nights in SF", from: "goal", to: "lookout", label: "the jazz nights", theirYes: "yes move it" }, {});
   console.log = quiet;
   check("a quote that isn't in their message moves nothing", none.ok === false && madeUp.ok === false, [none, madeUp]);
-  check("…and Co is told to quote again, not to ask them again", /Quote only the words in their message that say yes/.test(madeUp.error) && !/ask them/i.test(madeUp.error), madeUp);
+  check("…and Cue is told to quote again, not to ask them again", /Quote only the words in their message that say yes/.test(madeUp.error) && !/ask them/i.test(madeUp.error), madeUp);
   check("…without a model read (the fact comes first)", reads.length === 0);
   check("…the store is untouched", f.writes.length === 0 && f.lanes.goal.length === 1 && f.lanes.lookout.length === 1, f.writes);
   check("…and no line waits for the reply, and no move is claimed", state.laneNotes.length === 0 && !moved(facts));
-  const direct = await L.moveLane({ userId: "u", from: "goal", to: "lookout", item: "jazz nights in SF", theirYes: "yes", message: "not now", recent: `Co: ${OFFER}` }, f.store);
+  const direct = await L.moveLane({ userId: "u", from: "goal", to: "lookout", item: "jazz nights in SF", theirYes: "yes", message: "not now", recent: `Cue: ${OFFER}` }, f.store);
   check("the module holds it too: a yes that isn't in their message moves nothing", direct.ok === false && f.writes.length === 0);
   // The quote is theirs, but the read says it isn't a yes to this (review, 2026-10-13): the judge decides, nothing moves.
   verdict = async () => ({ yes: false, why: "they're unsure", read: true });
@@ -103,7 +103,7 @@ check("what Co reads about moving lanes has no em dash or exclamation point and 
     console.log = quiet;
     check(`the read says "${msg}" isn't a yes, so nothing moves`, r.ok === false && /doesn't read as a yes/.test(r.error) && f.writes.length === 0 && s2.laneNotes.length === 0, r);
   }
-  check("…the read sees the offer, their message and the ability", reads.length === 3 && reads[0].recent === `Co: ${OFFER}` && reads[0].message === "not sure, let me think" && /tasks, lookouts and goals/.test(reads[0].ability), reads[0]);
+  check("…the read sees the offer, their message and the ability", reads.length === 3 && reads[0].recent === `Cue: ${OFFER}` && reads[0].message === "not sure, let me think" && /tasks, lookouts and goals/.test(reads[0].ability), reads[0]);
   // A read that failed, or came back unreadable, is not a yes.
   verdict = async () => { throw new Error("timeout"); };
   {
@@ -128,23 +128,23 @@ check("what Co reads about moving lanes has no em dash or exclamation point and 
 check("the quote fact takes whole words", yesIsTheirs("yes please", "Yes please! do it") && yesIsTheirs("go ahead", "no problem, go ahead") && !yesIsTheirs("ok", "booking it") && !yesIsTheirs("no", "I know") && !yesIsTheirs("", "yes"));
 check("…and leaves intent to the read: no negation words decide anything in code", yesIsTheirs("Yes", "Yes! Can't wait") && yesIsTheirs("why not", "why not") && yesIsTheirs("yes", "yes, don't wait for me") && !/DECLINES|BARE_NO|NEGATIONS/.test(src("services/theirYes.ts")));
 check("the read is one short Haiku call, only from the tool guard", /MODELS\.haiku/.test(src("services/theirYes.ts")) && /confirmYes\(/.test(src("agent/toolGuard.ts")) && !/confirmYes|judgeYes/.test(src("agent/conversationReply.ts")));
-check("offersMove reads Co's question about this move only", L.offersMove(`Co: ${OFFER}`, "lookout", "jazz nights in SF") && !L.offersMove(`Co: ${OFFER}`, "goal", "founder runs in the Marina") && !L.offersMove("Co: I moved the jazz nights to your lookouts.", "lookout", "jazz nights in SF") && L.offersMove("Co: Should the venue search for the November dinner be one of your goals?", "goal", "find a venue for the November dinner"));
-check("…not one from further back than Co's turn before their previous message", !L.offersMove(`Co: ${OFFER}\nMember: hmm\nCo: ok\nMember: wait\nCo: sure thing`, "lookout", "jazz nights in SF"));
+check("offersMove reads Cue's question about this move only", L.offersMove(`Cue: ${OFFER}`, "lookout", "jazz nights in SF") && !L.offersMove(`Cue: ${OFFER}`, "goal", "founder runs in the Marina") && !L.offersMove("Cue: I moved the jazz nights to your lookouts.", "lookout", "jazz nights in SF") && L.offersMove("Cue: Should the venue search for the November dinner be one of your goals?", "goal", "find a venue for the November dinner"));
+check("…not one from further back than Cue's turn before their previous message", !L.offersMove(`Cue: ${OFFER}\nMember: hmm\nCue: ok\nMember: wait\nCue: sure thing`, "lookout", "jazz nights in SF"));
 
 // ---- the read sees the exchange, not Co's last line: a clarifying question in between, a link last, beats joined
 {
   const clarifying = Y.exchangeFromLog(["Co replied: Want me to keep the jazz nights as a lookout instead of a goal?", "User said: What's the difference?", "Co replied: A lookout means I watch and text you when one comes up.", "Co replied: A goal just shapes what I look for.", "User said: ok yes do it"].join("\n"));
   const linkLast = Y.exchangeFromLog(["User said: anything Friday?", "Co replied: Here's the Friday one.", "Co replied: And want me to keep the jazz nights as a lookout instead of a goal?", "Co replied: https://lu.ma/jazz-fri"].join("\n"));
   const intro = Y.exchangeFromLog(["Co replied: Want an intro to Maya?", "User said: Who is she?", "Co replied: She runs the founders dinner at Linden."].join("\n"));
-  check("the clarifying flow keeps the offer in view", /Co: Want me to keep the jazz nights as a lookout/.test(clarifying) && /Member: What's the difference\?/.test(clarifying) && /lookout means I watch .* \/ A goal just shapes/.test(clarifying), clarifying);
-  check("…the link-last flow too, the link shown as a link and the beats joined", /Co: Here's the Friday one\. \/ And want me to keep the jazz nights .* \/ \[link: https:\/\/lu\.ma\/jazz-fri\]$/.test(linkLast), linkLast);
-  check("…and the intro offer behind a question back", /Co: Want an intro to Maya\?\nMember: Who is she\?\nCo: She runs the founders dinner/.test(intro), intro);
+  check("the clarifying flow keeps the offer in view", /Cue: Want me to keep the jazz nights as a lookout/.test(clarifying) && /Member: What's the difference\?/.test(clarifying) && /lookout means I watch .* \/ A goal just shapes/.test(clarifying), clarifying);
+  check("…the link-last flow too, the link shown as a link and the beats joined", /Cue: Here's the Friday one\. \/ And want me to keep the jazz nights .* \/ \[link: https:\/\/lu\.ma\/jazz-fri\]$/.test(linkLast), linkLast);
+  check("…and the intro offer behind a question back", /Cue: Want an intro to Maya\?\nMember: Who is she\?\nCue: She runs the founders dinner/.test(intro), intro);
   check("offersMove finds the offer in both", L.offersMove(clarifying, "lookout", "jazz nights in SF") && L.offersMove(linkLast, "lookout", "jazz nights in SF"));
   // As production has it: the thread already ends with their current message (fourth review: the offer was lost behind it).
   const linkLastLive = Y.exchangeFromLog(["User said: anything Friday?", "Co replied: Here's the Friday one.", "Co replied: And want me to keep the jazz nights as a lookout instead of a goal?", "Co replied: https://lu.ma/jazz-fri", "User said: yes"].join("\n"));
   check("…and with their current message already at the end of the thread", /Member: ok yes do it$/.test(clarifying) && L.offersMove(clarifying, "lookout", "jazz nights in SF") && L.offersMove(linkLastLive, "lookout", "jazz nights in SF"));
   const memo = Y.turnsFromLog(["Co replied: Sounds fun.", "User sent a voice memo: I'm thinking about jazz", "Co replied: Want me to keep the jazz nights as a lookout instead of a goal?"].join("\n"));
-  check("a voice memo reads as theirs, not glued onto Co's line", memo.length === 3 && memo[1].side === "member" && /thinking about jazz/.test(memo[1].text) && !/thinking about jazz/.test(memo[0].text));
+  check("a voice memo reads as theirs, not glued onto Cue's line", memo.length === 3 && memo[1].side === "member" && /thinking about jazz/.test(memo[1].text) && !/thinking about jazz/.test(memo[0].text));
   check("the window is capped", Y.exchangeText(Array.from({ length: 40 }, (_, i) => ({ side: i % 2 ? "member" : "co", text: "x".repeat(300) } as const))).length <= Y.EXCHANGE_LIMITS.chars + 1);
   for (const [name, recent] of [["clarifying", clarifying], ["link last", linkLast]] as const) {
     const f = fakeStore();
@@ -159,7 +159,7 @@ check("…not one from further back than Co's turn before their previous message
   }
   const cr = src("agent/conversationReply.ts");
   check("texts and calls both hand the read the exchange", /recentExchange: exchangeFromLog\(input\.recentConversation\)/.test(cr) && /recentExchange: exchangeText\(msgs\.slice\(0, i\)/.test(src("routes/callLlm.ts")) && /recent: ctx\.recentExchange/.test(src("agent/toolGuard.ts")));
-  check("the read asks whether Co offered this action in the exchange", /did Co offer THIS action/.test(Y.yesPrompt({ recent: clarifying, message: "ok yes", ability: "x" })) && /If no offer of this action appears in the exchange, no\./.test(Y.yesPrompt({ recent: "", message: "", ability: "" })));
+  check("the read asks whether Cue offered this action in the exchange", /did Cue offer THIS action/.test(Y.yesPrompt({ recent: clarifying, message: "ok yes", ability: "x" })) && /If no offer of this action appears in the exchange, no\./.test(Y.yesPrompt({ recent: "", message: "", ability: "" })));
 }
 
 // ---- 3. with their yes: it moves, it's logged, and the reply carries the line exactly once
@@ -183,7 +183,7 @@ check("…not one from further back than Co's turn before their previous message
   console.log = quiet;
   const all = state.sentMessages.join("\n");
   check("the reply carries the line, once, in a text that was going anyway", count(state.sentMessages[0], line) === 1 && /^Done, I'll keep watching for those\. Moved the jazz nights from goals to lookouts\./.test(state.sentMessages[0]), state.sentMessages);
-  check("…never a second time this turn, even when Co writes it again", count(all, line) === 1 && state.sentMessages.length === 2 && /Talk soon/.test(state.sentMessages[1]), state.sentMessages);
+  check("…never a second time this turn, even when Cue writes it again", count(all, line) === 1 && state.sentMessages.length === 2 && /Talk soon/.test(state.sentMessages[1]), state.sentMessages);
   check("…and it's marked said", state.laneNotes.length === 0 && state.laneNotesSent.length === 1);
   check("the line has no em dash or exclamation point", !/[—–!]/.test(line));
   L.setLaneStoreForTests(null);
@@ -201,9 +201,9 @@ check("…not one from further back than Co's turn before their previous message
   check("task to lookout through moveLane is refused even with a yes", r.ok === false && /only on their own words/.test(r.error), r);
   check("…nothing moved and no line waits", f.writes.length === 0 && state.laneNotes.length === 0);
   check("…the refusal is logged", f.logs.some((d) => d.action === "refused_their_words_only"));
-  const back = await L.moveLane({ userId: "u", from: "lookout", to: "task", item: "founder runs in the Marina", theirYes: "yes", message: "yes", recent: "Co: Want me to make the founder runs a task?" }, f.store);
+  const back = await L.moveLane({ userId: "u", from: "lookout", to: "task", item: "founder runs in the Marina", theirYes: "yes", message: "yes", recent: "Cue: Want me to make the founder runs a task?" }, f.store);
   check("a lookout never goes back into tasks", back.ok === false && f.writes.length === 0);
-  const goalToTask = await L.moveLane({ userId: "u", from: "task", to: "goal", item: "task #12", theirYes: "sure", message: "sure, that's really a goal", recent: "Co: Should the venue for the November dinner be one of your goals instead?" }, f.store);
+  const goalToTask = await L.moveLane({ userId: "u", from: "task", to: "goal", item: "task #12", theirYes: "sure", message: "sure, that's really a goal", recent: "Cue: Should the venue for the November dinner be one of your goals instead?" }, f.store);
   check("task to goal works on a yes, by its task number", goalToTask.ok === true && goalToTask.note === "moved find a venue for the November dinner from tasks to goals" && f.lanes.task.length === 0, goalToTask);
   L.setLaneStoreForTests(null);
 }
@@ -237,11 +237,11 @@ check("a pending line lets one reply through after a link", /if \(!answers && !s
 
 // ---- the line itself
 check("the line is clean: no quotes, dashes or exclamation points", L.laneNote(`the "jazz" nights — Fridays!`, "goal", "lookout") === "moved the jazz nights, Fridays from goals to lookouts");
-check("Co's label is used only when it names the same thing", L.noteLabel("the jazz nights", "jazz nights in SF") === "the jazz nights" && L.noteLabel("your big plan", "jazz nights in SF") === "jazz nights in SF");
+check("Cue's label is used only when it names the same thing", L.noteLabel("the jazz nights", "jazz nights in SF") === "the jazz nights" && L.noteLabel("your big plan", "jazz nights in SF") === "jazz nights in SF");
 {
   const line = "moved the jazz nights from goals to lookouts";
   const twice = L.carryLaneNotes("Moved the jazz nights from goals to lookouts. Done.\n\nmoved the jazz nights from goals to lookouts.", [line]);
-  check("a line Co wrote twice goes out once", count(twice.text, line) === 1 && twice.carried.length === 1, twice);
+  check("a line Cue wrote twice goes out once", count(twice.text, line) === 1 && twice.carried.length === 1, twice);
   const q = L.carryLaneNotes("Want anything else?", [line]);
   check("in a reply that's only a question, the line leads", q.text === "Moved the jazz nights from goals to lookouts. Want anything else?", q);
   check("nothing pending, nothing added", L.carryLaneNotes("Sounds good.", []).text === "Sounds good.");
@@ -285,7 +285,7 @@ check("any other ask still gets the kind it's read as", L.askKindAfter({ kind: "
   check("…gives a never-read lookout find, without a model call", by(2).kind === "find" && !asked.includes(by(2).ask_text), { row: by(2), asked });
   check("…still classifies everything else", by(3).kind === "help");
   // Royce, 2026-10-13: an already-classified find ask that reads as Co's own work isn't switched off either (status-check lane).
-  check("…and never moves a lookout that reads like Co's own promise to help, nor an already-read ask (the search keeps running)", by(4).kind === "find" && by(5).kind === "find", [by(4), by(5)]);
+  check("…and never moves a lookout that reads like Cue's own promise to help, nor an already-read ask (the search keeps running)", by(4).kind === "find" && by(5).kind === "find", [by(4), by(5)]);
   check("every kind write is guarded on the row it read", sqls.filter((q) => /UPDATE ask_checkins/.test(q)).every((q) => /intent IS NOT DISTINCT FROM \$6/.test(q)));
 }
 {
@@ -335,7 +335,7 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
   check("a lookout without their watch words never restates one of their tasks", L.lookoutRestatesTask("watch for jazz nights in SF", ["find jazz nights in SF"]) === "find jazz nights in SF" && L.lookoutRestatesTask("founder runs in the Marina", [task]) === null);
   check("…paraphrases included", L.lookoutRestatesTask("keep an eye out for venues for the November dinner", [task]) === task && L.lookoutRestatesTask("watch for November dinner venues", [task]) === task);
   const ct = src("agent/conversationTools.ts");
-  check("…held in startTask unless their own message asks to watch; a yes to Co's watch offer doesn't exempt it; open asks count", /if \(lookout && !\(T\.WATCH_ASK\.test\(ctx\.resolvedContent\) && T\.wordsAreTheirs\(theirWords, ctx\.resolvedContent\)\)\)/.test(ct) && /intent IS DISTINCT FROM 'lookout'/.test(ct.slice(ct.indexOf("if (lookout && !(T.WATCH_ASK"), ct.indexOf("lookoutRestatesTask(goal")) ) && /lookoutRestatesTask\(goal, \[\.\.\.state\.closedTaskGoals, \.\.\.open\]\)/.test(ct));
+  check("…held in startTask unless their own message asks to watch; a yes to Cue's watch offer doesn't exempt it; open asks count", /if \(lookout && !\(T\.WATCH_ASK\.test\(ctx\.resolvedContent\) && T\.wordsAreTheirs\(theirWords, ctx\.resolvedContent\)\)\)/.test(ct) && /intent IS DISTINCT FROM 'lookout'/.test(ct.slice(ct.indexOf("if (lookout && !(T.WATCH_ASK"), ct.indexOf("lookoutRestatesTask(goal")) ) && /lookoutRestatesTask\(goal, \[\.\.\.state\.closedTaskGoals, \.\.\.open\]\)/.test(ct));
 }
 {
   const lm = src("services/laneMoves.ts");
@@ -352,7 +352,7 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
   const now = new Date("2026-10-13T20:00:00Z");
   const played = D.settleFromJudgment(p, { playedBack: true, promisedFollowUp: false, when: null, latestBy: null }, 0, now);
   const nothing = D.settleFromJudgment(p, { playedBack: false, promisedFollowUp: false, when: null, latestBy: null }, 0, now);
-  check("a first read whose text promised nothing withdraws the look (it used to become Co's own lookout)", played.task.kind === "withdraw" && played.given === true, played);
+  check("a first read whose text promised nothing withdraws the look (it used to become Cue's own lookout)", played.task.kind === "withdraw" && played.given === true, played);
   check("…and one that said nothing at all withdraws it too", nothing.task.kind === "withdraw", nothing);
   check("…withdrawn on the ledger, never missed: it was never said", C.outcomeOf("dropped", D.FIRST_LOOK_WITHDRAWN, [], { source: "promise" }) === "withdrawn");
   const dr = src("services/theDoor.ts");
@@ -360,7 +360,7 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
   check("…closed as dropped with that wording, so nothing searches, paces or sends for it", /if \(d\.task\.kind === "withdraw"\)[\s\S]{0,300}closeTask\(userId, id, "dropped", FIRST_LOOK_WITHDRAWN\)/.test(settle) && !/source\s*=|laneMoves|lookoutFrom/.test(settle), settle.slice(0, 400));
   const promised = D.settleFromJudgment(p, { playedBack: true, promisedFollowUp: true, when: "by 6pm", latestBy: "2026-10-14T01:00:00.000Z" }, 0, now);
   const sooner = D.settleFromJudgment(p, { playedBack: true, promisedFollowUp: true, when: "tonight", latestBy: "2026-10-13T23:00:00.000Z" }, 0, now);
-  check("a first read that carried a promise stays Co's promise (kept, or moved to the time it said)", promised.task.kind === "keep" && sooner.task.kind === "move", [promised, sooner]);
+  check("a first read that carried a promise stays Cue's promise (kept, or moved to the time it said)", promised.task.kind === "keep" && sooner.task.kind === "move", [promised, sooner]);
   check("…the look starts as a promise task, never a lookout", /startTask\(\{[^}]*source: "promise" \}\)/.test(dr.slice(dr.indexOf("export async function giveFirstRead"), dr.indexOf("export type FirstLookRow"))));
   // Their own "keep an eye out for X" in that first message: a lookout the same way as any ask, by the intent split from their words.
   const writes: any[][] = [];
@@ -393,8 +393,8 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
   check("…and the dynamic writers are still only the reviewed ones", files.filter(({ c }) => /UPDATE co_profiles SET \$\{/.test(c)).map((x) => x.f).sort().join(",") === "routes/co.ts,services/whatCoKnows.ts", files.filter(({ c }) => /UPDATE co_profiles SET \$\{/.test(c)).map((x) => x.f));
   // A new lookout task: only from these, each a new lookout, never a task changing lane.
   const LOOKOUT_STARTERS: Record<string, string> = {
-    "agent/conversationTools.ts": "startTask on their own watch words, or Co's own lookout, which never restates a task (lookoutRestatesTask)",
-    "harness/callGrounding.ts": "a lookout Co promised on a call: new, from the call, not from a task",
+    "agent/conversationTools.ts": "startTask on their own watch words, or Cue's own lookout, which never restates a task (lookoutRestatesTask)",
+    "harness/callGrounding.ts": "a lookout Cue promised on a call: new, from the call, not from a task",
     "services/goalOwnership.ts": "a goal's watch piece the member picked (pickGoalItems, their yes)",
     "services/coTasks.ts": "reads a row's source; writes none",
   };
@@ -432,7 +432,7 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
   const stateWriters = files.filter(({ c }) => /INSERT\s+INTO\s+goal_states|DELETE\s+FROM\s+goal_states|setGoalState\(/.test(c) || sets(c, "goal_states").some((x) => /\bstate\s*=/.test(x))).map((x) => x.f).sort();
   check("goal states change only through the reviewed writers", stateWriters.join(",") === Object.keys(GOAL_STATE_WRITERS).sort().join(","), stateWriters);
   check("the intent split writes through laneMoves.ts", /settleAskIntent\(String\(x\.row\.id\), intent, why\)/.test(src("services/askLifecycle.ts")));
-  check("the door no longer paces a first look as Co's own lookout", !/paceDoorLook|co_initiated/.test(src("services/theDoor.ts")) && !/paceDoorLook/.test(src("services/laneMoves.ts")));
+  check("the door no longer paces a first look as Cue's own lookout", !/paceDoorLook|co_initiated/.test(src("services/theDoor.ts")) && !/paceDoorLook/.test(src("services/laneMoves.ts")));
 }
 
 console.log(`lane moves: ${total - failed}/${total} passed`);

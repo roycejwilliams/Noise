@@ -112,14 +112,14 @@ const route = src("src/routes/sendblue.ts");
 check("a real text from them resets the unprompted count", /markRead\(lockKey\)[^\n]*\n[^\n]*\n\s+sendLimiter\.noteInbound\(lockKey\);/.test(route));
 const sb = src("src/services/sendblue.ts");
 check("a trip emails the team right away", /alertTeamNow\(\s*`send_breaker:/.test(sb));
-check("a trip leaves a note on the member for Co", /'send_held'/.test(sb));
+check("a trip leaves a note on the member for Cue", /'send_held'/.test(sb));
 const tools = src("src/agent/conversationTools.ts");
 check("sendReply stops when sends are held or failed twice", /sendLimiter\.blocked\(ctx\.phoneNumber\) \|\| state\.failedSends >= 2/.test(tools));
 const reply = src("src/agent/conversationReply.ts");
 check("the agent loop stops on a held send", /stopWhen: \[stepCountIs\(LOOP_BUDGET\.steps\), \(\) => state\.sendStopped[,\]]/.test(reply));
 check("no plain-text retry or fallback while held", (reply.match(/if \(!state\.sent && !state\.sendStopped\)/g) ?? []).length === 2);
 const grounding = src("src/harness/replyGrounding.ts");
-check("Co is told its texts were held, and not to deny it", /memory_type = 'send_held'/.test(grounding) && /Never deny it or give another reason/.test(grounding));
+check("Cue is told its texts were held, and not to deny it", /memory_type = 'send_held'/.test(grounding) && /Never deny it or give another reason/.test(grounding));
 
 // ---- the held note itself
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";

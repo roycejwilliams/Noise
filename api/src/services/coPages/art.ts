@@ -51,7 +51,7 @@ export function checkArtImage(v: unknown, field: string, problems: string[]): Ar
   if (v === undefined || v === null) return null;
   const o = v as Record<string, unknown>;
   if (!o || typeof o !== "object" || Array.isArray(o)) {
-    problems.push(`${field} must be a picture Co found`);
+    problems.push(`${field} must be a picture Cue found`);
     return null;
   }
   for (const k of Object.keys(o)) if (!["kind", "src", "alt", "credit", "creditUrl", "via", "placeId", "i", "place"].includes(k)) problems.push(`${field} has unknown field ${k}`);
@@ -63,7 +63,7 @@ export function checkArtImage(v: unknown, field: string, problems: string[]): Ar
     const place = text(o.place, 90);
     // Google's own data (a photo name, an author) is never kept with the artifact.
     if (!placeId || i === null || !place || !alt || o.src !== venueKey(placeId, i) || o.credit != null || o.creditUrl != null) {
-      problems.push(`${field} isn't a venue photo Co can show (only its place id and index are kept)`);
+      problems.push(`${field} isn't a venue photo Cue can show (only its place id and index are kept)`);
       return null;
     }
     return { kind: "venue", via: "google", src: venueKey(placeId, i), placeId, i, place, alt };
@@ -78,7 +78,7 @@ export function checkArtImage(v: unknown, field: string, problems: string[]): Ar
     } catch {}
   }
   if (o.kind !== "mood" || o.via !== "unsplash" || !UNSPLASH_IMG.test(src) || !alt || !credit || o.placeId != null || o.i != null) {
-    problems.push(`${field} isn't a picture Co can show (a venue photo by its place id, or a credited mood image)`);
+    problems.push(`${field} isn't a picture Cue can show (a venue photo by its place id, or a credited mood image)`);
     return null;
   }
   return { kind: "mood", via: "unsplash", src, alt, credit, creditUrl };
@@ -197,7 +197,7 @@ export function abstractCover(title: string, c: { ground: string; ink: string; a
   const cx = 120 + r(160), cy = 150 + r(200), rad = 110 + r(70);
   const bandY = 280 + r(120), tilt = -18 + r(36);
   const arcs = Array.from({ length: 4 }, (_, k) => `<circle cx="${(cx + 40).toFixed(0)}" cy="${(cy + 30).toFixed(0)}" r="${(rad + 34 + k * 26).toFixed(0)}" fill="none" stroke="${c.ink}" stroke-opacity="${(0.22 - k * 0.04).toFixed(2)}" stroke-width="1.5"/>`).join("");
-  return `<svg class="tplate" viewBox="0 0 400 500" role="img" aria-label="Abstract cover design by Co" data-art="design" preserveAspectRatio="xMidYMid slice" style="background:${c.ground}"><rect width="400" height="500" fill="${c.ground}"/><g transform="rotate(${tilt.toFixed(1)} 200 250)"><rect x="-60" y="${bandY.toFixed(0)}" width="520" height="${(60 + r(50)).toFixed(0)}" fill="${a2}" fill-opacity="0.85"/></g><circle cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" r="${rad.toFixed(0)}" fill="${c.accent}"/>${arcs}</svg><span class="credit design" data-qa-text="credit">${e("Cover design by Co, not a photo")}</span>`;
+  return `<svg class="tplate" viewBox="0 0 400 500" role="img" aria-label="Abstract cover design by Cue" data-art="design" preserveAspectRatio="xMidYMid slice" style="background:${c.ground}"><rect width="400" height="500" fill="${c.ground}"/><g transform="rotate(${tilt.toFixed(1)} 200 250)"><rect x="-60" y="${bandY.toFixed(0)}" width="520" height="${(60 + r(50)).toFixed(0)}" fill="${a2}" fill-opacity="0.85"/></g><circle cx="${cx.toFixed(0)}" cy="${cy.toFixed(0)}" r="${rad.toFixed(0)}" fill="${c.accent}"/>${arcs}</svg><span class="credit design" data-qa-text="credit">${e("Cover design by Cue, not a photo")}</span>`;
 }
 
 // ---------------------------------------------------------------- slide layouts per grammar

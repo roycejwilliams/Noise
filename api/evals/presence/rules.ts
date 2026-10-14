@@ -69,7 +69,7 @@ const ask = P.arrivalAskText(ev, true);
 check("ask: names the night, the event and the place", ask.startsWith("Tonight: Founders Supper at The Battery."));
 check("ask: offers both ways, location or 'I'm here'", /share your location with me until the end of the day/.test(ask) && /"I'm here"/.test(ask));
 check("ask: no location offer when the venue has no coordinates", !/location/.test(P.arrivalAskText(ev, false)) && /"I'm here"/.test(P.arrivalAskText(ev, false)));
-check("ask: survives Co's send cleanup and has no em dashes", cleanCoMessage(ask) === ask && !/[—–]/.test(ask));
+check("ask: survives Cue's send cleanup and has no em dashes", cleanCoMessage(ask) === ask && !/[—–]/.test(ask));
 check("ask: a daytime event says Today", P.arrivalAskText({ ...ev, start_at: "2026-09-23T19:00:00Z" }, true).startsWith("Today:"));
 
 // ---------------------------------------------------------------- the nudge hold
@@ -109,7 +109,7 @@ const sb = src("src/routes/sendblue.ts");
 // Arrival is Co's call now (conversationTools.ts markArrived, 2026-09-25):
 // members only (the reply agent only runs for members), and it re-scores.
 check("saying they've arrived marks arrival and re-scores", /markArrived: tool\(\{[\s\S]{0,900}recordTextArrival\(ctx\.userId\)[\s\S]{0,400}arrived\.isNew[\s\S]{0,80}scoreGuestListForEvent/.test(src("src/agent/conversationTools.ts")));
-check("no Co event on: nothing recorded, and Co doesn't welcome them", /no Co event of theirs on right now/.test(src("src/agent/conversationTools.ts")));
+check("no Cue event on: nothing recorded, and Cue doesn't welcome them", /no Cue event of theirs on right now/.test(src("src/agent/conversationTools.ts")));
 check("the reply welcomes them without naming anyone", /don't name anyone or promise a person here/.test(src("src/agent/conversationTools.ts")));
 {
   const geo = src("src/services/geocoding.ts");

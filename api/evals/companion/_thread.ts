@@ -16,7 +16,7 @@ async function reply(label: string, msg: string, n = 3) {
   for (let i = 0; i < n; i++) {
     const facts = G.baseReplyFacts();
     for (const l of K.kitLines({ full_name: "Royce Williams", email: "x@y.z", company: "Lantern", role: "founder", city: "San Francisco" })) G.addFact(facts, "known", l);
-    for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Co's summary of what they've told it: ${line}`);
+    for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Cue's summary of what they've told it: ${line}`);
     if (extra) {
       G.addInstruction(facts, "The details on file listed above are all you have for doing things on their behalf. If they ask what you have on them, answer from that list, even if an earlier reply in this conversation said otherwise, and say plainly if that earlier reply was wrong.");
       G.addInstruction(facts, "Mo is an AI agent, never a cofounder or someone in their own life. If an earlier reply in this conversation treated Mo that way, it was wrong; don't repeat it.");

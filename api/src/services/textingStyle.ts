@@ -16,17 +16,17 @@ import { recordDecision } from "../harness/core.js";
 export const MAX_NOTES = 6;
 
 export function styleLearningPrompt(current: string[], coSaid: string, theySaid: string): string {
-  return `Co is an AI companion that texts members. You keep a short list of how this member likes Co to text them.
+  return `Cue is an AI companion that texts members. You keep a short list of how this member likes Cue to text them.
 
 Current notes:
 ${current.length ? current.map((n) => `- ${n}`).join("\n") : "(none)"}
 
-Co's last message: "${coSaid.slice(0, 600)}"
+Cue's last message: "${coSaid.slice(0, 600)}"
 Their reply: "${theySaid.slice(0, 600)}"
 
-Only change the notes if their reply makes clear how they want Co to text them: length, directness, detail, questions, tone, emoji, timing, what to lead with (e.g. "just tell me", "shorter please", "stop asking so many questions", "more detail", "that's not what I need, focus on X"). A normal reply is not a preference. Never note anything about their life or plans here, only how Co should text them.
+Only change the notes if their reply makes clear how they want Cue to text them: length, directness, detail, questions, tone, emoji, timing, what to lead with (e.g. "just tell me", "shorter please", "stop asking so many questions", "more detail", "that's not what I need, focus on X"). A normal reply is not a preference. Never note anything about their life or plans here, only how Cue should text them.
 
-If something changes, return the full updated list (at most ${MAX_NOTES}, each a short instruction to Co, newest last; drop any older note the new one contradicts). Otherwise return {"changed": false}.
+If something changes, return the full updated list (at most ${MAX_NOTES}, each a short instruction to Cue, newest last; drop any older note the new one contradicts). Otherwise return {"changed": false}.
 
 Return ONLY JSON: {"changed": false} or {"changed": true, "notes": ["...", "..."]}`;
 }

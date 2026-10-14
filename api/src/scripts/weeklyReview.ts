@@ -23,7 +23,7 @@ async function main() {
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
-        prompt: `A Co decision was flagged: ${m.decision} ${m.action ?? ""} (${m.reason ?? ""}).\nConversation around it:\n${m.around.join("\n")}\n\nWhat went wrong for the person, in one sentence, and which eval should cover it (reply, router, proactive, matching, intro, emotion, capture, details, voice)? Suggest the eval case: the message, the recent conversation, and what must never reach the person.\nReturn ONLY JSON: {"whatWentWrong": "...", "eval": "...", "case": {"message": "...", "recentConversation": "...", "forbidden": ["regex"]}}`,
+        prompt: `A Cue decision was flagged: ${m.decision} ${m.action ?? ""} (${m.reason ?? ""}).\nConversation around it:\n${m.around.join("\n")}\n\nWhat went wrong for the person, in one sentence, and which eval should cover it (reply, router, proactive, matching, intro, emotion, capture, details, voice)? Suggest the eval case: the message, the recent conversation, and what must never reach the person.\nReturn ONLY JSON: {"whatWentWrong": "...", "eval": "...", "case": {"message": "...", "recentConversation": "...", "forbidden": ["regex"]}}`,
       });
       suggestion = parseModelJson(text);
     } catch {

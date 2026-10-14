@@ -28,14 +28,14 @@ async function reply(label: string, msg: string, runs = 3) {
   for (let i = 0; i < runs; i++) {
     const facts = G.baseReplyFacts();
     for (const l of K.kitLines({ full_name: "Royce Williams", email: "x@y.z", company: "Lantern", role: "founder", city: "San Francisco" })) G.addFact(facts, "known", l);
-    for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Co's summary of what they've told it: ${line}`);
+    for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Cue's summary of what they've told it: ${line}`);
     if (extra) {
       G.addInstruction(facts, "The details on file listed above are all you have for doing things on their behalf. If they ask what you have on them, answer from that list, even if an earlier reply in this conversation said otherwise, and say plainly if that earlier reply was wrong.");
       G.addInstruction(facts, "Mo is an AI agent, never a cofounder or someone in their own life. If an earlier reply in this conversation treated Mo that way, it was wrong; don't repeat it.");
     }
     if (process.env.EXTRA === "2") {
       G.addInstruction(facts, "The details on file listed above are all you have for doing things on their behalf. If they ask what you have on them, answer from that list, even if an earlier reply in this conversation said otherwise, and say plainly if that earlier reply was wrong.");
-      G.addInstruction(facts, "Their cofounder is Jacqueline. Mo is software that Co runs, not a person. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo, whatever an earlier reply in this conversation said.");
+      G.addInstruction(facts, "Their cofounder is Jacqueline. Mo is software that Cue runs, not a person. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo, whatever an earlier reply in this conversation said.");
     }
     const r = await runConversationReplyAgent({ userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Royce", resolvedContent: msg, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: conv, recentMemories: process.env.MEM === "1" ? "User said: what do you have on me for applications?\nCo replied: Just that you want help applying to X, no team or role picked yet, nothing drafted. That's it on file." : process.env.MEM === "2" ? "User said: what do you have on me for applications?" : "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true }, { dryRun: true, record: false });
     n++;
@@ -63,10 +63,10 @@ if (process.env.FRESH === "1") {
   for (const [kind, msg, ok] of fresh) for (let i = 0; i < 2; i++) {
     const facts = G.baseReplyFacts();
     for (const l of K.kitLines({ full_name: "Royce Williams", email: "x@y.z", company: "Lantern", role: "founder", city: "San Francisco" })) G.addFact(facts, "known", l);
-    for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Co's summary of what they've told it: ${line}`);
+    for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Cue's summary of what they've told it: ${line}`);
     if (process.env.EXTRA === "2") {
       G.addInstruction(facts, "The details on file listed above are all you have for doing things on their behalf. If they ask what you have on them, answer from that list, even if an earlier reply in this conversation said otherwise, and say plainly if that earlier reply was wrong.");
-      G.addInstruction(facts, "Mo is software that Co runs, not a person. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo, whatever an earlier reply in this conversation said.");
+      G.addInstruction(facts, "Mo is software that Cue runs, not a person. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo, whatever an earlier reply in this conversation said.");
     }
     const r = await runConversationReplyAgent({ userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Royce", resolvedContent: msg, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: conv, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true }, { dryRun: true, record: false });
     total++;

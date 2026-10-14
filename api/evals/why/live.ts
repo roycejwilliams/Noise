@@ -24,9 +24,9 @@ let ok = 0, total = 0;
 for (let i = 0; i < runs; i++) {
   const f = baseReplyFacts();
   addFact(f, "known", "They live in San Francisco.");
-  addFact(f, "did_before", `Co sent them https://x.com/i/status/2102773693290336381 with: "${caption}"`);
-  addFact(f, "known", `They pressed Reply on this earlier text from Co (iMessage inline reply), so their message is about it: "https://x.com/i/status/2102773693290336381" (that's the link Co sent for: ${caption}).`);
-  addInstruction(f, `They're reacting to something Co sent them. ${CO_WHY} ${why}`);
+  addFact(f, "did_before", `Cue sent them https://x.com/i/status/2102773693290336381 with: "${caption}"`);
+  addFact(f, "known", `They pressed Reply on this earlier text from Cue (iMessage inline reply), so their message is about it: "https://x.com/i/status/2102773693290336381" (that's the link Cue sent for: ${caption}).`);
+  addInstruction(f, `They're reacting to something Cue sent them. ${CO_WHY} ${why}`);
   const r: any = await runConversationReplyAgent(
     { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Royce", resolvedContent: "I'm in", isVoice: false, imageForVision: null, hasPendingOffer: true, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts: f, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: `Co replied: https://x.com/i/status/2102773693290336381\nCo replied: ${caption}`, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true } as any,
     { dryRun: true, record: false, stubSearch: true },

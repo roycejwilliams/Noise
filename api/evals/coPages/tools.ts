@@ -56,10 +56,10 @@ const tools: any = P.pageTools(ctx, { say: async (t) => { said.push(t); return t
   const r = await tools.makePage.execute({ ...input, line: "Here's Saturday in the Mission, two dinners side by side." }, {});
   const ins = calls.find((c) => /INSERT INTO co_pages/.test(c.sql));
   check("rule 2: one text, the line and the link, nothing about its contents", r.ok && said.length === 1 && /^Here's Saturday in the Mission, two dinners side by side\.\nhttps:\/\/co\.example\/d\/[A-Za-z0-9_-]{24}$/.test(said[0]) && !/Alder|Mesa|\$85/.test(said[0]), { r, said });
-  check("stored as theirs (owner); Co is told that one text is the whole delivery (review of #148: no second text)", ins?.params[1] === "owner-a" && /send nothing more about it, no summary, no second text/.test(r.note));
+  check("stored as theirs (owner); Cue is told that one text is the whole delivery (review of #148: no second text)", ins?.params[1] === "owner-a" && /send nothing more about it, no summary, no second text/.test(r.note));
   said.length = 0;
   const bad = await tools.makePage.execute({ ...input, sections: [{ heading: "Also", blocks: [{ type: "text", text: "Ellis Park is coming too, newly divorced and looking to meet people." }] }], line: "Here it is." }, {});
-  check("rule 6: a page that fails the grounding isn't made, and Co is told to give the points in a text", !bad.ok && said.length === 0 && /give them the points in a text/.test(bad.error) && notDone.length === 1, bad);
+  check("rule 6: a page that fails the grounding isn't made, and Cue is told to give the points in a text", !bad.ok && said.length === 0 && /give them the points in a text/.test(bad.error) && notDone.length === 1, bad);
 }
 {
   said.length = 0;
@@ -69,7 +69,7 @@ const tools: any = P.pageTools(ctx, { say: async (t) => { said.push(t); return t
   check("rule 3: the same page (its id, their ownership) and 'Updated the page: what changed', no link, no contents", r.ok && upd?.params[0] === "A".repeat(24) && upd?.params[1] === "owner-a" && said.length === 1 && said[0] === "Updated the page: swapped Friday dinner for Saturday at Mesa Verde.", { r, said });
   const quiet: any = P.pageTools(ctx, { say: async () => false, notDone: () => {}, source: async () => source });
   const unsent = await quiet.updatePage.execute({ ...input, page: "mission", changed: "moved it to 8" }, {});
-  check("review of #148: an 'updated' line that didn't send isn't counted as told; Co says it in its reply", unsent.ok && /didn't send: say in your reply/.test(unsent.note) && facts.some((f) => /but the text saying so didn't send/.test(f)), unsent);
+  check("review of #148: an 'updated' line that didn't send isn't counted as told; Cue says it in its reply", unsent.ok && /didn't send: say in your reply/.test(unsent.note) && facts.some((f) => /but the text saying so didn't send/.test(f)), unsent);
   const down = await tools.takeDownPage.execute({ page: "mission" }, {});
   const td = calls.find((c) => /SET taken_down_at = NOW\(\), data = '\{\}'::jsonb/.test(c.sql));
   check("take-down: their own page only, content wiped", down.ok && td?.params[0] === "A".repeat(24) && td?.params[1] === "owner-a");
@@ -95,12 +95,12 @@ S.useCoPageDb(null);
 // ---------------------------------------------------------------- rule 1 and the wiring
 {
   const make: any = Cap.ABILITIES.find((a: any) => a.tool === "makePage");
-  check("rule 1: Co picks the format and never asks; text, page, PDF, Google Doc each have their case", !!make && /never ask \\"a page or a PDF\?\\"|never ask "a page or a PDF\?"/.test(make.use) && /one fact or a short answer is a text/.test(make.use) && /a file to download, print or attach is a PDF/.test(make.use) && /a Google Doc only when they ask for one/.test(make.use), make?.use);
-  check("rule 2 in Co's own guidance: ONE text, nothing about the contents", /ONE text, your line saying what you made plus its link, and nothing about its contents in the chat/.test(make.use));
+  check("rule 1: Cue picks the format and never asks; text, page, PDF, Google Doc each have their case", !!make && /never ask \\"a page or a PDF\?\\"|never ask "a page or a PDF\?"/.test(make.use) && /one fact or a short answer is a text/.test(make.use) && /a file to download, print or attach is a PDF/.test(make.use) && /a Google Doc only when they ask for one/.test(make.use), make?.use);
+  check("rule 2 in Cue's own guidance: ONE text, nothing about the contents", /ONE text, your line saying what you made plus its link, and nothing about its contents in the chat/.test(make.use));
   check("update and take-down are registered, bounded", ["updatePage", "takeDownPage"].every((t) => Cap.ABILITIES.some((a: any) => a.tool === t && a.limits)));
   check("on calls too", ["makePage", "updatePage", "takeDownPage"].every((t) => (CT.CALL_TOOL_NAMES as readonly string[]).includes(t)));
   const lt = fs.readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8");
-  check("grounded on the same source as a document: their words and what Co read this turn", /const pages = pageTools\(ctx, \{ say, notDone, source: pageSource \}\);/.test(lt) && /\.\.\.pages,/.test(lt));
+  check("grounded on the same source as a document: their words and what Cue read this turn", /const pages = pageTools\(ctx, \{ say, notDone, source: pageSource \}\);/.test(lt) && /\.\.\.pages,/.test(lt));
   const ct = fs.readFileSync(new URL("../../../co-test/src/server.ts", import.meta.url), "utf8");
   check("served on co-test at /d, behind the public-page rate limit", /app\.use\("\/d", createCoPageRouter\(\)\);/.test(ct) && /"\/mo\/unsubscribe", "\/d"\], limiter\)/.test(ct));
 }

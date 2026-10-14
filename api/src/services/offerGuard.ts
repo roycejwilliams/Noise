@@ -12,7 +12,7 @@ const EVENT_WORDS = /\b(events?|workshops?|fairs?|pop-?ups?|concerts?|panels?|me
 const TIME = /\b\d{1,2}(?::\d{2})?\s?(?:a\.?m\.?|p\.?m\.?)\b|\b\d{1,2}:\d{2}\b/gi;
 const MONTHS_DAYS = new Set("monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december".split(" "));
 // Capitalized words that are not names of anything.
-const NOT_NAMES = new Set(["i", "i'm", "i'll", "i've", "i'd", "co", "ok", "okay", "yes", "no", "sure", "so", "and", "but", "or", "that", "this", "it", "it's", "that's", "there", "there's", "here", "if", "when", "what", "who", "where", "why", "how", "want", "would", "could", "should", "do", "does", "did", "are", "is", "was", "can", "will", "you", "you're", "your", "we", "they", "he", "she", "the", "a", "an", "both", "either", "maybe", "right", "good", "great", "got", "just", "now", "then", "also", "one", "two", "three", "some", "any", "all", "not", "nothing", "something", "everything", "anything", "talk", "text", "let", "let's", "talking", "thanks", "thank", "hey", "hi", "hello"]);
+const NOT_NAMES = new Set(["i", "i'm", "i'll", "i've", "i'd", "co", "cue", "ok", "okay", "yes", "no", "sure", "so", "and", "but", "or", "that", "this", "it", "it's", "that's", "there", "there's", "here", "if", "when", "what", "who", "where", "why", "how", "want", "would", "could", "should", "do", "does", "did", "are", "is", "was", "can", "will", "you", "you're", "your", "we", "they", "he", "she", "the", "a", "an", "both", "either", "maybe", "right", "good", "great", "got", "just", "now", "then", "also", "one", "two", "three", "some", "any", "all", "not", "nothing", "something", "everything", "anything", "talk", "text", "let", "let's", "talking", "thanks", "thank", "hey", "hi", "hello"]);
 
 const norm = (s: string) => ` ${s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim()} `;
 const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -118,7 +118,7 @@ export const HELD_LINE = "Got it.";
 export const SPOKEN_COMMON = "PDF Google Doc Docs Sheets Slides Drive Gmail Calendar LinkedIn Instagram iMessage Messages FaceTime Zoom Slack Notion Luma Calendly Venmo Uber Lyft Airbnb Eventbrite AI CEO CTO COO CFO VC VCs FAQ RSVP ASAP ETA TBD ID URL Mr Mrs Ms Dr Q1 Q2 Q3 Q4";
 
 // The call prompt's sections that carry what Co knows about them (services/elevenLabsCalls.ts CALL_CONTEXT_BLOCK, CALL_NOW).
-const KNOWN_SECTION = /^# (?:What you know about|Right now|What Co has found for them)\b/;
+const KNOWN_SECTION = /^# (?:What you know about|Right now|What (?:Co|Cue) has found for them)\b/;
 export function knownSections(system: string): string {
   const out: string[] = [];
   let on = false;

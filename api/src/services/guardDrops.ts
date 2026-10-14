@@ -32,5 +32,5 @@ export function dateDropped(userId: string | null, where: string, why: string): 
 
 // An identity drop: the guard (identityGuard.ts) changed the text.
 export function identityDropped(before: string, after: string | null, where: string, userId?: string | null): void {
-  if ((after ?? "").trim() !== (before ?? "").trim()) recordGuardDrop({ guard: "identity", where, userId, reason: after?.trim() ? "a sentence said who they are beyond what they told Co" : "the whole text said who they are beyond what they told Co" });
+  if ((after ?? "").trim() !== (before ?? "").trim()) recordGuardDrop({ guard: "identity", where, userId, reason: after?.trim() ? "a sentence said who they are beyond what they told Cue" : "the whole text said who they are beyond what they told Cue" });
 }

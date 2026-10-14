@@ -47,8 +47,8 @@ export const SIGNALS: Signal[] = [
   { key: "city_overwritten", label: "Profile city changes blocked (extraction drifting)", bad: `decision = 'profile.city' AND outcome = 'skip'`, total: `decision = 'profile.city'`, floor: 0.5, minCount: 3 },
   // Co still paying attention (2026-09-28, services/understanding.ts): members
   // it hasn't learned anything new about in three weeks.
-  { key: "understanding_quiet", label: "Members Co hasn't learned anything new about in 3 weeks", bad: `decision = 'understanding.check' AND outcome = 'skip'`, total: `decision = 'understanding.check'`, floor: 0.5, minCount: 2 },
-  { key: "reaction_withheld", label: "Tapbacks Co chose but had to withhold (a reply was still owed)", bad: `decision = 'tool.reactInsteadOfReplying' AND action = 'not_done'`, total: `decision = 'tool.reactInsteadOfReplying'`, floor: 0.4, minCount: 3 },
+  { key: "understanding_quiet", label: "Members Cue hasn't learned anything new about in 3 weeks", bad: `decision = 'understanding.check' AND outcome = 'skip'`, total: `decision = 'understanding.check'`, floor: 0.5, minCount: 2 },
+  { key: "reaction_withheld", label: "Tapbacks Cue chose but had to withhold (a reply was still owed)", bad: `decision = 'tool.reactInsteadOfReplying' AND action = 'not_done'`, total: `decision = 'tool.reactInsteadOfReplying'`, floor: 0.4, minCount: 3 },
   // Real events found, none offerable (sold out, already sent, out of range):
   // the answer they get is "nothing", even though the search worked.
   { key: "found_but_unofferable", label: "Searches that found real events but could offer none", bad: `decision = 'recommendation.search' AND action <> 'sent_matches' AND jsonb_array_length(COALESCE(proposal->'scope'->'gatedOut', '[]'::jsonb)) > 0`, total: `decision = 'recommendation.search'`, floor: 0.4, minCount: 3 },
@@ -66,7 +66,7 @@ export const SIGNALS: Signal[] = [
   // decision for each one.
   { key: "proactive_blocked_at_send", label: "Proactive sends blocked at send time (caps/hours/opt-out changed since the pick)", bad: `decision = 'proactive.dailyPick' AND reason LIKE 'blocked at send:%'`, total: `decision = 'proactive.dailyPick' AND action IS NOT NULL`, floor: 0.1, minCount: 2 },
   { key: "exempt_send_blocked_or_failed", label: "Transactional (exempt) sends blocked by hours/opt-out or failed", bad: `decision = 'proactive.exemptSend' AND outcome = 'skip'`, total: `decision = 'proactive.exemptSend'`, floor: 0.3, minCount: 3 },
-  { key: "announcement_gave_up", label: "Co event announcements given up on (event gone/past, or opted out)", bad: `decision = 'tier1.announce' AND action LIKE 'gave_up%'`, total: `decision = 'tier1.announce'`, floor: 0.3, minCount: 2 },
+  { key: "announcement_gave_up", label: "Cue event announcements given up on (event gone/past, or opted out)", bad: `decision = 'tier1.announce' AND action LIKE 'gave_up%'`, total: `decision = 'tier1.announce'`, floor: 0.3, minCount: 2 },
   { key: "call_gate_blocked", label: "Calls blocked at the gate before dialing", bad: `decision = 'call.gate' AND outcome = 'skip'`, total: `decision = 'call.gate'`, floor: 0.3, minCount: 3 },
   // Code review, 2026-09-17: the Tier 2 relevance judge was silently
   // rejecting real events on their format label alone ("pitch night" isn't
@@ -95,12 +95,12 @@ export const SIGNALS: Signal[] = [
   { key: "cold_start_quiz", label: "Cold-start steering replies that asked more than one question", bad: `decision = 'coldstart.reply' AND action = 'steered' AND COALESCE((proposal->>'questions')::int, 0) > 1`, total: `decision = 'coldstart.reply' AND action = 'steered'`, floor: 0.3, minCount: 2, steady: { window: "7 days", repeatHours: 72 } },
   // Drift in Co's own choices (2026-09-25, toolGuard.ts): how often a tool
   // it chose didn't actually happen, and how often it hit a hard limit.
-  { key: "tool_not_done", label: "Tools Co chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
+  { key: "tool_not_done", label: "Tools Cue chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
   { key: "tool_limited", label: "Tool calls refused by a limit or missing yes", bad: `decision LIKE 'tool.%' AND action IN ('limited', 'needs_yes')`, total: `decision LIKE 'tool.%'`, floor: 0.25, minCount: 3 },
   // How often each tool is used per reply, so a sudden jump in any one shows.
   ...ABILITIES.filter((a) => a.tool && !["sendReply", "markTopicAsked"].includes(a.tool)).map((a) => ({
     key: `tool_use_${a.tool}`,
-    label: `Replies where Co used ${a.tool}`,
+    label: `Replies where Cue used ${a.tool}`,
     bad: `decision = 'tool.${a.tool}'`,
     total: `decision = 'turn.latency'`,
     floor: 0.35,
@@ -231,7 +231,7 @@ export function renderWeeklyReview(moments: ReviewMoment[], readings: SignalRead
   for (const m of moments) byDecision.set(m.decision, (byDecision.get(m.decision) ?? 0) + 1);
   const pct = (x: number) => `${Math.round(x * 100)}%`;
   return [
-    `<h2>Co weekly review</h2>`,
+    `<h2>Cue weekly review</h2>`,
     `<p>${moments.length} moments worth a look this week.</p>`,
     `<ul>${[...byDecision.entries()].map(([d, n]) => `<li>${d}: ${n}</li>`).join("")}</ul>`,
     `<h3>Signals (last 6 hours vs week)</h3><ul>${readings.map((r) => `<li>${r.signal.label}: ${pct(r.recentRate)} vs ${pct(r.baselineRate)}</li>`).join("")}</ul>`,
@@ -251,7 +251,7 @@ export async function runWeeklyReview(): Promise<void> {
       computeMetrics(30).catch((err: any) => (console.error("weekly review: metrics failed (non-fatal):", err?.message ?? err), null)),
       import("./northStar.js").then((m) => m.computeNorthStar(30)).catch((err: any) => (console.error("weekly review: north star failed (non-fatal):", err?.message ?? err), null)),
     ]);
-    await sendTeamEmail(`Co weekly review: ${moments.length} moments`, renderWeeklyReview(moments, readings) + (north ? `\n${(await import("./northStar.js")).renderNorthStarHtml(north)}` : "") + (metrics ? `\n${renderMetricsHtml(metrics)}` : ""));
+    await sendTeamEmail(`Cue weekly review: ${moments.length} moments`, renderWeeklyReview(moments, readings) + (north ? `\n${(await import("./northStar.js")).renderNorthStarHtml(north)}` : "") + (metrics ? `\n${renderMetricsHtml(metrics)}` : ""));
   } catch (err: any) {
     console.error("weekly review failed (non-fatal):", err?.message ?? err);
   }

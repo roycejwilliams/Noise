@@ -47,11 +47,11 @@ for (const [name, p] of [["turn", turnPrompt], ["call", callPrompt]] as const) {
   check(`${name}: says to use [] when there's no ask`, /\[\]/.test(p));
   // Guardrails that predate the scope split and must survive it.
   check(`${name}: only what the user actually said`, /"user:" lines/.test(p) && /never guess or infer/.test(p));
-  check(`${name}: never attribute Co's words to the member`, /"assistant:" lines/.test(p));
-  check(`${name}: a question Co asked is not an ask`, /never answered is not an ask/.test(p));
+  check(`${name}: never attribute Cue's words to the member`, /"assistant:" lines/.test(p));
+  check(`${name}: a question Cue asked is not an ask`, /never answered is not an ask/.test(p));
   check(`${name}: small talk / thanks / logistics are not asks`, /small talk/.test(p) && /thanks/.test(p) && /logistics/.test(p));
-  check(`${name}: feedback about Co is not an ask`, /feedback about Co/.test(p));
-  check(`${name}: answering Co's questions is not an ask`, /answers to Co's questions/.test(p));
+  check(`${name}: feedback about Cue is not an ask`, /feedback about Cue/.test(p));
+  check(`${name}: answering Cue's questions is not an ask`, /answers to Cue's questions/.test(p));
   check(`${name}: still asks for concrete_preferences, wants and availability`, p.includes("concrete_preferences") && p.includes("wants") && p.includes("availability"));
   check(`${name}: a one-off meeting time is not an availability pattern`, /NOT a recurring availability pattern/.test(p));
 }

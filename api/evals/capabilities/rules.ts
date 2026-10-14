@@ -37,18 +37,18 @@ for (const t of registered) {
   }
   check(`registry tool ${t} exists${teamOnly ? " for the team only" : ""}`, teamOnly ? teamTools.includes(t) && !toolNames.includes(t) : toolNames.includes(t));
 }
-check("Co finds things with its own loop's tools, and the old searchNow is gone", ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes"].every((t) => toolNames.includes(t)) && !toolNames.includes("searchNow"));
+check("Cue finds things with its own loop's tools, and the old searchNow is gone", ["searchEvents", "webSearch", "searchPosts", "readPage", "shareFinds", "draftEmail", "updateNotes"].every((t) => toolNames.includes(t)) && !toolNames.includes("searchNow"));
 for (const t of toolNames) check(`tool ${t} takes its description from the registry`, (tools as any)[t].description === toolUse(t) || t === "sendReply");
 check("ability ids are unique", new Set(ABILITIES.map((a) => a.id)).size === ABILITIES.length);
-check("every ability says what Co can do", ABILITIES.every((a) => a.can.trim().length > 20));
+check("every ability says what Cue can do", ABILITIES.every((a) => a.can.trim().length > 20));
 
 const facts = baseReplyFacts().facts.filter((f) => f.kind === "capability").map((f) => f.text);
-check("Co reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly).length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
-check("Co knows it can send its card", facts.some((f) => /contact card/.test(f)));
-check("Co knows it can't start a group text", facts.some((f) => /never starts a group text/.test(f)));
-check("Co knows it never writes a phone number", facts.some((f) => /never writes a phone number/.test(f)));
+check("Cue reads every ability and limit about itself (a member never reads the team-only ones)", facts.length === ABILITIES.filter((a) => !a.teamOnly).length + LIMITS.length && capabilitySheet().every((c) => facts.includes(c)) && !ABILITIES.filter((a) => a.teamOnly).some((a) => facts.includes(a.can)));
+check("Cue knows it can send its card", facts.some((f) => /contact card/.test(f)));
+check("Cue knows it can't start a group text", facts.some((f) => /never starts a group text/.test(f)));
+check("Cue knows it never writes a phone number", facts.some((f) => /never writes a phone number/.test(f)));
 check("no hand-kept capability list is left", !/STANDING_CAPABILITIES/.test(src("src/harness/replyGrounding.ts")));
-check("no em dashes in what Co reads about itself", !capabilitySheet().some((c) => /—/.test(c)));
+check("no em dashes in what Cue reads about itself", !capabilitySheet().some((c) => /—/.test(c)));
 
 console.log(`capability rules: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

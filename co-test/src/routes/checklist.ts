@@ -18,16 +18,16 @@ type ChecklistItem = {
 const CATALOG: ChecklistItem[] = [
   { key: "invite", label: "Got in with an invite code", category: "auto" },
   { key: "onboarding", label: "Finished onboarding (name and email saved)", category: "auto" },
-  { key: "call_offer", label: "Co offered the first call", category: "auto" },
-  { key: "call", label: "Had a call with Co", category: "auto" },
-  { key: "search_result", label: "Asked Co for something and got a real result", category: "auto" },
-  { key: "reaction", label: "Reacted to something Co sent (interested, not interested, or already did it)", category: "auto" },
-  { key: "followup", label: "Co reached out on its own", category: "auto" },
-  { key: "issue", label: "Told Co about a problem, and it was saved for the team", category: "auto" },
+  { key: "call_offer", label: "Cue offered the first call", category: "auto" },
+  { key: "call", label: "Had a call with Cue", category: "auto" },
+  { key: "search_result", label: "Asked Cue for something and got a real result", category: "auto" },
+  { key: "reaction", label: "Reacted to something Cue sent (interested, not interested, or already did it)", category: "auto" },
+  { key: "followup", label: "Cue reached out on its own", category: "auto" },
+  { key: "issue", label: "Told Cue about a problem, and it was saved for the team", category: "auto" },
   { key: "onboarding_on_brand", label: "Onboarding felt on brand: a private social club, never salesy", category: "manual" },
   { key: "call_worth_it", label: "The first call felt worth five minutes", category: "manual" },
-  { key: "results_matched", label: "What Co sent matched what I asked for", category: "manual" },
-  { key: "no_false_claims", label: "Nothing Co said about itself was untrue", category: "manual" },
+  { key: "results_matched", label: "What Cue sent matched what I asked for", category: "manual" },
+  { key: "no_false_claims", label: "Nothing Cue said about itself was untrue", category: "manual" },
 ];
 
 const when = (d: Date | string | null | undefined) =>

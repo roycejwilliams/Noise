@@ -32,7 +32,7 @@ export async function recordSafetyConcern(userId: string, firstName: string | nu
     payload: {
       recap: "",
       threadId: null,
-      thread: { text: "how they're doing today, after what they shared with Co yesterday, which was really heavy", quote: "", dueDate: null, feeling: "in real pain" },
+      thread: { text: "how they're doing today, after what they shared with Cue yesterday, which was really heavy", quote: "", dueDate: null, feeling: "in real pain" },
       item: null,
       safetyFollowUp: true,
     },
@@ -42,14 +42,14 @@ export async function recordSafetyConcern(userId: string, firstName: string | nu
   const { alertTeamNow } = await import("../harness/monitor.js");
   await alertTeamNow(
     `safety:${userId}:${new Date().toISOString().slice(0, 10)}`,
-    `Co alert: ${firstName ?? "a member"} may not be safe`,
-    `Something ${firstName ?? "a member"} said to Co today may mean they're thinking about hurting themselves (${source === "co" ? "Co flagged it" : "matched a crisis phrase"}). Co asked if they're safe and gave them 988. Their message isn't included here.</p>` +
+    `Cue alert: ${firstName ?? "a member"} may not be safe`,
+    `Something ${firstName ?? "a member"} said to Cue today may mean they're thinking about hurting themselves (${source === "co" ? "Cue flagged it" : "matched a crisis phrase"}). Cue asked if they're safe and gave them 988. Their message isn't included here.</p>` +
       `<p><b>What to do now:</b></p><ol>` +
       `<li>Whoever reads this first: reply-all "I've got it" so no one else doubles up.</li>` +
       `<li>Read the conversation on the dashboard within the hour.</li>` +
-      `<li>If they may be in immediate danger (a plan, a time, the means), call 911 for their location. Don't wait on Co.</li>` +
-      `<li>Otherwise, a real person from the team texts or calls them today, briefly and warmly, as themselves, not as Co. Point to 988 again.</li>` +
-      `<li>Note what you did in the dashboard. Co has already paused offers for 3 days and will check in tomorrow.</li></ol><p>`,
+      `<li>If they may be in immediate danger (a plan, a time, the means), call 911 for their location. Don't wait on Cue.</li>` +
+      `<li>Otherwise, a real person from the team texts or calls them today, briefly and warmly, as themselves, not as Cue. Point to 988 again.</li>` +
+      `<li>Note what you did in the dashboard. Cue has already paused offers for 3 days and will check in tomorrow.</li></ol><p>`,
   ).catch(() => {});
 }
 

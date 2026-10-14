@@ -181,7 +181,7 @@ const MIXED_ASK = "Draft the launch plan for the Sequin party and keep an eye ou
 const mixedSplit: GoldenCase = {
   n: 24,
   id: "mixed-split",
-  title: "A request that is half Co's work, half a lookout is split: the work part a task, the find part a lookout, never binned whole",
+  title: "A request that is half Cue's work, half a lookout is split: the work part a task, the find part a lookout, never binned whole",
   status: { live: true },
   from: "Royce 2026-10-13: \"'Draft the launch plan and keep an eye out for venues' is half task, half lookout - split those\"",
   run: async () => {
@@ -209,13 +209,13 @@ const mixedSplit: GoldenCase = {
   },
 };
 const OWN_WORK_ASK = "Draft the launch plan for the Sequin party";
-const FIND_VIA_CO = "Have Co look for venues for the launch party";
+const FIND_VIA_CO = "Have Cue look for venues for the launch party";
 const ownWorkNotInSpend: GoldenCase = {
   n: 25,
   id: "own-work-not-in-spend",
-  title: "Co's own work with its task is followed, never in the 9am web or X spend; a find worded around Co is still searched",
+  title: "Cue's own work with its task is followed, never in the 9am web or X spend; a find worded around Cue is still searched",
   status: { live: true },
-  from: "Royce 2026-10-13: \"for requests that are Co's own work the 9am run skips web and X searches - they're logged as 'followed as its task'\"; review: \"Nothing silently switches off\"",
+  from: "Royce 2026-10-13: \"for requests that are Cue's own work the 9am run skips web and X searches - they're logged as 'followed as its task'\"; review: \"Nothing silently switches off\"",
   run: async () => {
     // The real sweep planning (services/askSplit.ts askSearchPlan, with the real split read) and the floor's per-ask decision
     // (services/dailySweep.ts planAsk): no network search and no database (the kept read and the open tasks are stubbed).
@@ -252,14 +252,14 @@ const ownWorkNotInSpend: GoldenCase = {
 export const CASES: GoldenCase[] = [
   closingAQuestion,
   replacedGoal,
-  pending("phase 3 (discoveryStatus idle states)", "discoveryStatus has no idle states yet", "a member with interests only (no goals, no lookouts): the 9am run still runs but searches nothing, and discoveryStatus reads idle with reason \"interests only\" and its next_run_at; asked what Co is looking for, Co says nothing specific is being searched (interests are a lens, never searched alone until Royce approves an interests-only floor)", 9, "interests-only", "Interests alone: idle, never silently off", "plan v2 (10-13): When inputs run out, interests-only row"),
+  pending("phase 3 (discoveryStatus idle states)", "discoveryStatus has no idle states yet", "a member with interests only (no goals, no lookouts): the 9am run still runs but searches nothing, and discoveryStatus reads idle with reason \"interests only\" and its next_run_at; asked what Cue is looking for, Cue says nothing specific is being searched (interests are a lens, never searched alone until Royce approves an interests-only floor)", 9, "interests-only", "Interests alone: idle, never silently off", "plan v2 (10-13): When inputs run out, interests-only row"),
   pending("phase 3 (discoveryStatus idle states)", "discoveryStatus has no idle states yet", "closing a member's last open lookout (with no goals or interests left) puts discoveryStatus in its idle state with that reason, and the next 9am run searches nothing for them", 10, "closing-last-lookout", "Closing the last lookout idles discovery", "plan: discovery status reads idle when nothing is left to search"),
   pending("phase 4 (mapping report / seed)", "the mapping report and seed don't exist yet", "an old open ask whose intent can't be read from the member's words is listed in the mapping report as ambiguous and seeded as neither a lookout nor a task; it is never searched until the member's words say which", 11, "ambiguous-old-ask", "An ambiguous old ask is reported, not guessed", "plan: the mapping report seeds lanes from existing asks"),
   oneOffResearch,
   pending("phase 7 (lookout end-of-life, all members)", "lookout end-of-life isn't built", "on a lookout's last day the 9am run does a final sweep; a find that passes the picker and the send checks goes out as the one closing message in today's send format; the lookout is archived with that message's id; never a second message", 16, "lookout-ends-with-find", "A lookout's last day: the find is the closing message", "plan v2 (10-13): lookout end-of-life, amendment 5"),
-  pending("phase 7 (lookout end-of-life, all members)", "lookout end-of-life isn't built", "on a lookout's last day with nothing new: one short line in Co's voice (a last check, nothing new for <their words>), no question, no renewal offer; the lookout is archived; never silent, never sent for a lookout the member closed themselves", 17, "lookout-ends-with-nothing", "A lookout's last day with nothing: one closing line", "plan v2 (10-13): lookout end-of-life, amendment 5"),
-  pending("phase 5 (lane transitions)", "lane transitions aren't built", "Co proposes moving an input between lanes (e.g. a goal to a lookout) and the member doesn't confirm: nothing changes (no lane change, no member-visible note); a task becomes a lookout only on the member's own words; a confirmed change leaves exactly one member-visible line (\"moved X from goals to lookouts\")", 20, "lane-change-needs-confirmation", "A lane change needs the member's yes", "Royce 2026-10-13: lane changes need the member's confirmation"),
-  pending("phase 5 (stale-goal recheck)", "the stale-goal recheck isn't built", "a goal with no new signal for 14 days gets one check-in question from Co; no answer within 7 days and the goal goes idle and the next 9am run doesn't search it; never a second ask", 21, "stale-goal-goes-idle", "A quiet goal gets one check-in, then goes idle", "Royce 2026-10-13: stale goals are rechecked once, then idle"),
+  pending("phase 7 (lookout end-of-life, all members)", "lookout end-of-life isn't built", "on a lookout's last day with nothing new: one short line in Cue's voice (a last check, nothing new for <their words>), no question, no renewal offer; the lookout is archived; never silent, never sent for a lookout the member closed themselves", 17, "lookout-ends-with-nothing", "A lookout's last day with nothing: one closing line", "plan v2 (10-13): lookout end-of-life, amendment 5"),
+  pending("phase 5 (lane transitions)", "lane transitions aren't built", "Cue proposes moving an input between lanes (e.g. a goal to a lookout) and the member doesn't confirm: nothing changes (no lane change, no member-visible note); a task becomes a lookout only on the member's own words; a confirmed change leaves exactly one member-visible line (\"moved X from goals to lookouts\")", 20, "lane-change-needs-confirmation", "A lane change needs the member's yes", "Royce 2026-10-13: lane changes need the member's confirmation"),
+  pending("phase 5 (stale-goal recheck)", "the stale-goal recheck isn't built", "a goal with no new signal for 14 days gets one check-in question from Cue; no answer within 7 days and the goal goes idle and the next 9am run doesn't search it; never a second ask", 21, "stale-goal-goes-idle", "A quiet goal gets one check-in, then goes idle", "Royce 2026-10-13: stale goals are rechecked once, then idle"),
   pending("phase 5 (stale-goal recheck)", "the stale-goal recheck isn't built", "any reply about an idle goal brings it back to active, and the next 9am run searches it again", 22, "reply-revives-goal", "A reply about an idle goal revives it", "Royce 2026-10-13: an idle goal comes back on any reply about it"),
   mixedSplit,
   ownWorkNotInSpend,

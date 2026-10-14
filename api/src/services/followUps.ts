@@ -227,7 +227,7 @@ export function followUpKnowledge(k: Pick<MemberKnowledge, "restraint" | "delive
   const how = [
     r?.safetyHold ? "a safety hold is on (only care, no offers or nudges)" : null,
     r?.needsCare ? "they've been having a hard time lately" : null,
-    r?.frustratedWithCo ? "they've been frustrated with Co lately" : null,
+    r?.frustratedWithCo ? "they've been frustrated with Cue lately" : null,
     r?.feeling ? `their latest feeling: ${r.feeling}` : null,
   ].filter(Boolean);
   return [
@@ -288,7 +288,7 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
   const { closeTask, scheduleTask, noteOnTask } = await import("./coTasks.js");
   const age = Date.now() - new Date(task.createdAt).getTime();
   if (task.wakes > FOLLOWUP_LIMITS.maxWakes || age > FOLLOWUP_LIMITS.maxDays * 86_400_000) {
-    await closeTask(userId, task.id, "expired", "Co never found the right moment.");
+    await closeTask(userId, task.id, "expired", "Cue never found the right moment.");
     await recordDecision({ layer: 7, decision: "task.followup", userId, outcome: "skip", action: "expired", proposal: { taskId: task.id, type: task.followup?.type } }).catch(() => {});
     return;
   }

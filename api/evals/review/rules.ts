@@ -118,14 +118,14 @@ const reactions = base({
     msg("2026-09-18T21:05:00Z", "member", "Rough day at work honestly"),
   ],
   emotions: [
-    { at: "2026-09-18T21:01:05Z", source: "text", emotion: "frustrated", intensity: "high", about: "Co's search results", quote: "That's not what I asked", target: "co" },
+    { at: "2026-09-18T21:01:05Z", source: "text", emotion: "frustrated", intensity: "high", about: "Cue's search results", quote: "That's not what I asked", target: "co" },
     { at: "2026-09-18T21:05:05Z", source: "text", emotion: "stressed", intensity: "medium", about: "work", quote: null, target: "life" },
   ],
 });
 const rf = reactionFlags(reactions);
-check("frustration with Co is flagged", rf.some((f) => f.type === "member_frustrated_with_co" && f.severity === "high"));
-check("a hard day in their life is not a flag about Co", rf.filter((f) => f.type === "member_frustrated_with_co").length === 1);
-check("'that's not what I asked' is flagged with Co's message before it", rf.some((f) => f.type === "member_called_out_miss" && f.snippet.includes("pottery")));
+check("frustration with Cue is flagged", rf.some((f) => f.type === "member_frustrated_with_co" && f.severity === "high"));
+check("a hard day in their life is not a flag about Cue", rf.filter((f) => f.type === "member_frustrated_with_co").length === 1);
+check("'that's not what I asked' is flagged with Cue's message before it", rf.some((f) => f.type === "member_called_out_miss" && f.snippet.includes("pottery")));
 check("a callout already in user_reported_issues is counted once", !reactionFlags({ ...reactions, issues: [{ at: "2026-09-18T21:01:10Z", message: "That's not what I asked", summary: "Sent the wrong kind of event", category: "behavior", severity: "high" }] }).some((f) => f.type === "member_called_out_miss"));
 
 // --- Model flags must quote real messages.
@@ -139,19 +139,19 @@ const all = [...twConv, ...conversationFlags(vc), ...hiringLog, ...logFlags(misc
 const groups = groupFlags(all);
 check("groups rank by how often each happened", groups[0].type === "restated_own_message" && groups[0].count === 2);
 const digest = renderDigest(all, { u1: "Royce" }, "last 24h");
-check("the digest opens with the count and ends with how to get detail", digest[0].startsWith("Co review, last 24h:") && digest[digest.length - 1].includes("what broke since"));
+check("the digest opens with the count and ends with how to get detail", digest[0].startsWith("Cue review, last 24h:") && digest[digest.length - 1].includes("what broke since"));
 check("the digest is short enough for a text", digest.join("\n").length < 3000);
 const manyTypes = ["slow_reply", "search_sent_nothing", "found_but_turned_away", "stretch_send", "came_up_empty_text", "reply_rewritten", "router_unsure", "off_topic_search"].map((type, i) => ({ userId: "u1", at: `2026-09-18T1${i}:00:00Z`, type, severity: "low", snippet: "x", decisionIds: [], cause: "c", causeConfirmed: true, source: "log" }) as any);
 const trimmed = renderDigest(manyTypes, { u1: "Royce" }, "last 24h").join("\n");
 check("the digest lists at most 6 types and points to the rest", (trimmed.match(/^• /gm) ?? []).length === 6 && trimmed.includes("Plus 2 less frequent types"));
-check("an empty day says so plainly", renderDigest([], {}, "last 24h")[0] === "Co review, last 24h: nothing flagged.");
+check("an empty day says so plainly", renderDigest([], {}, "last 24h")[0] === "Cue review, last 24h: nothing flagged.");
 
 // --- The model review sees asks saved on earlier days.
 const withAsks = loggedActions(base({ openAsks: [{ text: "Looking for grants for a founder event", savedAt: "2026-09-15T18:00:00Z" }] }));
 check("open asks from earlier days are in the log the model reads", withAsks.includes("[saved 2026-09-15] open ask") && withAsks.includes("grants for a founder event"));
 
 // --- Dev only.
-check("never outside co-test", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "CoPatible", DEV_REVIEW: "true" } as any));
+check("never outside co-test", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "production", RAILWAY_SERVICE_NAME: "Noise", DEV_REVIEW: "true" } as any));
 check("not on co-test without the flag", !reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test" } as any));
 check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev", RAILWAY_SERVICE_NAME: "co-test", DEV_REVIEW: "true" } as any));
 
@@ -208,11 +208,11 @@ check("on co-test with the flag", reviewEnabled({ RAILWAY_ENVIRONMENT_NAME: "dev
     earlierSends: [{ sent_at: "2026-09-23T17:00:00Z", type: "event_offer", message: "https://lu.ma/x  A dinner" }],
   });
   const rec = earlierRecord(d);
-  check("earlier: what Co sent, in its own words", /recommended "SVVR #102: Meta Connect Meetup \+ Party"/.test(rec) && /Thursday rooftop mixer/.test(rec) && /texted them unprompted \(event_offer\)/.test(rec));
-  check("earlier: what they told Co", /accelerator or in touch with VCs/.test(rec));
+  check("earlier: what Cue sent, in its own words", /recommended "SVVR #102: Meta Connect Meetup \+ Party"/.test(rec) && /Thursday rooftop mixer/.test(rec) && /texted them unprompted \(event_offer\)/.test(rec));
+  check("earlier: what they told Cue", /accelerator or in touch with VCs/.test(rec));
   const pr = modelReviewPrompt(d);
   check("prompt: the week before is in, and counts as backing", /The 7 days before today/.test(pr) && /neither today's decision log nor the earlier record backs up/.test(pr));
-  check("prompt: Co's own rules are in, so stating them isn't flagged", /What Co can do and its standing rules/.test(pr) && /5 invites each/.test(pr));
+  check("prompt: Cue's own rules are in, so stating them isn't flagged", /What Cue can do and its standing rules/.test(pr) && /5 invites each/.test(pr));
   check("review has room to answer after thinking", /maxOutputTokens: 16_000/.test(readFileSync(new URL("../../src/harness/devReview.ts", import.meta.url), "utf8")));
 }
 

@@ -29,13 +29,13 @@ const since = new Date();
 console.log(`test member: ${tm[0].first_name} (${userId.slice(0, 8)})`);
 
 const base = fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-const system = E.promptForElevenLabs(base).replace(/\{\{first_name\}\}/g, "Jordan").replace("{{context_summary}}", "Jordan is a founder in San Francisco who runs a small design community. New to Co.").replace(/\{\{[a-z_]+\}\}/g, "");
+const system = E.promptForElevenLabs(base).replace(/\{\{first_name\}\}/g, "Jordan").replace("{{context_summary}}", "Jordan is a founder in San Francisco who runs a small design community. New to Cue.").replace(/\{\{[a-z_]+\}\}/g, "");
 const elTools = [
   { type: "function", function: { name: "end_call", description: "End the call once you've said a warm goodbye and given them a beat to respond.", parameters: { type: "object", properties: { reason: { type: "string" }, message: { type: "string" } }, required: ["reason"] } } },
   { type: "function", function: { name: "voicemail_detection", description: "Only when you hear a recorded voicemail greeting, a carrier message or a beep.", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } } },
 ];
 const callKey = `${userId}:live-${Date.now()}`;
-const messages: any[] = [{ role: "system", content: system }, { role: "assistant", content: "Hey Jordan, it's Co. How's your week going?" }];
+const messages: any[] = [{ role: "system", content: system }, { role: "assistant", content: "Hey Jordan, it's Cue. How's your week going?" }];
 
 type TurnOut = { said: string; firstMs: number | null; upstreamMs: number | null; totalMs: number; tools: { name: string; ok: boolean; ms: number; timedOut: boolean; note: string }[]; elCalls: string[] };
 async function turn(their: string, withTools = true): Promise<TurnOut> {
@@ -76,7 +76,7 @@ if (process.env.CALL_TOOLS_LIVE_LATENCY === "1") {
     }
   }
   const md = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)];
-  console.log(`\nfirst sentence, Co's tools offered: ${JSON.stringify(on)} (median ${md(on)}ms); not offered: ${JSON.stringify(off)} (median ${md(off)}ms)`);
+  console.log(`\nfirst sentence, Cue's tools offered: ${JSON.stringify(on)} (median ${md(on)}ms); not offered: ${JSON.stringify(off)} (median ${md(off)}ms)`);
   await pool.end();
   process.exit(0);
 }
@@ -90,12 +90,12 @@ if (!b.tools.some((t) => t.ok)) {
   c = await turn("Yes, please, go ahead and take the lead on it.");
   if (c.firstMs) (c.tools.length ? withTool : plain).push(c.firstMs);
 }
-const d = await turn("Perfect, that's all I needed today. Thanks Co, talk soon.");
+const d = await turn("Perfect, that's all I needed today. Thanks Cue, talk soon.");
 let ended = d.elCalls.some((x) => x.startsWith("end_call"));
 if (!ended) { const e = await turn("Bye!"); ended = e.elCalls.some((x) => x.startsWith("end_call")); }
 
 // Latency: a second plain turn and a second tool turn, as a second short call (the first one ended).
-messages.splice(1, messages.length - 1, { role: "assistant", content: "Hey Jordan, it's Co again." }, { role: "user", content: "Hey Co. Following up on the partner dinner." }, { role: "assistant", content: "Good, I'm on it. What's on your mind?" });
+messages.splice(1, messages.length - 1, { role: "assistant", content: "Hey Jordan, it's Cue again." }, { role: "user", content: "Hey Cue. Following up on the partner dinner." }, { role: "assistant", content: "Good, I'm on it. What's on your mind?" });
 const extra = await turn("Oh, one more thing. How do you think dinners like that usually go?");
 if (extra.firstMs) (extra.tools.length ? withTool : plain).push(extra.firstMs);
 const extra2 = await turn("Also, note that the studio is called Ellis Works and the date's not locked yet, so keep that open on your side.");
@@ -112,7 +112,7 @@ console.log("co_tasks rows:", JSON.stringify(tasks.rows));
 const notes = await pool.query(`SELECT id, notes FROM co_tasks WHERE user_id = $1 AND updated_at >= $2 ORDER BY id`, [userId, since]);
 const ellis = notes.rows.flatMap((r: any) => (Array.isArray(r.notes) ? r.notes : []).filter((n: any) => /ellis works/i.test(String(n?.text ?? ""))).map((n: any) => ({ task: r.id, note: String(n.text).slice(0, 200) })));
 console.log(`Ellis Works on a task: ${ellis.length ? "yes" : "NO"} ${JSON.stringify(ellis)}`);
-console.log(`Ellis turn: Co's own tools ${JSON.stringify(extra2.tools.map((t) => t.name))}; said "${extra2.said.trim()}"`);
+console.log(`Ellis turn: Cue's own tools ${JSON.stringify(extra2.tools.map((t) => t.name))}; said "${extra2.said.trim()}"`);
 const backstop = decisions.rows.filter((r: any) => r.decision === "call.task_fact_backstop");
 console.log(`backstop wrote: ${backstop.length ? JSON.stringify(backstop) : "no (not needed or not taken)"}`);
 console.log("decisions:", JSON.stringify(decisions.rows));

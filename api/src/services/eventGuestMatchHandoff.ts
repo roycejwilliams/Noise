@@ -333,11 +333,11 @@ export function introEmailContent(eventName: string, x: { user_id: string; first
   return {
     subject: `Introducing ${a.first_name} and ${b.first_name}`,
     html: galleryEmail({
-      preview: `From ${eventName}: Co thinks you two should meet.`,
+      preview: `From ${eventName}: Cue thinks you two should meet.`,
       eyebrow: "An introduction",
       headline: `${a.first_name}, meet ${b.first_name}.`,
       // Sent once both say yes: in the room, or after it. Never "before it".
-      body: [`You were both at ${eventName}, and Co thought you two should meet. Consider this your introduction.`],
+      body: [`You were both at ${eventName}, and Cue thought you two should meet. Consider this your introduction.`],
       close: "You both said yes. Take it from here.",
     }),
     first: a.user_id,
@@ -447,7 +447,7 @@ export async function resolveNamedEventGuest(userId: string, nameGuess: string, 
     `SELECT event_api_id, event_name FROM event_checkin_followups WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
     [userId],
   );
-  if (!recent[0]) return { error: "no recent Co event on file for them to have met someone at" };
+  if (!recent[0]) return { error: "no recent Cue event on file for them to have met someone at" };
   const eventId: string = recent[0].event_api_id;
   const eventName: string = recent[0].event_name;
 
@@ -482,7 +482,7 @@ export async function requestIntroToNamedGuest(
   // Their own request, not Co's suggestion: the pair is theirs (origin 'member'), not blocked on Co's taste, and logged.
   const RM = await import("./roomMatching.js");
   await RM.notePairMemberRequested(eventId, requester.user_id, target.user_id);
-  await recordDecision({ layer: 6, decision: "match.valueLines", userId: requester.user_id, outcome: "act", action: "member_requested", proposal: { eventId, targetId: target.user_id }, reason: "a member asked for this intro by name; the value gate applies to Co's own suggestions" }).catch(() => {});
+  await recordDecision({ layer: 6, decision: "match.valueLines", userId: requester.user_id, outcome: "act", action: "member_requested", proposal: { eventId, targetId: target.user_id }, reason: "a member asked for this intro by name; the value gate applies to Cue's own suggestions" }).catch(() => {});
   await recordOptIn(eventId, requester.user_id, requester.first_name, target.user_id, target.first_name, "interested");
 
   if (await hasReciprocalOptIn(eventId, requester.user_id, target.user_id)) {

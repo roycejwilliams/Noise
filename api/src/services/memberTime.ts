@@ -261,7 +261,7 @@ export function rescheduledWindow(nextAt: Date, now: Date, zone: string | null |
 // Pure: one line for a model or a fact sheet: what Co told them and the time it holds itself to, in their time.
 export function windowLine(w: CommitWindow | null | undefined): string {
   if (!w || w.closedAt) return "";
-  return `Co told them they'd have it ${w.words} (by ${localStamp(w.deadline, w.zone)}); if it can't be done by then, Co tells them before ${localStamp(w.warnBy, w.zone)}, with the new time.`;
+  return `Cue told them they'd have it ${w.words} (by ${localStamp(w.deadline, w.zone)}); if it can't be done by then, Cue tells them before ${localStamp(w.warnBy, w.zone)}, with the new time.`;
 }
 
 // ---------- delivery hours (Royce, 2026-10-08)

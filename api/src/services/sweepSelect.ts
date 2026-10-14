@@ -93,36 +93,36 @@ export type RejectReason = (typeof REJECT_REASONS)[number];
 export const RECORD_CLAIMS: readonly RejectReason[] = ["closed", "already_known", "ruled_out"];
 
 // The part that's the same for every member: cached across a sweep batch.
-export const SELECT_SYSTEM = `You're Co. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today.
+export const SELECT_SYSTEM = `You're Cue. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today.
 
 The bar is: they'd reply "wow". Not "seems relevant", not "fits a keyword in their ask". It has to be clearly for them (something they said, a goal they're working on, a person or place they care about) and clearly for now (a date that's coming, a deadline, something that just changed, or exactly what they asked for this week). If you can't say both, it doesn't go today.
 
 For every candidate, give one verdict:
-- "send": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Co sent before, O# how they reacted), why now, and "wow": true only if you'd genuinely expect that reaction. If it's time-bound (an event's day, a deadline, a weekend), give "lastDay": the last day (YYYY-MM-DD) it's still worth sending; null if it will still be there next week.
+- "send": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Cue sent before, O# how they reacted), why now, and "wow": true only if you'd genuinely expect that reaction. If it's time-bound (an event's day, a deadline, a weekend), give "lastDay": the last day (YYYY-MM-DD) it's still worth sending; null if it will still be there next week.
 - "hold": good for them, but the thing itself isn't ready yet (it opens later, or it's too far out to act on), or it would crowd a stronger send today. Say when it would be right, as a date (YYYY-MM-DD) if you can. You judge whether it fits them and its timing, never their attention: don't hold something because they seem busy, focused elsewhere or in a mood. They decide what they're too busy for. Something open now with a deadline, or applications open, is never held for that.
 - "reject": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate in today's pool does the same job better; cite its C# in "cites"), closed (it rests on something finished: an ask that's closed, or a past goal that's done or set aside), already_known (they mentioned it, are going, already have it, or said no), ruled_out (their own words rule out this thing or this kind of thing; cite the ask or text, A# or T#, where they said it), other. Add one line why.
 
-A ruled_out reject cites their own words (A# or T#) that rule it out. A closed or already_known reject is a claim about a record, so it cites that record by id in "cites": a closed ask (A#), a past goal that's done or set aside (G#), something Co sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.
+A ruled_out reject cites their own words (A# or T#) that rule it out. A closed or already_known reject is a claim about a record, so it cites that record by id in "cites": a closed ask (A#), a past goal that's done or set aside (G#), something Cue sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.
 
-Past goals each say why they're past. done and set aside are their word. lapsed is Co's own bookkeeping (a window that passed, a recheck they didn't answer), not theirs, and is never the reason something is closed. A closed one-off question (find me a couple of these) doesn't close an aim one of their active goals still carries either.
+Past goals each say why they're past. done and set aside are their word. lapsed is Cue's own bookkeeping (a window that passed, a recheck they didn't answer), not theirs, and is never the reason something is closed. A closed one-off question (find me a couple of these) doesn't close an aim one of their active goals still carries either.
 
-An ask isn't finished after one send: someone looking for events this week usually wants a few across the week, and a search for a community can take several tries. What Co already sent for an ask only counts against a candidate when it's the same kind of thing for the same moment. "covered" means another candidate in today's pool does the same job better, not that the ask got something before.
+An ask isn't finished after one send: someone looking for events this week usually wants a few across the week, and a search for a community can take several tries. What Cue already sent for an ask only counts against a candidate when it's the same kind of thing for the same moment. "covered" means another candidate in today's pool does the same job better, not that the ask got something before.
 
 Some candidates come with only a name and a date. Judge what the name tells you; thin isn't the same as weak.
 
 Things they asked for and things you'd bring up yourself clear the same bar. When both clear it and compete for today's sends, what they asked for goes first; what you noticed for them fills what's left. Send at most ${SELECT_LIMITS.maxSends}, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.
 
-When you send more than one, add "set": one line on why these go together today (what they share for this member, or how they differ), in plain words; it's what Co's message opens with. Leave it out for one send or none.
+When you send more than one, add "set": one line on why these go together today (what they share for this member, or how they differ), in plain words; it's what Cue's message opens with. Leave it out for one send or none.
 
 Return ONLY JSON:
 {"set":"...","verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08","taste":"matches"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."},{"id":"C4","verdict":"reject","reason":"already_known","cites":["S3"],"why":"..."}]}`;
 
 // The morning run's own instructions (member prompt, so SELECT_SYSTEM stays the same for every run and keeps its cache).
-export const MORNING_NOTE = `THIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Co event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate "rank": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and "forThem": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or "not a wow" only moves it down its kind; it never empties a kind.`;
+export const MORNING_NOTE = `THIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Cue event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate "rank": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and "forThem": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or "not a wow" only moves it down its kind; it never empties a kind.`;
 
 // What the thing is, not a rank: tier numbers read as a quality score (the
 // 2026-10-02 replay rejected things for being "tier 3").
-const SOURCE_LABEL: Record<number, string> = { 1: "a Co event", 2: "an event", 3: "an opening (program, place or opportunity)" };
+const SOURCE_LABEL: Record<number, string> = { 1: "a Cue event", 2: "an event", 3: "an opening (program, place or opportunity)" };
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
@@ -130,7 +130,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 export function pastWhy(g: PastGoal): string {
   if (g.state === "done") return "done";
   if (g.state === "set_aside") return "set aside";
-  return `lapsed${g.why ? `: ${clip(g.why, 100)}` : ""}; Co's bookkeeping, not their word`;
+  return `lapsed${g.why ? `: ${clip(g.why, 100)}` : ""}; Cue's bookkeeping, not their word`;
 }
 
 // Pure: the member part of the prompt.
@@ -139,20 +139,20 @@ export function selectPrompt(c: SelectContext): string {
   lines.push(`Member: ${c.firstName}${c.city ? `, ${c.city}` : ""}. Today: ${c.weekday} ${c.today}${c.zone ? ` (their time, ${c.zone})` : ""}.`);
   lines.push(`Discovery texts left this week: ${c.discoveryLeft} (things they asked for don't use these).`);
   if (c.feeling) lines.push(`How they've been: ${c.feeling}`);
-  lines.push(`\nWhat they've asked Co for (open):`);
+  lines.push(`\nWhat they've asked Cue for (open):`);
   lines.push(c.asks.length ? c.asks.map((a) => `${a.id} (since ${a.since}${a.closed ? ", closed since" : ""}): ${clip(a.text, 220)}`).join("\n") : "(none)");
   if (c.goals?.length) lines.push("", "Where they say they are headed (the LENS: judge every candidate against this as well as the asks; never cite it as the reason, the reason is an ask, a text, or what they did):", c.goals.map((g) => `- ${clip(g, 200)}`).join("\n"));
   if (c.goalsPast?.length) lines.push("", "Past goals (history, NOT the lens: never pick something only for a done or set-aside one):", c.goalsPast.map((g) => `${g.id} ${clip(g.text, 200)} (${pastWhy(g)})`).join("\n"));
-  if (c.person) lines.push("", "Co's read of them:", clip(c.person, 1500));
-  if (c.learned?.length) lines.push("", "What Co has learned about them (a correction replaces what it corrects):", c.learned.map((l) => `- ${clip(l, 200)}`).join("\n"));
-  if (c.delivered?.length) lines.push("", "What they already have from Co (never pick the same thing again as news; a reminder of something they're going to is different):", c.delivered.map((d) => `${d.id} ${clip(d.what, 120)} (${d.kind}, ${d.at})${d.reaction ? ` → ${d.reaction}` : ""}`).join("\n"));
-  if (c.carrying?.length) lines.push("", "What Co is already working on for them (a candidate that only repeats one of these isn't new):", c.carrying.map((x) => `- ${clip(x, 160)}`).join("\n"));
-  lines.push(`\nTheir recent texts with Co (oldest first):`);
-  lines.push(c.texts.length ? c.texts.slice(-SELECT_LIMITS.texts).map((t) => `${t.id} ${t.at} ${t.from === "member" ? "They" : "Co"}: ${clip(t.text, 280)}`).join("\n") : "(none)");
-  lines.push(`\nWhat Co sent them first, last 30 days, and what happened:`);
+  if (c.person) lines.push("", "Cue's read of them:", clip(c.person, 1500));
+  if (c.learned?.length) lines.push("", "What Cue has learned about them (a correction replaces what it corrects):", c.learned.map((l) => `- ${clip(l, 200)}`).join("\n"));
+  if (c.delivered?.length) lines.push("", "What they already have from Cue (never pick the same thing again as news; a reminder of something they're going to is different):", c.delivered.map((d) => `${d.id} ${clip(d.what, 120)} (${d.kind}, ${d.at})${d.reaction ? ` → ${d.reaction}` : ""}`).join("\n"));
+  if (c.carrying?.length) lines.push("", "What Cue is already working on for them (a candidate that only repeats one of these isn't new):", c.carrying.map((x) => `- ${clip(x, 160)}`).join("\n"));
+  lines.push(`\nTheir recent texts with Cue (oldest first):`);
+  lines.push(c.texts.length ? c.texts.slice(-SELECT_LIMITS.texts).map((t) => `${t.id} ${t.at} ${t.from === "member" ? "They" : "Cue"}: ${clip(t.text, 280)}`).join("\n") : "(none)");
+  lines.push(`\nWhat Cue sent them first, last 30 days, and what happened:`);
   lines.push(c.sent.length ? c.sent.slice(-SELECT_LIMITS.sent).map((s) => `${s.id} ${s.at}: ${clip(s.what, 160)}${s.reaction ? ` → ${s.reaction}` : " → no reply"}`).join("\n") : "(nothing)");
   if (c.outcomes.length) {
-    lines.push(`\nHow they've reacted to things Co suggested:`);
+    lines.push(`\nHow they've reacted to things Cue suggested:`);
     lines.push(c.outcomes.map((o) => `${o.id} ${o.at}: ${clip(o.item, 100)} → ${o.result}${o.note ? ` ("${clip(o.note, 120)}")` : ""}`).join("\n"));
   }
   if (c.rules?.length) lines.push("", "Member rules (for judging what goes; the send step still holds timing and caps):", c.rules.join("\n"));
@@ -438,7 +438,7 @@ export function claimCheckPrompt(c: SelectContext, items: ClaimItem[]): string {
   const words = items.filter((i): i is Extract<ClaimItem, { kind: "record" }> => i.kind === "record" && i.q === "words");
   const whys = items.filter((i): i is Extract<ClaimItem, { kind: "why" }> => i.kind === "why");
   const lates = items.filter((i): i is Extract<ClaimItem, { kind: "late" }> => i.kind === "late");
-  const lines = ["You check Co's reasons for leaving something out of a member's day. Answer only from what's written here.", "", "Their active goals (what they're working toward now):", (c.goals ?? []).length ? (c.goals ?? []).map((g) => `- ${clip(g, 200)}`).join("\n") : "(none on file)"];
+  const lines = ["You check Cue's reasons for leaving something out of a member's day. Answer only from what's written here.", "", "Their active goals (what they're working toward now):", (c.goals ?? []).length ? (c.goals ?? []).map((g) => `- ${clip(g, 200)}`).join("\n") : "(none on file)"];
   if (recs.length) {
     lines.push("", "RECORDS. For each, does the cited record show that the member already knows about, is going to, said no to, or finished THIS specific thing? A finished or closed record about a different program, ask or goal does not count, even if it is the same kind.");
     for (const r of recs) lines.push(`${r.id}: this thing: ${r.find}\n    the record: ${r.record}`);
@@ -599,12 +599,12 @@ export function tierPicks(c: SelectContext, judgments: Judgment[]): Judgment[] {
     const t = tierOf(p);
     if (chosenIds.has(j.id)) {
       const sent = j.verdict === "send";
-      return { ...j, verdict: "send", reason: sent ? j.reason : "tier_pick", why: sent ? j.why : memberWhyOf(j), notSentWhy: sent ? undefined : j.why, whyNow: sent || j.reason === "over_send_limit" ? j.whyNow ?? "" : "", until: null, tierPick: t, tierAlternates: alternates.get(j.id) ?? [], ...(sent ? {} : { guard: `the best of its tier this morning${j.reason === "fit_only" || j.verdict === "reject" ? ` (Co said ${j.claimed ?? j.reason}, not a reason to hold it back)` : j.verdict === "hold" ? " (Co would have held it; not a reason to hold it back)" : ""}` }) };
+      return { ...j, verdict: "send", reason: sent ? j.reason : "tier_pick", why: sent ? j.why : memberWhyOf(j), notSentWhy: sent ? undefined : j.why, whyNow: sent || j.reason === "over_send_limit" ? j.whyNow ?? "" : "", until: null, tierPick: t, tierAlternates: alternates.get(j.id) ?? [], ...(sent ? {} : { guard: `the best of its tier this morning${j.reason === "fit_only" || j.verdict === "reject" ? ` (Cue said ${j.claimed ?? j.reason}, not a reason to hold it back)` : j.verdict === "hold" ? " (Cue would have held it; not a reason to hold it back)" : ""}` }) };
     }
     if (heldBackFor(j) || j.verdict === "no_verdict") return j;
     const by = chosen.get(t);
     if (j.verdict === "hold" && j.reason !== "over_send_limit") return j;
-    return { ...j, verdict: "hold", reason: "tier_taken", until: null, guard: `one find per tier: ${by ? `"${by.name}"` : "another"} went from its tier this morning${j.verdict === "reject" ? `; Co said ${j.reason}, which only ranks it` : ""}` };
+    return { ...j, verdict: "hold", reason: "tier_taken", until: null, guard: `one find per tier: ${by ? `"${by.name}"` : "another"} went from its tier this morning${j.verdict === "reject" ? `; Cue said ${j.reason}, which only ranks it` : ""}` };
   });
 }
 
@@ -618,7 +618,7 @@ export function onlyVerifiedExits(judgments: Judgment[]): Judgment[] {
   return judgments.map((j) =>
     j.verdict !== "reject" || heldBackFor(j)
       ? j
-      : { ...j, verdict: "hold", reason: "fit_only", until: null, claimed: (REJECT_REASONS as readonly string[]).includes(j.reason) ? (j.reason as RejectReason) : undefined, guard: `${j.guard ? `${j.guard}; ` : ""}no verified reason to take it out (Co said ${j.reason}): it waits in the backlog` },
+      : { ...j, verdict: "hold", reason: "fit_only", until: null, claimed: (REJECT_REASONS as readonly string[]).includes(j.reason) ? (j.reason as RejectReason) : undefined, guard: `${j.guard ? `${j.guard}; ` : ""}no verified reason to take it out (Cue said ${j.reason}): it waits in the backlog` },
   );
 }
 // Holds code made that never buy a run of their own: a fit-only reject, and a tier's runner-up (the next morning runs anyway).
@@ -678,7 +678,7 @@ export function ageOutFitOnly(judgments: Judgment[]): Judgment[] {
   const aged: Judgment[] = [];
   judgments.forEach((j, i) => {
     if (j.verdict !== "hold" || j.reason !== "fit_only" || (j.fitOnlyMornings ?? 0) < FIT_ONLY_MORNINGS) return;
-    const note = `left unpicked for ${j.fitOnlyMornings} mornings as a fit-only hold (Co said ${j.claimed ?? "it only loosely fits"})`;
+    const note = `left unpicked for ${j.fitOnlyMornings} mornings as a fit-only hold (Cue said ${j.claimed ?? "it only loosely fits"})`;
     judgments[i] = { ...j, verdict: "reject", reason: "aged_out", why: `${note}: ${j.why}`, guard: `${note}: it leaves the backlog` };
     aged.push(judgments[i]);
   });

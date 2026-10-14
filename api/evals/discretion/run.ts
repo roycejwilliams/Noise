@@ -17,7 +17,7 @@ const messages = ["Yes!", "Sure", "go ahead", "who is it?", "yeah tell me who", 
 
 async function reply(message: string, instruction: string) {
   const rf = baseReplyFacts();
-  addFact(rf, "pending", "Co asked them: someone in Co's network came to mind for what they're looking for, want to hear who?");
+  addFact(rf, "pending", "Cue asked them: someone in Cue's network came to mind for what they're looking for, want to hear who?");
   addInstruction(rf, instruction);
   const out = await runConversationReplyAgent(
     {

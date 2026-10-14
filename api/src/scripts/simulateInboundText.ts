@@ -58,7 +58,7 @@ async function main() {
     );
     const reply = rows.find((r: any) => typeof r.content === "string" && r.content.startsWith("Co replied:"));
     if (reply) {
-      console.log(`[simulateInboundText] Co's reply (${reply.created_at.toISOString()}):`, reply.content);
+      console.log(`[simulateInboundText] Cue's reply (${reply.created_at.toISOString()}):`, reply.content);
       await pool.end();
       return;
     }

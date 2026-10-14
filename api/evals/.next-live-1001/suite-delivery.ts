@@ -150,7 +150,7 @@ export const delivery: Case[] = [
       const bad = await inbound(PHONE.C, "hello", { secret: "wrong" });
       const status = await inbound(PHONE.C, "", { extra: { is_outbound: true, status: "ERROR", error_code: 30003, error_message: "Unreachable" } });
       await settle(1500);
-      const errMem = await rows(`SELECT content FROM co_memories WHERE user_id = $1 AND content LIKE 'Co message failed to deliver%'`, [ID.C]);
+      const errMem = await rows(`SELECT content FROM co_memories WHERE user_id = $1 AND content LIKE 'Cue message failed to deliver%'`, [ID.C]);
       const turns = await rows(`SELECT count(*)::int AS n FROM inbound_webhook_handles`);
       const replies = await rows(`SELECT count(*)::int AS n FROM outbound_messages`);
       // Duplicate inbound handle: second delivery is a duplicate, not a second turn.

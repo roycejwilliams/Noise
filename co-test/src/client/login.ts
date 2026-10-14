@@ -43,7 +43,7 @@ async function prepareCode() {
     ).json();
     if (!data.success && data.error) throw new Error(data.error);
     if (!data.success || !data.text_in_number) throw new Error("Couldn't start sign-in. Refresh to try again.");
-    const message = `Hi Co! (test site code: ${data.code})`;
+    const message = `Hi Cue! (test site code: ${data.code})`;
     // iOS and Android use different separators before body= on sms: links.
     const separator = /iPhone|iPad|iPod/i.test(navigator.userAgent) ? "&" : "?";
     textCoButton.href = `sms:${data.text_in_number}${separator}body=${encodeURIComponent(message)}`;
@@ -65,12 +65,12 @@ function startPolling() {
         waitingEl.classList.add("hidden");
         textCoButton.classList.add("hidden");
         confirmForm.classList.remove("hidden");
-        statusEl.textContent = "Co just texted you a code. Enter it here.";
+        statusEl.textContent = "Cue just texted you a code. Enter it here.";
         confirmInput.focus();
       } else if (data.status === "expired") {
         window.clearInterval(pollTimer!);
         waitingEl.classList.add("hidden");
-        statusEl.textContent = "That took a while. Tap Text Co again.";
+        statusEl.textContent = "That took a while. Tap Text Cue again.";
         await prepareCode();
       }
     } catch (err) {
@@ -99,7 +99,7 @@ confirmForm.addEventListener("submit", async (e) => {
       statusEl.textContent = "Signed in.";
       window.location.href = "/phone";
     } else if (data.status === "wrong") {
-      showError("That code doesn't match. Check the text from Co and try again.");
+      showError("That code doesn't match. Check the text from Cue and try again.");
     } else {
       confirmForm.classList.add("hidden");
       textCoButton.classList.remove("hidden");
@@ -115,7 +115,7 @@ phoneForm.addEventListener("submit", async (e) => {
   phone = phoneInput.value.trim();
   if (!phone) return;
   await prepareCode();
-  if (errorEl.classList.contains("hidden")) statusEl.textContent = "Now text Co from that phone.";
+  if (errorEl.classList.contains("hidden")) statusEl.textContent = "Now text Cue from that phone.";
 });
 
 // The code only ever lives in the iMessage prefill, never on screen, so

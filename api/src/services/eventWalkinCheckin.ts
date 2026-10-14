@@ -11,13 +11,13 @@ import type { ScorableGuest } from "./eventScoring.js";
 // event, resolved live rather than hardcoded to any one event. Deliberately
 // generic: works for any Co-hosted event going forward, not just this one.
 
-const CHECKIN_PHRASE = /\bi'?m\s+(?:currently\s+)?at\s+a\s+co\s+(?:sponsored\s+)?event\b/i;
+const CHECKIN_PHRASE = /\bi'?m\s+(?:currently\s+)?at\s+a\s+(?:co|cue|noise)\s+(?:sponsored\s+)?event\b/i;
 
 // Strip a small set of English stopwords before comparing word sets — "the",
 // "a", "at", "for" etc. are noise for matching an event name and would let
 // two unrelated events both score a false partial match.
 const STOPWORDS = new Set([
-  "the", "a", "an", "at", "for", "of", "in", "on", "to", "and", "&", "co",
+  "the", "a", "an", "at", "for", "of", "in", "on", "to", "and", "&", "co", "cue", "noise",
 ]);
 
 function significantWords(s: string): Set<string> {

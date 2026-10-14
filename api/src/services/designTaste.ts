@@ -69,7 +69,7 @@ export async function loadDesignTaste(userId: string): Promise<{ taste: DesignTa
 
 // The one ask: recorded when Co asks, read so it never asks twice.
 export async function recordTasteAsked(userId: string): Promise<void> {
-  await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, $2, $3)`, [userId, DESIGN_TASTE_ASKED, "Co asked about their design taste"]);
+  await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, $2, $3)`, [userId, DESIGN_TASTE_ASKED, "Cue asked about their design taste"]);
 }
 export async function tasteAskedRecently(userId: string): Promise<boolean> {
   const { rows } = await pool.query(

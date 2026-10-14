@@ -68,14 +68,14 @@ export type Stats = {
 };
 
 export function describe(s: Stats): { headline: string; lines: string[]; note: string } {
-  const note = "This is the room in aggregate. It carries nothing any member told Co, and nothing about who talked to whom. Small counts are shown as a few, and headcounts are rounded.";
+  const note = "This is the room in aggregate. It carries nothing any member told Cue, and nothing about who talked to whom. Small counts are shown as a few, and headcounts are rounded.";
   if (s.registered < READOUT.minRoom) {
     return { headline: `How ${s.eventName} went`, lines: ["This room was too small to read out without pointing at individual members, so there is no readout for it."], note };
   }
   const lines: string[] = [];
-  lines.push(`${approx(s.registered)} members were registered and ${approx(s.arrived)} arrived through Co${s.walkins ? `, plus ${cell(s.walkins)} who checked in at the door` : ""}.`);
-  if (s.nudged) lines.push(`Co pointed ${cell(s.nudged)} members to someone to meet, and ${cell(s.interested)} said they wanted the connection.`);
-  if (s.debriefReplies) lines.push(`Of the members who told Co how it went, ${cell(s.metSomeone)} said they met someone worth knowing${s.followThroughMembers >= READOUT.minPeopleForConversations ? `, and ${cell(s.conversationsTold)} people were named across what members told Co` : ""}.`);
+  lines.push(`${approx(s.registered)} members were registered and ${approx(s.arrived)} arrived through Cue${s.walkins ? `, plus ${cell(s.walkins)} who checked in at the door` : ""}.`);
+  if (s.nudged) lines.push(`Cue pointed ${cell(s.nudged)} members to someone to meet, and ${cell(s.interested)} said they wanted the connection.`);
+  if (s.debriefReplies) lines.push(`Of the members who told Cue how it went, ${cell(s.metSomeone)} said they met someone worth knowing${s.followThroughMembers >= READOUT.minPeopleForConversations ? `, and ${cell(s.conversationsTold)} people were named across what members told Cue` : ""}.`);
   if (s.intros) lines.push(`${cell(s.intros)} introductions went out after both people said yes.`);
   const themes = s.askCount >= READOUT.minForThemes ? foldThemes(s.themes) : [];
   if (themes.length) lines.push(`What the room was looking for, by category: ${themes.map((t) => `${t.theme.toLowerCase()} (${t.n})`).join(", ")}.`);

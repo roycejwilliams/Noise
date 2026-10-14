@@ -52,7 +52,7 @@ export async function startTextLogin(phoneRaw: unknown): Promise<{ token: string
 const CONFIRM_TTL_MINUTES = 10;
 const CONFIRM_MAX_ATTEMPTS = 5;
 export const confirmText = (code: string) =>
-  `Your Co test dashboard sign-in code is ${code}. If you didn't just try to sign in, ignore this and don't share it with anyone.`;
+  `Your Cue test dashboard sign-in code is ${code}. If you didn't just try to sign in, ignore this and don't share it with anyone.`;
 const hashCode = (code: string) => createHash("sha256").update(code).digest("hex");
 type Send = (to: string, content: string) => Promise<unknown>;
 const defaultSend: Send = async (to, content) => {

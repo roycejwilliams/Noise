@@ -120,7 +120,7 @@ const searched = (fp: { plan: any }) => (fp.plan ? goalItemsFromPlan(fp.plan, (e
   check("structural: the floor's goal gate holds no send-set timer", !P.SWEEP_BLOCKERS.floor_goal.some((x) => P.SEND_TIMERS.includes(x)) && ["weekly_cap", "engagement_pace", "unanswered_pause"].every((x) => P.SEND_TIMERS.includes(x)));
   // 3. The one exception: the engagement taper reads only their own last message and the floor's own last search, never a send.
   const cadenceSrc = DS.searchCadence.toString();
-  check("structural: the taper's inputs are their last message and the floor's last search; nothing Co sent", !/send|sent|unanswered|cooldown|surfaced/i.test(cadenceSrc.replace(/lastSearchAt|lastInboundAt/g, "")) && /lastInboundAt/.test(cadenceSrc) && /lastSearchAt/.test(cadenceSrc));
+  check("structural: the taper's inputs are their last message and the floor's last search; nothing Cue sent", !/send|sent|unanswered|cooldown|surfaced/i.test(cadenceSrc.replace(/lastSearchAt|lastInboundAt/g, "")) && /lastInboundAt/.test(cadenceSrc) && /lastSearchAt/.test(cadenceSrc));
   const rd = DS.runDailySweep.toString().replace(/\s+/g, "");
   check("structural: the floor's day reads the taper from their last message and its own last search record, never a send", rd.includes("constinboundAt=awaitlastInboundAt(userId);") && rd.includes("searchCadence({now,zone,lastInboundAt:inboundAt,lastSearchAt:") && rd.includes("decision='sweep.daily'") && !/proactive_sends|proactive_candidates|last_surfaced/.test(rd));
   const fp1 = await floorGoalPlan({ user_id: "u1", cooldown_cleared: false, last_surfaced_at: day("2026-10-14") }, day("2026-10-14"), world({ stored: stored(GOALS, day("2026-10-12")) }).deps);
@@ -183,7 +183,7 @@ const searched = (fp: { plan: any }) => (fp.plan ? goalItemsFromPlan(fp.plan, (e
   check("silent exactly 7 days: every 3 days (Royce 2026-10-14: taper starts at 7)", c("2026-10-24", "2026-10-29").everyDays === 3 && !c("2026-10-24", "2026-10-29").search && c("2026-10-25", "2026-10-29").everyDays === 1); // inbound at 02:00Z is the evening before in their zone
   check("instant resume: a message from them since the last search means today's 9am searches everything", resume.search && /wrote since the last search/.test(resume.why));
   check("a tapered day says so: 'tapered: quiet N days, next search <date>'", c("2026-10-01", "2026-10-24").why === "tapered: quiet 29 days, next search 2026-10-30" || /^tapered: quiet \d+ days, next search \d{4}-\d{2}-\d{2}$/.test(c("2026-10-01", "2026-10-24").why), c("2026-10-01", "2026-10-24").why);
-  check("a send never affects the cadence: it isn't an input (same inputs, same answer, whatever Co sent)", DS.searchCadence.length === 1 && JSON.stringify(c("2026-10-20", "2026-10-28")) === JSON.stringify(c("2026-10-20", "2026-10-28")));
+  check("a send never affects the cadence: it isn't an input (same inputs, same answer, whatever Cue sent)", DS.searchCadence.length === 1 && JSON.stringify(c("2026-10-20", "2026-10-28")) === JSON.stringify(c("2026-10-20", "2026-10-28")));
   check("thresholds: daily within 6 days, tapered from 7 (a week is the unit), every 3 days to 14, weekly after", DS.SEARCH_TAPER.dailyUpToDays === 6 && DS.SEARCH_TAPER.everyFewUpToDays === 14 && DS.SEARCH_TAPER.everyFewDays === 3 && DS.SEARCH_TAPER.weeklyDays === 7);
   const rd = DS.runDailySweep.toString().replace(/\s+/g, "");
   check("pin: a tapered day is written as the day's record (never silent) and searches nothing", rd.includes('if(!cadence.search){awaitwriteDaily(userId,"skip","tapered",cadence.why') && rd.indexOf("cadence.search") < rd.indexOf("sweepMember("));
@@ -218,7 +218,7 @@ const searched = (fp: { plan: any }) => (fp.plan ? goalItemsFromPlan(fp.plan, (e
 {
   // Her last plan was 10-10 21:30 (before fingerprints); a goal find went out 10-11 08:15; the hourly goal sweep then hit the cooldown on
   // 10-11, 10-12, 10-13 and 10-14 and never planned. On 10-14 the old floor read no plan from the last 3 days: 0 of her 9 goals searched.
-  const NINE = ["co-found Co with Royce", "build a design system for Co", "get to 20 members by November", "host a November launch party", "find a Pilates studio near the Mission", "meet women founders in SF", "learn product analytics", "plan a trip to Mexico City", "read more fiction this fall"];
+  const NINE = ["co-found Cue with Royce", "build a design system for Cue", "get to 20 members by November", "host a November launch party", "find a Pilates studio near the Mission", "meet women founders in SF", "learn product analytics", "plan a trip to Mexico City", "read more fiction this fall"];
   const old = { proposal: { edges: NINE.map((g) => ({ goal: g, kind: "findable", edges: ["x y"] })), passed: [], setAside: [] }, created_at: new Date("2026-10-10T21:30:05Z") };
   const w = world({ goals: NINE, stored: old });
   w.deps.model = async () => { w.calls.model++; return JSON.stringify(NINE.map((g, i) => ({ n: i + 1, kind: "findable", edges: [`edge ${i}`], until: null, superseded_by: null, why: "" }))); };

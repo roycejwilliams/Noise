@@ -80,7 +80,7 @@ const run = async (o: { update?: any; meta?: any; token?: any; oldGrant?: boolea
 }
 {
   const r = await run({ meta: { modifiedAt: new Date("2026-10-11T19:30:00Z") } });
-  check("review of #143: edits made in the Doc after Co's are never written over: a new Doc, and the text says why", r.updates.length === 0 && r.uploads.length === 2 && /has edits since I made it, so I left it as it is/.test(r.texts[0] ?? ""), r.texts);
+  check("review of #143: edits made in the Doc after Cue's are never written over: a new Doc, and the text says why", r.updates.length === 0 && r.uploads.length === 2 && /has edits since I made it, so I left it as it is/.test(r.texts[0] ?? ""), r.texts);
 }
 {
   const r = await run();
@@ -98,8 +98,8 @@ const run = async (o: { update?: any; meta?: any; token?: any; oldGrant?: boolea
 {
   const r = await run({ token: null });
   const r2 = r.second as any;
-  check("…and the member's own text says it's a PDF this time, on any path (not only Co's reply)", /It's a PDF this time, since I couldn't update your Google Doc\./.test(r.texts.at(-1) ?? ""), r.texts);
-  check("Google disconnected since: the new version goes as a PDF and Co is told the text said so (no 'they asked for a Google Doc')", r2.docBecamePdf === true && r2.sentOk[0]?.via === "pdf_text" && r2.googleRefused === null && r2.googleMissing === false, { docBecamePdf: r2.docBecamePdf, via: r2.sentOk[0]?.via, refused: r2.googleRefused });
+  check("…and the member's own text says it's a PDF this time, on any path (not only Cue's reply)", /It's a PDF this time, since I couldn't update your Google Doc\./.test(r.texts.at(-1) ?? ""), r.texts);
+  check("Google disconnected since: the new version goes as a PDF and Cue is told the text said so (no 'they asked for a Google Doc')", r2.docBecamePdf === true && r2.sentOk[0]?.via === "pdf_text" && r2.googleRefused === null && r2.googleMissing === false, { docBecamePdf: r2.docBecamePdf, via: r2.sentOk[0]?.via, refused: r2.googleRefused });
 }
 {
   // Rule 4 for callers that don't name the change: worked out from the two versions, specific, never bare.
@@ -118,7 +118,7 @@ const run = async (o: { update?: any; meta?: any; token?: any; oldGrant?: boolea
   check("review of #143: a note that only adds a section still names the document", added.line === "Updated the venue brief: a new Catering section.", added.line);
   const sec = (h: string, b: string[]) => ({ heading: h, paragraphs: [], bullets: b });
   const a = { title: "T", note: "", suggestions: [], sections: [sec("Budget", ["$5k"]), sec("Timeline", ["May"]), sec("Room", ["40"])] } as any;
-  check("whatChanged: changed, added and removed sections by name, in Co's own voice (review of #143: never 'Co's suggestions')", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "changes to the Budget section (section 1), and a new Catering section" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "new suggestions from me" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "no more Timeline section");
+  check("whatChanged: changed, added and removed sections by name, in Cue's own voice (review of #143: never 'Cue's suggestions')", R.whatChanged(a, { ...a, sections: [sec("Budget", ["$6k"]), sec("Room", ["40"]), sec("Catering", ["Yes"])] }) === "changes to the Budget section (section 1), and a new Catering section" && R.whatChanged(a, { ...a, suggestions: ["x"] }) === "new suggestions from me" && R.whatChanged(a, { ...a, sections: [a.sections[0], a.sections[2]] }) === "no more Timeline section");
 }
 {
   // The Doc is looked up by its document, however many receipts they have.

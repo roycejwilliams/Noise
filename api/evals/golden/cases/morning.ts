@@ -49,7 +49,7 @@ const oneFindPerTier: GoldenCase = {
       discoveryLeft: 4,
       morning: true,
       pool: [
-        { id: "C1", key: "co supper|2026-10-16", name: "Co Supper: Climate Builders", date: "2026-10-16", tier: 1, kind: "answer", asks: ["A1"], details: "a Co dinner for 12, climate founders and operators, Thursday 7pm, Mission" },
+        { id: "C1", key: "co supper|2026-10-16", name: "Cue Supper: Climate Builders", date: "2026-10-16", tier: 1, kind: "answer", asks: ["A1"], details: "a Cue dinner for 12, climate founders and operators, Thursday 7pm, Mission" },
         { id: "C2", key: "climate hike|2026-10-18", name: "Climate Tech Hike: Lands End", date: "2026-10-18", tier: 2, kind: "answer", asks: ["A1"], details: "a 15-person Saturday morning hike for people working in climate" },
         { id: "C3", key: "climate drinks|2026-10-15", name: "Climate Founders Drinks (300+ RSVPs)", date: "2026-10-15", tier: 2, kind: "discovery", asks: [], details: "a large open mixer, 300+ RSVPs, name tags" },
         { id: "C4", key: "on deck climate|", name: "On Deck Climate Fellowship, winter cohort", date: "2026-11-15", tier: 3, kind: "discovery", asks: [], details: "a part-time fellowship for climate operators; applications open, close Nov 15" },
@@ -100,7 +100,7 @@ const searchedAfterGoalFind: GoldenCase = {
   id: "plan-goal-find-yesterday",
   title: "A member who got a goal find yesterday is still searched at 9am today",
   status: { live: true },
-  from: "Royce 2026-10-14: Jacqueline got 0 goal searches in 4 days after a goal find (cooldown plus a 3-day plan age); \"A send can never reduce what Co knows\"",
+  from: "Royce 2026-10-14: Jacqueline got 0 goal searches in 4 days after a goal find (cooldown plus a 3-day plan age); \"A send can never reduce what Cue knows\"",
   run: async () => {
     // Her last plan predates fingerprints (as Jacqueline's from 10-10 did), the hourly goal sweep has sat in its cooldown since the
     // find went out yesterday, and the floor must still search her goals today.

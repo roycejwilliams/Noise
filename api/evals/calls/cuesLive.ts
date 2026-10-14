@@ -88,7 +88,7 @@ async function runCall(name: string): Promise<{ name: string; conversationId: st
       agentTurns++;
       const text = String(m.agent_response_event?.agent_response ?? "");
       replies.push({ text, cues: cuesIn(text), latencyMs: callerEndedAt !== null && pending.firstAudio !== null ? pending.firstAudio - callerEndedAt : null, afterCaller: callerLine });
-      console.log(`  Co${callerEndedAt !== null && pending.firstAudio !== null ? ` (+${pending.firstAudio - callerEndedAt}ms)` : ""}: ${text}`);
+      console.log(`  Cue${callerEndedAt !== null && pending.firstAudio !== null ? ` (+${pending.firstAudio - callerEndedAt}ms)` : ""}: ${text}`);
       pending = { firstAudio: null };
       callerEndedAt = null;
     }
@@ -144,5 +144,5 @@ const timed = (rs: Reply[]) => rs.map((r) => r.latencyMs).filter((x): x is numbe
 const med = (xs: number[]) => (xs.length ? xs[Math.floor(xs.length / 2)] : null);
 const cued = all.filter((r) => r.cues.length);
 console.log(`\nreplies ${all.length}, with a cue ${cued.length} (${Math.round((100 * cued.length) / Math.max(1, all.length))}%), cues ${JSON.stringify(cued.flatMap((r) => r.cues))}`);
-console.log(`median ms from caller's line ending to Co's first audio: cued ${med(timed(cued))} (n=${timed(cued).length}), plain ${med(timed(all.filter((r) => !r.cues.length)))} (n=${timed(all.filter((r) => !r.cues.length)).length})`);
+console.log(`median ms from caller's line ending to Cue's first audio: cued ${med(timed(cued))} (n=${timed(cued).length}), plain ${med(timed(all.filter((r) => !r.cues.length)))} (n=${timed(all.filter((r) => !r.cues.length)).length})`);
 console.log("conversations:", results.map((r) => `${r.name}=${r.conversationId}`).join(", "));

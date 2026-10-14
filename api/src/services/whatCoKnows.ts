@@ -295,8 +295,8 @@ export function groupKnown(items: KnownItem[], perGroup = 8): KnownView {
 
 // Pure: the view as one fact line for the reply's grounding (refs left out: they're for the tool, never for a text).
 export function knownFact(v: KnownView): string {
-  if (!v.groups.length) return "What Co knows about them: nothing yet beyond their name and number.";
-  return `What Co knows about them, the complete list (answer only from this; never add to it): ${v.groups.map((g) => `${g.title}: ${g.lines.map((l) => (l.theirWords ? `${l.text} (their words: "${l.theirWords}")` : l.text)).join("; ")}`).join(". ")}.`;
+  if (!v.groups.length) return "What Cue knows about them: nothing yet beyond their name and number.";
+  return `What Cue knows about them, the complete list (answer only from this; never add to it): ${v.groups.map((g) => `${g.title}: ${g.lines.map((l) => (l.theirWords ? `${l.text} (their words: "${l.theirWords}")` : l.text)).join("; ")}`).join(". ")}.`;
 }
 
 // Pure: a corrected value has to rest on their words: at least one of its real words is in what they said this turn.
@@ -413,7 +413,7 @@ export function guardText(text: string, rows: ForgottenRow[]): string | null {
     out = kept;
     // "please forget the divorce stuff": the ask stays (Co should know it was asked and done), its subject doesn't.
     const own = out.match(/^\s*(User\b[^:\n]{0,40}:\s*)([\s\S]*)$/i);
-    if (own && removalAsked(own[2], null) && removed.some((r) => words(plainOf(r.old)).some((w) => w.length >= 4 && new Set(words(own[2]).map(stem)).has(stem(w))))) return `${own[1]}(asked Co to forget something they'd told it; done)`;
+    if (own && removalAsked(own[2], null) && removed.some((r) => words(plainOf(r.old)).some((w) => w.length >= 4 && new Set(words(own[2]).map(stem)).has(stem(w))))) return `${own[1]}(asked Cue to forget something they'd told it; done)`;
   }
   const notes: string[] = [];
   for (const r of rows) {
@@ -432,7 +432,7 @@ function withoutRemovedParts(text: string, removed: ForgottenRow[]): string | nu
   const m = text.match(/^(\s*[^:\n]{1,40}:\s*)([\s\S]*)$/);
   const head = m ? m[1] : "";
   const body = m ? m[2] : text;
-  const isLabel = !!m && !/^\s*(User|Co)\b/i.test(head);
+  const isLabel = !!m && !/^\s*(User|Co|Cue)\b/i.test(head);
   let sep = /;\s*/.test(body) ? "; " : isLabel && /,\s*/.test(body) ? ", " : null;
   if (!sep) return gone(text) ? null : text;
   const parts = body.split(sep === "; " ? /;\s*/ : /,\s*/);
@@ -858,7 +858,7 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       return { ref: item.ref, source: "avoid", was: old, now: null };
     }
   }
-  return { why: "not something Co can change" };
+  return { why: "not something Cue can change" };
 }
 
 // The corrections record's field for a ref: the co_profiles field itself for profile refs (so the extraction's own guard,
@@ -869,11 +869,11 @@ export function fieldFor(ref: string): string {
   if (kind === "goal") return "goals";
   if (kind === "snapshot") return a === "place" ? "where they are" : a === "work" ? "their work" : a === "wantsNow" ? "what they want now" : a === "weighingOn" ? "what's weighing on them" : "what matters to them in people";
   if (kind === "kit") return `their ${a === "linkedin" ? "LinkedIn" : a}`;
-  if (kind === "place") return "where Co looks for one of their wants";
+  if (kind === "place") return "where Cue looks for one of their wants";
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
   if (kind === "grant") return a === "docs" ? "their Google Docs connection" : "their calendar connection";
-  return { claim: "what they told Co", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Co took from something of theirs", ask: "what Co looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
+  return { claim: "what they told Cue", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Cue took from something of theirs", ask: "what Cue looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
 }
 
 // Changes items at their source, records each in the corrections record and the decision log, and refreshes what's derived.

@@ -22,9 +22,9 @@ export const MAX_TASKS_PER_CALL = 2;
 export type Wanted = { goal?: unknown; quote?: unknown };
 
 export function callTasksPrompt(theirLines: string): string {
-  return `Below is what a member said on a phone call with Co. Find the things they asked Co to WORK ON over days: resources or memos sent through the week, preparing them for something (a pitch, a conversation), lining up or comparing options, researching something for them, keeping an eye out and texting what turns up.
+  return `Below is what a member said on a phone call with Cue. Find the things they asked Cue to WORK ON over days: resources or memos sent through the week, preparing them for something (a pitch, a conversation), lining up or comparing options, researching something for them, keeping an eye out and texting what turns up.
 
-Only what THEY asked for, in their own words. Not what Co offered or promised, not a topic they mentioned, not a feeling, not something they will do themselves, not a one-time question answered on the call. If they asked for nothing like that, return none.
+Only what THEY asked for, in their own words. Not what Cue offered or promised, not a topic they mentioned, not a feeling, not something they will do themselves, not a one-time question answered on the call. If they asked for nothing like that, return none.
 
 For each: "goal" is one plain sentence of what to work on, from their ask ("Send pre-seed fundraising resources and ideas through the week"); "quote" is the exact words they said, copied from below.
 
@@ -111,7 +111,7 @@ export async function tasksFromCall(userId: string, transcript: string, deps: Ca
       });
       if (s.ok) started.push(a.goal);
     }
-    if (started.length) await deps.record(userId, key, `Started working on ${started.map((g) => `"${g}"`).join(" and ")} after the call, because they asked for it. Co will text what it finds over the next days (at most one text a day per task); no promise of what or when.`);
+    if (started.length) await deps.record(userId, key, `Started working on ${started.map((g) => `"${g}"`).join(" and ")} after the call, because they asked for it. Cue will text what it finds over the next days (at most one text a day per task); no promise of what or when.`);
     return started;
   } catch (err: any) {
     console.error("callTasks: failed (non-fatal):", err?.message ?? err);

@@ -113,7 +113,7 @@ async function main() {
     const phone = process.env.SENDBLUE_PHONE_NUMBER ?? "";
     const vcard = buildCoVCard(phone);
     res.setHeader("Content-Type", "text/vcard");
-    res.setHeader("Content-Disposition", "attachment; filename=Co.vcf");
+    res.setHeader("Content-Disposition", "attachment; filename=Cue.vcf");
     res.setHeader("Cache-Control", "public, max-age=86400");
     return res.send(vcard);
   });

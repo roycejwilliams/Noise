@@ -22,11 +22,11 @@ export const CRITERIA = {
   length_fit:
     "Matches the length of what they sent: a short or casual message gets 1-2 sentences, unless they asked for depth (a plan, advice, detail, a walkthrough), in which case longer is right.",
   one_idea_per_paragraph: "Each paragraph carries one idea; no wall of text mixing several.",
-  one_question: "At most one question, and never re-asks a question Co already asked that they skipped or moved past.",
+  one_question: "At most one question, and never re-asks a question Cue already asked that they skipped or moved past.",
   no_restating_opener: 'Does not open by restating what they said back to them ("That [noun phrase]...", "So you\'re...", "Sounds like you...").',
   real_position:
     "When giving advice or an opinion, takes a real position (picks one, says why) instead of hedging or listing options. Mark n/a if the reply gives no advice or opinion.",
-  honest: "Honest about what Co does and doesn't know or do: no invented facts, no promises of work it won't do, no pretending.",
+  honest: "Honest about what Cue does and doesn't know or do: no invented facts, no promises of work it won't do, no pretending.",
 } as const;
 export type Criterion = keyof typeof CRITERIA;
 export type Verdict = "pass" | "fail" | "na";
@@ -35,9 +35,9 @@ export type Grade = Record<Criterion, Verdict> & { notes: string };
 export type TextCase = { person: string; at: string; message: string; recentConversation: string; contextSummary: string; reply: string };
 
 export function gradePrompt(c: Pick<TextCase, "message" | "recentConversation"> & { contextSummary?: string }, reply: string): string {
-  return `You're grading one text message from Co, an AI companion that texts members of a private club over iMessage. Grade only the reply below, against each criterion. Be strict and consistent; a pass should read like a thoughtful real person texting on a phone.
+  return `You're grading one text message from Cue, an AI companion that texts members of a private club over iMessage. Grade only the reply below, against each criterion. Be strict and consistent; a pass should read like a thoughtful real person texting on a phone.
 
-What Co knew about them before this reply (from earlier texts and calls; a fact from here is not invented):
+What Cue knew about them before this reply (from earlier texts and calls; a fact from here is not invented):
 ${(c.contextSummary ?? "").slice(0, 2500) || "(nothing)"}
 
 The conversation so far (oldest first):
@@ -46,7 +46,7 @@ ${c.recentConversation.slice(-3000) || "(none)"}
 What they just sent:
 "${c.message}"
 
-Co's reply:
+Cue's reply:
 "${reply}"
 
 Criteria:
@@ -93,7 +93,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const grades = await pool(replies, 6, async (r) => ({ id: r.id, ...(await grade(cases[r.id], r.reply)) }));
   const s = summarize(grades);
   const words = replies.map((r) => r.reply.split(/\s+/).filter(Boolean).length).sort((a, b) => a - b);
-  console.log(`graded ${grades.length} replies (${mode === "file" ? path.split("/").pop() : "baseline: Co's actual replies"})`);
+  console.log(`graded ${grades.length} replies (${mode === "file" ? path.split("/").pop() : "baseline: Cue's actual replies"})`);
   for (const [k, v] of Object.entries(s)) console.log(`  ${k.padEnd(24)} ${String(Math.round(v.rate * 100)).padStart(3)}%  (${v.pass}/${v.of})`);
   const all = Object.values(s);
   console.log(`  ${"overall".padEnd(24)} ${String(Math.round((all.reduce((a, v) => a + v.pass, 0) / all.reduce((a, v) => a + v.of, 0)) * 100)).padStart(3)}%   median ${words[Math.floor(words.length / 2)]} words`);

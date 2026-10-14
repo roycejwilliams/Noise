@@ -16,8 +16,8 @@ check("once per event", !P.preArrivalEligible({ registered: true, notGoing: fals
 check("nothing for an event no longer on the calendar", !P.preArrivalEligible({ registered: true, notGoing: false, alreadySent: false, eventListed: false }).ok);
 const w = P.preArrivalWindow(start);
 check("the window is 3 hours to 1 hour before the start", w.from.toISOString() === "2026-10-09T23:00:00.000Z" && w.until.toISOString() === "2026-10-10T01:00:00.000Z");
-check("Co's 'later' can't pass the end of the window, and at the end it goes", F.boundedLater(new Date("2026-10-09T23:30:00Z"), 5, w.until.toISOString()).lastCall && F.boundedLater(new Date("2026-10-09T23:30:00Z"), 5, w.until.toISOString()).at.toISOString() === w.until.toISOString() && F.atWindowEnd(new Date("2026-10-10T00:55:00Z"), w.until.toISOString()) && !F.atWindowEnd(new Date("2026-10-10T00:00:00Z"), w.until.toISOString()));
-check("its timing is Co's, and it goes through the daily pick (hours, caps)", F.handedToCo({ type: "pre_arrival", targetKey: "pre_arrival:x" } as any) && /pre_arrival: \{ priority: 95 \}/.test(src("harness/proactive.ts")) && /"in_room", "pre_arrival"[,\]]/.test(src("harness/proactive.ts")));
+check("Cue's 'later' can't pass the end of the window, and at the end it goes", F.boundedLater(new Date("2026-10-09T23:30:00Z"), 5, w.until.toISOString()).lastCall && F.boundedLater(new Date("2026-10-09T23:30:00Z"), 5, w.until.toISOString()).at.toISOString() === w.until.toISOString() && F.atWindowEnd(new Date("2026-10-10T00:55:00Z"), w.until.toISOString()) && !F.atWindowEnd(new Date("2026-10-10T00:00:00Z"), w.until.toISOString()));
+check("its timing is Cue's, and it goes through the daily pick (hours, caps)", F.handedToCo({ type: "pre_arrival", targetKey: "pre_arrival:x" } as any) && /pre_arrival: \{ priority: 95 \}/.test(src("harness/proactive.ts")) && /"in_room", "pre_arrival"[,\]]/.test(src("harness/proactive.ts")));
 check("it never goes out after the event starts", /expiresAt: new Date\(new Date\(event\.start_at\)\.getTime\(\) - 30 \* 60_000\)/.test(src("services/eventPresence.ts")));
 
 // What it says
@@ -37,7 +37,7 @@ check("the poll only uses a location with that event's yes", /if \(!mayReadLocat
 check("at most one far-away note, only around the start", P.farNoteDue({ startAt: start, now: new Date(new Date(start).getTime() + 15 * 60_000), arrived: false, noteSent: false, distanceM: 8000 }) && !P.farNoteDue({ startAt: start, now: new Date(new Date(start).getTime() + 15 * 60_000), arrived: false, noteSent: true, distanceM: 8000 }) && !P.farNoteDue({ startAt: start, now: new Date(new Date(start).getTime() + 15 * 60_000), arrived: false, noteSent: false, distanceM: 500 }) && !P.farNoteDue({ startAt: start, now: new Date(new Date(start).getTime() - 60 * 60_000), arrived: false, noteSent: false, distanceM: 8000 }));
 check("coordinates are never stored", !/latitude|longitude/.test(src("services/preArrival.ts").replace(/\/\/.*$/gm, "")) && !/INSERT INTO event_presence[^;]*(lat|lng)/.test(src("services/eventPresence.ts")));
 check("stop sharing is handled in code before any reply", /if \(P\.isStopSharing\(resolvedContent\)\) await P\.stopSharing\(user\.id\)/.test(src("routes/sendblue.ts")));
-check("on the way, Co answers normally, records going, never pressures, never offers the host", /never pressure them to come, and never offer to contact the host/.test(src("harness/replyGrounding.ts")) && /updateGoing: tool\(/.test(src("agent/conversationTools.ts")));
+check("on the way, Cue answers normally, records going, never pressures, never offers the host", /never pressure them to come, and never offer to contact the host/.test(src("harness/replyGrounding.ts")) && /updateGoing: tool\(/.test(src("agent/conversationTools.ts")));
 
 console.log(`pre-arrival rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

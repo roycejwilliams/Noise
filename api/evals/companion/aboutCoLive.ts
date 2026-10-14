@@ -17,7 +17,7 @@ const orig = console.log;
 console.log = (...a: any[]) => { if (!/dryRun\]/.test(String(a[0]))) orig(...a); };
 
 const lastNight = [
-  "User said: What is Co? Give me a full description",
+  "User said: What is Cue? Give me a full description",
   "Co replied: I'm the one keeping track of what you're building and who you're becoming, so I can bring you the right people, events, and opportunities as they come up. Invite only, so being here means something.",
   "User said: I thought your moat was facilitating connections inside the event",
   "Co replied: You're right, that's a contradiction on my part. The moat is the compounding understanding and acting on it, not event facilitation.",
@@ -30,7 +30,7 @@ const moatLine = /the way a (person|friend|human) would|\b(get|gets|getting) to 
 const statements = (t: string) => t.split(/(?<=[.!?])\s+|\s\/\s/).filter((x) => x.trim() && !x.trim().endsWith("?")).length;
 const oneLine = (t: string) => (moatLine.test(t) ? "says the moat line" : statements(t) > 1 ? `${statements(t)} sentences describing itself` : null);
 const questions: [string, (t: string) => string | null][] = [
-  ["What is Co? Give me a full description", oneLine],
+  ["What is Cue? Give me a full description", oneLine],
   ["How would you describe yourself to a friend I'm inviting?", oneLine],
   ["Is your thing facilitating connections inside the event?", (t) => (moatLine.test(t) ? "says the moat line" : /real work happens between|but the (real|main)/i.test(t) ? "pitches what it really is" : null)],
   ["What do you actually do for me day to day?", (t) => (moatLine.test(t) ? "says the moat line" : /\b(talk(ing)?|text(ing)?|here|there|follow|check|between)\b/i.test(t) ? null : "no sense of being there between events")],
@@ -58,8 +58,8 @@ for (const [q, check] of questions) {
     previous = t;
     total++;
     if (!why) good++;
-    orig(`${why ? `BAD (${why})` : "ok "} [${history ? "after last night" : "fresh"}${read.aboutCo ? ", read: about Co" : ""}] ${q}\n     ${t.slice(0, 420)}\n`);
+    orig(`${why ? `BAD (${why})` : "ok "} [${history ? "after last night" : "fresh"}${read.aboutCo ? ", read: about Cue" : ""}] ${q}\n     ${t.slice(0, 420)}\n`);
   }
 }
-orig(`about Co: ${good}/${total} accurate and not a pitch`);
+orig(`about Cue: ${good}/${total} accurate and not a pitch`);
 process.exit(0);

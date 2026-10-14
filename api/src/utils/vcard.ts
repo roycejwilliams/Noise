@@ -21,7 +21,7 @@ export function buildCoVCard(phone: string): string {
   return [
     "BEGIN:VCARD",
     "VERSION:3.0",
-    "FN:Co",
+    "FN:Cue",
     `TEL:${phone}`,
     "URL:https://app.copatible.com",
     "EMAIL:support@copatible.com",

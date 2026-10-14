@@ -13,7 +13,7 @@ const STOP = new Set([
   "more", "other", "if", "something", "real", "fits", "after", "hang", "up", "what", "when", "once", "will", "would",
   "can", "could", "just", "also", "then", "there", "here", "some", "any", "all", "like", "kind", "know", "get", "got",
   "i'll", "ill", "i'm", "let", "me", "him", "she", "he", "yeah", "yes", "okay", "uh", "um", "really", "actually",
-  "keep", "word", "call", "promise", "text", "send", "co", "co's", "set",
+  "keep", "word", "call", "promise", "text", "send", "co", "co's", "cue", "cue's", "set",
 ]);
 // Crude stem: planning/planned/plans -> plan, documents -> docume (first six letters), so the same word in two forms matches.
 const stem = (w: string) => w.replace(/'s$/, "").replace(/(?:ing|ed|es|s)$/, "").replace(/([b-df-hj-np-tv-z])\1$/, "$1").slice(0, 6);
@@ -134,7 +134,7 @@ export async function sendsSince(userId: string, since: Date): Promise<Sent[]> {
 // ---- specifics a call grader flagged, checked against what the member texted and Co's records
 
 // Pure: the names, places and numbers in a statement: capitalized words (not sentence openers), quoted bits, and numbers.
-const NOT_NAMES = new Set(["I", "I'll", "I'm", "I've", "Co", "Co's", "The", "A", "An", "And", "But", "So", "Then", "If", "When", "Yes", "No", "Got", "Thanks", "Good", "Okay", "OK", "You", "You're", "Your", "We", "They", "It", "That", "This", "What", "Who", "Where", "How", "Also", "Failure", "Success", "Member", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
+const NOT_NAMES = new Set(["I", "I'll", "I'm", "I've", "Cue", "Cue's", "Co", "Co's", "The", "A", "An", "And", "But", "So", "Then", "If", "When", "Yes", "No", "Got", "Thanks", "Good", "Okay", "OK", "You", "You're", "Your", "We", "They", "It", "That", "This", "What", "Who", "Where", "How", "Also", "Failure", "Success", "Member", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]);
 export function specificsIn(s: string): string[] {
   const out = new Set<string>();
   for (const m of String(s ?? "").matchAll(/['"“‘]([^'"”’]{2,60})['"”’]/g)) out.add(m[1].trim());

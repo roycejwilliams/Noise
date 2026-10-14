@@ -35,7 +35,7 @@ export function commitmentProblem(s: string): string | null {
   if (/\?\s*$/.test(s)) return "a question";
   if (/^\s*(?:want me to|should i|would you like me to|do you want me to)\b/i.test(s)) return "an offer";
   if (MULTI_DAY.test(s)) return "multi-day work, opened from their own words";
-  if (CANT.test(s) || OFFERS_WHAT_CO_CANT.test(s)) return "something Co can't do";
+  if (CANT.test(s) || OFFERS_WHAT_CO_CANT.test(s)) return "something Cue can't do";
   return null;
 }
 
@@ -197,7 +197,7 @@ export async function checkCallCommitments(now: Date = new Date(), deps: CheckDe
       outcome: ok ? "act" : "skip",
       action: ok ? "kept" : "unkept",
       proposal: { taskId: String(t.id), goal: String(t.goal).slice(0, 200) },
-      reason: ok ? null : "Co said on a call it would send something; nothing went out by the time it fell due",
+      reason: ok ? null : "Cue said on a call it would send something; nothing went out by the time it fell due",
     }).catch(() => {});
   }
   return { kept, unkept };

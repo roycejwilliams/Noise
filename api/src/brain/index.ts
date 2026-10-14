@@ -83,7 +83,7 @@ export const GUARDS = {
   safety: "services/safety.ts + flagSafetyConcern: stay with them, crisis support, no steering or offers",
   pause: "services/proactivePause.ts: proactive texts held while paused",
   outreach_caps: "proactive caps and 3h spacing (PR #55)",
-  quiet_hours: "member-local quiet hours for anything Co sends first",
+  quiet_hours: "member-local quiet hours for anything Cue sends first",
 } as const;
 export type GuardName = keyof typeof GUARDS;
 
@@ -150,7 +150,7 @@ export function judgeText(p: TextPicture): Decision {
     : p.owed
       ? "an earlier message is still owed a real answer"
       : p.read?.asksForList
-        ? "they asked for the list of what Co can do"
+        ? "they asked for the list of what Cue can do"
         : p.clarify
           ? "what they mean isn't clear yet"
           : p.walkinAsk
@@ -161,10 +161,10 @@ export function judgeText(p: TextPicture): Decision {
   const dontSay: Rule[] = [];
   const tapback = (why: string, tell: string) => dontSay.push({ what: "tapback", why, tell });
   if (p.safetyConcern) {
-    tapback("they may not be safe, so Co has to reply", "They may not be safe. Reply to them properly.");
+    tapback("they may not be safe, so Cue has to reply", "They may not be safe. Reply to them properly.");
     dontSay.push({ what: "steer", why: "a safety concern this turn" }, { what: "first_read", why: "a safety concern this turn" });
-  } else if (p.owed) tapback("Co still owes them an answer from before, so it has to reply", "You still owe them an answer from before. Reply properly instead.");
-  else if (kind === "deliver") tapback("they asked what Co can do, so a reaction can't answer it", "They asked what you can do. A reaction can't answer that; reply with it.");
+  } else if (p.owed) tapback("Cue still owes them an answer from before, so it has to reply", "You still owe them an answer from before. Reply properly instead.");
+  else if (kind === "deliver") tapback("they asked what Cue can do, so a reaction can't answer it", "They asked what you can do. A reaction can't answer that; reply with it.");
   if (kind === "ask") {
     tapback("this turn asks them something, so it needs words", "This turn asks them something, and a reaction can't ask it. Reply with the question.");
     // One question a reply: the ask is it, so nothing else that asks something goes beside it.
@@ -218,7 +218,7 @@ export function judgeBriefing(p: BriefingPicture): BriefingDecision {
     ? `${p.clock.fact}${p.clock.note ? ` ${p.clock.note}` : ""} "Tonight" and "today" mean the hours left before they sleep; an event is only "tonight" if its start below says today.`
     : pacificClock(p.now);
   const offering = p.finds.available && p.finds.items.length > 0;
-  const why = offering ? "Co has finds on file for them that the call can offer" : "nothing on file to offer, so the call offers no event";
+  const why = offering ? "Cue has finds on file for them that the call can offer" : "nothing on file to offer, so the call offers no event";
   const dontSay: Rule[] = offering ? [] : [{ what: "event_offer", why: p.finds.available ? "nothing on file to offer" : p.finds.reason }];
   const findsNow = findsFor({ dontSay }, p.finds);
   const judged: BriefingDecision = {
@@ -291,12 +291,12 @@ export function judgeCallTurn(p: CallTurnPicture): CallTurnDecision {
   // One question a turn, unless the call has touched their safety.
   if (!p.safetyCall) dontSay.push({ what: "second_question", why: "one question a turn" });
   if (p.inboundFirst && !p.safetyCall) dontSay.push({ what: "after_question", why: "an inbound call's first reply: they lead" });
-  if (!p.closed) dontSay.push({ what: "end_call", why: "Co never hangs up first: they haven't said goodbye" });
+  if (!p.closed) dontSay.push({ what: "end_call", why: "Cue never hangs up first: they haven't said goodbye" });
   const kind: DecisionKind = p.inboundFirst && !p.safetyCall ? "ask" : "act";
   const why = p.safetyCall
     ? "the call has touched their safety: stay with them"
     : p.drained
-      ? "they told Co how they are: stay with them"
+      ? "they told Cue how they are: stay with them"
       : p.inboundFirst
         ? "they called: ask what's on their mind and let them lead"
         : "answer what they said and act on it";
@@ -323,7 +323,7 @@ export function logCallTurn(userId: string, d: CallTurnDecision): void {
 // Pure: the stop-suggesting list as it stands right now, for this turn only (after the cache breakpoint, so the call's cached prefix is
 // untouched). The call's opening context has it too; this keeps it current when it changes during the call.
 export function avoidNote(avoid: string[] | undefined): string | null {
-  return avoid?.length ? `(Co's note, not their words: right now they've asked you never to suggest ${avoid.map((a) => `"${a}"`).join(", ")}. No need to mention it.)` : null;
+  return avoid?.length ? `(Cue's note, not their words: right now they've asked you never to suggest ${avoid.map((a) => `"${a}"`).join(", ")}. No need to mention it.)` : null;
 }
 
 // Pure: the names and numbers in their words (each sentence's own first word is only a capital, so sentences are read apart).
@@ -341,7 +341,7 @@ export function taskFactNote(turnWords: string, tasks: { id: number; goal: strin
   const given = specificsTheyGave(turnWords);
   if (!given.length && !MONTH_OR_DAY.test(turnWords)) return null;
   const what = given.length ? given.map((g) => `"${g}"`).join(", ") : "a date";
-  return `(A note from Co's own records, not their words: they just gave you ${what}. If that belongs to one of your open tasks, write it on that task with updateTask in this turn, in their words, then answer. Saying it back doesn't write it down.)`;
+  return `(A note from Cue's own records, not their words: they just gave you ${what}. If that belongs to one of your open tasks, write it on that task with updateTask in this turn, in their words, then answer. Saying it back doesn't write it down.)`;
 }
 
 // ---------- Outgoing drafts (cutover 4): what Co texts first
@@ -418,7 +418,7 @@ export type CheckinDecision = Decision & { basis: CheckinBasis };
 // found for it may carry an offer (that one link); every other check-in offers nothing.
 export function judgeCheckin(p: { heavy: boolean; advice: boolean; story: boolean; thread: boolean; curious: boolean; item: boolean }): CheckinDecision {
   const basis: CheckinBasis = p.heavy ? "heavy" : p.advice ? "advice" : p.story ? "story" : p.thread ? "thread" : p.curious ? "curious" : "recap";
-  const why = { heavy: "something hard they shared yesterday: check on them", advice: "advice Co gave: ask how it went", story: "a moment worth marking", thread: "an open thread of theirs: ask where it landed", curious: "something Co is still figuring out, where the conversation leads", recap: "one specific thing from the recap, or nothing" }[basis];
+  const why = { heavy: "something hard they shared yesterday: check on them", advice: "advice Cue gave: ask how it went", story: "a moment worth marking", thread: "an open thread of theirs: ask where it landed", curious: "something Cue is still figuring out, where the conversation leads", recap: "one specific thing from the recap, or nothing" }[basis];
   // curious may offer one way Co can help, as a question, never a link.
   const dontSay: Rule[] = basis === "thread" && p.item ? [] : [{ what: "offer", why: basis === "curious" ? "a way to help is offered as a question, never a link" : "this check-in offers nothing" }];
   return { surface: "proactive", kind: "ask", why, instructions: [], guards: ["outreach_caps", "quiet_hours", "pause", "safety", "grounding"], dontSay, basis };

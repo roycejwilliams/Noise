@@ -35,7 +35,7 @@ const STATUS_WORDS: Record<LoopStatus, string> = {
 // search" was said off an open ask read as "in progress").
 // Whether Co's daily search covers it is said once, in the reply's running-work line (harness/replyGrounding.ts runningWorkLine, read
 // from real state, 2026-10-13): this label no longer says nothing is being worked on, which contradicted the daily search of a find ask.
-export const ASK_ON_FILE = "an open ask on file (whether Co's daily search covers it right now is in the running-work line)";
+export const ASK_ON_FILE = "an open ask on file (whether Cue's daily search covers it right now is in the running-work line)";
 
 // Pure: the loops implied by what Co already holds.
 export function deriveLoops(src: {
@@ -303,7 +303,7 @@ export async function setLoopStatus(
   if (closing) {
     if (row.source === "task" && row.taskId) {
       const { closeTask } = await import("./coTasks.js");
-      await closeTask(userId, row.taskId, status as "done" | "dropped", detail ?? `Co marked it ${status}`).catch((err: any) => console.error("openLoops: closing the loop's task failed:", err?.message ?? err));
+      await closeTask(userId, row.taskId, status as "done" | "dropped", detail ?? `Cue marked it ${status}`).catch((err: any) => console.error("openLoops: closing the loop's task failed:", err?.message ?? err));
     } else if (row.source === "ask") {
       await pool.query(`UPDATE ask_checkins SET resolved_at = COALESCE(resolved_at, NOW()), closed_reason = COALESCE(closed_reason, 'co') WHERE user_id = $1 AND ask_id = $2`, [userId, row.sourceRef]).catch((err: any) => console.error("openLoops: resolving the loop's ask failed:", err?.message ?? err));
     }

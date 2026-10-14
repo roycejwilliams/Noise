@@ -34,14 +34,14 @@ export const SPLIT_LIMITS = { timeoutMs: 5000, maxTokens: 200, partChars: 160 } 
 const unreadAs = (why: string): SplitRead => ({ kind: null, split: null, read: false, why });
 
 export function splitPrompt(text: string, theirWords?: string | null): string {
-  return `A member asked Co (a texting companion) for this: "${text.slice(0, 400)}"${theirWords && theirWords.trim() !== text.trim() ? `\nTheir own words: "${theirWords.slice(0, 500)}"` : ""}
+  return `A member asked Cue (a texting companion) for this: "${text.slice(0, 400)}"${theirWords && theirWords.trim() !== text.trim() ? `\nTheir own words: "${theirWords.slice(0, 500)}"` : ""}
 
-Co does some things itself (drafting, writing, planning, outlining, preparing something for them) and finds things in the world with its daily search (events, venues, places, people, programs, communities).
+Cue does some things itself (drafting, writing, planning, outlining, preparing something for them) and finds things in the world with its daily search (events, venues, places, people, programs, communities).
 What is this request?
-- "work": only a piece of work for Co to do (draft, write, plan, prepare something).
-- "find": only something to find, even if it's worded as "have Co look for..." or it's for a piece of work they're doing themselves.
-- "mixed": both a piece of work for Co AND a separate thing to find.
-Answer {"kind": "work"} or {"kind": "find"} or {"kind": "mixed", "work": "the work, in a few words, their terms", "find": "the thing to find, in a few words, their terms", "findIsLookout": true only if their words ask Co to keep watching or tell them when (keep an eye out, let me know when, look out for), else false}
+- "work": only a piece of work for Cue to do (draft, write, plan, prepare something).
+- "find": only something to find, even if it's worded as "have Cue look for..." or it's for a piece of work they're doing themselves.
+- "mixed": both a piece of work for Cue AND a separate thing to find.
+Answer {"kind": "work"} or {"kind": "find"} or {"kind": "mixed", "work": "the work, in a few words, their terms", "find": "the thing to find, in a few words, their terms", "findIsLookout": true only if their words ask Cue to keep watching or tell them when (keep an eye out, let me know when, look out for), else false}
 Never invent a part they didn't ask for. Return ONLY JSON.`;
 }
 
@@ -59,7 +59,7 @@ export function restatesPart(a: string, b: string): boolean {
 export function parseSplit(raw: string, text: string): SplitRead {
   try {
     const p = parseModelJson<{ kind?: unknown; work?: unknown; find?: unknown; findIsLookout?: unknown }>(raw);
-    if (p?.kind === "work" || p?.kind === "find") return { kind: p.kind, split: null, read: true, why: p.kind === "work" ? "Co's own work" : "something to find" };
+    if (p?.kind === "work" || p?.kind === "find") return { kind: p.kind, split: null, read: true, why: p.kind === "work" ? "Cue's own work" : "something to find" };
     if (p?.kind !== "mixed") return unreadAs("the read came back without a kind");
     const work = String(p.work ?? "").replace(/\s+/g, " ").trim().slice(0, SPLIT_LIMITS.partChars);
     const find = String(p.find ?? "").replace(/\s+/g, " ").trim().slice(0, SPLIT_LIMITS.partChars);
@@ -104,12 +104,12 @@ export const isOwnWork = (text: string): boolean => isCoTaskGoal(String(text ?? 
 // A task starts from their request only when their own message asks Co for that work outright, never when it answers a question or an
 // offer of Co's: one strict Haiku read of the exchange (theirYes.ts exchangeText). Anything but a clear yes is "don't start".
 export function outrightPrompt(work: string, message: string, recent: string): string {
-  return `Co is a texting companion. The recent exchange, oldest first:
+  return `Cue is a texting companion. The recent exchange, oldest first:
 ${recent.trim() || "(nothing before it)"}
 
 The member's latest message: "${message.slice(0, 600)}"
 
-Is the member's latest message itself asking Co, outright and in their own words, to do this work: "${work.slice(0, 200)}"? Answer no if they're answering a question or an offer from Co, saying yes to something Co suggested, or only mentioning it.
+Is the member's latest message itself asking Cue, outright and in their own words, to do this work: "${work.slice(0, 200)}"? Answer no if they're answering a question or an offer from Cue, saying yes to something Cue suggested, or only mentioning it.
 
 Return ONLY JSON: {"outright": true or false, "why": "one short line"}`;
 }
@@ -132,7 +132,7 @@ export async function exchangeFromTranscript(transcript: string): Promise<{ rece
   const { exchangeText } = await import("./theirYes.js");
   const turns: { side: "co" | "member"; text: string }[] = [];
   for (const line of String(transcript ?? "").split("\n")) {
-    const m = line.match(/^(user|assistant|User said|User sent|Co replied|Co said|Mo said|Mo replied):\s*(.*)$/i);
+    const m = line.match(/^(user|assistant|User said|User sent|Co replied|Co said|Cue replied|Cue said|Mo said|Mo replied):\s*(.*)$/i);
     if (m) turns.push({ side: /^user/i.test(m[1]) ? "member" : "co", text: m[2] });
     else if (/^\s*\[/.test(line)) continue;
     else if (turns.length && line.trim()) turns[turns.length - 1].text += ` ${line.trim()}`;
@@ -188,7 +188,7 @@ export async function followWorkPart(userId: string, split: Split, o: { transcri
   if (same) return { ok: true, taskId: same.id, existing: true };
   // No message of theirs (saveAsk and a call's capture save Co's own wording of it): nothing to read as their outright ask, so nothing
   // starts; the request keeps its find row (review, 2026-10-13: Co's paraphrase passed the quote check on its own text).
-  if (o.message == null || !o.message.trim()) return { ok: false, why: "no message of theirs to read (saved from Co's own wording)", unclaimed: true };
+  if (o.message == null || !o.message.trim()) return { ok: false, why: "no message of theirs to read (saved from Cue's own wording)", unclaimed: true };
   const ex = await exchangeFromTranscript(o.transcript);
   if (!(await d.outright(split.work, o.message, ex.recent).catch(() => false))) return { ok: false, why: "they didn't ask for that work outright", unclaimed: true };
   return d.start(userId, split.work, o.message).catch((err: any) => ({ ok: false, why: String(err?.message ?? err).slice(0, 160) }));
@@ -246,8 +246,8 @@ export function floorPlan(text: string, read: SplitRead | null, taskId: number |
   if (read.kind === "work" && taskId != null) return { search: null, followed: true, why: "followed as its task" };
   // Co's own promise ("Draft the launch plan") with no task: never searched (nothing on the web finds Co's own work; the 10-08 waste),
   // the same outcome a clean read at creation gives; noted and listed for the team, never silent (review, 2026-10-13).
-  if (read.kind === "work" && isCoCommitment(text)) return { search: null, followed: false, why: "Co's own promise with no task: not searched, listed for the team", note: "own_work_no_task" };
-  if (read.kind === "work") return { search: text, followed: false, why: "Co's own work, but no open task is it: searched whole, never quietly skipped", note: "own_work_no_task" };
+  if (read.kind === "work" && isCoCommitment(text)) return { search: null, followed: false, why: "Cue's own promise with no task: not searched, listed for the team", note: "own_work_no_task" };
+  if (read.kind === "work") return { search: text, followed: false, why: "Cue's own work, but no open task is it: searched whole, never quietly skipped", note: "own_work_no_task" };
   return { search: text, followed: false, why: "something to find" };
 }
 
@@ -302,7 +302,7 @@ export type DayDecision = "sweep.followed_as_task" | "sweep.own_work_no_task" | 
 export async function logOnceADay(decision: DayDecision, row: { id: string | number; user_id: string; ask_text: string }, o: { taskId: number | null; day: string; sweep: string; work?: string | null }, db: Db = pool): Promise<boolean> {
   const { rows } = await db.query(`SELECT 1 FROM harness_decisions WHERE decision = $1 AND user_id = $2 AND proposal->>'askId' = $3 AND proposal->>'day' = $4 LIMIT 1`, [decision, row.user_id, String(row.id), o.day]);
   if (rows.length) return false;
-  const reason = decision === "sweep.followed_as_task" ? "followed as its task" : decision === "sweep.own_work_no_task" ? "Co's own work with no task: searched whole" : "a mixed request's work part has no task: its find part is searched";
+  const reason = decision === "sweep.followed_as_task" ? "followed as its task" : decision === "sweep.own_work_no_task" ? "Cue's own work with no task: searched whole" : "a mixed request's work part has no task: its find part is searched";
   await db.query(
     `INSERT INTO harness_decisions (layer, decision, user_id, outcome, action, proposal, checks, confidence, reason) VALUES (5, $1, $2, 'skip', $3, $4, '[]', NULL, $5)`,
     [decision, row.user_id, decision.replace(/^sweep\./, ""), JSON.stringify({ askId: String(row.id), ask: String(row.ask_text ?? "").slice(0, 160), taskId: o.taskId, day: o.day, sweep: o.sweep, ...(o.work ? { work: o.work.slice(0, 160) } : {}) }), reason],

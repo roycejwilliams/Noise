@@ -20,15 +20,15 @@ console.log = (...a: any[]) => { if (!/dryRun\]/.test(String(a[0]))) orig(...a);
 const FEEDBACK = "saveFeedbackForTeam";
 const UPDATES = "sendProductUpdates";
 // As production shows an open task (services/coTasks.ts taskFactLines).
-const VENUE_TASK = 'Co is working on task #12 for them: "Find a venue in SF for Oct 10" (their words: "Find me a venue for Oct 10"). Done: searched Peerspace and venue sites. Still to do: check two NoPa spaces. Latest: two spaces in NoPa look close, prices unconfirmed. Co will work on it next around 2026-10-01 18:00 UTC: check the NoPa spaces.';
+const VENUE_TASK = 'Cue is working on task #12 for them: "Find a venue in SF for Oct 10" (their words: "Find me a venue for Oct 10"). Done: searched Peerspace and venue sites. Still to do: check two NoPa spaces. Latest: two spaces in NoPa look close, prices unconfirmed. Cue will work on it next around 2026-10-01 18:00 UTC: check the NoPa spaces.';
 const cases: { text: string; recent: string; want?: string; forbid?: string; task?: boolean }[] = [
   { text: "No that's not the person I need to have the equity conversation with. It's the 3rd cofounder who left.", recent: "User said: My cofounder's decision\nCo replied: Sounds like today's conversation covers more than just equity then.", forbid: FEEDBACK },
-  { text: "I thought your thing was facilitating connections inside the event", recent: "User said: What is Co?\nCo replied: I get to know you over time and bring you the right people and events.", forbid: FEEDBACK },
+  { text: "I thought your thing was facilitating connections inside the event", recent: "User said: What is Cue?\nCo replied: I get to know you over time and bring you the right people and events.", forbid: FEEDBACK },
   { text: "You don't think the gallery does?", recent: "Co replied: The gallery reception feels more corporate mixer than party.", forbid: FEEDBACK },
   { text: "Feedback for the team: when you send a venue, link the listing itself, not a page of search results", recent: "Co replied: https://giggster.com/find/san-francisco--ca/private-event", want: FEEDBACK },
   { text: "You keep asking me too many questions before you search. Just search with what I give you", recent: "Co replied: What hours, and is there a budget?", want: FEEDBACK },
   { text: "What's been added to your updates?", recent: "Co replied: Two that fit, sending both now.", want: UPDATES },
-  { text: "anything new with Co lately?", recent: "", want: UPDATES },
+  { text: "anything new with Cue lately?", recent: "", want: UPDATES },
   { text: "any updates on my venue search?", recent: "User said: Find me a venue for Oct 10\nCo replied: On it.", forbid: UPDATES, task: true },
   { text: "any updates on my venue search?", recent: "User said: Find me a venue for Oct 10\nCo replied: On it.", forbid: "startTask", task: true },
   { text: "how's the venue thing going?", recent: "User said: Find me a venue for Oct 10\nCo replied: On it.", forbid: "startTask", task: true },

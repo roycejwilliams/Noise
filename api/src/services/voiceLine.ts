@@ -49,7 +49,7 @@ export async function lineInVoice(ask: LineAsk): Promise<{ text: string; written
         experimental_telemetry: { isEnabled: true, functionId: "voiceLine" },
         prompt: `${CO_VOICE}
 
-Write one text message from Co.
+Write one text message from Cue.
 What it's for: ${ask.purpose}
 What's true (state nothing beyond this):
 ${ask.facts.map((f) => `- ${f}`).join("\n")}

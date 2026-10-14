@@ -73,8 +73,8 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   const msg = S.shareAskMessage(offered) ?? "";
   check("rsvp share: one question, numbered per ask, private unless picked", /good match/.test(msg) && /1\. seed investors/.test(msg) && /3\. a technical cofounder/.test(msg) && /stays between us/.test(msg), msg);
   check("rsvp share: a single ask is a plain yes or no", /you're looking for a sailing crew\? Yes or no/.test(S.shareAskMessage([{ text: "a sailing crew" }]) ?? ""));
-  check("rsvp share: nothing undecided, no question", S.shareAskMessage([]) === null && B.nameAskMessages("Co Night", null).length === 2);
-  check("rsvp share: it sits beside the brief question", B.nameAskMessages("Co Night", msg).length === 3);
+  check("rsvp share: nothing undecided, no question", S.shareAskMessage([]) === null && B.nameAskMessages("Cue Night", null).length === 2);
+  check("rsvp share: it sits beside the brief question", B.nameAskMessages("Cue Night", msg).length === 3);
   const ids = offered.map((a) => a.id);
   const picks = R.readPicks("1 and 3", ids.length)!;
   const next = S.applyAskPicks(intent as any[], ids, picks) as any[];
@@ -141,13 +141,13 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
 
 // ------------------------------------------------------------ what memory carries across
 {
-  const additive = `Additive offer sent to Jordan at "Co Night": 2 new candidate(s) checked in since their last match (Noor, Sarah Hao)`;
+  const additive = `Additive offer sent to Jordan at "Cue Night": 2 new candidate(s) checked in since their last match (Noor, Sarah Hao)`;
   finding("memory: an additive-offer record (names never told to the member) survives memberSafe whole", MS.safeMemory("event_guest_match_nudge", additive, ["Ellis"]) === additive);
-  const nudge = `Nudged Jordan that Ellis is also going to "Co Night" and worth meeting: what they've said they're looking for: "a growth stage startup to join" (score 88)`;
+  const nudge = `Nudged Jordan that Ellis is also going to "Cue Night" and worth meeting: what they've said they're looking for: "a growth stage startup to join" (score 88)`;
   check("memory: the nudge record carries only what the member was already told (name + shared ask)", MS.safeMemory("event_guest_match_nudge", nudge, ["Ellis"]) === nudge);
   finding("memory: the nudge record also carries the internal score ('score 88') into the member's reply context", /score 88/.test(MS.introFacts([{ memory_type: "event_guest_match_nudge", content: nudge }]).join(" ")));
   const recap = `Co replied: Ellis is building grid storage and left Tesla, worth a chat.`;
-  check("memory: Co's own line about a linked member is cut to a history line", !/Tesla/.test(MS.safeMemory("text_exchange", recap, ["Ellis"]) ?? ""));
+  check("memory: Cue's own line about a linked member is cut to a history line", !/Tesla/.test(MS.safeMemory("text_exchange", recap, ["Ellis"]) ?? ""));
   {
     // Linked names come from linkedMemberNames: someone who was only in an additive offer must be linked too.
     const { W, reset, addMember } = await import("./world.js");
@@ -156,7 +156,7 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
     const noor = addMember({ first_name: "Noor" });
     W.offers.push({ event_id: "evt-x", person_id: jordan.id, candidate_key: "additive", kind: "additive", candidate_id: null, candidate_ids: [noor.id], status: "open", opened_at: new Date(), created_at: new Date() });
     const linked = await MS.linkedMemberNames(jordan.id);
-    finding("memory: but a member who was only in an ADDITIVE offer is not 'linked' (no nudge row), so Co's own lines about them are not cut", /Tesla/.test(MS.safeMemory("text_exchange", `Co replied: Noor left Tesla.`, linked) ?? ""), linked);
+    finding("memory: but a member who was only in an ADDITIVE offer is not 'linked' (no nudge row), so Cue's own lines about them are not cut", /Tesla/.test(MS.safeMemory("text_exchange", `Co replied: Noor left Tesla.`, linked) ?? ""), linked);
   }
 }
 
@@ -182,7 +182,7 @@ finding("pre-arrival: names under 3 letters ('Al', 'Bo', 'Jo') are never checked
 const facts = { otherFirstName: "Ellis", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: "Jordan", otherStatedAsks: ["a growth stage startup to join"] };
 check("consent: 'Ellis wants to meet you' blocked", !C.checkInterestClaim("Ellis wants to meet you tonight.", facts).pass);
 check("consent: 'Ellis mentioned you' blocked", !C.checkInterestClaim("Ellis mentioned you earlier.", facts).pass);
-check("consent: Co's own suggestion passes", C.checkInterestClaim("Ellis is here and is looking for a growth stage startup to join, worth a hello.", facts).pass);
+check("consent: Cue's own suggestion passes", C.checkInterestClaim("Ellis is here and is looking for a growth stage startup to join, worth a hello.", facts).pass);
 check("consent: contact details blocked before both yes", !C.checkContactDetails("Text Ellis at 415-555-0123", { ...facts, otherPhone: "+14155550123" }).pass);
 finding("consent: 'Ellis is dying to talk to you' is not caught by the pattern check (left to the model read)", C.checkInterestClaim("Ellis is dying to talk to you.", facts).pass);
 
