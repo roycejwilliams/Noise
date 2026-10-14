@@ -864,7 +864,7 @@ const searchHeld = (rf: Pick<ReplyFacts, "facts">) => rf.facts.some((f) => f.kin
 const RUNNING_LIST = /^What is actually running for them right now/;
 const SAYS_NOT_RUNNING = /\b(?:nothing|not|no|isn't|aren't|haven't|hasn't|n't)\b/i;
 export function runningWorkLine(tasks: string[], briefs: string[], searching: SearchCoverage = NO_COVERAGE): string {
-  const hidden = searching.hidden ? [`${searching.hidden} more thing${searching.hidden === 1 ? "" : "s"} Co's daily search is looking for (details not shown here)`] : [];
+  const hidden = searching.hidden ? [`${searching.hidden} more piece${searching.hidden === 1 ? "" : "s"} of work or search Co has going for them (details not shown here)`] : [];
   const running = [
     ...tasks.map((t) => t.match(/^Co is working on task #(\d+) for them: "([^"]+)"/)).filter(Boolean).map((m) => `task #${m![1]}: "${m![2]}"`),
     ...briefs.map((b) => b.match(/^(?:Co is putting together research brief|Research brief) #(\d+) for them, "([^"]+)"/)).filter((m, i) => m && CARRIED_WORK.test(briefs[i])).map((m) => `research brief #${m![1]}: "${m![2]}"`),

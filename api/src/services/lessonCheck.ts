@@ -12,13 +12,14 @@
 // Every check is logged (lesson.check), so the team sees the cause next to the lesson. Never a text or an email.
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
-import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
-import { notToTeammate } from "./teamLines.js";
+// Everything it reads goes through the one source fence (services/sourceFence.ts): their own texts to Co and Co's own replies to
+// them, never their talk with anyone else and never another member's details (Royce, 2026-10-13).
+import { fenceReplyLog, fenceTheirTexts, memberFence, readLessonOriginals, readReplyLog, readTheirTexts, type Fence, type ReplyLog, type TheirText } from "./sourceFence.js";
 
-export type ReplyLog = { at: Date; outcome: string; draft: string; sent: string; why: string | null };
+export type { ReplyLog, TheirText };
 export type LessonCause = "check" | "co" | "unknown";
 // evidence: the log it was read from, kept with its check (lesson.check) so the lesson can be checked again when the same failure shows up.
 export type CheckedLesson = { text: string; cause: LessonCause; causeLine: string | null; original: string; evidence?: { replies: ReplyLog[]; theirs: TheirText[] } };
@@ -27,24 +28,6 @@ export type CheckedLesson = { text: string; cause: LessonCause; causeLine: strin
 const LOG_WINDOW_MIN = 30;
 const LOG_REPLIES = 3;
 export const HYPOTHESIS_MARK = "Hypothesis (cause not confirmed in the logs):";
-
-// Their own messages in the same window, so the read sees what each reply answered.
-export type TheirText = { at: Date; text: string };
-export async function recentTheirTexts(userId: string): Promise<TheirText[]> {
-  const { rows } = await pool.query(
-    `SELECT created_at, content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > NOW() - ($2 || ' minutes')::interval ORDER BY created_at DESC LIMIT ${LOG_REPLIES + 2}`,
-    [userId, String(LOG_WINDOW_MIN)],
-  );
-  return rows.reverse().map((r: any) => ({ at: new Date(r.created_at), text: String(r.content).replace(/^User said:\s*/, "") }));
-}
-
-export async function recentReplyLogs(userId: string): Promise<ReplyLog[]> {
-  const { rows } = await pool.query(
-    `SELECT created_at, action, proposal, reason FROM harness_decisions WHERE user_id = $1 AND decision = 'reply.grounding' AND created_at > NOW() - ($2 || ' minutes')::interval ORDER BY created_at DESC LIMIT ${LOG_REPLIES}`,
-    [userId, String(LOG_WINDOW_MIN)],
-  );
-  return rows.reverse().map((r: any) => ({ at: new Date(r.created_at), outcome: String(r.action ?? ""), draft: String(r.proposal?.draft ?? ""), sent: String(r.proposal?.final ?? ""), why: r.reason ? String(r.reason) : null }));
-}
 
 // Pure: the stored text for a verdict. A known cause is named in the lesson; an unknown one is marked a hypothesis.
 export function lessonText(lesson: string, cause: LessonCause, causeLine: string | null): string {
@@ -86,20 +69,27 @@ Then write the lesson that fits the real cause, in one short sentence: for "chec
 Return ONLY JSON: {"cause": "check" | "co" | "unknown", "lesson": "...", "causeLine": "..." or null}`;
 }
 
-export async function checkLesson(userId: string, i: { message: string; pushback: string | null; lesson: string }, o: { logs?: ReplyLog[]; theirs?: TheirText[]; read?: LessonReader } = {}): Promise<CheckedLesson> {
-  const logs = o.logs ?? (await recentReplyLogs(userId).catch(() => [] as ReplyLog[]));
+// Lines handed in (o.logs, o.theirs) go through the same fence as lines read here. What the model writes back is fenced too: a lesson
+// or cause that names someone else is never kept as confirmed. Evidence only the fence removed can't confirm anything.
+export async function checkLesson(userId: string, i: { message: string; pushback: string | null; lesson: string }, o: { logs?: ReplyLog[]; theirs?: TheirText[]; read?: LessonReader; fence?: Pick<Fence, "strip"> } = {}): Promise<CheckedLesson> {
+  const fence = o.fence ? { userId, ...o.fence } : await memberFence(userId);
+  const logs = o.logs ? fenceReplyLog(fence, o.logs) : await readReplyLog(fence, LOG_WINDOW_MIN, LOG_REPLIES).catch(() => [] as ReplyLog[]);
   if (!logs.length) return noLogVerdict(i.lesson);
-  const theirs = o.theirs ?? (o.logs ? [] : await recentTheirTexts(userId).catch(() => [] as TheirText[]));
+  const theirs = o.theirs ? fenceTheirTexts(fence, o.theirs) : o.logs ? [] : await readTheirTexts(fence, LOG_WINDOW_MIN, LOG_REPLIES + 2).catch(() => [] as TheirText[]);
   try {
-    const p = parseModelJson(await (o.read ?? haikuRead)(lessonPrompt({ message: i.message, pushback: i.pushback ?? "", lesson: i.lesson, logs, theirs }))) ?? {};
+    const p = parseModelJson(await (o.read ?? haikuRead)(lessonPrompt({ message: i.message, pushback: (i.pushback ? fence.strip(i.pushback) : null) ?? "", lesson: i.lesson, logs, theirs }))) ?? {};
     // Code guards the fact the model names: "check" only when the log shows the check changed a reply, "co" only when one went out
     // as drafted. Otherwise it is a hypothesis (review of the 10-13 fixes).
     const checkChanged = logs.some((l) => l.outcome !== "as_drafted" && l.draft.trim() !== l.sent.trim());
     const sentAsDrafted = logs.some((l) => l.outcome === "as_drafted");
     const named: LessonCause = p.cause === "check" || p.cause === "co" ? p.cause : "unknown";
     const cause: LessonCause = (named === "check" && checkChanged) || (named === "co" && sentAsDrafted) ? named : "unknown";
-    const lesson = typeof p.lesson === "string" && p.lesson.trim() ? p.lesson.trim().slice(0, 240) : i.lesson;
-    const causeLine = typeof p.causeLine === "string" && p.causeLine.trim() && p.causeLine.trim().toLowerCase() !== "null" ? p.causeLine.trim().slice(0, 240) : null;
+    const rawLesson = typeof p.lesson === "string" && p.lesson.trim() ? p.lesson.trim().slice(0, 240) : null;
+    const rawCause = typeof p.causeLine === "string" && p.causeLine.trim() && p.causeLine.trim().toLowerCase() !== "null" ? p.causeLine.trim().slice(0, 240) : null;
+    // Fenced on the way out: anything the strip changes or blanks is dropped (the guess stands, as a hypothesis).
+    const outOk = (t: string | null) => (t !== null && fence.strip(t)?.trim() === t.trim() ? t : null);
+    const lesson = outOk(rawLesson) ?? i.lesson;
+    const causeLine = outOk(rawCause);
     const known = cause !== "unknown" && !!causeLine;
     return { text: lessonText(known ? lesson : i.lesson, known ? cause : "unknown", known ? causeLine : null), cause: known ? cause : "unknown", causeLine: known ? causeLine : null, original: i.lesson, evidence: { replies: logs, theirs } };
   } catch {
@@ -112,12 +102,15 @@ export async function checkAndSaveLesson(userId: string, i: { message: string; p
   // The stored words vary with each read, so a repeat is caught on the guessed lesson it came from (the last 7 days of checks: an
 // older one may have left the newest lessons Co reads, and comes back).
   const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, "").trim();
-  const seen = await pool
-    .query(`SELECT proposal->>'original' AS original FROM harness_decisions WHERE user_id = $1 AND decision = 'lesson.check' AND created_at > NOW() - INTERVAL '7 days'`, [userId])
-    .then((r) => r.rows.some((x: any) => norm(String(x.original ?? "")) === norm(i.lesson)))
-    .catch(() => false);
+  const fence = await memberFence(userId);
+  // A guess that itself carries another member's details is never kept, not even as a hypothesis.
+  if (fence.strip(i.lesson)?.trim() !== i.lesson.trim()) {
+    await recordDecision({ layer: 3, decision: "lesson.check", userId, outcome: "skip", action: "withheld", reason: fence.failed ? "member names couldn't be read, so the lesson wasn't checked or kept" : "the guessed lesson carried details from outside their own conversation", proposal: { pushback: null } }).catch(() => {});
+    return;
+  }
+  const seen = await readLessonOriginals(fence, 7).then((xs) => xs.some((x) => norm(x) === norm(i.lesson))).catch(() => false);
   if (seen) return;
-  const r = await checkLesson(userId, i);
+  const r = await checkLesson(userId, i, { fence });
   await recordDecision({ layer: 3, decision: "lesson.check", userId, outcome: "act", action: r.cause, reason: r.causeLine, proposal: { original: r.original, stored: r.text, pushback: i.pushback, message: i.message, evidence: r.evidence ?? null } }).catch(() => {});
   const { saveLesson } = await import("./connectDots.js");
   await saveLesson(userId, r.text);
