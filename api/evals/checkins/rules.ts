@@ -223,6 +223,9 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("the next look is said from the sweep hour", /Next from Co: the daily search, this morning from 9\./.test(M.memberWorldFact(base())));
   check("the check-in rule reads their local time for the soft late-night register", /Late at night their time \(about 11pm to 5am\) open soft/.test(M.CHECKIN_RULE));
   check("dates are read in their zone: an ISO instant is their day, a bare date is that day, junk is no date", M.dayOf("2026-10-14T06:00:00Z", ZONE) === "2026-10-13" && M.dayOf("2026-12-15", ZONE) === "2026-12-15" && M.dayOf("Dec 15, 2026", ZONE) === "2026-12-15" && M.dayOf("soon", ZONE) === null);
+  // Never the process's zone (PR #201: CI runs in UTC and read "Dec 15, 2026" as Dec 14 for a Pacific member). This file runs under
+  // TZ=UTC, America/Los_Angeles and Asia/Tokyo with the same answers.
+  check("dates never depend on the server's zone: wall time stays its day, only an explicit offset converts", M.dayOf("2026-12-15T23:30", ZONE) === "2026-12-15" && M.dayOf("Dec 15, 2026 23:00", ZONE) === "2026-12-15" && M.dayOf("Tue, 15 Dec 2026 03:00:00 GMT", ZONE) === "2026-12-14" && M.dayOf("2026-12-15T03:00:00+00:00", ZONE) === "2026-12-14", [M.dayOf("2026-12-15T23:30", ZONE), M.dayOf("Dec 15, 2026 23:00", ZONE), M.dayOf("Tue, 15 Dec 2026 03:00:00 GMT", ZONE), M.dayOf("2026-12-15T03:00:00+00:00", ZONE)]);
 }
 
 // ------------------------------------------------------------------ 5. the rule, on the reply's facts (item 7: tokens)
@@ -501,7 +504,10 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     check("a repair that shrinks a good reply is refused: all three sentences go out", shrunk.repairs === 1 && shrunk.r.final === three, shrunk.r);
     const same = await run(probe, three);
     check("a repair that keeps all three goes out as is", same.r.final === three, same.r);
-    check("keepsEverySentence: a dropped, merged or rewritten sentence fails; a few words fixed passes", !M.keepsEverySentence(three, "Smart casual is right for the dinner.") && !M.keepsEverySentence(three, "Smart casual and a jacket. Want wine pairings?") && M.keepsEverySentence("I'll be glad to hear it the second you do.", "I'll be glad to hear about Hayes Valley the second you do."));
+    const away = "Nothing yet from the Hayes Valley place.";
+    check("keepsEverySentence: a dropped, merged or rewritten sentence fails; a dangling \"it\" replaced from the cut sentence passes", !M.keepsEverySentence(three, "Smart casual is right for the dinner.", away) && !M.keepsEverySentence(three, "Smart casual and a jacket. Want wine pairings?", away) && M.keepsEverySentence("I'll be glad to hear it the second you do.", "I'll be glad to hear about Hayes Valley the second you do.", away));
+    check("keepsEverySentence: flipped advice is not a repair", !M.keepsEverySentence("Smart casual works for the dinner.", "Smart casual doesn't work for the dinner.", away));
+    check("keepsEverySentence: a new name in place of \"it\" is not a repair", !M.keepsEverySentence("Bring a light jacket, it gets cold.", "Bring a light jacket, Nopa gets cold.", away) && M.keepsEverySentence("Bring a light jacket, it gets cold.", "Bring a light jacket, Hayes Valley gets cold.", away));
     const short = G.createReplyFacts();
     G.addFact(short, "known", G.runningWorkLine([], [], NOTHING));
     G.addMemberWorld(short, threadOnly);
