@@ -158,7 +158,7 @@ check("…not one from further back than Co's turn before their previous message
     L.setLaneStoreForTests(null);
   }
   const cr = src("agent/conversationReply.ts");
-  check("texts, calls and Mo all hand the read the exchange", /recentExchange: exchangeFromLog\(input\.recentConversation\)/.test(cr) && /recentExchange: exchangeText\(msgs\.slice\(0, i\)/.test(src("routes/callLlm.ts")) && /recentExchange: exchangeFromLog\(input\.awareness\?\.recent/.test(src("mo/teamAgent.ts")) && /recent: ctx\.recentExchange/.test(src("agent/toolGuard.ts")));
+  check("texts and calls both hand the read the exchange", /recentExchange: exchangeFromLog\(input\.recentConversation\)/.test(cr) && /recentExchange: exchangeText\(msgs\.slice\(0, i\)/.test(src("routes/callLlm.ts")) && /recent: ctx\.recentExchange/.test(src("agent/toolGuard.ts")));
   check("the read asks whether Co offered this action in the exchange", /did Co offer THIS action/.test(Y.yesPrompt({ recent: clarifying, message: "ok yes", ability: "x" })) && /If no offer of this action appears in the exchange, no\./.test(Y.yesPrompt({ recent: "", message: "", ability: "" })));
 }
 

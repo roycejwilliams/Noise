@@ -9,7 +9,6 @@ import fs from "node:fs";
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 const R = await import("../../src/services/readTurn.js");
 const I = await import("../../src/services/inlineReply.js");
-const H = await import("../../src/mo/health.js");
 const S = await import("../../src/services/staleWatch.js");
 const K = await import("../../src/services/memberKit.js");
 const L = await import("../../src/services/linkReader.js");
@@ -49,7 +48,6 @@ check("ack takes one fitting emoji (a plane for a landing), never words, several
   const rt = fs.readFileSync(new URL("../../src/services/readTurn.ts", import.meta.url), "utf8");
   check("the read is told reactions are communication: most get none, follow-ups get none, register first, never a heart on bad news, vary", /most messages get null/.test(rt) && /a follow-up to something they just asked/.test(rt) && /Read the emotional register first/.test(rt) && /never "❤️" or "😂"/.test(rt) && /Vary it/.test(rt));
 }
-check("Mo's actions ack by kind", /moApprove: "🚀"/.test(src("mo/teamAgent.ts")) && /moSkip: "👍"/.test(src("mo/teamAgent.ts")) && /moChangeDraft: "✍️"/.test(src("mo/teamAgent.ts")));
 check("the reply path reacts after the read, never blocking the reply", /turn\.ack/.test(src("routes/sendblue.ts")));
 
 // 2. Late results thread under the ask
@@ -59,22 +57,8 @@ check("a reply to a specific message still mirrors first", I.threadReason({ they
 // (2026-10-01) Late search results are gone with the old reply search: Co's loop shares finds as it goes.
 check("threaded sends still carry their reply handle", /replyTo/.test(src("harness/proactive.ts")));
 
-// 3. No silent outcomes
-check("causes are grouped by kind", H.causeOf("HTTP 403 Forbidden") === "auth" && H.causeOf("429 Too Many Requests") === "rate_limit" && H.causeOf("ETIMEDOUT") === "network" && H.causeOf("weird") === "other");
-const t0 = new Date("2026-09-29T12:00:00Z");
-const fail = (n: number) => ({ ok: 0, failed: Array.from({ length: n }, (_, i) => ({ cause: "auth" as const, who: `p${i}` })) });
-const r1 = H.nextHealth(H.EMPTY_HEALTH, fail(4), t0, { kind: "sending" });
-check("four failures make one message, not four", !!r1.message && /4 people/.test(r1.message) && r1.message.split("\n").length === 1);
-const r2 = H.nextHealth(r1.health, fail(4), new Date(t0.getTime() + 3_600_000), { kind: "sending" });
-check("the same cause isn't repeated an hour later", r2.message === null);
-const r3 = H.nextHealth(H.nextHealth(r2.health, fail(4), new Date(t0.getTime() + 2 * 3_600_000), { kind: "sending" }).health, { ok: 2, failed: [] }, new Date(t0.getTime() + 3 * 3_600_000), { kind: "sending" });
-check("it says so when it clears", !!r3.message && /^Back on/.test(r3.message) && r3.health.cause === null);
-const r4 = H.nextHealth(H.EMPTY_HEALTH, fail(1), t0, { kind: "replies", notifyAfterRuns: 2 });
-check("a reply-reader blip stays quiet for one run", r4.message === null && H.nextHealth(r4.health, fail(1), new Date(t0.getTime() + 3_600_000), { kind: "replies", notifyAfterRuns: 2 }).message !== null);
-const r5 = H.nextHealth({ ...H.EMPTY_HEALTH, cause: "auth", runs: 2, since: t0.toISOString(), notifiedAt: t0.toISOString() }, fail(1), new Date(t0.getTime() + 3_600_000), { kind: "sending" });
-check("three failing runs back off retries", H.inBackoff(r5.health, new Date(t0.getTime() + 3_600_000 + 60_000)) && !H.inBackoff(r5.health, new Date(t0.getTime() + 10 * 3_600_000)));
-
 // 4. Stale heads-up
+const t0 = new Date("2026-09-29T12:00:00Z");
 const read = (o: any) => ({ url: "u", finalUrl: "u", status: "ok", why: null, fields: {}, summary: null, source: "model", fetchedAt: t0, ...o });
 const f = (value: string, verified = true) => ({ value, quote: value, verified });
 check("no earlier read, no change", S.staleChange(null, read({})) === null);
@@ -136,7 +120,6 @@ check("bare domains count as links, with or without a path", JSON.stringify(L.li
 check("emails, numbers and plain words aren't links", L.linksIn("email me at sam@example.com or call 415.555.1212, e.g. tomorrow").length === 0);
 check("a link still being read tells Co not to say it read it", await (async () => { const r = await L.linkForReply(new Promise(() => {}), 30); return r.instructions.some((i) => /still being read/.test(i) && /Don't say you've read it/.test(i)); })());
 check("a cut that loses the question isn't sent as a stub", (() => { const g = src("harness/replyGrounding.ts"); return /draft\.includes\("\?"\) && !text\.includes\("\?"\) && words < 14/.test(g) && /enoughLeft\(cut, draft\)/.test(g); })());
-check("Mo's pause text doesn't start with Paused (Co's own line says it)", !/return sayLoose\(`Paused\./.test(src("mo/teamAgent.ts")));
 check("drafts for them keep their own wording", /use only the names, titles, events and details they gave you/.test(src("agent/conversationReply.ts")));
 
 check("the reply path reads a link from their unanswered texts through the tested merge helper (behavior: evals/guards)", (() => { const t = src("routes/sendblue.ts"); return /mergeEarlierLink\(resolvedContent, hasText, earlier\)/.test(t) && /INTERVAL '3 minutes'/.test(t) && /content LIKE 'Co replied:%'/.test(t); })());
@@ -156,7 +139,6 @@ check("advice from the learning call is recorded with the same guard as the tool
 // 2026-09-29 retest: half the learning reads were cut off at the token cap, Co made Mo a cofounder, and the kit question got a thread answer
 check("both learning reads leave room to finish: medium effort and a cap that fits the reasoning", (() => { const a = src("services/turnLearning.ts"); const b = src("services/callLearning.ts"); return /maxOutputTokens: 5000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(a) && /maxOutputTokens: 6000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(b); })());
 check("advice is judged on Co's last line only", /Co's own LAST line/.test(src("services/turnLearning.ts")));
-check("Mo is described as an AI agent, never a cofounder or someone in a member's life", (() => { const t = src("services/extensions.ts"); return /Mo is Co's teammate|\$\{e\.name\} is Co's teammate \(an AI agent that works alongside Co, not a person: never a cofounder/.test(t); })());
 check("advice doesn't guess who is involved", /Don't guess who else is involved or what their role is/.test(src("services/coVoice.ts")));
 check("asked what Co has on them, Co answers from the details on file first", /answer from the details on file first/.test(src("services/capabilities.ts")));
 
@@ -165,10 +147,9 @@ const TLn = await import("../../src/services/teamLines.js");
 check("talk with a teammate agent is dropped from what the learning reads see", TLn.withoutTeammateLines("User said: hi\nUser said: @Mo go [to Mo]\nMo replied: ok\nCo tagged Mo: @Mo\nCo replied: sure\nUser said: I go [to Bob] weekly") === "User said: hi\nCo replied: sure\nUser said: I go [to Bob] weekly");
 check("the SQL filter only matches a trailing [to Name]", /!~ ' \\\[to \[A-Za-z\]\+\\\]\$'/.test(TLn.notToTeammate()) || TLn.notToTeammate("m").startsWith("m.content"));
 check("every reader of the member's own lines skips their talk with a teammate", ["harness/personSnapshot.ts", "harness/memberThreads.ts", "services/memberKnowledge.ts"].every((f) => /notToTeammate\(/.test(src(f))) && /k\.exchanges\.filter/.test(src("services/callContext.ts")) && !/memory_type = 'text_exchange' AND \(content LIKE 'User said/.test(src("services/callContext.ts")) && /withoutTeammateLines\(input\.recentConversation\)/.test(src("services/turnLearning.ts")));
-check("the summary rebuild is told Mo is an AI agent, and drops an older 'cofounder Mo'", /Mo is an AI agent that works alongside Co, not a person in their life/.test(src("harness/personSnapshot.ts")));
 
 // Real-thread replay (evals/companion/threadReplay.ts): with earlier wrong replies in the thread, Co copied them until told plainly
-check("Mo is software for team members; the one-incident kit instruction is gone (the replay showed it changed nothing)", (() => { const g = src("harness/replyGrounding.ts"); return !/The details on file listed above are all you have for doing things on their behalf/.test(g) && /Mo is software that Co runs, not a person\. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo/.test(g); })());
+check("the one-incident kit instruction is gone (the replay showed it changed nothing)", !/The details on file listed above are all you have for doing things on their behalf/.test(src("harness/replyGrounding.ts")));
 {
   const C = await import("../../src/services/capabilities.js");
   const full = C.capabilitySheet().join("\n").length;

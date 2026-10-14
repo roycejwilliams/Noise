@@ -22,7 +22,7 @@ touched = 0;
 await P.runProactiveDispatch({} as any).catch(() => {});
 check("not paused: the dispatcher reads its queue as before", touched > 0);
 check("the switch sits at the top of both doors, before any lock or insert", /export async function runProactiveDispatch\(registry: ProactiveRegistry\): Promise<void> \{\n  if \(proactivePaused\(\)\) return;/.test(src) && /if \(proactivePaused\(\)\) return \{ sent: false, reason: "proactive outreach is paused" \};\n  \/\/ Monitoring visibility/.test(src));
-// ---- automatic calls and Mo
+// ---- automatic calls
 {
   const { triggerCallForUser } = await import("../../src/services/callTrigger.js");
   process.env.PROACTIVE_PAUSED = "true";
@@ -34,16 +34,6 @@ check("the switch sits at the top of both doors, before any lock or insert", /ex
     await triggerCallForUser("u", null, { kind } as any).catch(() => {});
     check(`paused: a call they asked for (${kind}) is NOT paused: it still goes through the gate`, touched > 0);
   }
-  const M = await import("../../src/mo/outreach.js");
-  process.env.MO_ENABLED = "true";
-  touched = 0;
-  await M.runMoOutreach(new Date("2026-10-06T19:00:00Z"));
-  check("paused: Mo's outbound outreach does nothing (no query, no send)", touched === 0);
-  check("paused: Mo's send tools refuse in plain words, so a team 'send now' can't go around it", /paused/.test(String(M.sendingBlocked({ ...process.env, MO_ENABLED: "true", PROACTIVE_PAUSED: "true" } as any))));
-  check("not paused: the same tools are unchanged", !/paused/.test(String(M.sendingBlocked({ MO_ENABLED: "true" } as any))));
-  delete process.env.MO_ENABLED;
-  const co = fs.readFileSync(new URL("../../src/mo/outreach.ts", import.meta.url), "utf8");
-  check("replies are not paused: the Mo inbox and everything a member or prospect sent is untouched", !/runMoInbox\(\): Promise<void> \{\s*if \([^)]*proactivePaused/.test(co));
   delete process.env.PROACTIVE_PAUSED;
 }
 const ct = fs.readFileSync(new URL("../../src/services/callTrigger.ts", import.meta.url), "utf8");

@@ -10,12 +10,11 @@
 //     what actually happened, so the morning review can flag bad judgment
 //     and the hourly monitor can spot drift (harness/monitor.ts)
 // Limits and confirmation come from each ability's entry in
-// services/capabilities.ts, or in an extension's own list (Mo's is
-// mo/abilities.ts), so every extension gets the same guards.
+// services/capabilities.ts, so every tool gets the same guards.
 import { z } from "zod";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
-import { abilityForTool, type Ability } from "../services/capabilities.js";
+import { abilityForTool } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
 import { recordToolAction } from "../services/coFacts.js";
 
@@ -38,8 +37,6 @@ type GuardCtx = {
   // The exchange before their message (services/theirYes.ts exchangeText): where the offer their yes answers is. A thread's log or a
   // call's turns, built by the caller.
   recentExchange?: string | null;
-  // Whose abilities these tools are. Co's registry by default.
-  abilityFor?: (tool: string) => Ability | undefined;
 };
 
 export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes";
@@ -56,7 +53,7 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
   const madeThisTurn = new Map<string, string>();
   for (const [name, t] of Object.entries(tools)) {
     if (UNGUARDED.has(name)) continue;
-    const ability = (ctx.abilityFor ?? abilityForTool)(name);
+    const ability = abilityForTool(name);
     if (!ability || typeof t.execute !== "function") continue;
     const limits = ability.limits ?? {};
 
@@ -151,9 +148,8 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
       if (made) ctx.notDone(`${name} made ${made}, but the text with it didn't send.`);
       else if (failed) ctx.notDone(`${name} didn't go through${result.error ? `: ${String(result.error).slice(0, 160)}` : "."}`);
       await log(failed ? "not_done" : "done", failed ? { error: String(result.error ?? "").slice(0, 200), ...(made ? { made } : {}) } : {});
-      // Co's record of what it did for them (services/coFacts.ts). Only
-      // Co's own tools: an extension's team tools act for the team.
-      if ((!failed || made) && !ctx.dryRun && !ctx.abilityFor) await recordToolAction(ctx.userId, name, input);
+      // Co's record of what it did for them (services/coFacts.ts).
+      if ((!failed || made) && !ctx.dryRun) await recordToolAction(ctx.userId, name, input);
       return result;
     };
   }

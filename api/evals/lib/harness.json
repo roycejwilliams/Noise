@@ -15,7 +15,6 @@
   "evals/companion/_thread.ts",
   "evals/inroom/world.ts",
   "evals/jev/cases.ts",
-  "evals/mo/xKeys.ts",
   "evals/replay/cases.ts",
   "evals/sweepSelect/grading.ts",
   "evals/sweepSelect/score.ts",

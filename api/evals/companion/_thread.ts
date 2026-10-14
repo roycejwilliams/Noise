@@ -4,7 +4,6 @@ import { readFileSync } from "fs";
 process.env.SENDBLUE_API_API_KEY ||= "x"; process.env.SENDBLUE_API_API_SECRET ||= "x";
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");
 const G = await import("../../src/harness/replyGrounding.js");
-const { teamSheet } = await import("../../src/services/extensions.js");
 const K = await import("../../src/services/memberKit.js");
 const { renderSnapshot } = await import("../../src/harness/personSnapshot.js");
 const d = JSON.parse(readFileSync("/tmp/real_thread.json", "utf8"));
@@ -16,7 +15,6 @@ const extra = process.env.EXTRA === "1";
 async function reply(label: string, msg: string, n = 3) {
   for (let i = 0; i < n; i++) {
     const facts = G.baseReplyFacts();
-    for (const l of teamSheet()) G.addFact(facts, "known", l);
     for (const l of K.kitLines({ full_name: "Royce Williams", email: "x@y.z", company: "Lantern", role: "founder", city: "San Francisco" })) G.addFact(facts, "known", l);
     for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Co's summary of what they've told it: ${line}`);
     if (extra) {

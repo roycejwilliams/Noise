@@ -172,6 +172,12 @@ user: I'm heading to the Grok night either way.`;
   const prompt = CL.callLearningPrompt({ transcript: call, today: "2026-09-28", onFile: null, openAsks: [] });
   check("one call read covers profile, resolutions, corrections, cadence, planned event and lessons", ["\"profile\"", "\"resolved\"", "\"corrections\"", "\"cadence\"", "\"planned_event\"", "\"lessons\""].every((k) => prompt.includes(k)) && /The whole call is new: every "user" line counts/.test(prompt));
   check("the call read writes about them as \"they\"", /never "he" or "she"/.test(prompt) && (() => { const n = CL.neutralLearning({ profile: { long_term_direction: "proving to himself he belongs", goals: ["help his cofounder"] } }).profile as any; return !/\b(he|him|himself|his)\b/i.test(`${n.long_term_direction} ${n.goals.join(" ")}`); })());
+  // The pronoun swap, pinned here since it moved out of the removed outreach code (2026-10-14).
+  check("'He is personally hosting' becomes 'They are personally hosting'", CL.neutralPronouns("He is personally hosting an in-person event.") === "They are personally hosting an in-person event.");
+  check("'She's co-hosting with her team' becomes neutral", CL.neutralPronouns("She's co-hosting with her team") === "They're co-hosting with their team");
+  check("'bringing him in' becomes 'bringing them in'", CL.neutralPronouns("worth bringing him in") === "worth bringing them in");
+  check("words containing 'he' are left alone", CL.neutralPronouns("the chess tournament he founded, then") === "the chess tournament they founded, then" && CL.neutralPronouns("hosting the event") === "hosting the event");
+  check("no gendered pronoun survives", !/\b(he|she|his|him|her|hers|himself|herself)\b/i.test(CL.neutralPronouns("He said his cofounder told him she'd host herself")));
   const cl = src("services/callLearning.ts");
   check("a failed read still fails the call (retried), an unreadable one falls back to the old calls", !/generateText\(\{[\s\S]{0,40}\}\)\.catch/.test(cl) && /extractPsychographicProfile\(input\.transcript\)/.test(cl) && /await storeProfile\(input\.userId, learned\.profile as any, input\.transcript, \{\s*precomputed:/.test(cl));
   check("lessons from calls use the same store and dedupe as texts, one member only", /memory_type = 'co_lesson'/.test(cl) && /WHERE user_id = \$1 AND memory_type = 'co_lesson'/.test(cl));

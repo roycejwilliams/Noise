@@ -36,7 +36,7 @@ export const RESTRAINT = {
   offDays: 30,
 };
 
-// Pure: what kind a proactive type is. null: not tracked (companion check-ins, debriefs, logistics, briefs, Mo's own flow).
+// Pure: what kind a proactive type is. null: not tracked (companion check-ins, debriefs, logistics, briefs).
 export function kindOf(type: string, payload: unknown = null): ProactiveKind | null {
   const p = (payload ?? {}) as { reminder?: boolean; kind?: string };
   switch (type) {

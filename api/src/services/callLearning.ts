@@ -28,7 +28,6 @@ import { LIFE_CHAPTERS_RULE, mightBeCorrection, PROFILE_JUDGMENT_MODEL } from ".
 import { parseModelJson } from "./modelJson.js";
 import { extractPsychographicProfile, storePlannedEventMention, storeProfile } from "./profileExtraction.js";
 import { parseTurnLearning, type TurnLearning } from "./turnLearning.js";
-import { neutralPronouns } from "../mo/rules.js";
 
 type OnFile = {
   city: string | null;
@@ -97,6 +96,24 @@ Return ONLY valid JSON, no preamble:
 export type CallLesson = { lesson: string; quote: string };
 
 const squash = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+
+// Pure: he/she and their forms become they/them/their, keeping a capital at the start of a word.
+export function neutralPronouns(text: string): string {
+  const swaps: [RegExp, string][] = [
+    [/\b(he|she) is\b/gi, "they are"],
+    [/\b(he|she) was\b/gi, "they were"],
+    [/\b(he|she) has\b/gi, "they have"],
+    [/\b(he|she)'s\b/gi, "they're"],
+    [/\b(himself|herself)\b/gi, "themself"],
+    [/\b(his|hers)\b/gi, "their"],
+    [/\bher(?=\s+[a-z])/gi, "their"],
+    [/\b(him|her)\b/gi, "them"],
+    [/\b(he|she)\b/gi, "they"],
+  ];
+  let out = text;
+  for (const [re, to] of swaps) out = out.replace(re, (m) => (m[0] === m[0].toUpperCase() ? to[0].toUpperCase() + to.slice(1) : to));
+  return out;
+}
 
 // "They", never a guessed "he" or "she" (2026-09-22 rule; callContext.ts
 // enforces the same on call summaries).

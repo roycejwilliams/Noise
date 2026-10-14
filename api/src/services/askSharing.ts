@@ -57,7 +57,52 @@ export function applyAskPicks<T extends { id?: string }>(intent: T[], offeredIds
   return intent.map((e: any) => (e?.id && offeredIds.includes(e.id) ? { ...e, shareable: yes.has(e.id), shareable_at: at } : e));
 }
 
-// Their answer to the RSVP question, read from their whole message (mo/memberRules.ts readPicks, strict: anything
+// Which numbered items they chose, read STRICTLY: only a clean choice counts, anything else is null and Co asks again. A
+// wrong yes here shares an ask the member meant to keep private, so the grammar is small on purpose:
+//   "1 and 3" / "1, 3" / "just 2" / "the first and the third"      -> those numbers
+//   "all" / "everyone" / "all of them" / "all three"                -> every item
+//   "all but 2" / "everyone except 1"                               -> everyone else
+//   "none" / "nobody" / "no one"                                    -> no one
+// Any other word, any negation ("not", "don't", "no" with a number), a question mark, or a number beyond the list is null.
+const FILLER = new Set(["yes", "ok", "okay", "sure", "please", "just", "only", "and", "the", "reach", "out", "to", "go", "ahead", "with", "for", "on", "them", "those", "these", "people", "person", "of", "me", "number", "numbers"]);
+const ORDINAL: Record<string, number> = { first: 1, second: 2, third: 3, "1st": 1, "2nd": 2, "3rd": 3 };
+export function readPicks(message: string, count: number): number[] | null {
+  if (/\?/.test(message)) return null;
+  const m = message.toLowerCase().replace(/[’‘]/g, "'");
+  if (/n't|\bnot\b|\bnever\b|\bwithout\b|\bskip\b|\bdrop\b|\bexclude\b|\bminus\b/.test(m)) return null;
+  const tokens = m.replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+  const all = Array.from({ length: count }, (_, i) => i + 1);
+  const joined = ` ${tokens.join(" ")} `;
+  if (/^ (?:(?:yes|ok|okay|sure|please|just) )*(?:none|nobody|no one|none of them|nothing) (?:(?:for|now|thanks|thank|you) )*$/.test(joined)) return [];
+  // all but N
+  const butM = joined.match(/^ (?:(?:yes|ok|okay|sure|please) )*(?:all|everyone|all of them) (?:but|except) (?:number |numbers )?((?:\d+|first|second|third)(?: (?:and )?(?:\d+|first|second|third))*) $/);
+  if (butM) {
+    const out = new Set(butM[1].split(/ (?:and )?/).map((t) => (/^\d+$/.test(t) ? Number(t) : ORDINAL[t])));
+    if ([...out].some((n) => !n || n < 1 || n > count)) return null;
+    return all.filter((n) => !out.has(n));
+  }
+  if (tokens.includes("but") || tokens.includes("except")) return null;
+  const hasAll = tokens.some((t) => ["all", "everyone"].includes(t));
+  const nums: number[] = [];
+  for (const t of tokens) {
+    if (/^\d+$/.test(t)) nums.push(Number(t));
+    else if (ORDINAL[t]) nums.push(ORDINAL[t]);
+    else if (t === "all" || t === "everyone" || t === "three" || t === "all") continue;
+    else if (!FILLER.has(t)) return null;
+  }
+  if (hasAll) {
+    // "all", "all of them", "all three": nothing else but fillers (so no numbers beside it)
+    if (nums.length) return null;
+    if (tokens.includes("three") && count !== 3) return null;
+    return all;
+  }
+  if (tokens.includes("three")) return null;
+  if (!nums.length) return null;
+  if (nums.some((n) => n < 1 || n > count)) return null;
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+// Their answer to the RSVP question, read from their whole message (readPicks above, strict: anything
 // unclear is no answer, and Co asks which numbers). A single offered ask takes a plain yes or no.
 export async function recordRsvpShareAnswer(userId: string, message: string): Promise<{ ok: true; shared: string[] } | { ok: false; why: string }> {
   const { rows } = await pool.query(
@@ -73,7 +118,6 @@ export async function recordRsvpShareAnswer(userId: string, message: string): Pr
     const a = readNameAnswer(message, message);
     picks = a === "yes" ? [1] : a === "no" ? [] : null;
   } else {
-    const { readPicks } = await import("../mo/memberRules.js");
     picks = readPicks(message, ids.length);
   }
   if (!picks) return { ok: false, why: "their answer isn't a clear choice" };

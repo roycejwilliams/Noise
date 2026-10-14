@@ -64,7 +64,7 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
 // ------------------------------------------------------------ the shareable-asks question at RSVP
 {
   const S = await import("../../src/services/askSharing.js");
-  const R = await import("../../src/mo/memberRules.js");
+  const R = S;
   const B = await import("../../src/services/eventBrief.js");
   const A = (id: string, text: string, shareable?: boolean) => ({ id, text, type: "seeking", status: "active", kind: "ask", ...(shareable === undefined ? {} : { shareable }) });
   const intent = [A("a1", "a sailing crew", true), A("a2", "a technical cofounder"), A("a3", "a pediatric dentist"), A("a4", "seed investors"), { id: "g1", text: "be calmer", type: "seeking", status: "active", kind: "goal" }];
@@ -83,6 +83,13 @@ finding(`share gate false positives: ${blocked.length}/${benign.length} ordinary
   check("rsvp share: an ask that wasn't offered is untouched", by("a1").shareable === true && by("g1").shareable === undefined);
   check("rsvp share: 'none' keeps every offered ask private", (S.applyAskPicks(intent as any[], ids, R.readPicks("none", 3)!) as any[]).filter((e) => ids.includes(e.id)).every((e) => e.shareable === false));
   check("rsvp share: an unclear answer is no answer", R.readPicks("maybe the cofounder one?", 3) === null && R.readPicks("all but not 2", 3) === null);
+  // The strict reader, pinned here since it moved out of the removed outreach code (2026-10-14).
+  check("picks: numbers, all, none", JSON.stringify(R.readPicks("1 and 3", 3)) === "[1,3]" && JSON.stringify(R.readPicks("all", 3)) === "[1,2,3]" && JSON.stringify(R.readPicks("none", 3)) === "[]" && JSON.stringify(R.readPicks("2", 3)) === "[2]");
+  check("picks: ordinals and 'all but'", JSON.stringify(R.readPicks("the first and the third", 3)) === "[1,3]" && JSON.stringify(R.readPicks("all but 2", 3)) === "[1,3]" && JSON.stringify(R.readPicks("everyone except 1", 3)) === "[2,3]" && JSON.stringify(R.readPicks("just 2", 3)) === "[2]" && JSON.stringify(R.readPicks("yes, 1 and 3 please", 3)) === "[1,3]");
+  for (const m of ["not all of them, just 2", "only 2, not 1 and 3", "I don't want 1 or 3", "no, not 1 or 3", "the second one", "that's all for now", "they each look good, let me think", "what's everyone's background?", "1, 3, not 2", "not 1", "skip 2", "all but 4", "all 1 and 2", "maybe 1?", "1?", "no 1", "no 1 and 3", "no, 1", "1 or 3 if you think so", "sure, whatever you think", "yes"]) check(`picks: "${m}" is unclear (null), never a guess`, R.readPicks(m, 3) === null);
+  check("picks: a number beyond the list or zero is unclear", R.readPicks("4", 3) === null && R.readPicks("0 and 1", 3) === null && R.readPicks("10", 3) === null);
+  check("picks: 'all three' only when there are three", JSON.stringify(R.readPicks("all three", 3)) === "[1,2,3]" && R.readPicks("all three", 2) === null);
+  check("picks: 'nobody' and 'none of them' are none", JSON.stringify(R.readPicks("nobody", 3)) === "[]" && JSON.stringify(R.readPicks("none of them", 3)) === "[]");
   const M = await import("../../src/services/matching.js");
   check("rsvp share: the nudge can only quote a picked ask", M.shareReasonFromOwnAsk(next, "S1").includes("sailing crew") && !M.shareableAsks(next).some((a: any) => a.text === "a pediatric dentist"));
 }

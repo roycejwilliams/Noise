@@ -38,7 +38,6 @@ import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGap
 import { recordDecision } from "../harness/core.js";
 import { missedCallText } from "../harness/callGate.js";
 import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
-import { extensionJobs } from "../services/extensions.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -1012,19 +1011,6 @@ export function registerJobs(io: Server) {
     runAdviceFollowUps().catch((err: any) => console.error("advice follow-up cron error:", err?.message ?? err));
   }, { timezone: "America/Los_Angeles" });
 
-  // Extensions' schedules (services/extensions.ts), each only while that
-  // extension is enabled. Mo (src/mo/, off unless MO_ENABLED=true) finds
-  // people weekly, brings approvers the next person daily, and acts on
-  // approved prospects and replies in Co's X DMs.
-  extensionJobs()
-    .then((jobs) => {
-      for (const job of jobs) {
-        cron.schedule(job.cron, () => {
-          job.run().catch((err: any) => console.error(`${job.name} cron error:`, err?.message ?? err));
-        }, job.timezone ? { timezone: job.timezone } : undefined);
-      }
-    })
-    .catch((err: any) => console.error("extension jobs failed to register:", err?.message ?? err));
 
   // No membership lapse (Royce, 2026-10-14: "Going quiet earns less contact, never ejection." The member's job is nothing):
   // the 2026-09-22 job that warned members Cue knew little about and then archived them is gone. Quiet members stay members.

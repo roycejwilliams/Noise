@@ -115,7 +115,7 @@ export function noteCarried(sent: string, note: Pick<StopNote, "line">): boolean
   return flat(sent).includes(flat(note.line));
 }
 // The proactive types a note may ride in: Co's own companion and offer texts. Never an event-day or in-room text, a lapse or expiry
-// notice, Mo's flow, or a recheck question about something else.
+// notice, or a recheck question about something else.
 export const NOTE_RIDES = new Set(["companion", "ask_checkin", "window_followup", "debrief", "event_offer", "network_tease", "loop_check", "goal_checkin", "goal_nudge", "intro_nudge", "commitment_nudge", "deadline_nudge", "calendar_follow", "event_followthrough", "post_call", "goal_closed"]);
 // Pure: whether this paced text may carry a note: an allowed type, never a heavy check-in, never while they're struggling.
 export function noteMayRide(c: { type: string; payload?: any }, needsCare: boolean): boolean {

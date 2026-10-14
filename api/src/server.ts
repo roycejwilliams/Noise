@@ -33,7 +33,7 @@ import { createUsersRouter } from "./routes/users.js";
 import { getAudioEntry } from "./services/voiceNote.js";
 import { configureSocket } from "./socket/index.js";
 import { buildCoVCard } from "./utils/vcard.js";
-import { createMoRouter } from "./routes/mo.js";
+import { createEmailOptOutRouter } from "./routes/emailOptOut.js";
 import { createGoogleRouter } from "./routes/google.js";
 import { createReadoutRouter } from "./routes/readout.js";
 import { createCoPageRouter } from "./routes/coPage.js";
@@ -70,8 +70,6 @@ app.use("/co/el/llm", express.json({ limit: "4mb" }), createCallLlmRouter());
 // Luma's webhook signature is the same "HMAC over the raw body" shape as the
 // two above — see validateLumaWebhook in routes/luma.ts for the exact scheme.
 app.use("/luma/webhook", express.raw({ type: "application/json" }));
-// Resend signs the raw body of Mo's inbound email posts (routes/mo.ts).
-app.use("/mo/email/inbound", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false })); // Twilio status callbacks send form-encoded bodies
@@ -93,7 +91,8 @@ app.use("/co", createCoRouter(io));
 app.use("/luma", createLumaRouter());
 app.use("/payments", stripeRouter(io, authenticateToken));
 app.use("/sendblue", sendblueRouter(io));
-app.use("/mo", createMoRouter());
+// The opt-out link in invitation emails already sent keeps working (routes/emailOptOut.ts).
+app.use("/mo", createEmailOptOutRouter());
 app.use("/google", createGoogleRouter());
 // The host's read-only partner readout, by an approved link only (services/partnerReadoutSend.ts).
 app.use("/readout", createReadoutRouter());

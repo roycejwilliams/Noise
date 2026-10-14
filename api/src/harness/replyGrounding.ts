@@ -37,7 +37,7 @@ import { carryingBlock, sentDetailHints, sentDetailLines, type TurnContext } fro
 import { switchedOff } from "../services/abilitySwitches.js";
 import { textingStyleFor } from "../services/textingStyle.js";
 import { tasteSummary } from "../services/outcomes.js";
-import { TEAM_BUILDER_LINE, handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
+import { TEAM_BUILDER_LINE, isTeamMember } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { NO_COVERAGE, type SearchCoverage } from "../services/searchCoverage.js";
 import { CHECKIN_RULE, deadAir, keepsEverySentence, workClaimsNameThread, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
@@ -280,20 +280,9 @@ export async function gatherReplyFacts(
   // Titles only, never links (a link goes out only through the tools).
   const live = await import("../services/coPages/store.js").then((m) => m.livePagesFor(userId)).catch(() => [] as { title: string; kind: string }[]);
   if (live.length) addFact(rf, "known", `Pages and decks you made them that are still live: ${live.slice(0, 8).map((p) => `the ${p.kind} "${p.title}"`).join("; ")}. When they ask to change one ("tighten the traction slide", "move dinner to 8"), open it (openArtifact) and change it from what's there; never ask them to paste or resend it.`);
-  // A member an extension brought in (Mo's invitations): what it knew, to
-  // ask about rather than state (services/extensions.ts, mo/handoff.ts).
-  const handoff = await handoffFor(userId).catch(() => ({ known: [] as string[], instructions: [] as string[] }));
-  for (const k of handoff.known) addFact(rf, "known", k);
-  for (const line of handoff.instructions) addInstruction(rf, line);
-  // The team only: Co's teammates and the team-only abilities, so Co never
-  // pitches Mo's work back as a new idea (services/extensions.ts teamSheet).
-  // Everyone else gets nothing about them.
+  // The team only: that they build Co, and the team-only abilities. Everyone else gets nothing about them.
   if (await isTeamMember(userId).catch(() => false)) {
     addInstruction(rf, TEAM_BUILDER_LINE);
-    for (const line of teamSheet()) addFact(rf, "capability", line);
-    // 2026-09-29: with earlier replies in the thread naming Mo beside a cofounder,
-    // Co kept doing it (2 to 3 of 3 replays) until it was told plainly, per replay.
-    addInstruction(rf, "Mo is software that Co runs, not a person. When they talk about their cofounder, equity, family, friends or their own life, never mention Mo, whatever an earlier reply in this conversation said.");
     for (const a of ABILITIES.filter((x) => x.teamOnly)) addFact(rf, "capability", a.can);
   }
   // Abilities switched off right now (services/abilitySwitches.ts).
@@ -1892,8 +1881,7 @@ async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model
   return claims ? { checks: [...code, ...claims.checks], modelOk: true, ms: claims.ms } : { checks: code, modelOk: false, ms: 0 };
 }
 
-// The claim read alone, for another speaker's reply (Mo's, mo/teamAgent.ts):
-// only the claim checks, none of Co's own code checks.
+// The claim read alone (the grounding evals use it): only the claim checks, none of Co's own code checks.
 export async function claimChecksOnly(draft: string, rf: ReplyFacts, src: GroundingSources, opts: { force?: boolean } = {}): Promise<GateCheck[]> {
   if (!opts.force && !needsClaimCheck(draft)) return [];
   const extracted = await extractClaims(draft, rf, src).catch(() => null);

@@ -222,8 +222,8 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const ess = src("services/eventSurfacingSweep.ts");
   const sf = src("services/sweepFind.ts");
   check("#5 empty runs count only when a search really ran", /&& trace\.searched\) \{\s*const quiet = [\s\S]{0,600}UPDATE ask_checkins SET empty_runs/.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3);
-  // 6. Person asks are in the people graph and Mo's gaps.
-  check("#6 person asks count in peopleGraph and Mo's network gaps", /kind IN \('find', 'person'\)/.test(src("services/peopleGraph.ts")) && (src("mo/team.ts").match(/kind IN \('find', 'person'\)/g) ?? []).length === 2);
+  // 6. Person asks are in the people graph.
+  check("#6 person asks count in peopleGraph", /kind IN \('find', 'person'\)/.test(src("services/peopleGraph.ts")));
   // 7. A goal change that didn't happen is never reported.
   const lt = src("agent/loopTools.ts");
   check("#7 markGoal reports an error when the goal didn't change", /const changed = await G\.setGoalState\([\s\S]{0,200}\.catch\(\(\) => false\);\s*if \(!changed\) return \{ ok: false, error: "The goal couldn't be marked just now; nothing changed\. Don't tell them it was\." \};/.test(lt));

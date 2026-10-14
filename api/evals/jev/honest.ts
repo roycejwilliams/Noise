@@ -1,4 +1,4 @@
-// An honest test of Jev in Co and Mo (Royce, 2026-09-23: "Don't carry
+// An honest test of Jev in Co (Royce, 2026-09-23: "Don't carry
 // biases, give an honest test").
 //
 // PRE-REGISTERED before running (thresholds and code are frozen; nothing is
@@ -8,10 +8,8 @@
 //        accuracy is not lower than Haiku alone (a loss of >=1 item that is
 //        significant at p<0.05 fails; a gain only counts as real if p<0.05),
 //        AND its median time per text is not slower than Haiku alone.
-//   Mo screen (real X posts pulled now): PASSES if Jev drops at most 5% of
-//        good posts AND at least 50% of bad ones.
-//   Mo replies (GENERATED; Mo has no real replies yet): reported, flagged as
-//        generated; PASSES if Jev+Haiku is not less accurate than Haiku.
+//   (The outreach agent's two parts were removed with it on 2026-10-14;
+//   branch archive/mo-backup-2026-10-14 has them.)
 // Labels come from Claude Opus, blind (it never sees Jev's or Haiku's answer),
 // and are written to disk before either model runs. Opus is the same family
 // as Haiku, which may favour Haiku; every case where Jev and Haiku disagree is
@@ -28,9 +26,6 @@ import { detectSeekingMode } from "../../src/services/emotionalTone.js";
 import { classifyIssue } from "../../src/services/issueReports.js";
 import { readTextEmotion } from "../../src/harness/emotion.js";
 import { readTextSignals } from "../../src/services/jevGateway.js";
-import { searchPostsWithAuthors } from "../../src/mo/xApi.js";
-import { inCity, clearStop, clearYes } from "../../src/mo/rules.js";
-import { screenPosts, readReplyWithJev } from "../../src/mo/jev.js";
 import { parseModelJson } from "../../src/services/modelJson.js";
 
 const DIR = process.env.HONEST_DIR!;
@@ -138,89 +133,6 @@ async function partCo() {
   say(`${disagreements.length} Jev-vs-Haiku disagreements written for a person to judge: ${DIR}/co_disagreements.txt`);
 }
 
-// ---------------------------------------------------------------- Mo screen
-async function partMoScreen() {
-  const qs = [
-    '("building" OR "shipping" OR "launched" OR "prototype") ("SF" OR "San Francisco") (startup OR founder OR app)',
-    '("hosting" OR "organizing") (dinner OR meetup OR salon OR "demo night") ("SF" OR "San Francisco")',
-    '("looking for" (cofounder OR "co-founder" OR designer OR engineer)) ("SF" OR "Bay Area" OR "San Francisco")',
-  ];
-  const byAuthor = new Map<string, any>();
-  for (const q of qs) {
-    const posts = await searchPostsWithAuthors(q, 25).catch((e: any) => { say(`X search failed: ${e?.message?.slice(0, 120)}`); return []; });
-    for (const p of posts) if (!byAuthor.has(p.author.id)) byAuthor.set(p.author.id, p);
-  }
-  const posts = [...byAuthor.values()].filter((p) => inCity(p.author.location, p.text));
-  const lf = `${DIR}/mo_post_labels.json`;
-  let labels: Record<string, "good" | "bad"> = existsSync(lf) ? JSON.parse(readFileSync(lf, "utf8")) : {};
-  for (const p of posts) {
-    if (labels[p.id]) continue;
-    const { text } = await generateText({
-      model: JUDGE, headers: GRADER_HEADERS,
-      prompt: `Label one X post for a test. Co is a private club in San Francisco for people who build things and show up for others. Is the author a PERSON who says they are doing something specific themselves right now (building a product or company, hosting or organizing a gathering, or looking for people to build with)? Promoters, recruiters, job ads, companies or brands, news, engagement bait, generic advice, and posts about nothing they're doing are "bad".
-
-Author: ${p.author.name} (@${p.author.username}); bio: ${(p.author.description ?? "").slice(0, 200)}
-Post: ${p.text.slice(0, 600)}
-
-Return ONLY JSON: {"label": "good" | "bad"}`,
-    });
-    const l = parseModelJson<{ label?: string }>(text).label;
-    if (l === "good" || l === "bad") labels[p.id] = l;
-  }
-  writeFileSync(lf, JSON.stringify(labels, null, 1)); // frozen before Jev runs
-  const used = posts.filter((p) => labels[p.id]);
-  const r = await screenPosts(used);
-  const dropped = new Set(r.dropped.map((d) => d.post.id));
-  const good = used.filter((p) => labels[p.id] === "good"), bad = used.filter((p) => labels[p.id] === "bad");
-  const gd = good.filter((p) => dropped.has(p.id)), bd = bad.filter((p) => dropped.has(p.id));
-  say(`\n=== MO SCREEN: ${used.length} real X posts (${good.length} good, ${bad.length} bad by Opus, blind) ===`);
-  say(`Good posts wrongly dropped: ${gd.length} of ${good.length} = ${wilson(gd.length, good.length)}`);
-  say(`Bad posts dropped before Claude: ${bd.length} of ${bad.length} = ${wilson(bd.length, bad.length)}`);
-  for (const p of gd) say(`   wrongly dropped: "${p.text.slice(0, 140)}"`);
-  const pass = good.length ? gd.length / good.length <= 0.05 && bad.length > 0 && bd.length / bad.length >= 0.5 : false;
-  say(`MO SCREEN VERDICT: ${pass ? "PASS" : "FAIL"}${good.length < 20 ? ` (only ${good.length} good posts: too few to be sure)` : ""}`);
-  writeFileSync(`${DIR}/mo_screen_results.json`, JSON.stringify({ labels, dropped: r.dropped.map((d) => ({ id: d.post.id, text: d.post.text, p: d.p })) }, null, 1));
-}
-
-// ---------------------------------------------------------------- Mo replies (generated)
-async function partMoReplies() {
-  const lf = `${DIR}/mo_replies.json`;
-  let cases: { text: string; label: string }[] = existsSync(lf) ? JSON.parse(readFileSync(lf, "utf8")) : [];
-  if (!cases.length) {
-    const { text } = await generateText({
-      model: JUDGE, // generating test replies is not grading: no grader header, so the meter runs it on Haiku
-      prompt: `For a test, write 45 realistic, varied X DM replies from strangers to this message from Co: "Saw your post about the dinners you host. Co runs a small invite-only club in SF for people like that. Want an invite?" 15 that mean yes, 15 that mean no (including polite, blunt, and "maybe later"), 15 that ask a question or are unclear. Mix lengths, slang, typos, sarcasm, emoji. Return ONLY JSON: {"replies": [{"text": "...", "label": "yes"|"no"|"question"}]}`,
-    });
-    const gen = parseModelJson<{ replies?: { text: string; label: string }[] }>(text).replies ?? [];
-    for (const g of gen) {
-      const { text: v } = await generateText({ model: JUDGE, headers: GRADER_HEADERS, prompt: `Co asked a stranger by DM whether they'd like an invite to a private club. Their reply: "${g.text}". Is this yes (wants the invite), no (doesn't, or wants to be left alone, including "not now"), or question (asks something or is unclear)? One word.` });
-      const w = v.trim().toLowerCase();
-      const relabel = w.startsWith("yes") ? "yes" : w.startsWith("no") ? "no" : "question";
-      if (relabel === g.label) cases.push(g); // keep only where two blind reads agree
-    }
-    writeFileSync(lf, JSON.stringify(cases, null, 1));
-  }
-  const haikuRead = async (t: string) => {
-    const { text } = await generateText({ model: anthropic("claude-haiku-4-5-20251001"), prompt: `Co invited someone to a private club by DM and asked if they'd like an invite. Their reply: "${t.slice(0, 500)}"\n\nAnswer with one word: yes (they want the invite), no (they don't, or want to be left alone), or question (anything else, including questions).` });
-    const w = text.trim().toLowerCase(); return w.startsWith("yes") ? "yes" : w.startsWith("no") ? "no" : "question";
-  };
-  let hr = 0, jr = 0, b = 0, c = 0, jd = 0, jdr = 0;
-  for (const cse of cases) {
-    const pre = clearStop(cse.text) ? "no" : clearYes(cse.text) ? "yes" : null; // same code rules in both arms
-    const h = pre ?? (await haikuRead(cse.text));
-    let j = pre;
-    if (!j) { const r = await readReplyWithJev(cse.text); if (r.verdict) { jd++; if (r.verdict === cse.label) jdr++; } j = r.verdict ?? (await haikuRead(cse.text)); }
-    if (h === cse.label) hr++; if (j === cse.label) jr++;
-    if (h === cse.label && j !== cse.label) b++; if (h !== cse.label && j === cse.label) c++;
-  }
-  const n = cases.length;
-  say(`\n=== MO REPLIES: ${n} GENERATED replies (Mo has no real ones yet), kept only where two blind Opus reads agreed ===`);
-  say(`Haiku ${wilson(hr, n)} | Jev→Haiku ${wilson(jr, n)} | Jev decided ${jd}, right on ${jdr} | p=${binomTwoSided(b, c).toFixed(3)}`);
-  say(`MO REPLIES VERDICT: ${jr >= hr ? "PASS" : "FAIL"} (generated data: weaker evidence)`);
-}
-
 await partCo();
-await partMoScreen();
-await partMoReplies();
 writeFileSync(`${DIR}/summary.txt`, out.join("\n"));
 process.exit(0);

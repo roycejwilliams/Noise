@@ -23,7 +23,6 @@ import { countRecentGateReplies, decideGateReply } from "../services/gateGuard.j
 import { claimJoinNotice, invitesLeftFor, inviterFirstName, releaseJoinNotice } from "../services/invites.js";
 import { decideInviteJoinedGate } from "../services/inviteJoinGate.js";
 import { handlePhoneChange } from "../services/phoneChange.js";
-import { extensionForMessage, handleTeamText } from "../services/extensions.js";
 import { firstSendTimes } from "../services/turnLatency.js";
 import { catchUpReaction } from "../services/reactionCatchup.js";
 import { gapDescription } from "../services/understanding.js";
@@ -73,7 +72,7 @@ import { callLine } from "../services/capabilities.js";
 import { callNotPlacedReason, callNotPlacedFacts } from "../services/callReasons.js";
 import { memberSafe, introFacts } from "../services/memberSafeMemories.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
-import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches, sendingAs } from "../services/sendblue.js";
+import sendblue, { blockSender, cleanCoMessage, markRead, sendReaction, webhookSecretMatches } from "../services/sendblue.js";
 import { OWED_AFTER, owedFromRows, RESUME_AFTER_MS, TURN_FAILED_NOTE, turnFailedNoteBlocked, turnReplayBlocked } from "../services/turnFailure.js";
 import { lineInVoice } from "../services/voiceLine.js";
 import { privacyAlert } from "../services/privacyAlert.js";
@@ -877,41 +876,6 @@ export function sendblueRouter(io: Server): Router {
           } else {
             await sendAndLog(user.id, number, pickLine(WRONG_CODE));
             return res.status(200).send({ received: true, action: "invite_code_rejected" });
-          }
-        }
-
-        // Texts for an extension (services/extensions.ts), like Mo's team
-        // (src/mo/): only from teammates, and only when the extension reads
-        // the text as meant for it. Anything else falls through to a normal
-        // reply. Not logged as conversation, so it never reaches their own
-        // threads.
-        if (hasText && user.identity_captured) {
-          // They pressed Reply on an extension's own text (Mo's "So on
-          // Harneet…"): it goes to that extension, whatever it says
-          // (2026-09-28: Co answered it instead).
-          const pressed = req.body?.thread_originator?.message_handle ?? req.body?.reply_to?.message_handle;
-          const repliedToExt = pressed ? await extensionForMessage(user.id, pressed).catch(() => null) : null;
-          const teamHandle = typeof req.body?.message_handle === "string" ? req.body.message_handle : null;
-          const teamAck = teamHandle ? (emoji: string) => sendReaction(teamHandle, emoji) : undefined;
-          const ext = await handleTeamText(user.id, content, { ...(repliedToExt ? { repliedTo: repliedToExt.content, only: repliedToExt.id } : {}), ack: teamAck }).catch((err: any) => {
-            console.error("sendblue: extension reply failed:", err?.message ?? err);
-            return null;
-          });
-          if (repliedToExt) {
-            recordDecision({ layer: 2, decision: "team.inlineToExtension", userId: user.id, outcome: ext ? "act" : "skip", action: repliedToExt.id }).catch(() => {});
-          }
-          if (ext !== null) {
-            // Their message to Mo goes in the thread too, marked as said to Mo,
-            // so Co can see the whole conversation (services/sendblue.ts
-            // logs Mo's replies).
-            if (hasText) await logTextExchange(user.id, `User said: ${content} [to ${ext.extension === "mo" ? "Mo" : ext.extension}]`).catch(() => {});
-            if (ext.reply) {
-              // Recorded as the extension's own text, so a reply under it comes back to it.
-              await sendingAs(ext.extension, () => sendblue.messages.send({ number, content: ext.reply, from_number: process.env.SENDBLUE_PHONE_NUMBER! })).catch((err: any) =>
-                console.error(`sendblue: ${ext.extension} reply send failed:`, err?.message ?? err),
-              );
-            }
-            return res.status(200).send({ received: true, action: `${ext.extension}_reply` });
           }
         }
 

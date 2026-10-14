@@ -26,7 +26,7 @@ import { createCallLlmRouter } from "../../api/src/routes/callLlm.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
-import { createMoRouter } from "../../api/src/routes/mo.js";
+import { createEmailOptOutRouter } from "../../api/src/routes/emailOptOut.js";
 import { createGoogleRouter } from "../../api/src/routes/google.js";
 import { createReadoutRouter } from "../../api/src/routes/readout.js";
 import { createCoPageRouter } from "../../api/src/routes/coPage.js";
@@ -79,8 +79,6 @@ async function main() {
   // has been 404ing silently since co-test became the only running server
   // for this environment.
   app.use("/luma/webhook", express.raw({ type: "application/json" }));
-  // Resend signs the raw body of Mo's inbound email posts (routes/mo.ts).
-  app.use("/mo/email/inbound", express.raw({ type: "application/json" }));
   app.use(express.json({ limit: "2mb" }));
   app.use(express.urlencoded({ extended: false })); // Twilio status callbacks are form-encoded
   app.use(cookieParser());
@@ -156,9 +154,8 @@ async function main() {
   app.use("/d", createCoPageRouter());
   app.use("/sendblue", sendblueRouter(io));
   app.use("/luma", createLumaRouter());
-  // Mo's email opt-out link and inbound email replies (2026-09-25: Mo runs
-  // here, so these have to be served here too).
-  app.use("/mo", createMoRouter());
+  // The opt-out link in invitation emails already sent keeps working (api/src/routes/emailOptOut.ts).
+  app.use("/mo", createEmailOptOutRouter());
 
   // Tool-access login (phone + OTP) — see services/testerAuth.ts. Public by
   // definition, it's the thing that grants access to everything below.
