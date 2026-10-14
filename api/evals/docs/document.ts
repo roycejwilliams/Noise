@@ -8,6 +8,8 @@ const X = await import("../../src/services/documentDelivery.js");
 const O = await import("../../src/services/documentOffer.js");
 const Cap = await import("../../src/services/capabilities.js");
 const G = await import("../../src/agent/toolGuard.js");
+// The read of their answer (services/theirYes.ts) is a model call: stubbed to yes, so these checks are about the guard's facts.
+(await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
 const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
@@ -151,7 +153,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   const notes: string[] = [];
   G.guardTools(tools, { userId: "u1", resolvedContent: "Yeah, put it in a doc for me please", dryRun: true, notDone: (t) => notes.push(t) });
   const noYes = await tools.writeDocument.execute({ theirYes: "" }, {});
-  check("without their own words in this message, no document is written", noYes.ok === false && calls.length === 0 && /needs their own yes/.test(noYes.error), noYes);
+  check("without their own words in this message, no document is written", noYes.ok === false && calls.length === 0 && /Quote only the words in their message that say yes/.test(noYes.error), noYes);
   const madeUp = await tools.writeDocument.execute({ theirYes: "sure, go ahead and send it" }, {});
   check("a yes they did not say is refused", madeUp.ok === false && calls.length === 0);
   const yes = await tools.writeDocument.execute({ theirYes: "put it in a doc for me" }, {});

@@ -56,7 +56,9 @@ check("the prompt keeps find for events, people, programs", /an event, a group o
 check("the prompt has no em dash or exclamation point", !/[—–!]/.test(p));
 
 // Asks already saved as find are re-marked by the guard (no model, still open).
-check("open find asks Co owes are moved to help before each sweep", /WHERE resolved_at IS NULL AND kind = 'find'/.test(ak) && /isCoCommitment\(String\(r\.ask_text/.test(ak) && /SET kind = 'help', kind_checked_at = NOW\(\) WHERE id = \$1 AND kind = 'find'/.test(ak));
+check("open find asks Co owes are moved to help before each sweep", /WHERE resolved_at IS NULL AND kind = 'find'/.test(ak) && /isCoCommitment\(String\(r\.ask_text/.test(ak) && /setAskKind\(db, \{ id: r\.id, read: \{ kind: r\.kind \?\? null, intent: r\.intent \?\? null \}, kind: "help" \}\)/.test(ak));
+// A lookout's kind is never changed by the kind job (lane moves, 2026-10-13): every kind write goes through laneMoves.ts setAskKind.
+check("the kind job never writes ask_checkins kind itself", !/UPDATE ask_checkins SET kind/.test(ak) && /intent IS DISTINCT FROM 'lookout'/.test(ak));
 check("re-marking never closes or reopens an ask", !/resolved_at = (NOW|NULL)/.test(ak.slice(ak.indexOf("export async function classifyOpenAsks"), ak.indexOf("export async function closeAsk"))));
 
 console.log(`ask kinds: ${total - failed}/${total} passed`);

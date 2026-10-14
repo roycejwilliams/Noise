@@ -676,6 +676,30 @@ export function nearDuplicate(a: string, b: string): boolean {
   return shared / Math.min(wa.size, wb.size) >= 0.75;
 }
 
+// A one-off ask is never a goal or an interest (Royce, 2026-10-13, lane moves: "no silent re-promotion through a side door"). The rule
+// lives in the turn's extraction (services/turnLearning.ts: goals and interests come only from what they say about themselves or want for
+// themselves, never from a one-off request's subject). Code holds back only the exact restatement of the one-off ask's own text (its
+// meaning words, the asking words left out), on a turn whose ask Co read as one-off (laneMoves.ts turnAskLane). A goal they state about
+// themselves beside the ask ("raise a pre-seed round" while asking for investor research) goes in (review, 2026-10-13: a word-overlap
+// hold held all 8 realistic self-statements). Exported for evals.
+const ASKING_WORDS = new Set(["find", "look", "search", "research", "help", "need", "want", "get", "some", "good", "best", "any", "can", "you", "could", "would", "pleas", "send", "draft", "writ", "mak", "giv", "tell", "advic", "idea", "option", "tonight", "today", "tomorrow", "week", "weekend", "thi", "that", "what", "wher", "how", "who", "spot", "plac", "recommend", "suggest", "list", "link", "doc", "document", "brief"]);
+// A thing's meaning words: stemmed content words, the asking words (and any `drop` words, stemmed the same way) left out.
+export function meaningWords(s: string, drop: readonly string[] = []): Set<string> {
+  const extra = new Set(drop.map((w) => stemWord(w.toLowerCase())));
+  return new Set([...listWords(String(s ?? ""))].filter((w) => !ASKING_WORDS.has(w) && !extra.has(w)));
+}
+export function heldAsOneOff(fresh: string[] | null | undefined, existing: string[] | null | undefined, askText: string): string[] {
+  const ask = meaningWords(askText);
+  if (!ask.size) return [];
+  return (fresh ?? []).filter((item) => {
+    const t = item?.trim();
+    if (!t || (existing ?? []).some((e) => nearDuplicate(e, t))) return false;
+    const w = meaningWords(t);
+    if (!w.size) return false;
+    return [...w].filter((x) => ask.has(x)).length / Math.max(w.size, ask.size) >= 0.75;
+  });
+}
+
 // How much a phrasing actually pins down. Used only to choose between two
 // items that already mean the same thing, and at the cap to stop a vague
 // item displacing a pointed one — never to reorder the list on its own.
@@ -826,6 +850,8 @@ export async function storeProfile(
     // judgments, already made, run through the same gates below instead of
     // three more model calls. openAsks is the numbered list that read saw.
     precomputed?: { resolutionRaw: string; openAsks: { id: string; text: string }[]; correctionsRaw: string; cadence: unknown };
+    // This turn's ask as the lanes read it (laneMoves.ts turnAskLane). A one-off ask never adds a goal or an interest (heldAsOneOff).
+    turnAsk?: import("./laneMoves.js").TurnAsk | null;
   } = {},
 ): Promise<{ safeChapters: string[]; safeStyle: string }> {
   const { rows: existingRows } = await pool.query(
@@ -896,8 +922,29 @@ export async function storeProfile(
   const safeStyle = clean.connection_style ?? existing?.connection_style ?? "small_group";
   // Newest first, near-duplicates collapsed, capped: these lists used to only
   // grow (one tester reached 126 goals and 115 blockers, most rewordings).
-  const activityPreferencesMerged = mergeProfileList(existing?.activity_preferences, clean.activity_preferences, 15);
-  const goalsMerged = mergeProfileList(existing?.goals, clean.goals, 12).filter((g) => !resolvedGoals.includes(g));
+  // A goal or interest that only restates this turn's one-off ask is held (heldAsOneOff, lane moves 2026-10-13).
+  const oneOff = opts.turnAsk?.oneOff ? opts.turnAsk : null;
+  const heldGoals = oneOff ? heldAsOneOff(clean.goals, existing?.goals, oneOff.text) : [];
+  const heldLikes = oneOff ? heldAsOneOff(clean.activity_preferences, existing?.activity_preferences, oneOff.text) : [];
+  if (heldGoals.length || heldLikes.length) {
+    await recordDecision({
+      layer: 4,
+      decision: "profile.write",
+      userId: user_id,
+      outcome: "skip",
+      action: "held_one_off",
+      reason: `it restates a one-off ask, which is never a goal or an interest (${oneOff!.why})`,
+      proposal: { ask: oneOff!.text.slice(0, 200), goals: heldGoals, activity_preferences: heldLikes },
+    }).catch(() => {});
+  }
+  // A goal they moved out of their goals (laneMoves.ts, at their yes) isn't read back in from the conversation that moved it; saying it
+  // again as a goal after that is a confirmed move back, not a re-read.
+  const movedOut: string[] = await pool
+    .query(`SELECT goal_text FROM goal_states WHERE user_id = $1 AND state <> 'active' AND source = 'member' AND reason LIKE 'moved to %'`, [user_id])
+    .then((r) => r.rows.map((x: any) => String(x.goal_text)))
+    .catch(() => [] as string[]);
+  const activityPreferencesMerged = mergeProfileList(existing?.activity_preferences, (clean.activity_preferences ?? []).filter((a) => !heldLikes.includes(a)), 15);
+  const goalsMerged = mergeProfileList(existing?.goals, (clean.goals ?? []).filter((g) => !heldGoals.includes(g) && !movedOut.some((m) => nearDuplicate(m, g))), 12).filter((g) => !resolvedGoals.includes(g));
   const blockersMerged = mergeProfileList(existing?.blockers, (clean.blockers ?? []).filter((b) => !isAboutCo(b)), 10).filter(
     (b) => !resolvedBlockers.includes(b) && !isAboutCo(b),
   );

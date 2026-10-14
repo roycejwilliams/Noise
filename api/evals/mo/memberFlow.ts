@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 const { default: pool } = await import("../../src/db/db.js");
 const F = await import("../../src/mo/memberFlow.js");
 const H = await import("../../src/mo/memberHunt.js");
+// The read of their answer (services/theirYes.ts) is a model call: stubbed to yes, so these checks are about the guard's facts.
+(await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
 

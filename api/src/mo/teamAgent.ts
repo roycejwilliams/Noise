@@ -11,6 +11,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
+import { exchangeFromLog } from "../services/theirYes.js";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
 import { guardTools } from "../agent/toolGuard.js";
@@ -316,6 +317,8 @@ export async function runMoTeamTurn(input: TeamTurnInput): Promise<TeamTurn> {
   const tools = guardTools(raw as Record<string, any>, {
     userId: input.userId,
     resolvedContent: input.text,
+    // What a yes answers (agent/toolGuard.ts confirmYes): the thread's recent exchange, Mo's and Co's lines with theirs.
+    recentExchange: exchangeFromLog(input.awareness?.recent ?? ""),
     dryRun: Boolean(input.dryRun),
     notDone: (w) => notDone.push(w),
     abilityFor: moAbilityForTool,

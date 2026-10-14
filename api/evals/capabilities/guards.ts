@@ -7,6 +7,8 @@ process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
 process.env.CO_VCARD_URL ||= "https://example.com/co.vcf";
 const { createConversationTools } = await import("../../src/agent/conversationTools.js");
 const { yesIsTheirs } = await import("../../src/agent/toolGuard.js");
+// The read of their answer (services/theirYes.ts) is a model call: stubbed to yes here, so these checks are about the guards.
+(await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
 const { setSwitchesForTest } = await import("../../src/services/abilitySwitches.js");
 const { SIGNALS } = await import("../../src/harness/monitor.js");
 const { ABILITIES, LIMITS } = await import("../../src/services/capabilities.js");
@@ -55,8 +57,8 @@ setSwitchesForTest({});
 {
   const { tools, facts } = make("I met Ellis at the rooftop thing, she was great");
   const r = await tools.requestEventIntro.execute({ personName: "Ellis", theirYes: "yes please connect us" }, {});
-  check("an intro without their yes in this message is refused", r.ok === false && /needs their own yes/.test(r.error));
-  check("…and recorded as not done yet", facts.some((f) => f.kind === "not_done" && /clear yes/.test(f.text)));
+  check("an intro without their yes in this message is refused", r.ok === false && /Quote only the words in their message that say yes/.test(r.error));
+  check("…and recorded as not done yet", facts.some((f) => f.kind === "not_done" && /quoted yes isn.t in their message/.test(f.text)));
 }
 {
   const { tools } = make("yes, connect me with Ellis");

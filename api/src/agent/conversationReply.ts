@@ -3,6 +3,7 @@ import type { TurnContext } from "../services/turnContext.js";
 import { generateText, stepCountIs } from "ai";
 import { LOOP_BUDGET } from "./loop.js";
 import { createConversationTools, type SendCoReply } from "./conversationTools.js";
+import { exchangeFromLog } from "../services/theirYes.js";
 import { writeMemory } from "../services/memory.js";
 import pool from "../db/db.js";
 import { CO_TEXT_CHANNEL } from "../services/coVoice.js";
@@ -35,7 +36,7 @@ export const TEXT_LISTENING = CO_LISTENING;
 export const TOOL_FAILURE_RULE = "When a tool fails or comes back thin, lead with what they get now: the content, or the best find you have. Say something is still coming only when a receipt or a task in the facts backs it. Never mention tools, searches, limits, errors or retries, and never ask them to try again: code already retries what can be retried.";
 export function TOOL_TURN_RULES(isVoice: boolean): string {
   return [
-    "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
+    "- When this turn starts or delivers work (startTask, researchBrief, writeDocument, emailPlan, draftEmail, followUp, moveLane), call that tool first. Then sendReply says what happened, from its result, as what they get and when, never as what you're doing.",
     "- Call tools that don't depend on each other in the same step.",
     `- One sendReply per turn.${isVoice ? "" : " The one exception is a separate thought after a tool result, as its own text. Never split one thought into pieces."}`,
     `- ${TOOL_FAILURE_RULE}`,
@@ -43,6 +44,8 @@ export function TOOL_TURN_RULES(isVoice: boolean): string {
 }
 
 export type ConversationReplyInput = {
+  // A confirmed lane move's line the first try at this reply never carried (laneMoves.ts): the retry carries it.
+  laneNotesOwed?: string[];
   // When their text arrived. The reply's one deadline runs from here, so the
   // turn's prep counts against it (2026-10-01 code review).
   turnStartedAt?: Date;
@@ -292,6 +295,7 @@ export async function runConversationReplyAgent(
       firstRead = p;
     },
     turnStartedAt: turnStart,
+    laneNotesOwed: input.laneNotesOwed ?? [],
     isTeam,
     userId: input.userId,
     phoneNumber: input.phoneNumber,
@@ -310,6 +314,8 @@ export async function runConversationReplyAgent(
     turn: input.turn ?? null,
     firstName: input.firstName ?? null,
     lastCoMessage: lastCoLine(input.recentConversation),
+    // What a yes answers is in the exchange, not only Co's last line (services/theirYes.ts, 2026-10-13).
+    recentExchange: exchangeFromLog(input.recentConversation),
     sendCoReply: input.sendCoReply,
     threadNext: input.threadNext,
     ackSent: input.ackSent ?? null,
@@ -676,9 +682,12 @@ ${TOOL_TURN_RULES(input.isVoice)}
     }
     if (retrying) {
       const toldThem = state.sent;
+      // A lane move made on the first try already happened: its line rides in the retry's reply (laneMoves.ts).
+      const laneNotesOwed = [...state.laneNotes];
+      state.laneNotes = [];
       input.resumeLater!(async () => {
         if (toldThem) addFact(input.facts, "did_this_turn", `A minute ago you told them "${REPLY_DELAYED_NOTE}" because your first try at this reply came out empty. This is that answer: answer what they said, and don't apologize again.`);
-        const again = await runConversationReplyAgent(input, { ...opts, attempt: attempt + 1 });
+        const again = await runConversationReplyAgent({ ...input, laneNotesOwed }, { ...opts, attempt: attempt + 1 });
         const { recordDecision } = await import("../harness/core.js");
         await recordDecision({ layer: 3, decision: "reply.resume", userId: input.userId, outcome: again.sent && again.replyText !== REPLY_GAVE_UP_NOTE ? "act" : "skip", action: again.replyText === REPLY_GAVE_UP_NOTE ? "empty_again" : again.sent ? "answered" : "not_sent", proposal: { message: input.resolvedContent.slice(0, 200) } }).catch(() => {});
       });
@@ -700,6 +709,13 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // A link queued but never flushed (the model shared one and then stopped)
   // still goes out, after the reply it belongs to.
   if (state.pendingLinks.length && !state.sendStopped) await flushLinks();
+
+  // A lane move whose line no text carried (the reply never went, or only a link did): logged for the morning review, never sent on
+  // its own (laneMoves.ts, Royce 2026-10-13: "never a separate text").
+  if (state.laneNotes.length && !opts.dryRun) {
+    const { recordDecision } = await import("../harness/core.js");
+    await recordDecision({ layer: 3, decision: "lane.note", userId: input.userId, outcome: "skip", action: "not_carried", reason: "a confirmed move's line didn't go out in a reply this turn", proposal: { lines: state.laneNotes } }).catch(() => {});
+  }
 
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
 

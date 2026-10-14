@@ -199,8 +199,9 @@ export type GoalDeps = {
   setState: (userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]) => Promise<unknown>;
   corrections: (userId: string) => Promise<Correction[]>;
   retired: (goal: string, c: Correction[], lastSaid?: Date | string | null) => Correction | null;
-  findAsks: (userId: string) => Promise<{ id: number; text: string }[]>;
-  helpAsk: (userId: string, id: number) => Promise<void>;
+  // intent: a lookout is never retired from a goal (lane moves, 2026-10-13); only their own words or a confirmed move change its lane.
+  findAsks: (userId: string) => Promise<{ id: number; text: string; intent?: string | null }[]>;
+  helpAsk: (userId: string, id: number, intent?: string | null) => Promise<void>;
   // failed: the read didn't come back whole (logged as a skip, never as a success).
   log: (d: { userId: string; action: string; proposal: Record<string, unknown>; reason?: string | null; failed?: boolean }) => Promise<void>;
 };
@@ -248,8 +249,9 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
   let retiredAsks = 0;
   if (notFindable.length) {
     for (const a of await deps.findAsks(userId).catch(() => [])) {
+      if (a.intent === "lookout") continue;
       if (!(isCoTaskGoal(a.text) || notFindable.some((g) => restates(a.text, g) || restates(g, a.text)))) continue;
-      await deps.helpAsk(userId, a.id).catch(() => {});
+      await deps.helpAsk(userId, a.id, a.intent ?? null).catch(() => {});
       retiredAsks++;
     }
   }
@@ -362,9 +364,12 @@ export const realGoalDeps: GoalDeps = {
   corrections: async (userId) => (await (await import("./memberKnowledge.js")).realKnowledgeDeps.corrections(userId, { limit: 40, days: null })) as Correction[],
   // The same check that retires a corrected thread in the call context (services/callContext.ts).
   retired: (goal, c, lastSaid) => retiredBy(goal, c as any, lastSaid ?? undefined) as Correction | null,
-  findAsks: async (userId) => (await pool.query(`SELECT id, ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find'`, [userId])).rows.map((r: any) => ({ id: Number(r.id), text: String(r.ask_text ?? "") })),
-  helpAsk: async (userId, id) => {
-    await pool.query(`UPDATE ask_checkins SET kind = 'help', kind_checked_at = NOW() WHERE id = $1 AND user_id = $2 AND kind = 'find'`, [id, userId]);
+  findAsks: async (userId) => (await pool.query(`SELECT id, ask_text, intent FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find' AND intent IS DISTINCT FROM 'lookout'`, [userId])).rows.map((r: any) => ({ id: Number(r.id), text: String(r.ask_text ?? ""), intent: r.intent ?? null })),
+  // The one kind write (laneMoves.ts setAskKind): only while it's still a find ask that isn't a lookout.
+  helpAsk: async (userId, id, intent) => {
+    const { setAskKind } = await import("./laneMoves.js");
+    // Never throws into the sweep: a write that can't land (an id that isn't a row's) changes nothing.
+    await setAskKind(pool, { id, userId, read: { kind: "find", intent: intent ?? null }, kind: "help" }).catch(() => false);
   },
   log: async (d) => {
     const { recordDecision } = await import("../harness/core.js");

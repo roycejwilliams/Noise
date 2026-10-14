@@ -295,7 +295,8 @@ async function readIntents(userId: string, asks: AskRow[]): Promise<Map<string, 
         await recordDecision({ layer: 5, decision: "ask.intent", userId, outcome: "skip", action: "unread", reason: "Co's reading of the ask came back without a clear answer; read again next time", proposal: { askId: x.row.id, ask: x.row.ask_text.slice(0, 200) } });
         continue;
       }
-      await pool.query(`UPDATE ask_checkins SET intent = $2, intent_why = $3 WHERE id = $1 AND intent IS NULL`, [x.row.id, intent, why]);
+      // The one way an ask becomes a lookout: this read of their own words (laneMoves.ts settleAskIntent, Royce 2026-10-13).
+      await (await import("./laneMoves.js")).settleAskIntent(String(x.row.id), intent, why);
       await recordDecision({ layer: 5, decision: "ask.intent", userId, outcome: "act", action: intent, reason: why || null, proposal: { askId: x.row.id, ask: x.row.ask_text.slice(0, 200), words: x.words.map((w) => w.slice(0, 300)) } });
     }
   } catch (err: any) {

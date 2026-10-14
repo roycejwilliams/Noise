@@ -470,6 +470,15 @@ export const ABILITIES: Ability[] = [
     limits: { perTurn: 3, perDay: 10 },
     use: "When they say a goal is reached, closed or no longer what they want, or answer whether they still want things for a goal Co set aside, mark it: done, stale, or active again, with a few words of why. Only a goal listed in what you know about them. Don't announce it; answer them as you would.",
   },
+  // Lane moves (services/laneMoves.ts, Royce 2026-10-13): Co proposes, their yes moves it, and the reply carries one line saying so.
+  {
+    id: "lane_move",
+    can: "Co keeps what it's carrying for them as tasks, lookouts and goals. When one belongs somewhere else (a task that's really a goal, a goal they'd rather Co watch for, a lookout that's really where they're headed), Co can offer to move it, and moves it only on their yes. A task becomes a lookout only when they ask Co to keep watching.",
+    tool: "moveLane",
+    limits: { perTurn: 2, perDay: 6 },
+    confirm: "their_yes",
+    use: "Move one of their things to another lane, only after you offered it and they said yes in this message: a task to their goals, a goal to their lookouts, or a lookout to their goals. Offer it in one line first (\"want me to keep the jazz nights as a lookout instead of a goal?\"); never move anything on your own. Never offer to turn a task into a lookout: that happens only when they ask you to keep watching, in their own words. item: the thing as it's listed (a task as \"task #12\"); from: its lane now; to: where it goes; label: a few words naming it (\"the jazz nights\"). It returns the one line that goes in your reply. Code puts that line in, so don't say the move in your own words, and never list or recap their lanes.",
+  },
   {
     id: "save_ask",
     can: "Co can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",

@@ -5,6 +5,7 @@
 import { Router, type Request, type Response } from "express";
 import { timingSafeEqual } from "crypto";
 import { recordDecision } from "../harness/core.js";
+import { exchangeText } from "../services/theirYes.js";
 import { verifyCallToken } from "../services/elevenLabsCalls.js";
 import { anthropicStream, runCallLlm, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
 import { commitmentProblem, trackCallCommitment } from "../services/callCommitments.js";
@@ -14,7 +15,7 @@ const textOfMsg = (m: OaiRequest["messages"][number] | undefined): string =>
   typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m!.content.map((p: any) => p?.text ?? "").join("") : "";
 
 // Pure: what the member said this turn (their lines since Co last spoke), everything they said on the call, and Co's last line.
-export function callWordsOf(b: OaiRequest): { turnWords: string; callWords: string; lastCoLine: string | null } {
+export function callWordsOf(b: OaiRequest): { turnWords: string; callWords: string; lastCoLine: string | null; recentExchange: string } {
   const msgs = b.messages.filter((m) => m.role === "user" || (m.role === "assistant" && textOfMsg(m).trim()));
   let i = msgs.length;
   while (i > 0 && msgs[i - 1].role === "user") i--;
@@ -23,6 +24,8 @@ export function callWordsOf(b: OaiRequest): { turnWords: string; callWords: stri
     turnWords: msgs.slice(i).map(textOfMsg).join(" ").trim(),
     callWords: msgs.filter((m) => m.role === "user").map(textOfMsg).join("\n"),
     lastCoLine: lastCo || null,
+    // The turns before this one, for the yes read on a confirm tool (services/theirYes.ts).
+    recentExchange: exchangeText(msgs.slice(0, i).map((m) => ({ side: m.role === "user" ? ("member" as const) : ("co" as const), text: textOfMsg(m) }))),
   };
 }
 

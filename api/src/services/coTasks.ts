@@ -72,7 +72,8 @@ export function lookoutOriginOf(source: string | null | undefined, followup: any
 }
 
 // Pure: a look that began as a new member's first read whose text promised nothing (services/theDoor.ts settleFirstRead): Co's own
-// look, never promised and never said on a call, so nothing about it may read as a promise Co made.
+// look, never promised and never said on a call, so nothing about it may read as a promise Co made. Only rows from before 2026-10-13:
+// such a first look is withdrawn now, never kept as a lookout (Royce: "no exception"); the readers stay for the rows still open.
 export const isDoorLook = (t: { followup?: any }): boolean => t.followup?.lookoutFrom === "first_read";
 
 // Pure: a work task's commitment window, from its followup JSON.
