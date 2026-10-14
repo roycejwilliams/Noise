@@ -324,6 +324,14 @@ const NOW = new Date("2026-10-06T04:48:00Z");
 
 // ======== a dry-run dispatch writes nothing, on every path it can take (and still reaches the brain's decision)
 {
+  // A fixed daytime clock (a Tuesday, 11am Pacific): the dispatch keeps quiet hours, so a run after 8pm Pacific never reached the
+  // brain's decision and every case failed at night (found 2026-10-13, when layer 1 became a required check).
+  const RealDate = Date;
+  const FIXED = new RealDate("2026-10-13T18:00:00Z").getTime();
+  globalThis.Date = class extends RealDate {
+    constructor(...a: any[]) { if (a.length) super(...(a as [any])); else super(FIXED); }
+    static now() { return FIXED; }
+  } as DateConstructor;
   const P = await import("../../src/harness/proactive.js");
   const { proactiveRegistry } = await import("../../src/harness/proactiveRegistry.js");
   const realQuery = pool.query;
@@ -359,6 +367,7 @@ const NOW = new Date("2026-10-06T04:48:00Z");
     }
   }
   pool.query = realQuery;
+  globalThis.Date = RealDate;
 }
 
 console.log = quiet;

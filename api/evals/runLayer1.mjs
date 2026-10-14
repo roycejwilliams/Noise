@@ -30,7 +30,9 @@ const run = (cmd, args, extra = {}) =>
     const t0 = Date.now();
     const p = spawn(cmd, args, { cwd: root, env: { ...env, ...extra }, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let out = "";
-    const timer = setTimeout(() => { try { process.kill(-p.pid, "SIGKILL"); } catch { p.kill("SIGKILL"); } }, 180_000);
+    // 360s a file (was 180): evals/coPages/tools.ts takes ~120s alone on a laptop and ran past 180s on GitHub's runner, so the
+    // now-required layer 1 check failed on time, not on a test (2026-10-13).
+    const timer = setTimeout(() => { try { process.kill(-p.pid, "SIGKILL"); } catch { p.kill("SIGKILL"); } }, 360_000);
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (out += d));
     p.on("close", (code) => { clearTimeout(timer); resolve({ code, out, ms: Date.now() - t0 }); });
