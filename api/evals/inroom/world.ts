@@ -69,6 +69,8 @@ export const W = {
   sent: [] as { to: string; content: string }[],
   emails: [] as string[],
   unknownSql: new Set<string>(),
+  pairs: [] as Row[], // co_pairs (services/roomMatching.ts): one row per (event, pair)
+  roomClosures: new Map<string, Row>(), // event_room_closures
   // Scorer: (askText, candidate) => score/share/mutual. Default: keyword overlap.
   scorer: null as null | ((ask: string, cand: Member) => { score: number; share: boolean; mutual?: boolean }),
   // Consent read verdict (the model half of introConsent): default no violation.
@@ -86,6 +88,8 @@ export function reset(): void {
   W.scoringDebounce.clear();
   W.additiveDebounce.clear();
   W.unknownSql.clear();
+  W.pairs.length = 0;
+  W.roomClosures.clear();
   W.scorer = null;
   W.consentViolation = () => false;
 }
@@ -424,6 +428,110 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
 
   // Everything else (co_facts writes, outbound_messages, checkin followups, user state): accepted, nothing returned.
+  // ---------------------------------------------------------------- the pair record (services/roomMatching.ts co_pairs), added for the
+  // room simulation (evals/roomsim): one row per (event, pair), a_id < b_id, with the lifecycle the gates read (asked, answered,
+  // declined, both yes, the intro claim and send, value lines). Without it a big room silently skipped those gates.
+  const pairAt = (e: string, a: string, b: string) => W.pairs.find((r) => r.event_id === e && r.a_id === a && r.b_id === b);
+  if (has("INSERT INTO co_pairs (event_id, a_id, b_id, origin)")) {
+    if (!pairAt(p[0], p[1], p[2])) W.pairs.push({ id: uuid(), event_id: p[0], a_id: p[1], b_id: p[2], origin: p[3], state: "suggested", created_at: new Date(), asked_a_at: null, asked_b_at: null, a_answer: null, b_answer: null, declined_at: null, both_yes_at: null, intro_claimed_at: null, intro_sent_at: null, intro_held_at: null, intro_attempts: 0, value_verdict: null, blocked_reason: null, expired_at: null });
+    return R([]);
+  }
+  if (has("SELECT * FROM co_pairs WHERE a_id = $1 AND b_id = $2")) return R(W.pairs.filter((r) => r.a_id === p[0] && r.b_id === p[1]).sort((x, y) => +y.created_at - +x.created_at));
+  if (has("SELECT 1 FROM co_pairs WHERE event_id = $1 AND a_id = $2 AND b_id = $3")) return R(pairAt(p[0], p[1], p[2]) ? [{ x: 1 }] : []);
+  if (has("UPDATE co_pairs SET asked_a_at") || has("UPDATE co_pairs SET asked_b_at")) {
+    const r = pairAt(p[0], p[1], p[2]);
+    const col = has("SET asked_a_at") ? "asked_a_at" : "asked_b_at";
+    if (r) {
+      if (!r[col] || (r.expired_at && r[col] <= r.expired_at)) r[col] = new Date();
+      if (r.state === "suggested") r.state = "asked";
+    }
+    return R([]);
+  }
+  if (has("UPDATE co_pairs SET a_answer") || has("UPDATE co_pairs SET b_answer")) {
+    const r = pairAt(p[0], p[1], p[2]);
+    const side = has("SET a_answer") ? "a" : "b";
+    if (r) {
+      r[`${side}_answer`] = p[3];
+      r.state = p[4];
+      if (p[4] === "declined") r.declined_at ??= new Date();
+      if (p[4] === "both_yes") r.both_yes_at ??= new Date();
+    }
+    return R([]);
+  }
+  if (has("UPDATE co_pairs SET intro_claimed_at = NOW()")) {
+    const r = pairAt(p[0], p[1], p[2]);
+    if (r && !r.intro_sent_at && !r.intro_claimed_at) {
+      r.intro_claimed_at = new Date();
+      return R([{ id: r.id }]);
+    }
+    return R([]);
+  }
+  if (has("UPDATE co_pairs SET intro_claimed_at = NULL")) {
+    const r = pairAt(p[0], p[1], p[2]);
+    if (r && !r.intro_sent_at) r.intro_claimed_at = null;
+    return R([]);
+  }
+  if (has("UPDATE co_pairs SET intro_sent_at")) {
+    const r = pairAt(p[0], p[1], p[2]);
+    if (r) {
+      r.intro_sent_at ??= new Date();
+      if (r.state !== "met") r.state = "intro_sent";
+    }
+    return R([]);
+  }
+  if (has("UPDATE co_pairs SET value_line_a")) {
+    const r = pairAt(p[0], p[1], p[2]);
+    if (r) {
+      r.value_line_a = p[3];
+      r.value_line_b = p[4];
+      r.value_why = p[6];
+      r.value_judged_at = new Date();
+      r.value_verdict = p[5];
+      if (!p[7] && r.state === "suggested") r.state = "blocked";
+      r.blocked_reason = p[7] ? null : p[8];
+    }
+    return R([]);
+  }
+  if (has("UPDATE co_pairs SET origin = 'member'")) {
+    const r = pairAt(p[0], p[1], p[2]);
+    if (r) r.origin = "member";
+    return R([]);
+  }
+  if (has("UPDATE co_pairs SET state = 'expired'")) {
+    const hit = W.pairs.filter((r) => r.event_id === p[0] && ["suggested", "asked"].includes(r.state));
+    for (const r of hit) {
+      r.state = "expired";
+      r.expired_at = p[1];
+    }
+    return R(hit.map((r) => ({ id: r.id })));
+  }
+  if (has("UPDATE co_pairs SET intro_held_at") || has("UPDATE co_pairs SET intro_attempts")) return R([]);
+  if (has("FROM co_pairs p JOIN users u")) return R([]);
+  if (has("SELECT status FROM event_guest_match_opt_ins WHERE event_id = $1 AND person_id = $2 AND candidate_id = $3")) {
+    return R(W.optIns.filter((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_id === p[2]).map((o) => ({ status: o.status })));
+  }
+  // Reads and writes the night touches that hold nothing the sim scores: answered from the members, or empty, or kept.
+  if (has("SELECT first_name FROM users WHERE id = $1")) {
+    const m = W.members.get(p[0]);
+    return R(m && (!has("archived_at IS NULL") || !m.archived_at) ? [{ first_name: m.first_name }] : []);
+  }
+  if (has("SELECT goals, life_chapters, intent FROM co_profiles WHERE user_id = $1")) {
+    const m = W.members.get(p[0]);
+    return R(m ? [{ goals: m.goals ?? [], life_chapters: [], intent: m.intent ?? [] }] : []);
+  }
+  if (has("FROM matching_pauses")) return R([]);
+  if (has("INSERT INTO event_room_closures")) {
+    W.roomClosures.set(p[0], { event_id: p[0], closed_at: null });
+    return R([]);
+  }
+  if (has("FROM event_room_closures")) return R([...W.roomClosures.values()].filter((r) => r.event_id === p[0] && r.closed_at));
+  if (has("INSERT INTO member_connections") || has("INSERT INTO co_facts") || has("UPDATE co_facts SET retired_at") || has("UPDATE proactive_user_state SET hold_until = NULL")) return R([]);
+  if (has("FROM deferred_sends") || has("FROM person_snapshots") || has("FROM co_facts") || has("FROM ask_checkins")) return R([]);
+  if (has("INSERT INTO event_checkin_followups")) {
+    W.checkinFollowups.push({ user_id: p[0], event_api_id: p[1], event_name: p[2], send_at: p[3], created_at: new Date() });
+    return R([]);
+  }
+
   W.unknownSql.add(sql.slice(0, 120));
   return R([]);
 }
