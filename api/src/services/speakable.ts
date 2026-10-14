@@ -301,8 +301,9 @@ export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
   { pattern: /^(?:so far,?\s+)?no (?:confirmed|solid|concrete|firm|real|good) (?:details|options|picks|results|leads|answers|news)?\s*(?:yet|so far)\b/i, why: "reports not having it yet" },
   { pattern: /\b(?:have|got|found) a (?:few|couple of|couple) (?:leads|options in the works)\b|\bi'?ll have (?:it|them|something|more) (?:soon|shortly|in a bit)\b|\bstill (?:looking|searching|checking|digging)\b/i, why: "a progress report instead of the thing" },
   // Co's own machinery, said aloud (2026-10-08 live call: "The search hit a limit on my end ... I'm retrying it now").
-  // "My systems" too (Royce, 2026-10-14: machinery talk like "nothing new on my end" or "my systems" stays cut on a check-in).
-  { pattern: /\b(?:hit a (?:limit|snag|wall|cap)|ran into a (?:limit|snag|cap)|(?:on|at) my end|my (?:systems?|pipeline|backend))\b|\b(?:i'?m|i am)\s+(?:now\s+)?(?:retrying|re-?running|trying (?:it|that) again|still (?:searching|looking|loading))\b/i, why: "narrates Co's own machinery" },
+  // "My systems" too (Royce, 2026-10-14: machinery talk like "nothing new on my end" or "my systems" stays cut on a check-in), and a
+  // bare "my end" or "my side" ("no news my end", golden 29's first try).
+  { pattern: /\b(?:hit a (?:limit|snag|wall|cap)|ran into a (?:limit|snag|cap)|(?:(?:on|at)\s+)?my (?:end|side)|my (?:systems?|pipeline|backend))\b|\b(?:i'?m|i am)\s+(?:now\s+)?(?:retrying|re-?running|trying (?:it|that) again|still (?:searching|looking|loading))\b/i, why: "narrates Co's own machinery" },
   // Tracker words.
   { pattern: /\b(?:status update|in progress|on my (?:list|queue)|in my queue|queued (?:it|up)|my task list)\b/i, why: "task-tracker words" },
 ];
