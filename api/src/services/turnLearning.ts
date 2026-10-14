@@ -215,7 +215,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
     // The ask first, so the profile write knows what kind of ask this turn carried (lane moves, Royce 2026-10-13): a one-off ask
     // (research, a document, advice, a single search) never becomes a goal or an interest: the extraction's rule (profile, goals) and,
     // for its exact restatement, code (laneMoves.ts turnAskLane, profileExtraction.ts heldAsOneOff).
-    const written = await persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message").catch((err: any) => {
+    const written = await persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message", input.message).catch((err: any) => {
       console.error("turnLearning: intent write failed (non-fatal):", err?.message ?? err);
       return null;
     });

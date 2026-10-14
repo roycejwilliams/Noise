@@ -447,6 +447,12 @@ export async function gatherReplyFacts(
   // What is actually running for them, read from task state every turn (2026-10-12, item 3): only this backs saying Co is working on
   // something; with nothing running, Co says so.
   if (opts.turn) addFact(rf, "known", runningWorkLine(opts.turn.tasks ?? [], opts.turn.briefs ?? [], opts.turn.searching));
+  // Their message may be about something Co is already doing (services/statusCheck.ts, Royce 2026-10-13): the candidate and where it
+  // stands; Co decides whether it's a status check. Co's own words; this fact backs them.
+  if (opts.turn?.statusCheck) {
+    addFact(rf, "known", opts.turn.statusCheck.fact);
+    addInstruction(rf, (await import("../services/statusCheck.js")).CANDIDATE_RULE);
+  }
   // What's ahead from Co, as scheduled (services/whatsAhead.ts): check-ins, follow-ups, tasks, the daily search and queued finds.
   if (opts.turn?.ahead) addFact(rf, "scheduled", opts.turn.ahead);
   // Documents Co delivered (services/deliveryReceipts.ts): "Documents you've delivered", by doc number, what's outstanding first.

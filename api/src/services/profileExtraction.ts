@@ -1288,17 +1288,31 @@ export async function captureIntent(
 // Everything captureIntent does after its model call: the same filters,
 // dedupe, writes and sweeps, for output produced elsewhere
 // (services/turnLearning.ts).
+// message: the member's message this capture is for (a text turn). With it, a turn Co answered as a task's status check saves no ask
+// that is that task again (services/statusCheck.ts); without it (calls, intake), nothing is skipped.
 export async function persistIntentFrom(
   user_id: string,
   parsed: CapturedIntentData | null,
   transcript: string,
   scope: IntentScope = "last_user_message",
+  message?: string | null,
 ): Promise<ExtractedIntent | null> {
   try {
     // Only what THEY said: an item that's Co's own line echoed back is
     // dropped (harness/profileWrite.ts echoesCoNotMember, 2026-09-23).
     const mine = (x: unknown) => typeof x === "string" && !echoesCoNotMember(x, transcript);
-    const asks = normalizeCapturedAsks(parsed, scope).filter((a) => mine(a.text));
+    const captured = normalizeCapturedAsks(parsed, scope).filter((a) => mine(a.text));
+    // This turn, if Co answered it as a status check for one of its tasks (services/statusCheck.ts, Royce 2026-10-13: status_check.turn
+    // with this message), saves no ask that is that task again (capturedAskIsTask: restates it and covers it). A broader ask, any other
+    // turn, and a read that fails all save as before (fail open).
+    const S = captured.length && message ? await import("./statusCheck.js") : null;
+    const answered = S && message ? await S.statusTurnTasks(user_id, message).catch(() => [] as number[]) : [];
+    const work = S && answered.length ? (await S.openWorkFor(user_id).catch(() => [] as import("./statusCheck.js").OpenWork[])).filter((w) => answered.includes(w.id)) : [];
+    const asks = captured.filter((a) => {
+      const dup = S && work.length && a.type === "seeking" ? S.capturedAskIsTask(a.text, work) : null;
+      if (dup) recordDecision({ layer: 4, decision: "profile.write", userId: user_id, outcome: "skip", action: "status_check", reason: `this turn answered task #${dup.id}'s status; no new ask for it`, proposal: { ask: a.text.slice(0, 200), taskId: dup.id } }).catch(() => {});
+      return !dup;
+    });
     const concrete_preferences = (Array.isArray(parsed?.concrete_preferences) ? parsed!.concrete_preferences : []).filter(mine);
     const wants = (Array.isArray(parsed?.wants) ? parsed!.wants : []).filter(mine);
     const availability = typeof parsed?.availability === "string" ? parsed!.availability : null;
