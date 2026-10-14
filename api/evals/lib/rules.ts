@@ -54,8 +54,22 @@ const hook = read("../.githooks/pre-push");
 check("the pre-push hook runs layer 1 and never a live eval", /evals:code/.test(hook) && !/evals:live|evals:nightly|eval:live/.test(hook.replace(/^#.*$/gm, "")));
 const wf = read("../.github/workflows/co-evals.yml");
 const wfAll = wf;
-check("the workflow never puts a dispatch input into a shell command", !/run:[^\n]*\$\{\{\s*inputs\./.test(wfAll) && /ONLY: \$\{\{ inputs\.only \}\}/.test(wfAll)); const pushJob = wf.slice(wf.indexOf("\njobs:"), wf.indexOf("\n  live:"));
-check("CI on a push or pull request runs layer 1 only", /evals:code/.test(pushJob) && !/evals:nightly|evals:live|eval:live|secrets\./.test(pushJob));
+check("the workflow never puts a dispatch input into a shell command", !/run:[^\n]*\$\{\{\s*inputs\./.test(wfAll) && /ONLY: \$\{\{ inputs\.only \}\}/.test(wfAll)); const pushJob = wf.slice(wf.indexOf("\njobs:"), wf.indexOf("\n  golden:"));
+// Royce, 2026-10-13: the golden conversations are a required pre-merge check, so ONE paid job runs on a PR into co-test: the metered,
+// capped golden run and nothing else. Held exactly (review of the harness: a loose match let a widened trigger, an extra paid step,
+// allowed hosts or a raised cap through).
+const goldenJob = wf.slice(wf.indexOf("\n  golden:"), wf.indexOf("\n  live:"));
+const goldenRuns = [...goldenJob.matchAll(/^\s+(?:- )?run: (.+)$/gm)].map((m) => m[1].trim());
+const wfJobs = [...wf.slice(wf.indexOf("\njobs:")).matchAll(/^  ([A-Za-z_][\w-]*):\s*$/gm)].map((m) => m[1]);
+check("CI on a push or pull request runs layer 1, plus only the capped golden job on a PR into co-test",
+  /evals:code/.test(pushJob) && !/evals:nightly|evals:live|eval:live|secrets\./.test(pushJob) &&
+  /\n    if: github\.event_name == 'pull_request' && github\.base_ref == 'co-test'\n/.test(goldenJob) &&
+  JSON.stringify(goldenRuns) === JSON.stringify(["npm ci", "npm run -s evals:golden"]) &&
+  !/EVAL_ALLOW_HOSTS|EVAL_WEB_SEARCH|EVAL_KEEP_MODEL|EVAL_COST_CAP_USD|EVAL_TOKEN_CAP/.test(goldenJob) &&
+  !/evals:nightly|evals:live|eval:live/.test(goldenJob) &&
+  Number(goldenJob.match(/timeout-minutes: (\d+)/)?.[1] ?? 0) > 0 && Number(goldenJob.match(/timeout-minutes: (\d+)/)?.[1] ?? 999) <= 30 &&
+  JSON.stringify(wfJobs) === JSON.stringify(["code", "golden", "live"]), `jobs ${wfJobs.join(",")}; golden steps ${goldenRuns.join(" | ")}`);
+check("the golden run is metered, capped at $4 and isolated from the database and sends", read("package.json").includes('"evals:golden": "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 tsx --import ./evals/lib/meter.mjs evals/golden/run.ts"') && /^\s*import\s+["']\.\.\/lib\/requireMeter\.js["']/m.test(read("evals/golden/run.ts")));
 check("the live job runs only on the nightly schedule or a manual dispatch, and runs the capped nightly set", /github\.event_name == 'schedule'/.test(wf) && /workflow_dispatch/.test(wf) && /npm run -s evals:nightly/.test(wf));
 
 // ---- layer 1: the stub

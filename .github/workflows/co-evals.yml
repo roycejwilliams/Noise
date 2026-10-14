@@ -1,6 +1,7 @@
 # Two layers (api/evals/README.md; Royce, 2026-10-06: cut the API spend).
 # code  = LAYER 1, every push and PR that touches api/: typecheck, the voice check and every logic test with the model
 #         fully stubbed. Zero tokens, no secrets needed.
+# golden = GOLDEN conversations (api/evals/golden), every PR into co-test: real calls, $4 cap, cost printed.
 # live  = LAYER 2, nightly or when asked, NEVER on a push or PR: a small sample of the highest-signal cases, Haiku for
 #         everything and Sonnet only for grading, a hard token/dollar cap, and the run's cost printed at the end.
 #         Needs ANTHROPIC_API_KEY.
@@ -52,6 +53,37 @@ jobs:
           cache-dependency-path: api/package-lock.json
       - run: npm ci
       - run: npm run -s evals:code
+  # GOLDEN conversations (api/evals/golden; Royce, 2026-10-13: "same command runs locally and is required in pre-merge CI").
+  # Every PR into co-test (pre-merge; not on the push after merge, so a model outage never holds a deploy). Real, paid calls on
+  # production models through the meter, hard $4 cap per run, cost printed. A live case that misses twice fails the check; pending
+  # cases never fail; a pass on the retry is a warning on the run.
+  golden:
+    if: github.event_name == 'pull_request' && github.base_ref == 'co-test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: api
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ci
+      GOOGLE_PLACES_API_KEY: ci
+      ELEVENLABS_API_KEY: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run -s evals:golden
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-results
+          path: api/evals/golden/last.local.json
+          if-no-files-found: ignore
   live:
     if: (github.event_name == 'workflow_dispatch' && inputs.live) || github.event_name == 'schedule'
     runs-on: ubuntu-latest

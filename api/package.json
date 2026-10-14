@@ -32,7 +32,8 @@
     "evals:replay": "tsx evals/replay/run.ts",
     "test": "node evals/runLayer1.mjs",
     "evals:nightly": "node evals/runLayer2.mjs",
-    "eval:live": "node evals/runLive.mjs"
+    "eval:live": "node evals/runLive.mjs",
+    "evals:golden": "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 tsx --import ./evals/lib/meter.mjs evals/golden/run.ts"
   },
   "keywords": [],
   "author": "",
