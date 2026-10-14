@@ -96,6 +96,9 @@ export type TurnContext = {
   retire?: { ask: import("./askRetire.js").RetireRow | null; asked: import("./askRetire.js").RetireRow[] };
   // The one stopped-looking note owed (services/askRetire.ts), carried by code in this turn's reply. None while they're struggling.
   stopNote?: import("./askRetire.js").StopNote | null;
+  // Their message may be about something Co is already doing (services/statusCheck.ts, Royce 2026-10-13): the candidate task and where
+  // it stands; the reply decides whether it's a status check.
+  statusCheck?: import("./statusCheck.js").StatusCheck | null;
   // Findable interests on file and the steering so far (services/coldStart.ts): while there are fewer than two, a reply may ask one
   // easy question that lets them name something Co could find (harness/replyGrounding.ts addColdStartSteer).
   coldStart?: import("./coldStart.js").ColdStartView | null;
@@ -421,6 +424,9 @@ export async function assembleContext(
   const recentDocs = newestDocs(receipts, 3);
   const drift = recentDocs.map((d) => receiptDrift(d, { notes, rejected, eventStartsAt: todayEvent?.startAt ? new Date(todayEvent.startAt) : null })).filter((x): x is Drift => !!x);
   const rawTasks = await tasksOnce().catch(() => [] as CoTask[]);
+  // A message that may be about something Co is already doing: a candidate the reply decides on (services/statusCheck.ts), from the
+  // tasks already read, through their fence (the number and goal only when it can't be read).
+  const statusCheck = await import("./statusCheck.js").then((S) => S.statusCheckFor(message, S.openWorkFrom(rawTasks), zone, safe)).catch(() => null);
   const goals = await import("./goalOwnership.js").then(async (G) => G.goalFactLines(await G.openGoals(userId), rawTasks, zone)).catch(() => [] as { kind: "known" | "scheduled"; text: string }[]);
   const rawBriefs = await briefsOnce().catch(() => [] as BriefView[]);
   const windows = new Map(rawTasks.filter((t) => t.status === "open" && t.window && !t.window.closedAt).map((t) => [`task #${t.id}`, { words: t.window!.words, deadline: t.window!.deadline, zone: t.window!.zone ?? null }]));
@@ -461,7 +467,7 @@ export async function assembleContext(
   const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: (rawSearching.hidden ?? 0) + rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length + withheldWork };
   const rawAhead = await aheadP;
   const ahead = rawAhead ? await import("./whatsAhead.js").then((W) => W.aheadLine(rawAhead, searching, zone, keep)).catch(() => undefined) : undefined;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, statusCheck, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

@@ -152,7 +152,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[] };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[] };
   // What went out carries these lane lines: they're said now, and never again this turn.
   const markLaneNotesSent = (went: string) => {
     const said = (n: string) => went.toLowerCase().replace(/\s+/g, " ").includes(n.toLowerCase());
@@ -164,6 +164,28 @@ export function createConversationTools(ctx: ConversationToolContext) {
     if (!out.length) return;
     state.laneNotesSent.push(...out);
     state.laneNotes = state.laneNotes.filter((n) => !said(n));
+  };
+  // A save or a start that may be an open task of Co's (services/statusCheck.ts): said once, Co decides. differentFrom that task's number
+  // goes through, logged. The candidate's standing goes in the facts once a turn, through their fence, and not when the turn already
+  // carries it.
+  const statusCandidate = async (text: string, differentFrom: number | undefined, tool: string): Promise<{ hold: string } | null> => {
+    const S = await import("../services/statusCheck.js");
+    const t = S.restatedTask(text, await S.openWorkForTool(ctx.userId, ctx.dryRun));
+    if (!t) return null;
+    if (differentFrom === t.id) {
+      if (!state.statusOverridden.includes(t.id)) state.statusOverridden.push(t.id);
+      if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "status_check.different", userId: ctx.userId, outcome: "act", action: tool, proposal: { taskId: t.id, text: text.slice(0, 200) } }).catch(() => {});
+      return null;
+    }
+    // Asked again without differentFrom: one short reminder, not the whole hint again.
+    if (state.statusRaised.includes(t.id)) return { hold: S.alreadyHeld(t) };
+    const strip = await S.stripForTool(ctx.userId);
+    state.statusRaised.push(t.id);
+    if (ctx.turn?.statusCheck?.taskId !== t.id && !state.statusFacts.includes(t.id)) {
+      state.statusFacts.push(t.id);
+      ctx.facts?.add("known", S.whereItStands(t, await memberZone(ctx.userId).catch(() => null), strip));
+    }
+    return { hold: S.looksLike(t, strip) };
   };
   ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
   ctx.noteAnswerSent = (answer: string) => {
@@ -547,8 +569,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
           .boolean()
           .optional()
           .describe("True when they asked you to keep watching over time and tell them when something turns up (\"let me know when...\", \"keep an eye out for...\"), not for one result now."),
+        differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
       }),
-      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout }) => {
+      execute: async ({ goal, theirWords, steps, firstStep, inHours, deadline, lookout, differentFrom }) => {
         const T = await import("../services/coTasks.js");
         const recent = ctx.dryRun
           ? ""
@@ -560,6 +583,18 @@ export function createConversationTools(ctx: ConversationToolContext) {
         if (!yesToOffer && !T.wordsAreTheirs(theirWords, `${ctx.resolvedContent}\n${recent}`)) {
           notDone("No task was started: the quote isn't in their words.");
           return { ok: false, error: "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
+        }
+        // Something that may be an open task of Co's (services/statusCheck.ts, Royce 2026-10-13): said once, Co decides. A lookout on
+        // their own watch words goes ahead (#194's exemption); the open task is named in its result.
+        const theirWatch = !!lookout && T.WATCH_ASK.test(ctx.resolvedContent) && T.wordsAreTheirs(theirWords, ctx.resolvedContent);
+        let alsoOpen: string | null = null;
+        if (theirWatch) {
+          const S = await import("../services/statusCheck.js");
+          const t = S.restatedTask(goal, await S.openWorkForTool(ctx.userId, ctx.dryRun));
+          if (t) alsoOpen = `It's also open as task #${t.id}. This lookout is theirs, on their own words. If they meant that task itself should change, that's moveLane on their yes; don't close or change it on your own.`;
+        } else {
+          const c = await statusCandidate(goal, differentFrom, "startTask");
+          if (c) return { ok: false, error: c.hold };
         }
         // A task becomes a lookout only on their words (laneMoves.ts, Royce 2026-10-13): unless their own message asks Co to watch (and
         // the quote is from it), a lookout never restates one of their tasks or open asks (closed this turn or still open). A yes to Co's
@@ -602,7 +637,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: r.why };
         }
         ctx.facts?.add("did_this_turn", `Started task #${r.task.id}: "${r.task.goal}". Co will work on it first around ${r.task.nextCheckAt ? localStamp(r.task.nextCheckAt, zone) : "soon"}: ${firstStep}.${r.task.deadline ? ` Their deadline: ${r.task.deadline}; Co's last check before it, where it tells them where things stand, is around ${r.task.finalCheckAt ? localStamp(r.task.finalCheckAt, zone) : "the day before"}.` : ""}`);
-        return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt };
+        return { ok: true, taskId: r.task.id, nextCheckAt: r.task.nextCheckAt, ...(alsoOpen ? { note: alsoOpen } : {}) };
       },
     }),
     // The door (services/theDoor.ts): a new member's first read, once. Code holds the facts (once, new members, their own words,
@@ -1326,8 +1361,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
     // makes "I'll keep looking" true.
     saveAsk: tool({
       description: toolUse("saveAsk"),
-      inputSchema: z.object({ what: z.string().describe("What they're looking for, in one plain sentence, in their words.") }),
-      execute: async ({ what }) => {
+      inputSchema: z.object({
+        what: z.string().describe("What they're looking for, in one plain sentence, in their words."),
+        differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
+      }),
+      execute: async ({ what, differentFrom }) => {
+        // Something that may be an open task of Co's (services/statusCheck.ts, Royce 2026-10-13): said once, Co decides.
+        const c = await statusCandidate(what, differentFrom, "saveAsk");
+        if (c) return { ok: false, error: c.hold };
         if (ctx.dryRun) {
           console.log(`[conversationReply dryRun] would save ask for ${ctx.userId}: "${what}"`);
         } else {

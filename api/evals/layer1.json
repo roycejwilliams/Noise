@@ -138,6 +138,7 @@
     "evals/reply-flow/fixes1008.ts",
     "evals/goals/lifecycle.ts",
     "evals/lanes/moves.ts",
+    "evals/asks/statusCheck.ts",
     "evals/goals/readCutOff.ts",
     "evals/goals/recheck.ts",
     "evals/goals/retire.ts",

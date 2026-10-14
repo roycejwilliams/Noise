@@ -14,7 +14,7 @@ const ZONE = "America/Los_Angeles";
 const MEMBER = { userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName: "Jordan" };
 
 type Kind = "known" | "did_before" | "scheduled" | "ongoing" | "unknown";
-type Turn = { recent: string; facts: [Kind, string][]; message: string };
+type Turn = { recent: string; facts: [Kind, string][]; message: string; instructions?: string[] };
 type Reply = { text: string; tools: string[]; checked: string[] };
 
 // One real reply turn, as production runs it (replay/run.ts): profile line, today in their zone, the case's facts, the read's notes.
@@ -27,6 +27,7 @@ async function reply(t: Turn): Promise<Reply> {
   G.addFact(facts, "known", "They live in San Francisco.");
   G.addFact(facts, "known", G.todayFact(ZONE));
   for (const [kind, text] of t.facts) G.addFact(facts, kind as any, text);
+  for (const i of t.instructions ?? []) G.addInstruction(facts, i);
   const read: any = await R.readTurn({ message: t.message, recentConversation: t.recent, openItems: [] }, null, null).catch(() => null);
   if (read?.aboutCo) G.addInstruction(facts, R.ABOUT_CO_INSTRUCTION);
   if (read?.router?.wantsRecommendation) G.addInstruction(facts, LOOP_GUIDE);
@@ -222,6 +223,54 @@ export const CASES: GoldenCase[] = [
       if (/nothing('?s| is) (actually |actively )?running/i.test(r.text) || SAYS_NOTHING_RUNNING.test(r.text)) misses.push("says nothing is running");
       const j = await judge(r.text, `The member asked Co this afternoon to watch for "${ask}". Co's daily search runs every morning from 9, so the first look is tomorrow morning. They asked "Is that actually running yet?"`, "Does the text convey that it will be looked at (or the search runs) tomorrow morning / the next morning, without saying nothing is running?");
       if (!j.yes) misses.push(`judge: doesn't say tomorrow morning (${j.reason})`);
+      return done(misses, r);
+    },
+  },
+  {
+    n: 23,
+    id: "status-check",
+    title: "Asked to do something Co is already doing: says it's underway and where it stands; never starts it again, says it stopped, or claims a new search",
+    status: { live: true },
+    from: "Royce, 2026-10-13: \"A member restating something Co is already doing isn't a stop and isn't a new ask - it's a status check\" (services/statusCheck.ts)",
+    run: async () => {
+      const G = await import("../../../src/harness/replyGrounding.js");
+      const S = await import("../../../src/services/statusCheck.js");
+      const { taskFactLines } = await import("../../../src/services/coTasks.js");
+      const { NO_COVERAGE } = await import("../../../src/services/searchCoverage.js");
+      const now = DateTime.now().setZone(ZONE);
+      const started = now.minus({ days: 2 }).set({ hour: 11, minute: 0 }).toUTC().toISO()!;
+      const noted = now.minus({ days: 1 }).set({ hour: 15, minute: 20 }).toUTC().toISO()!;
+      const next = now.plus({ days: 1 }).set({ hour: 10, minute: 0, second: 0, millisecond: 0 }).toUTC().toISO()!;
+      const task = {
+        id: 52, userId: MEMBER.userId, goal: "Draft the Sequin AI planning docs", theirWords: "can you draft planning docs for the Sequin AI launch?",
+        steps: [{ text: "Outline the launch timeline", done: true }, { text: "Draft the partner section", done: false }, { text: "Send Jordan the draft", done: false }],
+        planNext: "Draft the partner section", nextCheckAt: next, status: "open" as const, wakes: 1,
+        notes: [{ at: started, text: "Started." }, { at: noted, text: "Outlined the launch timeline: venue walk-through Nov 3, invites out Nov 10." }],
+        textsSent: 0, lastTextedAt: null, createdAt: started, deadline: null, finalCheckAt: null, finalTold: false, awaitingReply: false, theirReplyAt: null, kind: "work" as const, source: "ask" as const,
+      };
+      const message = "Can you draft the planning docs for Sequin?";
+      // As the turn builds it (services/turnContext.ts): the candidate through the fence (an invented member: nothing to strip).
+      const sc = S.statusCheckFor(message, [task], ZONE, (x) => x);
+      const misses: string[] = [];
+      if (!sc) misses.push("the restatement wasn't detected (statusCheckFor)");
+      const tasks = taskFactLines([task], undefined, ZONE);
+      const facts: [Kind, string][] = [
+        ...tasks.map((t): [Kind, string] => ["scheduled", t]),
+        ["known", G.runningWorkLine(tasks, [], NO_COVERAGE)],
+        ...(sc ? [["known", sc.fact] as [Kind, string]] : []),
+      ];
+      const recent = ["User said: can you draft planning docs for the Sequin AI launch?", "Co replied: On it. I'll outline the timeline first, then the partner section, and send you the draft."].join("\n");
+      // The tools see the open work as production does, so a save or a start says "this looks like task #52" once.
+      S.setOpenWorkForTests([task], (x) => x);
+      const r = await reply({ recent, facts, message, instructions: sc ? [S.CANDIDATE_RULE] : [] }).finally(() => S.setOpenWorkForTests(null));
+      if (/\b(stopped|paused|cancel(l)?ed|no longer (looking|searching|working))\b/i.test(r.text)) misses.push("says something stopped");
+      if (/\b(started|starting|kicked off|set up) (a )?(new )?(search|look|task)\b|\bI'?ll start (on )?(it|that|them)\b/i.test(r.text)) misses.push("claims a new start or search");
+      const j = await judge(
+        r.text,
+        `Co is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted "${message}".`,
+        "Does the text tell them Co is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.",
+      );
+      if (!j.yes) misses.push(`judge: not a status answer (${j.reason})`);
       return done(misses, r);
     },
   },

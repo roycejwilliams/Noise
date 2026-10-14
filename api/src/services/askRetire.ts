@@ -3,9 +3,10 @@
 // first."). A find ask that restates one of their work or Co-task goals (goalEdges.ts planGoalSweep) used to be switched to kind
 // 'help' on the spot, silently, and never was: ask_checkins.id is a UUID and was read with Number() (NaN).
 //   1. The plan marks it retire-due (flagRetire), tied to the goals it restates and the active goal it serves (serves_goal_id). A
-//      Co-task ask ("have Co draft…") is Co's own work, not something to find: it switches to help on the spot, logged, nothing said
-//      (stopping the search doesn't stop the work, so a "stopped looking" line would be untrue). Each whole plan re-evaluates: a
-//      mark the plan no longer makes, on an ask not yet asked and not tied to a set-aside still to be told, is cleared.
+//      Co-task ask ("have Co draft…") restates Co's own work: it's in the status-check lane (services/statusCheck.ts, Royce
+//      2026-10-13), never retired, never switched, no note; asked about, the reply answers where the work stands, and the search keeps
+//      running. Each whole plan re-evaluates: a mark the plan no longer makes, on an ask not yet asked and not tied to a set-aside still
+//      to be told, is cleared.
 //   2. The recheck acts first: while a tied goal's recheck is due or open (or its set-aside question is still to be told), the ask
 //      waits. A tied goal that stops after the mark (idled by the recheck, or closed and told) takes the ask with it: kind help, no
 //      question of its own, the goal's one note covers both, and bringing the goal back brings the ask back. A tied goal that stopped
@@ -498,16 +499,16 @@ export async function reviveAsksWithGoal(userId: string, hash: string): Promise<
   return n;
 }
 
-// The plan marks it (goalEdges.ts realGoalDeps.helpAsk). A Co-task ask is left exactly as it is (logged, not changed): stopping its
-// search without a word would be a silent change, and "stopped looking" would be untrue while Co still does the work. Royce decides
-// (2026-10-13) whether those get a note or a quiet switch. Otherwise tied to the goals it restates and the goal it serves when that
-// goal is active; the first mark's time stays. Never a lookout, never one held by their yes.
+// The plan marks it (goalEdges.ts realGoalDeps.helpAsk). A Co-task ask is left exactly as it is (logged, not changed): it's in the
+// status-check lane (Royce, 2026-10-13: "isn't a stop and isn't a new ask - it's a status check"), so the search keeps running, no kind
+// change and no note; asked about, the reply says where the work stands (services/statusCheck.ts). Otherwise tied to the goals it
+// restates and the goal it serves when that goal is active; the first mark's time stays. Never a lookout, never one held by their yes.
 export async function flagRetire(userId: string, id: string, intent: string | null, goals: string[]): Promise<void> {
   const { rows } = await pool.query(`SELECT ask_text, serves_goal_id, kind FROM ask_checkins WHERE id = $1 AND user_id = $2`, [id, userId]);
   if (!rows[0]) return;
   const text = String(rows[0].ask_text ?? "");
   if (isCoTaskGoal(text)) {
-    await realRetireDeps.log({ userId, decision: "ask.retire_skipped", outcome: "skip", action: "co_task_unchanged", reason: "Co's own task: left as it is until Royce decides between a note and a quiet switch", proposal: { ask: text.slice(0, 200), askId: id, intent } }).catch(() => {});
+    await realRetireDeps.log({ userId, decision: "ask.retire_skipped", outcome: "skip", action: "co_task_unchanged", reason: "status-check lane: Co's own work, the search keeps running (no kind change, no note)", proposal: { ask: text.slice(0, 200), askId: id, intent } }).catch(() => {});
     return;
   }
   const tied = new Set(goals.map((g) => goalHash(g)));

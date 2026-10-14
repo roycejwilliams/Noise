@@ -718,6 +718,18 @@ ${TOOL_TURN_RULES(input.isVoice)}
     await recordDecision({ layer: 3, decision: "lane.note", userId: input.userId, outcome: "skip", action: "not_carried", reason: "a confirmed move's line didn't go out in a reply this turn", proposal: { lines: state.laneNotes } }).catch(() => {});
   }
 
+  // A turn answered as a status check for a task of Co's (services/statusCheck.ts): only a tool hold Co didn't override with
+  // differentFrom (kept in the turn state, so a run that timed out still counts it). Logged with their message, so only this turn's
+  // background ask capture reads it.
+  if (state.sent && !opts.dryRun && opts.record !== false) {
+    const S = await import("../services/statusCheck.js");
+    const taskId = S.answeredAsStatus({ raised: state.statusRaised, overridden: state.statusOverridden });
+    if (taskId != null) {
+      const { recordDecision } = await import("../harness/core.js");
+      await recordDecision({ layer: 3, decision: S.STATUS_TURN, userId: input.userId, outcome: "act", action: "answered_as_status", proposal: { taskId, message: input.resolvedContent.slice(0, 500) } }).catch(() => {});
+    }
+  }
+
   const offered = await verifyAndRecordCallOffer(input, state.lastReplyText, opts.dryRun ?? false);
 
   // The one artifact offer this reply was told it may make (a plan sheet, a venue brief, a stale document's fix), recorded only when
