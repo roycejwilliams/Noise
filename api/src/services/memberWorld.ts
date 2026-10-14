@@ -84,20 +84,29 @@ export function worldClock(now: Date, zone: string | null | undefined): WorldClo
 
 // Pure: the day a date on file falls on, in their zone ("2026-12-15", an ISO instant, "Dec 15, 2026"), or null when it can't be read.
 // Never depends on the server's own zone (Railway runs in UTC; PR #201's CI caught "Dec 15, 2026" reading as Dec 14 for a Pacific
-// member): a bare date is that calendar day; a time with no zone is wall time in theirs; only an explicit offset converts.
-const HAS_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$|\b(?:GMT|UTC)\b/i;
+// member): a bare date is that calendar day; a time with no zone is wall time in theirs; only an explicit zone converts: an ISO offset
+// sitting directly on an ISO time ("T19:00-08:00", "Z"), or a named zone in free text (GMT, UTC, EST/EDT, CST/CDT, MST/MDT, PST/PDT).
+// A "-21:00" after a time in free text is the end of a range ("19:00-21:00"), never an offset.
+const ISO_OFFSET = /T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+const NAMED_ZONE = /\b(?:GMT|UTC|[ECMP][SD]T)\b/;
+const RANGE_END = /(\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?)\s*[-–]\s*\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?/i;
 export function dayOf(on: string | null | undefined, zone: string | null): string | null {
   const t = String(on ?? "").trim();
   if (!t) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
   const z = wordsZone(zone);
-  const iso = HAS_OFFSET.test(t) ? DateTime.fromISO(t, { setZone: true }).setZone(z) : DateTime.fromISO(t, { zone: z });
-  if (iso.isValid) return iso.toISODate();
-  const ms = Date.parse(t);
-  if (!Number.isFinite(ms) || !/\b\d{4}\b/.test(t)) return null;
-  // Free text ("Dec 15, 2026", "Dec 15, 2026 7pm"): Date.parse reads it in the process's own zone, so its local fields are the
-  // calendar day and wall time as written, whatever that zone is. With an explicit zone in the text, the instant converts instead.
-  if (HAS_OFFSET.test(t)) return DateTime.fromMillis(ms).setZone(z).toISODate();
+  if (/^\d{4}-\d{2}-\d{2}T/.test(t)) {
+    const iso = ISO_OFFSET.test(t) ? DateTime.fromISO(t, { setZone: true }).setZone(z) : DateTime.fromISO(t, { zone: z });
+    if (iso.isValid) return iso.toISODate();
+  }
+  // Free text ("Dec 15, 2026", "Dec 15, 2026 19:00-21:00", "Dec 15, 2026 11:30 PM PST"): a range keeps its start.
+  // "7pm" is written out as "7:00 PM", the form Date.parse reads.
+  const text = t.replace(RANGE_END, "$1").replace(/\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?(?![a-z])/gi, (_m, h: string, mm: string | undefined, ap: string) => `${h}:${mm ?? "00"} ${ap.toUpperCase()}M`);
+  const ms = Date.parse(text);
+  if (!Number.isFinite(ms) || !/\b\d{4}\b/.test(text)) return null;
+  // A named zone in the text: that instant, converted to theirs.
+  if (NAMED_ZONE.test(text)) return DateTime.fromMillis(ms).setZone(z).toISODate();
+  // No zone: Date.parse read it in the process's own zone, so its local fields are the calendar day as written, whatever that zone is.
   const d = new Date(ms);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }

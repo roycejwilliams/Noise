@@ -225,6 +225,12 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("dates are read in their zone: an ISO instant is their day, a bare date is that day, junk is no date", M.dayOf("2026-10-14T06:00:00Z", ZONE) === "2026-10-13" && M.dayOf("2026-12-15", ZONE) === "2026-12-15" && M.dayOf("Dec 15, 2026", ZONE) === "2026-12-15" && M.dayOf("soon", ZONE) === null);
   // Never the process's zone (PR #201: CI runs in UTC and read "Dec 15, 2026" as Dec 14 for a Pacific member). This file runs under
   // TZ=UTC, America/Los_Angeles and Asia/Tokyo with the same answers.
+  // A named US zone converts from that zone; a time range keeps its start (review of PR #201): the same under every server zone.
+  const TOKYO = "Asia/Tokyo";
+  check("\"Dec 15, 2026 11:30 PM PST\" is Dec 15 for a Pacific member and Dec 16 for a Tokyo one", M.dayOf("Dec 15, 2026 11:30 PM PST", ZONE) === "2026-12-15" && M.dayOf("Dec 15, 2026 11:30 PM PST", TOKYO) === "2026-12-16", [M.dayOf("Dec 15, 2026 11:30 PM PST", ZONE), M.dayOf("Dec 15, 2026 11:30 PM PST", TOKYO)]);
+  check("\"Jul 4, 2026 9:00 PM EDT\" converts from Eastern: Jul 4 in Pacific, Jul 5 in Tokyo", M.dayOf("Jul 4, 2026 9:00 PM EDT", ZONE) === "2026-07-04" && M.dayOf("Jul 4, 2026 9:00 PM EDT", TOKYO) === "2026-07-05");
+  check("\"Dec 15, 2026 19:00-21:00\" is a range, not an offset: Dec 15 for Pacific and Tokyo members", M.dayOf("Dec 15, 2026 19:00-21:00", ZONE) === "2026-12-15" && M.dayOf("Dec 15, 2026 19:00-21:00", TOKYO) === "2026-12-15" && M.dayOf("Dec 15, 2026 7pm-9pm", ZONE) === "2026-12-15", [M.dayOf("Dec 15, 2026 19:00-21:00", ZONE), M.dayOf("Dec 15, 2026 19:00-21:00", TOKYO), M.dayOf("Dec 15, 2026 7pm-9pm", ZONE)]);
+  check("an ISO offset sitting on the time still converts: 2026-12-15T19:00-08:00 is Dec 15 in Pacific, Dec 16 in Tokyo", M.dayOf("2026-12-15T19:00-08:00", ZONE) === "2026-12-15" && M.dayOf("2026-12-15T19:00-08:00", TOKYO) === "2026-12-16");
   check("dates never depend on the server's zone: wall time stays its day, only an explicit offset converts", M.dayOf("2026-12-15T23:30", ZONE) === "2026-12-15" && M.dayOf("Dec 15, 2026 23:00", ZONE) === "2026-12-15" && M.dayOf("Tue, 15 Dec 2026 03:00:00 GMT", ZONE) === "2026-12-14" && M.dayOf("2026-12-15T03:00:00+00:00", ZONE) === "2026-12-14", [M.dayOf("2026-12-15T23:30", ZONE), M.dayOf("Dec 15, 2026 23:00", ZONE), M.dayOf("Tue, 15 Dec 2026 03:00:00 GMT", ZONE), M.dayOf("2026-12-15T03:00:00+00:00", ZONE)]);
 }
 
