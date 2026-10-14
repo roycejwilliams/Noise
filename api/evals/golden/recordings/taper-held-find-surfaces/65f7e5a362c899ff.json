@@ -1,0 +1,100 @@
+{
+  "hash": "65f7e5a362c899ff",
+  "case": "taper-held-find-surfaces",
+  "recorded_at": "2026-10-14T23:33:08.602Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-sonnet-5",
+    "grader": false,
+    "max_tokens": 16000,
+    "system": "You're Cue. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today. The bar is: they'd reply \"wow\". Not \"seems relevant\", not \"fits a keyword in their ask\". It has to be clearly for ...",
+    "messages": 1,
+    "last": "user: Member: Rina, San Francisco. Today: Tuesday 2026-10-13 (their time, America/Los_Angeles). Discovery texts left this week: 4 (things they asked for don't use these). What they've asked Cue for (open): (none) Where they say they are headed (the LENS: judge every candidate against this as well as the a...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 16000,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Member: Rina, San Francisco. Today: Tuesday 2026-10-13 (their time, America/Los_Angeles).\nDiscovery texts left this week: 4 (things they asked for don't use these).\n\nWhat they've asked Cue for (open):\n(none)\n\nWhere they say they are headed (the LENS: judge every candidate against this as well as the asks; never cite it as the reason, the reason is an ask, a text, or what they did):\n- meet other climate founders who actually see each other\n\nTheir recent texts with Cue (oldest first):\nT1 Sep 23 14:00 They: I want a small group of climate founders who actually see each other. Dinners, a hike crew, not giant mixers.\nT2 Sep 23 14:00 Cue: Got it. Small rooms, climate people.\nT3 Oct 13 08:00 They: Sorry, went quiet. Back now and up for meeting people.\n\nWhat Cue sent them first, last 30 days, and what happened:\n(nothing)\n\nMember rules (for judging what goes; the send step still holds timing and caps):\nWhat's true:\n- Everything you say about them, other people, events, places, times, or what you've done comes from what you know about them or what was said in this conversation. If it isn't there, you don't have it: say so plainly, once, and say what you can do.\n- Your own read on something is an impression, so say it like one. Two events only clash if you have both start times and they overlap. Nobody knows who'll be at an event Cue isn't running.\n- When they've corrected something, only the corrected version exists. Never bring back the old one.\n- Something in what you know that's marked OLD is a question, not a fact: ask whether it's still true before you build on it.\n- What you did for them comes from what you actually sent or said. Never claim more.\n- Never say something is broken, down, sold out, failed or didn't work unless something in front of you says so. If you left a thing out, just leave it out.\n- You have no body. You can't be in a room, hold a drink, shake a hand or turn up anywhere in person. Be playful about it if the moment is light: wink at what you actually are, the voice in their phone, with them that way. Personality yes, small lies no.\nOther members: one member's details, plans, matches or answers never reach another member's conversation, and neither does whether someone is a member at all. People in their own life you talk about freely.\n\nTHIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Cue event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate \"rank\": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and \"forThem\": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or \"not a wow\" only moves it down its kind; it never empties a kind.\n\nThe pool (2):\nC1 Climate Founders Supper Club (8 seats) (2026-10-22); an opening (program, place or opportunity); from what they've shared; a monthly dinner for 8 climate founders and operators, applications open; held from a tapered search day\nC2 Bay Area Climate Hike (2026-10-18); an event; from what they've shared; a 15-person Saturday hike for people working in climate",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "medium"
+      },
+      "system": [
+        {
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "text": "You're Cue. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today.\n\nThe bar is: they'd reply \"wow\". Not \"seems relevant\", not \"fits a keyword in their ask\". It has to be clearly for them (something they said, a goal they're working on, a person or place they care about) and clearly for now (a date that's coming, a deadline, something that just changed, or exactly what they asked for this week). If you can't say both, it doesn't go today.\n\nFor every candidate, give one verdict:\n- \"send\": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Cue sent before, O# how they reacted), why now, and \"wow\": true only if you'd genuinely expect that reaction. If it's time-bound (an event's day, a deadline, a weekend), give \"lastDay\": the last day (YYYY-MM-DD) it's still worth sending; null if it will still be there next week.\n- \"hold\": good for them, but the thing itself isn't ready yet (it opens later, or it's too far out to act on), or it would crowd a stronger send today. Say when it would be right, as a date (YYYY-MM-DD) if you can. You judge whether it fits them and its timing, never their attention: don't hold something because they seem busy, focused elsewhere or in a mood. They decide what they're too busy for. Something open now with a deadline, or applications open, is never held for that.\n- \"reject\": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate in today's pool does the same job better; cite its C# in \"cites\"), closed (it rests on something finished: an ask that's closed, or a past goal that's done or set aside), already_known (they mentioned it, are going, already have it, or said no), ruled_out (their own words rule out this thing or this kind of thing; cite the ask or text, A# or T#, where they said it), other. Add one line why.\n\nA ruled_out reject cites their own words (A# or T#) that rule it out. A closed or already_known reject is a claim about a record, so it cites that record by id in \"cites\": a closed ask (A#), a past goal that's done or set aside (G#), something Cue sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.\n\nPast goals each say why they're past. done and set aside are their word. lapsed is Cue's own bookkeeping (a window that passed, a recheck they didn't answer), not theirs, and is never the reason something is closed. A closed one-off question (find me a couple of these) doesn't close an aim one of their active goals still carries either.\n\nAn ask isn't finished after one send: someone looking for events this week usually wants a few across the week, and a search for a community can take several tries. What Cue already sent for an ask only counts against a candidate when it's the same kind of thing for the same moment. \"covered\" means another candidate in today's pool does the same job better, not that the ask got something before.\n\nSome candidates come with only a name and a date. Judge what the name tells you; thin isn't the same as weak.\n\nThings they asked for and things you'd bring up yourself clear the same bar. When both clear it and compete for today's sends, what they asked for goes first; what you noticed for them fills what's left. Send at most 3, the strongest first; usually one or none. Sending nothing today is a good answer when nothing clears the bar. Use only what's in the records; never assume something they didn't say.\n\nWhen you send more than one, add \"set\": one line on why these go together today (what they share for this member, or how they differ), in plain words; it's what Cue's message opens with. Leave it out for one send or none.\n\nReturn ONLY JSON:\n{\"set\":\"...\",\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"whyMember\":\"...\",\"cites\":[\"A2\",\"T5\"],\"whyNow\":\"...\",\"wow\":true,\"lastDay\":\"2026-10-08\",\"taste\":\"matches\"},{\"id\":\"C2\",\"verdict\":\"hold\",\"why\":\"...\",\"until\":\"2026-10-08\"},{\"id\":\"C3\",\"verdict\":\"reject\",\"reason\":\"weak_fit\",\"why\":\"...\"},{\"id\":\"C4\",\"verdict\":\"reject\",\"reason\":\"already_known\",\"cites\":[\"S3\"],\"why\":\"...\"}]}",
+          "type": "text"
+        }
+      ]
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"whyMember\":\"They said directly they want a small group of climate founders who actually see each other—dinners, not giant mixers (T1), and just came back saying they're up for meeting people (T3)\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Applications are open now for a monthly dinner of 8 climate founders, exactly the format they named, with seats limited\",\"wow\":true,\"lastDay\":\"2026-10-22\",\"rank\":1,\"forThem\":\"A recurring small dinner with 8 climate founders and operators—the exact dinner format they asked for\"},{\"id\":\"C2\",\"verdict\":\"send\",\"whyMember\":\"They specifically mentioned a hike crew alongside dinners as what they want (T1), and they're back and open to meeting people (T3)\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Saturday hike for climate people is this weekend, size (15) fits the small-room feel they asked for\",\"wow\":true,\"lastDay\":\"2026-10-18\",\"rank\":1,\"forThem\":\"A Saturday hike with other climate workers—the hike-crew half of what they described wanting\"}],\"set\":\"Both hit the two shapes they named themselves—dinners and a hike crew—now that they're back and ready to meet people.\"}",
+      "usage": {
+        "input_tokens": 1161,
+        "cache_creation_input_tokens": 1630,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 1630,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 422,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg319pfFcizGSLFX7bEAz",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"verdicts\":[{\"id\":\"C1\",\"verdict\":\"send\",\"whyMember\":\"They said directly they want a small group of climate founders who actually see each other—dinners, not giant mixers (T1), and just came back saying they're up for meeting people (T3)\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Applications are open now for a monthly dinner of 8 climate founders, exactly the format they named, with seats limited\",\"wow\":true,\"lastDay\":\"2026-10-22\",\"rank\":1,\"forThem\":\"A recurring small dinner with 8 climate founders and operators—the exact dinner format they asked for\"},{\"id\":\"C2\",\"verdict\":\"send\",\"whyMember\":\"They specifically mentioned a hike crew alongside dinners as what they want (T1), and they're back and open to meeting people (T3)\",\"cites\":[\"T1\",\"T3\"],\"whyNow\":\"Saturday hike for climate people is this weekend, size (15) fits the small-room feel they asked for\",\"wow\":true,\"lastDay\":\"2026-10-18\",\"rank\":1,\"forThem\":\"A Saturday hike with other climate workers—the hike-crew half of what they described wanting\"}],\"set\":\"Both hit the two shapes they named themselves—dinners and a hike crew—now that they're back and ready to meet people.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1161,
+          "cache_creation_input_tokens": 1630,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 1630,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 422,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}
