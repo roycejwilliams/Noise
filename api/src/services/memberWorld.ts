@@ -83,14 +83,23 @@ export function worldClock(now: Date, zone: string | null | undefined): WorldClo
 }
 
 // Pure: the day a date on file falls on, in their zone ("2026-12-15", an ISO instant, "Dec 15, 2026"), or null when it can't be read.
+// Never depends on the server's own zone (Railway runs in UTC; PR #201's CI caught "Dec 15, 2026" reading as Dec 14 for a Pacific
+// member): a bare date is that calendar day; a time with no zone is wall time in theirs; only an explicit offset converts.
+const HAS_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$|\b(?:GMT|UTC)\b/i;
 export function dayOf(on: string | null | undefined, zone: string | null): string | null {
   const t = String(on ?? "").trim();
   if (!t) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-  const iso = DateTime.fromISO(t, { setZone: true });
-  if (iso.isValid) return iso.setZone(wordsZone(zone)).toISODate();
+  const z = wordsZone(zone);
+  const iso = HAS_OFFSET.test(t) ? DateTime.fromISO(t, { setZone: true }).setZone(z) : DateTime.fromISO(t, { zone: z });
+  if (iso.isValid) return iso.toISODate();
   const ms = Date.parse(t);
-  return Number.isFinite(ms) && /\b\d{4}\b/.test(t) ? DateTime.fromMillis(ms).setZone(wordsZone(zone)).toISODate() : null;
+  if (!Number.isFinite(ms) || !/\b\d{4}\b/.test(t)) return null;
+  // Free text ("Dec 15, 2026", "Dec 15, 2026 7pm"): Date.parse reads it in the process's own zone, so its local fields are the
+  // calendar day and wall time as written, whatever that zone is. With an explicit zone in the text, the instant converts instead.
+  if (HAS_OFFSET.test(t)) return DateTime.fromMillis(ms).setZone(z).toISODate();
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 // Pure: still ahead (or today). A date that can't be read is never proven ahead.
 export function stillAhead(on: string | null | undefined, clock: Pick<WorldClock, "today" | "zone">): boolean {
@@ -437,21 +446,39 @@ export function deadAirLine(o: { checkin: boolean | null; world: MemberWorld | n
   }
   return null;
 }
-// Pure: a repair after a thread report was cut keeps every remaining sentence: the same sentences in the same order, each word for word
-// or changed only by a few words (a dangling "it" made to stand alone). Anything else (a sentence dropped, merged, added or rewritten)
-// isn't a repair, and the cut goes out instead (review, 2026-10-14: the forced redraft must never shrink a good reply).
-export function keepsEverySentence(cut: string, repaired: string): boolean {
+// Pure: a repair after a thread report was cut keeps every remaining sentence: the same sentences in the same order, each word for word,
+// or changed only by replacing a pointing word (it, that, this, they, there, them) with words from the cut sentence (and a few joining
+// words). A dropped, merged, added or rewritten sentence, flipped advice ("works" to "doesn't work") or a new name isn't a repair, and
+// the cut goes out instead (review, 2026-10-14: the forced redraft must never shrink or change a good reply).
+const POINTING = new Set(["it", "that", "this", "they", "there", "them"]);
+const GLUE = new Set(["about", "the", "a", "an", "from", "of", "on", "with", "at", "for", "to", "in", "back", "your", "their"]);
+const wordsOf = (t: string) => t.toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+// Pure: the words a changed sentence dropped and added, by longest common subsequence.
+function wordDiff(a: string[], b: string[]): { removed: string[]; added: string[] } {
+  const L = Array.from({ length: a.length + 1 }, () => Array(b.length + 1).fill(0) as number[]);
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const removed: string[] = [];
+  const added: string[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) removed.push(a[i++]);
+    else added.push(b[j++]);
+  }
+  return { removed: [...removed, ...a.slice(i)], added: [...added, ...b.slice(j)] };
+}
+export function keepsEverySentence(cut: string, repaired: string, cutAway = ""): boolean {
   const split = (t: string) => t.replace(/[’‘]/g, "'").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter(Boolean);
-  const words = (t: string) => t.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
   const a = split(cut);
   const b = split(repaired);
   if (!a.length || a.length !== b.length) return false;
+  const from = new Set(wordsOf(cutAway));
   return a.every((x, i) => {
     if (x === b[i]) return true;
-    const wa = words(x);
-    const wb = words(b[i]);
-    const kept = wa.filter((w) => wb.includes(w)).length;
-    return wa.length - kept <= 3 && wb.length - kept <= 4 && kept / Math.max(wa.length, 1) >= 0.6;
+    const { removed, added } = wordDiff(wordsOf(x), wordsOf(b[i]));
+    if (!removed.length && !added.length) return true;
+    return removed.length > 0 && removed.every((w) => POINTING.has(w)) && added.length > 0 && added.every((w) => from.has(w) || GLUE.has(w));
   });
 }
 

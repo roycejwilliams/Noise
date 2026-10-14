@@ -2065,7 +2065,9 @@ export async function groundReply(
         stages.redraftMs = Date.now() - t0;
         const cleaned = raw ? cleanCoMessage(raw) : null;
         const allowed = [...rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text), theirOwnWords(src.recentMemories)].join("\n");
-        if (cleaned && cleaned.trim() !== cut.trim() && keepsEverySentence(cut, cleaned) && rewriteAddsNothing(draft, cleaned, allowed).ok) {
+        // What was cut away: the draft's sentences that aren't in what's left (the repair may only borrow their words).
+        const cutAway = (draft.match(SENTENCES) ?? []).map((x) => x.trim()).filter((x) => x && !cut.includes(x)).join(" ");
+        if (cleaned && cleaned.trim() !== cut.trim() && keepsEverySentence(cut, cleaned, cutAway) && rewriteAddsNothing(draft, cleaned, allowed).ok) {
           const t1 = Date.now();
           const r = await recheck(cut, cleaned, effectiveFailed1, rf, src);
           stages.secondCheckMs = Date.now() - t1;
