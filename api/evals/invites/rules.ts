@@ -26,7 +26,7 @@ const asks = [
   "send me an invite link",
   "I want to invite my friend Sam",
   "how many invites do I have left",
-  "can I invite someone to Co?",
+  "can I invite someone to Cue?",
   "Invite code for my coworker?",
   "how do I invite people",
 ];
@@ -62,10 +62,10 @@ check("no candidates in a plain hello", inviteCodeCandidates("hey, who is this?"
 check("ambiguous letters never count (I, L, O, 0, 1)", inviteCodeCandidates("INVITED1").length === 0);
 
 // The link and the pre-filled text
-check("greeting names the inviter", inviteGreeting("Royce", "6VGF76VK") === "Hi Co, Royce invited me. Code: 6VGF76VK");
-check("greeting without a name", inviteGreeting(null, "6VGF76VK") === "Hi Co, I was invited. Code: 6VGF76VK");
+check("greeting names the inviter", inviteGreeting("Royce", "6VGF76VK") === "Hi Cue, Royce invited me. Code: 6VGF76VK");
+check("greeting without a name", inviteGreeting(null, "6VGF76VK") === "Hi Cue, I was invited. Code: 6VGF76VK");
 const href = smsInviteHref("+15551234567", inviteGreeting("Royce", "6VGF76VK"));
-check("sms link opens Messages to Co with the text filled in", href.startsWith("sms:+15551234567?&body=Hi%20Co%2C%20Royce"));
+check("sms link opens Messages to Cue with the text filled in", href.startsWith("sms:+15551234567?&body=Hi%20Cue%2C%20Royce"));
 check("invite link is a web page on the base URL", inviteLink("6VGF76VK", "https://test.copatible.com/") === "https://test.copatible.com/i/6VGF76VK");
 check("no base URL, no link", inviteLink("6VGF76VK", "") === null);
 
@@ -76,7 +76,7 @@ for (const [name, pool] of Object.entries(pools)) {
   for (const line of pool) {
     const short = line.slice(0, 40);
     check(`${name}: no em dash: "${short}"`, !/[—–]/.test(line));
-    check(`${name}: Co is only ever Co: "${short}"`, !/copatible|matchmaker|assistant|concierge|\bAI\b/i.test(line));
+    check(`${name}: Cue is only ever Cue: "${short}"`, !/copatible|matchmaker|assistant|concierge|\bAI\b/i.test(line));
     check(`${name}: never "network" or exclusivity talk: "${short}"`, !/network|exclusive|invite-only|vip|elite/i.test(line));
     check(`${name}: no gendered pronouns: "${short}"`, !/\b(she|her|hers|he|him|his)\b/i.test(line));
   }
@@ -93,7 +93,7 @@ check("friend welcome fills the name", pickLine(WELCOME_INVITED, { inviter: "Roy
 const turn = (message: string) => ({ message, recentConversation: "" });
 const claimFails = (draft: string, message: string, sent = false) => {
   const rf = baseReplyFacts();
-  if (sent) addFact(rf, "known", "Co just texted them an invite link for a friend, in its own messages this turn. Don't send or describe another one.");
+  if (sent) addFact(rf, "known", "Cue just texted them an invite link for a friend, in its own messages this turn. Don't send or describe another one.");
   return codeChecks(draft, rf, turn(message)).some((c) => c.name === "no_invite_sent_claim" && !c.pass);
 };
 check("'Sending that now' to an invite ask, nothing sent: caught", claimFails("Sending that now, one sec.", "send my friend a code"));
@@ -199,7 +199,7 @@ check("getting into a dinner isn't an invite claim", notFlagged("I'll add you to
 check("a real invite claim is still caught", claimFails("Sending that invite now, one sec.", "can I get an invite for my friend?"));
 check("no fallback pile-on when they have none left", (() => {
   const rf = baseReplyFacts();
-  addFact(rf, "known", "Co just told them all 5 of their invites are used.");
+  addFact(rf, "known", "Cue just told them all 5 of their invites are used.");
   return !codeChecks("I'll send you another invite once someone joins.", rf, turn("can I get an invite for a friend?")).some((c) => c.name === "no_invite_sent_claim" && !c.pass);
 })());
 

@@ -8,6 +8,6 @@ const days = Number(process.argv[process.argv.indexOf("--days") + 1]) || 180;
 const r = await secondContactRate({ sinceDays: days, includeRecent: process.argv.includes("--include-recent") });
 const pct = (x: number | null) => (x === null ? "n/a" : `${Math.round(x * 100)}%`);
 console.log(`Introductions in the last ${days} days${process.argv.includes("--include-recent") ? "" : ` (at least ${SECOND_CONTACT_DAYS} days old)`}: ${r.intros}`);
-console.log(`Either side told Co how it went: ${r.answered}`);
-console.log(`Met or talked again within ${SECOND_CONTACT_DAYS} days: ${r.metAgain}  →  ${pct(r.rate)} of introductions (${pct(r.answeredRate)} of those Co heard about)`);
+console.log(`Either side told Cue how it went: ${r.answered}`);
+console.log(`Met or talked again within ${SECOND_CONTACT_DAYS} days: ${r.metAgain}  →  ${pct(r.rate)} of introductions (${pct(r.answeredRate)} of those Cue heard about)`);
 await pool.end();

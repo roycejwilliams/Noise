@@ -53,7 +53,7 @@ async function draftLine(instruction: string, fallback: string): Promise<string>
     const { text } = await generateText({
       model: anthropic(LINE_MODEL),
       experimental_telemetry: { isEnabled: true, functionId: "notifyTesters.draftLine" },
-      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting someone who's helping test Co before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes. Return ONLY that one short line, nothing else.`,
+      prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting someone who's helping test Cue before launch. ${instruction} No greeting, no "Hey", no using their name — that's handled separately. No em dashes. Return ONLY that one short line, nothing else.`,
     });
     const trimmed = text.trim();
     return trimmed || fallback;
@@ -84,12 +84,12 @@ async function main() {
   // NOTIFY_INTRO / NOTIFY_CLOSING pin the exact lines (e.g. after the text
   // was approved word for word); otherwise they're drafted.
   const intro = process.env.NOTIFY_INTRO ?? await draftLine(
-    "Write a short, warm phrase thanking them for helping test Co and saying here's what's new.",
-    "thanks for helping test Co. Here's what's new:",
+    "Write a short, warm phrase thanking them for helping test Cue and saying here's what's new.",
+    "thanks for helping test Cue. Here's what's new:",
   );
   const closing = process.env.NOTIFY_CLOSING ?? await draftLine(
     "Write a short, warm closing line inviting them to share what they think after trying it.",
-    "Let Co know what you think once you've had a chance to try it.",
+    "Let Cue know what you think once you've had a chance to try it.",
   );
   // Blank line between bullets (Royce, 2026-08-31: "put some spacing
   // between bullet points") — cramped together read as one dense block on

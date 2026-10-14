@@ -49,7 +49,7 @@ async function main() {
   const apiUrl = process.env.API_URL;
   if (!voiceId || !apiUrl) throw new Error("ELEVENLABS_VOICE_ID and API_URL must be set.");
   const config = buildAgentConfig({
-    name: `Co (${new URL(apiUrl).hostname})`,
+    name: `Cue (${new URL(apiUrl).hostname})`,
     prompt,
     voiceId,
     apiUrl,

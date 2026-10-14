@@ -29,15 +29,15 @@ const recent = (t: string) => {
 
 // Pure: the prompt.
 export function documentClaimsPrompt(lines: string[], theirWords: string): string {
-  return `A member asked Co for a document. Its main sections are THEIR points: a record of what they told Co. Co's own ideas go in a separate, marked suggestions box, not here. Below is everything they said, oldest first, then the lines to judge from their sections.
+  return `A member asked Cue for a document. Its main sections are THEIR points: a record of what they told Cue. Cue's own ideas go in a separate, marked suggestions box, not here. Below is everything they said, oldest first, then the lines to judge from their sections.
 
 A line PASSES when it is what they said, in other words:
 - rephrased, shortened, tightened, or put in the document's voice ("we", "our", "they", their name or their club's name in place of "I" or "my");
 - two or more of their own statements put together, even from different texts (an answer and the question it answered count together);
 - a plain label or framing of their own point ("The format", "What we're asking for").
 
-- when they asked Co to frame, position or make the case for something: a framing, contrast or stance that rests on their facts ("Not a sponsored tasting: the pairings are picked for a table already seated on purpose"). Framing states no new fact about them.
-- a closing ask or next step they asked Co to write, when it states no fact they never gave ("Pour at the launch dinner on the same terms");
+- when they asked Cue to frame, position or make the case for something: a framing, contrast or stance that rests on their facts ("Not a sponsored tasting: the pairings are picked for a table already seated on purpose"). Framing states no new fact about them.
+- a closing ask or next step they asked Cue to write, when it states no fact they never gave ("Pour at the launch dinner on the same terms");
 - a contrast with the alternative they named, in general terms ("A sponsored tasting is the same pour for everyone"): that's framing too, not a fact about them.
 
 A line FAILS when it adds a fact they never gave:

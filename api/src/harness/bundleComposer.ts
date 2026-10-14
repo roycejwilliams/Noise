@@ -61,13 +61,13 @@ export const realComposeDeps: ComposeDeps = {
 // situation, who they are) is backed by what's known; anything else, or a read that fails, and the line is left out. Pure prompt +
 // parse; the model is the caller's.
 export function closingLinePrompt(line: string, known: string): string {
-  return `A text Co is about to send ends with this line about the member:
+  return `A text Cue is about to send ends with this line about the member:
 "${line}"
 
-What Co knows about them (their own words, their record, how they've been):
+What Cue knows about them (their own words, their record, how they've been):
 ${known.trim() || "(nothing)"}
 
-Does the line state any feeling, situation, event in their life, or label of who they are (identity, role, status) that what Co knows does not back? Saying what the finds are for, or a gentle general warmth, is fine. A feeling or situation it states about THEM must be backed.
+Does the line state any feeling, situation, event in their life, or label of who they are (identity, role, status) that what Cue knows does not back? Saying what the finds are for, or a gentle general warmth, is fine. A feeling or situation it states about THEM must be backed.
 Return ONLY JSON: {"backed": true or false, "why": "a few words"}`;
 }
 export function readClosingJudgment(raw: string): { backed: boolean; why: string } {
@@ -123,18 +123,18 @@ export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: 
   const many = i.items.length > 1;
   const items = i.items
     .map((b, n) => {
-      const pick = b.pick ? `\nwhy Co's daily pick chose it for them: ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now: ${b.pick.whyNow}` : ""}` : "";
+      const pick = b.pick ? `\nwhy Cue's daily pick chose it for them: ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now: ${b.pick.whyNow}` : ""}` : "";
       return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? " (you mentioned it over a month ago with no reply; it's still open: circle back once, lightly)" : ""}\n${renderFacts(b.item.facts)}${pick}`;
     })
     .join("\n\n");
   return `${CO_VOICE}
 
-${CO_TEXT_CHANNEL} You're texting ${i.firstName}. Co is reaching out first with ${many ? `${i.items.length} things, each its own link and description` : "one thing"}.
+${CO_TEXT_CHANNEL} You're texting ${i.firstName}. Cue is reaching out first with ${many ? `${i.items.length} things, each its own link and description` : "one thing"}.
 
 HOW IT GOES OUT
 - No opening line: nothing before the first thing. Each thing stands on its own, its link then its description (Royce, 2026-10-13: "each tier found should get a link then a description. Never clump them up together").\n- Then, for each thing in order: its link (sent for you, as its own message) and your caption under it. Each caption names the thing and when it is, and says the one reason it fits them, in plain words. ${CO_WHY}
 - Each caption describes its own thing only, in its own words: what it is and why it fits them. Never mention, compare with or group it with the other things, and never repeat another caption's reason.
-${many ? "- After the last thing, end with your own line (it goes in \"opening\"): you know them, what they're going through and how they've been, so say what these mean for them now, however you'd say it. Your call, in Co's voice. Ground it in what you actually know about them below; never invent a feeling or a situation, and never name what someone is unless they told you. (Royce, 2026-10-13: tie it back to \"knowing the user ... we want to be that help\"; \"it doesn't need to be scripted. Co should have a mind of its own but still be on brand\".)\n" : ""}- Then one closing question that comes out of what you just said${many ? " about this set (which one, or whether any of them)" : ""}. Short, natural, yours: never a stock line.
+${many ? "- After the last thing, end with your own line (it goes in \"opening\"): you know them, what they're going through and how they've been, so say what these mean for them now, however you'd say it. Your call, in Cue's voice. Ground it in what you actually know about them below; never invent a feeling or a situation, and never name what someone is unless they told you. (Royce, 2026-10-13: tie it back to \"knowing the user ... we want to be that help\"; \"it doesn't need to be scripted. Cue should have a mind of its own but still be on brand\".)\n" : ""}- Then one closing question that comes out of what you just said${many ? " about this set (which one, or whether any of them)" : ""}. Short, natural, yours: never a stock line.
 - A caption is at most ${BUNDLE_LIMITS.captionChars - 40} characters and never ends with a question; the opening at most ${BUNDLE_LIMITS.openingChars}; the closing at most ${BUNDLE_LIMITS.closingChars}. Don't mention links.
 - ${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY}
 - A thing they didn't ask for is something you noticed for them: never say or imply they asked for it.
@@ -144,7 +144,7 @@ ${many ? "- After the last thing, end with your own line (it goes in \"opening\"
 
 THE THINGS (CONFIRMED_FACTS for each: the only facts you may state about it)
 ${items}
-${i.set && many ? `\nTHE DAY'S SET (what Co's pick saw in these together)\n${i.set}\n` : ""}${i.leadWhy ? `\nWHY THE FIRST ONE LEADS\n${i.leadWhy}\n` : ""}${i.memberBlock ? `\n${i.memberBlock}\n` : ""}${i.feeling ? `\nHOW THEY'VE BEEN FEELING (it shapes how you say this, never whether: if they've been struggling, gentler and lower-pressure; the captions never name it; your own line after the last thing may speak to what they're going through, gently, only from what's here; the closing question never names it)\n${i.feeling}\n` : ""}
+${i.set && many ? `\nTHE DAY'S SET (what Cue's pick saw in these together)\n${i.set}\n` : ""}${i.leadWhy ? `\nWHY THE FIRST ONE LEADS\n${i.leadWhy}\n` : ""}${i.memberBlock ? `\n${i.memberBlock}\n` : ""}${i.feeling ? `\nHOW THEY'VE BEEN FEELING (it shapes how you say this, never whether: if they've been struggling, gentler and lower-pressure; the captions never name it; your own line after the last thing may speak to what they're going through, gently, only from what's here; the closing question never names it)\n${i.feeling}\n` : ""}
 THE THREAD (your recent texts with them, oldest first, their time)
 ${i.thread.trim() || "(nothing recent)"}
 ${i.threadLive && i.mayWait !== false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes: a conversation may be live. Never land these on top of something unrelated. If the thread is about something else and not finished, answer with {"wait": "why"}. If it's about this, or it's clearly done, go ahead and say in "connects" how this follows from it.\n` : ""}${i.threadLive && i.mayWait === false ? `\nThey wrote to you within the last ${LIVE_MINUTES} minutes, and this can't wait any longer. If the thread is about something else, acknowledge it lightly in a few words in your first caption, and say in "connects" how you did.\n` : ""}${o.problems?.length ? `\nYOUR LAST VERSION (not sent)\n${o.last ?? ""}\nIt broke: ${o.problems.join(" | ")}. Write the whole message again with those fixed, keeping what worked.\n` : ""}
@@ -211,7 +211,7 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
     if (/https?:\/\//i.test(c)) problems.push({ at: n, why: `thing ${n}'s caption has a link in it; the link goes on its own` });
     const unbacked = unbackedSpecifics(c, b.item.facts);
     if (unbacked.length) problems.push({ at: n, why: `thing ${n}'s caption says ${unbacked.map((u) => `"${u.text}"`).join(", ")}, which its facts don't back` });
-    if ((stripUngroundedIdentity(c, b.item.grounding) ?? "").trim() !== c.trim()) problems.push({ at: n, why: `thing ${n}'s caption says who they are beyond what they've told Co` });
+    if ((stripUngroundedIdentity(c, b.item.grounding) ?? "").trim() !== c.trim()) problems.push({ at: n, why: `thing ${n}'s caption says who they are beyond what they've told Cue` });
     captions.set(n, c);
   });
   // The reason doesn't repeat (C1).
@@ -231,7 +231,7 @@ export function checkComposed(d: Draft, i: ComposeInput): Checked {
   const framing = (text: string, at: "opening" | "closing", maxChars: number) => {
     const bad = checkDraft(text, { maxChars, maxSentences: 2, forbidden, ...(backedBy ? { backedBy } : {}) }).filter((k) => !k.pass);
     if (bad.length) problems.push({ at, why: `the ${at}: ${bad.map((k) => `${k.name}${k.reason ? ` (${k.reason})` : ""}`).join(", ")}` });
-    else if ((stripUngroundedIdentity(text, at === "opening" ? aboutThem : grounding) ?? "").trim() !== text.trim()) problems.push({ at, why: `the ${at} says who they are beyond what they've told Co` });
+    else if ((stripUngroundedIdentity(text, at === "opening" ? aboutThem : grounding) ?? "").trim() !== text.trim()) problems.push({ at, why: `the ${at} says who they are beyond what they've told Cue` });
     else if (unbackedSpecifics(text, allFacts).length) problems.push({ at, why: `the ${at} states something the things' facts don't back` });
     else return true;
     return false;

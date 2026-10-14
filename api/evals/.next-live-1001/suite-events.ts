@@ -38,9 +38,9 @@ export const events: Case[] = [
         { id: "evt-fd1", name: "Founders Dinner", start: now - 10 * 60_000, end: now + 3 * 3600_000 },
         { id: "evt-fd2", name: "Founders Dinner Afterparty", start: now + 60 * 60_000, end: now + 4 * 3600_000 },
       ]);
-      const hit = await W.detectCheckinPhrase("I'm at a Co event, Climate Hardware Night");
-      const ended = await W.detectCheckinPhrase("I'm at a Co event, Climate Hardware Breakfast");
-      const ambiguous = await W.detectCheckinPhrase("I'm at a Co event, the founders dinner");
+      const hit = await W.detectCheckinPhrase("I'm at a Cue event, Climate Hardware Night");
+      const ended = await W.detectCheckinPhrase("I'm at a Cue event, Climate Hardware Breakfast");
+      const ambiguous = await W.detectCheckinPhrase("I'm at a Cue event, the founders dinner");
       const noPhrase = await W.detectCheckinPhrase("at climate hardware night");
       // A recommendation alone is never attendance.
       const M = await import("../../src/services/eventMatching.js");
@@ -213,7 +213,7 @@ export const events: Case[] = [
           ck("the reply is recorded once, then nothing is pending", !!pending && after === null, { pending, after }),
           ck("two guests named Jordan: asks which, picks no one", "error" in named && /more than one/i.test((named as any).error), named),
         ],
-        observed: { note: "resolveNamedEventGuest only looks at their most recent Co event (event_checkin_followups), not an older one they name." },
+        observed: { note: "resolveNamedEventGuest only looks at their most recent Cue event (event_checkin_followups), not an older one they name." },
       };
     },
   },

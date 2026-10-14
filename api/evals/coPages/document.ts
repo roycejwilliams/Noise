@@ -87,7 +87,7 @@ const base = () => ({
   check("OG tags so the link unfurls; noindex", /property="og:title" content="Saturday night in the Mission"/.test(html) && /property="og:image"/.test(html) && /name="robots" content="noindex, nofollow"/.test(html));
   check("no nav, no buttons, no forms, no scripts", !/<nav|<button|<form|<script/i.test(html));
   check("an image says where it's from", /<figcaption>From alderandash\.example<\/figcaption>/.test(html));
-  check("the quiet footer: Made by Co and the as-of date", /<div class="sign">Made by Co<\/div>/.test(html) && /As of Oct 11, 2026/.test(html));
+  check("the quiet footer: Made by Cue and the as-of date", /<div class="sign">Made by Cue<\/div>/.test(html) && /As of Oct 11, 2026/.test(html));
   check("Alder &amp; Ash is escaped, never raw", /Alder &amp; Ash/.test(html) && !/>Alder & Ash</.test(html));
 }
 

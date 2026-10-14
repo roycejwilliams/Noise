@@ -98,7 +98,7 @@ export function steerDecision(o: { seeds: SeedCount; heavy: boolean; frustrated?
   if (o.seeds.seeded) return { steer: false, why: `seeded (${o.seeds.n} findable interests on file)` };
   if ((o.lifetimeSteers ?? 0) >= COLD_START.steerLifetime) return { steer: false, why: `stopped asking: ${COLD_START.steerLifetime} natural tries never brought a findable interest` };
   if (o.heavy) return { steer: false, why: "a heavy moment" };
-  if (o.frustrated) return { steer: false, why: "frustrated with Co right now" };
+  if (o.frustrated) return { steer: false, why: "frustrated with Cue right now" };
   if (o.otherQuestion) return { steer: false, why: `this reply already has a question to ask (${o.otherQuestion})` };
   if (o.history[0]?.action === "steered") return { steer: false, why: "the last reply steered" };
   const weekAgo = o.now.getTime() - 7 * 86_400_000;
@@ -111,12 +111,12 @@ export function steerDecision(o: { seeds: SeedCount; heavy: boolean; frustrated?
 // quoted bad question (evals/texting: Co copies the phrasing it's shown, even when told not to use it).
 export function steerInstruction(seeds: SeedCount, asked: string[]): string {
   const have = seeds.n === 0
-    ? "Co has nothing on file yet that its daily search can look for on their behalf"
-    : `Co has only one thing on file its daily search can look for on their behalf (${seeds.seeds[0].text.slice(0, 120)})`;
+    ? "Cue has nothing on file yet that its daily search can look for on their behalf"
+    : `Cue has only one thing on file its daily search can look for on their behalf (${seeds.seeds[0].text.slice(0, 120)})`;
   const already = asked.length
     ? ` You already asked them: ${asked.slice(0, 4).map((q) => `"${q.slice(0, 160)}"`).join("; ")}. Never ask any of these again, in any wording; if they answered, work from the answer.`
     : "";
-  return `${have}. If it grows naturally out of what they just said, you may ask ONE easy question that lets them name something you could find for them: a scene or kind of room they'd like to be in, a kind of event, people they'd want to meet, or something they're exploring. It follows their topic: build it from the specific thing they just told you, in your own words, never a stock question (no examples are given on purpose: Co copies the wording it's shown, 2026-10-08); never jump to a new subject. One question at most in this reply, and only when you aren't asking them anything else. Never a list of questions, never a general question about their interests or hobbies like a form would ask, and never mention a profile, a search setup or that you're collecting anything. If their message needs a real answer or is about something else, just answer it and leave this for another time. When they name something you could find (now or earlier in this conversation), save it with saveAsk in their words so the daily search starts from it, and don't ask about it again.${already}`;
+  return `${have}. If it grows naturally out of what they just said, you may ask ONE easy question that lets them name something you could find for them: a scene or kind of room they'd like to be in, a kind of event, people they'd want to meet, or something they're exploring. It follows their topic: build it from the specific thing they just told you, in your own words, never a stock question (no examples are given on purpose: Cue copies the wording it's shown, 2026-10-08); never jump to a new subject. One question at most in this reply, and only when you aren't asking them anything else. Never a list of questions, never a general question about their interests or hobbies like a form would ask, and never mention a profile, a search setup or that you're collecting anything. If their message needs a real answer or is about something else, just answer it and leave this for another time. When they name something you could find (now or earlier in this conversation), save it with saveAsk in their words so the daily search starts from it, and don't ask about it again.${already}`;
 }
 
 // Pure: what a sent reply did with the steering it was offered. Any question in a reply that was offered steering counts as a

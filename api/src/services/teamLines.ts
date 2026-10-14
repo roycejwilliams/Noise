@@ -20,7 +20,7 @@ export function notToTeammate(alias = ""): string {
 // Text: drops the lines that belong to the member's talk with a teammate:
 // what they said to it, its replies, and Co's tag.
 const isTeammateLine = (l: string) =>
-  / \[to [A-Za-z]+\]\s*$/.test(l) || /^Co tagged \w+:/.test(l) || (/^\w+ replied:/.test(l) && !/^Co replied:/.test(l)) || /^Mo said:/.test(l);
+  / \[to [A-Za-z]+\]\s*$/.test(l) || /^Co tagged \w+:/.test(l) || (/^\w+ replied:/.test(l) && !/^(?:Co|Cue) replied:/.test(l)) || /^Mo said:/.test(l);
 export function withoutTeammateLines(text: string): string {
   return text.split("\n").filter((l) => !isTeammateLine(l)).join("\n");
 }

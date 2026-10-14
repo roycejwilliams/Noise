@@ -166,7 +166,7 @@ export async function attemptNetworkSurfacing(
     userId,
     type: "network_tease",
     targetKey: `network_tease:${item.candidate.candidate_id}`,
-    summary: `Someone in Co's network who fits what they're looking for (not named until they say yes): ${item.candidate.match_reason.slice(0, 160)}`,
+    summary: `Someone in Cue's network who fits what they're looking for (not named until they say yes): ${item.candidate.match_reason.slice(0, 160)}`,
     payload: { askId, candidate: item.candidate },
     expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
   });
@@ -408,10 +408,10 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
   const [p1, p2] = a.user_id < b.user_id ? [a, b] : [b, a];
   const subject = `Introducing ${p1.first_name} and ${p2.first_name}`;
   const html = galleryEmail({
-    preview: `Co thinks you two should meet.`,
+    preview: `Cue thinks you two should meet.`,
     eyebrow: "An introduction",
     headline: `${p1.first_name}, meet ${p2.first_name}.`,
-    body: [matchReason, "Co figured you two should actually meet. Consider this your introduction."],
+    body: [matchReason, "Cue figured you two should actually meet. Consider this your introduction."],
     close: "You both said yes. Take it from here.",
   });
   if (!ALLOW_REAL_SENDS) {
@@ -460,7 +460,7 @@ async function scheduleIntroFollowUps(pairs: (readonly [string, string])[]): Pro
         `INSERT INTO recommendation_outcome_followups (user_id, ask_text, tier, match_name, match, send_at)
          SELECT $1::uuid, $2::text, 0, $3::text, $4::jsonb, NOW() + INTERVAL '5 days'
          WHERE NOT EXISTS (SELECT 1 FROM recommendation_outcome_followups WHERE user_id = $1 AND lower(match_name) = lower($3))`,
-        [uid, "an intro Co made", `your intro to ${otherName}`, JSON.stringify({ kind: "intro", event_date: followupDate })],
+        [uid, "an intro Cue made", `your intro to ${otherName}`, JSON.stringify({ kind: "intro", event_date: followupDate })],
       )
       .catch((err: any) => console.error("network intro: follow-up schedule failed (non-fatal):", err?.message ?? err));
   }
@@ -519,7 +519,7 @@ export function networkEmailState(r: { email_sent?: unknown; email_outcome?: unk
 // retake can still finish it; past that, plainly that Co can't confirm it, with no promise.
 export function alreadyIntroducedLine(firstName: string, state: NetworkEmailState): string {
   if (state === "sent") return `\nThey said yes to ${firstName} again; the two of them were already introduced by email. Acknowledge briefly, don't send or promise another intro.`;
-  if (state === "unknown") return `\nThey said yes to ${firstName}; both of them are in, but Co can't confirm the intro email went through. Tell them plainly it may not have reached them, and to tell you if they don't have it. Don't say it was sent, and don't promise it's coming.`;
+  if (state === "unknown") return `\nThey said yes to ${firstName}; both of them are in, but Cue can't confirm the intro email went through. Tell them plainly it may not have reached them, and to tell you if they don't have it. Don't say it was sent, and don't promise it's coming.`;
   return `\nThey said yes to ${firstName}; both of them are in and the intro email is on its way. Tell them plainly the intro email is coming. Don't say it was sent, and don't say when. Don't promise another.`;
 }
 
@@ -738,7 +738,7 @@ export async function resolveNetworkIntroReply(
     };
     const emailed = await sendNetworkIntroEmail(person, candidateInfo, storedReason);
     if (emailed === "held") {
-      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them hasn't gone out yet; Co will send it. Tell them plainly that both of you are in and the intro email is coming. Don't say it was sent, and don't say when.`;
+      return `\nThey just said yes to being connected with ${pending.candidate.first_name}, and ${pending.candidate.first_name} had already said yes too. The intro email to both of them hasn't gone out yet; Cue will send it. Tell them plainly that both of you are in and the intro email is coming. Don't say it was sent, and don't say when.`;
     }
     if (emailed !== "sent") {
       // Not introduced: the pair goes back to waiting on its email, counted, and retryHeldNetworkIntros tries again (before this, a

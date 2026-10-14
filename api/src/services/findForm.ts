@@ -55,7 +55,7 @@ export function lifeEndOf(m: any, zone: string | null = null): string | null {
 }
 
 export function classifyPrompt(name: string, page: string, today: string): string {
-  return `Today is ${today}. A page Co found is titled "${name}". From the page text below, say what it is:
+  return `Today is ${today}. A page Cue found is titled "${name}". From the page text below, say what it is:
 - "event": something that happens at a time (a gathering, show, festival, meetup, dinner, talk). Give its date (YYYY-MM-DD), and its last day if it spans days.
 - "opening": something to apply to or join (a program, cohort, fellowship, grant, residency, job, open call, a place or community you can join any time). Give its application deadline (YYYY-MM-DD) if the page states one, else null.
 Only dates the page states. If it's an event and the page gives no date, the date is null.
@@ -205,7 +205,7 @@ export function exitKey(m: any): string {
 
 // How Co names what it is (Royce, 2026-10-09: "an event Saturday" or "an application closing Friday", never "a real opportunity").
 export function formLabel(m: any, zone: string | null, now = new Date()): string {
-  if (m?.kind === "co_event") return `a Co event${whenWords(eventDateOf(m, zone), zone, now)}`;
+  if (m?.kind === "co_event") return `a Cue event${whenWords(eventDateOf(m, zone), zone, now)}`;
   const f = formOf(m);
   if (f === "event") return `an event${whenWords(eventDateOf(m, zone), zone, now)}`;
   if (f === "opening") {

@@ -63,7 +63,7 @@ check("the agent's copy of the prompt says end_call, not hang_up, and knows it a
 const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
 check("the real prompt has no hang_up left in the agent's copy, and keeps its variables", !/\bhang_up\b/.test(promptForElevenLabs(prompt)) && /\{\{first_name\}\}/.test(prompt) && /\{\{context_summary\}\}/.test(promptForElevenLabs(prompt)));
 
-const cfg: any = buildAgentConfig({ name: "Co (test)", prompt: "P {{first_name}}", voiceId: "voice-1", apiUrl: "https://test.copatible.com" });
+const cfg: any = buildAgentConfig({ name: "Cue (test)", prompt: "P {{first_name}}", voiceId: "voice-1", apiUrl: "https://test.copatible.com" });
 const cc = cfg.conversation_config;
 check("phone audio is mu-law 8kHz both ways (register-call needs it)", cc.asr.user_input_audio_format === "ulaw_8000" && cc.tts.agent_output_audio_format === "ulaw_8000");
 // Royce chose Sonnet 4.6 for the live voice on 2026-10-04, after the comparison with Haiku 4.5.
@@ -71,7 +71,7 @@ check("phone audio is mu-law 8kHz both ways (register-call needs it)", cc.asr.us
 check("Royce's picks: Eleven v4 Turbo voice, Sonnet 4.6 direct, normal turn-taking", cc.tts.model_id === "eleven_v4_turbo" && cc.agent.prompt.llm === "claude-sonnet-4-6" && cc.turn.turn_eagerness === "normal" && AGENT_DEFAULTS.ttsModel === "eleven_v4_turbo");
 check("overrides from the env reach the config", (buildAgentConfig({ name: "x", prompt: "p", voiceId: "v", apiUrl: "https://a.b", llm: "claude-sonnet-5", ttsModel: "eleven_flash_v2_5", turnEagerness: "normal" }) as any).conversation_config.agent.prompt.llm === "claude-sonnet-5");
 const tools = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "webhook");
-check("no webhook tools on the agent: the coverage check went with the interview script (2026-10-08); Co's own tools reach a call through the LLM endpoint", tools.length === 0 && !JSON.stringify(cfg).includes("assess_conversation_coverage"));
+check("no webhook tools on the agent: the coverage check went with the interview script (2026-10-08); Cue's own tools reach a call through the LLM endpoint", tools.length === 0 && !JSON.stringify(cfg).includes("assess_conversation_coverage"));
 const sys = (cc.agent.prompt.tools as any[]).filter((t) => t.type === "system");
 const sysTools = sys;
 check("end_call and voicemail detection ride in the tools list as system tools (built_in_tools stored nothing); the voicemail line names them", sys.map((t) => t.params.system_tool_type).join() === "end_call,voicemail_detection" && sys.every((t) => t.description) && sys[1].params.voicemail_message.includes("{{first_name}}") && !("built_in_tools" in cc.agent.prompt));
@@ -87,7 +87,7 @@ check("the post-call webhook is signature-checked on the raw body, in both serve
 check("tools refuse a call without a valid token", /if \(!verifyCallToken\(userId, b\.call_token\)\) return res\.status\(401\)/.test(co));
 
 // Voice-layer review fixes (2026-10-03).
-check("Co opens the call itself, so nobody waits in silence (the stored line is the fallback)", cc.agent.first_message === OPENING_LINE && OPENING_LINE === "Hey {{first_name}}, it's Co.");
+check("Cue opens the call itself, so nobody waits in silence (the stored line is the fallback)", cc.agent.first_message === OPENING_LINE && OPENING_LINE === "Hey {{first_name}}, it's Cue.");
 check("the opening can be set per call: the agent allows the override and registration sends it", (cfg as any).platform_settings.overrides.conversation_config_override.agent.first_message === true && /conversationConfigOverride: \{[\s\S]{0,200}?\.\.\.\(o\.opening \? \{ agent: \{ firstMessage: o\.opening \} \}/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")) && (coSrc.match(/opening: await openingForCall\(/g) ?? []).length === 2 && /chooseOpening\(userId, firstName, direction\)/.test(coSrc));
 {
   const seen = new Set<string>();
@@ -95,7 +95,7 @@ check("the opening can be set per call: the agent allows the override and regist
   check("many variations: an everyday outbound call has 5+ openings to draw from", seen.size >= 5);
   const first = pickOpening({ direction: "outbound", firstCall: true, hour: 14, firstName: "Jordan", last: null, rand: () => 0 }).line;
   check("a first call opens like a first call; the name is filled in", /Jordan/.test(first) && /(finally|looking forward|glad we're)/i.test(first) && !/\{name\}/.test(first));
-  check("they called Co: the opening is an inbound one", [0, 0.3, 0.6, 0.99].every((r) => /(Glad you called|This is Co|You've got Co|I'm here)/.test(pickOpening({ direction: "inbound", firstCall: false, hour: 14, firstName: "Jordan", last: null, rand: () => r }).line)));
+  check("they called Cue: the opening is an inbound one", [0, 0.3, 0.6, 0.99].every((r) => /(Glad you called|This is Cue|You've got Cue|I'm here)/.test(pickOpening({ direction: "inbound", firstCall: false, hour: 14, firstName: "Jordan", last: null, rand: () => r }).line)));
   check("morning and evening lines appear only at those hours", !OPENINGS.some((t) => /^(Morning|Good morning)/.test(t.text) && t.when?.({ direction: "outbound", firstCall: false, hour: 20 })) && OPENINGS.some((t) => /^Evening/.test(t.text) && t.when?.({ direction: "outbound", firstCall: false, hour: 20 })) && !OPENINGS.some((t) => /^(Morning|Evening|Good morning)/.test(t.text) && t.when?.({ direction: "outbound", firstCall: false, hour: null })));
   let repeats = 0;
   for (let i = 0; i < 300; i++) {
@@ -108,7 +108,7 @@ check("the opening can be set per call: the agent allows the override and regist
 }
 check("voicemail: the tool's call is checked against whether the person actually talked", voicemailVerdict(true, false) === "voicemail" && voicemailVerdict(true, true) === "misfire" && voicemailVerdict(false, true) === "conversation" && voicemailVerdict(false, false) === "conversation");
 check("the voicemail tool is told a bare hello is a person", /A person saying \\?"hello\?/.test(JSON.stringify(sysTools)) || /hello\?/.test(sysTools[1].description));
-check("status callbacks find the member: To when Co calls, From when they call Co", memberNumberOf({ To: "+15550001111", From: "+14155550176", Direction: "outbound-api" }, "+14155550176").number === "+15550001111" && memberNumberOf({ To: "+14155550176", From: "+15550002222", Direction: "inbound" }, "+14155550176").inbound === true && memberNumberOf({ To: "+14155550176", From: "+15550002222", Direction: "inbound" }, "+14155550176").number === "+15550002222");
+check("status callbacks find the member: To when Cue calls, From when they call Cue", memberNumberOf({ To: "+15550001111", From: "+14155550176", Direction: "outbound-api" }, "+14155550176").number === "+15550001111" && memberNumberOf({ To: "+14155550176", From: "+15550002222", Direction: "inbound" }, "+14155550176").inbound === true && memberNumberOf({ To: "+14155550176", From: "+15550002222", Direction: "inbound" }, "+14155550176").number === "+15550002222");
 check("each call links to its ElevenLabs conversation", conversationLink("conv_1") === "https://elevenlabs.io/app/agents/history/conv_1" && conversationLink("") === null);
 {
   let built = 0;
@@ -127,10 +127,10 @@ check("a misfired voicemail goes through as a conversation, logged; inbound stat
 // PR #58 review fixes (2026-10-03), one check each.
 {
   // 1. Voicemail gate.
-  check("1 which finished calls are missed calls: a detected voicemail, or a call Co placed where nobody spoke; never a silent call they placed to Co or a misfire", missedKind("voicemail", false, "outbound") === "voicemail" && missedKind("conversation", false, "outbound") === "silent" && missedKind("conversation", false, "inbound") === null && missedKind("misfire", true, "outbound") === null && missedKind("conversation", true, "outbound") === null);
-  check("1 what Co left is recorded with their name", voicemailLeft("Jordan") === "Hey Jordan, it's Co. Sorry I missed you. I'll send you a text.");
+  check("1 which finished calls are missed calls: a detected voicemail, or a call Cue placed where nobody spoke; never a silent call they placed to Cue or a misfire", missedKind("voicemail", false, "outbound") === "voicemail" && missedKind("conversation", false, "outbound") === "silent" && missedKind("conversation", false, "inbound") === null && missedKind("misfire", true, "outbound") === null && missedKind("conversation", true, "outbound") === null);
+  check("1 what Cue left is recorded with their name", voicemailLeft("Jordan") === "Hey Jordan, it's Cue. Sorry I missed you. I'll send you a text.");
   const handler = coSrc.slice(coSrc.indexOf("async function handleMissedVoiceCall("), coSrc.indexOf("// After a call ends (ElevenLabs"));
-  check("1 both kinds claim the call once, run the old gate (once per call, none queued, none recent) and log it, and release the claim if the send fails", /INSERT INTO voicemail_calls/.test(handler) && /decideMissedCallFollowUp\(await gatherMissedCallState\(user\.id, callSid\)/.test(handler) && /action: `missed_call_followup:\$\{kind\}`/.test(handler) && /DELETE FROM voicemail_calls WHERE call_sid = \$1/.test(handler) && /Co left this voicemail/.test(handler));
+  check("1 both kinds claim the call once, run the old gate (once per call, none queued, none recent) and log it, and release the claim if the send fails", /INSERT INTO voicemail_calls/.test(handler) && /decideMissedCallFollowUp\(await gatherMissedCallState\(user\.id, callSid\)/.test(handler) && /action: `missed_call_followup:\$\{kind\}`/.test(handler) && /DELETE FROM voicemail_calls WHERE call_sid = \$1/.test(handler) && /Cue left this voicemail/.test(handler));
   check("1 the post-call route uses it, and never the member's latest call_sid", /handleMissedVoiceCall\(u\[0\], callSid, kind, conversationId\)/.test(coSrc) && /vars\.system__call_sid \?\? `el:\$\{conversationId\}`/.test(coSrc) && !/u\[0\]\?\.call_sid/.test(coSrc) && /direction: o\.direction,/.test(readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")));
   // 2. Failed registration frees the call.
   check("2 a call that can't register resets its live status (both paths, scoped to the call's sid)", (coSrc.match(/await releaseFailedCall\(userId,/g) ?? []).length === 2 && /call_status = 'failed'[^`]*call_sid = \$2/.test(coSrc));

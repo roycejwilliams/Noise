@@ -39,14 +39,14 @@ export function aheadLine(a: Ahead, coverage: SearchCoverage, zone: string | nul
     if (!goal) { withheld++; continue; }
     const when = localStamp(t.nextCheckAt, zone);
     if (t.kind === "followup") parts.push(`a check-in with them, "${goal.slice(0, 140)}", on ${when}`);
-    else if (t.kind === "research_brief") parts.push(`research brief #${t.id} "${goal.slice(0, 140)}", next due on Co's side around ${when}`);
-    else if (t.promised) parts.push(`task #${t.id} "${goal.slice(0, 140)}", which Co committed to them, due around ${when}${t.deadline ? `; their deadline ${t.deadline}` : ""}`);
-    else parts.push(`task #${t.id} "${goal.slice(0, 140)}", next due on Co's side around ${when}${t.deadline ? `; their deadline ${t.deadline}` : ""}`);
+    else if (t.kind === "research_brief") parts.push(`research brief #${t.id} "${goal.slice(0, 140)}", next due on Cue's side around ${when}`);
+    else if (t.promised) parts.push(`task #${t.id} "${goal.slice(0, 140)}", which Cue committed to them, due around ${when}${t.deadline ? `; their deadline ${t.deadline}` : ""}`);
+    else parts.push(`task #${t.id} "${goal.slice(0, 140)}", next due on Cue's side around ${when}${t.deadline ? `; their deadline ${t.deadline}` : ""}`);
   }
-  if (withheld) parts.push(`${withheld} more scheduled item${withheld === 1 ? "" : "s"} from Co (details not shown here)`);
+  if (withheld) parts.push(`${withheld} more scheduled item${withheld === 1 ? "" : "s"} from Cue (details not shown here)`);
   const searching = coverage.asks.length + coverage.goals.length + (coverage.hidden ?? 0);
-  if (searching) parts.push(`Co's daily search, every morning from 9, for ${searching} thing${searching === 1 ? "" : "s"} they want (listed under what's running)`);
+  if (searching) parts.push(`Cue's daily search, every morning from 9, for ${searching} thing${searching === 1 ? "" : "s"} they want (listed under what's running)`);
   if (a.queuedFinds) parts.push(`${a.queuedFinds} find${a.queuedFinds === 1 ? "" : "s"} already queued to go to them, each as its own text (don't describe one before it arrives)`);
-  if (!parts.length) return "What's ahead for them from Co: nothing is scheduled (no check-in, follow-up, task or daily search). If they ask what's coming up, say what they've told you is ahead for them, if anything, and that nothing is set on your side.";
-  return `What's ahead for them from Co, as scheduled now: ${parts.join("; ")}. When they ask what's coming up, what's ahead this week or what to look forward to, answer from this and from their own plans; never say nothing is planned or confirmed while this lists something, and only promise to reach them at a time listed as a check-in or a commitment.`;
+  if (!parts.length) return "What's ahead for them from Cue: nothing is scheduled (no check-in, follow-up, task or daily search). If they ask what's coming up, say what they've told you is ahead for them, if anything, and that nothing is set on your side.";
+  return `What's ahead for them from Cue, as scheduled now: ${parts.join("; ")}. When they ask what's coming up, what's ahead this week or what to look forward to, answer from this and from their own plans; never say nothing is planned or confirmed while this lists something, and only promise to reach them at a time listed as a check-in or a commitment.`;
 }

@@ -24,7 +24,7 @@ export const tiers: Case[] = [
     replaced: ["Luma calendar + discover: fixtures"],
     run: async () => {
       await member("A");
-      feeds([{ id: "evt-own-t", name: "Co Founders Supper", start: localDay(1) }], [{ id: "pub-t", name: "Founder Dinner: Climate Builders", start: localDay(2) }]);
+      feeds([{ id: "evt-own-t", name: "Cue Founders Supper", start: localDay(1) }], [{ id: "pub-t", name: "Founder Dinner: Climate Builders", start: localDay(2) }]);
       const { eventCandidates } = await import("../../src/services/tieredRecommendation.js");
       const r = await eventCandidates("founder dinner", "San Francisco", { when: "next 7 days", userId: ID.A, timezone: "America/Los_Angeles", limit: 8 });
       const t1 = r.candidates.find((c: any) => c.match.tier === 1)?.match as any, t2 = r.candidates.find((c: any) => c.match.tier === 2)?.match as any;
@@ -45,13 +45,13 @@ export const tiers: Case[] = [
     replaced: ["Luma calendar + discover: fixtures"],
     run: async () => {
       await member("A");
-      feeds([{ id: "evt-dup", name: "Co Founders Supper", start: localDay(1) }], [{ id: "evt-dup", name: "Co Founders Supper", start: localDay(1) }, { id: "pub-look", name: "Co Founders Supper", start: localDay(1) }]);
+      feeds([{ id: "evt-dup", name: "Cue Founders Supper", start: localDay(1) }], [{ id: "evt-dup", name: "Cue Founders Supper", start: localDay(1) }, { id: "pub-look", name: "Cue Founders Supper", start: localDay(1) }]);
       const { eventCandidates } = await import("../../src/services/tieredRecommendation.js");
       const r = await eventCandidates("founders supper", "San Francisco", { when: "next 7 days", userId: ID.A, timezone: "America/Los_Angeles", limit: 8 });
       const ids = r.candidates.map(idOf);
       return {
         checks: [
-          ck("the shared id appears once, as Co's own event", ids.filter((x: string) => x === "evt-dup").length === 1 && r.candidates.find((c: any) => idOf(c) === "evt-dup")?.match.tier === 1, r.candidates.map((c: any) => [idOf(c), c.match.tier])),
+          ck("the shared id appears once, as Cue's own event", ids.filter((x: string) => x === "evt-dup").length === 1 && r.candidates.find((c: any) => idOf(c) === "evt-dup")?.match.tier === 1, r.candidates.map((c: any) => [idOf(c), c.match.tier])),
           ck("a lookalike with a different id stays its own event", ids.includes("pub-look"), ids),
         ],
         observed: { turnedAway: r.turnedAway },
@@ -63,7 +63,7 @@ export const tiers: Case[] = [
     replaced: ["Luma feeds: fixtures; web search live; page reads blocked"],
     run: async () => {
       await member("A", { profile: { goals: ["meet other climate founders"] } });
-      feeds([{ id: "evt-knit", name: "Co Knitting Circle", start: localDay(1) }], [{ id: "pub-climate", name: "Climate Founders Dinner", start: localDay(2) }]);
+      feeds([{ id: "evt-knit", name: "Cue Knitting Circle", start: localDay(1) }], [{ id: "pub-climate", name: "Climate Founders Dinner", start: localDay(2) }]);
       const G = await import("../../src/harness/replyGrounding.js");
       const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");
       const { LOOP_GUIDE } = await import("../../src/agent/loop.js");
@@ -74,8 +74,8 @@ export const tiers: Case[] = [
       const text = String(r.replyText ?? "");
       return {
         checks: [
-          ck("the fitting public dinner is offered over Co's own off-topic event", /Climate Founders Dinner/i.test(text) && !/Knitting/i.test(text), text),
-          ck("no claim of exclusivity it can't back", !/exclusive|invite-only|members only/i.test(text) || /Co/i.test(text), text),
+          ck("the fitting public dinner is offered over Cue's own off-topic event", /Climate Founders Dinner/i.test(text) && !/Knitting/i.test(text), text),
+          ck("no claim of exclusivity it can't back", !/exclusive|invite-only|members only/i.test(text) || /Cue/i.test(text), text),
         ],
         texts: { reply: text },
         observed: { tools: r.toolsCalled, receipts: facts.facts.filter((f: any) => f.kind === "did_this_turn").map((f: any) => f.text) },
@@ -87,7 +87,7 @@ export const tiers: Case[] = [
     run: async () => {
       await member("A");
       const R = await import("../../src/services/recommendationOutcome.js");
-      await R.scheduleOutcomeFollowUp(ID.A, "dinners", { tier: 1, kind: "co_event", name: "Co Supper", event_api_id: "e1", event_date: "2026-10-10" } as any);
+      await R.scheduleOutcomeFollowUp(ID.A, "dinners", { tier: 1, kind: "co_event", name: "Cue Supper", event_api_id: "e1", event_date: "2026-10-10" } as any);
       await R.scheduleOutcomeFollowUp(ID.A, "dinners", { tier: 2, kind: "public_event", name: "Public Dinner", event_api_id: "e2", event_date: "2026-10-12", url: "https://lu.ma/e2" } as any);
       await R.scheduleOutcomeFollowUp(ID.A, "fellowships", { tier: 3, kind: "opportunity", name: "Demo Week", url: "https://x.invalid", statedDates: { start: "2026-10-14", end: "2026-10-16" } } as any);
       await R.scheduleOutcomeFollowUp(ID.A, "fellowships", { tier: 3, kind: "opportunity", name: "Open Fellowship", url: "https://y.invalid" } as any);
@@ -99,7 +99,7 @@ export const tiers: Case[] = [
       const nowMs = (await rows(`SELECT NOW() AS n`))[0].n;
       return {
         checks: [
-          ck("Tier 1: the day after the event, 11:00", iso(at("Co Supper"))?.startsWith("2026-10-11T"), at("Co Supper")),
+          ck("Tier 1: the day after the event, 11:00", iso(at("Cue Supper"))?.startsWith("2026-10-11T"), at("Cue Supper")),
           ck("Tier 2: the day after the event", iso(at("Public Dinner"))?.startsWith("2026-10-13T"), at("Public Dinner")),
           ck("Tier 3 with stated dates: the day after the last day", iso(at("Demo Week"))?.startsWith("2026-10-17T"), at("Demo Week")),
           ck("undated Tier 3: 5 days out", !!at("Open Fellowship") && Math.round((new Date(at("Open Fellowship").send_at).getTime() - new Date(nowMs).getTime()) / 86_400_000) === 5, at("Open Fellowship")),

@@ -87,11 +87,11 @@ const haiku: Judge = async (prompt) =>
 export function afterLinkPrompt(theirMessage: string, linkText: string, draft: string): string {
   return `A member texted: """${theirMessage.slice(0, 2000)}"""
 
-Co already sent them this, with a link to what it made: """${linkText.slice(0, 600)}"""
+Cue already sent them this, with a link to what it made: """${linkText.slice(0, 600)}"""
 
-Co now wants to send a second text: """${draft.slice(0, 1200)}"""
+Cue now wants to send a second text: """${draft.slice(0, 1200)}"""
 
-Does the second text answer a question they asked, or respond to something they said, beyond the request to make or change it, and say something the first text didn't already say? Answering a question about how to use, send or present it counts. Describing what Co made (what's in it, how it looks, that it's done or ready) does not count.
+Does the second text answer a question they asked, or respond to something they said, beyond the request to make or change it, and say something the first text didn't already say? Answering a question about how to use, send or present it counts. Describing what Cue made (what's in it, how it looks, that it's done or ready) does not count.
 
 Return ONLY JSON: {"answersSomethingElse": true or false}`;
 }

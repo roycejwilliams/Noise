@@ -473,16 +473,16 @@ export function sideLinePrompt(eventName: string, reader: ValueSide, other: Othe
   const mine = [
     ...reader.ownAsks.map((a) => `- ${a.type === "offering" ? "can offer" : "looking for"}: "${a.text}"`),
     ...reader.goals.map((g) => `- goal: "${g}"`),
-    ...reader.pastOutcomes.map((o) => `- an earlier intro Co made for them: ${o}`),
+    ...reader.pastOutcomes.map((o) => `- an earlier intro Cue made for them: ${o}`),
   ];
-  return `Co is a friend to every member of a private club, and only introduces two people when a friend who knows both of them would make the introduction. At "${eventName}", Co is considering pointing ${reader.firstName} toward ${other.firstName}.
+  return `Cue is a friend to every member of a private club, and only introduces two people when a friend who knows both of them would make the introduction. At "${eventName}", Cue is considering pointing ${reader.firstName} toward ${other.firstName}.
 
-What ${reader.firstName} has told Co (only ${reader.firstName} will read this line):
+What ${reader.firstName} has told Cue (only ${reader.firstName} will read this line):
 ${mine.length ? mine.join("\n") : "- (nothing on file)"}
 
-All Co may say about ${other.firstName}, what ${other.firstName} said Co may tell people they meet: ${other.shared.map((t, i) => `${other.kinds?.[i] === "offering" ? "can offer" : "looking for"} "${t}"`).join("; ")}
+All Cue may say about ${other.firstName}, what ${other.firstName} said Cue may tell people they meet: ${other.shared.map((t, i) => `${other.kinds?.[i] === "offering" ? "can offer" : "looking for"} "${t}"`).join("; ")}
 
-Write one sentence to ${reader.firstName}: the concrete reason meeting ${other.firstName} is worth it for ${reader.firstName}, resting on what ${other.firstName} shared, in close to their own words. Say nothing else about ${other.firstName}. Speak as Co straight to them ("you", and "I" for Co, never "Co thinks"): plain, warm, composed, the way a friend who knows both would put it. No em dashes, no exclamation points, no titles or labels for anyone.
+Write one sentence to ${reader.firstName}: the concrete reason meeting ${other.firstName} is worth it for ${reader.firstName}, resting on what ${other.firstName} shared, in close to their own words. Say nothing else about ${other.firstName}. Speak as Cue straight to them ("you", and "I" for Cue, never "Cue thinks"): plain, warm, composed, the way a friend who knows both would put it. No em dashes, no exclamation points, no titles or labels for anyone.
 Then judge it honestly: would a friend who knows ${reader.firstName} make this introduction for ${reader.firstName}'s sake? A friend makes it when what ${other.firstName} shared plainly meets something ${reader.firstName} needs or offers, even if it doesn't spell out every detail ${reader.firstName} cares about (a style, a place, a timeline, a title): what ${other.firstName} shared is a few words on purpose, and the two of them can sort out the details once they meet. "strong" for a specific reason ${reader.firstName} gets value, a direct need-and-offer fit included. "weak" when the reason is generic (similar interests, both like food, both in tech, good to know, would get along), when nothing ${other.firstName} shared bears on what ${reader.firstName} wants or offers, or when ${other.firstName}'s words openly rule it out. Sharing a general interest (both into food, tech, running, meeting people) is generic, never a need-and-offer fit, unless ${other.firstName} can give ${reader.firstName} something specific. A missing detail is not a mismatch.
 Return ONLY JSON: {"line": "...", "verdict": "strong" or "weak", "why": "a few words"}`;
 }
@@ -563,7 +563,7 @@ export function checkNoPrivateQuote(text: string, privateTexts: string[], shared
 
 // Pure: the facts the lines must hold to. The verdict is Co's; these are code's. allow: see checkNoPrivateQuote.
 export function checkValueLines(j: ValueJudgment | null, x: ValueSide, y: ValueSide, sensitive: RegExp[] = [], allow: string[] = []): { ok: boolean; checks: GateCheck[] } {
-  if (!j) return { ok: false, checks: [{ name: "value_judgment", pass: false, reason: "neither member shared anything Co may say" }] };
+  if (!j) return { ok: false, checks: [{ name: "value_judgment", pass: false, reason: "neither member shared anything Cue may say" }] };
   const checks: GateCheck[] = [];
   checks.push(j.verdict === "strong" ? { name: "friend_would_intro", pass: true } : { name: "friend_would_intro", pass: false, reason: `weak: ${j.why || "no reason given"}` });
   for (const [line, reader, other, label, judged] of [

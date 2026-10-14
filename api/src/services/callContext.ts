@@ -102,7 +102,7 @@ export function callFitLines(k: Pick<MemberKnowledge, "preferences" | "limits" |
     avoid.length ? `Never suggest these kinds of things: they asked you to stop (${avoid.map((a) => `"${a}"`).join(", ")}). Judge by what a thing mainly is. If they bring one up themselves, they're open to it again for that.` : null,
     availability ? `When they're free, in their words: "${availability}" (${isLimit(availability) ? "a limit: don't suggest things outside it" : "a leaning, not a limit"}).` : null,
     said.length ? `What they've told you that still holds (with when they said it):\n${said.map((l) => `- ${l}`).join("\n")}` : null,
-    read.length ? `Co's own reads of them (guesses, not things they told you: never say they said these):\n${read.map((l) => `- ${l}`).join("\n")}` : null,
+    read.length ? `Cue's own reads of them (guesses, not things they told you: never say they said these):\n${read.map((l) => `- ${l}`).join("\n")}` : null,
   ].filter((x): x is string => !!x);
 }
 // The recent texts (20) and their own words of the last 48 hours (25) both come from one exchange read.
@@ -218,7 +218,7 @@ function profileLines(p: ContextParts, keep: (text: string) => boolean = () => t
     // Their arc: goals they have closed. A lens for the call, not something to recite.
     arcLine(profile?.intent),
     wants.length ? `Wants: ${wants.slice(0, 2).join(", ")}` : null,
-    p.recommendation ? `Most recent thing Co suggested: ${p.recommendation}` : null,
+    p.recommendation ? `Most recent thing Cue suggested: ${p.recommendation}` : null,
   ].filter((l) => l !== `Blockers: `);
 }
 
@@ -257,7 +257,7 @@ const NOT_WHAT = new Set(["san", "francisco", "sf", "bay", "area", "oakland", "b
 const stems = (s: string) => new Set([...meaningWords(s)].map(stem).filter((w) => !NOT_WHAT.has(w)));
 // A line about Co's own work (what Co owes, said it would send, or sent), not the member's own life: only these are ever removed
 // as "they have it" (review of #110: "their pitch deck for Thursday" and "a plan for their mom's birthday" were removed).
-const ABOUT_CO_WORK = /\b(?:co|the assistant)\b[^.]{0,40}\b(?:said|says|sent|send|will|would|'ll|is putting|was putting|promised|drafted|drafting|finished|ready)\b|\b(?:promised on the call|keep your word|will be (?:sent|delivered|texted)|to be sent|sent to (?:their|his|her|royce's|the member's) texts?|doc(?:ument)? is ready|once ready)\b/i;
+const ABOUT_CO_WORK = /\b(?:co|cue|the assistant)\b[^.]{0,40}\b(?:said|says|sent|send|will|would|'ll|is putting|was putting|promised|drafted|drafting|finished|ready)\b|\b(?:promised on the call|keep your word|will be (?:sent|delivered|texted)|to be sent|sent to (?:their|his|her|royce's|the member's) texts?|doc(?:ument)? is ready|once ready)\b/i;
 // A promise that names no thing of its own ("text the drafted planning document", "plan will be delivered once ready"): another
 // wording of the call's deliverable. One that names something ("draft the investor update outline") is its own item.
 const GENERIC_DELIVERABLE_WORDS = new Set(["plan", "doc", "document", "pdf", "brief", "draft", "outline", "memo", "deck", "sheet", "write", "writeup", "one", "pager", "deliver", "delivere", "ready", "once", "promis", "call", "will", "the", "and", "that", "this", "your", "you", "them", "it"]);
@@ -563,7 +563,7 @@ const CALL_CONTEXT_WAIT_MS = 3000;
 // (holds, the unanswered pause, muted kinds, how they've been). The delivery-shape rule is for a delivery's text, not a call.
 export function callRulesBlock(rules: Pick<MemberRules, "quietHours" | "restraint">): string | null {
   const lines = [rules.quietHours, rules.restraint].map((l) => l.trim()).filter(Boolean);
-  return lines.length ? `What Co won't start on its own for them right now (what you say you'll send after the call lands inside these; what they ask for still goes):\n${lines.map((l) => `- ${l}`).join("\n")}` : null;
+  return lines.length ? `What Cue won't start on its own for them right now (what you say you'll send after the call lands inside these; what they ask for still goes):\n${lines.map((l) => `- ${l}`).join("\n")}` : null;
 }
 
 // Pure: what Co carries and has delivered (the layer's one carrying builder and delivered merge), as the lines collapseCarried
@@ -731,7 +731,7 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   const facts = [
     ...sentLines,
     ...ledger,
-    ...k.asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
+    ...k.asks.slice(0, 8).map((a) => `They've asked Cue for (their words): "${a.text}"`),
   ].join("\n");
   // Impressions: what Co's models wrote about them (never proof of a specific fact).
   const impressions = [who, lastCalls, recap, threads.map((t) => t.text).join("\n"), p.emotionalLine ?? ""].filter(Boolean).join("\n\n");

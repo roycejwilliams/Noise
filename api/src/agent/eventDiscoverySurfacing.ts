@@ -37,7 +37,7 @@ export function describeAsk(askText: string, fromProfile: boolean): string {
 
 // A goal find said as if they'd asked for it (Royce, 2026-10-09: goal finds frame as "Co noticed this for you"). Only a claim that
 // they asked or were looking: "you mentioned wanting X" ties it to their goal truthfully and passes (review of #128).
-export const CLAIMS_THEY_ASKED = { pattern: /\byou(?:'d| had)? asked\b|\byou (?:wanted|asked) me to\b|\b(?:like|as) you (?:asked|requested|wanted)\b|\bper your (?:ask|request)\b|\byou(?:'re| are|'ve been| have been| were) (?:looking|searching|hunting) for\b|\byou were looking\b|\bthe (?:\w+ )?you asked (?:me )?(?:about|for)\b/i, reason: "says they asked for it or were looking for it, and they didn't: Co noticed it for them" };
+export const CLAIMS_THEY_ASKED = { pattern: /\byou(?:'d| had)? asked\b|\byou (?:wanted|asked) me to\b|\b(?:like|as) you (?:asked|requested|wanted)\b|\bper your (?:ask|request)\b|\byou(?:'re| are|'ve been| have been| were) (?:looking|searching|hunting) for\b|\byou were looking\b|\bthe (?:\w+ )?you asked (?:me )?(?:about|for)\b/i, reason: "says they asked for it or were looking for it, and they didn't: Cue noticed it for them" };
 
 // What it is, from its form (services/findForm.ts): "an event on Saturday", "an opening, applications close Friday", never the
 // generic "a real opportunity" (Royce, 2026-10-09).
@@ -63,7 +63,7 @@ export const AUDIENCE_RULE = `If who_it_is_for is given, or the event's details 
 // No "thinking about you" opener and no invented bridge to the rest of their life.
 export const OFFER_HONESTY = `Never say you were thinking about them or about this. Connect it to something else in their life only when the event's own page says it is about that; an event is never "a way into" a community unless its page says so.`;
 // Co as the subject, with them or this as the object: the member's own "thinking about getting outside" stays.
-export const OFFER_FORBIDDEN = { pattern: /\b(?:thinking|thought) (?:about|of) (?:you|it|that|this)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Co was doing, and a line that fits anyone" };
+export const OFFER_FORBIDDEN = { pattern: /\b(?:thinking|thought) (?:about|of) (?:you|it|that|this)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Cue was doing, and a line that fits anyone" };
 // Implying they are, or aren't, in the group the event is for.
 export const IMPLIES_IDENTITY = { pattern: /\b(?:women|girls|ladies|men|guys|moms|dads|group)\b[^.]{0,50}\b(?:perfect|ideal|made|built|just) for you\b|\bwhich you are\b|\bsince you(?:'re| are) a\b|\bas a (?:woman|man|girl|guy|mom|dad)\b/i, reason: "implies who they are" };
 

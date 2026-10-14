@@ -47,7 +47,7 @@ export function candidateLifeState(r: { status: string; skip_reason?: string | n
   if (r.status === "expired") return "expired";
   const why = String(r.skip_reason ?? "");
   if (isFailedAttempt(why)) return "live";
-  if (/^Co's daily pick: reject/i.test(why)) return "rejected";
+  if (/^(?:Co|Cue)'s daily pick: reject/i.test(why)) return "rejected";
   if (/^stale/i.test(why)) return "expired";
   if (/^sent in a reply/i.test(why)) return "fulfilled";
   return "rejected";
@@ -358,7 +358,7 @@ export async function exitRejectedFinds(userId: string, rejected: { key: string;
   if (!rejected.length) return 0;
   const out = new Set<string>();
   for (const r of rejected) {
-    const ok = await writeExitFact({ userId, kind: "find", itemKey: r.key, label: r.name, state: "rejected", reason: `Co's daily pick: ${r.why || "not for them now"}`, scope: `this find${r.askText ? `, for: ${r.askText.slice(0, 100)}` : ""}; nothing broader about what they like` }, deps);
+    const ok = await writeExitFact({ userId, kind: "find", itemKey: r.key, label: r.name, state: "rejected", reason: `Cue's daily pick: ${r.why || "not for them now"}`, scope: `this find${r.askText ? `, for: ${r.askText.slice(0, 100)}` : ""}; nothing broader about what they like` }, deps);
     if (ok) out.add(r.key);
   }
   if (!out.size) return 0;
@@ -398,7 +398,7 @@ export async function exitAvoidedFinds(userId: string, kind: string, deps: Avoid
   // Everything waiting is judged, AVOID_JUDGE_MAX to a read.
   const kinds: (string | null)[] = [];
   for (let i = 0; i < judged.length; i += AVOID_JUDGE_MAX) kinds.push(...(await deps.judge(judged.slice(i, i + AVOID_JUDGE_MAX).map((w) => judgedOf(w.match)), [kind])));
-  const reason = `they asked Co to stop suggesting ${kind}`;
+  const reason = `they asked Cue to stop suggesting ${kind}`;
   const out = new Set<string>();
   const written = new Set<string>();
   let queued = 0;

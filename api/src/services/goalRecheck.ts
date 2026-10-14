@@ -62,19 +62,19 @@ export type RecheckJudge = (prompt: string) => Promise<string>;
 export const RECHECK_JUDGE = { timeoutMs: 8000, maxOutputTokens: 1500 } as const;
 // kind "ask": the same read for a find ask's retirement question (services/askRetire.ts): whether they still want Co looking for it.
 export function recheckJudgePrompt(goal: string, sent: string, kind: "goal" | "ask" = "goal"): string {
-  if (kind === "ask") return `A member of a private club asked Co to look for this: "${goal.slice(0, 300)}".
+  if (kind === "ask") return `A member of a private club asked Cue to look for this: "${goal.slice(0, 300)}".
 
-Co just sent them this text:
+Cue just sent them this text:
 """
 ${sent.slice(0, 1500)}
 """
 
-Did this text ask them whether they still want Co looking for it (so they can say yes or let it go)? It does NOT count when the question is an offer (to send, book or find something specific), when it asks about a different topic or plan, or when the thing is only mentioned in passing.
+Did this text ask them whether they still want Cue looking for it (so they can say yes or let it go)? It does NOT count when the question is an offer (to send, book or find something specific), when it asks about a different topic or plan, or when the thing is only mentioned in passing.
 
 Answer only with JSON: {"asked": true or false, "reason": "a few words"}`;
-  return `A member of a private club told Co this goal: "${goal.slice(0, 300)}".
+  return `A member of a private club told Cue this goal: "${goal.slice(0, 300)}".
 
-Co just sent them this text:
+Cue just sent them this text:
 """
 ${sent.slice(0, 1500)}
 """

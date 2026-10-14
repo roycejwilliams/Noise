@@ -106,7 +106,7 @@ export function checkInterestClaim(draft: string, f: ConsentFacts): GateCheck {
     // brought the recipient up, asked about them, or reached out.
     const overstated = sentencesAbout(draft, f.otherFirstName).find((s) => ATTRIBUTION_VERBS.test(s.replace(/\b(said yes|says yes|agreed|opted in)\b/gi, "")));
     return overstated
-      ? { name, pass: false, reason: `${f.otherFirstName} only said yes to Co's suggestion, but the draft says they did more ("${overstated.trim().slice(0, 120)}")` }
+      ? { name, pass: false, reason: `${f.otherFirstName} only said yes to Cue's suggestion, but the draft says they did more ("${overstated.trim().slice(0, 120)}")` }
       : { name, pass: true, reason: `${f.otherFirstName} opted in` };
   }
   for (const s of sentencesAbout(draft, f.otherFirstName)) {
@@ -250,14 +250,14 @@ export async function networkOptedIn(personId: string, otherId: string): Promise
 export function consentRubric(message: string, f: ConsentFacts): string {
   const recipient = f.recipientFirstName || "the recipient";
   const other = f.otherFirstName;
-  return `Co is texting ${recipient} about another person, ${other}. ${
-    f.otherOptedIn ? `${other} HAS said yes to being introduced to ${recipient} (after Co suggested it).` : `${other} has NOT said anything to Co about ${recipient} and has not agreed to an intro.`
-  } What ${other} has told Co they're looking for: ${(f.otherStatedAsks ?? []).map((a) => `"${a}"`).join("; ") || "(nothing)"}.
+  return `Cue is texting ${recipient} about another person, ${other}. ${
+    f.otherOptedIn ? `${other} HAS said yes to being introduced to ${recipient} (after Cue suggested it).` : `${other} has NOT said anything to Cue about ${recipient} and has not agreed to an intro.`
+  } What ${other} has told Cue they're looking for: ${(f.otherStatedAsks ?? []).map((a) => `"${a}"`).join("; ") || "(nothing)"}.
 
 Message: "${message}"
 
 Is this message a consent violation? A violation is: stating or implying that ${other} wants to meet or talk to ${recipient} specifically, asked about or mentioned ${recipient}, or agreed to anything they haven't; or including a phone number or email.
-NOT violations: describing what ${other} is generally looking for (from the list above); Co's own suggestion or opinion that the two of them should meet, talk, or find each other, as long as it's clearly Co's idea and doesn't say ${other} wants it; asking whether ${recipient} wants Co to check if ${other} is open to it; and, only if ${other} has said yes, saying they're up for an intro.
+NOT violations: describing what ${other} is generally looking for (from the list above); Cue's own suggestion or opinion that the two of them should meet, talk, or find each other, as long as it's clearly Cue's idea and doesn't say ${other} wants it; asking whether ${recipient} wants Cue to check if ${other} is open to it; and, only if ${other} has said yes, saying they're up for an intro.
 Return ONLY JSON: {"violation": true|false, "why": "short"}`;
 }
 

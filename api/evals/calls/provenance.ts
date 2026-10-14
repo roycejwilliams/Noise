@@ -28,9 +28,9 @@ check("a row with no date at all is unconfirmed, never current", F.stampOf({}, n
 check("a stamped line carries the text and the stamp", F.stampedLine("figuring out how to get their first paying customer", paying, now).startsWith("figuring out how to get their first paying customer (they said Sep 28"));
 
 // ---- every reader inherits it
-const thread: any = { id: "1", text: "figuring out how to get their first paying customer/check for Co", openedQuote: "How should I think about getting my first check with Co?", openedAt: "2026-09-28T07:00:00.000Z", status: "open", feeling: null, dueDate: null, nextStep: "check_in", kind: "thread", closedQuote: null, lastTouchedAt: "2026-09-28T07:00:00.000Z" };
+const thread: any = { id: "1", text: "figuring out how to get their first paying customer/check for Cue", openedQuote: "How should I think about getting my first check with Cue?", openedAt: "2026-09-28T07:00:00.000Z", status: "open", feeling: null, dueDate: null, nextStep: "check_in", kind: "thread", closedQuote: null, lastTouchedAt: "2026-09-28T07:00:00.000Z" };
 const rendered = T.renderThreads([thread], now);
-check("text side (recaps, drafts, reflection): the thread is rendered with its date and OLD", /they said Sep 28/.test(rendered) && /OLD/.test(rendered) && /first check with Co/.test(rendered), rendered);
+check("text side (recaps, drafts, reflection): the thread is rendered with its date and OLD", /they said Sep 28/.test(rendered) && /OLD/.test(rendered) && /first check with Cue/.test(rendered), rendered);
 const summary = CC.assembleCallSummary({ lessons: [], sentLines: [], base: "", threads: [{ text: "x", line: "figuring out how to get their first paying customer (they said Sep 28, 8 days ago; OLD, so ask whether it is still true and never state it as current)" }] });
 check("call side: the briefing prints the stamped line, not the bare text", /first paying customer \(they said Sep 28, 8 days ago; OLD/.test(summary), summary);
 const tc = src("services/turnContext.ts");
@@ -40,7 +40,7 @@ check("the recap threads reader (personModel) goes through renderThreads", /rend
 
 // ---- the behaviour on pushback is in the call prompt
 const g = E.CALL_GUIDE + "\n" + E.promptForElevenLabs(fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8"));
-check("the prompt tells Co to read the stamp: an OLD line is a question, never a fact", /marked OLD is a question, not a fact/.test(g) && /OLD when it has gone stale/.test(E.CALL_GUIDE));
+check("the prompt tells Cue to read the stamp: an OLD line is a question, never a fact", /marked OLD is a question, not a fact/.test(g) && /OLD when it has gone stale/.test(E.CALL_GUIDE));
 check("when a member challenges a claim: check its stamp, drop it in ONE sentence, move on", /push back on something you said about them/.test(g) && /drop it in one short sentence/.test(g) && /go back to what they are saying now/.test(g));
 check("and never apologize twice or say it got something wrong 'on my end'", /Never apologize twice, never say you got something wrong on your end/.test(g));
 const c = fs.readFileSync(new URL("./callEvals.ts", import.meta.url), "utf8");

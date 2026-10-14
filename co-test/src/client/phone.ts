@@ -152,7 +152,7 @@ async function initSession() {
       // opened by tapping the link on the device itself.
       const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
       const bodySeparator = isIOS ? "&" : "?";
-      const greeting = encodeURIComponent("Hi Co!");
+      const greeting = encodeURIComponent("Hi Cue!");
       messageCoButton.href = `sms:${textInNumber}${bodySeparator}body=${greeting}`;
     } else {
       messageCoButton.classList.add("hidden");

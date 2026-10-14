@@ -33,7 +33,7 @@ check("a single medium reading is an everyday complaint, not an episode", pickEp
 check("two medium readings together are an episode", pickEpisode([sig({ intensity: "medium", at: hoursBefore(3) }), sig({ intensity: "medium", at: hoursBefore(1) })], night, TZ) !== null);
 check("a low reading is never an episode", pickEpisode([sig({ intensity: "low" }), sig({ intensity: "low", at: hoursBefore(2) })], night, TZ) === null);
 check("a positive reading is not an episode", pickEpisode([sig({ valence: "positive" })], night, TZ) === null);
-check("frustration with Co is not their life", pickEpisode([sig({ target: "co" })], night, TZ) === null);
+check("frustration with Cue is not their life", pickEpisode([sig({ target: "co" })], night, TZ) === null);
 check("the voice frustration score alone is not an episode", pickEpisode([sig({ basis: "frustration_score" })], night, TZ) === null);
 check("older than the lookback is not an episode", pickEpisode([sig({ at: hoursBefore(HEAVY.lookbackHours + 1) })], night, TZ) === null);
 check("a good moment afterwards means it already passed", pickEpisode([sig({ at: hoursBefore(3) }), sig({ valence: "positive", intensity: "medium", at: hoursBefore(1) })], night, TZ) === null);
@@ -42,13 +42,13 @@ for (const w of ["I want to kill myself", "everyone is better off without me", "
   check(`self-harm is left to the conversation: ${w}`, pickEpisode([sig({ quote: w })], night, TZ) === null);
 }
 
-check("frustration about Co\'s calls is not their life", pickEpisode([sig({ about: "phone calls not connecting, wasted time", quote: "What\'s breaking?", emotion: "frustrated" })], night, TZ) === null);
-check("asking Co to take the lead is not a hard moment", pickEpisode([sig({ about: "needing someone to take ownership and execute", quote: "plan out the event and take lead" })], night, TZ) === null);
+check("frustration about Cue\'s calls is not their life", pickEpisode([sig({ about: "phone calls not connecting, wasted time", quote: "What\'s breaking?", emotion: "frustrated" })], night, TZ) === null);
+check("asking Cue to take the lead is not a hard moment", pickEpisode([sig({ about: "needing someone to take ownership and execute", quote: "plan out the event and take lead" })], night, TZ) === null);
 check("a real one about money still counts", pickEpisode([sig({ about: "lack of funding and bootstrapping constraints", quote: "we\'re unfunded" })], night, TZ) !== null);
 check("only one heavy check-in waits at a time", /pc\.target_key LIKE \$2 AND pc\.created_at > \$3/.test(read("src/services/heavyMoment.ts")));
 
 for (const w of ["my co-founder quit on me", "the biopsy results came back", "been job searching for six months with nothing", "got a call from the hospital while I was at work", "my cofounder said you never know"]) {
-  check(`a real hard moment is not mistaken for talk about Co: ${w}`, pickEpisode([sig({ about: w, quote: w })], night, TZ) !== null);
+  check(`a real hard moment is not mistaken for talk about Cue: ${w}`, pickEpisode([sig({ about: w, quote: w })], night, TZ) !== null);
 }
 for (const w of ["I wanna die", "I don’t want to wake up", "I can’t go on", "no point living", "I keep cutting myself", "thinking about killing myself"]) {
   check(`self-harm (wider, curly quotes): ${w}`, pickEpisode([sig({ quote: w })], night, TZ) === null);
@@ -115,12 +115,12 @@ check("a second check-in is held off for days after one is sent", HEAVY.quietDay
 check("it only reads that member's own readings", /WHERE user_id = \$1/.test(service) && !/memberSafe|other_person/.test(service));
 check("the drafting task quotes no example wording", !/"[A-Z][^"]{15,}"/.test(draft.slice(draft.indexOf("async function draftFromHeavy"), draft.indexOf("// Advice Co gave"))));
 check("the draft is forbidden from claiming it was thinking about them", /thinking\|thought\) \(\?:about\|of\)/.test(draft));
-check("yesterday is only when they told Co, never when the thing happens", /when_they_told_you/.test(draft) && /not when the thing itself happens/.test(draft));
-check("a draft about Co itself is skipped", /frustration with Co itself/.test(draft));
+check("yesterday is only when they told Cue, never when the thing happens", /when_they_told_you/.test(draft) && /not when the thing itself happens/.test(draft));
+check("a draft about Cue itself is skipped", /frustration with Cue itself/.test(draft));
 // In Co's shared core since 2026-10-08, so texts and calls both carry it.
 const { CO_LISTENING } = await import("../../src/services/coCore.js");
 const { promptForElevenLabs } = await import("../../src/services/elevenLabsCalls.js");
-check("the core tells Co never to announce a check-in it decides on alone, and a call carries it", /Never announce a check-in you decide to make on your own/.test(CO_LISTENING) && promptForElevenLabs(read("prompts/co-system-prompt.md")).includes(CO_LISTENING.split("\n").find((l) => /Never announce a check-in/.test(l))!.replace(/^- /, "")));
+check("the core tells Cue never to announce a check-in it decides on alone, and a call carries it", /Never announce a check-in you decide to make on your own/.test(CO_LISTENING) && promptForElevenLabs(read("prompts/co-system-prompt.md")).includes(CO_LISTENING.split("\n").find((l) => /Never announce a check-in/.test(l))!.replace(/^- /, "")));
 
 console.log(`next-day check-in rules: ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

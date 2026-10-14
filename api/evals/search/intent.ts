@@ -56,7 +56,7 @@ const TW = await import("../../src/services/taskWeb.js");
 check("GigSalad, Yelp and The Knot are known unreadable; Peerspace and The Bash read in a browser", ["gigsalad.com", "www.yelp.com", "theknot.com"].every(TW.cantCheck) && !["peerspace.com", "thebash.com", "giggster.com"].some(TW.cantCheck));
 check("a search naming an unreadable marketplace asks for the place's own site", /can't be opened to check, so for anything found there give the place's OWN website/.test(tw));
 check("a result with nothing on its page isn't a find", /nothing about it on its page/.test(src("agent/loopTools.ts")) && /read\.kept\.filter\(\(k\) => k\.facts\.length\)/.test(src("agent/loopTools.ts")));
-check("Co is told why listings on sites that block reading weren't used", /those sites block reading, so their listings can't be checked/.test(src("agent/loopTools.ts")));
+check("Cue is told why listings on sites that block reading weren't used", /those sites block reading, so their listings can't be checked/.test(src("agent/loopTools.ts")));
 
 // A real browser when a fetch is turned away (services/browserRead.ts).
 const B = await import("../../src/services/browserRead.js");

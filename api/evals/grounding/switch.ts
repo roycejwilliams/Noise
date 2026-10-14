@@ -16,7 +16,7 @@ const { askJevZdr } = await import("../../src/services/jevGateway.js");
 
 const replies: string[] = JSON.parse(readFileSync(process.argv[2], "utf8"));
 export const JEV_SWITCH_QUESTION =
-  "Does this text claim anything that could be false: something Co did, sent, saved or will do later; a time, date, place, price, number or link; what another person said, wants or did; what Co can or can't do; or a prediction about what will happen? No for pure feelings, questions, opinions, advice or small talk.";
+  "Does this text claim anything that could be false: something Cue did, sent, saved or will do later; a time, date, place, price, number or link; what another person said, wants or did; what Cue can or can't do; or a prediction about what will happen? No for pure feelings, questions, opinions, advice or small talk.";
 
 // Answer key, in parallel.
 const truth: boolean[] = new Array(replies.length);

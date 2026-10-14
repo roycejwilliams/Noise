@@ -61,10 +61,10 @@ const send = (id: string, extra: Record<string, unknown> = {}) => ({ id, verdict
 
 // ---------------------------------------------------------------- the rule
 {
-  const pool = [item("C1", "Co Supper Club", 1), item("C2", "Climate Founders Hike", 2), item("C3", "Founder Residency", 3)];
+  const pool = [item("C1", "Cue Supper Club", 1), item("C2", "Climate Founders Hike", 2), item("C3", "Founder Residency", 3)];
   const all = await run(base(pool), [send("C1"), rej("C2", "weak_fit"), rej("C3", "not_them", "not their scene")]);
   check("three tiers with one find each: all three go, whatever the wow bar said of two of them", sends(all) === "C1,C2,C3" && all.filter((j) => j.tierPick).length === 3, all);
-  check("a find the picker didn't send goes as the tier's pick, with the guard saying so", all.find((j) => j.id === "C2")!.reason === "tier_pick" && /the best of its tier this morning \(Co said weak_fit, not a reason to hold it back\)/.test(all.find((j) => j.id === "C2")!.guard ?? ""));
+  check("a find the picker didn't send goes as the tier's pick, with the guard saying so", all.find((j) => j.id === "C2")!.reason === "tier_pick" && /the best of its tier this morning \(Cue said weak_fit, not a reason to hold it back\)/.test(all.find((j) => j.id === "C2")!.guard ?? ""));
   const noTier3 = await run(base(pool.slice(0, 2)), [send("C1"), rej("C2", "weak_fit")]);
   check("tier 3 empty: tiers 1 and 2 still go", sends(noTier3) === "C1,C2");
   const two = await run(base([item("C1", "Founder Dinner East", 2, { kind: "discovery" }), item("C2", "Founder Dinner West", 2)]), [{ ...send("C1"), rank: 2 }, { ...send("C2"), rank: 1 }]);
@@ -80,7 +80,7 @@ const send = (id: string, extra: Record<string, unknown> = {}) => ({ id, verdict
 // ---------------------------------------------------------------- held back only for a real reason, then the next best goes
 {
   const pool = [item("C1", "Founders Supper Club", 2), item("C2", "Climate Founders Hike", 2)];
-  const known = await run(base(pool), [{ ...rej("C1", "already_known", "Co sent this exact supper club on Oct 13", { cites: ["S1"] }), rank: 1 }, { ...rej("C2", "weak_fit"), rank: 2 }]);
+  const known = await run(base(pool), [{ ...rej("C1", "already_known", "Cue sent this exact supper club on Oct 13", { cites: ["S1"] }), rank: 1 }, { ...rej("C2", "weak_fit"), rank: 2 }]);
   check("the tier's best held back for a real reason (already sent, cite names it): the next best goes", sends(known) === "C2" && known.find((j) => j.id === "C1")!.verdict === "reject" && heldBackFor(known.find((j) => j.id === "C1")!) !== null, known);
   const uncited = await run(base(pool), [{ ...rej("C1", "already_known", "they already have it"), rank: 1 }, { ...rej("C2", "weak_fit"), rank: 2 }]);
   check("an uncited already_known holds nothing back: the tier's best still goes", sends(uncited) === "C1", uncited);
@@ -89,7 +89,7 @@ const send = (id: string, extra: Record<string, unknown> = {}) => ({ id, verdict
   const lateYes = await run(base([item("C1", "Spring Cohort", 3, { details: "applications closed Oct 1" }), item("C2", "Winter Cohort", 3)]), [{ ...rej("C1", "too_late", "applications closed"), rank: 1 }, { ...rej("C2", "weak_fit"), rank: 2 }]);
   const lateNo = await run(base([item("C1", "Spring Cohort", 3, { details: "applications open to Nov 1" }), item("C2", "Winter Cohort", 3)]), [{ ...rej("C1", "too_late", "too far out"), rank: 1 }, { ...rej("C2", "weak_fit"), rank: 2 }]);
   check("too_late holds a find back only when the claim check confirms it from the find's own date and details", sends(lateYes) === "C2" && lateYes.find((j) => j.id === "C1")!.late === true && sends(lateNo) === "C1", { lateYes, lateNo });
-  const every = await run(base([item("C1", "Founders Supper Club", 2)]), [rej("C1", "already_known", "Co sent it Oct 13", { cites: ["S1"] })]);
+  const every = await run(base([item("C1", "Founders Supper Club", 2)]), [rej("C1", "already_known", "Cue sent it Oct 13", { cites: ["S1"] })]);
   check("a tier stays empty only when every find in it has a real reason against it", sends(every) === "");
   const failRead = await run(base([item("C1", "Big Climate Community", 3, { details: "our largest community, 400+ members" })]), [rej("C1", "ruled_out", "she said not giant mixers", { cites: ["A1"] })], stub({ fail: true }));
   // Royce, 2026-10-14: "A failed check buys a hold, never a send". Held for the morning (never exited), the tier sends nothing else here.
@@ -107,8 +107,8 @@ const send = (id: string, extra: Record<string, unknown> = {}) => ({ id, verdict
   check("as the picker actually judged it on 10-14 (weak_fit, no cite), it now goes", sends(rinaWeak) === "C1");
   const rinaOther = await run({ ...RINA, texts: [{ id: "T16", at: "Oct 12 09:21", from: "member", text: "I run product at a small climate startup" }] }, [rej("C1", "ruled_out", "not for her", { cites: ["T16"] })]);
   check("ruled_out citing words that don't rule it out holds nothing back", sends(rinaOther) === "C1");
-  const rinaCo = await run(RINA, [rej("C1", "ruled_out", "Co said so", { cites: ["S1"] })]);
-  check("ruled_out must cite their own words (an ask or a text of theirs); citing Co's send holds nothing back", sends(rinaCo) === "C1" && rinaCo[0].guard !== undefined);
+  const rinaCo = await run(RINA, [rej("C1", "ruled_out", "Cue said so", { cites: ["S1"] })]);
+  check("ruled_out must cite their own words (an ask or a text of theirs); citing Cue's send holds nothing back", sends(rinaCo) === "C1" && rinaCo[0].guard !== undefined);
   // Drake (10-14, renamed Marcus): a transactional law workshop; he's a criminal-law student attorney applying to firms. Nothing he
   // said rules it out, so it goes; a ruled_out citing his "applying to law firms" text is read as not ruling it out.
   const MARCUS = base([item("C1", "BCLT Transactional Law Skills Workshop with Freshfields", 3, { date: "2026-10-21", details: "a skills workshop for law students with Freshfields lawyers, Berkeley" })], { firstName: "Marcus", asks: [{ id: "A1", text: "seeking help drafting a pleading for dismissal for their client's case", since: "2026-10-12" }], texts: [{ id: "T15", at: "Oct 12 21:33", from: "member", text: "Job applications, I'm a third year law student applying to law firms. I also am a student attorney with a client who has a hearing on Friday in criminal court" }] });
@@ -119,7 +119,7 @@ const send = (id: string, extra: Record<string, unknown> = {}) => ({ id, verdict
 
 // ---------------------------------------------------------------- what the morning reads, and what stays as it was
 {
-  const pool = [item("C1", "Co Supper Club", 1), item("C2", "Climate Founders Hike", 2)];
+  const pool = [item("C1", "Cue Supper Club", 1), item("C2", "Climate Founders Hike", 2)];
   const hourly = await run({ ...base(pool), morning: false }, [send("C1"), rej("C2", "weak_fit")]);
   check("the hourly picker sends on the wow bar as before, no tier picks; its weak_fit waits in the backlog instead of exiting", sends(hourly) === "C1" && hourly.find((j) => j.id === "C2")!.reason === "fit_only" && !hourly.some((j) => j.tierPick));
   const p = selectPrompt(base(pool));
@@ -152,7 +152,7 @@ const send = (id: string, extra: Record<string, unknown> = {}) => ({ id, verdict
   const lateNo = await run(hourly, [rej("C1", "too_late", "too far out")]);
   check("hourly: an unconfirmed too_late waits too", lateNo[0].reason === "fit_only" && exits(lateNo) === "");
   const verified = await run(hourly, [
-    rej("C1", "already_known", "Co sent this exact supper club on Oct 13", { cites: ["S1"] }),
+    rej("C1", "already_known", "Cue sent this exact supper club on Oct 13", { cites: ["S1"] }),
     rej("C2", "too_late", "applications closed"),
     rej("C3", "ruled_out", "she said not giant mixers", { cites: ["A1"] }),
     send("C4"),

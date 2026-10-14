@@ -43,9 +43,9 @@ check("a PDF is known by its own bytes, not its name or type", F.isPdf(PDF) && !
   const again = await F.keepFile("u1", PDF, null, async () => { throw new Error("read twice"); });
   check("the same file again is the one on file (per member, by hash): not read or stored twice", again.ok && again.n === 3 && !again.isNew && !ran(/INSERT/) && log[0].p[0] === "u1");
   reset([[/COUNT\(\*\)::int AS n FROM member_files/, () => ({ rows: [{ n: 20 }] })]]);
-  check("past 20 files Co says so rather than keep more", (await F.keepFile("u1", PDF, null, async () => "t")).ok === false && !ran(/INSERT/));
+  check("past 20 files Cue says so rather than keep more", (await F.keepFile("u1", PDF, null, async () => "t")).ok === false && !ran(/INSERT/));
   reset([[/COUNT\(\*\)::int AS n FROM member_files/, () => ({ rows: [{ n: 0 }] })]]);
-  check("a file Co couldn't read isn't kept at all", (await F.keepFile("u1", PDF, null, async () => null)).ok === false && !ran(/INSERT/));
+  check("a file Cue couldn't read isn't kept at all", (await F.keepFile("u1", PDF, null, async () => null)).ok === false && !ran(/INSERT/));
 }
 {
   const sb = src("routes/sendblue.ts");
@@ -55,7 +55,7 @@ check("a PDF is known by its own bytes, not its name or type", F.isPdf(PDF) && !
   const IF = await import("../../src/services/inboundFile.js");
   check("intake: what's recorded of the turn is the file's number, never its name or a word of it", IF.fileRecordNote({ kind: "pdf", kept: { n: 4 } }, false) === "[sent a PDF, kept as their file #4]" && IF.fileRecordNote({ kind: "pptx", kept: { n: 5 } }, true) === "[also sent a PowerPoint deck, kept as their file #5]" && !/title|summary|text\b/.test(intake.replace(/resolvedContent/g, "")));
   const fact = IF.keptFileFact("pdf", { n: 7, isNew: true });
-  check("intake: Co is told only that it's kept and its number, and not to guess what it says", /their file #7/.test(fact) && /don't know what it says/.test(fact) && /keptFileFact\(fileKept\.kind, fileKept\)/.test(sb) && !/fileText/.test(sb.slice(sb.indexOf("if (fileKept) {"), sb.indexOf("if (fileKept) {") + 400)));
+  check("intake: Cue is told only that it's kept and its number, and not to guess what it says", /their file #7/.test(fact) && /don't know what it says/.test(fact) && /keptFileFact\(fileKept\.kind, fileKept\)/.test(sb) && !/fileText/.test(sb.slice(sb.indexOf("if (fileKept) {"), sb.indexOf("if (fileKept) {") + 400)));
   check("never from a linked account: nothing reads Google Drive or Gmail into a member's files", !/googleapis|accessTokenFor|drive/i.test(src("services/memberFiles.ts").replace(/\/\/.*$/gm, "")));
 }
 
@@ -71,7 +71,7 @@ check("a PDF is known by its own bytes, not its name or type", F.isPdf(PDF) && !
   check("only memberFiles.ts (and the migration) touches the table: no other reader exists to leak it", touching.join() === "db/migrations.ts,services/memberFiles.ts", touching);
   const lt = src("agent/loopTools.ts");
   const body = lt.slice(lt.indexOf("writeFromFile: tool("), lt.indexOf("deleteMyFiles: tool("));
-  check("the tool reads only this member's file (ctx.userId), never an id Co supplies", /F\.fileText\(ctx\.userId, input\.file \?\? null\)/.test(body) && !/userId: z\./.test(body));
+  check("the tool reads only this member's file (ctx.userId), never an id Cue supplies", /F\.fileText\(ctx\.userId, input\.file \?\? null\)/.test(body) && !/userId: z\./.test(body));
 }
 
 // ---- the tool: drafted apart from the conversation, and nothing of the file recorded
@@ -93,7 +93,7 @@ F.fileSteps.deliver = (async (doc: any, to: any, target: any) => { sent.push({ d
   const everything = JSON.stringify({ r, facts, notDone, logged: log.filter((l) => /INSERT INTO co_memories|harness_decisions|search_briefs|saveBrief/i.test(l.sql)).map((l) => l.p) });
   check("from their newest file: drafted from their file and their own words, sent to them only", r.ok && sent.length === 1 && sent[0].to.userId === "u1" && sent[0].to.phone === "+15550100001" && draftSaw.fileText === FILE_TEXT && /Harbor Hall for 120/.test(draftSaw.theirWords), { r, notDone });
   check("nothing the conversation keeps carries the file's words or the document's title (only 'their file #2')", !/Harbor|Capacity|Load-in|4000|venue brief"/.test(everything.replace(/a venue brief/g, "")) && /their file #2/.test(everything), everything.slice(0, 400));
-  check("what Co is handed back says it's sent and not to describe it", /haven't seen what it says, so don't describe it/.test(r.note));
+  check("what Cue is handed back says it's sent and not to describe it", /haven't seen what it says, so don't describe it/.test(r.note));
 
   F.fileSteps.draft = async () => ({ ...grounded, sections: [{ heading: "The space", bullets: ["Capacity 120 standing.", "The venue is the best in the Mission and sold out every weekend this year."] }] }) as any;
   reset(filesHandlers());
@@ -105,7 +105,7 @@ F.fileSteps.deliver = (async (doc: any, to: any, target: any) => { sent.push({ d
   sent.length = 0;
   F.fileSteps.draft = async () => { throw new Error("should not draft"); };
   const none = await make().writeFromFile.execute({ file: 7, kind: "other", want: "a summary" }, {});
-  check("a file number they don't have: nothing drafted or sent, and Co asks which", !none.ok && sent.length === 0 && /no file|have no file/i.test(none.error));
+  check("a file number they don't have: nothing drafted or sent, and Cue asks which", !none.ok && sent.length === 0 && /no file|have no file/i.test(none.error));
   check("the read asked for that number with their own id", log.some((l) => /AND n = \$2/.test(l.sql) && l.p[0] === "u1" && l.p[1] === 7));
 }
 
@@ -126,7 +126,7 @@ F.fileSteps.deliver = (async (doc: any, to: any, target: any) => { sent.push({ d
   reset([]);
   ctx.resolvedContent = "thanks, that looks good";
   const d2 = await make().deleteMyFiles.execute({}, {});
-  check("the tool deletes nothing without their ask (code checks their words, not Co's say-so)", !d2.ok && !ran(/DELETE/));
+  check("the tool deletes nothing without their ask (code checks their words, not Cue's say-so)", !d2.ok && !ran(/DELETE/));
   const mig = src("db/migrations.ts");
   check("gone completely: the text lives only in member_files, which goes with the member (ON DELETE CASCADE), with no embedding column", /CREATE TABLE IF NOT EXISTS member_files \([^`]*user_id UUID NOT NULL REFERENCES users\(id\) ON DELETE CASCADE/.test(mig) && !/member_files[^`]*embedding/.test(mig));
   check("gone completely: every model call on a file keeps its prompts and outputs out of the trace store", (src("services/memberFiles.ts").match(/PRIVATE_TELEMETRY\("/g) ?? []).length === 2 && /recordInputs: false, recordOutputs: false/.test(src("services/memberFiles.ts")));
@@ -137,7 +137,7 @@ F.fileSteps.deliver = (async (doc: any, to: any, target: any) => { sent.push({ d
   const w = Cap.ABILITIES.find((a) => a.id === "write_from_file")!;
   const del = Cap.ABILITIES.find((a) => a.id === "delete_files")!;
   check("registry: a document from a file needs their own yes, once a turn, three a day", w?.tool === "writeFromFile" && w.confirm === "their_yes" && w.limits?.perTurn === 1 && w.limits?.perDay === 3);
-  check("registry: Co says it doesn't discuss what a file says, and it's never used for anyone else", /doesn't read or discuss what a file says/.test(w.can) && /never used for anyone else/.test(w.can));
+  check("registry: Cue says it doesn't discuss what a file says, and it's never used for anyone else", /doesn't read or discuss what a file says/.test(w.can) && /never used for anyone else/.test(w.can));
   check("registry: delete is there, and says gone completely", del?.tool === "deleteMyFiles" && /gone completely/.test(del.can));
 }
 

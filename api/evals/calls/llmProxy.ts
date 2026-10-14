@@ -32,8 +32,8 @@ const baseBody = (extra: any = {}) => ({
   stream: true,
   temperature: 0.8,
   messages: [
-    { role: "system", content: `You are Co, on a call with Royce (the call prompt carries their first name).\n# Right now\n${g.rightNow}\n# What Co has found for them\n${g.findsNow}\n${g.contextSummary}` },
-    { role: "assistant", content: "Hey Royce, it's Co." },
+    { role: "system", content: `You are Cue, on a call with Royce (the call prompt carries their first name).\n# Right now\n${g.rightNow}\n# What Cue has found for them\n${g.findsNow}\n${g.contextSummary}` },
+    { role: "assistant", content: "Hey Royce, it's Cue." },
     { role: "user", content: "Yeah, so what do you think?" },
   ],
   tools: [{ type: "function", function: { name: "assess_conversation_coverage", description: "check", parameters: { type: "object", properties: {} } } }],
@@ -124,7 +124,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   // 2026-10-08: no cap in code any more. Royce said he'd been "kinda stressed" and Co said get some rest and hung up; the note now
   // keeps Co's agenda out and Co with them, and the model decides how much to say.
   check("no sentence cap on a drained turn: what the model says goes out (the note, not code, keeps the agenda out)", spoken.length > 2, spoken);
-  check("the note keeps Co with them: stay, the call ends when they want, never sent off to rest", /Stay with them/.test(M.DRAINED_NOTE) && /Never end the call or send them off to rest/.test(M.DRAINED_NOTE) && /no pitch, no events, no recap/.test(M.DRAINED_NOTE) && !/two short sentences|lets them go/.test(M.DRAINED_NOTE));
+  check("the note keeps Cue with them: stay, the call ends when they want, never sent off to rest", /Stay with them/.test(M.DRAINED_NOTE) && /Never end the call or send them off to rest/.test(M.DRAINED_NOTE) && /no pitch, no events, no recap/.test(M.DRAINED_NOTE) && !/two short sentences|lets them go/.test(M.DRAINED_NOTE));
   check("last night's words are the signal", M.memberStateSignal("Um, I've just been kinda stressed, uh, lately, and I'm just trying to figure out what's next."));
   sys = ""; spoken.length = 0;
   for await (const _ of P.runCallLlm(baseBody({ messages: [...baseBody().messages.slice(0, 2), { role: "user", content: "Can you send the PDF on Sequent AI?" }] }), { stream: spy(text(long)), onSpoken: (s) => spoken.push(s) })) { /* drain */ }
@@ -149,16 +149,16 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("an event with no source row is never said", !/Founders Mixer|Battery|7pm/.test(invented.content) && invented.dropped.length >= 1, invented.content);
   check("the member still hears the rest of the reply", /Want the link\?/.test(invented.content), invented.content);
   const only = await run(baseBody(), text("There's a Founders Mixer at The Battery on Friday at 7pm."));
-  check("if that was the whole reply, Co says it will look, never silence", only.content.trim() === G.SAFE_LINE, only.content);
+  check("if that was the whole reply, Cue says it will look, never silence", only.content.trim() === G.SAFE_LINE, only.content);
   const said = await run(baseBody({ messages: [...baseBody().messages, { role: "assistant", content: "x" }, { role: "user", content: "What about the Founders Mixer at The Battery?" }] }), text("The Founders Mixer at The Battery sounds good."));
   check("a name the member said themselves is theirs to be repeated", /Founders Mixer/.test(said.content), said.content);
-  const lowSelf = await run(baseBody({ messages: [{ role: "system", content: "You are Co. What Co has found: nothing." }, { role: "user", content: "hi" }, { role: "assistant", content: "There's a Founders Mixer at The Battery." }, { role: "user", content: "ok" }] }), text("That Founders Mixer at The Battery is on Friday."));
-  check("Co's own earlier line never sources a name (a made-up event can't vouch for itself)", !/Founders Mixer/.test(lowSelf.content), lowSelf.content);
+  const lowSelf = await run(baseBody({ messages: [{ role: "system", content: "You are Cue. What Cue has found: nothing." }, { role: "user", content: "hi" }, { role: "assistant", content: "There's a Founders Mixer at The Battery." }, { role: "user", content: "ok" }] }), text("That Founders Mixer at The Battery is on Friday."));
+  check("Cue's own earlier line never sources a name (a made-up event can't vouch for itself)", !/Founders Mixer/.test(lowSelf.content), lowSelf.content);
 }
 {
   // The real call: 55 sentences Co said, none flagged, given what the call was given.
   const flagged = G.unsourcedInCall(fixture.turns, { firstName: g.firstName, contextSummary: g.contextSummary, findsNow: g.findsNow, rightNow: g.rightNow });
-  check("replay of the real call: nothing Co named was unsourced (no false flags)", flagged.length === 0, flagged);
+  check("replay of the real call: nothing Cue named was unsourced (no false flags)", flagged.length === 0, flagged);
   const withInvented = G.unsourcedInCall([...fixture.turns, { role: "agent", message: "There's a Founders Mixer at The Battery on Friday at 7pm." }], { firstName: g.firstName, contextSummary: g.contextSummary, findsNow: g.findsNow, rightNow: g.rightNow });
   check("an invented event in a finished call is caught", withInvented.length === 1 && /Founders Mixer/.test(withInvented[0].names.join()), withInvented);
   check("an event sentence is checked and an ordinary one is not", G.placesAnEvent("The workshop is Saturday.") && !G.placesAnEvent("Jacqueline's leading that one."));
@@ -174,7 +174,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
   check("a question or an offer is not", said("Want me to text you those links?") !== null && said("I can text you the link.") !== null);
   check("multi-day work set up from their words is not (the call-task read opens that)", said("I'll set that up when we hang up and text you what I find.") !== null);
   check("so is 'I'll text you what I find over the next few days' (a task they asked for, opened from their words)", said("I'll text you what I find over the next few days.") !== null);
-  check("what Co can't do is not", said("I'll send you a list of investors.") !== null && said("I'll email Maya for you.") !== null);
+  check("what Cue can't do is not", said("I'll send you a list of investors.") !== null && said("I'll email Maya for you.") !== null);
   const calls: any[] = []; const dues: Date[] = []; const notes: string[] = [];
   const deps: any = {
     open: async () => [],
@@ -270,12 +270,12 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const ran: any[] = [];
     const up = scripted([[...text("On it, I'll take that on now."), ...tool("tu1", "startTask", '{"goal":"partner event planning doc"}')], text("Done, it's on my list and I'll text you the plan.")]);
     const r = await go(baseBody(elTools), { stream: up.stream, tools: fakeSet(async (n, i) => { ran.push({ n, i }); return { ok: true, taskId: 41 }; }) });
-    check("call tools: the model's Co tool runs on the server with its input", ran.length === 1 && ran[0].n === "startTask" && ran[0].i.goal === "partner event planning doc", ran);
-    check("call tools: ElevenLabs never sees Co's tool call (only text and its own tools)", !r.calls.some((c: any) => c.function?.name === "startTask") && r.finish === "stop", r.calls);
+    check("call tools: the model's Cue tool runs on the server with its input", ran.length === 1 && ran[0].n === "startTask" && ran[0].i.goal === "partner event planning doc", ran);
+    check("call tools: ElevenLabs never sees Cue's tool call (only text and its own tools)", !r.calls.some((c: any) => c.function?.name === "startTask") && r.finish === "stop", r.calls);
     const second = up.reqs[1];
     check("call tools: the result is fed back as a tool_result after the model's own tool_use", !!second && second.messages.at(-2).content.some((b: any) => b.type === "tool_use" && b.id === "tu1") && second.messages.at(-1).content.some((b: any) => b.type === "tool_result" && b.tool_use_id === "tu1" && /"taskId":41/.test(b.content)), second?.messages.slice(-2));
     check("call tools: the line before the tool streams first, then the answer after it (its \"Done,\" taken off: nothing is sent on a call)", /^On it, I'll take that on now\. It's on my list/.test(r.content), r.content);
-    check("call tools: Co's tools are offered beside ElevenLabs' end_call and voicemail_detection, with the call note in the prompt", ["end_call", "voicemail_detection", "startTask"].every((n) => up.reqs[0].tools.some((t: any) => t.name === n)) && /# Doing things on this call/.test(up.reqs[0].system[0].text));
+    check("call tools: Cue's tools are offered beside ElevenLabs' end_call and voicemail_detection, with the call note in the prompt", ["end_call", "voicemail_detection", "startTask"].every((n) => up.reqs[0].tools.some((t: any) => t.name === n)) && /# Doing things on this call/.test(up.reqs[0].system[0].text));
   }
   // 2. end_call passes through, with Co's tools on, once they've said goodbye (#113: Co never hangs up first; the hold is tested in
   // evals/calls/contextAndVoice.ts)
@@ -295,7 +295,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const ran2: string[] = [];
     const up3 = scripted([[...text("I'll note that, bye for now."), ...tool("n1", "startTask", '{"goal":"x y z"}', 1), ...tool("ec3", "end_call", '{"reason":"bye"}', 2)]]);
     const r3 = await go(bye(elTools), { stream: up3.stream, tools: fakeSet(async (n) => { ran2.push(n); return { ok: true }; }) });
-    check("a goodbye with a Co tool and end_call: the tool runs and end_call still goes out, no extra round", ran2.length === 1 && r3.calls.some((c: any) => c.function?.name === "end_call") && r3.finish === "tool_calls" && up3.reqs.length === 1);
+    check("a goodbye with a Cue tool and end_call: the tool runs and end_call still goes out, no extra round", ran2.length === 1 && r3.calls.some((c: any) => c.function?.name === "end_call") && r3.finish === "tool_calls" && up3.reqs.length === 1);
   }
   // 3. the real guard: a tool that needs their yes is refused without it (and runs with it)
   {
@@ -325,7 +325,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     let runs = 0;
     const loopForever = scripted([[...text("One more."), ...tool("s", "startTask", '{"goal":"again"}')]]);
     const r = await go(baseBody(), { stream: loopForever.stream, tools: fakeSet(async () => { runs++; return { ok: true }; }), maxToolSteps: 2 });
-    check("the step cap: at most maxToolSteps rounds of Co's tools, then the model answers with tools off", runs === 2 && loopForever.reqs.length === 3 && loopForever.reqs[2].tool_choice?.type === "none" && !loopForever.reqs[1].tool_choice, { runs, reqs: loopForever.reqs.length });
+    check("the step cap: at most maxToolSteps rounds of Cue's tools, then the model answers with tools off", runs === 2 && loopForever.reqs.length === 3 && loopForever.reqs[2].tool_choice?.type === "none" && !loopForever.reqs[1].tool_choice, { runs, reqs: loopForever.reqs.length });
     check("the default cap is 3 rounds in 8 seconds", P.CALL_TOOL_STEPS === 3 && P.CALL_TOOL_BUDGET_MS === 8000);
     const slow = scripted([[...text("On it."), ...tool("sl", "startTask", '{"goal":"slow"}')], text("It'll come by text.")]);
     let finished = false;
@@ -360,7 +360,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const route = fs.readFileSync(new URL("../../src/routes/callLlm.ts", import.meta.url), "utf8");
     check("the route builds the tools only for the verified member (call token), never from the request's say-so", /if \(userId && !voiceOnly && process\.env\.CALL_TOOLS !== "off"\)/.test(route) && /buildCallTools\(\{ userId, callKey/.test(route));
     const w = R.callWordsOf({ messages: [{ role: "system", content: "S" }, { role: "assistant", content: "Want me to put it in a doc?" }, { role: "user", content: "Yes." }, { role: "user", content: "Please take the lead." }] } as any);
-    check("their words this turn are their lines since Co last spoke; Co's last line is kept for a yes to an offer", w.turnWords === "Yes. Please take the lead." && w.lastCoLine === "Want me to put it in a doc?");
+    check("their words this turn are their lines since Cue last spoke; Cue's last line is kept for a yes to an offer", w.turnWords === "Yes. Please take the lead." && w.lastCoLine === "Want me to put it in a doc?");
   }
   // 6. the real texting tools, built for a call: the same descriptions, the same schemas
   {
@@ -377,8 +377,8 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
 // ---- 2026-10-08 live call: goodbye once, and no "I'm not sure of the name" out of nowhere
 {
   const bye = (extra: any[]) => baseBody({ messages: [
-    { role: "system", content: "You are Co. # Right now\nThursday evening." },
-    { role: "assistant", content: "Hey Royce, it's Co." },
+    { role: "system", content: "You are Cue. # Right now\nThursday evening." },
+    { role: "assistant", content: "Hey Royce, it's Cue." },
     { role: "user", content: "Okay, sounds good. Thank you so much." },
     { role: "assistant", content: "You're welcome, Royce. The doc will be in your texts in the morning. Take care tonight." },
     ...extra,

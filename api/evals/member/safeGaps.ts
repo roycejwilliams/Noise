@@ -8,7 +8,7 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 
 const safe = await M.memberSafeLine("u-test", ["Sarah"]);
 const coLine = safe("Co replied: Sarah told me she wants to cofound a climate startup and is free Thursdays.");
-check(`a Co line about a linked member keeps only that they came up ("${coLine}")`, !!coLine && !/cofound|climate|Thursdays/.test(coLine) && /Sarah, another member/.test(coLine));
+check(`a Cue line about a linked member keeps only that they came up ("${coLine}")`, !!coLine && !/cofound|climate|Thursdays/.test(coLine) && /Sarah, another member/.test(coLine));
 check("their own words are theirs and kept", safe("User said: Sarah and I want to grab coffee") === "User said: Sarah and I want to grab coffee");
 check("a loop title naming a linked member is stripped", !/wants to cofound/.test(safe("Waiting on Sarah: wants to cofound, deciding by Friday") ?? ""));
 check("lines without a linked member pass through", safe("Find a caterer for the open house") === "Find a caterer for the open house");
@@ -42,8 +42,8 @@ check("a failed name lookup throws (callers then leave the context out), never r
 // The same names as memberSafe: Co's own records (Tier 0 picks, intro offers) count, not only linked matches.
 const fromRecords = M.namesInRecords([{ memory_type: "recommendation", content: "[Tier 0] Maya: building grid storage | event X" }]);
 const s2 = await M.memberSafeLine("u-test", fromRecords);
-check(`a Tier 0 pick's name from Co's records is stripped ("${s2("Co replied: Maya is building grid storage and left Tesla.")}")`, !/grid storage|Tesla/.test(s2("Co replied: Maya is building grid storage and left Tesla.") ?? ""));
-check("memberSafeLine's lookup covers Co's records and introductions, like memberSafe", /namesInRecords\(records\.rows\)/.test(src("services/memberSafeMemories.ts")) && /network_introductions/.test(src("services/memberSafeMemories.ts")));
+check(`a Tier 0 pick's name from Cue's records is stripped ("${s2("Co replied: Maya is building grid storage and left Tesla.")}")`, !/grid storage|Tesla/.test(s2("Co replied: Maya is building grid storage and left Tesla.") ?? ""));
+check("memberSafeLine's lookup covers Cue's records and introductions, like memberSafe", /namesInRecords\(records\.rows\)/.test(src("services/memberSafeMemories.ts")) && /network_introductions/.test(src("services/memberSafeMemories.ts")));
 check("picker: sent messages and outcomes stripped too", /what: `\$\{s\.type\}: \$\{\(safe \? safe\(String\(s\.message/.test(src("services/sweepSelectContext.ts")) && /item: safe \? safe\(String\(o\.item_name\)\)/.test(src("services/sweepSelectContext.ts")));
 check("text path: tasks, briefs, lessons, ledger lines and open work stripped too", /lessons: keepAll\(lessons\)/.test(tc) && /tasks: keepAll\(tasks\), briefs: keepAll\(briefs\)/.test(tc) && /ledger: \{ \.\.\.ledger, lines: keepAll\(ledger\.lines\), named: keepAll\(ledger\.named\) \}/.test(tc) && /const openWork = keepAll\(/.test(tc));
 

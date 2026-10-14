@@ -56,7 +56,7 @@ h2{font-size:16px;margin:0 0 10px}h3{font-size:13px;color:var(--muted);margin:0 
 button{background:var(--accent);color:var(--bg);border:0;border-radius:8px;padding:9px 14px;font-weight:600;cursor:pointer}#count{color:var(--muted)}
 </style></head><body>
 <h1>Which texts would you rather have gotten?</h1>
-<p class="lead">${days.length} days from your real sweeps, ${esc(name)}. A and B are the old rules and Co's new pick, in a different order each day. Mark each item wow / fine / no, pick a side, and open the pool on days a side sent nothing.</p>
+<p class="lead">${days.length} days from your real sweeps, ${esc(name)}. A and B are the old rules and Cue's new pick, in a different order each day. Mark each item wow / fine / no, pick a side, and open the pool on days a side sent nothing.</p>
 ${sections.join("\n")}
 <div class="bar"><button id="dl">Download marks</button><span id="count"></span></div>
 <script>

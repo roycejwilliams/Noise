@@ -69,7 +69,7 @@ async function runCall(name: string): Promise<{ name: string; conversationId: st
     } else if (m.type === "interruption") turnAudioBytes = 0;
     else if (m.type === "agent_response") {
       agentTurns++;
-      console.log(`  Co: ${m.agent_response_event?.agent_response}`);
+      console.log(`  Cue: ${m.agent_response_event?.agent_response}`);
     } else if (m.type === "user_transcript") {
       const t = m.user_transcription_event?.user_transcript;
       heard.push(t);

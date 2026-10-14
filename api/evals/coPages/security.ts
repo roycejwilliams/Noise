@@ -47,9 +47,9 @@ const source = {
 
 // ---------------------------------------------------------------- H2 grounding
 {
-  check("a page from their words and Co's reads passes", G.pageProblems(page() as any, source).length === 0, G.pageProblems(page() as any, source));
+  check("a page from their words and Cue's reads passes", G.pageProblems(page() as any, source).length === 0, G.pageProblems(page() as any, source));
   const leak = S.checkPage(page("Ellis Park is coming too, newly divorced and looking to meet people."), source);
-  check("another member's details (nothing they said, nothing Co read) are refused before storing", !leak.ok, leak);
+  check("another member's details (nothing they said, nothing Cue read) are refused before storing", !leak.ok, leak);
   const event = S.checkPage(page("Also on Friday at 9 PM there's the Harbor Club mixer."), source);
   check("an event nothing backs is refused too", !event.ok, event);
   const schema = S.checkPage({ ...page(), title: "<b>x</b>" }, source);

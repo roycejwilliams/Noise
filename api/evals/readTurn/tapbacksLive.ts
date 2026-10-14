@@ -29,7 +29,7 @@ const turns: [string, string, number][] = [
   ["What's your exact search?", "Bookable event spaces near NoPa for a DJ set on Oct 10, under $1000.", 1],
   ["Generalize your search for something like that", "Still nothing that fits.", 3],
   ["Conduct the search again", "Two that fit, sending both now.", 71],
-  ["What is Co? Give me a full description", "I get to know you over time...", 306],
+  ["What is Cue? Give me a full description", "I get to know you over time...", 306],
   ["How would you describe yourself to investors or users", "To users, it's simple...", 1],
   ["Can you find me a event this weekend", "", 8],
   ["Well a couple", "Came up empty for this weekend specifically.", 0.2],

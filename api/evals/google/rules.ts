@@ -26,8 +26,8 @@ const data = src("services/googleData.ts");
 
 // ------------------------------------------------ scopes: read-only, minimal
 check("one scope: Gmail metadata, the tester flow (the calendar and Docs are their own grants, services/cueGrants.ts, 2026-10-15)", JSON.stringify(A.GOOGLE_SCOPES) === JSON.stringify(["https://www.googleapis.com/auth/gmail.metadata"]));
-check("no send, compose, modify, insert or full-access scope anywhere (drive.file, files Co creates, is the only Drive scope)", !/gmail\.(send|compose|modify|insert|readonly)|mail\.google\.com|auth\/calendar(\.events)?["'\s]|calendar\.events|auth\/drive(?!\.file)/.test(auth + data));
-check("granted scopes must be what Co asked for (free/busy is no longer accepted on this grant)", A.scopesAllowed("https://www.googleapis.com/auth/gmail.metadata") && !A.scopesAllowed("https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/gmail.metadata"));
+check("no send, compose, modify, insert or full-access scope anywhere (drive.file, files Cue creates, is the only Drive scope)", !/gmail\.(send|compose|modify|insert|readonly)|mail\.google\.com|auth\/calendar(\.events)?["'\s]|calendar\.events|auth\/drive(?!\.file)/.test(auth + data));
+check("granted scopes must be what Cue asked for (free/busy is no longer accepted on this grant)", A.scopesAllowed("https://www.googleapis.com/auth/gmail.metadata") && !A.scopesAllowed("https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/gmail.metadata"));
 check("anything wider is refused", !A.scopesAllowed("https://www.googleapis.com/auth/gmail.metadata https://www.googleapis.com/auth/gmail.send") && !A.scopesAllowed("") && !A.scopesAllowed("https://mail.google.com/"));
 check("wider scopes are revoked, not kept", /if \(!scopesAllowed\(tokens\.scope \?\? ""\)\) \{\s*\/\/[^\n]*\n\s*await revokeToken\(/.test(auth));
 
@@ -137,19 +137,19 @@ const tools = src("services/googleTools.ts");
 const conv = src("agent/conversationTools.ts");
 check("the tool goes through the same guard as every other tool", /Object\.assign\(tools, googleTools\(ctx, notDone\)\);\s*\n\s*if \(!ctx\.isTeam\) for \(const name of teamOnlyTools\(\)\) delete[^\n]*\n\s*\n\s*\/\/[^\n]*\n\s*guardTools\(tools/.test(conv));
 check("the link goes only to this member, as its own text", /ctx\.sendCoReply\(\{ phone: ctx\.phoneNumber, message: link, asVoice: false \}\)/.test(tools) && /createConnectLink\(ctx\.userId\)/.test(tools));
-check("without Google set up, Co says so instead of sending anything", /if \(!googleConfigured\(\)\) \{\s*notDone\(/.test(tools));
+check("without Google set up, Cue says so instead of sending anything", /if \(!googleConfigured\(\)\) \{\s*notDone\(/.test(tools));
 const { capabilitySheet } = await import("../../src/services/capabilities.js");
 const saved = { id: process.env.GOOGLE_CLIENT_ID, sec: process.env.GOOGLE_CLIENT_SECRET, key: process.env.GOOGLE_TOKEN_KEY };
 delete process.env.GOOGLE_CLIENT_ID;
-check("Co says it can't connect Gmail until it's set up (to the team; a member never hears of it)", capabilitySheet({ team: true }).some((l) => l === "Co can't connect to Gmail yet.") && !capabilitySheet().some((l) => /Gmail/.test(l)));
+check("Cue says it can't connect Gmail until it's set up (to the team; a member never hears of it)", capabilitySheet({ team: true }).some((l) => l === "Cue can't connect to Gmail yet.") && !capabilitySheet().some((l) => /Gmail/.test(l)));
 Object.assign(process.env, { GOOGLE_CLIENT_ID: "cid", GOOGLE_CLIENT_SECRET: "sec", GOOGLE_TOKEN_KEY: env.GOOGLE_TOKEN_KEY });
-check("once set up, Co tells the team exactly what it sees and that it never sends; a member still never hears of it", capabilitySheet({ team: true }).some((l) => /still waiting on a reply \(who, subject and date, never the message\)/.test(l) && /never sends email/.test(l) && /disconnect Google/.test(l)) && !capabilitySheet().some((l) => /Gmail/.test(l)));
+check("once set up, Cue tells the team exactly what it sees and that it never sends; a member still never hears of it", capabilitySheet({ team: true }).some((l) => /still waiting on a reply \(who, subject and date, never the message\)/.test(l) && /never sends email/.test(l) && /disconnect Google/.test(l)) && !capabilitySheet().some((l) => /Gmail/.test(l)));
 for (const [k, v] of [["GOOGLE_CLIENT_ID", saved.id], ["GOOGLE_CLIENT_SECRET", saved.sec], ["GOOGLE_TOKEN_KEY", saved.key]] as const) {
   if (v === undefined) delete process.env[k];
   else process.env[k] = v;
 }
 const route = src("routes/google.ts");
-check("the pages never show anyone's data and are mounted at /google", !/busy|waiting|snapshot|SELECT/.test(route.replace(/Co can now see which emails[^"]*/, "").replace(/export const CALENDAR_GRANT_COPY = \{[\s\S]*?\} as const;/, "")) && /app\.use\("\/google", createGoogleRouter\(\)\)/.test(src("server.ts")));
+check("the pages never show anyone's data and are mounted at /google", !/busy|waiting|snapshot|SELECT/.test(route.replace(/Cue can now see which emails[^"]*/, "").replace(/export const CALENDAR_GRANT_COPY = \{[\s\S]*?\} as const;/, "")) && /app\.use\("\/google", createGoogleRouter\(\)\)/.test(src("server.ts")));
 check("an expired or reused link says so and asks for a new one", /if \(!url\) return res\.status\(410\)/.test(route));
 
 console.log(`google rules: ${total - failed}/${total} passed`);

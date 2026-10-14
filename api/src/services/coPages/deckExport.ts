@@ -92,7 +92,7 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     const pptx = new PptxGenJS();
     pptx.layout = "LAYOUT_WIDE"; // 13.33 x 7.5 in, 16:9
     pptx.title = deck.data.title;
-    pptx.company = "Made by Co";
+    pptx.company = "Made by Cue";
     const st = deck.data.style;
     const hex = (c: string) => c.replace(/^#/, "").toUpperCase();
     // A PowerPoint file can't carry the web deck's open fonts, and a machine without them falls back to a default face (Times on a
@@ -152,7 +152,7 @@ export async function deckPptx(deck: { id: string; data: DeckData; version: numb
     if (!fieldTitle) t.addShape(pptx.ShapeType.rect, { x: 0, y: 7.2, w: 13.333, h: 0.3, fill: { color: hex(stops[0]) }, line: { color: hex(stops[0]) } });
     t.addText(deck.data.title, { x: 0.9, y: 3.6, w: 11.5, h: 1.5, fontFace: headFace, fontSize: 60, bold: headBold, color: hex(titleInk), valign: "bottom" });
     t.addText(deck.data.subtitle, { x: 0.9, y: 5.2, w: 10, h: 0.9, fontFace: bodyFace, fontSize: 20, color: hex(titleInk), transparency: 10, valign: "top" });
-    t.addText("Made by Co", { x: 0.9, y: 6.6, w: 4, h: 0.4, fontFace: bodyFace, fontSize: 10, color: hex(titleInk), transparency: 45 });
+    t.addText("Made by Cue", { x: 0.9, y: 6.6, w: 4, h: 0.4, fontFace: bodyFace, fontSize: 10, color: hex(titleInk), transparency: 45 });
     // Content slides, in the web deck's layouts: statements on the field, everything else on their paper.
     const { slideLayouts } = await import("./deck.js");
     const layouts = slideLayouts(deck.data.slides, st.grammar ?? "editorial");

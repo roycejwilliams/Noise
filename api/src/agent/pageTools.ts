@@ -226,7 +226,7 @@ export function pageTools(
         const g = (imaged as any).style?.grammar ?? (imaged as any).grammar ?? "editorial";
         const artLine = AI.artNote(artOk.ok ? art.report : { ...art.report, venues: [], map: 0, cover: (imaged as any).logo ? "logo" : "none" }, (GRAMMAR_SAID as any)[g]);
         for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
-        ctx.facts?.add("known", `The page's art direction, as Co chose it: ${artLine}`);
+        ctx.facts?.add("known", `The page's art direction, as Cue chose it: ${artLine}`);
         // Said when Co chose an art direction for it (a page made without one keeps the one line and the link).
         const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}${input.artDirection ? ` ${artLine}` : ""}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {

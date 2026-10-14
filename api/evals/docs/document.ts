@@ -15,9 +15,9 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
 
 // ---------------------------------------------------------------- the document
-const SAID = "Jacqueline and I are splitting the cofounder roles. I take product and engineering, she takes partnerships and the events. We want a gateway conversation before each Co event so matching is better. We have not decided who talks to Sequent AI first.";
+const SAID = "Jacqueline and I are splitting the cofounder roles. I take product and engineering, she takes partnerships and the events. We want a gateway conversation before each Cue event so matching is better. We have not decided who talks to Sequent AI first.";
 const input = {
-  title: "Where we are landing — Co and Sequent",
+  title: "Where we are landing — Cue and Sequent",
   note: "A page for you and Jacqueline, from what you told me.",
   sections: [
     { heading: "The split", paragraphs: ["You take product and engineering. Jacqueline takes partnerships and the events."] },
@@ -25,7 +25,7 @@ const input = {
   ],
 };
 const doc = D.resolveDocument(input);
-check("the title and notes lose dashes (a comma instead), markdown and stray spaces", doc.title === "Where we are landing, Co and Sequent" && !/[—–*_#`]/.test(D.docText(doc)));
+check("the title and notes lose dashes (a comma instead), markdown and stray spaces", doc.title === "Where we are landing, Cue and Sequent" && !/[—–*_#`]/.test(D.docText(doc)));
 check("sections keep their headings, paragraphs and bullets", doc.sections.length === 2 && doc.sections[0].heading === "The split" && doc.sections[1].bullets.length === 2);
 check("empty paragraphs, empty bullets and empty sections drop", D.resolveDocument({ title: "T", sections: [{ heading: "x", paragraphs: ["", "  "], bullets: [] }, { heading: "y", paragraphs: ["real"] }] }).sections.length === 1);
 check("limits cut instead of throwing: 30 sections become 10, a long paragraph is capped", D.resolveDocument({ title: "T", sections: Array.from({ length: 30 }, () => ({ paragraphs: ["x".repeat(2000)] })) }).sections.length === 10 && D.resolveDocument({ title: "T", sections: [{ paragraphs: ["x".repeat(2000)] }] }).sections[0].paragraphs[0].length === D.DOC_LIMITS.paragraphChars);
@@ -49,10 +49,10 @@ check("type: no italic anywhere (the italic serif subtitle was a third voice)", 
 check("type: the title and section headings are serif, the lede and bullets sans", /h1 \{ font-family: 'Fraunces'/.test(html) && /h2 \{ font-family: 'Fraunces'/.test(html) && /\.lede \{[^}]*font-size: var\(--lead\)/.test(html) && !/\.lede \{[^}]*Fraunces/.test(html));
 check("metadata: the date and who it is for, set small and quiet", /<div class="date">October 7, 2026<\/div>/.test(html) && /Prepared for Royce/.test(html) && /\.date \{ font-size: 8\.5px/.test(html));
 const plainHtml = D.documentHtml(doc, META);
-check("composition: the footer is the page's own bottom margin (title and page number), so it is anchored on every page at any length", /@bottom-left \{ content: "Where we are landing, Co and Sequent"/.test(plainHtml) && /@bottom-right \{ content: counter\(page\) " \/ " counter\(pages\)/.test(plainHtml));
+check("composition: the footer is the page's own bottom margin (title and page number), so it is anchored on every page at any length", /@bottom-left \{ content: "Where we are landing, Cue and Sequent"/.test(plainHtml) && /@bottom-right \{ content: counter\(page\) " \/ " counter\(pages\)/.test(plainHtml));
 check("composition: the paper covers the whole sheet, margins included", /@page \{[^}]*background: #F6F2EA/.test(html.replace(/\n/g, " ")));
-check("the sign-off and the Co signature are not in the PDF (that line belongs in the text thread)", !/Tell me what to change/.test(html) && !/rework it/.test(html) && !/class="close"/.test(html) && !/class="co"/.test(html));
-check("brand: a letterhead mark, a rule, numbered sections and a restrained gold: more than a hairline", /class="mark">Co</.test(html) && /counter\(sec, decimal-leading-zero\)/.test(html) && /\.mast \{[^}]*border-bottom: 1px solid/.test(html));
+check("the sign-off and the Cue signature are not in the PDF (that line belongs in the text thread)", !/Tell me what to change/.test(html) && !/rework it/.test(html) && !/class="close"/.test(html) && !/class="co"/.test(html));
+check("brand: a letterhead mark, a rule, numbered sections and a restrained gold: more than a hairline", /class="mark">Cue</.test(html) && /counter\(sec, decimal-leading-zero\)/.test(html) && /\.mast \{[^}]*border-bottom: 1px solid/.test(html));
 const hostile = D.documentHtml(D.resolveDocument({ title: 'Say "hi" \\ and <b>; } body { display:none } /*', sections: [{ paragraphs: ["x".repeat(100)] }] }), META);
 const boxText = /@bottom-left \{ content: "([^;]*)";/.exec(hostile)?.[1] ?? "(none)";
 check("a hostile title can't end the margin box's string or break out of its rule", /^[A-Za-z0-9 ,.'&:-]*$/.test(boxText) && (hostile.match(/@bottom-left/g) ?? []).length === 1, boxText);
@@ -63,16 +63,16 @@ check("composition: a short document gets more air, a long one is tighter (any l
 
 // ---- scannable: a record, not a chat
 const dense = D.resolveDocument({ title: "Where we are", sections: [{ heading: "The split", paragraphs: [Array.from({ length: 70 }, (_, i) => `word${i}`).join(" ")] }] });
-check("a dense paragraph is refused, and Co is told to use bullets", D.documentProblems(dense, { theirs: "word" }).some((p) => /put its points in bullets/.test(p)), D.documentProblems(dense, { theirs: "word" }));
+check("a dense paragraph is refused, and Cue is told to use bullets", D.documentProblems(dense, { theirs: "word" }).some((p) => /put its points in bullets/.test(p)), D.documentProblems(dense, { theirs: "word" }));
 const para = "You take product and engineering and Jacqueline takes partnerships and the events, and who talks to Sequent AI first is still open, as is how long the gateway conversation should run before an event begins.";
 const noBullets = D.resolveDocument({ title: "Where we are", sections: [{ heading: "A", paragraphs: [para] }, { heading: "B", paragraphs: [para] }, { heading: "C", paragraphs: [para] }] });
 check("a document of any length with no bullets at all is refused: list the points", D.documentProblems(noBullets, { theirs: "Sequent AI Jacqueline Thursday" }).some((p) => /no bullets/.test(p)), D.documentProblems(noBullets, { theirs: "Sequent AI Jacqueline Thursday" }));
 check("a section of bullets, as the tool asks for, passes", D.documentProblems(doc, { theirs: SAID }).length === 0);
 
 // ---- the file's name
-check("filename: a real name from the title, Co first, the day last", D.docFilename("Product positioning and scaling notes", "2026-10-07") === "Co-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Product positioning and scaling notes", "2026-10-07"));
+check("filename: a real name from the title, Cue first, the day last", D.docFilename("Product positioning and scaling notes", "2026-10-07") === "Cue-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Product positioning and scaling notes", "2026-10-07"));
 check("filename: punctuation and quotes drop, nothing unsafe survives", /^[A-Za-z0-9.-]+$/.test(D.docFilename('Royce\'s "plan" / v2: go!', "2026-10-07")) && D.docFilename('Royce\'s "plan" / v2: go!', "2026-10-07").endsWith(".pdf"));
-check("filename: a long title is cut, an empty one still has a name", D.docFilename("x ".repeat(100), "2026-10-07").length < 100 && D.docFilename("", "2026-10-07") === "Co-Document-2026-10-07.pdf");
+check("filename: a long title is cut, an empty one still has a name", D.docFilename("x ".repeat(100), "2026-10-07").length < 100 && D.docFilename("", "2026-10-07") === "Cue-Document-2026-10-07.pdf");
 
 // ---------------------------------------------------------------- delivery
 {
@@ -87,7 +87,7 @@ check("filename: a long title is cut, an empty one still has a name", D.docFilen
   const ok = await X.deliverDocument(doc, to, "pdf_text", mk());
   const m = sent.find((x) => x.media_url);
   check("delivery: the PDF goes to their number as an attachment in the thread, captioned with the title", ok.ok && m?.number === "+15550100001" && m.content === doc.title && m.from_number === "+15550000000", sent);
-  check("delivery: it arrives under a real name from its title and their day, not a hash", ok.ok && /^Co-Where-We-Are-Landing-Co-and-Sequent-\d{4}-\d{2}-\d{2}\.pdf$/.test(ok.filename) && m.media_url.endsWith(`/${ok.filename}`), { ok, url: m?.media_url });
+  check("delivery: it arrives under a real name from its title and their day, not a hash", ok.ok && /^Cue-Where-We-Are-Landing-Cue-and-Sequent-\d{4}-\d{2}-\d{2}\.pdf$/.test(ok.filename) && m.media_url.endsWith(`/${ok.filename}`), { ok, url: m?.media_url });
   const lateNight = await X.deliverDocument(doc, { ...to, zone: "America/Los_Angeles", now: new Date("2026-10-08T03:30:00Z") }, "pdf_text", mk());
   check("delivery: the date is their day, not the server's (8:30pm Pacific on the 7th is the 7th)", lateNight.ok && /-2026-10-07\.pdf$/.test(lateNight.filename), lateNight);
   const html0 = sent.find((x) => x.html);
@@ -102,7 +102,7 @@ check("filename: a long title is cut, an empty one still has a name", D.docFilen
   check("delivery: a send that throws is a plain failure", (await X.deliverDocument(doc, to, "pdf_text", mk({ throws: true }))).ok === false && sent.length === before + 1);
   check("the delivery seam: the PDF and (phase 2) the Google Doc", Object.keys(X.DELIVERERS).sort().join() === "google_docs,pdf_text");
   check("it uses the plan's own headless-Chrome render and file cache, not a new path", /import \{ renderPdf \} from "\.\/browserRead\.js"/.test(src("services/documentDelivery.ts")) && /cachePlanFile/.test(src("services/documentDelivery.ts")));
-  check("what a document may rest on is their own words: never Co's lines", /memory_type = 'call_transcript'/.test(src("services/documentDelivery.ts")) && /content LIKE 'User said:%'/.test(src("services/documentDelivery.ts")) && !/co_reply|'assistant'/.test(src("services/documentDelivery.ts").split("loadTheirWords")[1] ?? ""));
+  check("what a document may rest on is their own words: never Cue's lines", /memory_type = 'call_transcript'/.test(src("services/documentDelivery.ts")) && /content LIKE 'User said:%'/.test(src("services/documentDelivery.ts")) && !/co_reply|'assistant'/.test(src("services/documentDelivery.ts").split("loadTheirWords")[1] ?? ""));
 }
 
 // ---------------------------------------------------------------- the offer trigger
@@ -116,7 +116,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("an ask for guidance open a few days is enough alone", O.documentOfferDue(state({ helpAsks: [{ text: GUIDE, ageDays: 3 }] })).due === true);
   check("a fresh ask (a day old) is not a stuck one yet", O.documentOfferDue(state({ helpAsks: [{ text: GUIDE, ageDays: 1 }] })).due === false);
   check("a feeling of being unsure that keeps coming up (circling) is a moment", O.documentOfferDue(state({ recurring: [{ about: "whether to take on a CTO", emotions: ["uncertain", "confused"], count: 2 }] })).due === true);
-  check("frustration alone is not 'needs direction' (it is usually at Co)", O.documentOfferDue(state({ recurring: [{ about: "Co's replies", emotions: ["frustrated"], count: 5 }] })).due === false);
+  check("frustration alone is not 'needs direction' (it is usually at Cue)", O.documentOfferDue(state({ recurring: [{ about: "Cue's replies", emotions: ["frustrated"], count: 5 }] })).due === false);
   check("an open thread they feel unsure about, a few days old, is a moment", O.documentOfferDue(state({ threads: [{ text: "deciding how to position the concept", feeling: "uncertain (medium)", ageDays: 4 }] })).due === true);
   check("grief and exhaustion are care, not direction: no offer", O.documentOfferDue(state({ threads: [{ text: "the business", feeling: "grief, exhausted (high)", ageDays: 6 }], recurring: [{ about: "work", emotions: ["grief", "exhaustion"], count: 4 }] })).due === false);
   check("when they are having a hard time, their state comes first: never, whatever else is true", O.documentOfferDue(state({ needsCare: true, helpAsks: [{ text: GUIDE, ageDays: 5 }] })).due === false);
@@ -133,11 +133,11 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("a document just written (yesterday) holds the next offer", O.documentOfferDue(state({ helpAsks: [{ text: "figuring out how to price the first event", ageDays: 4 }], history: [hist("anything", 1, "accepted", "asked")] })).due === false);
   check("sameTopic: the same words in another order are the same topic; different ones are not", O.sameTopic("how to split the cofounder roles", "the cofounder roles split") && !O.sameTopic("pricing the first event", GUIDE));
   const lines = O.docOfferLines({ due: { topic: GUIDE, why: "x" }, pending: null });
-  check("the hint: offer once, only if it fits this message, in Co's own words after offerDocument, never write before a yes", !!lines.hint && /only if it fits this message/i.test(lines.hint) && /offer once/.test(lines.hint) && /offerDocument/.test(lines.hint) && /own words/.test(lines.hint) && /until they say yes/.test(lines.hint));
-  check("the hint is no canned line: it carries no sentence for Co to copy", !/"want me to put this together/i.test(lines.hint ?? ""));
+  check("the hint: offer once, only if it fits this message, in Cue's own words after offerDocument, never write before a yes", !!lines.hint && /only if it fits this message/i.test(lines.hint) && /offer once/.test(lines.hint) && /offerDocument/.test(lines.hint) && /own words/.test(lines.hint) && /until they say yes/.test(lines.hint));
+  check("the hint is no canned line: it carries no sentence for Cue to copy", !/"want me to put this together/i.test(lines.hint ?? ""));
   const waiting = O.docOfferLines({ due: null, pending: { topic: GUIDE } });
-  check("a waiting offer tells Co: a yes means write it; a pass means let it go and never offer it again", /If this message says yes/.test(waiting.pending ?? "") && /never offer it again/.test(waiting.pending ?? "") && waiting.hint === null);
-  check("nothing due and nothing waiting: Co is told nothing", O.docOfferLines({ due: null, pending: null }).hint === null && O.docOfferLines(null).pending === null);
+  check("a waiting offer tells Cue: a yes means write it; a pass means let it go and never offer it again", /If this message says yes/.test(waiting.pending ?? "") && /never offer it again/.test(waiting.pending ?? "") && waiting.hint === null);
+  check("nothing due and nothing waiting: Cue is told nothing", O.docOfferLines({ due: null, pending: null }).hint === null && O.docOfferLines(null).pending === null);
 }
 
 // ---------------------------------------------------------------- the tools, and only on a yes
@@ -146,7 +146,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   const o = Cap.ABILITIES.find((a) => a.id === "offer_document")!;
   check("registry: writeDocument needs their own yes, once a turn, eight a day (the receipts, not the count, stop a repeat)", w.tool === "writeDocument" && w.confirm === "their_yes" && w.limits?.perTurn === 1 && w.limits?.perDay === 8);
   check("registry: offerDocument once a turn, once a day, no yes needed (it only offers)", o.tool === "offerDocument" && o.limits?.perTurn === 1 && o.limits?.perDay === 1 && !o.confirm);
-  check("registry: Co is told what it can't do (no sheets or slides, nothing sent to others)", /can't make spreadsheets or slides/.test(w.can) && /only to them|goes only to them/.test(w.can));
+  check("registry: Cue is told what it can't do (no sheets or slides, nothing sent to others)", /can't make spreadsheets or slides/.test(w.can) && /only to them|goes only to them/.test(w.can));
   check("registry: the use text says to build from what they said and not to invent", /Don't invent a place, name, number, date or event/.test(w.use ?? "") && /what THEY said/.test(w.use ?? ""));
   const calls: string[] = [];
   const tools: any = { writeDocument: { inputSchema: (await import("zod")).z.object({}), execute: async () => { calls.push("write"); return { ok: true }; } }, offerDocument: { inputSchema: (await import("zod")).z.object({}), execute: async () => { calls.push("offer"); return { ok: true }; } } };
@@ -166,7 +166,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
 {
   const C = await import("../../src/services/coFacts.js");
   const row = { relation: "sent", label: "a document (PDF): Product Positioning and Scaling Notes", url: null, at: new Date("2026-10-07T16:18:00Z"), when: null, whenEnd: null } as any;
-  check("the record of a sent document: a re-ask sends the same version again, a change reads it first and sends the next version, never on Co's own", /send the same version again with writeDocument/.test(C.ledgerLine(row)) && /never "it's already up"/.test(C.ledgerLine(row)) && /readDocument first, then writeDocument with revises and changed/.test(C.ledgerLine(row)) && /Never send it again on your own/.test(C.ledgerLine(row)));
+  check("the record of a sent document: a re-ask sends the same version again, a change reads it first and sends the next version, never on Cue's own", /send the same version again with writeDocument/.test(C.ledgerLine(row)) && /never "it's already up"/.test(C.ledgerLine(row)) && /readDocument first, then writeDocument with revises and changed/.test(C.ledgerLine(row)) && /Never send it again on your own/.test(C.ledgerLine(row)));
   check("another send's line is unchanged (no suffix on a link)", !/writeDocument/.test(C.ledgerLine({ ...row, label: "an event link" })));
   const all = [row, { ...row, label: "https://lu.ma/x event" }];
   check("the message that names the document ('send me the product positioning notes again') is matched to its row, so the exclusion is exercised", C.rowsNamedIn(all, "Send me the Product Positioning notes again please").some((r: any) => /^a document \(PDF\)/.test(r.label)));
@@ -179,7 +179,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("an ask again: again, resend, updated, redo, the same request repeated after a document", a("Send it again please", true).again && a("resend the pdf").again && a("I need the updated version", true).again && a("let's try again, create me a pdf of the highlighted points").again);
   check("not an ask: talk about a document, or an ordinary message", !a("the doc looks good").ask && !a("What time is the event?").ask && !a("hey").ask);
   const lines = O.docOfferLines({ due: null, pending: null, lastDocument: { topic: "Notes" } }, "Send it again please");
-  check("Co is told the ask is its go-ahead: a re-ask sends the same version again, never 'already up' or 'scroll up'", /go-ahead/.test(lines.ask ?? "") && /send the same version again/.test(lines.ask ?? "") && /never say it's already up or to scroll up/.test(lines.ask ?? "") && /Never send a document again on your own/.test(lines.ask ?? ""), lines.ask);
+  check("Cue is told the ask is its go-ahead: a re-ask sends the same version again, never 'already up' or 'scroll up'", /go-ahead/.test(lines.ask ?? "") && /send the same version again/.test(lines.ask ?? "") && /never say it's already up or to scroll up/.test(lines.ask ?? "") && /Never send a document again on your own/.test(lines.ask ?? ""), lines.ask);
   const changed = O.docOfferLines({ due: null, pending: null, lastDocument: { topic: "Notes" } }, "can you update the notes with the pricing part");
   check("a change: readDocument first, then the next version (revises, changed), never a plain resend", /readDocument first, then writeDocument with revises and changed/.test(changed.ask ?? "") && !/same version again/.test(changed.ask ?? ""), changed.ask);
   check("no instruction on an ordinary message", O.docOfferLines({ due: null, pending: null }, "What time is the event?").ask === null);
@@ -219,7 +219,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   const SAYS = [
     "It's seems like everyone is doing a private social club",
     "What separates us? I'm not even sure to even label ourselves as a ai social club. We match inside the event",
-    "But remember we cant rely solely on the rooms/IRL events. Its not scalable. What are you going to do when Co identifies 30 problems/context across 10 different cities",
+    "But remember we cant rely solely on the rooms/IRL events. Its not scalable. What are you going to do when Cue identifies 30 problems/context across 10 different cities",
     "Qq are we encouraging people to meet outside of our events or partnerships?",
     "Right that's why we have Luma paired with this so we can see if other members are going to other events",
     "Are these problems we can solve? Screenshot of an iMessage conversation with Jacqueline: we want it to feel like a fraternity. Oh sick you're part of the network too. In Dallas no one shows up to anything without a personal invite.",
@@ -227,12 +227,12 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   ].join("\n");
   const claim = (t: string) => G.unbackedClaims([t], SAYS);
   check("a point they made passes, paraphrased: matching inside the event", claim("We match people inside the event, not from a private social club list.").length === 0, claim("We match people inside the event, not from a private social club list."));
-  check("a point they made passes: Luma paired to see members at other events", claim("Luma is paired with Co so we can see if other members are going to other events.").length === 0);
-  check("a number they gave passes", claim("Co identifies 30 problems across 10 different cities.").length === 0);
-  check("a number they never gave is refused", claim("Co identifies 30 problems across 12 different cities.").length === 1);
+  check("a point they made passes: Luma paired to see members at other events", claim("Luma is paired with Cue so we can see if other members are going to other events.").length === 0);
+  check("a number they gave passes", claim("Cue identifies 30 problems across 10 different cities.").length === 0);
+  check("a number they never gave is refused", claim("Cue identifies 30 problems across 12 different cities.").length === 1);
   const dallas = claim("Luma and Partiful adoption vary a lot by city. Dallas leans Partiful, and Luma is close to nonexistent there.");
   check("the real unattributed claim is refused: \"Dallas leans Partiful, Luma is close to nonexistent there\"", dallas.length >= 1 && /nonexistent|leans/.test(dallas.map((d) => d.missing.join()).join()), dallas);
-  const funds = claim("Each event funds the next: data from this room improves what Co can offer the next one.");
+  const funds = claim("Each event funds the next: data from this room improves what Cue can offer the next one.");
   check("the real Co-reasoning is refused: \"each event funds the next\"", funds.length === 1 && funds[0].missing.some((m: string) => /funds|improves/.test(m)), funds);
   check("scattered words don't back a claim (every word is somewhere in a fortnight of talk; the window is three sentences)", claim("Cities rooms matching signal problems scalable network fraternity invite Luma.").length >= 0 && G.GROUNDING.window === 3);
   check("a short line of only glue and scaffolding passes (nothing in it to back)", claim("Next step.").length === 0);
@@ -258,36 +258,36 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
 
   const mk = (o: any) => D.resolveDocument({ title: "Product positioning", note: "From today.", sections: [{ heading: "Points", bullets: o.bullets }], suggestions: o.suggestions });
   const src2 = { theirs: SAYS };
-  check("the tool refuses a document with an unattributed claim, and tells Co to rewrite it or move it to suggestions", (() => { const p = D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Each event funds the next, and data from this room improves what Co offers the next one."] }), src2); return p.some((x) => /isn't something they said/.test(x) && /move it to suggestions/.test(x)); })());
-  check("the same idea, in suggestions, goes through (marked as Co's)", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Each event could fund the next by feeding its match data back in."] }), src2).length === 0, D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Each event could fund the next by feeding its match data back in."] }), src2));
-  check("a suggestion still can't name an event or place nobody gave or Co read", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Go to the Founders Mixer at The Battery on Friday at 7pm."] }), src2).some((x) => /suggestion/.test(x)));
-  check("...unless Co read it this turn", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Co to see other events members attend."], suggestions: ["Go to the Founders Mixer at The Battery on Friday at 7pm."] }), { theirs: SAYS, read: "Founders Mixer at The Battery, Friday 7pm" }).length === 0);
+  check("the tool refuses a document with an unattributed claim, and tells Cue to rewrite it or move it to suggestions", (() => { const p = D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Each event funds the next, and data from this room improves what Cue offers the next one."] }), src2); return p.some((x) => /isn't something they said/.test(x) && /move it to suggestions/.test(x)); })());
+  check("the same idea, in suggestions, goes through (marked as Cue's)", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Cue to see other events members attend."], suggestions: ["Each event could fund the next by feeding its match data back in."] }), src2).length === 0, D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Cue to see other events members attend."], suggestions: ["Each event could fund the next by feeding its match data back in."] }), src2));
+  check("a suggestion still can't name an event or place nobody gave or Cue read", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Cue to see other events members attend."], suggestions: ["Go to the Founders Mixer at The Battery on Friday at 7pm."] }), src2).some((x) => /suggestion/.test(x)));
+  check("...unless Cue read it this turn", D.documentProblems(mk({ bullets: ["We match people inside the event, not from a social club list.", "Luma is paired with Cue to see other events members attend."], suggestions: ["Go to the Founders Mixer at The Battery on Friday at 7pm."] }), { theirs: SAYS, read: "Founders Mixer at The Battery, Friday 7pm" }).length === 0);
   // The page
-  const html2 = D.documentHtml(D.resolveDocument({ title: "T", sections: [{ heading: "H", bullets: ["One point."] }], suggestions: ["An idea of Co's."] }), { firstName: "Royce", date: "October 7, 2026" });
-  check("the page marks Co's own ideas visibly and apart from their points (a labelled, ruled block after the sections)", /<section class="sug"><h3>Co's suggestions<\/h3><ul><li>An idea of Co&#39;s\.<\/li><\/ul><\/section>/.test(html2) && html2.indexOf('class="sug"') > html2.indexOf("</section>") && /\.sug \{[^}]*border-left: 2px solid/.test(html2));
+  const html2 = D.documentHtml(D.resolveDocument({ title: "T", sections: [{ heading: "H", bullets: ["One point."] }], suggestions: ["An idea of Cue's."] }), { firstName: "Royce", date: "October 7, 2026" });
+  check("the page marks Cue's own ideas visibly and apart from their points (a labelled, ruled block after the sections)", /<section class="sug"><h3>Cue's suggestions<\/h3><ul><li>An idea of Cue&#39;s\.<\/li><\/ul><\/section>/.test(html2) && html2.indexOf('class="sug"') > html2.indexOf("</section>") && /\.sug \{[^}]*border-left: 2px solid/.test(html2));
   check("no suggestions, no block", !/class="sug"/.test(D.documentHtml(doc, { firstName: "R", date: "d" })));
   check("suggestions are capped at five", D.resolveDocument({ title: "T", sections: [{ bullets: ["x"] }], suggestions: Array.from({ length: 9 }, (_, i) => `idea ${i}`) }).suggestions.length === 5);
   // The input is one definition, shared by the reply and a task keeping a promise (services/documentSheet.ts WRITE_DOCUMENT_INPUT).
   check("the tool takes suggestions and says so", /suggestions: z\.array\(z\.string\(\)\)\.max\(5\)\.optional\(\)/.test(src("services/documentSheet.ts")) && /ONLY what they said, in their words/.test(src("services/documentSheet.ts")) && /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("agent/loopTools.ts")));
-  check("their record rests on their words alone: what Co read can back only a suggestion", /const source = \{ theirs, read \}/.test(src("agent/loopTools.ts")) && !/JSON\.stringify\(t\?\.profile/.test(src("agent/loopTools.ts")));
+  check("their record rests on their words alone: what Cue read can back only a suggestion", /const source = \{ theirs, read \}/.test(src("agent/loopTools.ts")) && !/JSON\.stringify\(t\?\.profile/.test(src("agent/loopTools.ts")));
   // The filename
-  check("filename: a title starting 'Co:' does not become Co-Co", D.docFilename("Co: Product Positioning and Scaling Notes", "2026-10-07") === "Co-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Co: Product Positioning and Scaling Notes", "2026-10-07"));
-  check("filename: 'Co Capability and Sequin AI Launch Party Funnel' does not either", D.docFilename("Co Capability and Sequin AI Launch Party Funnel", "2026-10-07") === "Co-Capability-and-Sequin-AI-Launch-Party-Funnel-2026-10-07.pdf", D.docFilename("Co Capability and Sequin AI Launch Party Funnel", "2026-10-07"));
-  check("filename: a title of just 'Co' still has a name", D.docFilename("Co", "2026-10-07") === "Co-Co-2026-10-07.pdf" || /^Co-/.test(D.docFilename("Co", "2026-10-07")));
-  check("the registry tells Co: no 'Co' in the title; the points are theirs; its own ideas go in suggestions", /no "Co" in it/.test(Cap.ABILITIES.find((x) => x.id === "write_document")!.use ?? "") && /goes in suggestions, which the page marks as Co's/.test(Cap.ABILITIES.find((x) => x.id === "write_document")!.use ?? ""));
+  check("filename: a title starting 'Cue:' does not become Co-Co", D.docFilename("Cue: Product Positioning and Scaling Notes", "2026-10-07") === "Cue-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Cue: Product Positioning and Scaling Notes", "2026-10-07"));
+  check("filename: 'Cue Capability and Sequin AI Launch Party Funnel' does not either", D.docFilename("Cue Capability and Sequin AI Launch Party Funnel", "2026-10-07") === "Cue-Capability-and-Sequin-AI-Launch-Party-Funnel-2026-10-07.pdf", D.docFilename("Cue Capability and Sequin AI Launch Party Funnel", "2026-10-07"));
+  check("filename: a title of just 'Cue' still has a name", D.docFilename("Cue", "2026-10-07") === "Cue-Co-2026-10-07.pdf" || /^Cue-/.test(D.docFilename("Cue", "2026-10-07")));
+  check("the registry tells Cue: no 'Cue' in the title; the points are theirs; its own ideas go in suggestions", /no "Cue" in it/.test(Cap.ABILITIES.find((x) => x.id === "write_document")!.use ?? "") && /goes in suggestions, which the page marks as Cue's/.test(Cap.ABILITIES.find((x) => x.id === "write_document")!.use ?? ""));
 }
 
 // ---------------------------------------------------------------- wiring
 {
   const lt = src("agent/loopTools.ts");
-  check("both tools are in Co's loop; the write goes through the same resolve, problems, deliver path", /writeDocument: tool\(/.test(lt) && /offerDocument: tool\(/.test(lt) && /resolveDocument\(input\)/.test(lt) && /documentProblems\(doc, source\)/.test(lt) && /deliverDocument\(doc/.test(lt));
-  check("the write rests on their words, not Co's: the source is their texts and calls, this message and what Co read", /loadTheirWords\(ctx\.userId\)/.test(lt) && /theirWords\(\)/.test(lt));
-  check("the offer is re-checked in code (documentOfferDue) and recorded before Co says it", /documentOfferDue\(await loadOfferState\(ctx\.userId\)\)/.test(lt) && /recordOffer\(ctx\.userId, due\.topic\)/.test(lt));
-  check("a moment that is not allowed is refused in code, whatever Co thinks", /if \(!due\.due\) return \{ ok: false, error: `Don't offer a document now/.test(lt));
+  check("both tools are in Cue's loop; the write goes through the same resolve, problems, deliver path", /writeDocument: tool\(/.test(lt) && /offerDocument: tool\(/.test(lt) && /resolveDocument\(input\)/.test(lt) && /documentProblems\(doc, source\)/.test(lt) && /deliverDocument\(doc/.test(lt));
+  check("the write rests on their words, not Cue's: the source is their texts and calls, this message and what Cue read", /loadTheirWords\(ctx\.userId\)/.test(lt) && /theirWords\(\)/.test(lt));
+  check("the offer is re-checked in code (documentOfferDue) and recorded before Cue says it", /documentOfferDue\(await loadOfferState\(ctx\.userId\)\)/.test(lt) && /recordOffer\(ctx\.userId, due\.topic\)/.test(lt));
+  check("a moment that is not allowed is refused in code, whatever Cue thinks", /if \(!due\.due\) return \{ ok: false, error: `Don't offer a document now/.test(lt));
   check("the offer records the code's topic, not the model's", !/recordOffer\(ctx\.userId, (input|String)/.test(lt));
   check("a document written marks the open offer accepted (or records an asked-for one)", /recordDocumentWritten\(ctx\.userId, doc\.title\)/.test(lt) && /status = 'accepted'/.test(src("services/documentOffer.ts")));
-  check("reply context: the notice and the waiting offer reach Co on every reply", /loadDocOfferContext\(userId\)/.test(src("services/turnContext.ts")) && /docOfferLines\(opts\.turn\?\.docOffer, opts\.turn\?\.message \?\? ""\)/.test(src("harness/replyGrounding.ts")));
-  check("the record: Co remembers it sent a document and that it offered", /case "writeDocument"/.test(src("services/coFacts.ts")) && /case "offerDocument"/.test(src("services/coFacts.ts")));
+  check("reply context: the notice and the waiting offer reach Cue on every reply", /loadDocOfferContext\(userId\)/.test(src("services/turnContext.ts")) && /docOfferLines\(opts\.turn\?\.docOffer, opts\.turn\?\.message \?\? ""\)/.test(src("harness/replyGrounding.ts")));
+  check("the record: Cue remembers it sent a document and that it offered", /case "writeDocument"/.test(src("services/coFacts.ts")) && /case "offerDocument"/.test(src("services/coFacts.ts")));
   check("the table exists, with the two states and the two sources", /CREATE TABLE IF NOT EXISTS document_offers/.test(src("db/migrations.ts")) && /CHECK \(status IN \('offered', 'accepted'\)\)/.test(src("db/migrations.ts")));
   // Explicitly out of scope (Royce, 2026-10-07): the stuck Sequent PDF and tasks 90/91 are untouched, and the 9am hold stays.
   const pf = src("services/planFile.ts");

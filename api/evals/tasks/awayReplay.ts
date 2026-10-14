@@ -53,7 +53,7 @@ const turn = async (task: any) => {
 };
 {
   const { log, r } = await turn({ ...base, id: 301, source: "lookout", lookoutOrigin: "co", goal: "Keep an eye out, as promised on a call: rooms in SF", lastTextedAt: null, textsSent: 0, awaitingReply: false });
-  check("a Co look-out's event find is held while she's away (nothing sent)", log.sent === 0, { log, did: r.did });
+  check("a Cue look-out's event find is held while she's away (nothing sent)", log.sent === 0, { log, did: r.did });
 }
 {
   const { log } = await turn(base);

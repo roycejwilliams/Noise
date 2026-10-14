@@ -38,7 +38,7 @@ const now = new Date("2026-09-30T15:00:00Z");
 const f = (type: any, severity: any, snippet: string, cause = "reply took 46s") => ({ userId: "u1", at: "2026-09-30T02:00:00Z", type, severity, snippet, decisionIds: [], cause, causeConfirmed: true, source: "log" as const });
 const flags = [f("slow_reply", "high", "62s to reply to <script>alert(1)</script>"), f("slow_reply", "medium", "48s"), f("reply_rewritten", "low", "draft cut")];
 const e = D.renderDigestEmail(flags as any, { u1: "Royce" }, { date: now, rejected: [{ name: "Kevin Hartz talk", why: "invite-only" }, { name: "kevin hartz talk", why: "dup" }] });
-check("the subject says the date, the count and how many are high", /Co morning report, Wednesday, September 30: 3 flags, 1 high/.test(e.subject), e.subject);
+check("the subject says the date, the count and how many are high", /Cue morning report, Wednesday, September 30: 3 flags, 1 high/.test(e.subject), e.subject);
 check("every flag type is in the email, with its count", /Slow reply \(over the latency budget\)/.test(e.html) && /Reply rewritten by the grounding check/.test(e.html) && />× 2</.test(e.html.replace(/\s+/g, " ").replace(/× 2 /g, "× 2<")) || /× 2/.test(e.html));
 check("member text is escaped, never raw HTML", !/<script>/.test(e.html) && /&lt;script&gt;/.test(e.html));
 check("the worst example of each type is shown", /62s to reply/.test(e.html) && !/>48s</.test(e.html));

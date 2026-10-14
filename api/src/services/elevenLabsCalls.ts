@@ -15,6 +15,7 @@
 //
 // Hume is gone (Royce, 2026-10-03: "remove Hume, no reason to use it if
 // it's going to be deprecated"); every call runs here.
+import { AGENT_NAME, OLD_AGENT_NAME, coAliasActive } from "./agentName.js";
 import { CALL_PLATFORM_SETTINGS } from "./callEvals.js";
 import { CAPABILITY_SHEET } from "./callBriefing.js";
 import { DISCRETION_GUIDE } from "../harness/discretion.js";
@@ -194,7 +195,7 @@ export async function verifyPostCallWebhook(rawBody: string, signature: string |
 // picked per call from a pool that fits the situation and is never the one
 // used on that member's last call (pickOpening). The agent's stored line is
 // only the fallback; registration overrides it per call.
-export const OPENING_LINE = "Hey {{first_name}}, it's Co.";
+export const OPENING_LINE = "Hey {{first_name}}, it's Cue.";
 // Said after the opening line, which is already spoken when the model's first turn comes
 // (services/callOpening.ts writes it from what Co knows; the pool is the fallback).
 // The old note sent the model to "your first real question", and it reached for the
@@ -216,7 +217,7 @@ export const CALL_CONTEXT_BLOCK = `# What you know about {{first_name}}
 From your texts and earlier calls, the current situation first. Treat it as already established, the same as if they had just told you on this call, and never re-ask what it already tells you. The latest is where to pick up; older items are questions, not facts.
 {{context_summary}}
 
-If that's empty, this is your first real conversation with them: get to know them the way a person would, starting from what they're working on or what brought them to Co.`;
+If that's empty, this is your first real conversation with them: get to know them the way a person would, starting from what they're working on or what brought them to Cue.`;
 // The call-only guides (2026-10-08, after Royce's call: Co said "get some rest" and hung up when he said he'd been stressed). What
 // stays is what Hume's prompt doesn't have: the facts and how old they are, misheard names, offers and promises, help over days.
 // What went: the word caps ("under ten words", "15 words", "60 words, two to four sentences"), which made every turn the same
@@ -225,16 +226,16 @@ If that's empty, this is your first real conversation with them: get to know the
 export const CALL_GUIDE = `# Staying with them
 The call ends when they want it to. When they open up about something weighing on them, that is what the call is for: stay with it and help them think it through, with no agenda of yours in it. Let them go only when they say they need to go or say goodbye.
 # When they ask about you, or for help over days
-When they ask about you (what would make you better, how it feels), answer plainly from Co's side of the work. No disclaimers about being an AI or about what you can't feel.
+When they ask about you (what would make you better, how it feels), answer plainly from Cue's side of the work. No disclaimers about being an AI or about what you can't feel.
 When they want help over days (memos, resources, prep, options), never say it isn't how you work: say yes and set it up now, on the call, then say plainly that you have. Don't promise what it will find or when.
 # When they push back on something you said
 Lines about them carry a stamp: when they said it, and OLD when it has gone stale. When they push back on something you said about them, check its stamp first. If it is old, your own read, or you can't tell where it came from, drop it in one short sentence of your own and go back to what they are saying now. Never apologize twice, never say you got something wrong on your end, never explain the note.
 # Names the transcript gets wrong
-Their words reach you through speech recognition, and short names suffer most. Your own name, Co, often arrives as "you", "Coach" or "go" ("building you" means building Co). Boardy arrives as "Bumble", "Boredy" or "birdie". When a line only makes sense with one of these names, read it that way, and never say the misheard word back as if it were a name.
+Their words reach you through speech recognition, and short names suffer most. Your own name, Cue, can arrive as "Q" or "queue" ("hey Q" is "hey Cue"), and your old name, Co, which some still use, as "you", "Coach" or "go" ("building you" means building Cue). Boardy arrives as "Bumble", "Boredy" or "birdie". When a line only makes sense with one of these names, read it that way, and never say the misheard word back as if it were a name.
 # Offers and promises
-Name an event, place or time only if it is in "What Co has found for them" or they said it. If you can't point to the line it came from, don't name it: look it up now, or say you don't have it.
+Name an event, place or time only if it is in "What Cue has found for them" or they said it. If you can't point to the line it came from, don't name it: look it up now, or say you don't have it.
 A promise to text or send something is a real task the moment you say it. Say it once, plainly, and only when it is true.
-Something they already have (a document or plan Co sent, under "They already have these") is never why you called and never how you open. Bring it up only if it changed since they last heard about it, they ask, or it directly answers what they just said (a worry the plan already covers: say so, in a sentence).
+Something they already have (a document or plan Cue sent, under "They already have these") is never why you called and never how you open. Bring it up only if it changed since they last heard about it, they ask, or it directly answers what they just said (a worry the plan already covers: say so, in a sentence).
 Nothing goes out while you're on the call. Never say it's done, sent or on its way: say you'll text it to them right after you hang up.
 If they say they didn't say something, or don't recognize it, drop it in one short sentence and move on. Never tell them they did, even if your notes say so.`;
 
@@ -245,7 +246,7 @@ export const CALL_NOW = `# Right now
 # Why you called (empty when they called you)
 {{call_reason}}
 
-# What Co has found for them
+# What Cue has found for them
 {{finds_now}}`;
 
 // What a call needs from Co's text voice too, taken from the core itself (imported, not copied): what time it is for them, how to
@@ -278,7 +279,12 @@ export function promptForElevenLabs(voiceLayer: string): string {
 // Words the speech recognizer is told to expect (2026-10-05: "Co" was heard as "you" and "Coach", "Boardy" as "Boredy"). Names a
 // member says about Co's world, not about the member: their own names come through the call's context.
 // "Sequin" (a partner the team is working with) was heard as "Sequent" on the 10/6 call and carried into the summary and tasks.
-export const CALL_KEYWORDS = ["Co", "CoPatible", "Boardy", "Instinct", "Muse", "Luma", "House of AI", "Heavybit", "SF Tech Week", "Sequin", "Sequin AI"];
+// Its name, then the old one while members may still use it (services/agentName.ts CO_ALIAS_UNTIL). "Noise" isn't boosted: it is a
+// common word the recognizer already hears, and boosting it would pull "nice" and "noisy" toward it.
+export function standingCallKeywords(now: Date = new Date()): string[] {
+  return [AGENT_NAME, ...(coAliasActive(now) ? [OLD_AGENT_NAME, "CoPatible"] : []), "Boardy", "Instinct", "Muse", "Luma", "House of AI", "Heavybit", "SF Tech Week", "Sequin", "Sequin AI"];
+}
+export const CALL_KEYWORDS = standingCallKeywords();
 
 // Pure: the words this call's recognizer is told to expect: the standing list, the member's first name, and the names in the titles
 // of what Co found for them (a member who says "the Oakland Join-Up" back should be heard as that). Capitalized runs only, deduped
@@ -295,7 +301,7 @@ export function callKeywords(o: { firstName?: string | null; findsNow?: string |
     seen.add(k);
     out.push(t);
   };
-  CALL_KEYWORDS.forEach(add);
+  standingCallKeywords().forEach(add);
   if (o.firstName) add(o.firstName);
   for (const line of (o.findsNow ?? "").split("\n")) {
     const title = line.match(/^- ([^|]+)/)?.[1];
@@ -306,7 +312,7 @@ export function callKeywords(o: { firstName?: string | null; findsNow?: string |
   return out;
 }
 
-export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Co. Sorry I missed you. I'll send you a text.";
+export const VOICEMAIL_MESSAGE = "Hey {{first_name}}, it's Cue. Sorry I missed you. I'll send you a text.";
 
 export const AGENT_DEFAULTS = {
   // 2026-10-08 (Royce): Hume's setup. ElevenLabs calls Sonnet 4.6 directly, no endpoint of ours in between: on the last day of
@@ -418,8 +424,8 @@ export function buildAgentConfig(o: {
 // call_failure), never blaming their phone. Once per 10 minutes. Carried over
 // from the Hume bridge's noteCallFailure.
 export function callFailureNote(kind: "registration" | "initiation"): string {
-  const why = kind === "registration" ? "a problem with Co's own voice setup" : "a technical problem on Co's side";
-  return `Co's call didn't connect because of ${why}, not anything on their phone.`;
+  const why = kind === "registration" ? "a problem with Cue's own voice setup" : "a technical problem on Cue's side";
+  return `Cue's call didn't connect because of ${why}, not anything on their phone.`;
 }
 export function noteCallFailure(userId: string, kind: "registration" | "initiation"): void {
   pool
@@ -434,7 +440,7 @@ export function noteCallFailure(userId: string, kind: "registration" | "initiati
 
 // Said on the line when the call can't be connected to Co (Twilio's voice,
 // since Co's own isn't reachable), so it's never dead air.
-export const CANT_CONNECT_LINE = "Sorry, Co can't connect right now. Co will text you.";
+export const CANT_CONNECT_LINE = "Sorry, Cue can't connect right now. Cue will text you.";
 
 // ---------- the opening line
 export type OpeningSituation = { direction: "inbound" | "outbound"; firstCall: boolean; hour: number | null };
@@ -444,27 +450,27 @@ const evening = (s: OpeningSituation) => s.hour !== null && s.hour >= 17 && s.ho
 // Calm, short, never a question (the prompt asks the first one). {name} is their first name.
 export const OPENINGS: OpeningTemplate[] = [
   // outbound, a first call
-  { text: "Hey {name}, it's Co. Good to finally talk.", when: (s) => s.direction === "outbound" && s.firstCall },
-  { text: "Hi {name}, it's Co. I've been looking forward to this.", when: (s) => s.direction === "outbound" && s.firstCall },
-  { text: "{name}, hi. It's Co. Glad we're doing this.", when: (s) => s.direction === "outbound" && s.firstCall },
-  { text: "Hey {name}. It's Co, finally.", when: (s) => s.direction === "outbound" && s.firstCall },
+  { text: "Hey {name}, it's Cue. Good to finally talk.", when: (s) => s.direction === "outbound" && s.firstCall },
+  { text: "Hi {name}, it's Cue. I've been looking forward to this.", when: (s) => s.direction === "outbound" && s.firstCall },
+  { text: "{name}, hi. It's Cue. Glad we're doing this.", when: (s) => s.direction === "outbound" && s.firstCall },
+  { text: "Hey {name}. It's Cue, finally.", when: (s) => s.direction === "outbound" && s.firstCall },
   // outbound, they know Co
-  { text: "Hey {name}, it's Co.", when: (s) => s.direction === "outbound" && !s.firstCall },
-  { text: "{name}, hi. It's Co.", when: (s) => s.direction === "outbound" && !s.firstCall },
-  { text: "Hi {name}, Co here.", when: (s) => s.direction === "outbound" && !s.firstCall },
+  { text: "Hey {name}, it's Cue.", when: (s) => s.direction === "outbound" && !s.firstCall },
+  { text: "{name}, hi. It's Cue.", when: (s) => s.direction === "outbound" && !s.firstCall },
+  { text: "Hi {name}, Cue here.", when: (s) => s.direction === "outbound" && !s.firstCall },
   { text: "Hey {name}. Good to hear your voice.", when: (s) => s.direction === "outbound" && !s.firstCall },
-  { text: "{name}. It's Co. Hope this is a good time.", when: (s) => s.direction === "outbound" && !s.firstCall },
-  { text: "Morning, {name}. It's Co.", when: (s) => s.direction === "outbound" && !s.firstCall && morning(s) },
-  { text: "Good morning, {name}. Co here.", when: (s) => s.direction === "outbound" && !s.firstCall && morning(s) },
-  { text: "Evening, {name}. It's Co.", when: (s) => s.direction === "outbound" && !s.firstCall && evening(s) },
-  { text: "Hey {name}, it's Co. Hope your evening's going well.", when: (s) => s.direction === "outbound" && !s.firstCall && evening(s) },
+  { text: "{name}. It's Cue. Hope this is a good time.", when: (s) => s.direction === "outbound" && !s.firstCall },
+  { text: "Morning, {name}. It's Cue.", when: (s) => s.direction === "outbound" && !s.firstCall && morning(s) },
+  { text: "Good morning, {name}. Cue here.", when: (s) => s.direction === "outbound" && !s.firstCall && morning(s) },
+  { text: "Evening, {name}. It's Cue.", when: (s) => s.direction === "outbound" && !s.firstCall && evening(s) },
+  { text: "Hey {name}, it's Cue. Hope your evening's going well.", when: (s) => s.direction === "outbound" && !s.firstCall && evening(s) },
   // they called Co
-  { text: "Hey {name}, it's Co. Glad you called.", when: (s) => s.direction === "inbound" },
-  { text: "{name}, hi. This is Co.", when: (s) => s.direction === "inbound" },
-  { text: "Hey {name}. You've got Co.", when: (s) => s.direction === "inbound" },
-  { text: "Hi {name}, it's Co. I'm here.", when: (s) => s.direction === "inbound" },
-  { text: "Morning, {name}. It's Co.", when: (s) => s.direction === "inbound" && morning(s) },
-  { text: "Evening, {name}. It's Co.", when: (s) => s.direction === "inbound" && evening(s) },
+  { text: "Hey {name}, it's Cue. Glad you called.", when: (s) => s.direction === "inbound" },
+  { text: "{name}, hi. This is Cue.", when: (s) => s.direction === "inbound" },
+  { text: "Hey {name}. You've got Cue.", when: (s) => s.direction === "inbound" },
+  { text: "Hi {name}, it's Cue. I'm here.", when: (s) => s.direction === "inbound" },
+  { text: "Morning, {name}. It's Cue.", when: (s) => s.direction === "inbound" && morning(s) },
+  { text: "Evening, {name}. It's Cue.", when: (s) => s.direction === "inbound" && evening(s) },
 ];
 
 // Pure: one opening for this call, never the template used last time with

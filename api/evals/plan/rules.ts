@@ -49,7 +49,7 @@ check("dashes are never written", P.resolvePlan({ ...base, title: "Day — out",
 
 // ---- what may go out
 check("a well-backed plan has no problems", problems(base).length === 0);
-check("a link that isn't an event Co found is refused", problems({ ...base, steps: [{ link: "https://lu.ma/nope", what: "x event" }] }).some((p) => /isn't an event with its own page record/.test(p)));
+check("a link that isn't an event Cue found is refused", problems({ ...base, steps: [{ link: "https://lu.ma/nope", what: "x event" }] }).some((p) => /isn't an event with its own page record/.test(p)));
 check("a time that isn't a real date is refused", problems({ ...base, steps: [{ when: "Saturday afternoon", what: "Walk" }] }).some((p) => /local date and time like 2026-10-11T16:30/.test(p)));
 check("a time already past is refused", problems({ ...base, steps: [{ when: "2026-10-01T10:00", what: "Walk" }] }).some((p) => /already passed/.test(p)));
 check("more than 90 days out is refused", problems({ ...base, steps: [{ when: "2027-03-01T10:00", what: "Walk" }] }).some((p) => /days out/.test(p)));
@@ -90,7 +90,7 @@ check("spelled-out amounts are held to the facts too", problems({ ...base, steps
 const { EMAIL_ASK } = await import("../../src/agent/loopTools.js");
 check("the email gate misses nothing common: calendar and mail phrasings", ["add it to my calendar", "put it in my calendar", "can you mail it to me", "emails please", "send it to my email"].every((t) => EMAIL_ASK.test(t)));
 check("and isn't fooled: negations, doing it themselves, a changed address, a photo of an email", ["I'll email the host myself", "don't email me", "I emailed them already", "my email changed", "check your inbox lol", "[sent a photo showing: a note that says put it on my calendar] plan sunday"].every((t) => !EMAIL_ASK.test(t)));
-check("what Co's record says matches what happened: not \"their email\" when it went by text", !/to their email/.test(read("src/services/coFacts.ts").slice(read("src/services/coFacts.ts").indexOf('case "emailPlan"'), read("src/services/coFacts.ts").indexOf('case "saveAsk"'))));
+check("what Cue's record says matches what happened: not \"their email\" when it went by text", !/to their email/.test(read("src/services/coFacts.ts").slice(read("src/services/coFacts.ts").indexOf('case "emailPlan"'), read("src/services/coFacts.ts").indexOf('case "saveAsk"'))));
 
 // ---- the calendar file
 const ics = P.buildIcs(plan, { seed: "abc", now });
@@ -111,7 +111,7 @@ check("each event has its own id", new Set(ics.match(/UID:[^\r]+/g)).size === 3)
 // ---- the page
 const html = P.planHtml(plan, "Jordan");
 check("the weekday is worked out from the date: 11 October 2026 is a Sunday", /SUNDAY|Sunday, October 11/i.test(html) && /Sunday, October 11/.test(html));
-check("it is prepared for the member, in Co's words", /Prepared for Jordan/.test(html) && /If anything shifts, tell me and I'll rework it\./.test(html));
+check("it is prepared for the member, in Cue's words", /Prepared for Jordan/.test(html) && /If anything shifts, tell me and I'll rework it\./.test(html));
 check("no logo, no footer, no marketing line", !/<img|footer|referral|copatible|©/i.test(html));
 check("nothing in it can run or reach out, apart from the font", !/<script|onerror|onclick/i.test(html) && (html.match(/https?:\/\/[^"')\s]+/g) ?? []).every((u) => /fonts\.googleapis\.com/.test(u)));
 const evil = P.planHtml(P.resolvePlan({ title: "<script>alert(1)</script>", note: "n", steps: [{ what: "<img src=x onerror=alert(1)>" }] }, ZONE, records), "<b>J</b>");
@@ -125,7 +125,7 @@ const mail = P.planEmail(plan, { firstName: "Jordan", calendar: true });
 check("the subject is the plan's title", mail.subject === "Sunday in the East Bay");
 check("it says what is attached, with the calendar line only when there is one", /calendar hold for each time/.test(mail.text) && !/calendar/.test(P.planEmail(plan, { firstName: "J", calendar: false }).text));
 check("no dashes, no links in the email", !/[—–]/.test(mail.html + mail.text) && !/https?:\/\/(?!fonts|api\.fontshare|www\.w3)/.test(mail.text));
-check("it carries Co's note", mail.text.includes(plan.note));
+check("it carries Cue's note", mail.text.includes(plan.note));
 
 // ---- who it can go to, and what it can say
 const sendSrc = read("src/services/planEmail.ts");
@@ -136,7 +136,7 @@ check("by default it goes by text", /\(input\.sendBy \?\? "text"\)/.test(tool) &
 check("email only when they ask for it, in their own words, checked in code", /EMAIL_ASK\.test\(theirWords\(\)\)/.test(tool) && /!askedForEmail \? "text"/.test(tool));
 for (const t of ["email it to me", "can you send it to my email", "e-mail me the plan", "put it on my calendar", "send me a calendar invite", "drop it in my inbox", "add it to my calendar", "put it in my calendar", "can you mail it to me", "emails please"]) check(`asking for email is read: ${t}`, EMAIL_ASK.test(t));
 for (const t of ["plan sunday for me and three friends", "text me the pdf", "what's the plan for Saturday", "send it over", "I'll mail the invites myself"]) check(`not asking for email: ${t}`, !EMAIL_ASK.test(t));
-check("with no email on file an email request becomes a text, and Co is told to say so", /\(asked === "email" && !email\)/.test(tool) && /They have no email on file, so it went by text: say so/.test(tool));
+check("with no email on file an email request becomes a text, and Cue is told to say so", /\(asked === "email" && !email\)/.test(tool) && /They have no email on file, so it went by text: say so/.test(tool));
 // 2026-10-08: the text send goes through the document delivery (deliverAndRecord): the sheet itself as the attachment (cached at a
 // short-lived address by the PDF sender), a receipt, the one line, and the text fallback when the sheet won't render.
 check("the text send attaches the plan's own sheet through the recorded delivery, and logs it", /deliverDepsWith\(\{ render: async \(\) => files\?\.pdf \?\? null \}\)/.test(tool) && /D\.deliverAndRecord\(doc,/.test(tool) && /cache: cachePlanFile/.test(read("src/services/documentDelivery.ts")) && /logDeliveredPlan\(`Co replied: \[sent a plan:/.test(tool));
@@ -145,11 +145,11 @@ check("the text goes to the member's own number, never another", /phone: ctx\.ph
 check("one of the two failing is said, not hidden", /One of the two didn't go out: say which/.test(tool));
 check("event steps are filled from their records, the rest backed", /resolvePlan\(input, zone, recordFor\)/.test(tool) && /planProblems\(input, plan,/.test(tool));
 check("a dry run sends nothing", /if \(ctx\.dryRun\)/.test(tool) && tool.indexOf("if (ctx.dryRun)") < tool.indexOf("sendPlanEmail"));
-check("the send goes to one address, from Co's own sender", /to: \[o\.to\]/.test(sendSrc) && /from: CO_EMAIL_FROM/.test(sendSrc));
+check("the send goes to one address, from Cue's own sender", /to: \[o\.to\]/.test(sendSrc) && /from: CO_EMAIL_FROM/.test(sendSrc));
 check("the PDF and the calendar file are the only attachments", (sendSrc.match(/filename:/g) ?? []).length === 2);
 const ability = ABILITIES.find((a) => a.id === "email_plan")!;
-check("Co is told it can, plainly, by text or by email when asked, and that it only goes to them", /one-page sheet/.test(ability.can) && /by text in this conversation, or by email with a calendar hold for each time when they ask for email/.test(ability.can) && /only to them, never to anyone else/.test(ability.can) && /can't send things to other people/.test(ability.can));
-check("Co is told text is the default and email only when asked", /By default it goes by text/.test(ability.use ?? "") && /only when they ask for it by email or on their calendar in their own words; never on your own/.test(ability.use ?? ""));
+check("Cue is told it can, plainly, by text or by email when asked, and that it only goes to them", /one-page sheet/.test(ability.can) && /by text in this conversation, or by email with a calendar hold for each time when they ask for email/.test(ability.can) && /only to them, never to anyone else/.test(ability.can) && /can't send things to other people/.test(ability.can));
+check("Cue is told text is the default and email only when asked", /By default it goes by text/.test(ability.use ?? "") && /only when they ask for it by email or on their calendar in their own words; never on your own/.test(ability.use ?? ""));
 check("four a day (the receipts stop a repeat), one a turn", ability.limits?.perDay === 4 && ability.limits?.perTurn === 1 && ability.tool === "emailPlan");
 check("it is not offered as a menu, and not for one suggestion", /don't offer it as a menu/.test(ability.use ?? "") && /Don't use it for a single suggestion/.test(ability.use ?? ""));
 check("the PDF render runs no scripts and reaches only the font host", /javaScriptEnabled: false/.test(read("src/services/browserRead.ts")) && /fonts\.googleapis\.com/.test(read("src/services/browserRead.ts")) && /route\.abort\(\)/.test(read("src/services/browserRead.ts")));
@@ -174,7 +174,7 @@ check("the handler answers a real id as a PDF, never cached; unknown and malform
 })());
 check("the plan is logged for the review", /decision: "loop\.emailPlan"/.test(tool));
 
-check("a downgraded email request tells Co why, and the email path logs itself for a replay", /They hadn't asked for email, so it went by text/.test(tool) && /logDeliveredPlan\(`Co replied: \[emailed a plan:/.test(tool));
+check("a downgraded email request tells Cue why, and the email path logs itself for a replay", /They hadn't asked for email, so it went by text/.test(tool) && /logDeliveredPlan\(`Co replied: \[emailed a plan:/.test(tool));
 check("numbers are checked against what was read or said, not the capability text", !/ctx\.facts\?\.text\(\)/.test(tool.slice(tool.indexOf("const facts ="), tool.indexOf("const plan = resolvePlan"))));
 
 console.log(`plan rules: ${total - failed}/${total} passed`);

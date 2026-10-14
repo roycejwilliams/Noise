@@ -25,7 +25,7 @@ const NOW = new Date("2026-10-06T20:00:00Z");
 const callPrompt = E.promptForElevenLabs(prompt);
 // 2026-10-08: the call prompt is Hume's again (Royce), Rapport and all; what stays out is the repo-only goals-and-asks interview.
 check("the call prompt runs no goals-and-asks interview", !/GOALS AND ASKS|what are you moving toward these next few months|here's what I'm carrying for you/.test(callPrompt));
-const ex = X.captureIntentPrompt("user: I'm moving toward getting Co in front of users\nassistant: here's what I'm carrying for you...\nuser: no, the first thing is pre-seed", "whole_transcript");
+const ex = X.captureIntentPrompt("user: I'm moving toward getting Cue in front of users\nassistant: here's what I'm carrying for you...\nuser: no, the first thing is pre-seed", "whole_transcript");
 check("the extraction takes direction as entries too, and treats the corrected playback as the final list", /DIRECTION they said they are moving toward over the next few months/.test(ex) && /the CORRECTED version is the final list/.test(ex) && X.normalizeCapturedAsks({ asks: Array.from({ length: 12 }, (_, i) => ({ text: `entry ${i}`, type: "seeking" as const })) } as any, "whole_transcript").length === 8);
 
 // ---- DAILY LIFE: goals stay silent (the lens)
@@ -34,11 +34,11 @@ check("replies get goals as an unspoken hint plus the rule (never as a fact to r
 check("the call context carries their closed goals as an arc line, orientation only", /arcLine\(profile\?\.intent\)/.test(src("services/callContext.ts")));
 const intent = [
   { id: "g1", kind: "goal", status: "active", text: "Raise a pre-seed round", created_at: day(80), confirmed_at: day(80) },
-  { id: "g2", kind: "goal", status: "active", text: "Get Co in front of users", created_at: day(20), confirmed_at: day(20) },
+  { id: "g2", kind: "goal", status: "active", text: "Get Cue in front of users", created_at: day(20), confirmed_at: day(20) },
   { id: "a1", kind: "ask", status: "active", text: "Find me weekend events", created_at: day(90) },
   { id: "g3", kind: "goal", status: "resolved", text: "Ship the first version", created_at: day(120), resolved_at: day(60), closed_by: "member", closed_quote: "we shipped it" },
 ];
-check("goal history is the autobiography: closed goals are kept, dated, with their closing words; asks are not in it", J.goalHistory(intent).map((g) => g.text).join("|") === "Ship the first version|Raise a pre-seed round|Get Co in front of users" && J.goalHistory(intent)[0].closedQuote === "we shipped it" && !J.goalHistory(intent).some((g) => g.text.includes("weekend")));
+check("goal history is the autobiography: closed goals are kept, dated, with their closing words; asks are not in it", J.goalHistory(intent).map((g) => g.text).join("|") === "Ship the first version|Raise a pre-seed round|Get Cue in front of users" && J.goalHistory(intent)[0].closedQuote === "we shipped it" && !J.goalHistory(intent).some((g) => g.text.includes("weekend")));
 check("the arc line names what they closed, by month, and nothing still open", /Ship the first version/.test(String(J.arcLine(intent))) && !/Raise a pre-seed/.test(String(J.arcLine(intent))));
 
 // ---- CHECK-INS: rare, seasonal, never the 7-day ask clock
@@ -46,7 +46,7 @@ check("a goal is asked about only after eight weeks unconfirmed: a 20-day-old go
 check("seasonal, never a drumbeat: nothing for eight weeks after the last goal check-in, whatever goals are due", J.dueGoalCheckin(intent, new Date(NOW.getTime() - 30 * 86_400_000), NOW) === null && J.dueGoalCheckin(intent, new Date(NOW.getTime() - 60 * 86_400_000), NOW)?.id === "g1");
 check("asks, closed goals and the oldest-unconfirmed order: only goals are ever due, oldest first", J.dueGoalCheckin([intent[2]], null, NOW) === null && J.dueGoalCheckin([intent[3]], null, NOW) === null && J.dueGoalCheckin([{ ...intent[1], created_at: day(70), confirmed_at: day(70) }, intent[0]], null, NOW)?.id === "g1");
 check("the type's own policy is a season: no more than one in 56 days, held while they struggle, and it is a companion message", /goal_checkin: \{ priority: 9, typeGapDays: 56 \}/.test(src("harness/proactive.ts")) && /"ask_checkin",\s+"goal_checkin",/.test(src("harness/proactive.ts")) && /goal_checkin: "companion"/.test(src("harness/proactivePurpose.ts")));
-check("it does not ride the 7-day ask clock: the ask check-in cron reads ask_checkins only and never queues a goal_checkin", !/goal_checkin/.test(src("jobs/index.ts").slice(src("jobs/index.ts").indexOf("Co Loop Stage 5 check-in on an open ask"), src("jobs/index.ts").indexOf("Luma & X asks need to surface"))) && /runGoalCheckins\(\)/.test(src("jobs/index.ts")));
+check("it does not ride the 7-day ask clock: the ask check-in cron reads ask_checkins only and never queues a goal_checkin", !/goal_checkin/.test(src("jobs/index.ts").slice(src("jobs/index.ts").indexOf("Cue Loop Stage 5 check-in on an open ask"), src("jobs/index.ts").indexOf("Luma & X asks need to surface"))) && /runGoalCheckins\(\)/.test(src("jobs/index.ts")));
 {
   const queued: any[] = [];
   (pool as any).query = async (sql: string) => (/FROM co_profiles cp JOIN users u/.test(sql) ? { rows: [{ user_id: "u1", intent, last_checkin: null }, { user_id: "u2", intent: [intent[2]], last_checkin: null }] } : { rows: [] });

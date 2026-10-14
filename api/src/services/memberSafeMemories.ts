@@ -25,8 +25,8 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // Pure: what one history sentence about a member says, from the sentence that named them.
 export function historyLine(sentence: string, name: string): string {
-  if (/\bintro(duc\w*)?\b|\bconnect(ed|ing)?\b/i.test(sentence)) return `Co introduced them to ${name}, another member.`;
-  if (/\bmatch\w*|\bsuggest\w*|\bnudg\w*|\bworth meeting\b|\bpoint\w* (them|you) (to|toward)/i.test(sentence)) return `Co suggested ${name}, another member, as someone to meet.`;
+  if (/\bintro(duc\w*)?\b|\bconnect(ed|ing)?\b/i.test(sentence)) return `Cue introduced them to ${name}, another member.`;
+  if (/\bmatch\w*|\bsuggest\w*|\bnudg\w*|\bworth meeting\b|\bpoint\w* (them|you) (to|toward)/i.test(sentence)) return `Cue suggested ${name}, another member, as someone to meet.`;
   return `${name}, another member, came up here; their details aren't kept for this conversation.`;
 }
 
@@ -41,7 +41,7 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
     try {
       const name = String(JSON.parse(content)?.candidate?.first_name ?? "").trim();
       // The tease never named them to this member; the offer after it did.
-      return t === "network_offer_pending" || !name ? "Co mentioned that another member could be worth meeting, without naming them." : `Co offered to introduce them to ${name}, another member.`;
+      return t === "network_offer_pending" || !name ? "Cue mentioned that another member could be worth meeting, without naming them." : `Cue offered to introduce them to ${name}, another member.`;
     } catch {
       return null;
     }
@@ -49,7 +49,7 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
   let text = content;
   // Tier 0 is a person: keep who, drop the reason (it's about them).
   // The rest of the line is events and openings, kept as written.
-  if (t === "recommendation") return text.replace(/\[Tier 0\]\s*([^:|]+?)\s*:\s*[^|]*/g, (_m, name: string) => `[Tier 0] ${name.trim()}, another member (Co suggested meeting them) `).trim() || null;
+  if (t === "recommendation") return text.replace(/\[Tier 0\]\s*([^:|]+?)\s*:\s*[^|]*/g, (_m, name: string) => `[Tier 0] ${name.trim()}, another member (Cue suggested meeting them) `).trim() || null;
   const names = linkedNames.map((n) => n.trim()).filter((n) => n.length >= 2);
   if (!names.length) return text.trim() || null;
   const named = new RegExp(`\\b(${names.map(escape).join("|")})\\b`);
@@ -90,8 +90,8 @@ export function introFacts(rows: { content: string; memory_type?: string | null 
   for (const r of rows) {
     if (!r.content) continue;
     // Never the internal match score (older nudge rows carried "(score 88)").
-    if (INTRO_RECORDS.has(r.memory_type ?? "")) out.push(`Co's record: ${(safeMemory(r.memory_type ?? null, String(r.content), []) ?? "").replace(/\s*\(score \d+\)/g, "").trim()}`);
-    if (r.memory_type === "recommendation") for (const m of String(r.content).matchAll(/\[Tier 0\]\s*([^:|]+?)\s*:/g)) out.push(`Co's record: Co suggested ${m[1].trim()}, another member, to them as someone worth meeting.`);
+    if (INTRO_RECORDS.has(r.memory_type ?? "")) out.push(`Cue's record: ${(safeMemory(r.memory_type ?? null, String(r.content), []) ?? "").replace(/\s*\(score \d+\)/g, "").trim()}`);
+    if (r.memory_type === "recommendation") for (const m of String(r.content).matchAll(/\[Tier 0\]\s*([^:|]+?)\s*:/g)) out.push(`Cue's record: Cue suggested ${m[1].trim()}, another member, to them as someone worth meeting.`);
   }
   return out;
 }

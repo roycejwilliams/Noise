@@ -34,7 +34,7 @@ export const onboarding: Case[] = [
       const t1 = await say(NEW1, "hey there");
       const u1 = await userBy(NEW1);
       const after1 = await coTexts(NEW1);
-      const t2 = await say(NEW1, "hello? is this Co");
+      const t2 = await say(NEW1, "hello? is this Cue");
       const after2 = await coTexts(NEW1);
       const second = after2.slice(after1.length);
       return {

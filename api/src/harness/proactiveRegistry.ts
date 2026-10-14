@@ -99,7 +99,7 @@ async function draftDebrief(c: Candidate, firstName: string): Promise<DraftResul
   // A follow-up on something Co sent needs a record that Co sent it.
   const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds) : null;
   const onlyAboutASend = !p.eventApiId && !(p.checkinFollowupIds ?? []).length && !(p.walkinCheckinIds ?? []).length;
-  if (onlyAboutASend && !sent) return skip("no record of Co sending it to them");
+  if (onlyAboutASend && !sent) return skip("no record of Cue sending it to them");
   const people = await peopleCoPointedTo(c.userId, p.eventApiId);
   // Did they go? Only a check-in, a walk-in, or their own stated word that they went (Royce, 2026-10-09: "How was the Claude
   // Founder Salon?" went to someone Co had only recommended it to; 2026-10-12 review: word matching read "going to practice my
@@ -177,13 +177,13 @@ export async function draftDebriefText(firstName: string, p: DebriefPayload, peo
       today: new Date().toISOString().slice(0, 10),
       people_co_pointed_them_to_there: people,
       what_they_were_looking_for: p.askText,
-      they_checked_in_at_the_door: walkin ? "yes, and Co doesn't know them well yet" : null,
+      they_checked_in_at_the_door: walkin ? "yes, and Cue doesn't know them well yet" : null,
     },
     task: !went && !isOpportunity
-      ? `Co only suggested "${p.eventName}" to them; nothing says they went. Ask, lightly, whether they ended up making it, naming it. Never assume they went: no "how was it", no "who did you meet". One easy question, no pressure either way.`
+      ? `Cue only suggested "${p.eventName}" to them; nothing says they went. Ask, lightly, whether they ended up making it, naming it. Never assume they went: no "how was it", no "who did you meet". One easy question, no pressure either way.`
       : isOpportunity
-      ? `Ask if they got a chance to look into or apply to "${p.eventName}" (an opening Co pointed them to on the date above, not an event) — did anything come of it. If what Co said about it shows it's still ahead of today, SKIP. One text, not a survey.`
-      : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Co pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
+      ? `Ask if they got a chance to look into or apply to "${p.eventName}" (an opening Cue pointed them to on the date above, not an event) — did anything come of it. If what Cue said about it shows it's still ahead of today, SKIP. One text, not a survey.`
+      : `Ask how "${p.eventName}" was, naming the event.${people.length ? ` Name one of the people Cue pointed them to and ask if they ended up talking.` : " Ask who they met or what stood out."}${walkin ? " Then offer, in the same text, to find time for a call this week so you can get to know them and point them to better people next time." : ""} One text, not a survey.`,
   });
   if (!text) return skip("model chose SKIP");
   // Code backstop: an unconfirmed debrief never takes for granted that they went.
@@ -212,7 +212,7 @@ export async function prepareOffer(c: Candidate, person: Person): Promise<Prepar
   if (!when.ok) return { skip: (await import("../services/guardDrops.js")).dateDropped(c.userId, "proactive.offer", `not offered: ${when.why}`) };
   const { gatherDots, findDots, whyContext } = await import("../services/connectDots.js");
   const known = await gatherDots(c.userId);
-  const dots = p.reminder ? [] : (await findDots({ ...known, now: `Co is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (${p.fromProfile ? `Co noticed it for them from where they're headed, not an ask: ${p.askText}` : `it came up for their ask: "${p.askText}"`})` })).map((d) => d.link);
+  const dots = p.reminder ? [] : (await findDots({ ...known, now: `Cue is about to offer them: ${p.match.name}${"description" in p.match && p.match.description ? `, ${String(p.match.description).slice(0, 300)}` : ""} (${p.fromProfile ? `Cue noticed it for them from where they're headed, not an ask: ${p.askText}` : `it came up for their ask: "${p.askText}"`})` })).map((d) => d.link);
   const why = whyContext(known);
   const { revealItem } = await import("../agent/eventDiscoverySurfacing.js");
   return { dots, why, item: revealItem(p.askText, p.fromProfile, p.match, { dots, why }) };
@@ -305,7 +305,7 @@ export const proactiveRegistry: ProactiveRegistry = {
       const text = await draftProactive({
         functionId: "networkIntroNudge.tease.draft",
         firstName: person.firstName,
-        facts: { what_is_true: "someone in Co's network fits what they've told you they're looking for" },
+        facts: { what_is_true: "someone in Cue's network fits what they've told you they're looking for" },
         task: "Say someone in the network came to mind for them, without naming or describing the person, and ask one yes/no question: do they want to hear who. Don't say the other person wants to meet them.",
       });
       if (!text) return skip("model chose SKIP");
@@ -381,7 +381,7 @@ export const proactiveRegistry: ProactiveRegistry = {
       // A thread Co took on since it was queued is Co's to deliver now, not a question for them (memberThreads.ts coOwns).
       const { coOwns, ownedWorkFor } = await import("./memberThreads.js");
       const owned = await ownedWorkFor(c.userId);
-      if (c.payload.thread && coOwns(c.payload.thread.text, owned)) return skip("Co owns this thread: an open task delivers it");
+      if (c.payload.thread && coOwns(c.payload.thread.text, owned)) return skip("Cue owns this thread: an open task delivers it");
       // A moment is said only while the record still backs it: a "went" needs their stated going (services/milestones.ts).
       if (c.payload.story?.key && !(await import("../services/milestones.js").then((M) => M.milestoneConfirmed(c.userId, c.payload.story.key)).catch(() => false))) return skip("the moment isn't confirmed by them: only theirs to say");
       const r = await draftCompanionCheckin(person.firstName, c.payload.recap ?? "", c.payload.thread ?? null, c.payload.item ?? null, c.payload.curious ?? null, c.payload.story ?? null, c.payload.advice ?? null, c.payload.heavy ?? null, owned);
@@ -537,7 +537,7 @@ export const proactiveRegistry: ProactiveRegistry = {
       const S = await import("../services/askSharing.js");
       const offered = S.undecidedAsks((await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [c.userId])).rows[0]?.intent).map((a) => a.id);
       if (offered.length) await pool.query(`UPDATE event_presence SET share_asked_at = NOW(), share_ask_ids = $3, share_answered_at = NULL WHERE event_api_id = $1 AND user_id = $2`, [c.payload.eventId, c.userId, offered]);
-      await writeMemory(c.userId, "event_brief_ask", `Asked if Co may name them in the member brief for "${c.payload.name}"`);
+      await writeMemory(c.userId, "event_brief_ask", `Asked if Cue may name them in the member brief for "${c.payload.name}"`);
     },
   },
 
@@ -572,7 +572,7 @@ export const proactiveRegistry: ProactiveRegistry = {
          ON CONFLICT (event_api_id, user_id) DO UPDATE SET share_asked_at = NOW(), share_ask_ids = $3, share_answered_at = NULL`,
         [c.payload.eventId, c.userId, offered],
       );
-      await writeMemory(c.userId, "event_brief_ask", `Asked, before "${c.payload.name}", whether Co may tell a good match in the room what they're looking for`);
+      await writeMemory(c.userId, "event_brief_ask", `Asked, before "${c.payload.name}", whether Cue may tell a good match in the room what they're looking for`);
     },
   },
 
@@ -855,7 +855,7 @@ export const proactiveRegistry: ProactiveRegistry = {
       // (harness/replyGrounding.ts reads followup_context).
       const sent = p.outcomeFollowupIds?.length ? await whatCoSent(c.userId, p.outcomeFollowupIds).catch(() => null) : null;
       if (sent) {
-        await writeMemory(c.userId, "followup_context", `Co's follow-up asked about "${p.eventName}", which Co sent them on ${sent.date}${sent.caption ? `: "${sent.caption}"` : ""}.`).catch(() => {});
+        await writeMemory(c.userId, "followup_context", `Cue's follow-up asked about "${p.eventName}", which Cue sent them on ${sent.date}${sent.caption ? `: "${sent.caption}"` : ""}.`).catch(() => {});
       }
       if (p.outcomeFollowupIds?.length) {
         await pool.query(`UPDATE recommendation_outcome_followups SET sent_at = NOW(), harness_status = 'sent' WHERE id = ANY($1::uuid[])`, [p.outcomeFollowupIds]);
@@ -869,7 +869,7 @@ export const proactiveRegistry: ProactiveRegistry = {
         // reply with a time becomes a scheduled call.
         await pool.query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
           c.userId,
-          `Co proactively offered: "${messages.join(" ")}" (morning-after follow-up after checking in at "${p.eventName}")`,
+          `Cue proactively offered: "${messages.join(" ")}" (morning-after follow-up after checking in at "${p.eventName}")`,
         ]);
       }
     },
@@ -903,6 +903,17 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   // Human-written bullets go out verbatim; only the intro/closing lines are
   // model-drafted, and those are what the output checks run on.
+  // Fixed wording, not a draft (services/nameChange.ts): the one text that tells them Co goes by Cue now, on a day nothing else goes.
+  // Re-read at send time: if the line already went out riding in another text, nothing goes.
+  name_change: {
+    async draft(c) {
+      const { rows } = await pool.query(`SELECT 1 FROM proactive_sends WHERE user_id = $1 AND target_key = $2`, [c.userId, c.targetKey]);
+      if (rows[0]) return skip("already told");
+      const { NAME_CHANGE_TEXT } = await import("../services/nameChange.js");
+      return { messages: [NAME_CHANGE_TEXT], text: NAME_CHANGE_TEXT, rules: { maxChars: 120, maxSentences: 3 } };
+    },
+  },
+
   // Fixed wording, not a draft: it names the date a page or deck expires, which has to be exactly right (services/coPages/expiry.ts).
   // Re-read at send time: kept, renewed, taken down or already past since it was queued means nothing goes.
   artifact_expiry: {

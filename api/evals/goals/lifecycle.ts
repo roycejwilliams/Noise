@@ -24,8 +24,8 @@ const OCT8 = new Date("2026-10-08T17:00:00Z");
 // Royce's goals on file, 2026-10-08 (work and Co tasks, no findable thing in their own words).
 const ROYCE = [
   "partnering with Sequin AI for a November launch party",
-  "have Co draft planning docs for branding and launch strategy with Sequin AI",
-  "maintain Co's presence after the November event",
+  "have Cue draft planning docs for branding and launch strategy with Sequin AI",
+  "maintain Cue's presence after the November event",
 ];
 
 function harness(answer: (prompt: string) => string, o: { states?: Map<string, any>; corrections?: any[]; asks?: { id: number; text: string }[] } = {}) {
@@ -50,14 +50,14 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
 {
   const h = harness(() => JSON.stringify([
     { n: 1, kind: "work", edges: ["AI and founder gatherings in SF in November", "partnering with Sequin AI for a November launch party"], until: "2026-11-30", superseded_by: null, why: "their own partnership" },
-    { n: 2, kind: "findable", edges: [], until: null, superseded_by: null, why: "Co's own drafting, nothing to find" },
+    { n: 2, kind: "findable", edges: [], until: null, superseded_by: null, why: "Cue's own drafting, nothing to find" },
     { n: 3, kind: "co_task", edges: ["open calls for consumer AI founders"], until: null, superseded_by: null, why: "" },
   ]));
   const p = await plan(h, ROYCE);
   check("the search is the findable edges, never a goal's own words", !!p.searchText && /AI and founder gatherings in SF in November/.test(p.searchText) && /open calls for consumer AI founders/.test(p.searchText) && !rawIn(p.searchText, ROYCE), p.searchText);
   check("an edge that restates the goal is dropped in code", !/partnering with Sequin AI for a November launch party/.test(p.searchText ?? ""));
-  check("a Co task is a Co task whatever the model says (the asks guard, extended to goals)", G.isCoTaskGoal(ROYCE[1]) && G.isCoTaskGoal(ROYCE[2]) && !G.isCoTaskGoal("find a running club in the Marina"));
-  check("a goal with no findable edge is passed with its reason", p.passed.some((x) => x.goal === ROYCE[1] && /co_task: Co's own drafting/.test(x.why)), p.passed);
+  check("a Cue task is a Cue task whatever the model says (the asks guard, extended to goals)", G.isCoTaskGoal(ROYCE[1]) && G.isCoTaskGoal(ROYCE[2]) && !G.isCoTaskGoal("find a running club in the Marina"));
+  check("a goal with no findable edge is passed with its reason", p.passed.some((x) => x.goal === ROYCE[1] && /co_task: Cue's own drafting/.test(x.why)), p.passed);
   check("the plan is logged: what it searches, what it passed and why", h.logs.length === 1 && h.logs[0].action === "searching_edges" && h.logs[0].proposal.passed.length === 1);
   const none = harness(() => JSON.stringify(ROYCE.map((_, i) => ({ n: i + 1, kind: i === 0 ? "work" : "co_task", edges: [], until: null, superseded_by: null, why: "no findable side" }))));
   const np = await plan(none, ROYCE);
@@ -91,8 +91,8 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
 
 // ---- 3. a superseded goal is stale and its searches end
 {
-  const goals = ["launch Co's first in-person event on Oct 10", "partnering with Sequin AI for a November launch party"];
-  const corrections = [{ field: "goals", old_value: "launch Co's first in-person event (Oct 10th)", new_value: "partnering with Sequin AI for a November launch party", corrected_at: "2026-10-06T17:00:00Z" }];
+  const goals = ["launch Cue's first in-person event on Oct 10", "partnering with Sequin AI for a November launch party"];
+  const corrections = [{ field: "goals", old_value: "launch Cue's first in-person event (Oct 10th)", new_value: "partnering with Sequin AI for a November launch party", corrected_at: "2026-10-06T17:00:00Z" }];
   const answer = () => JSON.stringify([
     { n: 1, kind: "work", edges: ["SF venues for a 120-person launch night"], until: null, superseded_by: null, why: "" },
     { n: 2, kind: "work", edges: ["AI and founder gatherings in SF in November"], until: null, superseded_by: null, why: "" },
@@ -114,29 +114,29 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
   const h = harness(() => JSON.stringify([
     { n: 1, kind: "findable", edges: ["Marina running clubs with weekday morning runs"], until: null, superseded_by: null, why: "" },
     { n: 2, kind: "work", edges: ["AI and founder gatherings in SF in November"], until: "2026-11-30", superseded_by: null, why: "" },
-    { n: 3, kind: "co_task", edges: [], until: null, superseded_by: null, why: "Co's own drafting" },
+    { n: 3, kind: "co_task", edges: [], until: null, superseded_by: null, why: "Cue's own drafting" },
   ]), { states });
   const p = await plan(h, goals);
   check("the done goal isn't sent to the model at all", h.prompts.length === 1 && !/raise a pre-seed round/.test(h.prompts[0]));
   check("the search has the active goals' edges only", !!p.searchText && /Marina running clubs/.test(p.searchText) && /November/.test(p.searchText) && !rawIn(p.searchText, goals));
-  check("the Co task with no edge is passed, the done goal neither searched nor passed", p.passed.length === 1 && p.passed[0].goal === ROYCE[1] && p.active.length === 2);
+  check("the Cue task with no edge is passed, the done goal neither searched nor passed", p.passed.length === 1 && p.passed[0].goal === ROYCE[1] && p.active.length === 2);
 }
 
 // ---- 5. find requests saved from a work or Co-task goal stop being searched
 {
   const asks = [
     { id: 1, text: "Offering to partner with Sequin AI for a November launch party" },
-    { id: 2, text: "have Co draft planning docs for branding and launch strategy with Sequin AI" },
+    { id: 2, text: "have Cue draft planning docs for branding and launch strategy with Sequin AI" },
     { id: 3, text: "plan will be delivered once ready" },
     { id: 4, text: "find a dinner series for founders in Hayes Valley" },
   ];
   const h = harness(() => JSON.stringify([
     { n: 1, kind: "work", edges: ["AI and founder gatherings in SF in November"], until: null, superseded_by: null, why: "" },
-    { n: 2, kind: "co_task", edges: [], until: null, superseded_by: null, why: "Co's own drafting" },
+    { n: 2, kind: "co_task", edges: [], until: null, superseded_by: null, why: "Cue's own drafting" },
     { n: 3, kind: "co_task", edges: [], until: null, superseded_by: null, why: "" },
   ]), { asks });
   const p = await plan(h, ROYCE);
-  check("goal-derived find requests (work, Co tasks, Co's promises) are marked retire-due (they retire through the ask-once flow, services/askRetire.ts)", h.helped.sort().join() === "1,2,3" && p.retiredAsks === 3, h.helped);
+  check("goal-derived find requests (work, Cue tasks, Cue's promises) are marked retire-due (they retire through the ask-once flow, services/askRetire.ts)", h.helped.sort().join() === "1,2,3" && p.retiredAsks === 3, h.helped);
   check("a real find request stays a find request", !h.helped.includes(4));
   check("help asks are never searched by the ask sweep (find and person only, and person asks go to intros, never the search)", /if \(row\.kind === "person"\) \{[\s\S]{0,400}attemptNetworkSurfacing[\s\S]{0,200}continue;\s*\}\s*try \{\s*await attemptEventSurfacing/.test(src("jobs/index.ts")) && /WHERE ac\.resolved_at IS NULL AND ac\.kind IN \('find', 'person'\)\s+AND u\.archived_at IS NULL/.test(src("jobs/index.ts")));
 }
@@ -149,10 +149,10 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
   await plan(h, [ROYCE[0]]);
   check("every run derives from scratch (two runs, two model calls; nothing cached)", calls === 2 && !/goal_find_edges|cached/.test(src("services/goalEdges.ts").replace(/never cached|nothing cached/g, "")));
   check("a context set-aside waits to be told (told_at NULL); one made in conversation is already said", /CASE WHEN \$6 = 'context' AND \$4 <> 'active' THEN NULL ELSE NOW\(\) END/.test(src("services/goalEdges.ts")));
-  check("the next reply is handed the untold set-aside as a hint to raise naturally, never a list", /Co stopped looking for things for their goal/.test(src("harness/replyGrounding.ts")) && /goalSetAsides = await import\("\.\/goalEdges\.js"\)/.test(src("services/turnContext.ts")));
+  check("the next reply is handed the untold set-aside as a hint to raise naturally, never a list", /Cue stopped looking for things for their goal/.test(src("harness/replyGrounding.ts")) && /goalSetAsides = await import\("\.\/goalEdges\.js"\)/.test(src("services/turnContext.ts")));
   check("told once a sent reply raises it; else one more hint", G.raisedGoal("Still want things for the Sequin AI November launch party?", ROYCE[0]) && !G.raisedGoal("Good morning, how was the run?", ROYCE[0]) && /noteGoalHints\(input\.userId, \[aside\]/.test(src("agent/conversationReply.ts")));
   check("done at their word: closing a goal marks it done (it stays on file)", /setGoalState\(userId, String\(goal\.text\), "done"/.test(src("services/goalJourney.ts")));
-  check("Co can mark a goal done, stale or active again (markGoal, registry entry), only a goal on file", /markGoal: tool\(/.test(src("agent/loopTools.ts")) && /That isn't one of their goals on file/.test(src("agent/loopTools.ts")) && /tool: "markGoal"/.test(src("services/capabilities.ts")));
+  check("Cue can mark a goal done, stale or active again (markGoal, registry entry), only a goal on file", /markGoal: tool\(/.test(src("agent/loopTools.ts")) && /That isn't one of their goals on file/.test(src("agent/loopTools.ts")) && /tool: "markGoal"/.test(src("services/capabilities.ts")));
 }
 
 // ---- 7. the review of #107
@@ -161,8 +161,8 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
   const asks = [{ id: 7, text: "find a running club in the Marina" }];
   const down = harness(() => { throw new Error("timeout"); }, { asks });
   await plan(down, ["find a running club in the Marina"]);
-  check("a model timeout retires no find request (only an answer that was read, or Co's own task)", down.helped.length === 0, down.helped);
-  const coDown = harness(() => { throw new Error("timeout"); }, { asks: [{ id: 8, text: "have Co draft planning docs for branding and launch strategy with Sequin AI" }] });
+  check("a model timeout retires no find request (only an answer that was read, or Cue's own task)", down.helped.length === 0, down.helped);
+  const coDown = harness(() => { throw new Error("timeout"); }, { asks: [{ id: 8, text: "have Cue draft planning docs for branding and launch strategy with Sequin AI" }] });
   await plan(coDown, [ROYCE[1]]);
   check("...Co's own task is still caught in code without the model", coDown.helped.join() === "8");
   // Marking a goal active again sticks: older corrections, a window that had passed, a newer goal don't re-stale it.

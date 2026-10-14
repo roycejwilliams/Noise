@@ -9,7 +9,7 @@ const { MODELS } = await import("../../src/models.js");
 const Anthropic = (await import("@anthropic-ai/sdk")).default;
 
 const summary =
-  "Where things stand now: Co sent Jordan the post-event branding plan PDF this morning.\n\n" +
+  "Where things stand now: Cue sent Jordan the post-event branding plan PDF this morning.\n\n" +
   "What you know about them right now:\nJordan is a founder in San Francisco building a climate data startup. They pitch at the Bay Climate demo day on Thursday and said they were nervous about the Q&A. " +
   "They like small dinners more than big mixers. ".repeat(6);
 const reason = R.callReasonFor({

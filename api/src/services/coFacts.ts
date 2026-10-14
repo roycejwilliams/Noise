@@ -72,11 +72,11 @@ export function toolAction(tool: string, input: any): { relation: string; label:
     case "shareLink":
       return (Array.isArray(input?.urls) ? input.urls : []).map((u: string) => ({ relation: "sent", label: `the link ${s(u)}`, url: s(u) }));
     case "sendContactCard":
-      return [{ relation: "sent", label: "Co's contact card" }];
+      return [{ relation: "sent", label: "Cue's contact card" }];
     case "sendInvite":
       return [{ relation: "sent", label: "an invite link to forward to a friend" }];
     case "sendProductUpdates":
-      return [{ relation: "sent", label: "the list of what's new in Co" }];
+      return [{ relation: "sent", label: "the list of what's new in Cue" }];
     // Co's own loop (agent/loop.ts): what it looked for, read and sent.
     case "searchEvents":
       return s(input?.what) ? [{ relation: "searched", label: `${s(input.what)}${s(input?.when) ? `, ${s(input.when)}` : ""}` }] : null;
@@ -110,7 +110,7 @@ export function toolAction(tool: string, input: any): { relation: string; label:
     case "noteReaction":
       return [{ relation: "did", label: `noted how "${s(input?.item)}" landed: ${s(input?.reaction)}${s(input?.quote) ? ` (their words: "${s(input.quote).slice(0, 120)}")` : ""}` }];
     case "markArrived":
-      return [{ relation: "did", label: "recorded that they arrived at a Co event" }];
+      return [{ relation: "did", label: "recorded that they arrived at a Cue event" }];
     case "requestEventIntro":
       return [{ relation: "did", label: `started a double opt-in intro${s(input?.personName) ? ` with ${s(input.personName)}` : ""}` }];
     case "reactInsteadOfReplying":
@@ -169,23 +169,23 @@ export function ledgerLine(r: LedgerRow, today = localToday(), zone: string | nu
   const day = localToday(zone, r.at);
   // The thing's own date, when known, read against today (dateGuard.ts).
   const note = r.when ? dateNote(readDates({ start: r.when, end: r.whenEnd && r.whenEnd >= r.when ? r.whenEnd : r.when }, today)) : "";
-  if (r.relation === "sent" && DOCUMENT_LABEL.test(r.label)) return `On ${day} Co sent them "${r.label}". ${DOCUMENT_AGAIN}`;
-  if (r.relation === "sent") return `On ${day} Co sent them "${r.label}"${r.url && !r.label.includes(r.url) ? ` (${r.url})` : ""}${note}.`;
+  if (r.relation === "sent" && DOCUMENT_LABEL.test(r.label)) return `On ${day} Cue sent them "${r.label}". ${DOCUMENT_AGAIN}`;
+  if (r.relation === "sent") return `On ${day} Cue sent them "${r.label}"${r.url && !r.label.includes(r.url) ? ` (${r.url})` : ""}${note}.`;
   // A first text that carried a link is a send of that link, said plainly
   // (2026-09-27: "texted them first: https://…" was read as not having sent
   // a link, and Co said it "never sent an actual link").
   if (r.relation === "texted") {
     const link = r.label.match(/https?:\/\/\S+/)?.[0];
     const rest = link ? r.label.replace(link, "").trim() : r.label;
-    return link ? `On ${day} Co sent them this link, unprompted: ${link}${rest ? `, with: "${rest}"` : ""}` : `On ${day} Co texted them first: "${r.label}"`;
+    return link ? `On ${day} Cue sent them this link, unprompted: ${link}${rest ? `, with: "${rest}"` : ""}` : `On ${day} Cue texted them first: "${r.label}"`;
   }
-  if (r.relation === "searched") return `On ${day} Co searched for them: "${r.label}".`;
+  if (r.relation === "searched") return `On ${day} Cue searched for them: "${r.label}".`;
   // The catch-up's word-match reads from before 2026-10-12 (services/provenance.ts): a guess, never what they did.
   if (r.source === "reaction.catchup" && !isStated(r.provenance)) {
     const m = r.label.match(/^noted how "(.+)" landed: ([a-z_]+)/);
-    return `On ${day} Co guessed from a text of theirs that "${m?.[1] ?? r.label}" landed as ${(m?.[2] ?? "a reaction").replace(/_/g, " ")}; they never confirmed it (${UNCONFIRMED_RULE}).`;
+    return `On ${day} Cue guessed from a text of theirs that "${m?.[1] ?? r.label}" landed as ${(m?.[2] ?? "a reaction").replace(/_/g, " ")}; they never confirmed it (${UNCONFIRMED_RULE}).`;
   }
-  return `On ${day} Co ${r.label}.`;
+  return `On ${day} Cue ${r.label}.`;
 }
 
 // For Co's reply: what it sent and did for them lately, plus anything older

@@ -26,17 +26,17 @@ const ROYCE_LIVE = [
   "wait for Jacqueline to be settled so they can move together on Sequin AI partnership",
   "pivoting to a partnership with Sequin AI after canceling the October launch date",
   "partnering with Sequin AI for a November launch party",
-  "have Co draft planning docs for branding and launch strategy with Sequin AI",
-  "maintain Co's presence after the November event",
+  "have Cue draft planning docs for branding and launch strategy with Sequin AI",
+  "maintain Cue's presence after the November event",
   "secure pre-seed investment funding from investors who understand consumer social products",
   "get into an accelerator or residency (e.g. South Park Commons)",
   "apply to South Park Commons or Blueprint II",
   "Plan out the event and take lead",
   "Seeking genuine friendships with dependable, intelligent people who want to work and build together",
-  "seeking to use Co to funnel and drive Jeremy Toce's guest list to test product matching",
-  "Help lead the partnership strategy with Sequin AI and generate alignment notes on potential connections between Co and their company",
+  "seeking to use Cue to funnel and drive Jeremy Toce's guest list to test product matching",
+  "Help lead the partnership strategy with Sequin AI and generate alignment notes on potential connections between Cue and their company",
   "Seeking guidance on whether the platform/city-adoption problem and the cultural/personal-invite problem with Sequin AI are solvable",
-  "They want Co to maintain a presence within the Sequin AI partnership beyond the November launch event.",
+  "They want Cue to maintain a presence within the Sequin AI partnership beyond the November launch event.",
 ];
 const EDGES: Record<number, string[]> = {
   6: ["SF pre-seed investor office hours", "consumer social founder investor dinners SF"],
@@ -71,7 +71,7 @@ const cut = full.slice(0, cutAt);
   check("a brace inside a string doesn't break the salvage", G.readEdgeAnswer('[{"n": 1, "why": "a {curly} and a \\"quote\\""}, {"n": 2, "why": "ok"}, {"n": 3').arr.length === 2);
   const parsed = G.parseEdges(ROYCE_LIVE, cut);
   check("the goals read from a cut-off answer keep their edges (pre-seed, residency, accelerator)", parsed[5].edges.length === 2 && parsed[6].edges.length === 2 && parsed[7].edges.length === 1, parsed.slice(5, 8).map((e) => e.edges));
-  check("only the goals the answer never reached read as unreadable (a Co task is known in code)", parsed.slice(11).every((e) => e.kind === "co_task" || e.why === "couldn't be read this time") && parsed.slice(0, 11).every((e) => e.why !== "couldn't be read this time"), parsed.map((e) => [e.kind, e.why]));
+  check("only the goals the answer never reached read as unreadable (a Cue task is known in code)", parsed.slice(11).every((e) => e.kind === "co_task" || e.why === "couldn't be read this time") && parsed.slice(0, 11).every((e) => e.why !== "couldn't be read this time"), parsed.map((e) => [e.kind, e.why]));
   check("an unread goal is never treated as explicitly not findable (its find requests stay)", parsed.slice(11).filter((e) => e.kind !== "co_task").every((e) => !e.explicit), parsed.slice(11).map((e) => [e.kind, e.explicit]));
 }
 
@@ -129,8 +129,8 @@ const cut = full.slice(0, cutAt);
 
 // 5. Framing.
 {
-  check("an ask find is Co doing what they said", /They asked you for this: "weekend plans"\. This is you doing what they asked/.test(ED.describeAsk("weekend plans", false)));
-  check("a goal find is something Co noticed for them, never their request", /didn't ask for this\. You noticed it for them/.test(ED.describeAsk("look for: SF founder dinners", true)) && /never say or imply they asked/.test(ED.describeAsk("x", true)));
+  check("an ask find is Cue doing what they said", /They asked you for this: "weekend plans"\. This is you doing what they asked/.test(ED.describeAsk("weekend plans", false)));
+  check("a goal find is something Cue noticed for them, never their request", /didn't ask for this\. You noticed it for them/.test(ED.describeAsk("look for: SF founder dinners", true)) && /never say or imply they asked/.test(ED.describeAsk("x", true)));
   const asked = ["Found the founder dinner you asked about", "Like you asked, here's one for Saturday", "You were looking for something like this", "Per your request: SPC opens Monday", "You've been looking for a builder community", "You're looking for investors, so this fits"];
   const fine = ["Noticed SPC's residency opens Monday", "This one has your name on it: a founder dinner Saturday", "You'd like this one", "Saw this and it fits where you're headed", "You mentioned wanting to raise pre-seed by spring, so Hustle Fund's office hours on Oct 21 fit", "Since you were hoping to launch in November, the SF Builders demo night is worth a look"];
   check("a goal find saying they asked is caught", asked.every((t) => ED.CLAIMS_THEY_ASKED.pattern.test(t)), asked.filter((t) => !ED.CLAIMS_THEY_ASKED.pattern.test(t)));

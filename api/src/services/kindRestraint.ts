@@ -83,7 +83,7 @@ export type ReadInbound = { at: Date; signal: Signal; quoted: string | null };
 // iMessage reactions arrive as text: Loved “…”, Liked “…”, Disliked “…”, Laughed at “…”, Emphasized “…”, Questioned “…”, and the
 // newer Reacted 🔥 to “…”. A threaded reply is logged with [Replying to Co's text: "…"] (services/inlineReply.ts).
 const TAPBACK = /^(loved|liked|disliked|laughed at|emphasized|questioned|reacted\s+(\S+)\s+to)\s+[“"']([\s\S]+?)[”"']\s*$/i;
-const THREADED = /\[Replying to Co's text: "([\s\S]+?)"(?:\s*\([^)]*\))?\]\s*$/;
+const THREADED = /\[Replying to (?:Co|Cue)'s text: "([\s\S]+?)"(?:\s*\([^)]*\))?\]\s*$/;
 
 // Pure: one of their lines as a signal. `text` is what they sent (the "User said: " prefix is removed by the reader).
 export function readInbound(line: InboundLine): ReadInbound {

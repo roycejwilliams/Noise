@@ -22,9 +22,9 @@ check("no lesson without pushback", read.moment.lesson === null);
 check("about_sent matches a real sent item, whatever its case", read.aboutSent === "Grok Bot x Notion for Product Builders night (SF)");
 check("an unknown thing is never about_sent", R.parseTurnRead({ ...base, about_sent: "Some other event" }, sent).aboutSent === null);
 check("coverage keeps only real topic keys", JSON.stringify(read.coverage?.missing_topics) === '["personality"]' && read.coverage?.fresh_topics?.length === 0);
-const share = R.parseTurnRead({ ...base, mode: "sharing", pushback: "tied it to Oct 10", lesson: "answer logistics as logistics", dots: [{ kind: "shape", link: "burned out", why: "break" }], emotion: { emotion: "Frustrated", intensity: "medium", valence: "negative", about: "Co's answer", target: "co" }, seeking: "solving", feedback: ["Get the time for every event Co surfaces"] }, sent);
+const share = R.parseTurnRead({ ...base, mode: "sharing", pushback: "tied it to Oct 10", lesson: "answer logistics as logistics", dots: [{ kind: "shape", link: "burned out", why: "break" }], emotion: { emotion: "Frustrated", intensity: "medium", valence: "negative", about: "Cue's answer", target: "co" }, seeking: "solving", feedback: ["Get the time for every event Cue surfaces"] }, sent);
 check("sharing keeps connections; pushback keeps its lesson", share.moment.dots.length === 1 && share.moment.lesson === "answer logistics as logistics");
-check("feelings aimed at Co are read as Co's", share.emotion?.target === "co" && share.emotion?.emotion === "frustrated" && share.seeking === "solving");
+check("feelings aimed at Cue are read as Cue's", share.emotion?.target === "co" && share.emotion?.emotion === "frustrated" && share.seeking === "solving");
 check("feedback becomes a reminder to save each piece, never a veto", /saveFeedbackForTeam/.test(R.feedbackInstruction(share.feedback) ?? "") && R.feedbackInstruction([]) === null);
 const prompt = buildRouterPrompt({ message: "hi", recentConversation: "", openItems: [] }) + R.turnReadAddendum(null, null);
 check("the read is the router's own prompt plus fields that never change it", prompt.startsWith(buildRouterPrompt({ message: "hi", recentConversation: "", openItems: [] })) && /never change the fields above/.test(prompt));
@@ -33,8 +33,8 @@ check("threads under their message first, then the thing it's about", I.threadRe
 const sb = src("routes/sendblue.ts");
 check("one read replaces the separate reads, with the old path behind READ_TURN=off", /const oneRead = hasText && readTurnEnabled\(\);/.test(sb) && /hasText && !oneRead\s*\? Promise\.all\(\[/.test(sb) && /hasText && !oneRead \? await captureIssueReport/.test(sb) && R.readTurnEnabled({ READ_TURN: "off" } as any) === false && R.readTurnEnabled({} as any) === true);
 check("coverage, the moment and emotion all come from the read", /readP\.then\(\(r\) => coverageNudgeFrom\(user\.id, profile, r\.coverage\)\)/.test(sb) && /dotsP = Promise\.resolve\(turnRead\.moment\)/.test(sb) && /oneRead \? \[turnRead\?\.seeking \?\? null, turnRead\?\.emotion \?\? null\]/.test(sb));
-check("threading about a sent thing uses Co's own message, found for this member only", /return why === "about_sent" \? aboutSentHandle : why \? ownHandle : null;/.test(sb) && /WHERE user_id = \$1 AND sent_at > NOW\(\) - INTERVAL '45 days'/.test(src("services/inlineReply.ts")));
-check("every message Co sends is kept by its handle", /if \(res\?\.message_handle\) recordOutbound\(/.test(src("services/sendblue.ts")) && /CREATE TABLE IF NOT EXISTS outbound_messages/.test(src("db/migrations.ts")));
+check("threading about a sent thing uses Cue's own message, found for this member only", /return why === "about_sent" \? aboutSentHandle : why \? ownHandle : null;/.test(sb) && /WHERE user_id = \$1 AND sent_at > NOW\(\) - INTERVAL '45 days'/.test(src("services/inlineReply.ts")));
+check("every message Cue sends is kept by its handle", /if \(res\?\.message_handle\) recordOutbound\(/.test(src("services/sendblue.ts")) && /CREATE TABLE IF NOT EXISTS outbound_messages/.test(src("db/migrations.ts")));
 
 console.log(`readTurn rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

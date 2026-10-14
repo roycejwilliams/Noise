@@ -63,7 +63,7 @@ export const CASES: GoldenCase[] = [
     id: "lesson-cause",
     title: "A lesson guessed from pushback names the reply check when the check caused it",
     status: { live: true },
-    from: "2026-10-13: Co kept 'describe it in his terms' when the reply check's false 'Nothing's running on that right now' line caused the pushback; lessons checked against the logs since #190",
+    from: "2026-10-13: Cue kept 'describe it in his terms' when the reply check's false 'Nothing's running on that right now' line caused the pushback; lessons checked against the logs since #190",
     run: async () => {
       const f = JSON.parse(fixture("guards-lesson-cause.json")) as LessonFixture;
       const logs: ReplyLog[] = f.logs.map((l) => ({ ...l, at: new Date(l.at) }));

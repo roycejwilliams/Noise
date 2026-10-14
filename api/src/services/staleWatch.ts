@@ -55,7 +55,7 @@ async function tell(row: Row, change: Change): Promise<boolean> {
   const stock = `Heads up on ${row.item_name}: ${change.detail}.`;
   const line = await lineInVoice({
     purpose: "Tell them plainly, in one or two short sentences, that something they said they were interested in has changed. No question and no pitch.",
-    facts: [`"${row.item_name}": ${change.detail}.`, "They told Co they were interested in it."],
+    facts: [`"${row.item_name}": ${change.detail}.`, "They told Cue they were interested in it."],
     examples: [],
     mustInclude: [],
     fallback: stock,

@@ -107,7 +107,7 @@ export function webhookSecretMatches(expected: string | undefined | null, provid
 // searching"). Loaded lazily to keep this file free of harness imports.
 export function sendHeldNote(fromMs: number, untilMs: number): string {
   const t = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" });
-  return `Co's texts to them were paused from ${t(fromMs)} to ${t(untilMs)} Pacific by Co's own limit on how many texts it sends one person. Anything Co tried to send them then never arrived, and anything they asked then may still be unanswered.`;
+  return `Cue's texts to them were paused from ${t(fromMs)} to ${t(untilMs)} Pacific by Cue's own limit on how many texts it sends one person. Anything Cue tried to send them then never arrived, and anything they asked then may still be unanswered.`;
 }
 
 function reportSendBreaker(number: string, count: number, resumesAt: number, reason: string): void {
@@ -129,8 +129,8 @@ function reportSendBreaker(number: string, count: number, resumesAt: number, rea
       const { alertTeamNow } = await import("../harness/monitor.js");
       await alertTeamNow(
         `send_breaker:${last4}`,
-        `Co alert: texts to ${user?.first_name ?? "a number"} paused`,
-        `Co stopped texting ${user?.first_name ?? "an unknown number"} (...${last4}) after ${why}. Nothing goes to them until ${new Date(resumesAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" })} Pacific. If this was a real conversation, the limit is wrong; if it was a loop, it worked.`,
+        `Cue alert: texts to ${user?.first_name ?? "a number"} paused`,
+        `Cue stopped texting ${user?.first_name ?? "an unknown number"} (...${last4}) after ${why}. Nothing goes to them until ${new Date(resumesAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" })} Pacific. If this was a real conversation, the limit is wrong; if it was a loop, it worked.`,
       );
     })
     .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));

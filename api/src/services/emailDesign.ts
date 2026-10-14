@@ -41,7 +41,7 @@ export function spacedCode(code: string): string {
 
 const block = (html: string, gap = 28) => `<tr><td align="center" style="padding:0 0 ${gap}px 0;">${html}</td></tr>`;
 
-const brand = () => block(`<div style="font-family:${SERIF};font-size:30px;line-height:1;color:${C.ink};">Co.</div>`);
+const brand = () => block(`<div style="font-family:${SERIF};font-size:30px;line-height:1;color:${C.ink};">Cue.</div>`);
 
 const eyebrow = (text: string) =>
   block(`<div style="font-family:${SANS};font-size:11px;font-weight:500;letter-spacing:1.5px;text-transform:uppercase;color:${C.muted};">${escapeHtml(text)}</div>`, 18);
@@ -67,7 +67,7 @@ const codeBox = (code: string) =>
 
 const footer = () =>
   `<tr><td style="padding:8px 0 0 0;border-top:1px solid ${C.line};"></td></tr>` +
-  block(`<div style="padding-top:12px;font-family:${SANS};font-size:11px;font-weight:500;letter-spacing:1px;text-transform:uppercase;color:${C.muted};">Co &nbsp;&middot;&nbsp; Private, by referral</div>`, 0);
+  block(`<div style="padding-top:12px;font-family:${SANS};font-size:11px;font-weight:500;letter-spacing:1px;text-transform:uppercase;color:${C.muted};">Cue &nbsp;&middot;&nbsp; Private, by referral</div>`, 0);
 
 function shell(rows: string, preview: string): string {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light">
@@ -89,7 +89,7 @@ export function quietEmail(o: { preview: string; headline: string; lines?: strin
     (o.code ? codeBox(o.code) : "") +
     (o.lines ?? []).map((l) => para(l)).join("") +
     (o.note ? para(o.note, { size: 12, color: C.muted }) : "") +
-    (o.signOff === false ? "" : italic("Co", 16)) +
+    (o.signOff === false ? "" : italic("Cue", 16)) +
     footer();
   return shell(rows, o.preview);
 }
@@ -109,7 +109,7 @@ export function letterpressEmail(o: { preview: string; headline: string; lead: s
     italic(o.lead, 16) +
     steps +
     (o.cta ? button(o.cta.label, o.cta.href, true) : "") +
-    italic("Co", 16);
+    italic("Cue", 16);
   const rows =
     `<tr><td style="padding:0 0 32px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid ${C.gold};text-align:center;"><tr><td style="padding:48px 40px 20px 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="text-align:center;">${inner}</table></td></tr></table></td></tr>` +
     footer();

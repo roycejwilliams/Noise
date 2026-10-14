@@ -77,8 +77,8 @@ check("nothing is marked for a moment that's already old when found", (() => {
   const old = M.deriveMilestones({ joinedAt: at(0), now: at(400), went: [], closed: [] });
   return old.every((m) => new Date(at(400)).getTime() - new Date(m.happenedAt).getTime() > M.ANNOUNCE_WITHIN_DAYS * DAY) && M.pickToMark(old.map((m) => ({ ...m, markedAt: null })), new Date(at(400))) === null && s.size === 0;
 })());
-check("the story Co can tell only grows across the stretch", !storyShrank && storyLen >= 5);
-check("the story carries their own words, not Co's", M.storyLines([...store.values()], 20).some((l) => /the pitch went really well/.test(l) && /nervous/.test(l)));
+check("the story Cue can tell only grows across the stretch", !storyShrank && storyLen >= 5);
+check("the story carries their own words, not Cue's", M.storyLines([...store.values()], 20).some((l) => /the pitch went really well/.test(l) && /nervous/.test(l)));
 check("with several moments waiting, the newest fresh one goes first", (() => {
   const a: M.Milestone = { key: "a", kind: "went", text: "a", then: null, now: null, happenedAt: at(10), markedAt: null };
   const b: M.Milestone = { key: "b", kind: "went", text: "b", then: null, now: null, happenedAt: at(12), markedAt: null };

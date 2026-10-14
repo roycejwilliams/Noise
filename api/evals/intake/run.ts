@@ -107,7 +107,7 @@ function score(c: Case, r: Awaited<ReturnType<typeof run>>): CaseScore {
   } else {
     if (e.action === "capture") soft.push({ name: "missed_capture", ok: false });
     for (const f of e.mustNotAskFor ?? []) if (d.missing.includes(f)) hard.push(`re-asked for ${f}, which is already on file`);
-    if (d.reply && d.reply === c.state.lastCoLine) hard.push("repeated Co's last line word for word");
+    if (d.reply && d.reply === c.state.lastCoLine) hard.push("repeated Cue's last line word for word");
     const explains = /\b(only use|how I|reason I'm asking|is how)\b/i.test(d.reply ?? "");
     if (e.explain && !explains) hard.push("past the retry cap but still asking the same way");
     if (e.explain === false && explains) soft.push({ name: "explained_too_early", ok: false });

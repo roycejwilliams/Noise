@@ -8,7 +8,7 @@ const require_ = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail !== undefined ? `\n  ${JSON.stringify(detail).slice(0, 500)}` : ""}`); } };
 
-const transcript = `assistant: Hey Jordan, it's Co.
+const transcript = `assistant: Hey Jordan, it's Cue.
 user: My open house got into Design Digest!
 assistant: That's huge. And when something worth pointing out turns up before the open house, you'll hear from me.
 user: Amazing. Ok, gotta run, bye!`;

@@ -34,7 +34,8 @@ const STARTERS = /^(?:get|getting|launch|launching|find|finding|build|building|r
 // work (their company, partners, the people they work with). A name in the ask itself is the thing being found, so it isn't here.
 // except: what is being found (the ask, the edges): a name in it (a neighborhood, a program) is the thing, not them.
 export function memberTerms(o: { firstName?: string | null; lastName?: string | null; goals?: (string | null | undefined)[] | null; work?: string | null; except?: string | null }): string[] {
-  const out = new Set<string>(["Co", "CoPatible"]);
+  // Its old name too, which goals written before the rename still use. Not "Noise": a common word, and a real event name (Noise Pop).
+  const out = new Set<string>(["Cue", "Co", "CoPatible"]);
   for (const n of [o.firstName, o.lastName]) if (n && n.trim().length > 1 && n.trim().toLowerCase() !== "them") out.add(n.trim());
   for (const text of [...(o.goals ?? []), o.work ?? ""]) {
     for (const m of String(text ?? "").matchAll(/\b([A-Z][\w&'.-]*(?:\s+(?:of|the|&|[A-Z][\w&'.-]*))*)/g)) {
@@ -45,7 +46,7 @@ export function memberTerms(o: { firstName?: string | null; lastName?: string | 
       while (words.length && /^(?:of|the|&)$/i.test(words[0])) words = words.slice(1);
       while (words.length && /^(?:of|the|&)$/i.test(words[words.length - 1])) words = words.slice(0, -1);
       const parts = words.filter((w) => !MONTHS_DAYS.test(w) && !GENERIC.has(w) && !/^\d/.test(w));
-      if (!parts.length || parts.every((w) => /^(?:Co|CoPatible)$/.test(w))) continue;
+      if (!parts.length || parts.every((w) => /^(?:Co|Cue|CoPatible|Noise)$/.test(w))) continue;
       // A capitalized category word ("Host Events", "AI Founders", "a Book Club") is not a name (review of #107): a term needs at
       // least one word that isn't an everyday category word.
       if (parts.every((w) => COMMON.has(w.toLowerCase().replace(/'s$/, "")))) continue;
@@ -53,7 +54,7 @@ export function memberTerms(o: { firstName?: string | null; lastName?: string | 
     }
   }
   const thing = String(o.except ?? "").toLowerCase();
-  return [...out].filter((t) => t.length > 1 && !(thing && !["co", "copatible"].includes(t.toLowerCase()) && thing.includes(t.toLowerCase())));
+  return [...out].filter((t) => t.length > 1 && !(thing && !["co", "cue", "copatible"].includes(t.toLowerCase()) && thing.includes(t.toLowerCase())));
 }
 
 // Phrases that describe the member instead of the thing.
@@ -128,7 +129,7 @@ export function queryProblems(q: string, o: { terms: string[]; source: QuerySour
   // A kind they told Co to stop suggesting is never searched for (services/memberLimits.ts; Phase A2). The list passed here is already
   // the one for this ask (avoidFor): a kind the ask names is theirs again.
   const ruledOut = o.avoid?.length ? avoidHits(text, o.avoid) : [];
-  if (ruledOut.length) out.push(`it looks for ${ruledOut.map((k) => `"${k}"`).join(", ")}, which they told Co to stop suggesting: search for something else they want`);
+  if (ruledOut.length) out.push(`it looks for ${ruledOut.map((k) => `"${k}"`).join(", ")}, which they told Cue to stop suggesting: search for something else they want`);
   const assumed = o.theirWords !== undefined ? assumedIdentity(text, o.theirWords) : [];
   if (assumed.length) out.push(`it assumes who they are (${assumed.join(", ")}), which their ask doesn't say: search for the thing itself`);
   // Whole words only, never inside a hyphenated word ("Co" is not in "co-working"). A one-word term matches case as written (a name

@@ -80,27 +80,27 @@ export const ANSWER_VALUES: Record<OpenItemKind, readonly string[]> = {
 export function describeOpenItem(kind: OpenItemKind, detail: string | null): string {
   switch (kind) {
     case "call_offer": {
-      const offered = detail?.split("| Co offered:")[1]?.trim() ?? detail ?? "";
-      return `Co's message that was recorded as a call offer: "${offered.slice(0, 300)}"`;
+      const offered = detail?.split(/\| (?:Co|Cue) offered:/)[1]?.trim() ?? detail ?? "";
+      return `Cue's message that was recorded as a call offer: "${offered.slice(0, 300)}"`;
     }
     case "event_tease":
-      return "Co hinted something (an event or opportunity) crossed its mind for them, without naming it, and asked if they want to hear more";
+      return "Cue hinted something (an event or opportunity) crossed its mind for them, without naming it, and asked if they want to hear more";
     case "outcome_followup":
-      return `Co asked how "${detail ?? "a recommendation"}" went and who they met there`;
+      return `Cue asked how "${detail ?? "a recommendation"}" went and who they met there`;
     case "event_checkin":
-      return `Co asked who they met at "${detail ?? "the event"}" tonight`;
+      return `Cue asked who they met at "${detail ?? "the event"}" tonight`;
     case "match_nudge":
       return detail
-        ? `Co told them about ${detail}, someone at the same event, and asked if they want to be connected`
-        : "Co told them another member is going to the same event, without saying who, and asked if they'd like an intro";
+        ? `Cue told them about ${detail}, someone at the same event, and asked if they want to be connected`
+        : "Cue told them another member is going to the same event, without saying who, and asked if they'd like an intro";
     case "network_tease":
-      return "Co said someone in its network crossed its mind for them, without saying who, and asked if they want to hear who";
+      return "Cue said someone in its network crossed its mind for them, without saying who, and asked if they want to hear who";
     case "network_intro":
-      return `Co named ${detail ?? "someone"} and asked if they want an introduction`;
+      return `Cue named ${detail ?? "someone"} and asked if they want an introduction`;
     case "walkin_ask":
-      return "They checked in at an event and Co asked what they're hoping to find there / who they'd want to meet";
+      return "They checked in at an event and Cue asked what they're hoping to find there / who they'd want to meet";
     case "offer_reaction":
-      return `Co sent them "${detail ?? "something"}" (with its details) and they haven't reacted to it yet. Only answer this if their message clearly reacts to it: interested ("ooh I'll check it out", "that looks good"), not_interested ("not for me", "I'll pass", "not really my thing"), or already_did_it (they say outright that they signed up, registered, applied, or went; a question about it, like what to bring or where it is, is not). A bare thanks, an emoji, or talking about something else isn't a reaction`;
+      return `Cue sent them "${detail ?? "something"}" (with its details) and they haven't reacted to it yet. Only answer this if their message clearly reacts to it: interested ("ooh I'll check it out", "that looks good"), not_interested ("not for me", "I'll pass", "not really my thing"), or already_did_it (they say outright that they signed up, registered, applied, or went; a question about it, like what to bring or where it is, is not). A bare thanks, an emoji, or talking about something else isn't a reaction`;
   }
 }
 
@@ -329,17 +329,17 @@ export function buildRouterPrompt(input: RouteInput): string {
         .join("\n")
     : "(nothing is waiting on a reply from them)";
   const declined = input.declinedCallTopics?.length
-    ? `\nCo previously offered a call about these, and they said no each time:\n${input.declinedCallTopics.map((t) => `- ${t}`).join("\n")}\n"Essentially the same situation" means the same underlying topic or feeling, even if worded completely differently: "building solo without a cofounder, don't know other founders locally" and "still feeling isolated without other founders around" are the SAME situation (solo-founder isolation). Read for the real thing underneath the phrasing, not a text match. If what they describe now is essentially the same situation as any of these, "would_benefit" does not apply — use "none". A genuinely different topic is still free to be "would_benefit".\n`
+    ? `\nCue previously offered a call about these, and they said no each time:\n${input.declinedCallTopics.map((t) => `- ${t}`).join("\n")}\n"Essentially the same situation" means the same underlying topic or feeling, even if worded completely differently: "building solo without a cofounder, don't know other founders locally" and "still feeling isolated without other founders around" are the SAME situation (solo-founder isolation). Read for the real thing underneath the phrasing, not a text match. If what they describe now is essentially the same situation as any of these, "would_benefit" does not apply — use "none". A genuinely different topic is still free to be "would_benefit".\n`
     : "";
 
-  return `You route one inbound text message for Co, a companion people text. Decide what the latest message is doing. You only classify; other code acts on your answer.
+  return `You route one inbound text message for Cue, a companion people text. Decide what the latest message is doing. You only classify; other code acts on your answer.
 
-Recent conversation, in order (read it: short replies only make sense against what Co last said):
+Recent conversation, in order (read it: short replies only make sense against what Cue last said):
 ${input.recentConversation || "(start of the conversation)"}
 
 Their latest message: "${input.message}"
 
-Things Co has asked that are still waiting on a reply from them (newest first, where known):
+Things Cue has asked that are still waiting on a reply from them (newest first, where known):
 ${itemsBlock}
 ${declined}
 Return ONLY a JSON object:
@@ -347,32 +347,32 @@ Return ONLY a JSON object:
 Write "reason" first, then make every other field agree with it: if your reason says the message isn't answering a waiting item, answers must be null.
 
 answers — which waiting item (if any) the latest message is actually replying to:
-- Only set it if the message is genuinely a reply to that item. If they're just talking, or replying to something else Co said, use null. Having an item open does not make every message an answer to it.
-- A short reply ("yes", "sure", "for sure", "no", "I'm interested") answers what Co asked most recently. Look at Co's last messages in the conversation: if Co's most recent message asked something that is not one of the waiting items, the short reply answers that, and answers is null.
-- If a short reply could just as plausibly answer two or more waiting items and the conversation does not make clear which, set answers to null and list those item ids in ambiguousBetween. In particular, when Co asked two or more waiting questions back to back with no reply from them in between, a short reply that doesn't name or refer to one of them ("sure", "yes", "ok do it") is ambiguous between those questions, even though one was sent slightly later.
+- Only set it if the message is genuinely a reply to that item. If they're just talking, or replying to something else Cue said, use null. Having an item open does not make every message an answer to it.
+- A short reply ("yes", "sure", "for sure", "no", "I'm interested") answers what Cue asked most recently. Look at Cue's last messages in the conversation: if Cue's most recent message asked something that is not one of the waiting items, the short reply answers that, and answers is null.
+- If a short reply could just as plausibly answer two or more waiting items and the conversation does not make clear which, set answers to null and list those item ids in ambiguousBetween. In particular, when Cue asked two or more waiting questions back to back with no reply from them in between, a short reply that doesn't name or refer to one of them ("sure", "yes", "ok do it") is ambiguous between those questions, even though one was sent slightly later.
 - A bare acknowledgment ("thanks", "ok", "got it", "sounds good", "cool", "nice", "bet") is not a yes to anything.
 - Tapback reactions such as "Liked “…”", "Loved “…”", "Emphasized “…”", "Laughed at “…”" are reactions to a message, not answers or requests.
-- call_offer: "accept" only if they clearly say yes to Co calling them. If the recorded "call offer" is really Co telling them they can call Co's number, or is not actually an offer for Co to call them, it cannot be accepted: never answer it with "accept". Saying they'd rather keep texting, or no to a call, is "decline".
+- call_offer: "accept" only if they clearly say yes to Cue calling them. If the recorded "call offer" is really Cue telling them they can call Cue's number, or is not actually an offer for Cue to call them, it cannot be accepted: never answer it with "accept". Saying they'd rather keep texting, or no to a call, is "decline".
 - outcome_followup / event_checkin: "named_positive" = they name or describe someone specific they met, or a specific good outcome ("met a product person at LinkedIn and an investor" counts, no names needed); "named_critical" = a real negative assessment ("waste of time", "nobody interesting"), with or without a name; "not_mentioned" = neutral or non-committal ("it was fine", "didn't go", "no one really"). Talking about something unrelated is not an answer.
 - match_nudge / network_intro: "yes" = they want to be connected/introduced to that specific person; "no" = passing.
 - event_tease / network_tease: "yes" = they want to hear more / hear who; "no" = passing.
 - walkin_ask: "answered" if their message says what they hope to find or who they want to meet.
 
-call — about Co calling them:
-- "explicit_request": they directly ask Co to call them now, or to talk by phone with no future time ("call me", "can you call me", "call me right now"). A command, not a question about the feature. Not this if they only mention a call while questioning, declining, or complaining about one ("why did you call me", "stop calling"). When a call request and some other waiting item are both possible, a call request does not also answer the other item.
-- "asks_about_calling": a question about whether or how PHONE CALLS with Co work ("can I just call you?", "how do I call you back?"). Questions about other Co features (memory, APIs, how it works in general) are "none". When in doubt between a call request and a question about calling, it's the question.
+call — about Cue calling them:
+- "explicit_request": they directly ask Cue to call them now, or to talk by phone with no future time ("call me", "can you call me", "call me right now"). A command, not a question about the feature. Not this if they only mention a call while questioning, declining, or complaining about one ("why did you call me", "stop calling"). When a call request and some other waiting item are both possible, a call request does not also answer the other item.
+- "asks_about_calling": a question about whether or how PHONE CALLS with Cue work ("can I just call you?", "how do I call you back?"). Questions about other Cue features (memory, APIs, how it works in general) are "none". When in doubt between a call request and a question about calling, it's the question.
 - "schedule_request": a call at a specific future date/time, including changing a time already set ("push that to 4pm"), even if the time is only complete combined with earlier messages.
 - "cancel_scheduled_call": cancel a scheduled call, with no new time.
 - "would_benefit": none of the above, but what they're describing is complex or emotional enough that voice would genuinely help. Never for short, light, or logistical messages.
 - "none": anything else. Accepting or declining a waiting call offer goes in answers, not here (use "none").
 
-wantsRecommendation — they're asking Co to find, suggest, or surface something concrete in the world right now (events, programs, people, opportunities): "find me a networking event", "anything real you can find for me", "found anything for me?", "have you surfaced anything lately?", "don't see anything on X?", "anything on Twitter?", "point me in the right direction" (after Co offered to look), "I want to look for some friends", "what's the vibes for Sunday?" (asking what's on then). It can be true alongside an answer ("never mind the call, can you find me a founder event"). false when: Not when they only ask what's new or changed with Co itself ("Updates?", "what's new?"): Co answers that on its own, without a search.
-- they're only answering a waiting item ("yes", "tell me more"), or asking about something Co already sent ("what did you send me", "where's the link?", "any details?", "who is hosting it?");
-- a false-premise callback ("that job posting you sent me, is it still open") when the conversation shows Co never sent it;
-- they want Co's own opinion or advice (how to fix something, help planning their pitch, feedback on their build);
-- venting or telling Co about their life.
+wantsRecommendation — they're asking Cue to find, suggest, or surface something concrete in the world right now (events, programs, people, opportunities): "find me a networking event", "anything real you can find for me", "found anything for me?", "have you surfaced anything lately?", "don't see anything on X?", "anything on Twitter?", "point me in the right direction" (after Cue offered to look), "I want to look for some friends", "what's the vibes for Sunday?" (asking what's on then). It can be true alongside an answer ("never mind the call, can you find me a founder event"). false when: Not when they only ask what's new or changed with Cue itself ("Updates?", "what's new?"): Cue answers that on its own, without a search.
+- they're only answering a waiting item ("yes", "tell me more"), or asking about something Cue already sent ("what did you send me", "where's the link?", "any details?", "who is hosting it?");
+- a false-premise callback ("that job posting you sent me, is it still open") when the conversation shows Cue never sent it;
+- they want Cue's own opinion or advice (how to fix something, help planning their pitch, feedback on their build);
+- venting or telling Cue about their life.
 
-beyondAsk — when wantsRecommendation is true, separate the ask from everything else in the message. The ask is what they want found, including its time frame, place, and who it's for ("tech week, Oct 5th - Oct 11th?" is one ask; "anything about VC looking to fund?" is one ask). beyondAsk is anything else that needs a real response: a feeling ("ugh rough week"), news about their life ("wasn't feeling the mixer"), a second, different question, or a reaction to something Co said. Write it in a few plain words ("rough week", "asked about Maya too"), or null when the message is only the ask. A feeling or life update is never part of the ask. null when wantsRecommendation is false.
+beyondAsk — when wantsRecommendation is true, separate the ask from everything else in the message. The ask is what they want found, including its time frame, place, and who it's for ("tech week, Oct 5th - Oct 11th?" is one ask; "anything about VC looking to fund?" is one ask). beyondAsk is anything else that needs a real response: a feeling ("ugh rough week"), news about their life ("wasn't feeling the mixer"), a second, different question, or a reaction to something Cue said. Write it in a few plain words ("rough week", "asked about Maya too"), or null when the message is only the ask. A feeling or life update is never part of the ask. null when wantsRecommendation is false.
 
 askUnclear — when wantsRecommendation is true, a short, plain question to ask them first if what they want could reasonably mean two clearly different things, so searching would be a guess (Royce, 2026-09-18: "if you don't have an understanding of the context... ask clarifying questions... rather than just sending them anything"). Example: a founder asking "anyone hiring a design engineer?" could be hiring one or looking for a role, so: "Are you looking to hire a design engineer, or looking for a design engineer role?" null whenever the ask is clear enough to act on, including broad ones ("anything happening this weekend?", "any founder events?") and ones the conversation already makes clear. Never ask about details you could reasonably search broadly for.
 
@@ -444,15 +444,15 @@ export function isIrreversible(kind: OpenItemKind, value: string): boolean {
 function plainOption(item: Pick<OpenItem, "kind" | "description">): string {
   switch (item.kind) {
     case "call_offer":
-      return "a call with Co";
+      return "a call with Cue";
     case "event_tease":
-      return "hearing more about the event or opportunity Co mentioned";
+      return "hearing more about the event or opportunity Cue mentioned";
     case "network_tease":
-      return "hearing who Co had in mind";
+      return "hearing who Cue had in mind";
     case "offer_reaction":
-      return `what Co sent about ${item.description.match(/"([^"]+)"/)?.[1] ?? "something"}`;
+      return `what Cue sent about ${item.description.match(/"([^"]+)"/)?.[1] ?? "something"}`;
     default:
-      return item.description.replace(/^Co /, "").slice(0, 120);
+      return item.description.replace(/^(?:Co|Cue) /, "").slice(0, 120);
   }
 }
 
@@ -555,7 +555,7 @@ export function decideActions<T extends RoutableItem>(
       if (ok) {
         d.resolve = { item, value: out.answers.value };
       } else if (saysTheyDid) {
-        d.clarifyContext = `\nThey might be saying they already signed up for or went to ${plainOption(item).replace(/^what Co sent about /, "")}, but they didn't say it outright. Don't treat it as done or say they went. If it fits, ask them plainly whether they did.`;
+        d.clarifyContext = `\nThey might be saying they already signed up for or went to ${plainOption(item).replace(/^what (?:Co|Cue) sent about /, "")}, but they didn't say it outright. Don't treat it as done or say they went. If it fits, ask them plainly whether they did.`;
         d.clarifyAbout = "items";
       } else if (irreversible) {
         d.clarifyContext = `\nIt sounds like they might be saying yes to ${plainOption(item)}, but it isn't clear. Don't act on it yet. Check with them briefly, in one short line, that that's what they meant.`;

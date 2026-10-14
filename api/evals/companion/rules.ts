@@ -33,16 +33,16 @@ check("ack takes one fitting emoji (a plane for a landing), never words, several
   const now = new Date("2026-10-01T05:00:00Z");
   const ago = (min: number) => new Date(now.getTime() - min * 60_000);
   check("the first reaction in a while is allowed", T.ackAllowed("👀", { recent: [], textsSinceLast: null }, now).ok);
-  check("no reaction on the text right after one Co reacted to (last night: 👀 on five in a row)", !T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(1) }], textsSinceLast: 0 }, now).ok);
-  check("one text later Co decides (the backstop doesn't pick for it)", T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(5) }], textsSinceLast: 1 }, now).ok);
+  check("no reaction on the text right after one Cue reacted to (last night: 👀 on five in a row)", !T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(1) }], textsSinceLast: 0 }, now).ok);
+  check("one text later Cue decides (the backstop doesn't pick for it)", T.ackAllowed("✍️", { recent: [{ emoji: "👀", at: ago(5) }], textsSinceLast: 1 }, now).ok);
   check("never the same reaction twice in a row (Royce, 2026-10-01 decisions)", !T.ackAllowed("👀", { recent: [{ emoji: "👀", at: ago(60) }], textsSinceLast: 4 }, now).ok && !T.ackAllowed("❤", { recent: [{ emoji: "❤️", at: ago(60) }], textsSinceLast: 4 }, now).ok && T.ackAllowed("👀", { recent: [{ emoji: "🥂", at: ago(60) }, { emoji: "👀", at: ago(200) }], textsSinceLast: 4 }, now).ok);
   check("no more than 3 in two hours", !T.ackAllowed("🥂", { recent: [{ emoji: "❤️", at: ago(20) }, { emoji: "✍️", at: ago(50) }, { emoji: "👍", at: ago(100) }], textsSinceLast: 5 }, now).ok && T.ackAllowed("🥂", { recent: [{ emoji: "❤️", at: ago(20) }, { emoji: "✍️", at: ago(50) }, { emoji: "👍", at: ago(150) }], textsSinceLast: 5 }, now).ok);
-  check("Co sees its recent reactions before it decides", T.describeTapbacks({ recent: [{ emoji: "👀", at: ago(3) }, { emoji: "✍️", at: ago(90) }], textsSinceLast: 2 }, now) === "👀 3 min ago (2 of their texts since), ✍️ 2h ago" && R.reactionsLine("👀 3 min ago").includes("not with the same one each time") && R.reactionsLine(null) === "");
+  check("Cue sees its recent reactions before it decides", T.describeTapbacks({ recent: [{ emoji: "👀", at: ago(3) }, { emoji: "✍️", at: ago(90) }], textsSinceLast: 2 }, now) === "👀 3 min ago (2 of their texts since), ✍️ 2h ago" && R.reactionsLine("👀 3 min ago").includes("not with the same one each time") && R.reactionsLine(null) === "");
   check("❤️ and 😂 go as the native tapbacks", T.reactionFor("❤️") === "love" && T.reactionFor("❤") === "love" && T.reactionFor("😂") === "laugh" && T.reactionFor("👍") === "like" && T.reactionFor("👀") === "👀");
   const ct = fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
   check("the closing tapback is any single emoji under the ack's rules, never the last one again", /reaction: z\.string\(\)/.test(ct) && /parseAck\(picked\)/.test(ct) && /sameReaction\(ctx\.lastReaction, reaction\)/.test(ct) && /sendReaction\(ctx\.messageHandle, reactionFor\(reaction\)\)/.test(ct));
   const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
-  check("the reply knows Co's last reaction (this turn's ack first)", /const lastReaction = ackSent \?\? \(await tapbacksP/.test(sb) && /\blastReaction,/.test(sb));
+  check("the reply knows Cue's last reaction (this turn's ack first)", /const lastReaction = ackSent \?\? \(await tapbacksP/.test(sb) && /\blastReaction,/.test(sb));
   check("searches no longer add a 👀 of their own", !/sendReaction\(ownHandle, "👀"\)/.test(sb) && /HOLD_NO_ACK_MS/.test(sb));
   check("the read sees its recent reactions, and the backstop checks the same history before sending", /readTurn\(routeInput, t, coveragePriorContext\(profile\), \{ reactions: h \? describeTapbacks\(h\) : null \}\)/.test(sb) && /ackAllowed\(ackEmoji, h\)/.test(sb) && /sendReaction\(ackHandle, reactionFor\(ackEmoji\)\)/.test(sb));
   const rt = fs.readFileSync(new URL("../../src/services/readTurn.ts", import.meta.url), "utf8");
@@ -78,7 +78,7 @@ check("a detail must be something they wrote", K.checkKitValue("company", "Lante
 check("only work details are saved this way", !K.checkKitValue("email", "a@b.co", "a@b.co").ok);
 check("LinkedIn must look like a profile", K.checkKitValue("linkedin", "https://www.linkedin.com/in/sam-rivera", "here https://www.linkedin.com/in/sam-rivera").ok && !K.checkKitValue("linkedin", "https://evil.com/in/sam", "https://evil.com/in/sam").ok);
 check("what will be used is shown before it's used", /I'll use Full name and Company|I'll use/.test(K.detailsToUse(kit as any, ["full_name", "company"]).line) && K.detailsToUse(kit as any, ["linkedin"]).missing.includes("linkedin"));
-check("the kit is a tool Co chooses, with a per-turn limit", /saveKitFact/.test(src("agent/conversationTools.ts")) && /kit/.test(src("services/capabilities.ts")));
+check("the kit is a tool Cue chooses, with a per-turn limit", /saveKitFact/.test(src("agent/conversationTools.ts")) && /kit/.test(src("services/capabilities.ts")));
 
 // 6. Critique of shared links
 const ok = read({ excerpt: "We help small studios ship faster. Pricing starts at $99 a month. Book a demo today. ".repeat(3) });
@@ -89,7 +89,7 @@ check("a readable link brings the critique instruction", shared.instructions.som
 const bad = await L.linkForReply(Promise.resolve(read({ status: "login_required", why: "login wall" }) as any));
 check("an unreadable link says so and asks for the text", bad.instructions.some((i) => /couldn't read/.test(i)) && !bad.instructions.some((i) => /honest friend/.test(i)));
 const slow = await L.linkForReply(new Promise(() => {}), 50);
-check("a slow read never holds the reply, and Co is told it hasn't read it", slow.facts.length === 0 && slow.instructions.length === 1);
+check("a slow read never holds the reply, and Cue is told it hasn't read it", slow.facts.length === 0 && slow.instructions.length === 1);
 check("the reply path reads their first link in the same turn", /linkForReply\(theirLinkP\)/.test(src("routes/sendblue.ts")));
 
 // Fixes after review (2026-09-29)
@@ -110,15 +110,15 @@ check("advice is asked about after 3 days, not before", A.dueAdvice([adv(1, 1)],
 check("advice isn't asked about once stale or already asked", A.dueAdvice([adv(1, 30)], nowA) === null && A.dueAdvice([adv(1, 5, { followedUpAt: ago(1) })], nowA) === null);
 check("the newest due advice goes first", A.dueAdvice([adv(1, 10), adv(2, 5)], nowA)?.id === 2);
 check("the same topic within a week isn't noted twice", A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA) && !A.isRepeat("the pitch", [{ topic: "pitch on Friday", givenAt: ago(10) }], nowA) && !A.isRepeat("moving", [{ topic: "pitch on Friday", givenAt: ago(2) }], nowA));
-check("replies know what Co advised lately, and drop old advice", A.adviceLines([adv(1, 2), adv(2, 40)], nowA).length === 1 && /advised them on/.test(A.adviceLines([adv(1, 2)], nowA)[0]));
+check("replies know what Cue advised lately, and drop old advice", A.adviceLines([adv(1, 2), adv(2, 40)], nowA).length === 1 && /advised them on/.test(A.adviceLines([adv(1, 2)], nowA)[0]));
 check("advice is recorded by the learning call only (the tool was removed) and followed up", !/noteAdvice/.test(src("services/capabilities.ts")) && !/noteAdvice: tool/.test(src("agent/conversationTools.ts")) && /runAdviceFollowUps/.test(src("jobs/index.ts")) && /markFollowedUp\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
-check("Co's voice keeps professionals in the loop on health, legal and money", (() => { const t = src("services/coVoice.ts"); return /a doctor for a symptom, a lawyer for a contract/.test(t) && /never tell them to buy, sell or invest/.test(t); })());
+check("Cue's voice keeps professionals in the loop on health, legal and money", (() => { const t = src("services/coVoice.ts"); return /a doctor for a symptom, a lawyer for a contract/.test(t) && /never tell them to buy, sell or invest/.test(t); })());
 check("advice uses their story and earlier advice", /what you advised before/.test(src("agent/conversationReply.ts")) && /opts\.turn\?\.advice/.test(src("harness/replyGrounding.ts")));
 
 // From the 09-29 test conversation
 check("bare domains count as links, with or without a path", JSON.stringify(L.linksIn("What do you think of this? www.from-royce.com")) === JSON.stringify(["https://www.from-royce.com"]) && L.linksIn("see from-royce.com/work, thanks")[0] === "https://from-royce.com/work" && L.linksIn("https://lu.ma/x?a=1 and https://x.com/a/status/1?s=20").length === 2);
 check("emails, numbers and plain words aren't links", L.linksIn("email me at sam@example.com or call 415.555.1212, e.g. tomorrow").length === 0);
-check("a link still being read tells Co not to say it read it", await (async () => { const r = await L.linkForReply(new Promise(() => {}), 30); return r.instructions.some((i) => /still being read/.test(i) && /Don't say you've read it/.test(i)); })());
+check("a link still being read tells Cue not to say it read it", await (async () => { const r = await L.linkForReply(new Promise(() => {}), 30); return r.instructions.some((i) => /still being read/.test(i) && /Don't say you've read it/.test(i)); })());
 check("a cut that loses the question isn't sent as a stub", (() => { const g = src("harness/replyGrounding.ts"); return /draft\.includes\("\?"\) && !text\.includes\("\?"\) && words < 14/.test(g) && /enoughLeft\(cut, draft\)/.test(g); })());
 check("drafts for them keep their own wording", /use only the names, titles, events and details they gave you/.test(src("agent/conversationReply.ts")));
 
@@ -133,14 +133,14 @@ check("cutting a sentence with a domain in it doesn't leave a fragment", (() => 
 
 // 2026-09-29 live test: Co didn't call noteAdvice on a pitch answer, so nothing was noted. The learning call that already runs after every text now reports advice too (no extra call).
 const TL = await import("../../src/services/turnLearning.js");
-check("the learning call reads advice from Co's reply, and parses it", (() => { const p = TL.parseTurnLearning('{"profile":{},"advice":{"topic":"investor pitch","gist":"Say the ask early and stop talking."}}'); return p?.advice?.topic === "investor pitch" && TL.parseTurnLearning('{"profile":{},"advice":null}')?.advice === null && TL.parseTurnLearning('{"profile":{},"advice":{"topic":5}}')?.advice === null; })());
-check("advice from the learning call is recorded with the same guard as the tool", /recordAdvice\(input\.userId, learned\.advice\.topic/.test(src("services/turnLearning.ts")) && /8\. advice: this one is about Co's own LAST line/.test(src("services/turnLearning.ts")));
+check("the learning call reads advice from Cue's reply, and parses it", (() => { const p = TL.parseTurnLearning('{"profile":{},"advice":{"topic":"investor pitch","gist":"Say the ask early and stop talking."}}'); return p?.advice?.topic === "investor pitch" && TL.parseTurnLearning('{"profile":{},"advice":null}')?.advice === null && TL.parseTurnLearning('{"profile":{},"advice":{"topic":5}}')?.advice === null; })());
+check("advice from the learning call is recorded with the same guard as the tool", /recordAdvice\(input\.userId, learned\.advice\.topic/.test(src("services/turnLearning.ts")) && /8\. advice: this one is about Cue's own LAST line/.test(src("services/turnLearning.ts")));
 
 // 2026-09-29 retest: half the learning reads were cut off at the token cap, Co made Mo a cofounder, and the kit question got a thread answer
 check("both learning reads leave room to finish: medium effort and a cap that fits the reasoning", (() => { const a = src("services/turnLearning.ts"); const b = src("services/callLearning.ts"); return /maxOutputTokens: 5000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(a) && /maxOutputTokens: 6000,\s*providerOptions: \{ anthropic: \{ effort: "medium" \} \}/.test(b); })());
-check("advice is judged on Co's last line only", /Co's own LAST line/.test(src("services/turnLearning.ts")));
+check("advice is judged on Cue's last line only", /Cue's own LAST line/.test(src("services/turnLearning.ts")));
 check("advice doesn't guess who is involved", /Don't guess who else is involved or what their role is/.test(src("services/coVoice.ts")));
-check("asked what Co has on them, Co answers from the details on file first", /answer from the details on file first/.test(src("services/capabilities.ts")));
+check("asked what Cue has on them, Cue answers from the details on file first", /answer from the details on file first/.test(src("services/capabilities.ts")));
 
 // 2026-09-29: the summary of Royce said he built Co "with cofounders Mo and Jacqueline", because his texts to Mo were read as facts about his life
 const TLn = await import("../../src/services/teamLines.js");
@@ -163,7 +163,7 @@ check("the one-incident kit instruction is gone (the replay showed it changed no
 
 check("a link from their earlier text is logged, and the reply is told the photo is its preview", (() => { const t = src("routes/sendblue.ts"); return /linkFromEarlier = m\.fromEarlier/.test(t) && /decision: "turn\.link"/.test(t) && /this message may be its preview image or a separate photo/.test(t); })());
 
-check("'met someone' is read from their own words and recorded on their recent Co event", (() => { const p = TL.parseTurnLearning('{"profile":{},"met_someone":"met a founder named Sam, great chat"}'); const t = src("services/turnLearning.ts"); return p?.metSomeone === "met a founder named Sam, great chat" && TL.parseTurnLearning('{"profile":{}}')?.metSomeone === null && TL.metQuoteIsTheirs("met a founder", "I met a founder there!") && !TL.metQuoteIsTheirs("met two investors", "I met a founder there!") && /learned\.metSomeone && metQuoteIsTheirs\(learned\.metSomeone, input\.message\)/.test(t); })());
+check("'met someone' is read from their own words and recorded on their recent Cue event", (() => { const p = TL.parseTurnLearning('{"profile":{},"met_someone":"met a founder named Sam, great chat"}'); const t = src("services/turnLearning.ts"); return p?.metSomeone === "met a founder named Sam, great chat" && TL.parseTurnLearning('{"profile":{}}')?.metSomeone === null && TL.metQuoteIsTheirs("met a founder", "I met a founder there!") && !TL.metQuoteIsTheirs("met two investors", "I met a founder there!") && /learned\.metSomeone && metQuoteIsTheirs\(learned\.metSomeone, input\.message\)/.test(t); })());
 
 console.log(`companion rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

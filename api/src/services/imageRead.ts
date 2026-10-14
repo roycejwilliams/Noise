@@ -61,7 +61,7 @@ export async function describeImage(data: Buffer, mediaType: string): Promise<st
             { type: "image", image: data, mediaType },
             {
               type: "text",
-              text: `Someone texted this image to Co. Write down what it shows so it can be referred to later without the image: if it's a screenshot of text (a message, an email, a document, a website), copy the important text itself, including names, dates, numbers and requirements; if it's a map, name the neighborhood and the streets around any pin or highlighted spot; otherwise describe what's in it. Plain words, no guesses beyond what's visible, at most 120 words. Return only the description.`,
+              text: `Someone texted this image to Cue. Write down what it shows so it can be referred to later without the image: if it's a screenshot of text (a message, an email, a document, a website), copy the important text itself, including names, dates, numbers and requirements; if it's a map, name the neighborhood and the streets around any pin or highlighted spot; otherwise describe what's in it. Plain words, no guesses beyond what's visible, at most 120 words. Return only the description.`,
             },
           ],
         },

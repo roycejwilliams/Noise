@@ -1023,6 +1023,16 @@ export function registerJobs(io: Server) {
   // No membership lapse (Royce, 2026-10-14: "Going quiet earns less contact, never ejection." The member's job is nothing):
   // the 2026-09-22 job that warned members Cue knew little about and then archived them is gone. Quiet members stay members.
 
+  // The one "I'm going by Cue now" text, queued for every member who knew it as Co (services/nameChange.ts). Idempotent: a member
+  // already queued or told is skipped. Once shortly after start, then daily; the proactive dispatch decides when it goes.
+  const queueNames = () =>
+    import("../services/nameChange.js")
+      .then((m) => m.queueNameChange())
+      .then((n) => { if (n) console.log(`name change: queued for ${n} member(s)`); })
+      .catch((err: any) => console.error("name change queue error:", err?.message ?? err));
+  setTimeout(queueNames, 60_000);
+  cron.schedule("40 9 * * *", queueNames, { timezone: "America/Los_Angeles" });
+
   // Co's own events: send announcements that were waiting for the person's
   // daytime hours (services/coEventAnnouncement.ts).
   cron.schedule("*/10 * * * *", () => {
@@ -1176,7 +1186,7 @@ export function registerJobs(io: Server) {
           summary: parts?.thread
             ? `Check in on "${parts.thread.text.slice(0, 80)}"${parts.item ? " with one thing found for it" : ""}`
             : curious
-              ? `Pick up something they said that leads to ${curious.about.slice(0, 80)}, or one way Co could help (skip if nothing they said leads there)`
+              ? `Pick up something they said that leads to ${curious.about.slice(0, 80)}, or one way Cue could help (skip if nothing they said leads there)`
               : "No-reason check-in about one specific open thread from their recent recap (skip if there isn't one)",
           payload: { recap: row.recap, threadId: parts?.threadId ?? null, thread: parts?.thread ?? null, item: parts?.item ?? null, curious },
           expiresAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),

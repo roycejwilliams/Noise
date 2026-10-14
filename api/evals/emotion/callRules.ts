@@ -16,7 +16,7 @@ const check = (label: string, ok: boolean) => {
 };
 
 const transcript = [
-  "assistant: Hey Jordan, it's Co. What's actually going on with you these days?",
+  "assistant: Hey Jordan, it's Cue. What's actually going on with you these days?",
   "user: Honestly I'm exhausted, the move has taken everything out of me",
   "assistant: That sounds like a lot.",
   "user: yeah",
@@ -27,7 +27,7 @@ const transcript = [
 
 const lines = callLinesToRead(transcript);
 check("only the member's lines are read, and a bare 'yeah' isn't", lines.length === 3 && lines.every((l) => !/^assistant/i.test(l.text)) && !lines.some((l) => l.text === "yeah"));
-check("each line comes with what was said before it, labelled Them and Co", /Co: Hey Jordan/.test(lines[0].context) && /Them: Honestly I'm exhausted/.test(lines[1].context) && /Co: I'm sorry/.test(lines[2].context));
+check("each line comes with what was said before it, labelled Them and Cue", /Cue: Hey Jordan/.test(lines[0].context) && /Them: Honestly I'm exhausted/.test(lines[1].context) && /Cue: I'm sorry/.test(lines[2].context));
 check("the lines stay in call order", lines.map((l) => l.index).join() === "1,4,6");
 const long = Array.from({ length: 50 }, (_, i) => `user: ${"word ".repeat(3 + (i % 7))}number ${i}`).join("\n");
 const capped = callLinesToRead(long);
@@ -50,7 +50,7 @@ const many = await callEmotionMoments(transcript, async () => feel("tired", "hig
 check("one moment per feeling, so one feeling doesn't crowd out the rest", many.length === 1);
 const dist = await callEmotionMoments([1, 2, 3, 4, 5].map((i) => `user: this line number ${i} has enough words in it`).join("\n"), (() => { let n = 0; return async () => feel(`feeling${n++}`, "medium", "negative"); })());
 check("at most three moments are kept", dist.length === CALL_EMOTION_MAX_MOMENTS);
-check("a frustration with Co keeps its target, as on the text path", (await callEmotionMoments(transcript, fake({ exhausted: feel("frustrated", "high", "negative", "what Co found", "co") })))[0].target === "co");
+check("a frustration with Cue keeps its target, as on the text path", (await callEmotionMoments(transcript, fake({ exhausted: feel("frustrated", "high", "negative", "what Cue found", "co") })))[0].target === "co");
 check("a read that fails or finds nothing leaves no moment and never throws", (await callEmotionMoments(transcript, async () => { throw new Error("boom"); })).length === 0 && (await callEmotionMoments(transcript, async () => null)).length === 0);
 
 // The loop treats them as it treated Hume's moments.
@@ -60,7 +60,7 @@ const sig = (o: Partial<EmotionSignal>): EmotionSignal => ({ source: "call", emo
 const ctx = summarizeSignals([sig({}), sig({ emotion: "hopeful", intensity: "low", valence: "positive", about: "demo day" })], now);
 check("the loop reads the call: strongest moment is current, the call's moments are listed", ctx.lastCall?.moments.length === 2 && ctx.current?.emotion === "exhausted");
 check("a negative life moment from a call makes needsCare (a later positive one clears it)", summarizeSignals([sig({})], now).needsCare === true && summarizeSignals([sig({}), sig({ emotion: "hopeful", valence: "positive", intensity: "medium", at: at(10) })], now).needsCare === false);
-check("a frustration with Co on a call counts as frustration with Co", summarizeSignals([sig({ emotion: "frustrated", target: "co", about: "what Co found" })], now).withCo.frustrated === true);
+check("a frustration with Cue on a call counts as frustration with Cue", summarizeSignals([sig({ emotion: "frustrated", target: "co", about: "what Cue found" })], now).withCo.frustrated === true);
 
 // Wiring.
 const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
@@ -69,7 +69,7 @@ check("a retried delivery doesn't record them twice, and a failure can't fail th
 
 // ElevenLabs' frustration score, beside the text read (2026-10-04). Shapes from a real co-test call.
 const elTurns = [
-  { role: "agent", message: "Hey Jordan, it's Co.", analysis: null },
+  { role: "agent", message: "Hey Jordan, it's Cue.", analysis: null },
   { role: "user", message: "It's been a hard week.", analysis: { user_sentiment_score: -0.5, user_frustration_score: 0.1 } },
   { role: "user", message: "Oh, perfect. That's just perfect.", analysis: { user_sentiment_score: -0.6, user_frustration_score: 0.5 } },
   { role: "user", message: "I'm so done with this. My co-founder pushed the release again.", analysis: { user_sentiment_score: -0.8, user_frustration_score: 0.7 } },
@@ -78,7 +78,7 @@ const elTurns = [
   { role: "user", message: "no score here" },
 ];
 const scored = frustrationScores(elTurns);
-check("only the caller's scored lines are read", scored.length === 5 && !scored.some((l) => /Jordan, it's Co/.test(l.text)));
+check("only the caller's scored lines are read", scored.length === 5 && !scored.some((l) => /Jordan, it's Cue/.test(l.text)));
 check("frustrationScores tolerates a missing or odd transcript", frustrationScores(null).length === 0 && frustrationScores({}).length === 0);
 const textRead = [{ valence: "negative" as const, quote: "I'm so done with this. My co-founder pushed the release again." }];
 const fr = frustrationMoments(scored, textRead);
@@ -98,7 +98,7 @@ const nowT = new Date("2026-10-04T20:00:00Z");
 const scoreRow = { source: "call" as const, emotion: "frustrated", intensity: "high" as const, valence: "negative" as const, about: null, quote: "Oh, perfect.", at: new Date("2026-10-04T19:00:00Z") };
 check("a frustration score alone never sets needsCare", summarizeSignals([{ ...scoreRow, basis: "frustration_score" as const }], nowT).needsCare === false);
 check("the same feeling from the text read still does", summarizeSignals([scoreRow], nowT).needsCare === true);
-check("Co still sees the score moment from the call", summarizeSignals([{ ...scoreRow, basis: "frustration_score" as const }], nowT).lastCall?.moments.length === 1);
+check("Cue still sees the score moment from the call", summarizeSignals([{ ...scoreRow, basis: "frustration_score" as const }], nowT).lastCall?.moments.length === 1);
 const emo = readFileSync(new URL("../../src/harness/emotion.ts", import.meta.url), "utf8");
 const migs = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
 const metr = readFileSync(new URL("../../src/harness/metrics.ts", import.meta.url), "utf8");

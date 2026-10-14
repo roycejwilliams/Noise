@@ -233,7 +233,7 @@ export async function eventCandidates(
     event_date: localDate(e.start_at, zone),
     name: e.name,
     url: e.url,
-    reason: tier === 1 ? "A Co event." : "A public event.",
+    reason: tier === 1 ? "A Cue event." : "A public event.",
     city: e.city ?? null,
     ...(e.online ? { online: true } : {}),
   }) as TierMatch;

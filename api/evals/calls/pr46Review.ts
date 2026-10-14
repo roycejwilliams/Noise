@@ -31,13 +31,13 @@ check("a member named Grace: 'grace' in a sentence is not them", CC.neutralMembe
 // ---- Co's reply is several texts, one line each
 const beats = (...lines: string[]) => lines.map((l) => `Co replied: ${l}`).join("\n");
 const offerThenLink = `${beats("Want me to look for founder communities in SF?", "https://example.com/communities")}\nUser said: yes please`;
-check("an offer followed by a link, then a yes, is still a yes to the offer (it isn't dropped as Co's echo)", PW.echoesCoNotMember("founder communities in SF", offerThenLink) === false);
+check("an offer followed by a link, then a yes, is still a yes to the offer (it isn't dropped as Cue's echo)", PW.echoesCoNotMember("founder communities in SF", offerThenLink) === false);
 const offerThenBeat = `${beats("Want me to look for founder communities in SF?", "No pressure either way.")}\nUser said: yeah do it`;
 check("an offer followed by a softener, then a yes, likewise", PW.echoesCoNotMember("founder communities in SF", offerThenBeat) === false);
-check("Co's own plan, then another beat, then 'sure' is still not their want", PW.echoesCoNotMember("dig into sponsors for the event", `${beats("I'll dig into sponsors for the event.", "Back soon.")}\nUser said: sure`) === true);
+check("Cue's own plan, then another beat, then 'sure' is still not their want", PW.echoesCoNotMember("dig into sponsors for the event", `${beats("I'll dig into sponsors for the event.", "Back soon.")}\nUser said: sure`) === true);
 const draft = "Good, keep going. Have a look at the cap table too.\n\nWhat's the number you're raising?";
 const recent = `${beats("What's the number you're raising?")}\nUser said: not sure yet\n${beats("Fair enough.", "Think it over.")}\nUser said: ok`;
-check("a question in Co's previous turn is caught even though the turn after it was two beats", !TS.dropRepeatedQuestion(draft, recent).includes("What's the number you're raising?"));
+check("a question in Cue's previous turn is caught even though the turn after it was two beats", !TS.dropRepeatedQuestion(draft, recent).includes("What's the number you're raising?"));
 check("several beats of one turn are read as one message", !TS.dropRepeatedQuestion(draft, beats("Got it, that's a big week.", "What's the number you're raising?") + "\nUser said: hmm").includes("What's the number you're raising?"));
 
 // ---- no first name on file

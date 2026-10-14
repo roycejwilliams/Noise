@@ -16,8 +16,8 @@ const label = String(process.env.REPLAY_LABEL ?? "").replace(link ?? "", "").tri
 if (r && link && label) r = { ...r, what: label };
 console.log("pressed:", r?.text, "| what:", r?.what?.slice(0, 80), "| also in thread:", r?.alsoInThread);
 const openItems = [
-  { id: "offer_reaction:39", kind: "offer_reaction", description: "Co offered \"Grok Bot x Notion for Product Builders night (SF)\" (Tuesday)", askedAt: new Date() },
-  { id: "offer_reaction:38", kind: "offer_reaction", description: "Co offered \"daytonaio's AI Builders demo night\" (Tuesday)", askedAt: new Date() },
+  { id: "offer_reaction:39", kind: "offer_reaction", description: "Cue offered \"Grok Bot x Notion for Product Builders night (SF)\" (Tuesday)", askedAt: new Date() },
+  { id: "offer_reaction:38", kind: "offer_reaction", description: "Cue offered \"daytonaio's AI Builders demo night\" (Tuesday)", askedAt: new Date() },
 ] as any;
 const out = await routeMessage({ message: `I'm in ${inlineNote(r!)}`, recentConversation: "", openItems });
 console.log("router:", JSON.stringify(out.output).slice(0, 400));

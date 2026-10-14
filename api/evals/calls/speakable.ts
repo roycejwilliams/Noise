@@ -48,7 +48,7 @@ check("a short sentence is untouched", split15("That makes sense.").join("|") ==
   check("never cut after an introductory 'when' clause (its main clause is still to come)", intro.every((p) => !/lunch\.$/.test(p)), intro);
   const mid = split15("Then inside, they text you when they want an intro, and you've already got the depth.");
   check("a 'when' in the middle of a sentence does not stop a comma break", mid.length === 2 && mid.every((p) => S.wordCount(p) <= 15), mid);
-  check("'before ...' is a clause, not a preposition to cut at", !split15("That's a sharp angle you're already seeing how Co fits into their event before you even sit down with them.").some((p) => /^Before /.test(p)));
+  check("'before ...' is a clause, not a preposition to cut at", !split15("That's a sharp angle you're already seeing how Cue fits into their event before you even sit down with them.").some((p) => /^Before /.test(p)));
   const stream = streamed("Are you looking to do that before November or does it make sense to wait until closer to the launch?", 4).join("");
   check("streamed: a question past the limit still arrives as questions, never a dangling statement", /\?\s*$/.test(stream) && !/November\.\s/.test(stream), stream);
   const lead = split15("Before I dig into what alignment might look like with them, I want to make sure I understand what you are asking me for.");
@@ -113,40 +113,40 @@ for (const size of [1, 3, 7, 20]) {
 {
   const today = [
     ["From where I sit, the most useful role at an event is helping people find the right person in the room before they've talked to anyone.", /^From where I sit\.$/],
-    ["When we hang up, I'll set up a task to draft a planning doc, a launch plan for the Sequin AI event, covering how Co shows up there.", /^When we hang up\.$/],
+    ["When we hang up, I'll set up a task to draft a planning doc, a launch plan for the Sequin AI event, covering how Cue shows up there.", /^When we hang up\.$/],
     ["Do you want me to hold onto this so the next time we talk, we pick up from the cost split?", /talk\.$/],
     ["Where does it get hard when you and Jacqueline sit down with them next week to talk it through?", /\byou\.$/],
   ] as const;
   for (const [line, frag] of today) check(`2026-10-08 call: no fragment from "${line.slice(0, 40)}..."`, !S.speakable(line).split(/(?<=[.?!])\s+/).some((p) => frag.test(p)), S.speakable(line));
-  check("a very long run-on still closes where two clauses join", S.splitLong("We could start with the guest list for the November night at House of AI, and then we can work out how Co shows up for each person once they walk into the room and start talking.").length >= 2);
+  check("a very long run-on still closes where two clauses join", S.splitLong("We could start with the guest list for the November night at House of AI, and then we can work out how Cue shows up for each person once they walk into the room and start talking.").length >= 2);
 }
 // ---- a line never contradicts itself (Royce, 2026-10-08: "no opening line where two clauses disagree")
 {
   const caught = [
     // The opening written for Royce on the merged code: a plan Co still owes can't have been reviewed.
-    ["Hey Royce, it's Co. Have you had a chance to review that post-event branding plan I owe you, or still waiting on Jacqueline's input?", /still owes is also something they had/],
-    ["Hey Royce, it's Co. I still owe you the planning doc. Did you get a chance to read it?", /still owes/],
-    ["Hey Royce, it's Co. What did you think of the venue list I still owe you?", /still owes/],
-    ["Hey Royce, it's Co. Did you like the sponsor brief I haven't sent yet?", /still owes/],
-    ["Hey Royce, it's Co. I sent you the brief I still owe you, any thoughts?", /still owes/],
-    ["Hey Royce, it's Co. Is the deck still finished?", /"still" with a completion verb/],
-    ["Hey Royce, it's Co. The date is locked in, but it's still up in the air.", /locked and open/],
-    ["Hey Royce, it's Co. Jacqueline got back to you on the budget, and you're still waiting on her budget notes.", /heard back and still waiting/],
-    ["Hey Royce, it's Co. The plan is done, and the plan isn't finished yet.", /done and not done/],
+    ["Hey Royce, it's Cue. Have you had a chance to review that post-event branding plan I owe you, or still waiting on Jacqueline's input?", /still owes is also something they had/],
+    ["Hey Royce, it's Cue. I still owe you the planning doc. Did you get a chance to read it?", /still owes/],
+    ["Hey Royce, it's Cue. What did you think of the venue list I still owe you?", /still owes/],
+    ["Hey Royce, it's Cue. Did you like the sponsor brief I haven't sent yet?", /still owes/],
+    ["Hey Royce, it's Cue. I sent you the brief I still owe you, any thoughts?", /still owes/],
+    ["Hey Royce, it's Cue. Is the deck still finished?", /"still" with a completion verb/],
+    ["Hey Royce, it's Cue. The date is locked in, but it's still up in the air.", /locked and open/],
+    ["Hey Royce, it's Cue. Jacqueline got back to you on the budget, and you're still waiting on her budget notes.", /heard back and still waiting/],
+    ["Hey Royce, it's Cue. The plan is done, and the plan isn't finished yet.", /done and not done/],
   ] as const;
   for (const [line, why] of caught) check(`contradiction caught: "${line.slice(20, 80)}..."`, why.test(S.selfContradiction(line) ?? ""), S.selfContradiction(line));
   const fine = [
-    "Hey Royce, it's Co. I still owe you that planning doc on Co's post-event presence. Want it tonight?",
-    "Hey Royce, it's Co. I still owe you that planning doc on Co's post-event presence, so where did Jacqueline land on her input?",
+    "Hey Royce, it's Cue. I still owe you that planning doc on Cue's post-event presence. Want it tonight?",
+    "Hey Royce, it's Cue. I still owe you that planning doc on Cue's post-event presence, so where did Jacqueline land on her input?",
     // An either-or question asks which; it doesn't say both.
-    "Hey Royce, it's Co. Is the date locked, or still open?",
-    "Hey Royce, it's Co. Did you hear back from Sequent AI, or still waiting on them?",
+    "Hey Royce, it's Cue. Is the date locked, or still open?",
+    "Hey Royce, it's Cue. Did you hear back from Sequent AI, or still waiting on them?",
     // Two true states of two different things.
-    "Hey Royce, it's Co. The venue is booked, and the date is still up in the air.",
-    "Hey Royce, it's Co. Did you get the deck? I still owe you the budget.",
-    "Hey Royce, it's Co. Have you had a chance to look at the venue list I sent?",
-    "Hey Royce, it's Co. Still waiting on Jacqueline's input for the branding plan?",
-    "Hey Royce, it's Co. Last we talked you were finding sponsors for the October 10 event. Where did that land?",
+    "Hey Royce, it's Cue. The venue is booked, and the date is still up in the air.",
+    "Hey Royce, it's Cue. Did you get the deck? I still owe you the budget.",
+    "Hey Royce, it's Cue. Have you had a chance to look at the venue list I sent?",
+    "Hey Royce, it's Cue. Still waiting on Jacqueline's input for the branding plan?",
+    "Hey Royce, it's Cue. Last we talked you were finding sponsors for the October 10 event. Where did that land?",
   ];
   for (const line of fine) check(`a coherent line passes: "${line.slice(20, 80)}..."`, S.selfContradiction(line) === null, S.selfContradiction(line));
   // Everything Co said on the 10/6 call, two sentences at a time (an opening's size): nothing flagged.
@@ -157,7 +157,7 @@ for (const size of [1, 3, 7, 20]) {
 {
   // 2026-10-08 call eval: streamed a token at a time, a sentence just over the limit was cut mid-clause ("that's where I'd. Start
   // rather than..."); streamed or whole, it must split at the same, natural place.
-  const t = "If there's ever a Co event or a room where it makes sense to put you two in the same space, that's where I'd start rather than a cold intro over email. But honestly, that stood out.";
+  const t = "If there's ever a Cue event or a room where it makes sense to put you two in the same space, that's where I'd start rather than a cold intro over email. But honestly, that stood out.";
   const st = new S.SpeakableStream();
   const streamed = [...[...t].flatMap((c) => st.push(c)), ...st.end()].join("").trim();
   check(`streamed a character at a time, a long sentence splits where the whole text does ("${streamed}")`, streamed === S.speakable(t) && !/I'd\./.test(streamed));
@@ -172,7 +172,7 @@ for (const size of [1, 3, 7, 20]) {
   check(`a long question with only an opening-clause comma stays whole, streamed or not ("${streamedQ}")`, !/people\./.test(whole) && !/people\./.test(streamedQ) && /\?$/.test(streamedQ));
   const q2 = "I keep thinking about the guest list you described for the open house in November, and what would make the right people want to stay late?";
   check(`a question still splits at a complete ", and" boundary ("${S.speakable(q2)}")`, /November\. What would make/.test(S.speakable(q2)));
-  const statement = "If there's ever a Co event or a room where it makes sense to put you two in the same space and talk it through properly over dinner, that's where I'd start rather than a cold intro.";
+  const statement = "If there's ever a Cue event or a room where it makes sense to put you two in the same space and talk it through properly over dinner, that's where I'd start rather than a cold intro.";
   check(`statements still split as before ("${S.speakable(statement)}")`, S.speakable(statement).split(/(?<=\.)\s/).length >= 2);
   check("a question is read as one before its \"?\" arrives", S.readsAsQuestion("So when you think about it, what's".split(" ")) && S.readsAsQuestion("[warmly] Are you".split(" ")) && !S.readsAsQuestion("That makes sense, and the room".split(" ")));
 }

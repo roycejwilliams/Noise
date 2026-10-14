@@ -86,7 +86,7 @@ export function memberClosed(theirLast: string): boolean {
 // Co's own goodbye in its last turn, however phrased ("Alright Royce, take care.", "Enjoy tonight, bye!", "Night!", "Cheers, Jordan.").
 const CO_CLOSING = /\b(?:bye|goodbye|good ?night|night|take care|talk (?:to you )?(?:soon|later|tomorrow)|speak soon|see you|catch you later|cheers|enjoy (?:tonight|the|your|it)|have a (?:good|great|nice|lovely) (?:night|evening|one|day|weekend|time|trip))\b/i;
 // Pure: their words ask Co something, once a greeting's own question ("what's up?", "how's it going?", "how are you?") is set aside.
-const GREETING_Q = /\b(?:what'?s up|what'?s new|what'?s going on|what'?s happening|how'?s it going|how are you(?: doing)?|how'?s (?:your|ur) (?:day|night|evening|week|weekend)|how have you been|you good|sup)\b(?: (?:with you|man|dude|co))?\s*\?*/gi;
+const GREETING_Q = /\b(?:what'?s up|what'?s new|what'?s going on|what'?s happening|how'?s it going|how are you(?: doing)?|how'?s (?:your|ur) (?:day|night|evening|week|weekend)|how have you been|you good|sup)\b(?: (?:with you|man|dude|co|cue))?\s*\?*/gi;
 export function asksCo(said: string): boolean {
   const rest = said.replace(GREETING_Q, " ");
   // "What's up with the caterer" asks about something (it's not the greeting), and a question asked without a "?" still asks
@@ -384,11 +384,11 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (clean && outbound) {
       const kept = thanksForCallingCut(sentence);
       if (kept === null) {
-        deps.onDropped?.(sentence, "thanks them for calling on a call Co placed");
+        deps.onDropped?.(sentence, "thanks them for calling on a call Cue placed");
         return null;
       }
       if (kept !== sentence) {
-        deps.onDropped?.(sentence, "\"glad you called\" on a call Co placed");
+        deps.onDropped?.(sentence, "\"glad you called\" on a call Cue placed");
         return say(s.replace(sentence, kept));
       }
     }
@@ -513,7 +513,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
         // Held when they haven't closed, even on a turn that says nothing (review of #113: a bare end_call mid-call still hung up
         // first). A held turn with nothing said gets one more answer below, never dead air.
         if (name === "end_call" && ruledOut(decision, "end_call")) {
-          deps.onDropped?.("end_call", "Co never hangs up first: they haven't said goodbye");
+          deps.onDropped?.("end_call", "Cue never hangs up first: they haven't said goodbye");
           heldEnd = true;
           cur = { kind: "skip" };
           continue;

@@ -54,9 +54,9 @@ export async function ownerPreviewName(userId: string): Promise<string | null> {
 export function previewDescription(data: StoredCoPage["data"]): string {
   if (isDeckData(data)) {
     const n = (data as DeckData).slides.length + 1;
-    return `A ${n}-slide deck made by Co.`;
+    return `A ${n}-slide deck made by Cue.`;
   }
-  return "A page made by Co.";
+  return "A page made by Cue.";
 }
 
 const styleOf = (data: StoredCoPage["data"]): DeckStyle | null => (isDeckData(data) ? (data as DeckData).style : ((data as CoPageData).style ?? null));
@@ -115,13 +115,13 @@ h1{margin-top:auto;font-family:${fontStack(display)};font-weight:400;font-size:$
 .who{font-weight:500}
 .made{display:flex;align-items:center;gap:14px;font-size:22px;letter-spacing:.04em;color:${k.soft}}
 .mark{width:52px;height:52px;border-radius:50%;border:2px solid ${k.ink};display:flex;align-items:center;justify-content:center;font-family:'Fraunces',Georgia,serif;font-size:24px;color:${k.ink}}
-</style></head><body><div class="card">${gradient ? "" : `<div class="bar"></div>`}<div class="kind">${o.kind === "deck" ? "A deck" : "A page"}</div><h1>${e(o.title)}</h1><div class="foot"><span class="who">${o.name ? e(o.name) : ""}</span><span class="made"><span class="mark">Co</span>Made by Co</span></div></div></body></html>`;
+</style></head><body><div class="card">${gradient ? "" : `<div class="bar"></div>`}<div class="kind">${o.kind === "deck" ? "A deck" : "A page"}</div><h1>${e(o.title)}</h1><div class="foot"><span class="who">${o.name ? e(o.name) : ""}</span><span class="made"><span class="mark">Cue</span>Made by Cue</span></div></div></body></html>`;
 }
 
 // The app icon: Co's mark, for the favicon and apple-touch-icon.
-export const CO_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><rect width="180" height="180" rx="40" fill="${C.ink}"/><text x="90" y="116" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="80" fill="#FBF9F5">Co</text></svg>`;
+export const CO_MARK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><rect width="180" height="180" rx="40" fill="${C.ink}"/><text x="90" y="116" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="80" fill="#FBF9F5">Cue</text></svg>`;
 export function coMarkHtml(): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400&display=swap" rel="stylesheet"><style>*{margin:0}html,body{width:180px;height:180px;background:${C.ink};overflow:hidden}div{width:180px;height:180px;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',Georgia,serif;font-size:80px;color:#FBF9F5}</style></head><body><div>Co</div></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400&display=swap" rel="stylesheet"><style>*{margin:0}html,body{width:180px;height:180px;background:${C.ink};overflow:hidden}div{width:180px;height:180px;display:flex;align-items:center;justify-content:center;font-family:'Fraunces',Georgia,serif;font-size:80px;color:#FBF9F5}</style></head><body><div>Cue</div></body></html>`;
 }
 
 // ---------------------------------------------------------------- the head
@@ -131,7 +131,7 @@ export function coMarkHtml(): string {
 export function previewHead(o: { title: string; description: string; url: string | null; imageUrl: string | null; iconBase: string | null }): string {
   return [
     `<meta name="description" content="${e(o.description)}">`,
-    `<meta property="og:site_name" content="Co">`,
+    `<meta property="og:site_name" content="Cue">`,
     `<meta property="og:type" content="website">`,
     `<meta property="og:title" content="${e(o.title)}">`,
     `<meta property="og:description" content="${e(o.description)}">`,
@@ -158,12 +158,12 @@ export function previewHead(o: { title: string; description: string; url: string
 // Pure: the one card every missing link shows: no title, no name, no image.
 export function genericHead(iconBase: string | null): string {
   return [
-    `<meta property="og:site_name" content="Co">`,
+    `<meta property="og:site_name" content="Cue">`,
     `<meta property="og:type" content="website">`,
-    `<meta property="og:title" content="Co">`,
+    `<meta property="og:title" content="Cue">`,
     `<meta property="og:description" content="This link isn't available.">`,
     `<meta name="twitter:card" content="summary">`,
-    `<meta name="twitter:title" content="Co">`,
+    `<meta name="twitter:title" content="Cue">`,
     `<meta name="twitter:description" content="This link isn't available.">`,
     ...iconLinks(iconBase),
   ].join("\n");

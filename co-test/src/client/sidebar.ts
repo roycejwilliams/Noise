@@ -68,7 +68,7 @@ export function renderSidebar(active: SidebarPage): void {
   container.innerHTML = `
     <div class="sidebar-brand">
       <span class="sidebar-brand-mark">${brandMark}</span>
-      <span>Co (test)</span>
+      <span>Cue (test) · Noise</span>
     </div>
     <nav class="sidebar-nav">${navHtml}</nav>
   `;

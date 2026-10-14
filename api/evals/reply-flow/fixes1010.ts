@@ -74,7 +74,7 @@ const slide = (...lines: string[]) => `<?xml version="1.0"?><p:sld><p:cSld><p:sp
 const PPTX = zip({
   "[Content_Types].xml": "<Types/>",
   "ppt/presentation.xml": "<p:presentation/>",
-  "ppt/slides/slide1.xml": slide("Co", "The companion for people you haven&apos;t met"),
+  "ppt/slides/slide1.xml": slide("Cue", "The companion for people you haven&apos;t met"),
   "ppt/slides/slide2.xml": slide("Problem", "Rooms full of strangers &amp; no way in"),
   "ppt/slides/slide10.xml": slide("Ask", "Raising pre-seed"),
 });
@@ -92,7 +92,7 @@ check("a .pptx is known by its own bytes (the 16:20 and 16:22 sends), never take
 check("the other kinds: docx, keynote, pages, old office, video, jpeg, pdf, unknown", IF.fileKindOf(DOCX) === "docx" && IF.fileKindOf(KEYNOTE) === "keynote" && IF.fileKindOf(PAGES) === "pages" && IF.fileKindOf(OLE) === "old_office" && IF.fileKindOf(MP4) === "video" && IF.fileKindOf(JPEG) === "image" && IF.fileKindOf(PDF) === "pdf" && IF.fileKindOf(Buffer.from("hello there, not a file at all")) === "unknown");
 {
   const t = IF.officeText(PPTX, "pptx") ?? "";
-  check("a deck's text is read in code, slides in their own order (10 after 2), entities decoded", /^Slide 1:\nCo\nThe companion for people you haven't met\n\nSlide 2:\nProblem\nRooms full of strangers & no way in\n\nSlide 3:\nAsk\nRaising pre-seed$/.test(t), t);
+  check("a deck's text is read in code, slides in their own order (10 after 2), entities decoded", /^Slide 1:\nCue\nThe companion for people you haven't met\n\nSlide 2:\nProblem\nRooms full of strangers & no way in\n\nSlide 3:\nAsk\nRaising pre-seed$/.test(t), t);
   check("a Word file's paragraphs, runs joined", IF.officeText(DOCX, "docx") === "Venue terms\nCapacity 120");
   check("a deck with no text in it reads as nothing (never 'read')", IF.officeText(zip({ "ppt/presentation.xml": "x", "ppt/slides/slide1.xml": "<p:sld/>" }), "pptx") === null);
   check("a broken zip reads as nothing, never throws", IF.officeText(Buffer.concat([PPTX.subarray(0, 60), Buffer.alloc(30)]), "pptx") === null && IF.zipNames(Buffer.from("PK\x03\x04 not really")) === null);
@@ -103,14 +103,14 @@ check("the other kinds: docx, keynote, pages, old office, video, jpeg, pdf, unkn
   const ins = log.find((l) => /INSERT INTO member_files/.test(l.sql));
   check("a deck is kept like a PDF: for them alone, numbered, its text read in code (no model call)", k.ok && k.n === 2 && ins?.p[0] === "u1" && /^Slide 1:/.test(String(ins?.p[4])) && ins?.p[1] === "Co Deck.pptx");
   reset();
-  check("a Keynote deck isn't kept (Co can't read it), and nothing is stored", (await F.keepFile("u1", KEYNOTE, null)).ok === false && !ran(/INSERT/));
+  check("a Keynote deck isn't kept (Cue can't read it), and nothing is stored", (await F.keepFile("u1", KEYNOTE, null)).ok === false && !ran(/INSERT/));
   check("only PDF, PowerPoint and Word files are keepable", IF.isKeepable("pdf") && IF.isKeepable("pptx") && IF.isKeepable("docx") && !IF.isKeepable("keynote") && !IF.isKeepable("image"));
 }
 {
   const fact = IF.unreadableFileFact("keynote");
   check("an unreadable file is named for what it is, and the reply offers routes that work", /a Keynote deck/.test(fact) && /paste the key slides/.test(fact) && /PDF/.test(fact) && /link/.test(fact) && /never call it a photo/.test(fact) && /never blame their connection/.test(fact));
   check("the routes and facts carry no em dash and no exclamation point", ![IF.FILE_ROUTES, fact, IF.keptFileFact("pptx", { n: 1, isNew: true }), IF.AWAITED_DETAIL, IF.pickUpFact("x")].some((t) => /—|!/.test(t)));
-  check("the record notes: alone, it is the message; with their text, it rides after it", IF.fileRecordNote({ kind: "pptx", unreadable: true }, false) === "[sent a PowerPoint deck Co couldn't open]" && IF.fileRecordNote({ kind: "pptx", unreadable: true }, true) === "[also sent a PowerPoint deck Co couldn't open]");
+  check("the record notes: alone, it is the message; with their text, it rides after it", IF.fileRecordNote({ kind: "pptx", unreadable: true }, false) === "[sent a PowerPoint deck Cue couldn't open]" && IF.fileRecordNote({ kind: "pptx", unreadable: true }, true) === "[also sent a PowerPoint deck Cue couldn't open]");
   const sb = src("routes/sendblue.ts");
   check("intake: the file's kind is read before it's taken for a photo, and only an image goes to vision", /fileKind = fileKindOf\(fileBytes, imageRes\.headers\.get\("content-type"\)\)/.test(sb) && /if \(isKeepable\(fileKind\)\)/.test(sb) && /else if \(fileKind === "image" \|\| fileKind === "heic"\)/.test(sb));
   check("intake: a file that came with their text is in the record (the first send left no trace)", /\$\{fileNoteWithText \? ` \$\{fileNoteWithText\}` : ""\}/.test(sb) && /fileNoteWithText = fileRecordNote\(/.test(sb));
@@ -121,7 +121,7 @@ check("the other kinds: docx, keynote, pages, old office, video, jpeg, pdf, unkn
   reset([[/INSERT INTO open_loops/, () => ({ rows: [{ id: 901 }] })]]);
   const id = await IF.openAwaitedFile(fakeDb as any, "u1", "pptx");
   const w = log[0];
-  check("the ask that waits on the file is one loop Co carries, for that member only, open (so it can be asked about once)", id === 901 && w.p[0] === "u1" && w.p[1] === IF.AWAITED_REF && /source, source_ref/.test(w.sql) && /'open'/.test(w.sql) && /PowerPoint deck/.test(w.p[2]));
+  check("the ask that waits on the file is one loop Cue carries, for that member only, open (so it can be asked about once)", id === 901 && w.p[0] === "u1" && w.p[1] === IF.AWAITED_REF && /source, source_ref/.test(w.sql) && /'open'/.test(w.sql) && /PowerPoint deck/.test(w.p[2]));
   reset([[/UPDATE open_loops SET status = 'done'/, () => ({ rows: [{ title: IF.awaitedFileTitle("pptx") }] })]]);
   const t = await IF.closeAwaitedFile(fakeDb as any, "u1");
   check("a readable file closes it, scoped to them, and the reply picks the ask back up", t === IF.awaitedFileTitle("pptx") && /WHERE user_id = \$1 AND source = 'co'/.test(log[0].sql) && /pick that request back up/.test(IF.pickUpFact(t!)));
@@ -147,7 +147,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   // Rows 10405 / 10410: "Nothing's come through on my end yet", with and without the record behind it.
   const draft = "Nothing's come through on my end yet. Send it as a PDF and I'll take a look.";
   const withRecord = G.createReplyFacts();
-  G.addFact(withRecord, "known", IF.fileRecordFact([{ at: new Date(), content: "User said: [sent a PowerPoint deck Co couldn't open]" }], "Did you receive it? I just sent it")!);
+  G.addFact(withRecord, "known", IF.fileRecordFact([{ at: new Date(), content: "User said: [sent a PowerPoint deck Cue couldn't open]" }], "Did you receive it? I just sent it")!);
   const noRecord = G.createReplyFacts();
   const narr = (rf: any) => G.codeChecks(draft, rf, empty as any).some((c) => c.name === "no_internal_narration" && !c.pass);
   check("narration: allowed when the record shows nothing readable arrived", !narr(withRecord));
@@ -156,32 +156,32 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   check("the claim check agrees with the narration check, both ways", G.claimChecks(claim, withRecord, empty as any)[0].pass === true && G.claimChecks(claim, noRecord, empty as any)[0].pass === false);
   check("a positive 'it came through' is never backed by that record", G.claimChecks([{ text: "Got it, it came through", type: "past_action", supported: false, factId: null, quote: null }], withRecord, empty as any)[0].pass === false);
   check("row 10410's wording is an arrival denial too", IF.arrivalDenial("That one didn't come through either, Jacqueline.") && IF.arrivalDenial("Photo didn't come through on my end, can't see it.") && !IF.arrivalDenial("Still digging on my end."));
-  check("narration rule itself is unchanged for Co's machinery", !!S.narratesInternalState("The search hit a limit on my end.") && !S.narratesInternalState("Nothing's come through on my end yet.", { allow: IF.arrivalDenial }));
+  check("narration rule itself is unchanged for Cue's machinery", !!S.narratesInternalState("The search hit a limit on my end.") && !S.narratesInternalState("Nothing's come through on my end yet.", { allow: IF.arrivalDenial }));
 }
 {
   const at = (min: number) => new Date(Date.UTC(2026, 9, 10, 23, min));
   const line = (min: number, content: string) => ({ at: at(min), content });
-  check("the record: an unreadable file means nothing readable has come", /no readable file or photo has come through since/.test(IF.fileRecordFact([line(20, "User said: Hi Co, can you help pressure test my pitch deck? [also sent a PowerPoint deck Co couldn't open]")], "Did you receive it?") ?? ""));
+  check("the record: an unreadable file means nothing readable has come", /no readable file or photo has come through since/.test(IF.fileRecordFact([line(20, "User said: Hi Cue, can you help pressure test my pitch deck? [also sent a PowerPoint deck Cue couldn't open]")], "Did you receive it?") ?? ""));
   check("the record: the old photo line counts as unreadable", /a photo/.test(IF.fileRecordFact([line(21, "User said: [sent a photo — couldn't load it]")], "x") ?? ""));
   check("the record: a readable photo or kept file in the window means no such fact", IF.fileRecordFact([line(1, "User said: [sent a photo showing: a slide]")], "did you get it") === null && IF.fileRecordFact([line(1, "User said: here [also sent a PDF, kept as their file #3]")], "did you get it") === null);
   check("review #140, 5: a deck kept 45 minutes ago (outside the 30-minute lines) still means 'it came', so no 'nothing arrived' fact", IF.fileRecordFact([line(45, "User said: did you get my deck?")], "did you get my deck?", at(0)) === null);
-  check("review #140, 5: an unreadable file AFTER an older kept one is still 'couldn't open'; one before a newer kept one is not", /couldn't be opened/.test(IF.fileRecordFact([line(30, "User said: [sent a Keynote deck Co couldn't open]")], "x", at(0)) ?? "") && IF.fileRecordFact([line(10, "User said: [sent a Keynote deck Co couldn't open]")], "x", at(20)) === null);
+  check("review #140, 5: an unreadable file AFTER an older kept one is still 'couldn't open'; one before a newer kept one is not", /couldn't be opened/.test(IF.fileRecordFact([line(30, "User said: [sent a Keynote deck Cue couldn't open]")], "x", at(0)) ?? "") && IF.fileRecordFact([line(10, "User said: [sent a Keynote deck Cue couldn't open]")], "x", at(20)) === null);
   check("the record: 'I just sent it' with nothing on file says nothing has arrived", /no file or photo from them has arrived/.test(IF.fileRecordFact([], "Did you receive it? I just sent it") ?? ""));
   check("the record: an everyday message gets no fact, nor 'I sent it to my boss'", IF.fileRecordFact([], "How was your weekend?") === null && IF.fileRecordFact([], "I sent it to my boss already") === null && IF.fileRecordFact([], "I can't see why not") === null);
   check("an arrival denial needs an object or an end: 'can't see why' isn't one", !IF.arrivalDenial("I can't see why not.") && IF.arrivalDenial("I can't open it.") && IF.arrivalDenial("Couldn't open that file."));
   check("a photo or video that didn't open isn't carried as work; a document is", IF.AWAITED_KINDS.has("pptx") && IF.AWAITED_KINDS.has("keynote") && !IF.AWAITED_KINDS.has("image") && !IF.AWAITED_KINDS.has("video"));
-  check("a PDF Co couldn't use says why, not that the format can't be opened", /couldn't use this one \(too large to read here\)/.test(IF.unreadableFileFact("pdf", "too large to read here")));
+  check("a PDF Cue couldn't use says why, not that the format can't be opened", /couldn't use this one \(too large to read here\)/.test(IF.unreadableFileFact("pdf", "too large to read here")));
 }
 
 // ================================================================ 3. the call
 {
   const out = EL.callSituation({ direction: "outbound", team: true });
-  check("outbound: the call says Co placed it, and never to thank them for calling", /you called them; they did not call you/.test(out) && /Never thank them for calling/.test(out));
-  check("team: the call says they build Co", out.includes(X.TEAM_BUILDER_LINE) && /Never pitch Co to them/.test(X.TEAM_BUILDER_LINE));
-  check("not team: nothing about building Co", !EL.callSituation({ direction: "inbound", team: false }).includes("builds you"));
+  check("outbound: the call says Cue placed it, and never to thank them for calling", /you called them; they did not call you/.test(out) && /Never thank them for calling/.test(out));
+  check("team: the call says they build Cue", out.includes(X.TEAM_BUILDER_LINE) && /Never pitch Cue to them/.test(X.TEAM_BUILDER_LINE));
+  check("not team: nothing about building Cue", !EL.callSituation({ direction: "inbound", team: false }).includes("builds you"));
   check("the situation leads the call's context", EL.withCallSituation("Recent: interviews.", { direction: "outbound", team: false }).startsWith("This call: you called them") && /Recent: interviews\.$/.test(EL.withCallSituation("Recent: interviews.", { direction: "outbound", team: false })));
   check("registration writes it, from the team flag", /context_summary: withCallSituation\(o\.contextSummary, \{ direction: o\.direction, team: await isTeamMember\(o\.userId\)/.test(src("services/elevenLabsCalls.ts")));
-  check("texts: a team member's reply is told they build Co", /addInstruction\(rf, TEAM_BUILDER_LINE\)/.test(src("harness/replyGrounding.ts")));
+  check("texts: a team member's reply is told they build Cue", /addInstruction\(rf, TEAM_BUILDER_LINE\)/.test(src("harness/replyGrounding.ts")));
   check("the team line has no em dash or exclamation point", !/—|!/.test(X.TEAM_BUILDER_LINE));
 }
 {
@@ -191,13 +191,13 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   const text = (s: string) => [{ type: "content_block_start", index: 0, content_block: { type: "text" } }, ...(s.match(/.{1,6}/gs) ?? []).map((t) => ({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: t } })), { type: "content_block_stop", index: 0 }];
   const go = async (system: string) => {
     const out: string[] = [], dropped: string[] = [];
-    const body = { model: "x", stream: true, messages: [{ role: "system", content: system }, { role: "assistant", content: "Hey Jordan, it's Co." }, { role: "user", content: "I've been thinking about the launch a lot." }] };
+    const body = { model: "x", stream: true, messages: [{ role: "system", content: system }, { role: "assistant", content: "Hey Jordan, it's Cue." }, { role: "user", content: "I've been thinking about the launch a lot." }] };
     for await (const c of P.runCallLlm(body as any, { stream: () => (async function* () { for (const e of text("I'm really glad you called. Tell me what's on your mind about it.")) yield e; })() as any, onDropped: (s, w) => dropped.push(w) })) if (c.choices[0].delta.content) out.push(String(c.choices[0].delta.content));
     return { said: out.join(""), dropped };
   };
-  const ob = await go("You are Co.\nThis call is outbound.");
-  check("the call brain: on an outbound call the line never reaches the voice", !/glad you called/i.test(ob.said) && /Tell me what's on your mind/.test(ob.said) && ob.dropped.some((w) => /call Co placed/.test(w)), ob);
-  const ib = await go("You are Co.\nThis call is inbound.");
+  const ob = await go("You are Cue.\nThis call is outbound.");
+  check("the call brain: on an outbound call the line never reaches the voice", !/glad you called/i.test(ob.said) && /Tell me what's on your mind/.test(ob.said) && ob.dropped.some((w) => /call Cue placed/.test(w)), ob);
+  const ib = await go("You are Cue.\nThis call is inbound.");
   check("the call brain: on an inbound call it's true and stays", /glad you called/i.test(ib.said), ib);
 }
 
@@ -243,7 +243,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   const away = A.awayFromClaims([c], now)!;
   const cand = (type: string, payload: any = { askId: "profile", fromProfile: true }) => ({ id: "1", userId: "u1", type, targetKey: `${type}:x`, topicKey: "t", summary: "", priority: 50, dueAt: now, expiresAt: null, payload, attempts: 0, createdAt: now }) as any;
   const held = (type: string, payload?: any) => PR.candidateChecks(cand(type, payload), { now, sends: [], lastInboundAt: now, away } as any).some((k) => k.name === "away_hold" && !k.pass);
-  check("dispatch: a find Co started waits while she's away; an in-room nudge too", held("event_offer") && held("event_match_nudge"));
+  check("dispatch: a find Cue started waits while she's away; an in-room nudge too", held("event_offer") && held("event_match_nudge"));
   check("review #140, 2: an answer to her own ask is never held (\"I'm in NYC, any founder dinners this week?\"), nor a resurfaced answer", !held("event_offer", { askId: "a1", fromProfile: false }) && !held("event_offer", { askId: "a1", fromProfile: false, again: true }));
   check("dispatch: what isn't tied to a place still goes (a companion check-in, an intro tease)", !held("companion") && !held("network_tease"));
   check("dispatch: not away, nothing held", !PR.candidateChecks(cand("event_offer"), { now, sends: [], lastInboundAt: now, away: null } as any).some((k) => k.name === "away_hold"));
@@ -251,7 +251,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   check("the restraint read carries it to dispatch", /away: raw\.away \?\? null/.test(src("harness/proactive.ts")) && /kind = 'away'/.test(src("services/memberKnowledge.ts")));
   const events = [{ name: "Founder Friends SF", url: "https://lu.ma/ff" }];
   check("tasks 164/165: a text carrying an event it found is held while she's away; a role still goes", TT.eventInSend("Founder Friends SF is Monday", [], events) && TT.eventInSend("This one fits", ["https://lu.ma/ff"], events) && !TT.eventInSend("A growth role at Acme fits what you said", ["https://acme.com/jobs/1"], events));
-  check("review #140, 2: only a look-out Co started waits; an ask task, a member look-out and a promise (owed delivery) never do", A.awayHoldsTask({ source: "lookout", lookoutOrigin: "co" }) && !A.awayHoldsTask({ source: "lookout", lookoutOrigin: "member" }) && !A.awayHoldsTask({ source: "promise" }) && !A.awayHoldsTask({ source: "ask" }) && /schedule your next look for the day after 2026-10-20/.test(A.awayTaskNote({ until: "2026-10-20", quote: null, text: "" })));
+  check("review #140, 2: only a look-out Cue started waits; an ask task, a member look-out and a promise (owed delivery) never do", A.awayHoldsTask({ source: "lookout", lookoutOrigin: "co" }) && !A.awayHoldsTask({ source: "lookout", lookoutOrigin: "member" }) && !A.awayHoldsTask({ source: "promise" }) && !A.awayHoldsTask({ source: "ask" }) && /schedule your next look for the day after 2026-10-20/.test(A.awayTaskNote({ until: "2026-10-20", quote: null, text: "" })));
   check("inbound texts note it", /A\.noteAwayFromText\(pool, user\.id, resolvedContent/.test(src("routes/sendblue.ts")));
 }
 
@@ -290,7 +290,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   // 6. Real sentences about calling someone else are untouched on an outbound call.
   const keep = ["I'm glad you called me out on that.", "Happy you called Sam back.", "Glad you reached out to her, that took guts.", "Thanks for calling the venue first."];
   check("review #140, 6: about calling someone else, never cut", keep.every((t) => P.thanksForCallingCut(t) === t), keep.map((t) => P.thanksForCallingCut(t)));
-  check("review #140, 6: about calling Co, still cut", P.thanksForCallingCut("I'm really glad you called.") === null && P.thanksForCallingCut("Thanks for calling me back.") === null && P.thanksForCallingCut("Glad you called today, because I had news.") === "I had news.");
+  check("review #140, 6: about calling Cue, still cut", P.thanksForCallingCut("I'm really glad you called.") === null && P.thanksForCallingCut("Thanks for calling me back.") === null && P.thanksForCallingCut("Glad you called today, because I had news.") === "I had news.");
 }
 {
   // 7. WILLING needs the agreeing words.

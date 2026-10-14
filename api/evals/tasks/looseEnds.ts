@@ -71,7 +71,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   // (a) one at a time
   check("no open brief: a new one may start", CT.briefAlreadyOpen([]) === null && CT.briefAlreadyOpen([{ status: "done", held: null }, { status: "dropped", held: null }]) === null);
   check("an open brief stops a second one", /already being put together/.test(CT.briefAlreadyOpen([{ status: "open", held: null }]) ?? ""));
-  check("a finished brief waiting for their hours stops it too, and hands Co the line to say now", /Tell them that now/.test(CT.briefAlreadyOpen([{ status: "open", held: { text: "I looked, but couldn't verify any venues that fit.", at: "" } }]) ?? ""));
+  check("a finished brief waiting for their hours stops it too, and hands Cue the line to say now", /Tell them that now/.test(CT.briefAlreadyOpen([{ status: "open", held: { text: "I looked, but couldn't verify any venues that fit.", at: "" } }]) ?? ""));
   const ct = src("services/coTasks.ts");
   const start = ct.slice(ct.indexOf("export async function startResearchBrief"), ct.indexOf("// ---------------------------------------------------------------- research briefs, as the reply sees them"));
   check("the guard reads the open briefs themselves, not openTasks (which is work tasks only)", /briefAlreadyOpen\(await recentBriefs\(input\.userId\)\)/.test(start) && !/open\.some\(\(t\) => t\.kind === "research_brief"\)/.test(start));
@@ -93,13 +93,13 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   // (c) the reply sees them
   const B = (o: Partial<import("../../src/services/coTasks.js").BriefView>) => ({ id: 7, goal: "Venue options: private dinner for twelve", theirWords: "find me a private dining room for twelve", status: "open" as const, createdAt: "2026-10-07T17:00:00Z", closedAt: null, outcome: null, held: null, ...o });
   const [running, held, done, dropped] = CT.briefFactLines([B({}), B({ held: { text: "I looked, but couldn't verify any venues that fit. Want me to widen the search?", at: "2026-10-08T16:00:00Z" } }), B({ status: "done", closedAt: "2026-10-07T17:20:00Z", outcome: 'sent the brief "Venue options": 1. Spruce; 2. Quince' }), B({ status: "dropped", closedAt: "2026-10-07T17:20:00Z", outcome: "asked them first: missing headcount" })], "America/Los_Angeles");
-  check("a running brief reads as work in progress, in their time", /^Co is putting together research brief #7/.test(running) && /PDT/.test(running));
+  check("a running brief reads as work in progress, in their time", /^Cue is putting together research brief #7/.test(running) && /PDT/.test(running));
   check("a held brief says what it came to and when it goes", /hasn't reached them yet/.test(held) && /widen the search/.test(held) && /around /.test(held));
   check("a sent brief carries what went out (numbered options)", /finished/.test(done) && /1\. Spruce; 2\. Quince/.test(done));
   check("a stopped brief says why", /without a brief: asked them first/.test(dropped));
   const tc = src("services/turnContext.ts");
   check("the reply's turn loads briefs next to tasks (tasks stay work-only, so the task tools' count is unchanged)", /recentBriefs\(userId\)\.then\(\(b\) => briefFactLines\(b, zone\)\)/.test(tc) && /openTasks\(userId\)\.then\(\(t\) => taskFactLines\(t, undefined, zone\)\)/.test(tc));
-  check("the reply's facts include them: running/held as scheduled, finished as Co's record", /for \(const line of opts\.turn\?\.briefs \?\? \[\]\) addFact\(rf, \/\^Co is putting together\|hasn't reached them yet\/\.test\(line\) \? "scheduled" : "did_before", line\)/.test(src("harness/replyGrounding.ts")));
+  check("the reply's facts include them: running/held as scheduled, finished as Cue's record", /for \(const line of opts\.turn\?\.briefs \?\? \[\]\) addFact\(rf, \/\^\(\?:Co\|Cue\) is putting together\|hasn't reached them yet\/\.test\(line\) \? "scheduled" : "did_before", line\)/.test(src("harness/replyGrounding.ts")));
   check("open loops carry a brief in progress (it closes by the same task-status read)", /kind IN \('work', 'research_brief'\)/.test(src("services/openLoops.ts")));
 }
 
@@ -144,7 +144,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   const { narratesInternalState } = await import("../../src/services/speakable.js");
   const t = RB.briefOptionsText("Venue options: a launch dinner for 40", [{ name: "Perbacco", url: "https://www.perbaccosf.com/dining/" }, { name: "Mastro's", url: "https://www.mastrosrestaurants.com/private-events-san-francisco/" }]);
   check("the fallback names what it is and lists each option with its link", /^The venue options for a launch dinner for 40 wouldn't come through as a PDF, so here they are:/.test(t) && /1\. Perbacco: https:\/\/www\.perbaccosf\.com\/dining\//.test(t) && /2\. Mastro's: https:/.test(t));
-  check("the fallback never narrates Co's state", narratesInternalState(t) === null);
+  check("the fallback never narrates Cue's state", narratesInternalState(t) === null);
   const rb = src("services/researchBrief.ts");
   check("a brief whose document didn't go is kept and re-sent, never closed silently", /if \(!delivered\.sent\) \{[\s\S]{0,500}holdBriefDoc\(/.test(rb) && !/"the brief couldn't be sent"/.test(rb));
   check("the retry re-sends the same document (no new find), through the receipts, then texts the options", /pendingDoc\?\.doc[\s\S]{0,300}sendBrief\(pendingDoc\.doc/.test(rb) && /briefOptionsText\(pendingDoc\.title, pendingDoc\.options\)/.test(rb) && RB.DOC_RETRIES >= 1 && !/deliverDocument\(/.test(rb.slice(rb.indexOf("export async function runResearchBriefTask"))));

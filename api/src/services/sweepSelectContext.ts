@@ -168,7 +168,7 @@ async function factsAsOf(q: Q, userId: string, now: Date, zone: string, safe: ((
     id: `T${i + 1}`,
     at: DateTime.fromJSDate(new Date(t.created_at)).setZone(zone).toFormat("LLL d HH:mm"),
     from: /^User/i.test(t.content) ? ("member" as const) : ("co" as const),
-    text: safe ? (safe(String(t.content)) ?? "").replace(/^(User said|Co replied|User|Co):\s*/i, "") : "",
+    text: safe ? (safe(String(t.content)) ?? "").replace(/^(User said|Co replied|Cue replied|User|Co|Cue):\s*/i, "") : "",
   })).filter((t: any) => t.text).map((t: any, i: number) => ({ ...t, id: `T${i + 1}` }));
   const feel = await q(`SELECT emotion, intensity, about FROM emotion_signals WHERE user_id = $1 AND created_at < $2 AND created_at >= $2::timestamptz - INTERVAL '3 days' AND COALESCE(target, 'life') = 'life' ORDER BY created_at DESC LIMIT 4`, [userId, now]).catch(() => [] as any[]);
   // Where they are headed: the lens every candidate is judged against alongside their asks (services/goalJourney.ts). No goal

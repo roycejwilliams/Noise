@@ -16,14 +16,14 @@ import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
 // (a) Co's own conversation with the member, and Co's own record of its work for them; (b) what they connected. No reader here
 // touches another member's rows, the member's talk with anyone else, or a connected source (none of these paths needs one yet).
 export const SOURCES = {
-  theirTexts: "a: their texts to Co (text_exchange, 'User said:', never to a teammate)",
-  replyLog: "a: Co's replies to them as drafted and as sent (reply.grounding); a draft is withheld when it carried another member's details",
-  openFindAsks: "a: what they asked Co to find (ask_checkins, kind 'find')",
-  lastDailyRun: "a: what Co's daily search did for them (sweep.daily)",
-  scheduled: "a: Co's open tasks and check-ins for them (co_tasks)",
+  theirTexts: "a: their texts to Cue (text_exchange, 'User said:', never to a teammate)",
+  replyLog: "a: Cue's replies to them as drafted and as sent (reply.grounding); a draft is withheld when it carried another member's details",
+  openFindAsks: "a: what they asked Cue to find (ask_checkins, kind 'find')",
+  lastDailyRun: "a: what Cue's daily search did for them (sweep.daily)",
+  scheduled: "a: Cue's open tasks and check-ins for them (co_tasks)",
   queuedFinds: "a: finds queued to them (proactive_candidates, a count only)",
-  lessonOriginals: "a: the lessons Co already checked for them (lesson.check, the guessed lesson only)",
-  exchange: "a: their recent texts with Co, both sides, as sent (text_exchange, never to or from a teammate); the member-world read (services/memberWorld.ts)",
+  lessonOriginals: "a: the lessons Cue already checked for them (lesson.check, the guessed lesson only)",
+  exchange: "a: their recent texts with Cue, both sides, as sent (text_exchange, never to or from a teammate); the member-world read (services/memberWorld.ts)",
   activity: "a: when they were last active on any channel (their texts, voice memos, calls, texts to a teammate): timestamps only, never what was said",
 } as const;
 // The two other paths the 10-13 fixes added read no member data at all, so they have nothing to fence:
@@ -114,7 +114,7 @@ export function fenceExchange(f: Pick<Fence, "strip">, rows: { at: Date; content
     const c = String(r.content ?? "");
     const own = withoutTeammateLines(c).trim();
     if (!own || own !== c.trim()) return [];
-    const m = own.match(/^(User said|User sent a voice memo|Co replied|Co is looking):\s*([\s\S]*)$/);
+    const m = own.match(/^(User said|User sent a voice memo|Co replied|Co is looking|Cue replied|Cue is looking):\s*([\s\S]*)$/);
     if (!m || !m[2].trim()) return [];
     const kept = f.strip(m[2].trim());
     return kept ? [{ at: r.at, from: m[1].startsWith("User") ? ("member" as const) : ("co" as const), text: kept }] : [];

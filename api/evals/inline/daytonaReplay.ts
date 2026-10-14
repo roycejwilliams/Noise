@@ -17,10 +17,10 @@ let ok = 0;
 for (let i = 0; i < runs; i++) {
   const f = baseReplyFacts();
   addFact(f, "known", "They live in San Francisco.");
-  addFact(f, "did_before", `Co sent them https://x.com/i/status/2102773693290336381 with: "${caption}" The post it came from: "${post}"`);
-  addFact(f, "known", `They pressed Reply on this earlier text from Co (iMessage inline reply), so their message is about it: "https://x.com/i/status/2102773693290336381" (that's the link Co sent for: ${caption}).`);
+  addFact(f, "did_before", `Cue sent them https://x.com/i/status/2102773693290336381 with: "${caption}" The post it came from: "${post}"`);
+  addFact(f, "known", `They pressed Reply on this earlier text from Cue (iMessage inline reply), so their message is about it: "https://x.com/i/status/2102773693290336381" (that's the link Cue sent for: ${caption}).`);
   const dots = await findDots({
-    now: `They just texted Co: "I'm in" [Replying to Co's text: "https://x.com/i/status/2102773693290336381" (${caption})]`,
+    now: `They just texted Cue: "I'm in" [Replying to Cue's text: "https://x.com/i/status/2102773693290336381" (${caption})]`,
     asks: ["Looking for a builder/founder community with people into design or experience building products 0 -> 1", "Seeking genuine friendships with dependable, intelligent people who want to work and build together", "Find sponsors for the event"],
     threads: [{ text: "considering taking a break from building the product, feeling his worth is tied to output", feeling: "burned out (medium)" }],
     offersThisWeek: 7,
@@ -34,6 +34,6 @@ for (let i = 0; i < runs; i++) {
   const text = String(r.replyText);
   const pass = !bad.test(text);
   if (pass) ok++;
-  console.log(`${pass ? "ok  " : "MISS"} Co: ${text.replace(/\n/g, " / ")}`);
+  console.log(`${pass ? "ok  " : "MISS"} Cue: ${text.replace(/\n/g, " / ")}`);
 }
 console.log(`no handle-as-people, no "your crowd": ${ok}/${runs}`);

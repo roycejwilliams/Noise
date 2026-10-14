@@ -55,7 +55,7 @@ check("an ask that was not queued is not counted, and is simply tried again next
 check("a pass asks at most MAX_ASKS_PER_PASS members", await (async () => { let n = 0; const many = Array.from({ length: 25 }, (_, k) => ({ id: 100 + k, title: "t", ...row({ lastConfirmedAt: day("2026-09-20") }) })); await OL.runLoopDecay(NOW, { ...deps, live: async () => many, ask: async () => { n++; return true; } } as any); return n === OL.MAX_ASKS_PER_PASS; })());
 
 // ---- the reviewer's cases (2026-10-06)
-check("work Co has scheduled (in motion) is never asked about or expired, even long after anyone confirmed it", LC.decayAction(row({ lastConfirmedAt: day("2026-08-01"), inMotion: true }), NOW, TODAY).kind === "none" && LC.decayAction(row({ lastConfirmedAt: day("2026-09-01"), dueDate: "2026-10-01", inMotion: true }), NOW, TODAY).kind === "none");
+check("work Cue has scheduled (in motion) is never asked about or expired, even long after anyone confirmed it", LC.decayAction(row({ lastConfirmedAt: day("2026-08-01"), inMotion: true }), NOW, TODAY).kind === "none" && LC.decayAction(row({ lastConfirmedAt: day("2026-09-01"), dueDate: "2026-10-01", inMotion: true }), NOW, TODAY).kind === "none");
 check("a loop waiting on someone else's reply is not asked about; the hard limit ends it", LC.decayAction(row({ status: "waiting_on_reply", lastConfirmedAt: day("2026-09-20") }), NOW, TODAY).kind === "none" && LC.decayAction(row({ status: "waiting_on_reply", lastConfirmedAt: day("2026-09-01") }), NOW, TODAY).kind === "expire");
 check("30 days with no signal expires it even if the ask never went out", LC.decayAction(row({ lastConfirmedAt: day("2026-09-05") }), NOW, TODAY).kind === "expire" && LC.decayAction(row({ lastConfirmedAt: day("2026-09-07") }), NOW, TODAY).kind === "ask");
 check("asked means SENT: the ask sets decay_asked_at in onSent, not at queueing", /async onSent\(c\) \{\s*await pool\.query\(`UPDATE open_loops SET decay_asked_at = NOW\(\)/.test(src("harness/proactiveRegistry.ts")) && !/decay_asked_at = NOW\(\)/.test(src("services/openLoops.ts").replace(/closed_reason[^\n]*/g, "")));
@@ -101,15 +101,15 @@ check("the reply path confirms what the member's text is about before it describ
 // ---- a reply doesn't hedge on work that is in motion
 const mo = [{ id: 9, title: "Find a venue for dinner", status: "open", detail: null, dueDate: null, source: "task", lastConfirmedAt: day("2026-09-10"), inMotion: true }, { id: 10, title: "Old idea about a podcast", status: "open", detail: null, dueDate: null, source: "task", lastConfirmedAt: day("2026-09-10"), inMotion: false }];
 const rep = OL.describeLoops(mo as any, { now: NOW, today: TODAY, withIds: true })!;
-check("a reply: work Co has scheduled is described plainly even if no one confirmed it lately; the idle one is tagged", !/venue for dinner[^;]*not confirmed lately/.test(rep) && /podcast[^;]*not confirmed lately/.test(rep));
+check("a reply: work Cue has scheduled is described plainly even if no one confirmed it lately; the idle one is tagged", !/venue for dinner[^;]*not confirmed lately/.test(rep) && /podcast[^;]*not confirmed lately/.test(rep));
 check("but a draft never uses it unless it is open and recently confirmed, in motion or not", !/venue/.test(OL.describeLoops(mo as any, { now: NOW, today: TODAY, draftOnly: true }) ?? ""));
-check("the reply's loops carry whether Co has them in motion", /AS in_motion FROM open_loops o LEFT JOIN co_tasks/.test(src("services/openLoops.ts")));
+check("the reply's loops carry whether Cue has them in motion", /AS in_motion FROM open_loops o LEFT JOIN co_tasks/.test(src("services/openLoops.ts")));
 
 // ---- wiring
 const ol = src("services/openLoops.ts"), pm = src("services/personModel.ts"), mig = src("db/migrations.ts");
 check("check-ins, tasks, the sweep and calls read loops through the draft filter", /describeLoops\(loops, \{ draftOnly: true, zone \}\)/.test(pm) && /last_confirmed_at, decay_asked_at FROM open_loops/.test(pm));
 check("an expired or date-passed loop is a tombstone the sync never reopens (unless they signal after it)", /closed_reason IN \('co', 'expired', 'date_passed', 'answered'\)/.test(ol) && /signalAt/.test(ol));
-check("what Co does at their word confirms a loop; a sync alone doesn't", /updated_at = NOW\(\), last_confirmed_at = NOW\(\)/.test(ol) && !/changed_at = NOW\(\)" : ""\}[^`]*last_confirmed_at = NOW/.test(ol));
+check("what Cue does at their word confirms a loop; a sync alone doesn't", /updated_at = NOW\(\), last_confirmed_at = NOW\(\)/.test(ol) && !/changed_at = NOW\(\)" : ""\}[^`]*last_confirmed_at = NOW/.test(ol));
 check("the columns exist and old rows start from their last touch", /ADD COLUMN IF NOT EXISTS last_confirmed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS decay_asked_at/.test(mig) && /SET last_confirmed_at = COALESCE\(updated_at, changed_at, created_at\)/.test(mig));
 check("the decay pass runs with the loop sync", /runLoopDecay\(\)/.test(src("jobs/index.ts")));
 check("the ask is a registered proactive type, a question, once per loop", /loop_check: \{/.test(src("harness/proactiveRegistry.ts")) && /targetKey: `loop_check:\$\{l\.id\}:/.test(ol) && /loop_check: "companion"/.test(src("harness/proactivePurpose.ts")) && /loop_check: \{ priority/.test(src("harness/proactive.ts")));

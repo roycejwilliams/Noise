@@ -136,9 +136,9 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   check("B1: one that's over exits", !ended.ok && ended.exit && /over/.test(ended.why));
   const slugCalls: string[] = [];
   const slug = await S.recheckFind(lumaFind({ url: "supper" }), { now: NOW, zone: LA, deps: { ...depsWith().deps, luma: async (u) => { slugCalls.push(u); return details(); } } });
-  check("B1: a Co or public event with a Luma slug (not a full link) is read on Luma too", slug.ok && slug.verified && slugCalls[0] === "supper");
+  check("B1: a Cue or public event with a Luma slug (not a full link) is read on Luma too", slug.ok && slug.verified && slugCalls[0] === "supper");
   const coNoUrl = await S.recheckFind(lumaFind({ tier: 1, kind: "co_event", url: undefined }), { now: NOW, zone: LA, deps: depsWith().deps });
-  check("B1: a Co event with no link goes marked unverified", coNoUrl.ok && !coNoUrl.verified);
+  check("B1: a Cue event with no link goes marked unverified", coNoUrl.ok && !coNoUrl.verified);
   const u = await S.recheckFind(lumaFind(), { now: NOW, zone: LA, deps: depsWith({ luma: null }).deps });
   check("B1: an unreadable event page is a miss, never an exit or a send", !u.ok && !u.exit);
 }
@@ -330,7 +330,7 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
 // ================================================================ B6: stillRelevant reads the source, for goal finds too
 
 {
-  const goalFind: any = { id: "g1", userId: "u1", type: "event_offer", targetKey: "x", topicKey: "x", summary: "An event Co noticed for them", priority: 60, dueAt: NOW, expiresAt: null, attempts: 0, createdAt: new Date(NOW.getTime() - 72 * 3_600_000), payload: { askId: "profile", askText: "where they're headed", fromProfile: true, match: lumaFind() } };
+  const goalFind: any = { id: "g1", userId: "u1", type: "event_offer", targetKey: "x", topicKey: "x", summary: "An event Cue noticed for them", priority: 60, dueAt: NOW, expiresAt: null, attempts: 0, createdAt: new Date(NOW.getTime() - 72 * 3_600_000), payload: { askId: "profile", askText: "where they're headed", fromProfile: true, match: lumaFind() } };
   check("B6: a goal find waiting over a day gets the relevance re-check (it never did)", P.needsRelevanceCheck(goalFind, NOW));
   const before = modelCalls;
   const sold = depsWith({ luma: details({ soldOut: true }) });
@@ -443,7 +443,7 @@ const cand = (match: any, extra: any = {}) => ({ id: "c1", userId: "u1", payload
   check("a non-Luma event page is read live, from its own page", /Checked live just now \(2026-10-11 19:00 UTC\), "Gallery Night", from its own page: starts Sat Oct 24, 7:00 PM; price 45 USD \(the page doesn't say it's sold out\)\./.test(lines.join("\n")), lines);
   check("…and a sold-out one says so", /"Supper Club", from its own page: sold out\./.test(lines.join("\n")), lines);
   const none = await A.liveDetailFacts("still spots?", [{ name: "Pop-up", url: "https://popup.example/x" }], deps, at);
-  check("a page with no event data stays as-of (never said as current)", /its page doesn't list spots, time or price in a form Co can confirm: anything on file about them is as of when it was found, never current\./.test(none.join("")), none);
+  check("a page with no event data stays as-of (never said as current)", /its page doesn't list spots, time or price in a form Cue can confirm: anything on file about them is as of when it was found, never current\./.test(none.join("")), none);
   // Review of #146: an article or a venue page sent last never takes the slots ahead of the event they're asking about.
   const read: string[] = [];
   const order = { luma: async (u: string) => { read.push(u); return null; }, isLuma: deps.isLuma, page: async (u: string) => { read.push(u); return null; } };

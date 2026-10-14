@@ -124,7 +124,7 @@ export async function noteIntroAskNotSent(p: { askerId?: string; candidateId?: s
   await pool
     .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)`, [
       p.askerId,
-      `The intro ask Co said it would send ${name} didn't go out, so that intro isn't happening this time. If they ask, say so plainly, without any reason.`,
+      `The intro ask Cue said it would send ${name} didn't go out, so that intro isn't happening this time. If they ask, say so plainly, without any reason.`,
     ])
     .catch((err: any) => console.error("deferredSends: noting an unsent intro ask failed (non-fatal):", err?.message ?? err));
 }
@@ -174,7 +174,7 @@ export const judgeAfterCorrection: CorrectionJudge = async (messages, c) => {
     model: anthropic(MODELS.haiku),
     maxOutputTokens: 300,
     experimental_telemetry: { isEnabled: true, functionId: "deferredSends.recheck", recordInputs: false, recordOutputs: false },
-    prompt: `A text Co queued for a member before they corrected something about themselves.
+    prompt: `A text Cue queued for a member before they corrected something about themselves.
 They corrected: it was "${c.was}", now "${c.now}".
 The queued text:
 ${messages.map((m) => `"${m}"`).join("\n")}

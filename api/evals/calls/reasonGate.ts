@@ -65,18 +65,18 @@ const callState = (callReason?: import("../../src/services/callReason.js").CallR
 // ================================================================ 1. only Co's own work on file: no call
 const PDF_TITLE = "Post-event branding plan for the Sequin AI launch";
 const onlyHomework = state({
-  coWork: [PDF_TITLE, "draft and text a plan on Co's post-event presence"],
+  coWork: [PDF_TITLE, "draft and text a plan on Cue's post-event presence"],
   threads: [
     thread({ id: "t-pdf", text: "the post-event branding plan for the Sequin AI launch", openedQuote: "send me the branding plan" }),
-    thread({ id: "t-co", text: "Co will send the one-pager on sponsors", openedQuote: "can you put together a one-pager" }),
+    thread({ id: "t-co", text: "Cue will send the one-pager on sponsors", openedQuote: "can you put together a one-pager" }),
   ],
   claims: [claim({ kind: "plan", text: "the PDF went out this morning", quote: null, provenance: "user_said" })],
 });
 const none = R.callReasonFor(onlyHomework);
-check("only Co's deliverables on file: no reason", none.reason === null, none);
+check("only Cue's deliverables on file: no reason", none.reason === null, none);
 check("everything considered is listed, each excluded with why", none.considered.length === 3 && none.considered.every((c) => !c.kept && !!c.why), none.considered);
-check("a thread that is a doc Co delivered is excluded as Co's deliverable", /deliverable or task/.test(none.considered.find((c) => c.key === "thread:t-pdf")?.why ?? ""), none.considered);
-check("a thread that is Co's own commitment is excluded (askKind isCoCommitment)", /commitment|task|homework/.test(none.considered.find((c) => c.key === "thread:t-co")?.why ?? ""), none.considered);
+check("a thread that is a doc Cue delivered is excluded as Cue's deliverable", /deliverable or task/.test(none.considered.find((c) => c.key === "thread:t-pdf")?.why ?? ""), none.considered);
+check("a thread that is Cue's own commitment is excluded (askKind isCoCommitment)", /commitment|task|homework/.test(none.considered.find((c) => c.key === "thread:t-co")?.why ?? ""), none.considered);
 
 const blocked = G.decideCall(callState(none), { kind: "checkin_cadence" }, NOW);
 check("a Co-started check-in call with no reason from their life is not placed", !blocked.allowed && blocked.checks.some((c) => c.name === "member_reason" && !c.pass), blocked.checks);
@@ -96,20 +96,20 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
   const placed = G.decideCall(callState(r), { kind: "checkin_cadence" }, NOW);
   check("and the call is placed", placed.allowed && placed.checks.find((c) => c.name === "member_reason")?.pass === true, placed.checks);
   const p = O.openingPrompt({ firstName: "Jordan", direction: "outbound", summary: "Jordan is a founder. " + "pad ".repeat(100), reason: r.reason });
-  check("the outbound opening is written from the reason (their moment)", p.includes("Founders Supper Club") && /Co called because of this, a moment in their life/.test(p), p.slice(0, 600));
-  check("the outbound prompt never offers Co's homework as an opener (\"something Co owes them\" is gone)", !/something Co owes them/.test(p) && /Never open on Co's own work/.test(p));
+  check("the outbound opening is written from the reason (their moment)", p.includes("Founders Supper Club") && /Cue called because of this, a moment in their life/.test(p), p.slice(0, 600));
+  check("the outbound prompt never offers Cue's homework as an opener (\"something Cue owes them\" is gone)", !/something Cue owes them/.test(p) && /Never open on Cue's own work/.test(p));
   const src = O.openingSource("Jordan is a founder. " + "pad ".repeat(100), "outbound", r.reason);
-  check("the line is checked against the reason too (its names are in what Co knows)", /Why Co is calling: .*Founders Supper Club/.test(src));
-  check("a line about their moment passes the checks", O.openingProblems("Hey Jordan, it's Co. Still on for the Founders Supper Club?", src, "Jordan") === null, O.openingProblems("Hey Jordan, it's Co. Still on for the Founders Supper Club?", src, "Jordan"));
+  check("the line is checked against the reason too (its names are in what Cue knows)", /Why Cue is calling: .*Founders Supper Club/.test(src));
+  check("a line about their moment passes the checks", O.openingProblems("Hey Jordan, it's Cue. Still on for the Founders Supper Club?", src, "Jordan") === null, O.openingProblems("Hey Jordan, it's Cue. Still on for the Founders Supper Club?", src, "Jordan"));
   check("{{call_reason}} carries it for the call brain", (R.holdCallReason("u-deadline", "checkin_cadence", r), /Founders Supper Club/.test(R.callReasonVariable("u-deadline", "outbound"))));
-  check("{{call_reason}} is empty on an inbound call (they called Co)", R.callReasonVariable("u-deadline", "inbound") === "");
+  check("{{call_reason}} is empty on an inbound call (they called Cue)", R.callReasonVariable("u-deadline", "inbound") === "");
   check("a held reason expires", R.callReasonVariable("u-deadline", "outbound", Date.now() + R.CALL_REASON.ttlMs + 1) === "");
 }
 {
   // a worry they mentioned
   const r = R.callReasonFor(state({ claims: [claim({ kind: "worry", text: "worried the Series A partner meeting on Thursday won't go well", quote: "honestly nervous about Thursday's partner meeting" })], coWork: [PDF_TITLE] }));
-  check("a worry they told Co about is a reason", r.reason?.kind === "worry" && /partner meeting/.test(r.reason.text), r);
-  check("Co's inference never starts a call", R.callReasonFor(state({ claims: [claim({ provenance: "co_inferred", quote: null, text: "probably stressed about fundraising" })] })).reason === null);
+  check("a worry they told Cue about is a reason", r.reason?.kind === "worry" && /partner meeting/.test(r.reason.text), r);
+  check("Cue's inference never starts a call", R.callReasonFor(state({ claims: [claim({ provenance: "co_inferred", quote: null, text: "probably stressed about fundraising" })] })).reason === null);
 }
 {
   // an upcoming event they mentioned, and a dated thread just past
@@ -146,14 +146,14 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
   check("and the opening is told not to name it", !/biopsy/.test(g) && /Don't name it/.test(g));
   const c = R.callReasonFor(state({ milestones: [{ key: "thread:t9", kind: "thread_done", text: "they closed their first paying customer", happenedAt: pt("2026-10-04T12:00:00").toISOString() }] }));
   check("something they finished lately is a reason (celebration)", c.reason?.kind === "celebration");
-  check("Co's own milestone (days with Co) is not", R.callReasonFor(state({ milestones: [{ key: "days:30", kind: "with_co", text: "30 days with Co", happenedAt: pt("2026-10-04T12:00:00").toISOString() }] })).reason === null);
+  check("Cue's own milestone (days with Cue) is not", R.callReasonFor(state({ milestones: [{ key: "days:30", kind: "with_co", text: "30 days with Cue", happenedAt: pt("2026-10-04T12:00:00").toISOString() }] })).reason === null);
 }
 
 // ================================================================ 3. intake and member-requested calls
 {
   const r = R.callReasonFor(state({ kind: "auto_intake" }));
   check("a brand-new member's intake call has its reason (getting to know them)", r.reason?.kind === "intake" && G.decideCall(callState(r), { kind: "auto_intake" }, NOW).allowed);
-  check("its opening is about them, not Co", /open on them/.test(O.outboundOpeningGuide(r.reason)) && /Never open on Co's own work/.test(O.outboundOpeningGuide(r.reason)));
+  check("its opening is about them, not Cue", /open on them/.test(O.outboundOpeningGuide(r.reason)) && /Never open on Cue's own work/.test(O.outboundOpeningGuide(r.reason)));
   for (const kind of ["router_decision", "scheduled_call", "user_initiated"] as const) {
     check(`member-requested (${kind}) needs no reason from the gate`, !R.needsMemberReason(kind) && G.decideCall(callState({ reason: null, considered: [] }), { kind }, NOW).allowed && !G.decideCall(callState(), { kind }, NOW).checks.some((c) => c.name === "member_reason"));
   }
@@ -166,26 +166,26 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
 
 // ================================================================ 4. the opening never leads with Co's homework (outbound and inbound)
 {
-  const ctx = "Where things stand now: Co sent Jordan the post-event branding plan PDF this morning. Jordan is pitching at demo day Thursday. " + "pad ".repeat(100);
+  const ctx = "Where things stand now: Cue sent Jordan the post-event branding plan PDF this morning. Jordan is pitching at demo day Thursday. " + "pad ".repeat(100);
   const homework = [
-    "Hey Jordan, it's Co. The PDF went out this morning, wanted to make sure it landed.",
-    "Hey Jordan, it's Co. Wanted to make sure the branding plan came through okay.",
-    "Hey Jordan, it's Co. Did you get the PDF I sent?",
-    "Hey Jordan, it's Co. Did you have a chance to look at the plan?",
-    "Hey Jordan, it's Co. I sent you the branding plan this morning, any thoughts?",
-    "Hey Jordan, it's Co. Following up on the branding plan.",
-    "Hey Jordan, it's Co. The branding plan is in your inbox.",
-    "Hey Jordan, it's Co. I still owe you that plan.",
+    "Hey Jordan, it's Cue. The PDF went out this morning, wanted to make sure it landed.",
+    "Hey Jordan, it's Cue. Wanted to make sure the branding plan came through okay.",
+    "Hey Jordan, it's Cue. Did you get the PDF I sent?",
+    "Hey Jordan, it's Cue. Did you have a chance to look at the plan?",
+    "Hey Jordan, it's Cue. I sent you the branding plan this morning, any thoughts?",
+    "Hey Jordan, it's Cue. Following up on the branding plan.",
+    "Hey Jordan, it's Cue. The branding plan is in your inbox.",
+    "Hey Jordan, it's Cue. I still owe you that plan.",
   ];
-  for (const line of homework) check(`refused (homework): ${line}`, O.openingProblems(line, ctx, "Jordan") === "leads with Co's homework", O.openingProblems(line, ctx, "Jordan"));
-  const theirs = ["Hey Jordan, it's Co. How's the demo day pitch shaping up?", "Hey Jordan, it's Co. Still pitching at demo day Thursday?", "Jordan, hi. It's Co. Did the deck go out to the investors?"];
+  for (const line of homework) check(`refused (homework): ${line}`, O.openingProblems(line, ctx, "Jordan") === "leads with Cue's homework", O.openingProblems(line, ctx, "Jordan"));
+  const theirs = ["Hey Jordan, it's Cue. How's the demo day pitch shaping up?", "Hey Jordan, it's Cue. Still pitching at demo day Thursday?", "Jordan, hi. It's Cue. Did the deck go out to the investors?"];
   for (const line of theirs) check(`accepted (their moment): ${line}`, O.openingProblems(line, ctx + " deck investors", "Jordan") === null, O.openingProblems(line, ctx + " deck investors", "Jordan"));
   // Their own deliverables are their news, not Co's homework.
-  for (const t of ["my email went out to investors this morning", "the launch plan is done", "my pitch deck is ready", "the lease is in your inbox"]) check(`not Co's homework (theirs): ${t}`, !R.leadsWithCoHomework(t));
-  check("a commitment in their own words (\"I'll send them the deck Friday\") is theirs, not Co's", R.coWorkWhy("I'll send them the deck Friday", [], true) === null && R.coWorkWhy("I'll send them the deck Friday", []) !== null);
-  check("\"the plan is still coming\" is Co's homework only when the record says Co owes it", R.leadsWithCoHomework("The launch plan is still coming.", "Where things stand now: Co owes them a launch plan. Not sent yet.") && !R.leadsWithCoHomework("The launch plan is still coming.", "They are writing their launch plan."));
+  for (const t of ["my email went out to investors this morning", "the launch plan is done", "my pitch deck is ready", "the lease is in your inbox"]) check(`not Cue's homework (theirs): ${t}`, !R.leadsWithCoHomework(t));
+  check("a commitment in their own words (\"I'll send them the deck Friday\") is theirs, not Cue's", R.coWorkWhy("I'll send them the deck Friday", [], true) === null && R.coWorkWhy("I'll send them the deck Friday", []) !== null);
+  check("\"the plan is still coming\" is Cue's homework only when the record says Cue owes it", R.leadsWithCoHomework("The launch plan is still coming.", "Where things stand now: Cue owes them a launch plan. Not sent yet.") && !R.leadsWithCoHomework("The launch plan is still coming.", "They are writing their launch plan."));
   const inbound = O.openingPrompt({ firstName: "Jordan", direction: "inbound", summary: ctx });
-  check("inbound: never Co's agenda, and the homework rule is in the prompt", /never open with Co's own agenda/.test(inbound) && /Never open on Co's own work/.test(inbound) && !/Co called because/.test(inbound));
+  check("inbound: never Cue's agenda, and the homework rule is in the prompt", /never open with Cue's own agenda/.test(inbound) && /Never open on Cue's own work/.test(inbound) && !/Co called because/.test(inbound));
   check("the check is the same function for both directions (openingProblems has no direction)", O.openingProblems.length === 3);
 }
 
@@ -197,12 +197,12 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
     "FROM co_tasks": [],
   };
   const s = await R.loadCallReasonState("u-db", "checkin_cadence", NOW);
-  check("the loader reads their threads and Co's own work", s.threads.length === 1 && s.coWork.includes("Demo day pitch notes"), s);
+  check("the loader reads their threads and Cue's own work", s.threads.length === 1 && s.coWork.includes("Demo day pitch notes"), s);
   const r = R.callReasonFor(s);
-  check("a thread of theirs that matches a doc Co delivered is Co's work, not a reason", r.reason === null && /deliverable/.test(r.considered[0]?.why ?? ""), r);
+  check("a thread of theirs that matches a doc Cue delivered is Cue's work, not a reason", r.reason === null && /deliverable/.test(r.considered[0]?.why ?? ""), r);
   tables["FROM document_deliveries"] = [docRow("Sponsor outreach email")];
   const r2 = R.callReasonFor(await R.loadCallReasonState("u-db", "checkin_cadence", NOW));
-  check("the same thread is a reason when Co's work is something else", r2.reason?.kind === "coming_up" && r2.reason.feeling === "nervous", r2);
+  check("the same thread is a reason when Cue's work is something else", r2.reason?.kind === "coming_up" && r2.reason.feeling === "nervous", r2);
 
   // gatherCallState fills the reason (and holds it) for a check-in call
   tables = { "checkin_call_cadence_days": [{ sms_opted_out: false, identity_captured: true, city: null, checkin_call_cadence_days: 7, has_real_profile: true, had_real_call: true }], "FROM document_deliveries": [docRow(PDF_TITLE)] };
@@ -231,8 +231,8 @@ check("an inferred check-in call gets the same check", !G.decideCall({ ...callSt
 // Review of #110: homework in disguise is never a reason.
 {
   const R2 = await import("../../src/services/callReason.js");
-  check("'waiting on the dinner plan Co is putting together' is Co's work, not a reason", R2.coWorkWhy("waiting on the dinner plan Co is putting together", []) !== null);
-  check("'excited to get the research on coworking spaces' is Co's work, not a reason", R2.coWorkWhy("excited to get the research on coworking spaces", []) !== null);
+  check("'waiting on the dinner plan Cue is putting together' is Cue's work, not a reason", R2.coWorkWhy("waiting on the dinner plan Cue is putting together", []) !== null);
+  check("'excited to get the research on coworking spaces' is Cue's work, not a reason", R2.coWorkWhy("excited to get the research on coworking spaces", []) !== null);
   check("their own news still is a reason ('nervous about the Thursday pitch')", R2.coWorkWhy("nervous about the Thursday pitch", []) === null);
 }
 // The call path on the member-knowledge layer: when the member-name read fails, memberKnowledge rejects, and every call reader goes

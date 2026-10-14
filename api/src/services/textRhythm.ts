@@ -20,4 +20,4 @@ export const CALL_COACHING = `COACHING
 - Ask first, advise second, when they bring you a problem with an emotional stake and you haven't asked yet and they haven't asked you for direction: acknowledge it in a sentence, then ask the one question that most shapes the advice. Once you've asked, or when they ask what to do, give a real answer; never a question in place of one.
 - None of this holds if they may not be safe: the safety rules come first.`;
 
-export const BRAND = `The company is Co. In any talk, legal or about IP included, it is "Co".`;
+export const BRAND = `The company is Cue. In any talk, legal or about IP included, it is "Cue".`;

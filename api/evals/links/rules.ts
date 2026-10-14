@@ -58,12 +58,12 @@ const read = {
 };
 const d = L.describeRead("Demo Night", read, new Date("2026-09-28T21:00:00Z"));
 check("verified fields are facts, in the event's own time", d.facts.some((f) => /start: Tuesday, October 6 at 6:00 PM/.test(f)));
-check("unverified fields and Co's own summary are only hints", !d.facts.some((f) => /\$20|Good for builders/.test(f)) && d.hints.some((h) => /\$20/.test(h)) && d.hints.some((h) => /Good for builders/.test(h)));
+check("unverified fields and Cue's own summary are only hints", !d.facts.some((f) => /\$20|Good for builders/.test(f)) && d.hints.some((h) => /\$20/.test(h)) && d.hints.some((h) => /Good for builders/.test(h)));
 check("what the page doesn't state is said plainly", d.facts.some((f) => /doesn't state: venue/.test(f)));
 const stale = L.describeRead("Demo Night", read, new Date("2026-09-29T08:00:00Z"));
 check("an old read of something that changes says so", stale.facts.some((f) => /may have changed/.test(f)));
 const cant = L.describeRead("daytonaio", { ...read, status: "no_content", why: "the link goes to a photo or video, not a page", fields: {}, summary: null });
-check("a page Co couldn't read is said plainly, with nothing guessed", cant.facts.length === 1 && /couldn't read the page for "daytonaio": the link goes to a photo/.test(cant.facts[0]) && cant.hints.length === 0);
+check("a page Cue couldn't read is said plainly, with nothing guessed", cant.facts.length === 1 && /couldn't read the page for "daytonaio": the link goes to a photo/.test(cant.facts[0]) && cant.hints.length === 0);
 check("an X post is known to need a login, without fetching", (await L.readPage("https://x.com/someone/status/1")).status === "login_required");
 
 // ---------------------------------------------------------------- X posts

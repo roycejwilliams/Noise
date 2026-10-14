@@ -22,7 +22,7 @@ export const context: Case[] = [
           ck("Maya's details never reach the summary", !MAYA.test(summary), summary),
           ck("the call summary keeps A's own part", /technical cofounder/.test(summary), summary),
           ck("the person model still says who A is", /climate founder/.test(summary), summary),
-          ck("Maya is still known as someone Co linked them with", /Maya, another member/.test(summary), summary),
+          ck("Maya is still known as someone Cue linked them with", /Maya, another member/.test(summary), summary),
           ck("A's own words pass unchanged", /hunting for a technical cofounder/.test(summary), summary),
         ],
         texts: { summary },
@@ -63,7 +63,7 @@ export const context: Case[] = [
       const facts = G.baseReplyFacts();
       for (const f of callNotPlacedFacts(err)) G.addFact(facts, f.kind, f.text);
       // The instruction exactly as routes/sendblue.ts adds it.
-      G.addInstruction(facts, `They just asked you to call them. Co genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`);
+      G.addInstruction(facts, `They just asked you to call them. Cue genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`);
       const recent = "User said: Call me\nCo replied: Calling you now.\nCo replied: Reached your voicemail just now. Reply here when you can, or I'll try again in a bit.";
       const r: any = await runConversationReplyAgent({ ackSent: null, userId: ID.A, phoneNumber: "+14155550100", firstName: "Avery", resolvedContent: "Try again", isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: recent, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true } as any, { dryRun: true, record: false, stubSearch: true });
       const text = String(r.replyText ?? "");

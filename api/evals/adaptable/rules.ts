@@ -34,24 +34,24 @@ check("closing an ask updates both places and retires its matches", /UPDATE ask_
 check("unsure asks keep being searched", /return "find";\s*\}\s*\}/.test(ak));
 check("instant searches of a new ask only for find asks", /ac\.last_attempted_at IS NULL AND ac\.kind = 'find'/.test(src("src/services/eventSurfacingSweep.ts")));
 const tools = src("src/agent/conversationTools.ts");
-check("Co can close an ask, matched to exactly one open ask, with a receipt", /closeAsk: tool\(\{[\s\S]{0,1600}hits\.length !== 1[\s\S]{0,200}notDone\(/.test(tools));
+check("Cue can close an ask, matched to exactly one open ask, with a receipt", /closeAsk: tool\(\{[\s\S]{0,1600}hits\.length !== 1[\s\S]{0,200}notDone\(/.test(tools));
 
 // ---- texting style
 check("style notes are deduped and capped", JSON.stringify(mergeNotes(["Keep it short", "keep it short", "", "Lead with the answer", "a", "b", "c", "d", "e"])) === JSON.stringify(["Lead with the answer", "a", "b", "c", "d", "e"].slice(-MAX_NOTES)) && mergeNotes(null).length === 0);
 const sp = styleLearningPrompt(["Keep it short"], "Here are three options…", "just tell me which one");
-check("only a clear preference about how Co texts becomes a note", /A normal reply is not a preference/.test(sp) && /Never note anything about their life or plans here/.test(sp));
+check("only a clear preference about how Cue texts becomes a note", /A normal reply is not a preference/.test(sp) && /Never note anything about their life or plans here/.test(sp));
 check("a new note replaces one it contradicts", /drop any older note the new one contradicts/.test(sp));
-check("Co reads the notes before every reply", /textingStyleFor\(userId\)[\s\S]{0,200}How they've told you they like to be texted, follow it/.test(src("src/harness/replyGrounding.ts")));
+check("Cue reads the notes before every reply", /textingStyleFor\(userId\)[\s\S]{0,200}How they've told you they like to be texted, follow it/.test(src("src/harness/replyGrounding.ts")));
 // Style is learned in the turn's one background read (services/turnLearning.ts, 2026-09-28).
 check("learning runs in the background after each message", /learnFromTextTurn\(\{[\s\S]{0,200}coSaidBefore: hasText \? lastCoLine\(recentConversation\) : null,[\s\S]{0,40}\}\)\.catch/.test(src("src/routes/sendblue.ts")) && /applyStyleUpdate\(input\.userId, styleNotes, learned\.style, input\.message\)/.test(src("src/services/turnLearning.ts")));
 
 // ---- outcomes
-check("Co records how things landed, only for things it really sent", /noteReaction: tool\(\{[\s\S]{0,2200}ctx\.turn\?\.sent \?\? \(await sentItems\(ctx\.userId\)\)[\s\S]{0,900}isn't something Co sent them recently/.test(tools) && /memory_type = 'recommendation_offered'/.test(readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8")) && /FROM revealed_offers/.test(readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8")) && /return loadSentItems\(userId\)/.test(readFileSync(new URL("../../src/services/reactionCatchup.ts", import.meta.url), "utf8")));
+check("Cue records how things landed, only for things it really sent", /noteReaction: tool\(\{[\s\S]{0,2200}ctx\.turn\?\.sent \?\? \(await sentItems\(ctx\.userId\)\)[\s\S]{0,900}isn't something Cue sent them recently/.test(tools) && /memory_type = 'recommendation_offered'/.test(readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8")) && /FROM revealed_offers/.test(readFileSync(new URL("../../src/services/turnContext.ts", import.meta.url), "utf8")) && /return loadSentItems\(userId\)/.test(readFileSync(new URL("../../src/services/reactionCatchup.ts", import.meta.url), "utf8")));
 check("reactions map to outcomes the search already learns from", /interested: "interested", going: "acted", went_liked: "helped", went_disliked: "didnt_help", not_for_me: "declined"/.test(readFileSync(new URL("../../src/services/reactionCatchup.ts", import.meta.url), "utf8")) && /REACTION_RESULT\[reaction\]/.test(tools));
-check("what's landed feeds replies and Co's choice of what to send first", /tasteSummary\(userId\)/.test(src("src/harness/replyGrounding.ts")) && /What's landed with them before: \$\{about\.taste/.test(src("src/harness/proactive.ts")));
+check("what's landed feeds replies and Cue's choice of what to send first", /tasteSummary\(userId\)/.test(src("src/harness/replyGrounding.ts")) && /What's landed with them before: \$\{about\.taste/.test(src("src/harness/proactive.ts")));
 
 // ---- registry
-for (const t of ["closeAsk", "noteReaction", "checkInvitesLeft"]) check(`${t} is in Co's registry`, ABILITIES.some((a) => a.tool === t));
+for (const t of ["closeAsk", "noteReaction", "checkInvitesLeft"]) check(`${t} is in Cue's registry`, ABILITIES.some((a) => a.tool === t));
 
 console.log(`adaptable rules: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

@@ -226,7 +226,7 @@ export function officeText(b: Buffer, kind: FileKind): string | null {
 // already does, so a file that came with a message is never silent again.
 export function fileRecordNote(o: { kind: FileKind; kept?: { n: number } | null; unreadable?: boolean }, withText: boolean): string {
   const label = FILE_LABEL[o.kind];
-  const what = o.kept ? `${label}, kept as their file #${o.kept.n}` : `${label} Co couldn't open`;
+  const what = o.kept ? `${label}, kept as their file #${o.kept.n}` : `${label} Cue couldn't open`;
   return withText ? `[also sent ${what}]` : `[sent ${what}]`;
 }
 
@@ -238,7 +238,7 @@ export const FILE_ROUTES = "paste the key slides or points right here as text (y
 // The fact the reply gets when this turn's file couldn't be opened. Co says what happened, offers the routes, and never pretends.
 export function unreadableFileFact(kind: FileKind, why: string | null = null): string {
   const label = FILE_LABEL[kind];
-  return `They sent ${label} this turn. It reached Co, but Co ${why ? `couldn't use this one (${why})` : `can't open ${kind === "unknown" ? "it" : "that kind of file"}`}, so nothing in it was read. Say so plainly in a few words (it came through, but you can't open that format); never call it a photo unless it is one, never say or hint at what's in it, and never blame their connection. Then offer the ways that work: ${FILE_ROUTES}.`;
+  return `They sent ${label} this turn. It reached Cue, but Cue ${why ? `couldn't use this one (${why})` : `can't open ${kind === "unknown" ? "it" : "that kind of file"}`}, so nothing in it was read. Say so plainly in a few words (it came through, but you can't open that format); never call it a photo unless it is one, never say or hint at what's in it, and never blame their connection. Then offer the ways that work: ${FILE_ROUTES}.`;
 }
 
 // A file Co kept (a PDF, now also a deck or a Word file): what Co may say about it. Never its contents (services/memberFiles.ts).
@@ -267,7 +267,7 @@ const RECEIPT_Q = /\b(?:did you (?:get|receive|see) (?:it|that|this|them|my)|(?:
 
 // The markers fileRecordNote and the photo path write into "User said:" lines.
 const READABLE_MARK = /\[(?:also )?sent (?:a photo showing|a photo\]|a PDF, kept|a PowerPoint deck, kept|a Word document, kept)|kept as their file #|\[They also sent a photo/;
-const UNREADABLE_MARK = /\[(?:also )?sent [^\]]*?(?:Co couldn't open|couldn't load it|Co couldn't keep)\]/;
+const UNREADABLE_MARK = /\[(?:also )?sent [^\]]*?(?:(?:Co|Cue) couldn't open|couldn't load it|(?:Co|Cue) couldn't keep)\]/;
 
 // Pure: the record fact for this turn, or none. `recent` is their "User said:" lines from the last RECORD_MINUTES, this turn's included.
 // recent: their lines from the last RECORD_MINUTES (this turn's included), each with when it came. lastReadableAt: the newest file Co
@@ -282,7 +282,7 @@ export function fileRecordFact(recent: { at: Date; content: string }[], message:
   const lastReadable = Math.max(...readableTimes);
   const unreadable = recent.filter((l) => UNREADABLE_MARK.test(l.content)).sort((a, b) => b.at.getTime() - a.at.getTime());
   if (unreadable.length && unreadable[0].at.getTime() > lastReadable) {
-    const what = unreadable.map((l) => l.content.match(/sent ([^\]]*?)(?: Co couldn't open| — couldn't load it|, couldn't load it| Co couldn't keep)\]/)?.[1]).filter(Boolean)[0] ?? "a file";
+    const what = unreadable.map((l) => l.content.match(/sent ([^\]]*?)(?: (?:Co|Cue) couldn't open| — couldn't load it|, couldn't load it| (?:Co|Cue) couldn't keep)\]/)?.[1]).filter(Boolean)[0] ?? "a file";
     return `${FILE_RECORD_PREFIX} what they sent (${what}) arrived but couldn't be opened, and no readable file or photo has come through since. It is true to say it didn't come through in a form you can open.`;
   }
   if (Number.isFinite(lastReadable)) return null;
@@ -307,9 +307,9 @@ export const AWAITED_REF = "awaited_file";
 export const AWAITED_KINDS: ReadonlySet<FileKind> = new Set(["pdf", "pptx", "docx", "xlsx", "keynote", "pages", "numbers", "old_office", "zip", "unknown"]);
 export const AWAITED_ASK_AFTER_HOURS = 24;
 export function awaitedFileTitle(kind: FileKind): string {
-  return `Going over the ${FILE_LABEL[kind].replace(/^an? /, "")} they sent, once a copy Co can open arrives`;
+  return `Going over the ${FILE_LABEL[kind].replace(/^an? /, "")} they sent, once a copy Cue can open arrives`;
 }
-export const AWAITED_DETAIL = `waiting on them: Co couldn't open what they sent; a PDF, a link, or the key points pasted as text would work`;
+export const AWAITED_DETAIL = `waiting on them: Cue couldn't open what they sent; a PDF, a link, or the key points pasted as text would work`;
 
 // Pure: what this turn does to the awaited-file loop. An unreadable document opens it; only a kept document closes it (review of
 // #140: a selfie after the failed deck closed it); a photo, a video or nothing at all leaves it as it is.
@@ -345,5 +345,5 @@ export async function closeAwaitedFile(db: Q, userId: string): Promise<string | 
 }
 
 export function pickUpFact(title: string): string {
-  return `Earlier they sent a file Co couldn't open, and you were waiting on a copy you could read (${title}). What they sent this turn is likely it: pick that request back up.`;
+  return `Earlier they sent a file Cue couldn't open, and you were waiting on a copy you could read (${title}). What they sent this turn is likely it: pick that request back up.`;
 }

@@ -46,7 +46,7 @@ check("only their lines count as theirs", theirs.includes("caterer for 60") && !
 const older = theirText(["User said: can you find me a photographer for the launch party", "Co replied: On it."].join("\n") + "\n" + recent);
 const photo = read({ question: "Still want photographer options?", theirWords: "a photographer for the launch party", work: "find three photographers for the launch party" });
 check("an older ask, in their own older texts, still grounds the work", decidePayloadFirst(photo, "Hey! Still want photographer options?", older, []).handOff);
-check("the ask as Co restated it never counts as their words", !decidePayloadFirst(photo, "Hey! Still want photographer options?", theirs, []).handOff && !/theirAsk/.test(String(theirText)));
+check("the ask as Cue restated it never counts as their words", !decidePayloadFirst(photo, "Hey! Still want photographer options?", theirs, []).handOff && !/theirAsk/.test(String(theirText)));
 check("the ask comes from askText or asked (for the read's context)", theirAskOf({ askText: "a caterer" }) === "a caterer" && theirAskOf({ asked: "venues" }) === "venues" && theirAskOf({}) === null && theirAskOf(null) === null);
 
 // Waking the task Co already has for it.
@@ -77,7 +77,7 @@ const reg = readFileSync(new URL("../../src/harness/proactiveRegistry.ts", impor
 check("a payload-first drop moves the check-in count on, so that ask's check-ins come back", /async onDropped\(c, _status, reason\) \{\s*const next = \/\^payload first\/\.test\(reason \?\? ""\);[\s\S]*checkin_count = checkin_count \+ 1/.test(reg));
 const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
 check("the spacing column exists", /ALTER TABLE proactive_user_state ADD COLUMN IF NOT EXISTS space_until TIMESTAMPTZ/.test(mig));
-check("a read that fails sends the text as written (never blocks Co)", /catch \(err: any\) \{\s*console\.error\("payloadFirst read failed/.test(pf) && /\.catch\(\(\) => null\)/.test(block));
+check("a read that fails sends the text as written (never blocks Cue)", /catch \(err: any\) \{\s*console\.error\("payloadFirst read failed/.test(pf) && /\.catch\(\(\) => null\)/.test(block));
 
 console.log(`payload first rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

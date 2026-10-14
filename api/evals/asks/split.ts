@@ -18,7 +18,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
 
 // ---- 1. the store: a hard type on every entry
 const ask = { id: "a1", text: "Find me weekend events", type: "seeking", status: "active", kind: "ask" };
-const goal = { id: "g1", text: "Get Co in front of users", type: "seeking", status: "active", kind: "goal" };
+const goal = { id: "g1", text: "Get Cue in front of users", type: "seeking", status: "active", kind: "goal" };
 const legacy = { id: "l1", text: "Looking for a founder community", type: "seeking", status: "active" };
 const doneGoal = { id: "g2", text: "Build a founder community", type: "seeking", status: "resolved", kind: "goal" };
 const intent = [ask, goal, legacy, doneGoal];
@@ -56,21 +56,21 @@ K.setEntryClassifierForTests(async (t) => (/^find me|link to/i.test(t) ? "ask" :
 }
 {
   calls.length = 0;
-  const e = await X.persistCapturedIntent("u1", { text: "Get Co in front of users", type: "seeking" } as any, extras);
-  check("'Get Co in front of users' is typed goal and gets NO ask_checkins row: nothing can search, offer or check in on it", e.kind === "goal" && wrote(/INSERT INTO ask_checkins/).length === 0 && wrote(/UPDATE ask_checkins/).length === 0 && wrote(/INSERT INTO co_profiles/).some((c) => JSON.parse(c.args[1])[0].kind === "goal" && JSON.parse(c.args[1])[0].status === "active"));
+  const e = await X.persistCapturedIntent("u1", { text: "Get Cue in front of users", type: "seeking" } as any, extras);
+  check("'Get Cue in front of users' is typed goal and gets NO ask_checkins row: nothing can search, offer or check in on it", e.kind === "goal" && wrote(/INSERT INTO ask_checkins/).length === 0 && wrote(/UPDATE ask_checkins/).length === 0 && wrote(/INSERT INTO co_profiles/).some((c) => JSON.parse(c.args[1])[0].kind === "goal" && JSON.parse(c.args[1])[0].status === "active"));
 }
 {
   calls.length = 0;
-  profileIntent = [{ id: "g1", text: "Get Co in front of users", type: "seeking", status: "active", kind: "goal", embedding: null }];
-  const e = await X.persistCapturedIntent("u1", { text: "Get Co in front of users", type: "seeking" } as any, extras);
+  profileIntent = [{ id: "g1", text: "Get Cue in front of users", type: "seeking", status: "active", kind: "goal", embedding: null }];
+  const e = await X.persistCapturedIntent("u1", { text: "Get Cue in front of users", type: "seeking" } as any, extras);
   check("a restated goal updates the goal it repeats (in place, no duplicate, no ask row, no time limit renewed)", e.id === "g1" && wrote(/UPDATE co_profiles SET intent/).length === 1 && wrote(/INSERT INTO ask_checkins|UPDATE ask_checkins/).length === 0);
   profileIntent = [];
 }
 K.setEntryClassifierForTests(async () => "goal");
 {
   calls.length = 0;
-  profileIntent = [{ id: "a9", text: "Get Co in front of users", type: "seeking", status: "active", kind: "ask", embedding: null }];
-  const e = await X.persistCapturedIntent("u1", { text: "Get Co in front of users", type: "seeking" } as any, extras);
+  profileIntent = [{ id: "a9", text: "Get Cue in front of users", type: "seeking", status: "active", kind: "ask", embedding: null }];
+  const e = await X.persistCapturedIntent("u1", { text: "Get Cue in front of users", type: "seeking" } as any, extras);
   check("a goal is never merged into an ask with the same words (each kind dedupes only against its own kind)", e.id !== "a9" && e.kind === "goal" && wrote(/INSERT INTO co_profiles/).length === 1);
   profileIntent = [];
 }
@@ -78,12 +78,12 @@ K.setEntryClassifierForTests(async () => { throw new Error("model down"); });
 {
   calls.length = 0;
   const orig = console.error; console.error = () => {};
-  const e = await X.persistCapturedIntent("u1", { text: "Get Co in front of users", type: "seeking" } as any, extras).catch(() => null);
+  const e = await X.persistCapturedIntent("u1", { text: "Get Cue in front of users", type: "seeking" } as any, extras).catch(() => null);
   console.error = orig;
   check("when the classifier is down the entry is still written, as an ask (it has a lifecycle and a time limit; a goal with none is the riskier default)", !!e && e.kind === "ask" && wrote(/INSERT INTO ask_checkins/).length === 1);
 }
 K.setEntryClassifierForTests(null);
-check("the classifier's definitions carry the two examples: errand vs direction, ask when unsure", /Get Co in front of users/.test(K.KIND_DEFINITIONS) && /Plan out the event and take lead/.test(K.KIND_DEFINITIONS) && /If you cannot tell, it is an ASK/.test(K.KIND_DEFINITIONS) && /Find me weekend events/.test(K.KIND_DEFINITIONS));
+check("the classifier's definitions carry the two examples: errand vs direction, ask when unsure", /Get Cue in front of users/.test(K.KIND_DEFINITIONS) && /Plan out the event and take lead/.test(K.KIND_DEFINITIONS) && /If you cannot tell, it is an ASK/.test(K.KIND_DEFINITIONS) && /Find me weekend events/.test(K.KIND_DEFINITIONS));
 check("an ask can reference the goal it serves: ask_checkins.serves_goal_id exists, and nothing reasons over it yet", /ADD COLUMN IF NOT EXISTS serves_goal_id TEXT/.test(src("db/migrations.ts")) && !/serves_goal_id/.test(["services/askLifecycle.ts", "services/goalSweep.ts", "jobs/index.ts", "harness/proactiveRegistry.ts"].map(src).join("\n")));
 
 // ---- REGRESSIONS
@@ -117,7 +117,7 @@ check("an ask can reference the goal it serves: ask_checkins.serves_goal_id exis
   check("REGRESSION: the goal sweep runs for a member with open asks, same as for one without", n === 2 && surfaced.map((s) => s.id).join() === "u1,u2" && marked.join() === "u1,u2");
   const ctx = surfaced[0].ctx;
   // 2026-10-08: the search is each active goal's findable edge (services/goalEdges.ts), never a goal's own words or an ask's text.
-  check("what it searches is the plan's findable edges, never a goal's own words or an ask's text", /programs and cohorts for pre-seed founders/.test(ctx) && /founder dinners/.test(ctx) && !/raise a pre-seed/.test(ctx) && !/Get Co in front of users/.test(ctx) && !/Find me weekend events/.test(ctx));
+  check("what it searches is the plan's findable edges, never a goal's own words or an ask's text", /programs and cohorts for pre-seed founders/.test(ctx) && /founder dinners/.test(ctx) && !/raise a pre-seed/.test(ctx) && !/Get Cue in front of users/.test(ctx) && !/Find me weekend events/.test(ctx));
   check("the budget is per member and independent of asks: due again 20 hours after the last attempt, not before", GS.goalSweepDue({ last_attempted_at: null }) && !GS.goalSweepDue({ last_attempted_at: new Date(Date.now() - 19 * 3_600_000) }) && GS.goalSweepDue({ last_attempted_at: new Date(Date.now() - 21 * 3_600_000) }) && /INTERVAL '20 hours'/.test(sql) && /INTERVAL '3 days'/.test(sql));
   check("the cron hands the whole sweep to services/goalSweep.ts and still dispatches after", /await runGoalSweep\(runWithConcurrency\);\s*await runDispatch\(\);/.test(src("jobs/index.ts")) && !/NOT EXISTS \(SELECT 1 FROM ask_checkins ac WHERE ac\.user_id = u\.id AND ac\.resolved_at IS NULL\)/.test(src("jobs/index.ts")));
 }

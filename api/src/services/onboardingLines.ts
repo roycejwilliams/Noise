@@ -10,10 +10,10 @@
 
 // A new number's first text, before any code.
 export const GATE_ASK = [
-  "Hey, I'm Co. I get to know every member, and when we're in the same room, I make sure you meet the right people. What's your invite code?",
-  "Hi, I'm Co. Think of me as the one who knows who you should meet. What's your invite code?",
-  "Hey, it's Co. I make the right introductions when we're in the same room. Send me your invite code to start.",
-  "Hey, I'm Co. Every member gets to know me, and I get to know them. What's your invite code?",
+  "Hey, I'm Cue. I get to know every member, and when we're in the same room, I make sure you meet the right people. What's your invite code?",
+  "Hi, I'm Cue. Think of me as the one who knows who you should meet. What's your invite code?",
+  "Hey, it's Cue. I make the right introductions when we're in the same room. Send me your invite code to start.",
+  "Hey, I'm Cue. Every member gets to know me, and I get to know them. What's your invite code?",
 ];
 
 export const WRONG_CODE = [

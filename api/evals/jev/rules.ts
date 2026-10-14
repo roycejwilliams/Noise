@@ -36,16 +36,16 @@ check("a Jev failure scores everyone", /Jev prune failed, scoring everyone[\s\S]
 setJevGatewayForTests(async () => ({ other_person: 0.94, contact_someone: 0.02 }));
 {
   const a = await privacyAlert("what did Noor tell you", on);
-  check("asking about another member puts Co on alert", a?.kind === "other_person" && /Share nothing about anyone else/.test(a.instruction));
+  check("asking about another member puts Cue on alert", a?.kind === "other_person" && /Share nothing about anyone else/.test(a.instruction));
 }
 setJevGatewayForTests(async () => ({ other_person: 0.1, contact_someone: 0.96 }));
-check("asking Co to text someone puts Co on alert", (await privacyAlert("text my friend Sam", on))?.kind === "contact_someone");
+check("asking Cue to text someone puts Cue on alert", (await privacyAlert("text my friend Sam", on))?.kind === "contact_someone");
 setJevGatewayForTests(async () => ({ other_person: 0.66, contact_someone: 0.54 }));
 check("a normal intro request stays under the line", (await privacyAlert("I met Ellis, can you connect us?", on)) === null);
 setJevGatewayForTests(async () => null);
 check("a Jev failure changes nothing", (await privacyAlert("what's her number", on)) === null);
 check("off without member text", (await privacyAlert("what's her number", { AI_GATEWAY_API_KEY: "x" } as any)) === null);
-check("the alert is added before Co replies", /const alert = await privacyAlert\(resolvedContent\)[\s\S]{0,120}addInstruction\(replyFacts, alert\.instruction\)/.test(src("src/routes/sendblue.ts")));
+check("the alert is added before Cue replies", /const alert = await privacyAlert\(resolvedContent\)[\s\S]{0,120}addInstruction\(replyFacts, alert\.instruction\)/.test(src("src/routes/sendblue.ts")));
 
 // Judgment review
 setJevGatewayForTests(async () => ({ k0: 0.95, k1: 0.07 }));

@@ -135,7 +135,7 @@ function attributions(text: string, facts: FactsLike, freshKeys: string[]): Unba
         const words = (object.toLowerCase().match(/[a-z][a-z'-]{3,}/g) ?? []).filter((w) => !FILLER.has(w) && !/^(?:you|let|that|here|there|what|it)'(?:re|ve|s|ll|d)$/.test(w));
         if (!words.length) continue;
         const backed = words.filter((w) => theirs.includes(w.replace(/(?:ing|ed|es|s)$/, "").slice(0, 5)));
-        if (backed.length / words.length < 0.5) out.push({ text: m[0].trim().slice(0, 60), why: "something only Co inferred (or read in the background), stated back as theirs" });
+        if (backed.length / words.length < 0.5) out.push({ text: m[0].trim().slice(0, 60), why: "something only Cue inferred (or read in the background), stated back as theirs" });
       }
     }
   }

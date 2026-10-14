@@ -69,7 +69,7 @@ check("setLoopStatus by id works", r2.ok);
 check("finding 2: closing the loop closes its task", tasks[0].status === "done");
 tasks[0].status = "open"; // even if the task were still listed
 await O.syncOpenLoops("u");
-check("finding 2: next sync keeps Co's close (no reopen)", !!loops[0].closed_at && loops[0].status === "done", JSON.stringify(loops[0]));
+check("finding 2: next sync keeps Cue's close (no reopen)", !!loops[0].closed_at && loops[0].status === "done", JSON.stringify(loops[0]));
 
 // 3. A change seen earlier (by a text turn) still wakes the task later.
 loops = []; tasks = [task7()];
@@ -111,7 +111,7 @@ const tools: any = LT.loopTools(ctx, state, loop, (w: string) => notDone.push(w)
 const out = await tools.shareFinds.execute({ items: [{ link: "https://wave.example/", caption: "Wave holds 120 standing, $180/hr." }] }, { toolCallId: "t", messages: [] });
 check("finding 4: the link went, the caption failed (retried once)", sends.filter((x) => x.startsWith("https://")).length === 1 && sends.filter((x) => !x.startsWith("https://")).length === 2, JSON.stringify(sends));
 check("finding 4: no fact says the caption was sent", !facts.some((f) => /with the caption/.test(f)) && facts.some((f) => /caption didn't send/.test(f)), JSON.stringify(facts));
-check("finding 4: Co is told to carry the caption in its reply", out.ok && (out as any).uncaptioned?.[0] === "Wave" && /caption didn't go out/.test((out as any).note) && notDone.some((n) => /caption for Wave/.test(n)));
+check("finding 4: Cue is told to carry the caption in its reply", out.ok && (out as any).uncaptioned?.[0] === "Wave" && /caption didn't go out/.test((out as any).note) && notDone.some((n) => /caption for Wave/.test(n)));
 
 // Beats and bursts: a newer text mid-reply, a beat that fails partway.
 {
@@ -145,7 +145,7 @@ check("finding 4: Co is told to carry the caption in its reply", out.ok && (out 
   const rec = new Date("2026-10-01T12:00:00Z");
   const ok = { member: { optedOut: false, archived: false }, coRepliedSince: false, lastInboundAt: new Date(rec.getTime() + 200), callAt: null, receivedAt: rec, now: new Date(rec.getTime() + 60_000) };
   check("replay runs when nothing reached them", TF.turnReplayBlocked(ok) === null);
-  check("replay never runs after a Co text, a newer text of theirs, a call, or an hour", TF.turnReplayBlocked({ ...ok, coRepliedSince: true }) === "already_answered" && TF.turnReplayBlocked({ ...ok, lastInboundAt: new Date(rec.getTime() + 30_000) }) === "newer_text" && TF.turnReplayBlocked({ ...ok, callAt: new Date(rec.getTime() + 1000) }) === "call_placed" && TF.turnReplayBlocked({ ...ok, now: new Date(rec.getTime() + 2 * 3_600_000) }) === "too_old" && TF.turnReplayBlocked({ ...ok, member: { optedOut: true, archived: false } }) === "opted_out");
+  check("replay never runs after a Cue text, a newer text of theirs, a call, or an hour", TF.turnReplayBlocked({ ...ok, coRepliedSince: true }) === "already_answered" && TF.turnReplayBlocked({ ...ok, lastInboundAt: new Date(rec.getTime() + 30_000) }) === "newer_text" && TF.turnReplayBlocked({ ...ok, callAt: new Date(rec.getTime() + 1000) }) === "call_placed" && TF.turnReplayBlocked({ ...ok, now: new Date(rec.getTime() + 2 * 3_600_000) }) === "too_old" && TF.turnReplayBlocked({ ...ok, member: { optedOut: true, archived: false } }) === "opted_out");
   const fs = await import("node:fs");
   const sb = fs.readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
   check("each retry is claimed once (timer or restart pass, never both)", /SET retry_claimed_at = NOW\(\) WHERE handle = \$1 AND retry_claimed_at IS NULL RETURNING/.test(sb) && /if \(handle && !\(await claimRetry\(handle\)\)\) return;/.test(sb));

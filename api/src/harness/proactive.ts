@@ -136,7 +136,9 @@ export type ProactiveType =
   | "intro_nudge"
   | "deadline_nudge"
   | "goal_nudge"
-  | "commitment_nudge";
+  | "commitment_nudge"
+  // The one "I'm going by Cue now" text (services/nameChange.ts, 2026-10-14). Usually it rides in another text instead.
+  | "name_change";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -205,6 +207,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   goal_closed: { priority: 86 },
   // Once per quiet stretch per goal (recheck_asked_at); one recheck text every few days at most, so goals due together never pile up.
   goal_recheck: { priority: 10, typeGapDays: 3 },
+  // Lowest of all: on its own only on a day nothing else is ready (it rides in whatever goes first otherwise).
+  name_change: { priority: 1 },
   // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
   // One deadline heads-up a day at most (final review of #108).
   deadline_nudge: { priority: 75, typeGapDays: 1 },
@@ -309,6 +313,7 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "goal_nudge",
   "commitment_nudge",
   "goal_recheck",
+  "name_change",
 ]);
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
@@ -441,7 +446,7 @@ export function userLevelChecks(state: Omit<PickState, "candidates">, opts: { sk
   const spacing = spacingCheck(state);
   const checks: GateCheck[] = [
     { name: "not_opted_out", pass: !state.optedOut, reason: "they opted out of texts" },
-    { name: "mid_conversation", pass: !state.midConversation, reason: "they're mid-conversation with Co right now" },
+    { name: "mid_conversation", pass: !state.midConversation, reason: "they're mid-conversation with Cue right now" },
   ];
   if (!opts.skipHours) {
     checks.push({
@@ -652,7 +657,7 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   }
   const tried = Date.parse(String((c.payload as { relevanceTriedAt?: string })?.relevanceTriedAt ?? ""));
   if (tried && state.now.getTime() - tried < RELEVANCE_RETRY_HOURS * HOUR) {
-    checks.push({ name: "relevance_retry", pass: false, reason: "Co couldn't say if it's still relevant; trying again shortly" });
+    checks.push({ name: "relevance_retry", pass: false, reason: "Cue couldn't say if it's still relevant; trying again shortly" });
   }
   // "Asked, got yes, delivered nothing, asked again" (2026-10-03): a tease is a
   // question whose answer is a reveal; while an earlier yes is still owed its
@@ -660,7 +665,7 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (c.type === "network_tease" && state.undeliveredYes) {
     checks.push({ name: "no_undelivered_yes", pass: false, reason: "they said yes to hearing who and nothing was delivered; no new tease until that clears" });
   }
-  if (state.safetyHold && PROACTIVE_PURPOSE_MAP[c.type] === "offer") {
+  if (state.safetyHold && (PROACTIVE_PURPOSE_MAP[c.type] === "offer" || c.type === "name_change")) {
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
   }
   // Away from home, in their own words (services/away.ts, 2026-10-11: Jacqueline said she was traveling and SF finds kept coming):
@@ -677,7 +682,7 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   // one. An answer to their own explicit ask (an event offer for an open ask) is never held back: they asked.
   const kind = kindOf(c.type, c.payload);
   if (kind && !(kind === "find" && isAnswering(c)) && state.suppressedKinds?.includes(kind)) {
-    checks.push({ name: "kind_restraint", pass: false, reason: `they let the last ${RESTRAINT.ignoredToSuppress} ${kind} texts pass with no reply or reaction; Co stopped sending these until they answer one` });
+    checks.push({ name: "kind_restraint", pass: false, reason: `they let the last ${RESTRAINT.ignoredToSuppress} ${kind} texts pass with no reply or reaction; Cue stopped sending these until they answer one` });
   }
   // One goal surface a season, across the seasonal check-in and the goal nudge (services/goalJourney.ts GOAL_CHECKIN). A goal recheck
   // text (services/goalRecheck.ts) counts as one too, so the three never land close together.
@@ -1034,17 +1039,17 @@ export function memberDraftBlock(k: MemberKnowledge, rules: MemberRules): string
   const past = k.goals.filter((g) => g.state !== "active").slice(0, 3);
   if (active.length) lines.push(`- Where they say they're headed (the lens: never recite it): ${active.map((g) => cap(g.text, 120)).join("; ")}`);
   if (past.length) lines.push(`- Goals that are done or set aside (history, never current direction): ${past.map((g) => `${cap(g.text, 100)} (${g.state})`).join("; ")}`);
-  if (k.asks.length) lines.push(`- What they've asked Co for that's still open: ${k.asks.slice(0, 5).map((a) => cap(a.text, 120)).join("; ")}`);
+  if (k.asks.length) lines.push(`- What they've asked Cue for that's still open: ${k.asks.slice(0, 5).map((a) => cap(a.text, 120)).join("; ")}`);
   const sent = k.delivered.slice(0, 10);
   if (sent.length) lines.push(`- Already sent them (don't re-pitch any as new; a reminder, follow-up or update about one is fine): ${sent.map((d) => `${cap(d.what, 80)} (${d.kind}, ${day(d.at)}${d.reaction ? `, they reacted: ${cap(d.reaction, 40)}` : ""})`).join("; ")}`);
   const carrying = k.carrying.filter((c) => c.state !== "done").slice(0, 6);
-  if (carrying.length) lines.push(`- What Co is carrying for them: ${carrying.map((c) => `${cap(c.what, 100)} (${c.kind}, ${c.state}${c.told ? ", they know" : ""})`).join("; ")}`);
+  if (carrying.length) lines.push(`- What Cue is carrying for them: ${carrying.map((c) => `${cap(c.what, 100)} (${c.kind}, ${c.state}${c.told ? ", they know" : ""})`).join("; ")}`);
   if (k.corrections.length) lines.push(`- They corrected (only the corrected version exists): ${k.corrections.slice(0, 4).map((c) => `${c.field}: ${c.now ? cap(c.now, 80) : "(removed)"}, not ${cap(c.was, 60)}`).join("; ")}`);
   const stated = k.preferences.filter((p) => p.source === "stated");
   const landed = k.preferences.filter((p) => p.source !== "stated");
   if (stated.length) lines.push(`- What kind of room they've said they want (their words): ${stated.map((p) => cap(p.text, 300)).join("; ")}`);
   if (landed.length) lines.push(`- What has landed with them before: ${landed.map((p) => cap(p.text, 300)).join("; ")}`);
-  if (k.lessons.length) lines.push(`- What Co has learned about texting them: ${k.lessons.slice(0, 4).map((l) => cap(l.text, 160)).join("; ")}`);
+  if (k.lessons.length) lines.push(`- What Cue has learned about texting them: ${k.lessons.slice(0, 4).map((l) => cap(l.text, 160)).join("; ")}`);
   const memberRules = [rules.discretion, rules.memberSafety, rules.grounding, rules.deliveryShape, rules.restraint, rules.quietHours].filter((r) => r && r.trim()).join("\n\n");
   return `WHAT YOU KNOW ABOUT THEM (background: it shapes what you say and what you leave out; it is never a source for a date, an event or a commitment, and never something to state that CONFIRMED_FACTS doesn't have)
 ${lines.length ? lines.join("\n") : "- (nothing more on file)"}
@@ -1078,7 +1083,7 @@ export async function draftProactive(opts: {
   const redo = redraftFor.getStore();
   const build = (own: string | null) => `${CO_VOICE}
 
-${CO_TEXT_CHANNEL} You're texting ${opts.firstName}. Co is reaching out first; they didn't just text you.
+${CO_TEXT_CHANNEL} You're texting ${opts.firstName}. Cue is reaching out first; they didn't just text you.
 
 ${opts.maxSentences && opts.maxSentences !== 2 ? PROACTIVE_RULES.replace("Max 2 sentences", `Max ${opts.maxSentences} sentences`) : PROACTIVE_RULES}
 
@@ -1148,7 +1153,7 @@ function sentenceCount(text: string): number {
 // the model may shorten "Co Test Event 2 (SF Founders Meetup)" to "the SF
 // Founders Meetup", which should still count.
 export function nameTokens(name: string): string[] {
-  const stop = new Set(["event", "events", "the", "and", "with", "for", "test", "co", "meetup", "night", "presents"]);
+  const stop = new Set(["event", "events", "the", "and", "with", "for", "test", "co", "cue", "meetup", "night", "presents"]);
   return Array.from(new Set(name.toLowerCase().match(/[a-z0-9']{4,}/g) ?? [])).filter((w) => !stop.has(w));
 }
 
@@ -1228,7 +1233,7 @@ export function checkDraft(text: string, rules: OutputRules): GateCheck[] {
   }
   // One voice standard with calls (services/speakable.ts): no "Starting the…", "working on", "once it's worth sending".
   const narration = narratesInternalState(text);
-  checks.push({ name: "draft_narrates_state", pass: !narration, reason: narration ?? "narrates Co's own state" });
+  checks.push({ name: "draft_narrates_state", pass: !narration, reason: narration ?? "narrates Cue's own state" });
   return checks;
 }
 
@@ -1536,13 +1541,13 @@ Return ONLY JSON: {"id": "<one id from the list>", "why": "one short line"}`,
     ]);
     const parsed = readPick(text);
     const pick = eligible.find((c) => c.id === String(parsed?.id ?? ""));
-    if (pick) return { pick, reason: `Co's pick of ${eligible.length}: ${String(parsed?.why ?? "").slice(0, 200)}`, source: "co" };
-    console.error("proactive: Co's pick named nothing eligible, using priority (non-fatal):", text.slice(0, 300));
+    if (pick) return { pick, reason: `Cue's pick of ${eligible.length}: ${String(parsed?.why ?? "").slice(0, 200)}`, source: "co" };
+    console.error("proactive: Cue's pick named nothing eligible, using priority (non-fatal):", text.slice(0, 300));
   } catch (err: any) {
-    console.error("proactive: Co's pick failed, using priority (non-fatal):", err?.message ?? err);
+    console.error("proactive: Cue's pick failed, using priority (non-fatal):", err?.message ?? err);
   }
   const fallback = proposePick(eligible);
-  return { ...fallback, reason: `${fallback.reason} (Co's pick unavailable)` };
+  return { ...fallback, reason: `${fallback.reason} (Cue's pick unavailable)` };
 }
 
 // An answer that has waited more than a day is re-read before it goes
@@ -1607,11 +1612,11 @@ export async function stillRelevant(c: Candidate, about: { recentConversation: s
         model: anthropic(DRAFT_MODEL),
         maxOutputTokens: 300,
         experimental_telemetry: { isEnabled: true, functionId: "proactive.stillRelevant" },
-        prompt: `A text Co was going to send this member has been waiting since ${day(c.createdAt)}. It's now ${day(about.now)}.
+        prompt: `A text Cue was going to send this member has been waiting since ${day(c.createdAt)}. It's now ${day(about.now)}.
 
 What it was going to do: [${c.type}] ${c.summary}
 ${source ? `\n${source}\n` : ""}
-Their recent texts with Co (oldest first):
+Their recent texts with Cue (oldest first):
 ${about.recentConversation.slice(-2500) || "(none)"}
 
 Is it still relevant? It's stale only if one of these is true:
@@ -1651,6 +1656,8 @@ async function sendWithLedger(
   messages: string[],
   opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[] } = {},
   extras: { candidate: Candidate; messages: string[] }[] = [],
+  // A note riding in this text with its own once-only key (the name notice): claimed here, inside the lock, or the text goes without it.
+  ride: { candidate: Candidate; without: string[] } | null = null,
 ): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[] }> {
   const client = await pool.connect();
   const delivered: string[] = [];
@@ -1689,6 +1696,16 @@ async function sendWithLedger(
     if (!g.ok) {
       await client.query("ROLLBACK");
       return { sent: false, failed: g.failed };
+    }
+    // The riding note's key, claimed first: if another send already told them (two dispatches at once), this text goes without it.
+    if (ride) {
+      const claimed = await client.query(
+        `INSERT INTO proactive_sends (user_id, type, target_key, topic_key, candidate_id, message, exempt)
+         VALUES ($1, $2, $3, $4, $5, $6, true) ON CONFLICT (user_id, target_key) DO NOTHING RETURNING id`,
+        [person.userId, ride.candidate.type, ride.candidate.targetKey, ride.candidate.topicKey, ride.candidate.id, messages.join("\n\n")],
+      );
+      if (claimed.rows[0]) await client.query(`UPDATE proactive_candidates SET status = 'sent', decided_at = NOW(), updated_at = NOW() WHERE id = $1`, [ride.candidate.id]);
+      else messages = ride.without;
     }
     // The kind goes on the ledger (services/kindRestraint.ts): what restraint reads to learn which kinds they let pass.
     const ins = await client.query(
@@ -1755,6 +1772,9 @@ async function sendWithLedger(
   }
   return { sent: true, delivered };
 }
+
+// Tests drive the send-time ledger directly (evals/proactive/nameChange.ts, golden case 52), with a fake store.
+export const sendWithLedgerForTests = sendWithLedger;
 
 // For transactional texts outside the daily pick. Still idempotent per
 // target, still logged in the ledger (exempt = true, so they don't count
@@ -2115,7 +2135,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   const heldBy = heldNow(member, now);
   if (heldBy && !opts.dryRun) {
     const until = heldBy === "hold" ? member.holdUntil : member.spaceUntil;
-    await recordSkipOnce(userId, `${heldBy}:${until?.toISOString() ?? ""}`, { layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: heldBy, reason: heldBy === "hold" ? `held until ${until?.toISOString()} (Co's pick had nothing to send; a new find clears it)` : `space until ${until?.toISOString()} after work was handed to a task` });
+    await recordSkipOnce(userId, `${heldBy}:${until?.toISOString() ?? ""}`, { layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: heldBy, reason: heldBy === "hold" ? `held until ${until?.toISOString()} (Cue's pick had nothing to send; a new find clears it)` : `space until ${until?.toISOString()} after work was handed to a task` });
   }
   if (heldNow(member, now)) return;
 
@@ -2188,17 +2208,21 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // and a text goes out only when the last decision delivers this candidate (sends). The gates above already vetoed what isn't
   // eligible; the guards below (last day first, the draft's checks, the send-time ledger) keep their veto after it.
   // A find on its last chance goes before what can wait (expiringFind); otherwise Co picks.
-  const urgent = expiringFind(ev.eligible, { now: state.now, zone: person.timezone, sends: state.sends });
-  const chosen = urgent ? null : await choosePick(ev.eligible, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null, zone: person.timezone, now: state.now });
+  // The name notice never competes for the day's text (services/nameChange.ts): it rides in whatever goes, and goes on its own only
+  // when nothing else is ready.
+  const nameNotice = ev.eligible.find((x) => x.type === "name_change") ?? null;
+  const pickable = nameNotice && ev.eligible.length > 1 ? ev.eligible.filter((x) => x.type !== "name_change") : ev.eligible;
+  const urgent = expiringFind(pickable, { now: state.now, zone: person.timezone, sends: state.sends });
+  const chosen = urgent ? null : await choosePick(pickable, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null, zone: person.timezone, now: state.now });
   let decision: DraftDecision = judgeDailyPick({
     urgent: urgent ? { id: urgent.pick.id, why: `expires before the next send slot (ends ${localStamp(urgent.endsAt, person.timezone)}, next slot ${localStamp(urgent.nextSlot, person.timezone)}): it goes ahead of what can wait` } : null,
     chosen: chosen ? { id: chosen.pick?.id ?? null, why: chosen.reason, source: chosen.source } : { id: null, why: "", source: "code" },
     noneHoldHours: RULES.pickNoneHoldHours,
   });
   // Co decides; code guards the fact: a picked find on its last day goes before what is still true tomorrow (lastDayFirst).
-  const lastDay = urgent ? null : lastDayFirst(chosen?.pick ?? null, ev.eligible, { now: state.now, zone: person.timezone });
+  const lastDay = urgent ? null : lastDayFirst(chosen?.pick ?? null, pickable, { now: state.now, zone: person.timezone });
   decision = lastDayVeto(decision, lastDay ? { id: lastDay.pick.id, why: `its last day is today (ends ${localStamp(lastDay.endsAt, person.timezone)}), and what else was ready is still true tomorrow: it goes first` } : null);
-  const picked = { pick: ev.eligible.find((x) => x.id === decision.pick) ?? null, reason: decision.why, source: decision.source };
+  const picked = { pick: pickable.find((x) => x.id === decision.pick) ?? null, reason: decision.why, source: decision.source };
   const done = (type: string | null) => {
     if (opts.dryRun) console.log(`[dispatch dryRun] brain: ${decision.kind}${type ? `:${type}` : ""} pick=${decision.pick} (${decision.why.slice(0, 160)})`);
     else logDraftDecision(userId, decision, type);
@@ -2213,7 +2237,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     done(null);
     return;
   }
-  const c = leadPick(picked.pick, ev.eligible);
+  const c = leadPick(picked.pick, pickable);
   // The bundle leads with the most time-bound of the day's picks (leadPick, code): the decision follows it.
   if (c.id !== decision.pick) decision = { ...decision, pick: c.id };
   const pickChecks = ev.perCandidate.find((p) => p.candidate.id === c.id)?.checks ?? [];
@@ -2526,6 +2550,17 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       }
     }
   }
+  // The name notice rides in this text when no stopped-looking line does: one note a text, on the same terms (services/nameChange.ts).
+  let nameRide: { candidate: Candidate; without: string[] } | null = null;
+  if (!composed && !rideNote && nameNotice && c.type !== "name_change") {
+    const A = await import("../services/askRetire.js");
+    const N = await import("../services/nameChange.js");
+    if (A.noteMayRide(c, !!member.state.needsCare) && !N.carriesNameChange(sending.join("\n"))) {
+      const { carryLaneNotes } = await import("../services/laneMoves.js");
+      nameRide = { candidate: nameNotice, without: sending };
+      sending = A.rideAlong(sending, N.NAME_CHANGE_RIDE, (d, p) => carryLaneNotes(d, p));
+    }
+  }
   const extras: { candidate: Candidate; messages: string[] }[] = composed ? composed.perItem.slice(1) : [];
 
   // Bound: only a deliver of this candidate goes out (brain/index.ts sends).
@@ -2543,7 +2578,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   let result: Awaited<ReturnType<typeof sendWithLedger>>;
   try {
-    result = await sendWithLedger(c, person, sending, { ...opts, suppressedKinds: state.suppressedKinds }, extras);
+    result = await sendWithLedger(c, person, sending, { ...opts, suppressedKinds: state.suppressedKinds }, extras, nameRide);
   } catch (err: any) {
     // Send failed and the ledger row rolled back. Retry on a later tick, up
     // to the attempt limit, instead of every 15 minutes until it expires.

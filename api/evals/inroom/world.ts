@@ -594,9 +594,9 @@ function fakeAnthropic(init: any): Response {
   }
   // The value-line judge (services/roomMatching.ts valueGate, one call per side): strong, the line naming the other
   // member's first shared ask in the same form the share reason used to take.
-  if (prompt.startsWith("Co is a friend to every member of a private club")) {
+  if (prompt.startsWith("Cue is a friend to every member of a private club")) {
     W.llmCalls.push({ kind: "valueLine", prompt });
-    const shared = [...(prompt.match(/said Co may tell people they meet: ([^\n]*)/)?.[1] ?? "").matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+    const shared = [...(prompt.match(/said Cue may tell people they meet: ([^\n]*)/)?.[1] ?? "").matchAll(/"([^"]*)"/g)].map((x) => x[1]);
     if (!shared.length) return anthropicText(JSON.stringify({ line: "", verdict: "weak", why: "nothing shared" }));
     return anthropicText(JSON.stringify({ line: `what they've said they can offer: "${shared[0]}"`, verdict: "strong", why: "stub" }));
   }

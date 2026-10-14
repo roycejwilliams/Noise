@@ -123,8 +123,8 @@ async function sendMissedCallFollowUp(
     );
     coMessage = result.text;
   } catch (aiErr) {
-    console.error("Co follow-up message generation failed, using fallback:", aiErr);
-    coMessage = `Hey ${user.first_name}, Co tried to reach you. Reply here whenever you're ready, or expect another call soon.`;
+    console.error("Cue follow-up message generation failed, using fallback:", aiErr);
+    coMessage = `Hey ${user.first_name}, Cue tried to reach you. Reply here whenever you're ready, or expect another call soon.`;
   }
 
   let audioUrl: string | null = null;
@@ -646,7 +646,7 @@ async function handleMissedVoiceCall(
   _io?.to(`user:${user.id}`).emit("co:call_completed", { call_sid: callSid, status: kind === "voicemail" ? "voicemail" : "no_answer" });
   await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [user.id]).catch(() => {});
   try {
-    const note = kind === "voicemail" ? `Co left this voicemail: "${voicemailLeft(user.first_name)}"` : `Co called ${user.first_name} but there was no real conversation (chat el:${conversationId}).`;
+    const note = kind === "voicemail" ? `Cue left this voicemail: "${voicemailLeft(user.first_name)}"` : `Co called ${user.first_name} but there was no real conversation (chat el:${conversationId}).`;
     const seen = await pool.query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'system' AND content = $2 LIMIT 1`, [user.id, note]);
     if (!seen.rows[0]) await writeMemory(user.id, "system", note).catch((err: any) => console.error("post-call: failed to log the missed call (non-fatal):", err?.message ?? err));
     const missed = decideMissedCallFollowUp(await gatherMissedCallState(user.id, callSid), new Date());
@@ -836,7 +836,7 @@ async function processEndedCall(o: {
         memberKnowledge(user_id, { include: AUDIT_SECTIONS }).catch(() => null),
       ]);
       const knownBeforeCall0 = knownBeforeFrom(auditKnowledge, callPicture);
-      const knownBeforeCall = o.offered ? { ...knownBeforeCall0, facts: `${knownBeforeCall0.facts}\n\nWhat Co had found for them before the call (anything offered from this list is on file):\n${o.offered}` } : knownBeforeCall0;
+      const knownBeforeCall = o.offered ? { ...knownBeforeCall0, facts: `${knownBeforeCall0.facts}\n\nWhat Cue had found for them before the call (anything offered from this list is on file):\n${o.offered}` } : knownBeforeCall0;
       const existingTranscriptMem = await pool.query(
         `SELECT id FROM co_memories WHERE user_id = $1 AND memory_type = 'call_transcript' AND content = $2 LIMIT 1`,
         [user_id, transcript],

@@ -15,7 +15,7 @@ export function renderMatchLead(count: number): string {
 // was a post on X that mentioned Luma, and Co never said so).
 export function sourceOf(match: { kind?: string; tier?: number; url?: string }): string {
   if (match.kind === "opportunity") return "a post on X";
-  if (match.kind === "co_event") return "Co's own Luma calendar";
+  if (match.kind === "co_event") return "Cue's own Luma calendar";
   if (match.url?.includes("lu.ma")) return "its Luma event page";
   return "a public event listing";
 }

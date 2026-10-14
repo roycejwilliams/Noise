@@ -235,7 +235,7 @@ export function taskFactLines(tasks: CoTask[], fmt: (iso: string) => string = (x
       const done = t.steps.filter((s) => s.done).map((s) => s.text);
       const left = t.steps.filter((s) => !s.done).map((s) => s.text);
       const last = t.notes.slice(-2).map((n) => n.text);
-      return `Co is working on task #${t.id} for them: "${t.goal}" (their words: "${t.theirWords.slice(0, 160)}").${done.length ? ` Done: ${done.join("; ")}.` : ""}${left.length ? ` Still to do: ${left.join("; ")}.` : ""}${last.length ? ` Latest: ${last.join(" / ")}.` : ""}${t.deadline ? ` Their deadline: ${t.deadline}${t.finalCheckAt && !t.finalTold ? `; Co's last check before it, where it tells them where things stand, is around ${fmt(t.finalCheckAt)}` : ""}.` : ""}${t.nextCheckAt ? ` Co will work on it next around ${fmt(t.nextCheckAt)}${t.planNext ? `: ${t.planNext}` : ""}.` : ""}${t.window && !t.window.closedAt ? ` ${windowLine(t.window)}` : ""}`;
+      return `Cue is working on task #${t.id} for them: "${t.goal}" (their words: "${t.theirWords.slice(0, 160)}").${done.length ? ` Done: ${done.join("; ")}.` : ""}${left.length ? ` Still to do: ${left.join("; ")}.` : ""}${last.length ? ` Latest: ${last.join(" / ")}.` : ""}${t.deadline ? ` Their deadline: ${t.deadline}${t.finalCheckAt && !t.finalTold ? `; Cue's last check before it, where it tells them where things stand, is around ${fmt(t.finalCheckAt)}` : ""}.` : ""}${t.nextCheckAt ? ` Cue will work on it next around ${fmt(t.nextCheckAt)}${t.planNext ? `: ${t.planNext}` : ""}.` : ""}${t.window && !t.window.closedAt ? ` ${windowLine(t.window)}` : ""}`;
     });
 }
 
@@ -517,7 +517,7 @@ export function briefFactLines(briefs: BriefView[], zone?: string | null): strin
   return briefs.map((b) => {
     const what = `"${b.goal}" (their words: "${b.theirWords.slice(0, 160)}")`;
     if (b.status === "open" && b.held) return `Research brief #${b.id} for them, ${what}, is finished but hasn't reached them yet (it was outside their hours). What it came to: "${b.held.text}". That goes to them${b.held.at ? ` around ${at(b.held.at)}` : " in their morning"}, unless you tell them first.`;
-    if (b.status === "open") return `Co is putting together research brief #${b.id} for them, ${what}, since ${at(b.createdAt)}. It runs in the background and goes to them as a document when it's done.`;
+    if (b.status === "open") return `Cue is putting together research brief #${b.id} for them, ${what}, since ${at(b.createdAt)}. It runs in the background and goes to them as a document when it's done.`;
     if (b.status === "done") return `Research brief #${b.id}, ${what}, finished${b.closedAt ? ` ${at(b.closedAt)}` : ""}: ${b.outcome ?? "sent"}.`;
     return `Research brief #${b.id}, ${what}, stopped${b.closedAt ? ` ${at(b.closedAt)}` : ""} without a brief: ${b.outcome ?? "no reason recorded"}.`;
   });

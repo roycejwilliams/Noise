@@ -39,7 +39,7 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   check("held on kind backoff: a week out", P.coInitiatedRetryAt({ now: at("12:00"), sends: [] }, ["kind_restraint"]).getTime() === at("12:00").getTime() + 7 * 24 * 3_600_000);
   check("held on spacing and pause: the later of the two", P.coInitiatedRetryAt(state, ["spacing", "unanswered_pause"]).getTime() === at("11:30").getTime() + 24 * 3_600_000);
   // Review of #129: task texts space later texts too (a find 15 minutes after a task update was the 11:30 incident reversed).
-  check("a task update spaces the next text Co starts", !P.spacingCheck({ now: at("11:45"), sends: [rec("task_update", "11:30", true)] }).pass);
+  check("a task update spaces the next text Cue starts", !P.spacingCheck({ now: at("11:45"), sends: [rec("task_update", "11:30", true)] }).pass);
   check("an event-change notice still doesn't", P.spacingCheck({ now: at("11:45"), sends: [rec("event_change", "11:30", true)] }).pass);
   const px = src("harness/proactive.ts");
   check("sendExempt reads the gates inside the lock (coInitiatedHold on the locked client) and holds a Co-initiated text with its reason, logged", /if \(opts\.coInitiated\) \{[\s\S]{0,300}coInitiatedHold\(client, /.test(px) && /async function coInitiatedHold\(client: Queryable[\s\S]{0,200}loadSends\(client, o\.userId\)/.test(px) && /record\("skip", "held_co_initiated", reason\)/.test(px));
@@ -86,9 +86,9 @@ const rec = (type: string, when: string, exempt = false) => ({ type, targetKey: 
   // Founder-approved 2026-10-12 (memory provenance): "went" comes only from a door check-in, a walk-in, or their stated went (a
   // stated helped / didn't help row for that item). Their texts are never read for it: "going to practice my pitch before the
   // launch" read as having gone, and a stated "I'm going" is a plan. Everything else gets the question.
-  check("Co suggested it and nothing more: not confirmed", !R.wentOnRecord(p, []));
+  check("Cue suggested it and nothing more: not confirmed", !R.wentOnRecord(p, []));
   check("a stated going is a plan, not having gone: the debrief asks", !R.wentOnRecord(p, [{ result: "acted", provenance: "stated" }]));
-  check("Co's own read of their words (no provenance, or inferred) never counts", !R.wentOnRecord(p, [{ result: "helped", provenance: null }]) && !R.wentOnRecord(p, [{ result: "didnt_help", provenance: "inferred" }]) && !R.wentOnRecord(p, [{ result: "acted", provenance: null }]));
+  check("Cue's own read of their words (no provenance, or inferred) never counts", !R.wentOnRecord(p, [{ result: "helped", provenance: null }]) && !R.wentOnRecord(p, [{ result: "didnt_help", provenance: "inferred" }]) && !R.wentOnRecord(p, [{ result: "acted", provenance: null }]));
   check("interest or a pass never counts", !R.wentOnRecord(p, [{ result: "interested", provenance: "stated" }, { result: "declined", provenance: "stated" }]));
   check("their stated went and liked it: confirmed", R.wentOnRecord(p, [{ result: "helped", provenance: "stated" }]));
   check("their stated went and didn't: confirmed", R.wentOnRecord(p, [{ result: "didnt_help", provenance: "stated" }]));

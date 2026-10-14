@@ -37,7 +37,7 @@ export function pickIntro(list: Introduced[], name: string): Introduced | null |
 export function secondContactLabel(firstName: string, outcome: SecondContactOutcome, on: Date): string {
   const day = on.toISOString().slice(0, 10);
   const what = { met_again: `Saw ${firstName} again`, talked_again: `Talked with ${firstName} again`, not_yet: `Hasn't seen ${firstName} again yet`, not_going_to: `Doesn't plan to see ${firstName} again` }[outcome];
-  return `${what} (said ${day}; Co introduced them)`;
+  return `${what} (said ${day}; Cue introduced them)`;
 }
 
 // metOn: when they met or talked, if they said ("we met last Tuesday"); the metric counts that day, not the day they told Co.

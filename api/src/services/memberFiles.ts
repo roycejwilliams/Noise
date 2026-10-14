@@ -82,10 +82,10 @@ export async function keepFile(userId: string, buf: Buffer, urlOrName: string | 
   const had = await pool.query(`SELECT n, text FROM member_files WHERE user_id = $1 AND sha256 = $2`, [userId, sha]);
   if (had.rows[0]) return { ok: true, n: Number(had.rows[0].n), isNew: false, read: !!had.rows[0].text };
   const held = await pool.query(`SELECT COUNT(*)::int AS n FROM member_files WHERE user_id = $1`, [userId]);
-  if ((held.rows[0]?.n ?? 0) >= FILE_LIMITS.maxFiles) return { ok: false, why: `Co is already holding ${FILE_LIMITS.maxFiles} of their files; they can ask Co to delete some` };
+  if ((held.rows[0]?.n ?? 0) >= FILE_LIMITS.maxFiles) return { ok: false, why: `Cue is already holding ${FILE_LIMITS.maxFiles} of their files; they can ask Cue to delete some` };
   const text = await read(buf);
   // A file Co couldn't read isn't kept: there'd be nothing to use, only something to hold.
-  if (!text) return { ok: false, why: "Co couldn't read it" };
+  if (!text) return { ok: false, why: "Cue couldn't read it" };
   const insert = () =>
     pool.query(
       `INSERT INTO member_files (user_id, n, name, sha256, bytes, text)
@@ -167,7 +167,7 @@ What they said recently (their own words):
 ${o.theirWords.slice(-6000)}
 >>>
 
-Rules: every point in the sections comes from their file or their words, in those words as closely as reads well; never add a fact, figure, name, place, date or claim that isn't there. Your own ideas go only in "suggestions" (at most 3), never in the sections. A short plain title (no "Co" in it), one line under it, then 2 to 6 sections, each a heading, at most two sentences, then the points as short bullets. No dashes, no markdown.
+Rules: every point in the sections comes from their file or their words, in those words as closely as reads well; never add a fact, figure, name, place, date or claim that isn't there. Your own ideas go only in "suggestions" (at most 3), never in the sections. A short plain title (no "Cue" in it), one line under it, then 2 to 6 sections, each a heading, at most two sentences, then the points as short bullets. No dashes, no markdown.
 
 Return ONLY JSON: {"title": "...", "note": "...", "sections": [{"heading": "...", "paragraphs": ["..."], "bullets": ["..."]}], "suggestions": ["..."]}`,
     });

@@ -50,7 +50,7 @@ export async function voiceFinds(userId: string, now: Date = new Date()): Promis
     pool.query(`SELECT city, intent FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
   ]);
   const what = brief?.what?.trim() || latestAskEntry(profile?.intent)?.text?.trim() || "";
-  if (!what) return { available: false, reason: "they haven't asked Co to find anything yet" };
+  if (!what) return { available: false, reason: "they haven't asked Cue to find anything yet" };
   const city = brief?.city ?? profile?.city ?? null;
   const [events, openings] = await Promise.all([
     eventCandidates(what, city, { when: brief?.when ?? null, userId, limit: 5 }).catch(() => null),

@@ -75,7 +75,7 @@ export function avoidFor(avoid: string[], askText: string | null | undefined): s
 export type Judged = { name: string; details: string };
 
 export function avoidPrompt(items: Judged[], avoid: string[]): string {
-  return `A member told Co to stop suggesting these kinds of things: ${avoid.map((a) => `"${a}"`).join(", ")}.
+  return `A member told Cue to stop suggesting these kinds of things: ${avoid.map((a) => `"${a}"`).join(", ")}.
 
 For each thing below, say which of those kinds it clearly is, judged by its own main activity (who attends, hosts or sponsors never changes what kind of thing it is: a chess night full of founders is a chess night). If it isn't clearly one of them, null.
 
@@ -155,7 +155,7 @@ export async function limitsGate<M>(matches: M[], limits: Limits | null, o: { as
   const kept: M[] = [];
   const out: { match: M; why: string }[] = [];
   matches.forEach((m, i) => {
-    if (kinds[i]) return out.push({ match: m, why: `they asked Co to stop suggesting ${kinds[i]}` });
+    if (kinds[i]) return out.push({ match: m, why: `they asked Cue to stop suggesting ${kinds[i]}` });
     const d = (m as any)?.details;
     const conflict = askNamesATime(o.askText) ? null : availabilityConflict(limits.availability, d?.startAt ?? null, d?.timezone ?? null);
     if (conflict) return out.push({ match: m, why: conflict });

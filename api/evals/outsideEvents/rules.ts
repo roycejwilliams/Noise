@@ -27,7 +27,7 @@ const found = [
   { user_id: "a", event_api_id: null, source: "mention" as const },
   { user_id: "b", event_api_id: "evt-real", source: "surfaced" as const },
 ];
-check("a member Co only recommended the event to is not counted as going", JSON.stringify(attendeesOnly(found).map((m) => m.user_id)) === '["a"]');
+check("a member Cue only recommended the event to is not counted as going", JSON.stringify(attendeesOnly(found).map((m) => m.user_id)) === '["a"]');
 check("but the recommended event still lends its real id", pickCanonicalEventId(found, ["me", "a"]) === "evt-real");
 const em = src("services/eventMatching.ts");
 check("recommending an event no longer matches anyone", !/scoreMatchedGroup\(eventApiId/.test(em) && /Recorded only \(2026-09-23\)/.test(em));

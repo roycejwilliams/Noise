@@ -37,7 +37,7 @@ async function run(answers: string[]) {
   }
 }
 
-check("the limit is 300 and Co is told it up front", D.REVEAL_MAX_CHARS === 300 && /Keep it under 260 characters/.test(D.REVEAL_LENGTH));
+check("the limit is 300 and Cue is told it up front", D.REVEAL_MAX_CHARS === 300 && /Keep it under 260 characters/.test(D.REVEAL_LENGTH));
 check("LONG is over the limit (the case being tested)", LONG.length > D.REVEAL_MAX_CHARS);
 
 {
@@ -62,7 +62,7 @@ check("LONG is over the limit (the case being tested)", LONG.length > D.REVEAL_M
 
 {
   const { r, prompts } = await run(["SKIP"]);
-  check("Co's SKIP is still final", prompts.length === 1 && r === null);
+  check("Cue's SKIP is still final", prompts.length === 1 && r === null);
 }
 
 console.log(`event reveal length: ${total - failed}/${total} passed`);

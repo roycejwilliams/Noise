@@ -93,7 +93,7 @@ export function timedPromiseShaped(text: string): string[] {
 const CANT = /\b(?:sponsors?|sponsorships?|investors?|funders?|funding|grants?|donors?)\b/i;
 export function cantKeep(sentence: string): string | null {
   if (INSTANT.test(sentence)) return "promises an instant result";
-  if (CANT.test(sentence) || OFFERS_WHAT_CO_CANT.test(sentence)) return "something Co can't do";
+  if (CANT.test(sentence) || OFFERS_WHAT_CO_CANT.test(sentence)) return "something Cue can't do";
   return null;
 }
 
@@ -113,15 +113,15 @@ export function entryOf(t: Pick<CoTask, "id" | "goal" | "status" | "nextCheckAt"
 
 export type ReadPromise = { sentence: string; when: string; about: "call" | "other"; entry: number | null; by?: string | null };
 export function bindingPrompt(reply: string, entries: LedgerEntry[], zone: string | null, now: Date = new Date()): string {
-  return `Co (a companion texting a member) is about to send this reply:
+  return `Cue (a companion texting a member) is about to send this reply:
 """
 ${reply.slice(0, 2000)}
 """
 
-What Co already has scheduled for this member (its ledger):
+What Cue already has scheduled for this member (its ledger):
 ${entries.length ? entries.map((e) => `#${e.id}: ${e.what} (fires ${e.fires.map((f) => localStamp(f, zone)).join(", ") || "unscheduled"})`).join("\n") : "(nothing)"}
 
-List every promise in the reply that Co ITSELF will do something at or by a stated time ("I'll check back Friday", "you'll have the shortlist by Thursday", "I'll text you tomorrow"). Not offers or questions ("want me to...?"), not the member's own actions, not things done in this reply, not promises with no time. For each: the sentence exactly as written, the time words exactly as written, the latest moment those words mean as an ISO 8601 time with its offset (now is ${DateTime.fromJSDate(now).setZone(wordsZone(zone)).toISO()}, in ${wordsZone(zone)}), whether it's about a phone call or meeting ("call") or anything else ("other"), and the ledger number it's about, or null if none.
+List every promise in the reply that Cue ITSELF will do something at or by a stated time ("I'll check back Friday", "you'll have the shortlist by Thursday", "I'll text you tomorrow"). Not offers or questions ("want me to...?"), not the member's own actions, not things done in this reply, not promises with no time. For each: the sentence exactly as written, the time words exactly as written, the latest moment those words mean as an ISO 8601 time with its offset (now is ${DateTime.fromJSDate(now).setZone(wordsZone(zone)).toISO()}, in ${wordsZone(zone)}), whether it's about a phone call or meeting ("call") or anything else ("other"), and the ledger number it's about, or null if none.
 
 Return ONLY JSON: {"promises": [{"sentence": "...", "when": "...", "by": "2026-10-16T21:00:00-07:00", "about": "call"|"other", "entry": 12|null}]}`;
 }
@@ -192,7 +192,7 @@ export async function bindPromises(reply: string, deps: BindDeps): Promise<{ ver
     // be said, read or not (fail closed in both branches).
     const fromWords = deadlineFromWhen(p.when, now, deps.zone) ?? deadlineFromWhen(p.sentence, now, deps.zone);
     const by = fromWords?.deadline ?? (read ? readTime(p.by, now) : null);
-    if (!by) { verdicts.push({ sentence: p.sentence, bound: false, why: `"${p.when}" isn't a time Co can place` }); continue; }
+    if (!by) { verdicts.push({ sentence: p.sentence, bound: false, why: `"${p.when}" isn't a time Cue can place` }); continue; }
     if (by.getTime() <= now.getTime()) { verdicts.push({ sentence: p.sentence, bound: false, why: "that time has already passed" }); continue; }
     // A call or meeting: kept by a scheduled call, never by the read's label alone.
     // A call or meeting by the read's label, or by Co's own words whatever the label says (a real call promise labelled "other" must
@@ -206,7 +206,7 @@ export async function bindPromises(reply: string, deps: BindDeps): Promise<{ ver
     const already = entries().find((e) => (p.entry === null || e.id === p.entry) && firesBy(e, by, now));
     if (already && (p.entry !== null || !read)) { verdicts.push({ sentence: p.sentence, bound: true, entry: already.id, how: "already" }); continue; }
     if (!read) { verdicts.push({ sentence: p.sentence, bound: false, why: "the promise check couldn't run, and nothing on the ledger fires by then" }); continue; }
-    if ((by.getTime() - now.getTime()) / 3_600_000 > TASK_LIMITS.maxHours) { verdicts.push({ sentence: p.sentence, bound: false, why: "that's further out than Co can hold a commitment" }); continue; }
+    if ((by.getTime() - now.getTime()) / 3_600_000 > TASK_LIMITS.maxHours) { verdicts.push({ sentence: p.sentence, bound: false, why: "that's further out than Cue can hold a commitment" }); continue; }
     const fireAt = warnByFor(by, now, deps.zone);
     if (p.entry !== null) {
       const e = entries().find((x) => x.id === p.entry);
@@ -226,7 +226,7 @@ export async function bindPromises(reply: string, deps: BindDeps): Promise<{ ver
       const same = entries().find((e) => firesBy(e, by, now) && tasks.some((t) => t.id === e.id && (t.source === "promise" || t.source === "lookout")));
       if (same) { verdicts.push({ sentence: p.sentence, bound: true, entry: same.id, how: "already" }); continue; }
     }
-    if (atPromiseCap(tasks)) { verdicts.push({ sentence: p.sentence, bound: false, why: "Co is already keeping as many promises as it can hold" }); continue; }
+    if (atPromiseCap(tasks)) { verdicts.push({ sentence: p.sentence, bound: false, why: "Cue is already keeping as many promises as it can hold" }); continue; }
     const r = await deps.openPromise({ sentence: p.sentence, inHours: Math.max(TASK_LIMITS.minHours, (fireAt.getTime() - now.getTime()) / 3_600_000), window: commitmentWindow(p.when, now, deps.zone) }).catch((err: any) => ({ ok: false as const, why: String(err?.message ?? err).slice(0, 120) }));
     if (r.ok) {
       verdicts.push({ sentence: p.sentence, bound: true, entry: r.id, how: "opened" });
@@ -234,7 +234,7 @@ export async function bindPromises(reply: string, deps: BindDeps): Promise<{ ver
       tasks = await deps.open();
     } else verdicts.push({ sentence: p.sentence, bound: false, why: r.why });
   }
-  const checks: GateCheck[] = verdicts.filter((v): v is Extract<Verdict, { bound: false }> => !v.bound).map((v) => ({ name: "claim_future_promise", pass: false, reason: `future_promise: "${v.sentence}" (nothing on Co's schedule fires by then: ${v.why})` }));
+  const checks: GateCheck[] = verdicts.filter((v): v is Extract<Verdict, { bound: false }> => !v.bound).map((v) => ({ name: "claim_future_promise", pass: false, reason: `future_promise: "${v.sentence}" (nothing on Cue's schedule fires by then: ${v.why})` }));
   return { verdicts, checks, opened, pulled, deferred, read };
 }
 

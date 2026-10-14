@@ -159,13 +159,13 @@ export async function liveDetailFacts(message: string, items: LiveItem[], deps: 
         lines.push(
           parts.length
             ? `Checked live just now (${now.toISOString().slice(0, 16).replace("T", " ")} UTC), "${i.name}", from its own page: ${parts.join("; ")}${p?.soldOut ? "" : " (the page doesn't say it's sold out)"}.`
-            : `Co tried to check "${i.name}" live just now and its page doesn't list spots, time or price in a form Co can confirm: anything on file about them is as of when it was found, never current.`,
+            : `Cue tried to check "${i.name}" live just now and its page doesn't list spots, time or price in a form Cue can confirm: anything on file about them is as of when it was found, never current.`,
         );
         return;
       }
       const d = await deps.luma(i.url!).catch(() => null);
       if (!d) {
-        lines.push(`Co tried to check "${i.name}" live just now and couldn't read its page: anything on file about its spots, time or price is as of when it was found, never current.`);
+        lines.push(`Cue tried to check "${i.name}" live just now and couldn't read its page: anything on file about its spots, time or price is as of when it was found, never current.`);
         return;
       }
       lines.push(`Checked live just now (${now.toISOString().slice(0, 16).replace("T", " ")} UTC), "${i.name}": ${renderEventDetails(i.name, d).filter((l) => !/^What the event page says/.test(l)).join(" ")}`);

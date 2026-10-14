@@ -36,9 +36,9 @@ Co replied: Weird, not sure why it's not connecting.
 
 Want to start with the venue types to call, or the questions to ask when you get someone on the phone?
 User said: What's breaking?`;
-  check("#4 a question in a later paragraph of Co's text counts as asked", !/\?/.test(dropRepeatedQuestion("That's on my side.\n\nWant to start with the venue types to call, or the questions to ask?", paras)));
-  check("#4 'Co called' and photo lines end Co's message", dropRepeatedQuestion("Ok then. Want to start with the venue types to call?", "Co replied: hi\nUser sent a photo or voice memo (name/email intake)\nWant to start with the venue types to call?") === "Ok then. Want to start with the venue types to call?");
-  check("#4 a gap marker ends Co's message", dropRepeatedQuestion("Ok. Want to start with the venue types to call?", "Co replied: hi\n[— 2 hours later —]\nWant to start with the venue types to call?") === "Ok. Want to start with the venue types to call?");
+  check("#4 a question in a later paragraph of Cue's text counts as asked", !/\?/.test(dropRepeatedQuestion("That's on my side.\n\nWant to start with the venue types to call, or the questions to ask?", paras)));
+  check("#4 'Co called' and photo lines end Cue's message", dropRepeatedQuestion("Ok then. Want to start with the venue types to call?", "Co replied: hi\nUser sent a photo or voice memo (name/email intake)\nWant to start with the venue types to call?") === "Ok then. Want to start with the venue types to call?");
+  check("#4 a gap marker ends Cue's message", dropRepeatedQuestion("Ok. Want to start with the venue types to call?", "Co replied: hi\n[— 2 hours later —]\nWant to start with the venue types to call?") === "Ok. Want to start with the venue types to call?");
   const short = "Co replied: Nice. How's the permit going?\nUser said: slow";
   const longer = "Got it, that sounds slow. How's the permit going, and did the venue get back about the Saturday date?";
   check("#4 a new question that only contains an earlier short one still goes out", dropRepeatedQuestion(longer, short) === longer);
@@ -58,33 +58,33 @@ const rg = src("harness/replyGrounding.ts");
 check("#4 nothing either check flagged goes out", /let cut = stripUnsupported\(draft, effectiveFailed1, allowArrival\);/.test(rg) && /if \(cutCode\.length\) cut = stripUnsupported\(cut, cutCode, allowArrival\);/.test(rg) && /if \(!failed2\.length\) kept = \{ text: cleaned, checks: r\.checks \};/.test(rg));
 check("#4 a failed call's real reason reaches the reply", /memory_type = 'call_failure'/.test(rg) && /the problem is on your side, not their phone/.test(rg));
 const calls = src("services/elevenLabsCalls.ts");
-check("#4 a call that can't connect is noted in plain words, once per 10 min", /noteCallFailure\(userId, "registration"\)/.test(src("routes/co.ts")) && /a problem with Co's own voice setup/.test(calls) && /INTERVAL '10 minutes'/.test(calls));
+check("#4 a call that can't connect is noted in plain words, once per 10 min", /noteCallFailure\(userId, "registration"\)/.test(src("routes/co.ts")) && /a problem with Cue's own voice setup/.test(calls) && /INTERVAL '10 minutes'/.test(calls));
 check("#4 the reply is told to follow where they went", /If they moved on from a question you asked, go where they went; don't ask it again\./.test(src("agent/conversationReply.ts")));
 
 // ---------------------------------------------------------------- #2 Co's words aren't their wants
 {
   const { echoesCoNotMember } = await import("../../src/harness/profileWrite.js");
-  const call = `assistant: Like are they helping you bring people to the event, or is it more about building out what Co can actually do?
+  const call = `assistant: Like are they helping you bring people to the event, or is it more about building out what Cue can actually do?
 user: i'm pretty much at the point now with code that um i'm ready to get hands off of coding. I am running to the problem where i'm not as network as her.
 user: Um, probably my co founder'cause we're both from texas. I wanna continue to keep building with like minded individuals like that. just having that sense of community that just very important.
 user: Ah, very down to earth and laid back like I feel like a lot of bloated egos in the tech space. somebody dependable and you know intelligent.
 assistant: I'll keep that in mind. After we hang up I'll dig into those founder, tech, design, and product communities in SF and text you if something real fits.
 user: Honestly, just a friend. somebody they can kinda go through battles with and you know, depend on.`;
-  check("#2 Co's own line is not saved as their want", echoesCoNotMember("founder, tech, design, and product communities in SF", call));
+  check("#2 Cue's own line is not saved as their want", echoesCoNotMember("founder, tech, design, and product communities in SF", call));
   check("#2 their real ask is kept", !echoesCoNotMember("Looking to connect with down to earth, laid back people without inflated egos in the tech space", call));
   check("#2 their real want is kept", !echoesCoNotMember("people to go through battles with and depend on", call));
   check("#2 something both said is kept", !echoesCoNotMember("building with like minded individuals", call));
   // Code review 2026-09-24: an ask they said yes to is theirs.
   const agreed = `assistant: Want me to look for founder communities in SF?
 user: Yes please`;
-  check("#2 Co's offer they said yes to is kept", !echoesCoNotMember("founder communities in SF", agreed));
+  check("#2 Cue's offer they said yes to is kept", !echoesCoNotMember("founder communities in SF", agreed));
   check("#2 a yes by text counts too", !echoesCoNotMember("founder communities in SF", "Co replied: Nice.\n\nShould I look for founder communities in SF?\nUser said: yeah that'd be great"));
-  check("#2 'okay' to Co's own plan is still not their want", echoesCoNotMember("founder communities in SF", "assistant: I'll dig into founder communities in SF after this.\nuser: sure"));
+  check("#2 'okay' to Cue's own plan is still not their want", echoesCoNotMember("founder communities in SF", "assistant: I'll dig into founder communities in SF after this.\nuser: sure"));
   check("#2 a no isn't agreement", echoesCoNotMember("founder communities in SF", "assistant: Want me to look for founder communities in SF?\nuser: nah not really"));
   // Text history has other labeled lines (sendblue.ts, co.ts); they're never Co's words.
-  check("#2 a voice memo after Co's text is theirs, not Co's", !echoesCoNotMember("founder communities in SF", "Co replied: Nice.\n\nWhat kind of people?\nUser sent a voice memo: honestly founder communities in SF\nuser: ok\nassistant: founder communities in SF, got it"));
-  check("#2 a paragraph of Co's text that starts with 'Co' is still Co's", echoesCoNotMember("founder communities in SF", "Co replied: Got it.\n\nCo will look at founder communities in SF.\nUser said: cool thanks"));
-  check("#2 a text turn with no Co line is never filtered", !echoesCoNotMember("founder communities in SF", "user: looking for founder communities in SF"));
+  check("#2 a voice memo after Cue's text is theirs, not Cue's", !echoesCoNotMember("founder communities in SF", "Co replied: Nice.\n\nWhat kind of people?\nUser sent a voice memo: honestly founder communities in SF\nuser: ok\nassistant: founder communities in SF, got it"));
+  check("#2 a paragraph of Cue's text that starts with 'Cue' is still Cue's", echoesCoNotMember("founder communities in SF", "Co replied: Got it.\n\nCue will look at founder communities in SF.\nUser said: cool thanks"));
+  check("#2 a text turn with no Cue line is never filtered", !echoesCoNotMember("founder communities in SF", "user: looking for founder communities in SF"));
   const pe = src("services/profileExtraction.ts");
   check("#2 captureIntent filters asks, wants and preferences", /const mine = \(x: unknown\) => typeof x === "string" && !echoesCoNotMember\(x, transcript\);/.test(pe) && /\.filter\(\(a\) => mine\(a\.text\)\)/.test(pe));
 }
@@ -92,7 +92,7 @@ user: Yes please`;
 // ---------------------------------------------------------------- #1 promises Co makes on a call
 {
   const cg = src("harness/callGrounding.ts");
-  check("#1 a promise Co volunteers on a call runs a real search", /await keepCallPromise\(userId, c\.what, transcript\)/.test(cg) && /attemptEventSurfacing\(\{\n\s+askId: `\$\{PROMISE_ASK_PREFIX\}\$\{key\}`/.test(cg));
+  check("#1 a promise Cue volunteers on a call runs a real search", /await keepCallPromise\(userId, c\.what, transcript\)/.test(cg) && /attemptEventSurfacing\(\{\n\s+askId: `\$\{PROMISE_ASK_PREFIX\}\$\{key\}`/.test(cg));
   check("#1 the search never says they asked for it", /askText: what,\n\s+fromProfile: true,/.test(cg));
   check("#1 what came of it is recorded either way", /"promise_result"/.test(cg) && /found nothing good enough to send yet/.test(cg));
   const sweep = src("services/eventSurfacingSweep.ts");
@@ -130,7 +130,7 @@ user: Yes please`;
 // ---------------------------------------------------------------- run-ons and stutters on the call
 {
   const prompt = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-  check("speech: no dashes anywhere in the call prompt (Co copies its style; a spoken dash is a run-on)", !/[—–]/.test(prompt));
+  check("speech: no dashes anywhere in the call prompt (Cue copies its style; a spoken dash is a run-on)", !/[—–]/.test(prompt));
   check("speech: short spoken sentences, never a dash", /Short sentences, one thought each/.test(prompt) && /Never put a dash in what you say/.test(prompt));
   check("speech: one question per turn, never re-asked in other words", /Ask one question per turn\./.test(prompt) && /never follow it with the same question in other words/.test(prompt));
   check("speech: 'hello?' mid-call means the line seemed to drop, not a new call", /say you're still here and pick up where you were, never greet them like a new call/.test(prompt));
@@ -142,7 +142,7 @@ user: Yes please`;
   const cases: [string, string, string | null, string][] = [
     ["#1 a name after 'about' keeps its own pronoun", "Royce talked about Maya. She is leaving the company.", "Royce", "Royce talked about Maya. She is leaving the company."],
     ["#1 a name after 'for' keeps its own pronoun", "Royce is worried for Jordan. He just lost his job.", "Royce", "Royce is worried for Jordan. He just lost his job."],
-    ["#1 a name after 'to' keeps its own pronoun", "Royce introduced Co to Ellis. She runs a design studio.", "Royce", "Royce introduced Co to Ellis. She runs a design studio."],
+    ["#1 a name after 'to' keeps its own pronoun", "Royce introduced Cue to Ellis. She runs a design studio.", "Royce", "Royce introduced Cue to Ellis. She runs a design studio."],
     ["#1 'his cofounder' then 'She' stays with the cofounder", "Royce said his cofounder is leaving. She is nervous.", "Royce", "Royce said their cofounder is leaving. She is nervous."],
     ["#2 'friends' doesn't stop the member's fix", "Royce wants to make new friends. He sounded hopeful.", "Royce", "Royce wants to make new friends. They sounded hopeful."],
     ["#2 'investors' doesn't stop the member's fix", "Royce is pitching investors next week. He sounded nervous.", "Royce", "Royce is pitching investors next week. They sounded nervous."],
@@ -155,12 +155,12 @@ user: Yes please`;
 
   const { fillMemberName, callSummaryPrompt: sumPrompt } = await import("../../src/services/callContext.js");
   check("summary: the member is written as {M}, never a pronoun", /Write the person on the call as \{M\} every time, never a pronoun for them/.test(sumPrompt("user: hi")) && /const summary = fillMemberName\(raw\.trim\(\), firstName\);/.test(src("services/callContext.ts")));
-  check("summary: {M} is filled with their name, possessive kept", fillMemberName("{M} is building Co. {M}'s cofounder is from Texas.", "Royce") === "Royce is building Co. Royce's cofounder is from Texas.");
+  check("summary: {M} is filled with their name, possessive kept", fillMemberName("{M} is building Cue. {M}'s cofounder is from Texas.", "Royce") === "Royce is building Cue. Royce's cofounder is from Texas.");
   check("summary: '{M}self' is 'themself', not 'Royceself'", fillMemberName("{M} wants to surround {M}self with good people.", "Royce") === "Royce wants to surround themself with good people.");
   check("summary: a leftover 'he' about someone else stays", fillMemberName("{M} talked about Maya. She is leaving.", "Royce") === "Royce talked about Maya. She is leaving.");
   const { echoesCoNotMember, agreesWith } = await import("../../src/harness/profileWrite.js");
-  check("#4 a yes to an unrelated question doesn't claim Co's plan (text)", echoesCoNotMember("founder communities in SF", "Co replied: I'll dig into founder communities in SF after this.\n\nHow was your weekend?\nUser said: yeah it was great"));
-  check("#4 a yes to an unrelated question doesn't claim Co's plan (call)", echoesCoNotMember("founder communities in SF", "assistant: I'll dig into founder communities in SF. Did you eat yet?\nuser: yeah I did"));
+  check("#4 a yes to an unrelated question doesn't claim Cue's plan (text)", echoesCoNotMember("founder communities in SF", "Co replied: I'll dig into founder communities in SF after this.\n\nHow was your weekend?\nUser said: yeah it was great"));
+  check("#4 a yes to an unrelated question doesn't claim Cue's plan (call)", echoesCoNotMember("founder communities in SF", "assistant: I'll dig into founder communities in SF. Did you eat yet?\nuser: yeah I did"));
   check("#4 a yes to the offer itself still counts", !echoesCoNotMember("founder communities in SF", "assistant: Want me to look for founder communities in SF?\nuser: yes please"));
   check("#5 'of course not' isn't a yes", !agreesWith("user: of course not") && echoesCoNotMember("founder communities in SF", "assistant: Want me to look for founder communities in SF?\nuser: of course not"));
   check("#5 'yes, I mean no' isn't a yes", !agreesWith("user: yes, I mean no, forget that"));

@@ -44,12 +44,12 @@ const task = (id: number, goal: string): W => ({ id, goal, steps: [], notes: [],
 // ---- 1. the pre-filter
 for (const m of [
   "Can you draft the planning docs for Sequin?",
-  "Have Co draft the planning docs with Sequin AI",
+  "Have Cue draft the planning docs with Sequin AI",
   "how are the Sequin planning documents coming along?",
   "any update on the planning docs for Sequin AI?",
   "Hey, quick one. Did you start on the Sequin planning docs? Also want something fun this weekend.",
 ]) check(`restated: "${m}"`, S.restatedTask(m, WORK)?.id === 7, S.restatedTask(m, WORK));
-check("restated: a check-in Co holds", S.restatedTask("can you check in with me after my investor pitch?", WORK)?.id === 9);
+check("restated: a check-in Cue holds", S.restatedTask("can you check in with me after my investor pitch?", WORK)?.id === 9);
 check("a lookout is left out", S.restatedTask("live jazz nights in SF", WORK) === null);
 // Near misses: the same kind of thing, something else (each message adds a word its task lacks).
 const NEAR: [string, string][] = [
@@ -110,14 +110,14 @@ for (const m of ["stop working on the Sequin planning docs", "cancel the Sequin 
   const sc = S.statusCheckFor("Can you draft the planning docs for Sequin?", WORK, ZONE, SAME);
   check("the candidate names the task as possibly the same, with where it stands", !!sc && /^Possibly the same as open task #7 \("Draft the Sequin AI planning docs"\)\. Where it stands:/.test(sc.fact) && /latest, Outlined the launch timeline: walk-through Nov 3, invites Nov 10 \(/.test(sc.fact) && /Steps done: Outline the launch timeline \(1 of 2\)/.test(sc.fact) && /Next: Draft the partner section\./.test(sc.fact), sc?.fact);
   check("…no stray period before a time", !!sc && !/\.\s*\(/.test(sc.fact), sc?.fact);
-  check("…when Co next works on it is never read as a delivery time", !!sc && /Co's next work session on it \(not a delivery time\): around /.test(sc.fact));
+  check("…when Cue next works on it is never read as a delivery time", !!sc && /Cue's next work session on it \(not a delivery time\): around /.test(sc.fact));
   check("…in plain words: no em dash or exclamation point", !!sc && !/[—–!]/.test(sc.fact));
   const closed = S.statusCheckFor("Can you draft the planning docs for Sequin?", WORK, ZONE, null);
   check("the fence can't be read: the task's number only, no goal words, no notes", closed?.fact === "Possibly the same as open task #7.", closed?.fact);
   check("…and the tool hint the same", S.looksLike(DOCS, null) === "This looks like task #7, already open. If it's the same, answer as a status check (already on it, where it stands) and don't call this again. If it's different, call again with differentFrom: 7." && !/Sequin/.test(S.looksLike(DOCS, null)));
   const stripped = S.whereItStands({ ...DOCS, notes: [...DOCS.notes, { at: "2026-10-13T19:00:00Z", text: "Asked Ellis about the partner list." }] }, ZONE, (s) => (/Ellis/.test(s) ? null : s));
   check("a line the fence blanks never reaches the reply", !/Ellis/.test(stripped) && /Where it stands:/.test(stripped), stripped);
-  check("the rule lets Co decide: status for asking again or how it's going, anything else handled as itself", /If they're asking for it again or how it's going, answer as a status check/.test(S.CANDIDATE_RULE) && /changing, stopping, adding to or thanking you for it, or asking for something different, handle that instead and ignore this/.test(S.CANDIDATE_RULE) && !/[—–!]/.test(S.CANDIDATE_RULE));
+  check("the rule lets Cue decide: status for asking again or how it's going, anything else handled as itself", /If they're asking for it again or how it's going, answer as a status check/.test(S.CANDIDATE_RULE) && /changing, stopping, adding to or thanking you for it, or asking for something different, handle that instead and ignore this/.test(S.CANDIDATE_RULE) && !/[—–!]/.test(S.CANDIDATE_RULE));
   const rg = src("harness/replyGrounding.ts");
   check("the reply carries the candidate and the rule", /addFact\(rf, "known", opts\.turn\.statusCheck\.fact\);\s*addInstruction\(rf, \(await import\("\.\.\/services\/statusCheck\.js"\)\)\.CANDIDATE_RULE\);/.test(rg));
   const tc = src("services/turnContext.ts");
@@ -150,7 +150,7 @@ for (const m of ["stop working on the Sequin planning docs", "cancel the Sequin 
   console.log = () => {};
   const again = await a.tools.saveAsk.execute({ what: "draft the planning docs for Sequin", differentFrom: 7 }, {});
   console.log = quiet;
-  check("differentFrom goes through: Co decided it's different", again.ok === true && a.facts.some((f) => f.kind === "ongoing") && a.state.statusOverridden.join() === "7", again);
+  check("differentFrom goes through: Cue decided it's different", again.ok === true && a.facts.some((f) => f.kind === "ongoing") && a.state.statusOverridden.join() === "7", again);
   const turn = { statusCheck: { taskId: 7, goal: DOCS.goal, fact: "Possibly the same as open task #7." } };
   console.log = () => {};
   const t2 = make("Can you draft the planning docs for Sequin?", turn);
@@ -177,9 +177,9 @@ for (const m of ["stop working on the Sequin planning docs", "cancel the Sequin 
 
 // ---- 4. the background capture skips only an answered status; nothing writes or switches
 {
-  check("answered as status: only a hold the tools raised that Co didn't override", S.answeredAsStatus({ raised: [7], overridden: [] }) === 7);
-  check("…not once Co said it's different", S.answeredAsStatus({ raised: [7], overridden: [7] }) === null);
-  check("…and nothing at all when the tools raised nothing: a candidate Co never acted on proves nothing (fail open)", S.answeredAsStatus({ raised: [], overridden: [] }) === null);
+  check("answered as status: only a hold the tools raised that Cue didn't override", S.answeredAsStatus({ raised: [7], overridden: [] }) === 7);
+  check("…not once Cue said it's different", S.answeredAsStatus({ raised: [7], overridden: [7] }) === null);
+  check("…and nothing at all when the tools raised nothing: a candidate Cue never acted on proves nothing (fail open)", S.answeredAsStatus({ raised: [], overridden: [] }) === null);
   const cr = src("agent/conversationReply.ts");
   check("the reply path logs it after a sent reply, from the turn state, with their message", /S\.answeredAsStatus\(\{ raised: state\.statusRaised, overridden: state\.statusOverridden \}\)/.test(cr) && /decision: S\.STATUS_TURN[^\n]*proposal: \{ taskId, message: input\.resolvedContent\.slice\(0, 500\) \}/.test(cr) && !/toolsCalled: toolsSoFar/.test(cr));
   const pe = src("services/profileExtraction.ts");
@@ -199,14 +199,14 @@ for (const m of ["stop working on the Sequin planning docs", "cancel the Sequin 
   for (const [m, t] of BROAD) {
     const recorded = S.answeredAsStatus({ raised: [], overridden: [] });
     const skipped = recorded != null ? S.capturedAskIsTask(m, [t]) : null;
-    check(`a broad ask Co answered in plain text is saved: "${m}" (open: "${t.goal}")`, recorded === null && skipped === null);
+    check(`a broad ask Cue answered in plain text is saved: "${m}" (open: "${t.goal}")`, recorded === null && skipped === null);
   }
   check("…and even on a status turn for that task, all but an exact restatement are saved", BROAD.filter(([m, t]) => S.capturedAskIsTask(m, [t])).map(([m]) => m).every((m) => m === "can you find events in SF?"), BROAD.filter(([m, t]) => S.capturedAskIsTask(m, [t])).map(([m]) => m));
   const sc = src("services/statusCheck.ts");
   check("the status-check path writes nothing", !/\b(UPDATE|INSERT|DELETE)\b/.test(sc));
   const ar = src("services/askRetire.ts");
   const branch = ar.slice(ar.indexOf("if (isCoTaskGoal(text)) {"), ar.indexOf("const tied = new Set"));
-  check("askRetire leaves a Co-task ask as it is: status-check lane, the search keeps running, no kind change, no note", /status-check lane: Co's own work, the search keeps running \(no kind change, no note\)/.test(branch) && /return;/.test(branch) && !/setAskKind|UPDATE|retire_note|lineInVoice/.test(branch), branch);
+  check("askRetire leaves a Co-task ask as it is: status-check lane, the search keeps running, no kind change, no note", /status-check lane: Cue's own work, the search keeps running \(no kind change, no note\)/.test(branch) && /return;/.test(branch) && !/setAskKind|UPDATE|retire_note|lineInVoice/.test(branch), branch);
 }
 
 console.log(`status checks: ${total - failed}/${total} passed`);

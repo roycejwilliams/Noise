@@ -23,7 +23,7 @@ for (const chosen of [pitch, fleet, chess]) {
   const lead = P.leadPick(chosen, [pitch, fleet, chess]);
   const sibs = P.pickSiblingOffers(lead, [pitch, fleet, chess]);
   const order = [lead, ...sibs].map((c: any) => c.payload.match.name);
-  check(`whichever pick Co chose (${chosen.payload.match.name}), Fleet Week leads and no second tier-3 pick rides with it: ${order.join(" > ")}`, order.length === 1 && order[0].startsWith("San Francisco Fleet Week"));
+  check(`whichever pick Cue chose (${chosen.payload.match.name}), Fleet Week leads and no second tier-3 pick rides with it: ${order.join(" > ")}`, order.length === 1 && order[0].startsWith("San Francisco Fleet Week"));
 }
 // One pick from each tier: all three go together, most time-bound first.
 const tiered = (c: any, tier: number) => ({ ...c, payload: { ...c.payload, match: { ...c.payload.match, tier } } });

@@ -4,8 +4,8 @@ import "../lib/requireMeter.js";
 const { draftCompanionCheckin } = await import("../../src/agent/companionCheckin.js");
 const cases = [
   { text: "They were in the middle of: the pitch on Friday. It came through.", then: "I have a big pitch Friday and I'm nervous", now: "the pitch went really well", allowed: /pitch/i },
-  { text: "They've been with Co for 30 days.", then: null, now: null, allowed: /30|month/i },
-  { text: "They went to Founders Dinner, which Co had sent them.", then: null, now: null, allowed: /founders dinner/i },
+  { text: "They've been with Cue for 30 days.", then: null, now: null, allowed: /30|month/i },
+  { text: "They went to Founders Dinner, which Cue had sent them.", then: null, now: null, allowed: /founders dinner/i },
 ];
 let bad = 0;
 for (const c of cases) {

@@ -48,11 +48,11 @@ export type CallClaim = {
 // 2026-10-08: the old line said Co can't know "people's intentions it wasn't given", with nothing about Co's own events, and
 // the audit read "I can learn who's coming, who each person is trying to meet" (Co's in-room guest-list matching, its core
 // product) as a false capability claim. The registry (services/capabilities.ts) is now the source; these only add to it.
-export const CALL_CAPABILITIES = `Co can: look for events, communities, opportunities, and people after a call and text them if something real fits (never a guaranteed result or time); take on work over days that they asked for and text what it finds; call them back if they ask; text them.
-Co can't: promise when something will be found or a guaranteed result, or know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Co's own events it does know the guest list and what each guest told Co they're looking for.`;
+export const CALL_CAPABILITIES = `Cue can: look for events, communities, opportunities, and people after a call and text them if something real fits (never a guaranteed result or time); take on work over days that they asked for and text what it finds; call them back if they ask; text them.
+Cue can't: promise when something will be found or a guaranteed result, or know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Cue's own events it does know the guest list and what each guest told Cue they're looking for.`;
 const CALL_ONLY_LIMITS = [
-  "On a call, Co can't promise when something will be found, or a guaranteed result.",
-  "Co can't know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Co's own events it does know the guest list and what each guest told Co they're looking for.",
+  "On a call, Cue can't promise when something will be found, or a guaranteed result.",
+  "Cue can't know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Cue's own events it does know the guest list and what each guest told Cue they're looking for.",
 ];
 
 // The registry, as the audit reads it: what Co can do by id, and what it can't by number (team-only abilities left out).
@@ -90,7 +90,7 @@ export const saidDay = (saidOn: string): string => {
   const d = DateTime.fromISO(String(saidOn).slice(0, 10), { zone: "utc" });
   return d.isValid ? d.toFormat("LLL d") : String(saidOn);
 };
-const ASK_LINE = /^They've asked Co for \(their words\): /;
+const ASK_LINE = /^They've asked (?:Co|Cue) for \(their words\): /;
 export function knownBeforeFrom(
   k: Pick<MemberKnowledge, "goals" | "asks" | "delivered" | "corrections" | "claims" | "identity"> | null,
   picture: { facts: string; impressions: string },
@@ -103,21 +103,21 @@ export function knownBeforeFrom(
   const pictureFacts = picture.facts.split("\n").filter((l) => l.trim() && !ASK_LINE.test(l));
   const facts = [
     ...pictureFacts,
-    ...k.asks.slice(0, 8).map((a) => `They've asked Co for (their words): "${a.text}"`),
-    ...k.delivered.slice(0, 12).map((d) => `Co sent them ${d.kind === "document" ? "the document " : ""}"${d.what}"${d.url ? ` (${d.url})` : ""} on ${day(d.at)}.`),
+    ...k.asks.slice(0, 8).map((a) => `They've asked Cue for (their words): "${a.text}"`),
+    ...k.delivered.slice(0, 12).map((d) => `Cue sent them ${d.kind === "document" ? "the document " : ""}"${d.what}"${d.url ? ` (${d.url})` : ""} on ${day(d.at)}.`),
     // The corrected version only: an old value is never "on record" (it's the one thing that must still be caught if Co said it).
     ...k.corrections.map((c) => {
       const v = plainCorrected(c.now);
-      if (!c.now) return `They corrected their ${c.field}; what Co had no longer holds.`;
+      if (!c.now) return `They corrected their ${c.field}; what Cue had no longer holds.`;
       return v.settled ? `They corrected their ${c.field} to "${v.text}", and that goal is ${v.settled === "done" ? "done" : "set aside"} now (history, not current).` : `They corrected their ${c.field}: it's "${c.now}" now.`;
     }),
     ...claims.filter((c) => c.provenance === "user_said").map((c) => `They said (${saidDay(c.saidOn)}): ${c.text}${c.quote ? ` ("${c.quote}")` : ""}`),
   ];
   const goals = k.goals.length
-    ? `Their goals in Co's notes (only active ones are where they're headed; done or stale ones are history):\n${k.goals.map((g) => `- ${g.text} (${g.state})`).join("\n")}`
+    ? `Their goals in Cue's notes (only active ones are where they're headed; done or stale ones are history):\n${k.goals.map((g) => `- ${g.text} (${g.state})`).join("\n")}`
     : null;
   const inferred = claims.filter((c) => c.provenance === "co_inferred").map((c) => `- ${c.text}`);
-  const impressions = [picture.impressions, goals, inferred.length ? `Co's own read of them (never something they said):\n${inferred.join("\n")}` : null].filter((x): x is string => !!x && !!x.trim());
+  const impressions = [picture.impressions, goals, inferred.length ? `Cue's own read of them (never something they said):\n${inferred.join("\n")}` : null].filter((x): x is string => !!x && !!x.trim());
   return { facts: facts.join("\n"), impressions: impressions.join("\n\n") };
 }
 
@@ -127,34 +127,34 @@ export function knownBeforeFrom(
 // specific time, place, count, or what another person said, wants or did.
 export function callAuditPrompt(transcript: string, knownBefore: string, impressions?: string): string {
   const reg = auditRegistry();
-  return `Audit what Co said on a phone call. Co can only claim things it actually knew and only promise things it can actually do.
+  return `Audit what Cue said on a phone call. Cue can only claim things it actually knew and only promise things it can actually do.
 
-What Co can do (its capability registry, by id; this is the truth about Co, whatever any other line says):
+What Cue can do (its capability registry, by id; this is the truth about Cue, whatever any other line says):
 ${reg.abilities.map((a) => `[${a.id}] ${a.can}`).join("\n")}
 
-What Co can't do (by number):
+What Cue can't do (by number):
 ${reg.limits.map((l, i) => `L${i + 1} ${l}`).join("\n")}
 
 In short, on a call:
 ${CALL_CAPABILITIES}
 
-What Co knew going into the call (facts):
+What Cue knew going into the call (facts):
 ${knownBefore || "(nothing)"}
 ${impressions?.trim() ? `
-Co's own impressions going in (summaries its models wrote). Use these to understand the call, never as proof: a specific time, place, count, link, or what another person said, wants or did that only an impression backs is "invented_fact". What the person themself said in these recent texts is fine to rely on.
+Cue's own impressions going in (summaries its models wrote). Use these to understand the call, never as proof: a specific time, place, count, link, or what another person said, wants or did that only an impression backs is "invented_fact". What the person themself said in these recent texts is fine to rely on.
 ${impressions.slice(0, 6000)}
 ` : ""}
-Call transcript ("assistant" is Co):
+Call transcript ("assistant" is Cue):
 ${transcript.slice(-12000)}
 
-List every statement by Co ("assistant" lines only) that is a promise of a future action, a specific fact about an event, a person, or a place, or a claim about what Co can do. For each:
-- "promise_keepable": a promise to look for something, keep an eye out, or do work, after the call, and text what it finds, with no guaranteed result or time. Casual ones count the same: "you'll hear from me", "I'm on it", "I'll keep an ear out for the right moment", "leave it with me". Put what to do in "what", specific enough to act on from the call (what to look for, for what, by when if said). In "asked_quote", copy the person's exact words from a "user" line that asked for it (a request, or their yes to Co's offer together with what it answered); null only when Co offered it on its own and they never asked.
+List every statement by Cue ("assistant" lines only) that is a promise of a future action, a specific fact about an event, a person, or a place, or a claim about what Cue can do. For each:
+- "promise_keepable": a promise to look for something, keep an eye out, or do work, after the call, and text what it finds, with no guaranteed result or time. Casual ones count the same: "you'll hear from me", "I'm on it", "I'll keep an ear out for the right moment", "leave it with me". Put what to do in "what", specific enough to act on from the call (what to look for, for what, by when if said). In "asked_quote", copy the person's exact words from a "user" line that asked for it (a request, or their yes to Cue's offer together with what it answered); null only when Cue offered it on its own and they never asked.
 - "promise_unkeepable": any other promise (a time, a guaranteed result, booking, contacting someone for them).
-- "invented_fact": a specific fact not in what Co knew or what the person said on the call. In "specifics", list the exact names, places, times or numbers that had no source.
-- "capability": a claim about what Co can or can't do that the registry above contradicts. In "limit", the number of the can't line it breaks ("L3"). If a registry line says Co does it, it is "ok", not "capability"; put that line's id in "ability".
-- "ok": supported by the facts Co knew, what the person said, or the registry. Leave these out of the list: only the other types are used.
+- "invented_fact": a specific fact not in what Cue knew or what the person said on the call. In "specifics", list the exact names, places, times or numbers that had no source.
+- "capability": a claim about what Cue can or can't do that the registry above contradicts. In "limit", the number of the can't line it breaks ("L3"). If a registry line says Cue does it, it is "ok", not "capability"; put that line's id in "ability".
+- "ok": supported by the facts Cue knew, what the person said, or the registry. Leave these out of the list: only the other types are used.
 
-Return ONLY JSON: {"claims": [{"quote": "Co's exact words", "type": "...", "what": "...", "ability": "id or null", "limit": "L# or null", "asked_quote": "their exact words or null", "specifics": []}]}`;
+Return ONLY JSON: {"claims": [{"quote": "Cue's exact words", "type": "...", "what": "...", "ability": "id or null", "limit": "L# or null", "asked_quote": "their exact words or null", "specifics": []}]}`;
 }
 
 export function callAuditChecks(claims: CallClaim[]): GateCheck[] {
@@ -227,8 +227,8 @@ export async function keepCallPromise(userId: string, what: string, transcript?:
   // A find fed to the pool gets the picker now, not at the next sweep (review, 2026-10-13: "a find from noon never waits until tomorrow").
   if (fed) await import("../services/sweepShadow.js").then((S) => S.runPickerAfterSweep(userId, "call")).catch((err: any) => console.error("picker after a call promise failed (non-fatal):", err?.message ?? err));
   const result = queued || fed
-    ? `Looked into "${what}" after the call, as Co said it would, and found something; ${fed ? "Co's daily pick decides whether it goes out" : "it's queued to send"}.`
-    : `Looked into "${what}" after the call, as Co said it would, and found nothing good enough to send yet.`;
+    ? `Looked into "${what}" after the call, as Cue said it would, and found something; ${fed ? "Cue's daily pick decides whether it goes out" : "it's queued to send"}.`
+    : `Looked into "${what}" after the call, as Cue said it would, and found nothing good enough to send yet.`;
   await writeMemory(userId, "promise_result", result).catch(() => null);
   // Tied to this call, so this call's after-call text is the one that
   // reports it (services/callKey.ts).
@@ -257,12 +257,12 @@ export function capabilityCorrectionVerdict(c: Pick<CallClaim, "quote" | "what" 
   if (words >= 3) {
     const best = reg.abilities.map((a) => ({ id: a.id, o: overlap(c.quote, a.can) })).sort((x, y) => y.o - x.o)[0];
     const worstLimit = Math.max(0, ...reg.limits.map((l) => overlap(c.quote, l)));
-    if (best && best.o >= 0.5 && best.o > worstLimit) return { save: false, why: `the registry has it: [${best.id}] matches what Co said` };
+    if (best && best.o >= 0.5 && best.o > worstLimit) return { save: false, why: `the registry has it: [${best.id}] matches what Cue said` };
   }
   const n = Number(String(c.limit ?? "").match(/^\s*L?(\d+)\s*$/i)?.[1] ?? NaN);
   if (!Number.isInteger(n) || n < 1 || n > reg.limits.length) return { save: false, why: "it names no can't line in the registry that it breaks" };
   // The line it cites has to be about what Co said: a limit that shares nothing with the claim or its note isn't the one it breaks.
-  if (overlap(`${c.quote} ${c.what ?? ""}`, reg.limits[n - 1]) === 0) return { save: false, why: `the can't line it cites (L${n}) isn't about what Co said` };
+  if (overlap(`${c.quote} ${c.what ?? ""}`, reg.limits[n - 1]) === 0) return { save: false, why: `the can't line it cites (L${n}) isn't about what Cue said` };
   return { save: true, why: `breaks L${n}: ${reg.limits[n - 1].slice(0, 120)}` };
 }
 
@@ -271,13 +271,13 @@ export function capabilityCorrectionVerdict(c: Pick<CallClaim, "quote" | "what" 
 export function inventedFactVerdict(c: Pick<CallClaim, "quote" | "specifics">, transcript: string, knownBefore: string, records: string): { save: boolean; why: string; onRecord: string[] } {
   const flagged = Array.isArray(c.specifics) && c.specifics.some((x) => typeof x === "string" && x.trim()) ? c.specifics.filter((x): x is string => typeof x === "string") : specificsIn(c.quote);
   const r = specificsOnRecord(flagged, `${userLinesOf(transcript).join("\n")}\n${knownBefore}`, records);
-  if (r.backed) return { save: false, why: `on record in their texts or Co's records: ${r.onRecord.join(", ")}`, onRecord: r.onRecord };
+  if (r.backed) return { save: false, why: `on record in their texts or Cue's records: ${r.onRecord.join(", ")}`, onRecord: r.onRecord };
   return { save: true, why: r.unbacked.length ? `no source for: ${r.unbacked.join(", ")}` : "kept as the audit judged it", onRecord: r.onRecord };
 }
 
 // Pure: the member's own words that asked for a promise. The audit's quote counts only when it is really in their lines; else
 // the user turn just before Co's promise (or the one before that) when it asks Co for something.
-const ASKING = /\b(?:can you|could you|would you|will you|i (?:actually |really )?(?:want|need|would love|'d love|'d like) (?:you|for you|co)|i want co|please|go ahead|take (?:the )?lead|start (?:planning|drafting|putting)|send me|text me|put together|draft)\b/i;
+const ASKING = /\b(?:can you|could you|would you|will you|i (?:actually |really )?(?:want|need|would love|'d love|'d like) (?:you|for you|co|cue)|i want (?:co|cue)|please|go ahead|take (?:the )?lead|start (?:planning|drafting|putting)|send me|text me|put together|draft)\b/i;
 export function askedQuoteFor(c: Pick<CallClaim, "quote" | "asked_quote">, transcript: string): string | null {
   const theirs = userLinesOf(transcript);
   const q = typeof c.asked_quote === "string" ? c.asked_quote.trim() : "";
@@ -400,7 +400,7 @@ async function openPromiseThread(userId: string, p: PlannedPromise, transcript: 
   const t = promiseThreadTask(p, theirLineBefore(transcript, p.quotes[0] ?? ""));
   const r = await startTask({ userId, ...t });
   const result = r.ok
-    ? `Co said on the call it would keep an eye out for "${p.what}". It's open as task #${r.task.id}: Co keeps looking and texts when something real turns up.`
+    ? `Cue said on the call it would keep an eye out for "${p.what}". It's open as task #${r.task.id}: Cue keeps looking and texts when something real turns up.`
     : null;
   if (result) {
     await writeMemory(userId, "promise_result", result).catch(() => null);
@@ -452,7 +452,7 @@ export async function auditCall(
         await writeMemory(
           userId,
           "system",
-          `Co promised on a call: "${c.what}". ${p.asked ? `They asked for it in their own words ("${p.asked.slice(0, 160)}")` : "Co offered it on its own"}; task #${p.coveredBy} is carrying it.`,
+          `Cue promised on a call: "${c.what}". ${p.asked ? `They asked for it in their own words ("${p.asked.slice(0, 160)}")` : "Cue offered it on its own"}; task #${p.coveredBy} is carrying it.`,
         ).catch(() => null);
       } else if (p.asked) {
         await captureIntentForTurn(userId, `user: ${c.what}`, { timeoutMs: 6000 }).catch(() => null);
@@ -460,7 +460,7 @@ export async function auditCall(
         await writeMemory(
           userId,
           "system",
-          `Co promised on a call to look into: "${c.what}" — Co's own initiative, not something the person actually asked for.`,
+          `Cue promised on a call to look into: "${c.what}" — Cue's own initiative, not something the person actually asked for.`,
         ).catch(() => null);
         // A real thread, not one search (#113: "you'll hear from me" has to open something that keeps going): a promise task Co
         // owns, woken daily, texting only when it has something real. If none can open (at the cap), the one search still runs.
@@ -509,7 +509,7 @@ export async function recentCallCorrections(userId: string): Promise<string[]> {
     .map((r: any) => {
       try {
         const c = JSON.parse(r.content);
-        return `On a recent call Co said "${c.quote}", which ${c.type === "invented_fact" ? "wasn't based on anything Co actually knew" : c.type === "capability" ? "isn't true about what Co can do" : "is a promise Co can't keep"}${c.note ? ` (${c.note})` : ""}. If it comes up, correct it plainly.`;
+        return `On a recent call Cue said "${c.quote}", which ${c.type === "invented_fact" ? "wasn't based on anything Cue actually knew" : c.type === "capability" ? "isn't true about what Cue can do" : "is a promise Cue can't keep"}${c.note ? ` (${c.note})` : ""}. If it comes up, correct it plainly.`;
       } catch {
         return null;
       }

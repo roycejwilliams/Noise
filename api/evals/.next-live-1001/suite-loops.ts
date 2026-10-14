@@ -171,8 +171,8 @@ export const loops: Case[] = [
       const stale = (await loopRows("A")).find((l: any) => l.source === "notes");
       return {
         checks: [
-          ck("Co's done closes the loop and its task", taskRow.status === "done" && afterResync.find((l: any) => Number(l.id) === tl.id)?.closed_at, { taskRow }),
-          ck("Co's dropped closes the loop and resolves its ask", !!askRow.resolved_at && afterResync.find((l: any) => Number(l.id) === al.id)?.status === "dropped", askRow),
+          ck("Cue's done closes the loop and its task", taskRow.status === "done" && afterResync.find((l: any) => Number(l.id) === tl.id)?.closed_at, { taskRow }),
+          ck("Cue's dropped closes the loop and resolves its ask", !!askRow.resolved_at && afterResync.find((l: any) => Number(l.id) === al.id)?.status === "dropped", askRow),
           ck("a Co-closed loop stays closed on resync", afterResync.filter((l: any) => [tl.id, al.id].includes(Number(l.id))).every((l: any) => l.closed_at), afterResync),
           ck("an older brief doesn't reopen a Co-closed notes loop", !!stillClosed?.closed_at, stillClosed),
           ck("a genuinely newer brief reopens it", reopened && !reopened.closed_at, reopened),

@@ -61,38 +61,38 @@ export function openingContext(summary: string): string {
 }
 
 // What the outbound line opens on: the reason Co called (their moment), or, for a call they asked for, them.
-const NOT_CO_WORK = "Never open on Co's own work: nothing Co sent, made, drafted, delivered, owes or is working on (no \"did it land\", no \"did you get the doc\").";
+const NOT_CO_WORK = "Never open on Cue's own work: nothing Cue sent, made, drafted, delivered, owes or is working on (no \"did it land\", no \"did you get the doc\").";
 export function outboundOpeningGuide(reason: CallReason | null | undefined): string {
   if (reason && reason.kind !== "member_asked" && reason.kind !== "intake") {
     if (reason.sensitive)
-      return `Co is calling about something personal in their life. Don't name it: whoever picks up hears this line. Greet them warmly and ask one open, light question about them. ${NOT_CO_WORK}`;
+      return `Cue is calling about something personal in their life. Don't name it: whoever picks up hears this line. Greet them warmly and ask one open, light question about them. ${NOT_CO_WORK}`;
     // Their words stay out of the guide: they often carry the feeling ("nervous about the Q&A"), which the first line never names
     // (2026-10-08 live check: 3 of 3 lines asked "still feeling nervous?"). The call brain gets them ({{call_reason}}).
-    return `Co called because of this, a moment in their life: ${reason.text}. Open on it: greet them, then one light question about the thing itself (how it went, how it's shaping up, whether it's still on), never about how they feel about it. Their moment, in a friend's words. ${NOT_CO_WORK}`;
+    return `Cue called because of this, a moment in their life: ${reason.text}. Open on it: greet them, then one light question about the thing itself (how it went, how it's shaping up, whether it's still on), never about how they feel about it. Their moment, in a friend's words. ${NOT_CO_WORK}`;
   }
-  if (reason?.kind === "intake") return `This is their first real conversation with Co: Co called to get to know them. Greet them and open on them. ${NOT_CO_WORK}`;
-  return `${reason?.kind === "member_asked" ? "They asked Co to call. " : ""}Then pick up ONE specific, real thing about them and their week, as a light question or as "last we talked ...": something they said, have coming up or are working on, whatever a friend who knows them would naturally bring up. ${NOT_CO_WORK}`;
+  if (reason?.kind === "intake") return `This is their first real conversation with Cue: Cue called to get to know them. Greet them and open on them. ${NOT_CO_WORK}`;
+  return `${reason?.kind === "member_asked" ? "They asked Cue to call. " : ""}Then pick up ONE specific, real thing about them and their week, as a light question or as "last we talked ...": something they said, have coming up or are working on, whatever a friend who knows them would naturally bring up. ${NOT_CO_WORK}`;
 }
 
 export function openingPrompt(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; recent?: string[]; reason?: CallReason | null }): string {
-  return `You're writing the first thing Co says when a phone call connects. Co is a calm, warm companion who already knows ${o.firstName || "this person"} and has talked with them before. ${o.direction === "outbound" ? `Co is calling them, so Co says who it is ("it's Co").` : "They called Co."}
+  return `You're writing the first thing Cue says when a phone call connects. Cue is a calm, warm companion who already knows ${o.firstName || "this person"} and has talked with them before. ${o.direction === "outbound" ? `Cue is calling them, so Cue says who it is ("it's Cue").` : "They called Cue."}
 
-What Co knows about them (this is all you may use):
+What Cue knows about them (this is all you may use):
 ${o.summary.slice(0, OPENING_WRITER.maxContext)}
 
-Write ONE spoken line, two short sentences at most and under 28 words, greeting ${o.firstName || "them"} by name.${o.direction === "inbound" ? ` They called Co, so they likely have something on their mind: greet them warmly and let them lead. A light touch of one real thing about them is fine; never open with Co's own agenda. ${NOT_CO_WORK}` : ` ${outboundOpeningGuide(o.reason)}`}
-Never pick up something they've already told Co is off, changed or done, and never repeat back news from the last call as if it were new. Never say Co did, drafted, sent or found something unless what Co knows says it was done: something Co still owes them is still owed.
+Write ONE spoken line, two short sentences at most and under 28 words, greeting ${o.firstName || "them"} by name.${o.direction === "inbound" ? ` They called Cue, so they likely have something on their mind: greet them warmly and let them lead. A light touch of one real thing about them is fine; never open with Cue's own agenda. ${NOT_CO_WORK}` : ` ${outboundOpeningGuide(o.reason)}`}
+Never pick up something they've already told Cue is off, changed or done, and never repeat back news from the last call as if it were new. Never say Cue did, drafted, sent or found something unless what Cue knows says it was done: something Cue still owes them is still owed.
 ${o.recent?.length ? `How you opened your last calls with them (never reuse their words, and don't lead with the same thing again):
 ${o.recent.map((l) => `- ${l}`).join("\n")}
 ` : ""}
 Rules:
-- Only use facts that are in what Co knows. No times, places, names or numbers that aren't there.
+- Only use facts that are in what Cue knows. No times, places, names or numbers that aren't there.
 - Never name or guess how they feel or sound.
-- The line is heard the moment anyone picks up, maybe not them. Pick up work, plans, projects or logistics only. Never health, loss, family, money trouble, legal matters, relationships, or anything another member of Co said or did.
-- No times or dates relative to now (today, tomorrow, this week, a weekday) unless the exact words are in what Co knows.
+- The line is heard the moment anyone picks up, maybe not them. Pick up work, plans, projects or logistics only. Never health, loss, family, money trouble, legal matters, relationships, or anything another member of Cue said or did.
+- No times or dates relative to now (today, tomorrow, this week, a weekday) unless the exact words are in what Cue knows.
 - No "how are you", no "good to hear your voice", no "I remember", no "I was thinking about you".
 - Plain speech: no dashes, brackets, quotes or placeholders.
-- If nothing in what Co knows is a safe, good thing to pick up, answer exactly: NONE
+- If nothing in what Cue knows is a safe, good thing to pick up, answer exactly: NONE
 
 Reply with only the line.`;
 }
@@ -100,7 +100,7 @@ Reply with only the line.`;
 const FEELING_WORD = /\b(?:stress(?:ed)?|overwhelm\w*|anxi\w*|worr(?:y|ied|ies)|nervous|sad|upset|frustrat\w*|exhaust\w*|burn(?:ed|t)? out|lonely|depress\w*|scared|afraid|angry|annoyed|discourag\w*|feeling|feel)\b/i;
 const RELATIVE_TIME = /\b(?:today|tonight|tomorrow|yesterday|this (?:week|weekend|morning|afternoon|evening)|next (?:week|weekend|month)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
 const CO_DID = /\bI(?:'ve| have)?\s+(?:just\s+|already\s+)?(drafted|sent|finished|wrote|put together|pulled together|made|built|found|booked|set up|lined up)\b/i;
-const STOP_CAPS = new Set(["i", "i'm", "i've", "i'd", "i'll", "co"]);
+const STOP_CAPS = new Set(["i", "i'm", "i've", "i'd", "i'll", "co", "cue"]);
 // Words that start a sentence and are capitalised only for that.
 const GREETING_CAPS = new Set(["hey", "hi", "hello", "last", "it's", "so", "any", "how", "did", "is", "was", "are", "were", "what", "where", "when", "which", "who", "has", "have", "had", "do", "does", "still", "been", "and", "but", "or", "i'm", "i've", "i'd", "i'll", "i", "co", "you", "your", "you're", "you've", "that", "the", "a", "an", "we", "we've", "let's", "good", "welcome", "back", "thanks", "thank", "quick", "one", "two", "since"]);
 
@@ -119,21 +119,21 @@ export function openingProblems(raw: string, summary: string, firstName: string)
   if (!checkNoEmotionLabelOnCall(line).pass) return "names a feeling";
   if (SENSITIVE.test(line)) return "a sensitive topic";
   if (FEELING_WORD.test(line)) return "names a feeling";
-  if (RELATIVE_TIME.test(line) && !RELATIVE_TIME.test(summary)) return "a relative time not in what Co knows";
+  if (RELATIVE_TIME.test(line) && !RELATIVE_TIME.test(summary)) return "a relative time not in what Cue knows";
   if (/\bintro(?:duc\w*)?\b|\bsaid yes\b|\bwants? to meet\b/i.test(line)) return "speaks for another member";
   if (/\bhow are you\b|good to hear your voice|i remember|thinking about you/i.test(line) || stockLine(line)) return "a stock line";
   // Never narrates Co's own state ("I still haven't found anything solid yet", "working on it"): the same rule as every text (speakable.ts).
-  if (narratesInternalState(line) || /\b(?:haven't|have not|still haven't) (?:found|got|gotten|finished|had a chance)\b/i.test(line)) return "narrates Co's own state";
+  if (narratesInternalState(line) || /\b(?:haven't|have not|still haven't) (?:found|got|gotten|finished|had a chance)\b/i.test(line)) return "narrates Cue's own state";
   // Never two clauses that can't both be true (2026-10-08: "review that post-event branding plan I owe you"): speakable.ts.
   const clash = selfContradiction(line);
   if (clash) return `contradicts itself: ${clash}`;
   // Co's own finished work only when the record says it (2026-10-08: "I drafted the planning doc" for a plan
   // the after-call check had found nothing good enough to send for).
   const did = line.match(CO_DID);
-  if (did && !new RegExp(`\\b${did[1].toLowerCase().replace(/\s+/g, "\\s+")}\\b`).test(summary.toLowerCase())) return `claims Co ${did[1].toLowerCase()} something the record doesn't show`;
+  if (did && !new RegExp(`\\b${did[1].toLowerCase().replace(/\s+/g, "\\s+")}\\b`).test(summary.toLowerCase())) return `claims Cue ${did[1].toLowerCase()} something the record doesn't show`;
   // Never Co's homework, inbound or outbound (2026-10-08: "the PDF went out this morning, wanted to make sure it landed"):
   // the opening is about them, never a deliverable Co sent, owes or is working on (services/callReason.ts).
-  if (leadsWithCoHomework(line, summary)) return "leads with Co's homework";
+  if (leadsWithCoHomework(line, summary)) return "leads with Cue's homework";
   // Every name, place and number in it has to be in what it was written from.
   const hay = summary.toLowerCase().replace(/’/g, "'");
   for (const sentence of line.split(/(?<=[.!?])\s+/)) {
@@ -146,7 +146,7 @@ export function openingProblems(raw: string, summary: string, firstName: string)
       const isName = /^[A-Z]/.test(bare) && !GREETING_CAPS.has(bare.toLowerCase()) && !STOP_CAPS.has(bare.toLowerCase()) && bare.toLowerCase() !== firstName.toLowerCase();
       const needle = bare.toLowerCase().replace(/’/g, "'");
       const present = isNumber ? new RegExp(`(?<![0-9])${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![0-9])`).test(hay) : hay.includes(needle);
-      if ((isNumber || isName) && !present) return `not in what Co knows: ${bare}`;
+      if ((isNumber || isName) && !present) return `not in what Cue knows: ${bare}`;
     }
   }
   return null;
@@ -174,7 +174,7 @@ export async function recentOpenings(userId: string, n = 4): Promise<string[]> {
 // moment it opens on is in what Co knows.
 export function openingSource(summary: string, direction: "inbound" | "outbound", reason?: CallReason | null): string {
   const base = openingContext(summary);
-  return direction === "outbound" && reason ? `${base}\n\nWhy Co is calling: ${renderCallReason(reason)}` : base;
+  return direction === "outbound" && reason ? `${base}\n\nWhy Cue is calling: ${renderCallReason(reason)}` : base;
 }
 
 export async function writeOpening(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number; userId?: string; reason?: CallReason | null }): Promise<{ line: string | null; why?: string }> {

@@ -23,16 +23,16 @@ const { CO_LISTENING: listening } = await import("../../src/services/coCore.js")
 const template = reply.slice(reply.indexOf("  const system = `You are replying"), reply.indexOf("const userText ="));
 const prompt = `${listening}\n${template}`;
 const sentences = prompt.replace(/\$\{[^}]*\}/g, "X").split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter((s) => s.split(/\s+/).length > 2);
-check("no dashes in the reply prompt (Co copies its instructions' style)", !/[—–]/.test(prompt));
+check("no dashes in the reply prompt (Cue copies its instructions' style)", !/[—–]/.test(prompt));
 check("the reply prompt is written in short sentences", sentences.filter((s) => s.split(/\s+/).length > 45).length === 0);
-check("no quoted bad openers for Co to copy", !/"That's a big call\."|"That \[noun phrase\]/.test(prompt));
-check("texts get Co's shared core (how Co listens included), not the full call guide", /const sharedSystem = `\$\{CO_CORE\}\n\n\$\{MOVES_GUIDE\}\n\n\$\{MESSAGE_RHYTHM\}\n\n\$\{COACHING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
+check("no quoted bad openers for Cue to copy", !/"That's a big call\."|"That \[noun phrase\]/.test(prompt));
+check("texts get Cue's shared core (how Cue listens included), not the full call guide", /const sharedSystem = `\$\{CO_CORE\}\n\n\$\{MOVES_GUIDE\}\n\n\$\{MESSAGE_RHYTHM\}\n\n\$\{COACHING\}`;/.test(reply) && !/\$\{input\.personaPrompt\}/.test(reply));
 check("the call guide isn't fetched from Hume on every text", !/renderCoPersonaPrompt\(/.test(src("routes/sendblue.ts")));
 check("the length rule is concrete", /under about 15 words and doesn't ask for a plan or detail, reply in one or two sentences/.test(reply));
 check("say each thing once", /Say each thing once\. Don't repeat a point, an offer or a question from your last message\./.test(reply));
 
-check("the reply starts with Co's own answer or reaction", /Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words\./.test(reply));
-check("the length line is said last, right before Co writes", /const userText = lengthLine \? `\$\{baseUserText\} \$\{lengthLine\}` : baseUserText;/.test(reply));
+check("the reply starts with Cue's own answer or reaction", /Always respond genuinely to what they said first: start with your answer or your own reaction, in your own words\./.test(reply));
+check("the length line is said last, right before Cue writes", /const userText = lengthLine \? `\$\{baseUserText\} \$\{lengthLine\}` : baseUserText;/.test(reply));
 check("no test switches or example block left in", !/process\.env\.CO_TEXT_|SHORT_EXAMPLES/.test(reply));
 {
   process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";

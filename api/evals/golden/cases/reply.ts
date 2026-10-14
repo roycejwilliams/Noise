@@ -53,7 +53,7 @@ async function judge(text: string, context: string, question: string): Promise<{
       model: anthropic(MODELS.haiku),
       headers: GRADER_HEADERS,
       maxOutputTokens: 300,
-      prompt: `You grade one text a companion called Co sent a member.\n\nThe situation: ${context}\n\nCo's text:\n"""${text}"""\n\n${question}\n\nReturn ONLY JSON: {"answer": "yes" | "no", "count": <number, only if the question asks for one>, "reason": "one short line quoting the words that decide it"}`,
+      prompt: `You grade one text a companion called Cue sent a member.\n\nThe situation: ${context}\n\nCue's text:\n"""${text}"""\n\n${question}\n\nReturn ONLY JSON: {"answer": "yes" | "no", "count": <number, only if the question asks for one>, "reason": "one short line quoting the words that decide it"}`,
     });
     const j = parseModelJson<{ answer?: string; count?: number; reason?: string }>(out);
     return { yes: /^yes$/i.test(String(j.answer ?? "")), reason: String(j.reason ?? ""), n: typeof j.count === "number" ? j.count : undefined };
@@ -85,7 +85,7 @@ export const CASES: GoldenCase[] = [
   {
     n: 1,
     id: "running-work",
-    title: "Asked what Co is searching for, with one look-out searched each morning: names it, never says nothing is running",
+    title: "Asked what Cue is searching for, with one look-out searched each morning: names it, never says nothing is running",
     status: { live: true },
     from: "2026-10-13 live thread: 'Nothing's running on that right now' while a lookout was searched daily; fixed in #190 (fd8dddf)",
     run: async () => {
@@ -100,7 +100,7 @@ export const CASES: GoldenCase[] = [
       const misses: string[] = [];
       if (!/jazz/i.test(r.text)) misses.push("doesn't name the jazz look-out");
       if (/nothing('?s| is) (actually |actively )?running/i.test(r.text) || SAYS_NOTHING_RUNNING.test(r.text)) misses.push("says nothing is running");
-      const j = await judge(r.text, `Co's daily search looks every morning for what the member asked: "${LOOKOUT}". The member asked "What are you actually searching for?"`, "Does the text answer with live jazz nights as what Co is searching or watching for (naming it as the answer to their question counts; it need not say \"daily\"), without saying nothing is running, that nothing is being searched, or that it's only saved?");
+      const j = await judge(r.text, `Cue's daily search looks every morning for what the member asked: "${LOOKOUT}". The member asked "What are you actually searching for?"`, "Does the text answer with live jazz nights as what Cue is searching or watching for (naming it as the answer to their question counts; it need not say \"daily\"), without saying nothing is running, that nothing is being searched, or that it's only saved?");
       if (!j.yes) misses.push(`judge: doesn't present the jazz search as running (${j.reason})`);
       return done(misses, r);
     },
@@ -108,7 +108,7 @@ export const CASES: GoldenCase[] = [
   {
     n: 2,
     id: "nothing-at-all",
-    title: "Asked what Co is searching for with nothing running: says so plainly, offers at most once",
+    title: "Asked what Cue is searching for with nothing running: says so plainly, offers at most once",
     status: { live: true },
     from: "2026-10-13 live thread: the honest nothing-running line went out with a second offer on top; fixed in #190 (fd8dddf)",
     run: async () => {
@@ -126,7 +126,7 @@ export const CASES: GoldenCase[] = [
       if (said && !j.yes) misses.push(`judge: claims or implies running work (${j.reason})`);
       const found = offers(r.text);
       if (found.length > 1) misses.push(`offers ${found.length} times: ${found.map((o) => `"${o}"`).join(", ")}`);
-      const c = await judge(r.text, "Nothing is running for the member; Co may offer once to start something.", OFFER_COUNT_Q);
+      const c = await judge(r.text, "Nothing is running for the member; Cue may offer once to start something.", OFFER_COUNT_Q);
       if (!c.yes) misses.push(`judge: more than one offer (${c.n ?? "?"}: ${c.reason})`);
       return done(misses, r);
     },
@@ -134,7 +134,7 @@ export const CASES: GoldenCase[] = [
   {
     n: 3,
     id: "double-offer",
-    title: "After Co said nothing's running and offered to start, \"What do you mean by that?\" gets at most one offer",
+    title: "After Cue said nothing's running and offered to start, \"What do you mean by that?\" gets at most one offer",
     status: { live: true },
     from: "2026-10-13 live thread: 'What do you mean by that?' after the nothing-running line; the reply offered to turn it on and the canned line offered again; fixed in #190 (fd8dddf)",
     run: async () => {
@@ -151,7 +151,7 @@ export const CASES: GoldenCase[] = [
       const misses: string[] = [];
       const found = offers(r.text);
       if (found.length > 1) misses.push(`offers ${found.length} times: ${found.map((o) => `"${o}"`).join(", ")}`);
-      const c = await judge(r.text, `Co just told the member "${G.NOTHING_RUNNING_LINE}" about a pilates studio search, and they asked "What do you mean by that?". Nothing is running for them.`, OFFER_COUNT_Q);
+      const c = await judge(r.text, `Cue just told the member "${G.NOTHING_RUNNING_LINE}" about a pilates studio search, and they asked "What do you mean by that?". Nothing is running for them.`, OFFER_COUNT_Q);
       if (!c.yes) misses.push(`judge: more than one offer (${c.n ?? "?"}: ${c.reason})`);
       if (/\b(still|i'?m|i am|been)\s+(searching|looking|digging|working on)\b/i.test(r.text)) misses.push("claims work is running");
       // The #190 line itself, directly (the turn above only reaches it when the check cuts a work-status claim): with nothing running,
@@ -171,7 +171,7 @@ export const CASES: GoldenCase[] = [
     id: "whats-ahead",
     title: "\"Anything I should look forward to this week?\" with a check-in two days out scheduled: names it, never 'nothing confirmed'",
     status: { live: true },
-    from: "2026-10-13 live thread: Co set a Friday branding check-in that morning and said 'nothing confirmed' that afternoon; fixed in #190 (fd8dddf)",
+    from: "2026-10-13 live thread: Cue set a Friday branding check-in that morning and said 'nothing confirmed' that afternoon; fixed in #190 (fd8dddf)",
     run: async () => {
       const G = await import("../../../src/harness/replyGrounding.js");
       const { aheadLine } = await import("../../../src/services/whatsAhead.js");
@@ -196,7 +196,7 @@ export const CASES: GoldenCase[] = [
       const misses: string[] = [];
       if (!new RegExp(`\\b${day.slice(0, 3)}`, "i").test(r.text) && !/\b(day after tomorrow|in two days|this week)\b/i.test(r.text)) misses.push(`doesn't mention the ${day} check-in`);
       if (/nothing('?s| is)?\s+(firm(ly)?\s+|really\s+|yet\s+)?(confirmed|planned|scheduled|set|on the calendar|lined up)|no(thing)?\s+(firm\s+|confirmed\s+)?plans\b/i.test(r.text)) misses.push("says nothing is confirmed or planned");
-      const j = await judge(r.text, `Co has a branding accountability check-in with the member set for ${day}. They asked "Anything I should look forward to this week?"`, "Does the text tell them about the branding check-in that is set for them (in any words: coming up, on the books, on the calendar, scheduled), without saying nothing is planned, confirmed or scheduled? Answer yes if it names that check-in at all.");
+      const j = await judge(r.text, `Cue has a branding accountability check-in with the member set for ${day}. They asked "Anything I should look forward to this week?"`, "Does the text tell them about the branding check-in that is set for them (in any words: coming up, on the books, on the calendar, scheduled), without saying nothing is planned, confirmed or scheduled? Answer yes if it names that check-in at all.");
       if (!j.yes) misses.push(`judge: no ${day} check-in as ahead (${j.reason})`);
       return done(misses, r);
     },
@@ -221,7 +221,7 @@ export const CASES: GoldenCase[] = [
       const r = await reply({ recent, facts, message: "Is that actually running yet?" });
       const misses: string[] = [];
       if (/nothing('?s| is) (actually |actively )?running/i.test(r.text) || SAYS_NOTHING_RUNNING.test(r.text)) misses.push("says nothing is running");
-      const j = await judge(r.text, `The member asked Co this afternoon to watch for "${ask}". Co's daily search runs every morning from 9, so the first look is tomorrow morning. They asked "Is that actually running yet?"`, "Does the text convey that it will be looked at (or the search runs) tomorrow morning / the next morning, without saying nothing is running?");
+      const j = await judge(r.text, `The member asked Cue this afternoon to watch for "${ask}". Cue's daily search runs every morning from 9, so the first look is tomorrow morning. They asked "Is that actually running yet?"`, "Does the text convey that it will be looked at (or the search runs) tomorrow morning / the next morning, without saying nothing is running?");
       if (!j.yes) misses.push(`judge: doesn't say tomorrow morning (${j.reason})`);
       return done(misses, r);
     },
@@ -229,9 +229,9 @@ export const CASES: GoldenCase[] = [
   {
     n: 23,
     id: "status-check",
-    title: "Asked to do something Co is already doing: says it's underway and where it stands; never starts it again, says it stopped, or claims a new search",
+    title: "Asked to do something Cue is already doing: says it's underway and where it stands; never starts it again, says it stopped, or claims a new search",
     status: { live: true },
-    from: "Royce, 2026-10-13: \"A member restating something Co is already doing isn't a stop and isn't a new ask - it's a status check\" (services/statusCheck.ts)",
+    from: "Royce, 2026-10-13: \"A member restating something Cue is already doing isn't a stop and isn't a new ask - it's a status check\" (services/statusCheck.ts)",
     run: async () => {
       const G = await import("../../../src/harness/replyGrounding.js");
       const S = await import("../../../src/services/statusCheck.js");
@@ -267,8 +267,8 @@ export const CASES: GoldenCase[] = [
       if (/\b(started|starting|kicked off|set up) (a )?(new )?(search|look|task)\b|\bI'?ll start (on )?(it|that|them)\b/i.test(r.text)) misses.push("claims a new start or search");
       const j = await judge(
         r.text,
-        `Co is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted "${message}".`,
-        "Does the text tell them Co is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.",
+        `Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted "${message}".`,
+        "Does the text tell them Cue is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.",
       );
       if (!j.yes) misses.push(`judge: not a status answer (${j.reason})`);
       return done(misses, r);

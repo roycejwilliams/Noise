@@ -17,7 +17,7 @@ const check = (label: string, ok: boolean) => {
 const src = (p: string) => readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
 
 const quiet = quietEmail({ preview: "481 206. It expires in five minutes.", headline: "Your code.", code: "481206", lines: ["It expires in five minutes."] });
-const welcome = letterpressEmail({ preview: "p", headline: "You're in.", lead: "Lead.", steps: ["One.", "Two.", "Three."], cta: { label: "Text Co", href: "sms:+10000000000" } });
+const welcome = letterpressEmail({ preview: "p", headline: "You're in.", lead: "Lead.", steps: ["One.", "Two.", "Three."], cta: { label: "Text Cue", href: "sms:+10000000000" } });
 const intro = galleryEmail({ preview: "p", eyebrow: "An introduction", headline: "Jordan, meet Ellis.", body: ["Reason <b>with</b> “quotes” & José."], close: "You both said yes. Take it from here." });
 
 for (const [name, html] of [["quiet", quiet], ["letterpress", welcome], ["gallery", intro]] as const) {
@@ -36,7 +36,7 @@ check("the code is set as two groups of three", quiet.includes("481 206") && spa
 // Royce, 2026-09-24: no panel behind the code, just the maroon digits.
 check("the code is maroon with no background panel", quiet.includes("color:#A23C59") && !quiet.includes("#EFECE6"));
 check("welcome has the gold border and numbered steps", welcome.includes("border:1px solid #C2A885") && welcome.includes(">01<") && welcome.includes(">03<"));
-check("welcome button texts Co", welcome.includes('href="sms:+10000000000"') && welcome.includes("Text Co"));
+check("welcome button texts Cue", welcome.includes('href="sms:+10000000000"') && welcome.includes("Text Cue"));
 check("names and reasons are escaped, not injected", intro.includes("&lt;b&gt;with&lt;/b&gt;") && !intro.includes("<b>with</b>"));
 check("accents and curly quotes survive as entities", intro.includes("Jos&#233;") && intro.includes("&#8220;quotes&#8221;"));
 check("escapeHtml handles quotes", escapeHtml(`a"b'c`) === "a&quot;b&#39;c");
@@ -46,7 +46,7 @@ check("the old black template is gone", !/EMAIL_STYLES|emailTemplate\(|OTP_BOX|b
 check("every code email uses the Quiet layout", (otp.match(/quietEmail\(\{/g) ?? []).length === 7);
 check("the welcome uses Letterpress", /letterpressEmail\(\{/.test(otp));
 check("the welcome no longer points at an app", !otp.includes("app.copatible.com"));
-check("the welcome button only shows when Co's number is set", /cta: coNumber \? \{ label: "Text Co", href: `sms:\$\{coNumber\}` \} : undefined/.test(otp));
+check("the welcome button only shows when Cue's number is set", /cta: coNumber \? \{ label: "Text Cue", href: `sms:\$\{coNumber\}` \} : undefined/.test(otp));
 for (const f of ["src/services/networkIntroNudge.ts", "src/services/eventGuestMatchHandoff.ts"]) {
   const s = src(f);
   check(`${f}: introductions use the Gallery layout`, /galleryEmail\(\{/.test(s) && !s.includes("<p>Hi both,</p>"));

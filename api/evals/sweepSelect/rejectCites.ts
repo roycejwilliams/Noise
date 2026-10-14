@@ -62,7 +62,7 @@ const asOf = "2026-10-14T16:00:00Z";
 const goal = (text: string, state: "active" | "done" | "stale", reason: string | null = null, o: { at?: string; source?: "context" | "member" | "co" | null } = {}) => ({ text, state, reason, told: true, onFile: true, hash: goalHash(text), source: o.source ?? null, verifiedAt: o.at ?? asOf });
 // Seven unrelated active goals first and older, the accelerator and funding goals after them and newest: the old cut of 6 dropped
 // exactly those (10-14).
-const UNRELATED = ["Plan out the launch event and take the lead", "Seeking genuine friendships with dependable people", "use Co to drive a guest list to test matching", "lead the partnership strategy with a launch partner", "work out whether the city-adoption problem is solvable", "draft planning docs for branding and launch strategy", "host a small launch dinner in November"];
+const UNRELATED = ["Plan out the launch event and take the lead", "Seeking genuine friendships with dependable people", "use Cue to drive a guest list to test matching", "lead the partnership strategy with a launch partner", "work out whether the city-adoption problem is solvable", "draft planning docs for branding and launch strategy", "host a small launch dinner in November"];
 const k: any = {
   userId: "u-jordan",
   asOf,
@@ -71,7 +71,7 @@ const k: any = {
     ...UNRELATED.map((t) => goal(t, "active", null, { at: "2026-10-01T16:00:00Z" })),
     goal("secure pre-seed investment funding from investors who understand consumer social products", "active", null, { at: "2026-10-12T16:00:00Z" }),
     goal("apply to South Park Commons or Blueprint II", "active", null, { at: "2026-10-12T23:30:00Z" }),
-    goal("build Co full time while pursuing funding and an accelerator to support that path", "active", null, { at: "2026-10-13T16:00:00Z" }),
+    goal("build Cue full time while pursuing funding and an accelerator to support that path", "active", null, { at: "2026-10-13T16:00:00Z" }),
     // Only replaced: hidden from the picker (#188).
     goal("get into an accelerator or residency (e.g. South Park Commons)", "stale", 'replaced by a newer goal: "apply to South Park Commons or Blueprint II"', { source: "context" }),
     goal("secure funding since the civic grant fell through", "stale", 'they said since: "that\'s no longer the plan"', { source: "context" }),
@@ -162,7 +162,7 @@ const waits = (r: { j: Judgment; exited: number; left: any[] }) => r.j.verdict =
 
 // ---------------------------------------------------------------- the fixture reads as his state did
 check("fixture: the replaced accelerator goal isn't listed (#188); set aside in their words, lapsed and done are", !(ctx.goalsPast ?? []).some((g) => g.text.startsWith("get into an accelerator")) && ctx.goalsPast!.find((g) => g.id === SETASIDE_G)!.state === "set_aside" && ctx.goalsPast!.find((g) => g.id === LAPSED_G)!.state === "lapsed" && ctx.goalsPast!.find((g) => g.id === DONE_G)!.state === "done", ctx.goalsPast);
-check("every active goal is the lens, newest first: the accelerator goals beyond position 6 are in, at the top", ctx.goals!.length === 10 && ctx.goals![0].startsWith("build Co full time") && ctx.goals![1] === "apply to South Park Commons or Blueprint II" && ctx.goals!.slice(3).every((g) => UNRELATED.includes(g)), ctx.goals);
+check("every active goal is the lens, newest first: the accelerator goals beyond position 6 are in, at the top", ctx.goals!.length === 10 && ctx.goals![0].startsWith("build Cue full time") && ctx.goals![1] === "apply to South Park Commons or Blueprint II" && ctx.goals!.slice(3).every((g) => UNRELATED.includes(g)), ctx.goals);
 
 // ---------------------------------------------------------------- 1. today's exact verdict
 {
@@ -180,9 +180,9 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
 // ---------------------------------------------------------------- 2. cites must be about THIS find
 {
   // Records code checks by name (the shadow pool's own match).
-  const sent = await runOnce(reject("already_known", ["S1"], "Co already sent this exact residency on Oct 12"));
+  const sent = await runOnce(reject("already_known", ["S1"], "Cue already sent this exact residency on Oct 12"));
   check("already_known citing an S# that names this residency stays a reject and exits, with no read needed", kept(sent) && sent.facts.length === 1 && sent.left.length === 0 && sent.plan.reject.map((x) => x.id).join() === "row-1" && sent.calls === 0, sent.j);
-  const otherSend = await runOnce(reject("already_known", ["S2"], "Co already sent a fellowship"));
+  const otherSend = await runOnce(reject("already_known", ["S2"], "Cue already sent a fellowship"));
   check("an S# about a different program holds it", held(otherSend) && /none of its cites is a closed or known record about this find \(S2\)/.test(otherSend.j.guard ?? ""), otherSend.j);
   const otherDelivered = await runOnce(reject("already_known", ["D1"]));
   check("a D# about a different program holds it", held(otherDelivered));
@@ -198,11 +198,11 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
   const done = await runOnce(reject("closed", [DONE_G], "the accelerator goal is done"));
   check("closed citing the done 'focus on accelerators' goal holds: a finished goal of the same kind isn't this find", held(done), done.j);
   const lapsed = await runOnce(reject("closed", [LAPSED_G]));
-  check("a lapsed goal (its window passed: Co's bookkeeping) carries nothing, and needs no read", held(lapsed) && lapsed.calls === 0 && /none of its cites/.test(lapsed.j.guard ?? ""), lapsed.j);
+  check("a lapsed goal (its window passed: Cue's bookkeeping) carries nothing, and needs no read", held(lapsed) && lapsed.calls === 0 && /none of its cites/.test(lapsed.j.guard ?? ""), lapsed.j);
   const applied = await runOnce(reject("already_known", ["T9"], "they already applied to Speedrun"), withApplied);
   check("already_known citing their own text 'already applied to Speedrun' stays a reject (the read ties it to this find)", kept(applied) && applied.calls === 1, applied.j);
   const coText = await runOnce(reject("already_known", ["T1"]));
-  check("Co's own text never carries it (only theirs does)", held(coText) && coText.calls === 0);
+  check("Cue's own text never carries it (only theirs does)", held(coText) && coText.calls === 0);
   const ghost = await runOnce(reject("closed", ["A9"]));
   check("a cite to a nonexistent id holds", held(ghost) && /isn't there \(A9\)/.test(ghost.j.guard ?? ""));
   const replacedOld = await runOnce(reject("closed", ["G9"], "the accelerator goal was replaced"));
@@ -312,7 +312,7 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
   ]);
   const by = (t: string) => g.find((x) => x.text === t);
   check("a replaced goal isn't listed; active goals aren't past goals; ids run G1..", !by("A") && !by("B") && g.map((x) => x.id).join() === "G1,G2,G3,G4,G5,G6");
-  check("a window that passed, a recheck with no answer, or a state nobody is said to have set is lapsed (Co's bookkeeping)", by("C")!.state === "lapsed" && by("D")!.state === "lapsed" && by("H")!.state === "lapsed");
+  check("a window that passed, a recheck with no answer, or a state nobody is said to have set is lapsed (Cue's bookkeeping)", by("C")!.state === "lapsed" && by("D")!.state === "lapsed" && by("H")!.state === "lapsed");
   check("their own word sets a goal aside; done is done", by("E")!.state === "set_aside" && by("F")!.state === "set_aside" && by("I")!.state === "done");
   const many = Array.from({ length: GOALS_CEILING + 4 }, (_, i) => ({ text: `goal ${i}`, state: "active" as const, verifiedAt: new Date(Date.parse("2026-01-01T00:00:00Z") + i * 86_400_000).toISOString() }));
   const lens = activeGoals(many);
@@ -325,10 +325,10 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
 {
   const p = selectPrompt(ctx);
   check("the picker sees every active goal, the accelerator ones included", /the LENS[^\n]*\n(- [^\n]*\n){10}/.test(p) && /- apply to South Park Commons or Blueprint II/.test(p));
-  check("the prompt lists past goals with ids and why each is past; lapsed ones as Co's bookkeeping; no replaced ones", new RegExp(`${SETASIDE_G} secure funding since the civic grant fell through \\(set aside\\)`).test(p) && new RegExp(`${LAPSED_G} attend Tech Week in San Francisco this weekend \\(lapsed: its window passed \\(2026-10-11\\); Co's bookkeeping, not their word\\)`).test(p) && !/get into an accelerator/.test(p), p.slice(p.indexOf("Past goals"), p.indexOf("Past goals") + 600));
+  check("the prompt lists past goals with ids and why each is past; lapsed ones as Cue's bookkeeping; no replaced ones", new RegExp(`${SETASIDE_G} secure funding since the civic grant fell through \\(set aside\\)`).test(p) && new RegExp(`${LAPSED_G} attend Tech Week in San Francisco this weekend \\(lapsed: its window passed \\(2026-10-11\\); Cue's bookkeeping, not their word\\)`).test(p) && !/get into an accelerator/.test(p), p.slice(p.indexOf("Past goals"), p.indexOf("Past goals") + 600));
   check("the prompt lists what they already have with D# ids", /\nD1 Founder Fellows by Upfront Ventures \(opportunity, Oct 13\)/.test(p));
   check("the instructions name the record codes, the cites rule and that the record must be about this candidate", /closed \(it rests on something finished/.test(SELECT_SYSTEM) && /already_known \(they mentioned it, are going, already have it, or said no\)/.test(SELECT_SYSTEM) && /cites that record by id in "cites"/.test(SELECT_SYSTEM) && /The record has to be about this candidate itself/.test(SELECT_SYSTEM) && /A closed ask or a finished goal about a different program doesn't close this one/.test(SELECT_SYSTEM));
-  check("the instructions: covered cites its C#, lapsed goals are bookkeeping, a closed one-off question doesn't close a live aim", /covered \(another candidate in today's pool does the same job better; cite its C# in "cites"\)/.test(SELECT_SYSTEM) && /lapsed is Co's own bookkeeping/.test(SELECT_SYSTEM) && /doesn't close an aim one of their active goals still carries/.test(SELECT_SYSTEM) && !/replaced by a newer goal isn't/.test(SELECT_SYSTEM));
+  check("the instructions: covered cites its C#, lapsed goals are bookkeeping, a closed one-off question doesn't close a live aim", /covered \(another candidate in today's pool does the same job better; cite its C# in "cites"\)/.test(SELECT_SYSTEM) && /lapsed is Cue's own bookkeeping/.test(SELECT_SYSTEM) && /doesn't close an aim one of their active goals still carries/.test(SELECT_SYSTEM) && !/replaced by a newer goal isn't/.test(SELECT_SYSTEM));
   check("the instructions don't change per member (so they cache)", !SELECT_SYSTEM.includes("Jordan"));
   // The claim check's prompt: every active goal, the find, the record, and the two questions.
   const verdicts = guardVerdicts(withApplied, parseVerdicts(JSON.stringify({ verdicts: [{ id: "C1", verdict: "reject", reason: "closed", cites: ["A2"], why: "x" }] }))!);
@@ -344,7 +344,7 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
   check("a G# or D# the run had is stripped even beside a word (D1 athletes loses its D1; accepted)", memberSafeWhy("for D1 athletes", ids) === "for athletes");
   const guarded = guardVerdicts(ctx, parseVerdicts(reject("already_known", ["A9"], "funding was set aside"))!)[0];
   const rep = renderShadowReport([{ name: "Jordan", day: TODAY, skipped: null, oldQueued: [], oldTexted: [], pool: [{ id: "C1", name: RESIDENCY.name, date: RESIDENCY.date }], judgments: [guarded] }]);
-  check("the internal report shows a guarded hold with what Co claimed, its cites, its why and the guard", /~ a16z Speedrun SR008 Residency until 2026-10-15: Co said reject \[already_known: A9\]: funding was set aside \(reject claimed a closed or known record/.test(rep), rep);
+  check("the internal report shows a guarded hold with what Cue claimed, its cites, its why and the guard", /~ a16z Speedrun SR008 Residency until 2026-10-15: Cue said reject \[already_known: A9\]: funding was set aside \(reject claimed a closed or known record/.test(rep), rep);
 }
 
 // ---------------------------------------------------------------- pins

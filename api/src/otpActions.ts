@@ -80,17 +80,17 @@ export const sendSMS = async ({
 
   try {
     if (status === "accepted") {
-      await send(`You're in. You were chosen to join Co. Use the code below to get started.\n${otp_code}`);
+      await send(`You're in. You were chosen to join Cue. Use the code below to get started.\n${otp_code}`);
     } else if (status === "rejected") {
-      await send(`Your Co application wasn't accepted. You're welcome to update and resubmit.`);
+      await send(`Your Cue application wasn't accepted. You're welcome to update and resubmit.`);
     }
 
     if (resent) {
-      await send(`Here's your new Co verification code.\n${otp_code}`);
+      await send(`Here's your new Cue verification code.\n${otp_code}`);
     }
 
     if (login) {
-      await send(`Your Co login code is below. It expires in 5 minutes.\n${otp_code}`);
+      await send(`Your Cue login code is below. It expires in 5 minutes.\n${otp_code}`);
     }
 
     // Hand-written, approved lines, one picked at random (services/
@@ -109,7 +109,7 @@ export const sendSMS = async ({
     if (welcome) await send(pickLine(WELCOME));
 
     if (welcome_back) {
-      await send(`Welcome back to Co.`);
+      await send(`Welcome back to Cue.`);
     }
   } catch (error: any) {
     // co-test's Sendblue plan is inbound-only: Co can't text a number that
@@ -170,21 +170,21 @@ export const sendEmail = async ({
 
     if (status === "accepted") {
       await send(
-        `Welcome to Co.`,
+        `Welcome to Cue.`,
         quietEmail({ preview: "Your access code. It expires in five minutes.", headline: "You were chosen.", code: otp_code!, lines: ["Use this code to step in. It expires in five minutes."], note: "Don't share this code." }),
       );
     }
 
     if (status === "rejected") {
       await send(
-        `Your Co application.`,
+        `Your Cue application.`,
         quietEmail({ preview: "An update on your application.", headline: "Not this time.", lines: ["Your application wasn't accepted. You're welcome to update it and ask for another look."] }),
       );
     }
 
     if (resent) {
       await send(
-        `Your new Co code.`,
+        `Your new Cue code.`,
         quietEmail({ preview: `${spacedCode(otp_code!)}. It expires in five minutes.`, headline: "A new code.", code: otp_code!, lines: ["It expires in five minutes. If you didn't ask for it, ignore this and nothing changes."] }),
       );
     }
@@ -193,10 +193,10 @@ export const sendEmail = async ({
       await send(
         `Confirm your new number.`,
         quietEmail({
-          preview: "Text this code to Co to switch your number.",
+          preview: "Text this code to Cue to switch your number.",
           headline: "Changing your number.",
           code: otp_code!,
-          lines: [`Text this code to Co from your current number to move your account to the number ending in ${phoneChange.newNumberLast4}. It expires in five minutes.`],
+          lines: [`Text this code to Cue from your current number to move your account to the number ending in ${phoneChange.newNumberLast4}. It expires in five minutes.`],
           note: "If you didn't ask for this, ignore it and email team@copatible.com.",
         }),
       );
@@ -204,7 +204,7 @@ export const sendEmail = async ({
 
     if (login) {
       await send(
-        `Your Co code.`,
+        `Your Cue code.`,
         quietEmail({ preview: `${spacedCode(otp_code!)}. It expires in five minutes.`, headline: "Your code.", code: otp_code!, lines: ["It expires in five minutes. If you didn't ask for it, ignore this and nothing changes."] }),
       );
     }
@@ -220,11 +220,11 @@ export const sendEmail = async ({
           headline: "You're in.",
           lead: "Membership is by referral. Someone who knows you vouched for you, and that's the only way through the door.",
           steps: [
-            "Co will text you. Answer the way you'd talk to a friend who remembers everything.",
+            "Cue will text you. Answer the way you'd talk to a friend who remembers everything.",
             "Tell it what this chapter of your life is about. It listens for what you don't say, too.",
-            "When there's a room worth your evening, Co will tell you who in it to meet.",
+            "When there's a room worth your evening, Cue will tell you who in it to meet.",
           ],
-          cta: coNumber ? { label: "Text Co", href: `sms:${coNumber}` } : undefined,
+          cta: coNumber ? { label: "Text Cue", href: `sms:${coNumber}` } : undefined,
         }),
       );
     }
@@ -235,11 +235,11 @@ export const sendEmail = async ({
     // there, in the same unhurried register as the text version.
     if (calendarFollow) {
       await send(
-        `Co noticed you.`,
+        `Cue noticed you.`,
         quietEmail({
-          preview: "Co is invite-only, not just an events page.",
+          preview: "Cue is invite-only, not just an events page.",
           headline: firstName ? `Hello, ${firstName}.` : "Hello.",
-          lines: ["You followed the Co Presents calendar. Co is invite-only, not just an events page.", "Reply with a little about what you're hoping to find, and Co will keep you in mind for what's next."],
+          lines: ["You followed the Co Presents calendar. Cue is invite-only, not just an events page.", "Reply with a little about what you're hoping to find, and Cue will keep you in mind for what's next."],
         }),
       );
     }

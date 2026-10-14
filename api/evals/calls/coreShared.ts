@@ -26,7 +26,7 @@ const callPrompt = E.promptForElevenLabs(voiceLayer);
 const reply = read("src/agent/conversationReply.ts");
 const elSrc = read("src/services/elevenLabsCalls.ts");
 const parts = core.CO_CORE_PARTS;
-check("the core's identity part is CO_VOICE itself (one definition of who Co is)", parts.voice === CO_VOICE);
+check("the core's identity part is CO_VOICE itself (one definition of who Cue is)", parts.voice === CO_VOICE);
 check("the core is exactly its parts, in order", core.CO_CORE === [parts.voice, parts.listening, parts.grounding, parts.memberSafety, parts.safety].join("\n\n"));
 check("texts: the reply's shared system block starts from CO_CORE, imported from coCore", /import \{ CO_CORE, CO_LISTENING \} from "\.\.\/services\/coCore\.js";/.test(reply) && /const sharedSystem = `\$\{CO_CORE\}\n/.test(reply));
 check("texts: the listening block is the core's own constant (the old name kept for imports)", TEXT_LISTENING === core.CO_LISTENING && /export const TEXT_LISTENING = CO_LISTENING;/.test(reply));
@@ -36,7 +36,7 @@ check("calls: the facts and safety come from the same constants, imported from c
 check("calls: what's true, safety and other members reach the call prompt verbatim, each once", [parts.grounding, parts.safety, parts.memberSafety].every((p) => callPrompt.split(p).length === 2));
 check("calls: the text voice and listening blocks stay out (Hume's prompt is the voice)", !callPrompt.includes(parts.voice) && !callPrompt.includes(parts.listening) && !/bring them progress, a blocker/.test(callPrompt) && !/Say less than you could/.test(callPrompt));
 check("calls: the core's time and advice paragraphs and its check-in rule ride along, verbatim", E.CALL_FROM_CORE.split("\n\n").every((x: string) => parts.voice.includes(x) || parts.listening.includes(x)) && E.CALL_FROM_CORE.split("\n\n").length === 3 && callPrompt.includes(E.CALL_FROM_CORE) && /when a professional should make the call/.test(callPrompt));
-check("calls: Hume's prompt leads, then what Co knows, then what's true", callPrompt.startsWith("# On the phone\nYou are Co.") && callPrompt.indexOf("# What you know about") < callPrompt.indexOf(parts.grounding));
+check("calls: Hume's prompt leads, then what Cue knows, then what's true", callPrompt.startsWith("# On the phone\nYou are Cue.") && callPrompt.indexOf("# What you know about") < callPrompt.indexOf(parts.grounding));
 check("calls: the safety and other-member parts sit under the guardrails heading, and the discretion lines follow", callPrompt.indexOf("# Guardrails") < callPrompt.indexOf(parts.safety) && callPrompt.indexOf(parts.safety) < callPrompt.indexOf(parts.memberSafety) && callPrompt.indexOf(parts.memberSafety) < callPrompt.indexOf(DISCRETION_GUIDE));
 // Not copied: no core sentence is typed out again in either channel's own files.
 const sentencesOf = (t: string) => t.split(/(?<=[.!?:])\s+|\n/).map((s) => s.replace(/^- /, "").trim()).filter((s) => s.split(/\s+/).length >= 8);
@@ -44,7 +44,7 @@ const coreSentences = [parts.listening, parts.grounding, parts.memberSafety, par
 const copied = (src: string) => coreSentences.filter((s) => src.includes(s));
 check("not copied: no core sentence is retyped in the reply, the call code or the voice layer", [reply, elSrc, voiceLayer].every((s) => copied(s).length === 0), [reply, elSrc, voiceLayer].flatMap(copied).join(" | "));
 check("the safety rules stay as strict as the call guide's were", /everything else stops/.test(parts.safety) && /Ask plainly: "Are you safe right now\?"/.test(parts.safety) && /call or text 988, any time, free/.test(parts.safety) && /immediate danger, 911/.test(parts.safety) && /don't hand them off and leave/.test(parts.safety) && /for as long as they want to talk/.test(parts.safety) && /wanting to disappear, everyone being better off without them, not wanting to wake up/.test(parts.safety));
-check("no role noun for Co anywhere, except in the voice layer's own \"never a concierge, a matchmaker...\" line", !/\b(concierge|assistant|matchmaker)\b/i.test([parts.listening, parts.grounding, parts.memberSafety, parts.safety, voiceLayer.replace(/never a concierge, a matchmaker, a therapist, an assistant, or an AI product/i, "")].join("\n")));
+check("no role noun for Cue anywhere, except in the voice layer's own \"never a concierge, a matchmaker...\" line", !/\b(concierge|assistant|matchmaker)\b/i.test([parts.listening, parts.grounding, parts.memberSafety, parts.safety, voiceLayer.replace(/never a concierge, a matchmaker, a therapist, an assistant, or an AI product/i, "")].join("\n")));
 
 // ---- 2. no interview script
 // 2026-10-08 (Royce): Hume's prompt is back, phases and all, as how Co organizes its attention. What stays out: the coverage tool,
@@ -53,37 +53,37 @@ const script = /assess_conversation_coverage|elapsed_minutes|ready to summarize|
 check("no coverage tool, wrap-up timer or ready-made line in the voice layer", !script.test(voiceLayer), voiceLayer.match(script)?.[0]);
 check("no coverage tool, wrap-up timer or ready-made line in the built call prompt", !script.test(callPrompt), callPrompt.match(script)?.[0]);
 check("no coverage tool on the agent", !JSON.stringify(E.buildAgentConfig({ name: "t", prompt: voiceLayer, voiceId: "v", apiUrl: "https://x.test" })).includes("assess_conversation_coverage"));
-check("one question per turn, and any reflection is in Co's own words, new every time", /Ask one question per turn/.test(voiceLayer) && /in your own words, new every time/.test(voiceLayer) && /never a stock phrase that would fit anyone/.test(voiceLayer));
+check("one question per turn, and any reflection is in Cue's own words, new every time", /Ask one question per turn/.test(voiceLayer) && /in your own words, new every time/.test(voiceLayer) && /never a stock phrase that would fit anyone/.test(voiceLayer));
 check("the phone basics hold: short spoken sentences, names as on file, goodbye once then end_call", /Short sentences, one thought each/.test(voiceLayer) && /use the spelling in what you know about them/.test(voiceLayer) && /Say that goodbye once/.test(voiceLayer) && /end_call/.test(voiceLayer) && /never asking whether they're still there/.test(voiceLayer));
-check("calls act on the call: no 'after we hang up' instruction left (2026-10-08: calls run Co's tools)", !/when (?:we|you) hang up|after we hang up|look after the call/i.test(callPrompt), callPrompt.match(/[^.\n]*(?:hang up|after the call)[^.\n]*/i)?.[0]);
+check("calls act on the call: no 'after we hang up' instruction left (2026-10-08: calls run Cue's tools)", !/when (?:we|you) hang up|after we hang up|look after the call/i.test(callPrompt), callPrompt.match(/[^.\n]*(?:hang up|after the call)[^.\n]*/i)?.[0]);
 check("the voice layer is Hume's length, not a whole second prompt", voiceLayer.split(/\s+/).length < 4000, voiceLayer.split(/\s+/).length);
 
 // ---- 3. the call context
 const NOW = new Date("2026-10-08T01:00:00Z"); // Oct 7, 6pm Pacific
 const corrections = [
-  { field: "goals", old_value: "get Co's first paying customer/check", new_value: "pivoting to a partnership with Sequin AI after canceling the October launch date", corrected_at: "2026-10-07T17:00:00Z" },
+  { field: "goals", old_value: "get Cue's first paying customer/check", new_value: "pivoting to a partnership with Sequin AI after canceling the October launch date", corrected_at: "2026-10-07T17:00:00Z" },
   { field: "partner name", old_value: "Sequent AI", new_value: "Sequin AI", corrected_at: "2026-10-07T16:48:00Z" },
-  { field: "goals", old_value: "launch Co's first in-person event (Oct 10th)", new_value: "shifting focus to a November event partnership with Jeremy/House of AI", corrected_at: "2026-10-05T17:00:00Z" },
+  { field: "goals", old_value: "launch Cue's first in-person event (Oct 10th)", new_value: "shifting focus to a November event partnership with Jeremy/House of AI", corrected_at: "2026-10-05T17:00:00Z" },
   { field: "goals", old_value: "shifting focus to a November event partnership with Jeremy/House of AI", new_value: "partnering with Sequin AI for a November launch party", corrected_at: "2026-10-06T17:00:00Z" },
   { field: "goals", old_value: "solve venue/cost/permit issue via Civic Joy Fund or indoor space", new_value: null, corrected_at: "2025-09-25T17:00:00Z" },
 ];
-check("a thread restating a corrected goal is retired", !!CC.retiredBy("figuring out how to get their first paying customer/check for Co", corrections, "2026-09-28T07:00:00Z"));
+check("a thread restating a corrected goal is retired", !!CC.retiredBy("figuring out how to get their first paying customer/check for Cue", corrections, "2026-09-28T07:00:00Z"));
 check("a thread about a plan they said was wrong is retired", !!CC.retiredBy("Civic Joy Fund no longer an option; still trying to find other sponsors for the event", corrections, "2025-09-24T07:00:00Z"));
 check("a thread that says the corrected version is current", CC.retiredBy("partnering with Sequin AI for a November launch party at House of AI", corrections, "2026-10-07T20:00:00Z") === null);
-check("a thread that came up again after the correction is current", CC.retiredBy("figuring out how to get their first paying customer/check for Co", corrections, "2026-10-07T20:00:00Z") === null);
+check("a thread that came up again after the correction is current", CC.retiredBy("figuring out how to get their first paying customer/check for Cue", corrections, "2026-10-07T20:00:00Z") === null);
 check("an unrelated thread is current", CC.retiredBy("looking for a builder/founder community to connect with", corrections) === null && CC.retiredBy("looking for a dependable friend to go through the founder journey with", corrections) === null);
 const settled = CC.renderSettled(corrections);
-check("settled: the new version first, the old one only as (not ...), dated", /- goal, (?:yesterday \()?Oct 7\)?: pivoting to a partnership with Sequin AI after canceling the October launch date \(not "get Co's first paying customer\/check"\)/.test(settled) && /- partner name, (?:yesterday \()?Oct 7\)?: Sequin AI \(not "Sequent AI"\)/.test(settled), settled);
+check("settled: the new version first, the old one only as (not ...), dated", /- goal, (?:yesterday \()?Oct 7\)?: pivoting to a partnership with Sequin AI after canceling the October launch date \(not "get Cue's first paying customer\/check"\)/.test(settled) && /- partner name, (?:yesterday \()?Oct 7\)?: Sequin AI \(not "Sequent AI"\)/.test(settled), settled);
 check("settled: a correction whose new version was itself corrected later is covered by the later one", !/Oct 5: shifting focus/.test(settled) && /Oct 6: partnering with Sequin AI/.test(settled), settled);
 check("settled: a 'that's wrong' correction shows as not X", /not "solve venue\/cost\/permit issue via Civic Joy Fund or indoor space" \(they said that's wrong\)/.test(settled));
-check("a corrected name is written the right way in Co's notes", CC.withCorrectedNames("A November partnership with Sequent AI, whose founder...", corrections) === "A November partnership with Sequin AI, whose founder..." && CC.withCorrectedNames("get Co's first paying customer", corrections) === "get Co's first paying customer");
+check("a corrected name is written the right way in Cue's notes", CC.withCorrectedNames("A November partnership with Sequent AI, whose founder...", corrections) === "A November partnership with Sequin AI, whose founder..." && CC.withCorrectedNames("get Cue's first paying customer", corrections) === "get Cue's first paying customer");
 
 const rows = [
-  { created_at: "2026-10-08T00:30:52Z", memory_type: "text_exchange", content: "[Call] Royce has canceled Co's October launch date and is now planning a November event with Sequin AI, held at House of AI, and asked Co to draft a plan on Co's presence after the event." },
-  { created_at: "2026-10-08T00:30:18Z", memory_type: "call_transcript", content: "assistant: Hey Royce, it's Co.\nuser: Uh, no. Our pivot now is the Sequin AI partnership in November." },
+  { created_at: "2026-10-08T00:30:52Z", memory_type: "text_exchange", content: "[Call] Royce has canceled Cue's October launch date and is now planning a November event with Sequin AI, held at House of AI, and asked Cue to draft a plan on Cue's presence after the event." },
+  { created_at: "2026-10-08T00:30:18Z", memory_type: "call_transcript", content: "assistant: Hey Royce, it's Cue.\nuser: Uh, no. Our pivot now is the Sequin AI partnership in November." },
   { created_at: "2026-10-07T01:31:10Z", memory_type: "text_exchange", content: "[Call] Royce canceled an October event after Civic Joy Fund fell through and is shifting focus to a November partnership with Sequent AI, whose founder is throwing a launch party." },
   { created_at: "2026-10-07T01:30:23Z", memory_type: "call_transcript", content: "assistant: Hey Royce.\nuser: We're actually canceling the event, so that's out the window." },
-  { created_at: "2026-10-03T21:07:29Z", memory_type: "text_exchange", content: "[Call] Royce called back and greeted Co." },
+  { created_at: "2026-10-03T21:07:29Z", memory_type: "text_exchange", content: "[Call] Royce called back and greeted Cue." },
   { created_at: "2026-10-03T21:06:00Z", memory_type: "call_transcript", content: "assistant: Hi Royce.\nuser: Hey, I wanted to talk through the sponsor list for the party." },
 ];
 const calls = CC.pairCalls(rows);
@@ -100,21 +100,21 @@ const summary = CC.assembleCallSummary({
   lessons: ["Use the correct partner name 'Sequin AI', not 'Sequent'."],
   sentLines: [],
   threads: [{ text: "looking for a builder/founder community (they said Sep 21, 16 days ago; OLD, so ask whether it is still true and never state it as current)" }],
-  base: "Who they are:\nWork: Founder building Co",
+  base: "Who they are:\nWork: Founder building Cue",
 });
 const at = (h: string) => summary.indexOf(h);
 check("the current situation comes first, then the last calls, then settled corrections", at("Where things stand now") === 0 && at("Where things stand now") < at("Your last calls with them") && at("Your last calls with them") < at("Settled (") && at("Settled (") < at("Who they are"), summary.slice(0, 300));
-check("the corrected goal never appears as current: only inside its settled line", summary.split("\n").filter((l) => /first paying customer/.test(l)).every((l) => /\(not "get Co's first paying customer\/check"\)/.test(l)));
+check("the corrected goal never appears as current: only inside its settled line", summary.split("\n").filter((l) => /first paying customer/.test(l)).every((l) => /\(not "get Cue's first paying customer\/check"\)/.test(l)));
 check("an OLD thread is listed as a question, after everything current", !/What they're in the middle of/.test(summary) && at("Older threads, not current") > at("Who they are"));
 const forOpening = O.openingContext(summary);
 check("the opening is written from the current part only: no older threads, no old side of a settled correction", !/Older threads|builder\/founder community|first paying customer|"Sequent AI"/.test(forOpening) && /Sequin AI/.test(forOpening), forOpening);
-check("the opening is told to pick up one real thing (not always the same one), not something already off or done", /whatever a friend who knows them would naturally bring up/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })) && /Never pick up something they've already told Co is off, changed or done/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })));
+check("the opening is told to pick up one real thing (not always the same one), not something already off or done", /whatever a friend who knows them would naturally bring up/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })) && /Never pick up something they've already told Cue is off, changed or done/.test(O.openingPrompt({ firstName: "Royce", direction: "outbound", summary: forOpening })));
 // The 2026-10-08 rebuild wrote "I drafted the planning doc..." for a plan the after-call check had found nothing good enough to send for.
 const pad = " pad".repeat(80);
-check("the opening can't claim work Co didn't do", O.openingProblems("Hey Royce, it's Co. I drafted the plan for Sequin AI, want it?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Co. How is the Sequin AI plan coming?", "Co sent them the Sequin AI notes." + pad, "Royce") === null);
+check("the opening can't claim work Cue didn't do", O.openingProblems("Hey Royce, it's Cue. I drafted the plan for Sequin AI, want it?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Cue. How is the Sequin AI plan coming?", "Cue sent them the Sequin AI notes." + pad, "Royce") === null);
 // 2026-10-08 (Royce): even work Co did is never the opening ("the PDF went out, wanted to make sure it landed"); this used to pass.
-check("the opening never leads with Co's homework, even work the record shows", O.openingProblems("Hey Royce, it's Co. I sent the Sequin AI notes, did they land?", "Co sent them the Sequin AI notes." + pad, "Royce") === "leads with Co's homework");
-check("the opening keeps its grounding checks", O.openingProblems("Hey Royce, it's Co. How did Berkeley go?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Co. How is the Sequin AI plan coming?", forOpening + pad, "Royce") === null);
+check("the opening never leads with Cue's homework, even work the record shows", O.openingProblems("Hey Royce, it's Cue. I sent the Sequin AI notes, did they land?", "Cue sent them the Sequin AI notes." + pad, "Royce") === "leads with Cue's homework");
+check("the opening keeps its grounding checks", O.openingProblems("Hey Royce, it's Cue. How did Berkeley go?", forOpening + pad, "Royce") !== null && O.openingProblems("Hey Royce, it's Cue. How is the Sequin AI plan coming?", forOpening + pad, "Royce") === null);
 const ctxSrc = read("src/services/callContext.ts");
 check("the call context reads the same model of the person as texting, and the dated call rows", /personModelParts\(userId\)/.test(ctxSrc) && /memberType|memory_type = 'call_transcript'/.test(ctxSrc) && /content LIKE '\[Call\]%'/.test(ctxSrc));
 check("every call-only part goes through the member strip", /const strip = async/.test(ctxSrc) && /stripOne\(c\.summary\)/.test(ctxSrc) && /strip\(c\.theirWords\)/.test(ctxSrc) && /strip\(stamped\)/.test(ctxSrc) && /strip\(carried\.open/.test(ctxSrc) && /strip\(carried\.theyHaveIt\)/.test(ctxSrc));

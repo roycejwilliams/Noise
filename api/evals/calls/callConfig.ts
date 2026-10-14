@@ -12,7 +12,7 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
 
 const prompt = fs.readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");
-const cfg: any = E.buildAgentConfig({ name: "Co", prompt, voiceId: "v", apiUrl: "https://x.test" });
+const cfg: any = E.buildAgentConfig({ name: "Cue", prompt, voiceId: "v", apiUrl: "https://x.test" });
 const c = cfg.conversation_config, ap = c.agent.prompt;
 const tools: any[] = ap.tools;
 const text = JSON.stringify(cfg);
@@ -28,29 +28,31 @@ check("Sonnet stays where nobody waits: post-call, recaps, grading still use it"
 // 2026-10-08: "normal", like Hume's one second of silence; eager endpointing cut in on the pauses of someone thinking aloud.
 check("turn detection: normal endpointing, speculative turns, the v3 turn model, pinned so a push can't drift", c.turn.turn_eagerness === "normal" && c.turn.speculative_turn === true && c.turn.turn_model === "turn_v3");
 check("no coverage check: the interview script's tool is gone from the agent and its prompt (2026-10-08)", !tools.some((t) => t.name === "assess_conversation_coverage") && !/assess_conversation_coverage|coverage/i.test(ap.prompt));
-check("the find is no longer a tool Co waits on: no surface_recommendation tool at all", !tools.some((t) => t.name === "surface_recommendation") && !/surface_recommendation/.test(ap.prompt));
+check("the find is no longer a tool Cue waits on: no surface_recommendation tool at all", !tools.some((t) => t.name === "surface_recommendation") && !/surface_recommendation/.test(ap.prompt));
 check("the tools that remain add no spoken filler", tools.filter((t) => t.type === "webhook").every((t) => t.pre_tool_speech === "off"));
 check("end_call and voicemail detection are still there", tools.some((t) => t.name === "end_call") && tools.some((t) => t.name === "voicemail_detection"));
 // 2026-10-08: the word caps made every turn the same shape; Hume's own phone section sets the rhythm.
 check("no word caps in the call prompt (under ten words, 15 words, 60 words, two to four sentences)", !/under ten words|past 15 words|60 words at most|two to four short sentences/.test(ap.prompt));
 
-check("the call guide still says: no AI disclaimer, never 'not how I work' for multi-day help, act on the call", /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Co does look[^\n]*/g, "")));
+check("the call guide still says: no AI disclaimer, never 'not how I work' for multi-day help, act on the call", /No disclaimers about being an AI/.test(ap.prompt) && /never say it isn't how you work: say yes and set it up now, on the call/.test(ap.prompt) && !/when (?:we|you) hang up|after (?:we hang up|the call)/i.test(ap.prompt.replace(/After a call, Cue does look[^\n]*/g, "")));
 
 // ---- 5. keywords
 const kw: string[] = c.asr.keywords;
-check("the recognizer is told the names it got wrong: Co, Boardy, and the others", ["Co", "Boardy", "CoPatible", "Instinct", "Muse", "Luma"].every((k) => kw.includes(k)));
+check("the recognizer is told the names it got wrong: Cue, Boardy, and the others", ["Cue", "Boardy", "Instinct", "Muse", "Luma"].every((k) => kw.includes(k)));
+// Its old name too, while members may still use it (services/agentName.ts CO_ALIAS_UNTIL); never "Noise", a common word.
+check("the recognizer listens for Cue too during the alias, and isn't boosted toward Noise", kw.includes("Cue") && !kw.includes("Noise"));
 
 // ---- 7. capability sheet and member context
 const sheet = B.CAPABILITY_SHEET;
-check("the sheet is in the call prompt", ap.prompt.includes("# What Co can do today"));
-check("it says Co does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Say yes to this on a call and set it up then and there/.test(sheet) && /Never say this is "not how I work"/.test(sheet) && !/A call can't start a task live/.test(sheet));
-check("it does not promise what Co can't: no finding investors or a particular advisor, no group texts, no daily messages", /Co can't find investors, sponsors or funders on demand/.test(sheet) && /never starts a group text/.test(sheet) && /can't promise a daily message/.test(sheet));
-check("it says a call keeps its promise to look into something after the call", /After a call, Co does look into what you said you'd look into/.test(sheet));
+check("the sheet is in the call prompt", ap.prompt.includes("# What Cue can do today"));
+check("it says Cue does multi-day work and how to ask for it by text, and bans 'not how I work'", /works on it over the following days \(up to 30\)/.test(sheet) && /Say yes to this on a call and set it up then and there/.test(sheet) && /Never say this is "not how I work"/.test(sheet) && !/A call can't start a task live/.test(sheet));
+check("it does not promise what Cue can't: no finding investors or a particular advisor, no group texts, no daily messages", /Cue can't find investors, sponsors or funders on demand/.test(sheet) && /never starts a group text/.test(sheet) && /can't promise a daily message/.test(sheet));
+check("it says a call keeps its promise to look into something after the call", /After a call, Cue does look into what you said you'd look into/.test(sheet));
 check("it stops the questions it has answers to: say what you have and ask if it's still right", /Never ask for something you already know/.test(sheet) && /ask, in your own words, whether it's still right/.test(sheet));
 check("the sheet is one page (under 560 words)", sheet.split(/\s+/).length < 560);
 check("the member context is still in the prompt", /\{\{context_summary\}\}/.test(ap.prompt));
 check("the clock and the finds are per-call variables in the prompt, with placeholders", /\{\{right_now\}\}/.test(ap.prompt) && /\{\{finds_now\}\}/.test(ap.prompt) && "right_now" in c.agent.dynamic_variables.dynamic_variable_placeholders && "finds_now" in c.agent.dynamic_variables.dynamic_variable_placeholders);
-check("guardrails still come last, after the sheet", ap.prompt.indexOf("# What Co can do today") < ap.prompt.indexOf("# Guardrails"));
+check("guardrails still come last, after the sheet", ap.prompt.indexOf("# What Cue can do today") < ap.prompt.indexOf("# Guardrails"));
 
 // ---- 3. time check: the replay
 // The call was Oct 5 at 9:48pm Pacific (2026-10-06T04:48Z). The event started Oct 6 at 6:30pm Pacific: TOMORROW evening, not tonight.
@@ -91,7 +93,7 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
 
 // ---- the call brain behind our own endpoint, with the direct path as the rollback
 {
-  const on: any = E.buildAgentConfig({ name: "Co", prompt, voiceId: "v", apiUrl: "https://x.test", proxy: { url: "https://x.test/co/el/llm", secretId: "sec_1" } });
+  const on: any = E.buildAgentConfig({ name: "Cue", prompt, voiceId: "v", apiUrl: "https://x.test", proxy: { url: "https://x.test/co/el/llm", secretId: "sec_1" } });
   const p: any = on.conversation_config.agent.prompt;
   check("proxy on: the agent's LLM is the custom one, at our endpoint, with the workspace secret as its bearer", p.llm === "custom-llm" && p.custom_llm.url === "https://x.test/co/el/llm" && p.custom_llm.api_key.secret_id === "sec_1" && p.custom_llm.api_type === "chat_completions", p.custom_llm);
   check("proxy on: the endpoint names the call brain (Sonnet 4.6), the tools stay on the agent, and there is no off-proxy fallback", p.custom_llm.model_id === "claude-sonnet-4-6" && p.tools.length === tools.length && p.backup_llm_config.preference === "disabled");
@@ -107,10 +109,10 @@ check("the registration passes the two variables to ElevenLabs", /right_now: o\.
   const gd = E.CALL_GUIDE;
   const full = E.promptForElevenLabs(prompt);
   check("rhythm comes from Hume's phone section: short spoken sentences, no dashes; no caps or sample reply in the call guide", /Short sentences, one thought each/.test(full) && /Never put a dash in what you say/.test(full) && !/Wrong: |Right: /.test(gd) && !/That makes sense\.|Good, that helps\./.test(gd));
-  check("offers: name an event only from the finds or their own words; no source line, no name", /Name an event, place or time only if it is in "What Co has found for them" or they said it/.test(gd));
+  check("offers: name an event only from the finds or their own words; no source line, no name", /Name an event, place or time only if it is in "What Cue has found for them" or they said it/.test(gd));
   check("promises: a promise to text or send is a real task the moment it is said, said once", /A promise to text or send something is a real task the moment you say it/.test(gd));
   // 2026-10-08: "close warmly in two sentences, then let them go" made Co hang up on Royce when he said he'd been stressed.
-  check("member state: when they open up, Co stays; the call ends when they want it to; nothing says to let them go or close in two sentences", /The call ends when they want it to/.test(gd) && /stay with it and help them think it through/.test(gd) && !/Close warmly in two sentences|let them go warmly|then let them go/.test(full));
+  check("member state: when they open up, Cue stays; the call ends when they want it to; nothing says to let them go or close in two sentences", /The call ends when they want it to/.test(gd) && /stay with it and help them think it through/.test(gd) && !/Close warmly in two sentences|let them go warmly|then let them go/.test(full));
   check("the guide reaches the agent (it is part of promptForElevenLabs)", full.includes(gd) && !full.includes("# Their state comes first") && !full.includes("# Cadence"));
   const ids = (cfg.platform_settings.evaluation.criteria as any[]).map((x) => x.id);
   check("the post-call grade has the three new criteria", ["drops_stale_claims_on_pushback", "sends_what_it_promised", "member_state_outranks_agenda"].every((i) => ids.includes(i)), ids);

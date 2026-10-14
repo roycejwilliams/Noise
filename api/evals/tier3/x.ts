@@ -72,7 +72,7 @@ const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta
   check("the club's bar for what's kept", /never a token or coin promotion, a giveaway, engagement bait or a bare headline/.test(p));
   check("the X budget is still one search a sweep", SF.SWEEP_BUDGET.xSearches === 1 && /One search a sweep/.test(SF.SWEEP_X_TOOL));
   const roles = /\b(concierge|assistant|matchmaker)\b/i;
-  check("no role nouns for Co in the guidance", !roles.test(p) && !roles.test(SF.SWEEP_X_TOOL));
+  check("no role nouns for Cue in the guidance", !roles.test(p) && !roles.test(SF.SWEEP_X_TOOL));
   const sf = src("services/sweepFind.ts");
   check("the sweep's X tool uses the guidance text and 20 posts", /description: SWEEP_X_TOOL/.test(sf) && /searchRecentPosts\(q, X_SEARCH_RESULTS\)/.test(sf));
   check("a post's own link can be kept, as a web page found through X", /source: "web", via: "x", url: l/.test(sf));

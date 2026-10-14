@@ -139,7 +139,7 @@ const NY = "America/New_York";
   const late = { ...row, at: at("2026-10-08T04:30:00Z") }; // 9:30pm PDT Oct 7 = 12:30am EDT Oct 8
   check("ledger: a late send is Oct 7 for a Pacific member and Oct 8 for a New York one", F.ledgerLine(late, "2026-10-08", LA).startsWith("On 2026-10-07 ") && F.ledgerLine(late, "2026-10-08", NY).startsWith("On 2026-10-08 "));
   const lines = F.ledgerLinesFrom([row], "did you send that?", at("2026-10-08T02:00:00Z").getTime(), LA);
-  check("ledger: the lines Co reads carry the member's day", lines.length === 1 && lines[0].startsWith("On 2026-10-07 "), lines);
+  check("ledger: the lines Cue reads carry the member's day", lines.length === 1 && lines[0].startsWith("On 2026-10-07 "), lines);
   check("ledgerFacts reads the member's zone", /zoneIn !== undefined \? zoneIn : await memberZone\(userId\)/.test(src("services/coFacts.ts")));
 }
 

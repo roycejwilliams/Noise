@@ -58,7 +58,7 @@ console.log(`  model's first token (direct path, what ElevenLabs waits on)   med
 console.log(`  first complete sentence out of the proxy                      median ${median(proxied.map((t) => t.firstMs ?? NaN).filter(Number.isFinite))}  ${proxied.map((t) => t.firstMs).join(",")}`);
 console.log(`  first complete sentence, direct (no cleaning, same boundary)  median ${median(direct.map((t) => t.firstMs ?? NaN).filter(Number.isFinite))}  ${direct.map((t) => t.firstMs).join(",")}`);
 console.log("\nproxy replies, each after the member's line:");
-proxied.forEach((t, k) => console.log(` ${k + 1}. member: ${turns[picks[k]].message.replace(/\s+/g, " ").slice(0, 120)}\n    Co: ${t.text.replace(/\n+/g, " / ").slice(0, 320)}`));
+proxied.forEach((t, k) => console.log(` ${k + 1}. member: ${turns[picks[k]].message.replace(/\s+/g, " ").slice(0, 120)}\n    Cue: ${t.text.replace(/\n+/g, " / ").slice(0, 320)}`));
 
 // ---------- 2. the drained member
 const drainedAt = turns.findIndex((t) => t.role === "user" && /long day/i.test(t.message));

@@ -16,15 +16,15 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail === undefined ? "" : JSON.stringify(detail).slice(0, 600)); } };
 
 const ASK = "Yeah, that's fine. But actually, I actually want you to take lead and, you know, just kind of start planning any docs or PDFs that we could kind of have between me and my cofounder going forward, and how we plan on launching our own branding throughout the Lumen event.";
-const CALL = `assistant: Hey Jordan, it's Co. How's the launch going?
+const CALL = `assistant: Hey Jordan, it's Cue. How's the launch going?
 user: We moved the date. We're partnering with Lumen AI on something in November, at the Atrium with a guy named Ellis.
 assistant: The most useful role at an event is helping people find the right person in the room. I can learn who's coming, who each person is trying to meet. Point people toward those connections.
 user: That fits. Ellis runs logistics software for events.
 assistant: So you're planning the November event at the Atrium with Ellis Marr. Want me to hold onto this?
 user: ${ASK}
-assistant: Yes, I can take that on. When we hang up, I'll set up a task to draft a planning doc. I'll text you what I put together, and you and your cofounder can review it. Should it focus on the event only, or also how Co keeps a presence after it?
+assistant: Yes, I can take that on. When we hang up, I'll set up a task to draft a planning doc. I'll text you what I put together, and you and your cofounder can review it. Should it focus on the event only, or also how Cue keeps a presence after it?
 user: Yeah, for sure. The later half is more important.
-assistant: Got it. Then the plan will focus on how Co keeps its presence after the event. I'll set that up when we hang up and text you what I put together.
+assistant: Got it. Then the plan will focus on how Cue keeps its presence after the event. I'll set that up when we hang up and text you what I put together.
 user: Yeah, it's perfect.
 assistant: Good. I'll set up the post-event branding plan when we hang up. Text you what I find. Talk soon.
 user: Thanks.`;
@@ -34,15 +34,15 @@ user: Thanks.`;
   const q = "I can learn who's coming, who each person is trying to meet. Point people toward those connections.";
   const reg = G.auditRegistry();
   check("the audit reads the real registry: in-room guest-list matching is on it", reg.abilities.some((a) => a.id === "co_events" && /guest list/.test(a.can) && /who they hope to meet/.test(a.can)));
-  check("the audit prompt carries every member-facing ability by id and the limits by number", (() => { const p = G.callAuditPrompt(CALL, "known"); return /\[co_events\] At Co events: Co knows who's coming/.test(p) && /\nL1 /.test(p) && /"limit": "L# or null"/.test(p) && /"asked_quote"/.test(p) && /"specifics"/.test(p); })());
-  check("the call's own can't line no longer denies knowing what guests want at Co's own events", /At Co's own events it does know the guest list/.test(G.CALL_CAPABILITIES) && !/people's intentions\) it wasn't given/.test(G.CALL_CAPABILITIES));
-  const today = G.capabilityCorrectionVerdict({ quote: q, what: "Co cannot learn attendee identities or intentions at an event or make real-time matches", limit: "L8" });
+  check("the audit prompt carries every member-facing ability by id and the limits by number", (() => { const p = G.callAuditPrompt(CALL, "known"); return /\[co_events\] At Cue events: Cue knows who's coming/.test(p) && /\nL1 /.test(p) && /"limit": "L# or null"/.test(p) && /"asked_quote"/.test(p) && /"specifics"/.test(p); })());
+  check("the call's own can't line no longer denies knowing what guests want at Cue's own events", /At Cue's own events it does know the guest list/.test(G.CALL_CAPABILITIES) && !/people's intentions\) it wasn't given/.test(G.CALL_CAPABILITIES));
+  const today = G.capabilityCorrectionVerdict({ quote: q, what: "Cue cannot learn attendee identities or intentions at an event or make real-time matches", limit: "L8" });
   check("2026-10-08: 'I can learn who's coming, who each person is trying to meet' is refused as a correction, even citing a limit", !today.save && /co_events/.test(today.why), today);
   check("refused when the audit names the registry line that covers it", !G.capabilityCorrectionVerdict({ quote: "I'll point you to who's worth meeting", what: "x", ability: "co_events", limit: "L8" }).save);
   check("refused when it names no can't line it breaks (the old audit's shape)", !G.capabilityCorrectionVerdict({ quote: "I can book that table for you tonight", what: "x" }).save);
-  const book = G.capabilityCorrectionVerdict({ quote: "I can book that table for you tonight", what: "Co can't book", limit: String(`L${reg.limits.findIndex((l) => /can't book, buy, register/.test(l)) + 1}`) });
+  const book = G.capabilityCorrectionVerdict({ quote: "I can book that table for you tonight", what: "Cue can't book", limit: String(`L${reg.limits.findIndex((l) => /can't book, buy, register/.test(l)) + 1}`) });
   check("a real wrong claim (booking) that cites the limit it breaks is still saved", book.save, book);
-  const plan = G.planCallAudit([{ quote: q, type: "capability", what: "Co cannot learn attendee identities", limit: "L8" }], CALL, { knownBefore: "", records: "", tasks: [] });
+  const plan = G.planCallAudit([{ quote: q, type: "capability", what: "Cue cannot learn attendee identities", limit: "L8" }], CALL, { knownBefore: "", records: "", tasks: [] });
   check("the plan saves no correction for it and says why", plan.corrections.length === 0 && plan.refused.length === 1 && /registry has it/.test(plan.refused[0].why));
   const cg = src("harness/callGrounding.ts");
   check("auditCall writes call_correction only from the checked plan", /const corrections = plan\.corrections;/.test(cg) && !/claims\.filter\(\(x\) => x\.type === "promise_unkeepable" \|\| x\.type === "invented_fact" \|\| x\.type === "capability"\)/.test(cg));
@@ -56,12 +56,12 @@ user: Thanks.`;
   check("a full name the member texted is not invented, though the call only had the first name", !v.save && v.onRecord.includes("Ellis Marr"), v);
   check("without their texts it still counts as invented", G.inventedFactVerdict(claim, CALL, "", "User said: hi").save);
   check("with no specifics from the audit, the quote's own names are checked", !G.inventedFactVerdict({ quote: claim.quote, specifics: null }, CALL, "", records).save);
-  check("Co having said it earlier on the call is not a source", G.inventedFactVerdict({ quote: "It's at the Atrium with Ellis Marr", specifics: ["Ellis Marr"] }, `assistant: Ellis Marr runs it\n${CALL}`, "", "").save);
-  check("the record loader reads only their own lines and Co's records, never Co's texts or summaries", /content LIKE 'User said:%'/.test(src("services/followThrough.ts")) && /FROM co_facts WHERE owner_user_id = \$1/.test(src("services/followThrough.ts")));
+  check("Cue having said it earlier on the call is not a source", G.inventedFactVerdict({ quote: "It's at the Atrium with Ellis Marr", specifics: ["Ellis Marr"] }, `assistant: Ellis Marr runs it\n${CALL}`, "", "").save);
+  check("the record loader reads only their own lines and Cue's records, never Cue's texts or summaries", /content LIKE 'User said:%'/.test(src("services/followThrough.ts")) && /FROM co_facts WHERE owner_user_id = \$1/.test(src("services/followThrough.ts")));
   // ElevenLabs' judge, re-checked
   const analysis = { evaluation_criteria_results: {
-    no_invented_specifics: { criteria_id: "no_invented_specifics", result: "failure", rationale: "Co invented 'Ellis Marr' — the member only said 'a guy named Ellis.' No last name was given." },
-    names_and_voice: { criteria_id: "names_and_voice", result: "failure", rationale: "Co invented the last name 'Marr' for Ellis, which the member never provided." },
+    no_invented_specifics: { criteria_id: "no_invented_specifics", result: "failure", rationale: "Cue invented 'Ellis Marr' — the member only said 'a guy named Ellis.' No last name was given." },
+    names_and_voice: { criteria_id: "names_and_voice", result: "failure", rationale: "Cue invented the last name 'Marr' for Ellis, which the member never provided." },
     no_known_questions: { criteria_id: "no_known_questions", result: "failure", rationale: "asked their city again" },
     short_spoken_replies: { criteria_id: "short_spoken_replies", result: "success", rationale: "" },
   } };
@@ -108,7 +108,7 @@ user: Thanks.`;
 // ---------------------------------------------------------------- 3b. one commitment, one task
 {
   const live = { id: 111, goal: "Keep your word from the call: \"I'll text you what I put together, and you and your cofounder can review it.\"", theirWords: ASK.slice(0, 300), createdAt: "2026-10-08T00:28:49Z" };
-  check("their ask and Co's live promise answering it are the same commitment", F.sameCommitment({ goal: "Start planning docs and PDFs for branding and launch plans for the Lumen event", theirWords: ASK.slice(20) }, live));
+  check("their ask and Cue's live promise answering it are the same commitment", F.sameCommitment({ goal: "Start planning docs and PDFs for branding and launch plans for the Lumen event", theirWords: ASK.slice(20) }, live));
   check("different asks are not", !F.sameCommitment({ goal: "Find venues for a dinner for 40 in October", theirWords: "can you find me a few venues for a launch dinner, about 40 people" }, live));
   // tasksFromCall notes the live task instead of opening a second
   const calls: any[] = []; const notes: any[] = [];
@@ -141,7 +141,7 @@ user: Thanks.`;
   const claims: any[] = [
     { quote: "Yes, I can take that on. When we hang up, I'll set up a task to draft a planning doc.", type: "promise_keepable", what: "draft a post-event branding/presence planning doc" },
     { quote: "I'll text you what I put together, and you and your cofounder can review it.", type: "promise_keepable", what: "text the drafted planning document" },
-    { quote: "Got it. Then the plan will focus on how Co keeps its presence after the event. I'll set that up when we hang up and text you what I put together.", type: "promise_keepable", what: "draft and text a plan on Co's post-event presence" },
+    { quote: "Got it. Then the plan will focus on how Cue keeps its presence after the event. I'll set that up when we hang up and text you what I put together.", type: "promise_keepable", what: "draft and text a plan on Cue's post-event presence" },
     { quote: "Good. I'll set up the post-event branding plan when we hang up. Text you what I find.", type: "promise_keepable", what: "set up and text the post-event branding plan" },
   ];
   const plan = G.planCallAudit(claims, CALL, { knownBefore: "", records: "", tasks: [live] });
@@ -163,9 +163,9 @@ user: Thanks.`;
   const asked = G.askedQuoteFor(c, CALL);
   check("2026-10-08: their explicit ask ('I actually want you to take lead ... start planning any docs') is read as asked", !!asked && /take lead/.test(asked), asked);
   check("the audit's own quote counts when it's really theirs", G.askedQuoteFor({ quote: "x", asked_quote: "start planning any docs or PDFs" }, CALL) === "start planning any docs or PDFs");
-  check("an invented quote doesn't, and Co's own unprompted offer stays Co's", G.askedQuoteFor({ quote: "I'll look for some events for you while we're at it", asked_quote: "please find me events" }, "assistant: How was your week?\nuser: Fine, busy.\nassistant: I'll look for some events for you while we're at it\nuser: sounds good") === null);
+  check("an invented quote doesn't, and Cue's own unprompted offer stays Cue's", G.askedQuoteFor({ quote: "I'll look for some events for you while we're at it", asked_quote: "please find me events" }, "assistant: How was your week?\nuser: Fine, busy.\nassistant: I'll look for some events for you while we're at it\nuser: sounds good") === null);
   const plan = G.planCallAudit([{ quote: c.quote, type: "promise_keepable", what: "text the drafted planning document" }], CALL, { knownBefore: "", records: "", tasks: [] });
-  check("so the plan files it as their ask, never 'Co's own initiative'", plan.promises[0].asked !== null);
+  check("so the plan files it as their ask, never 'Cue's own initiative'", plan.promises[0].asked !== null);
 }
 
 // ---------------------------------------------------------------- after-call steps read the shared member-knowledge layer (PR 7)
@@ -191,15 +191,15 @@ user: Thanks.`;
     exchanges: [{ from: "member", text: "can you find venues", call: false, verifiedAt: at }, { from: "co", text: "summary of the call", call: true, verifiedAt: at }],
     person: null,
   };
-  const kb = G.knownBeforeFrom(k, { facts: `Details on file for "Atrium mixer", which Co sent them.\nThey've asked Co for (their words): "venues for a launch dinner"`, impressions: "Who they are: a founder." });
+  const kb = G.knownBeforeFrom(k, { facts: `Details on file for "Atrium mixer", which Cue sent them.\nThey've asked Cue for (their words): "venues for a launch dinner"`, impressions: "Who they are: a founder." });
   check("the audit's facts carry the layer's asks once, its delivered items and the picture's sent details", (kb.facts.match(/venues for a launch dinner/g) ?? []).length === 1 && /Post-event presence plan/.test(kb.facts) && /Atrium mixer/.test(kb.facts), kb.facts);
-  check("a correction is on record only in its corrected version (the old value Co might say is still caught)", /San Francisco/.test(kb.facts) && !/Oakland/.test(kb.facts + kb.impressions));
-  check("what they said is a fact; Co's read and goals (with state) are impressions only", /design studio/.test(kb.facts) && !/stretched thin/.test(kb.facts) && /stretched thin/.test(kb.impressions) && /Hire a designer \(done\)/.test(kb.impressions) && !/Hire a designer/.test(kb.facts));
+  check("a correction is on record only in its corrected version (the old value Cue might say is still caught)", /San Francisco/.test(kb.facts) && !/Oakland/.test(kb.facts + kb.impressions));
+  check("what they said is a fact; Cue's read and goals (with state) are impressions only", /design studio/.test(kb.facts) && !/stretched thin/.test(kb.facts) && /stretched thin/.test(kb.impressions) && /Hire a designer \(done\)/.test(kb.impressions) && !/Hire a designer/.test(kb.facts));
   check("without the layer the audit reads the call picture as before", JSON.stringify(G.knownBeforeFrom(null, { facts: "f", impressions: "i" })) === JSON.stringify({ facts: "f", impressions: "i" }));
   const labelled = PC.labelClaims(k);
-  check("the post-call claims keep their labels: what they said apart from Co's read", labelled.enduring.length === 1 && /they said/.test(labelled.enduring[0]) && labelled.coInferred.length === 1 && /Co's read/.test(labelled.coInferred[0]) && labelled.theySaid.length === 0);
+  check("the post-call claims keep their labels: what they said apart from Cue's read", labelled.enduring.length === 1 && /they said/.test(labelled.enduring[0]) && labelled.coInferred.length === 1 && /Cue's read/.test(labelled.coInferred[0]) && labelled.theySaid.length === 0);
   // Review of #121: the label is the day it was SAID, as their local date (2026-10-05 stays Oct 5 in Pacific, never Oct 4).
-  check("claim labels are the day said, never shifted a day early through UTC", /they said, Oct 5\)/.test(labelled.enduring[0]) && /Co's read, Oct 7, until Oct 9\)/.test(labelled.coInferred[0]) && /They said \(Oct 5\): Jordan is building/.test(kb.facts), { labelled, facts: kb.facts });
+  check("claim labels are the day said, never shifted a day early through UTC", /they said, Oct 5\)/.test(labelled.enduring[0]) && /Cue's read, Oct 7, until Oct 9\)/.test(labelled.coInferred[0]) && /They said \(Oct 5\): Jordan is building/.test(kb.facts), { labelled, facts: kb.facts });
   // Review probe: a Denver -> Austin correction and an enduring "Lives in Denver" claim gave both as facts.
   {
     const probe: any = { ...k, corrections: [{ field: "city", was: "Denver", now: "Austin", verifiedAt: at }], claims: [{ text: "Jordan lives in Denver.", provenance: "user_said", kind: "city", quote: "I live in denver", expiresOn: null, saidOn: "2026-09-01", verifiedAt: at }, ...k.claims] };
@@ -213,7 +213,7 @@ user: Thanks.`;
   const sec = PC.postCallKnowledgeSection(k);
   const rules = MK.memberRules(k);
   check("the post-call text gets the member rules from memberRules(k), word for word", [rules.discretion, rules.memberSafety, rules.grounding, rules.deliveryShape, rules.restraint, rules.quietHours].every((r) => !r || sec.includes(r)));
-  check("what they have is never restated, and what Co carries is never in this text (#115)", /THEY ALREADY HAVE THESE \(never restate[^\n]*\n- "Post-event presence plan"/.test(sec) && /WORK CO IS CARRYING FOR THEM \(never in this text[^\n]*\n- Find venues/.test(sec) && !/task #3/.test(sec));
+  check("what they have is never restated, and what Cue carries is never in this text (#115)", /THEY ALREADY HAVE THESE \(never restate[^\n]*\n- "Post-event presence plan"/.test(sec) && /WORK CO IS CARRYING FOR THEM \(never in this text[^\n]*\n- Find venues/.test(sec) && !/task #3/.test(sec));
   check("recent texts carry when, and the call's own summary isn't one of them", /RECENT TEXTS, WITH WHEN[^\n]*\n- \w{3} Oct 8[^\n]*They: can you find venues/.test(sec) && !/summary of the call/.test(sec));
   check("restraint and quiet hours shape the text, never a reason to SKIP (code decides whether it goes)", /never a reason to SKIP/.test(sec));
   // Nothing from the layer goes into CONFIRMED_FACTS, so it can't back a day or a commitment in the draft.

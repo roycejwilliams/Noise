@@ -30,6 +30,7 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   goal_closed: "companion",
   // The goal recheck (services/goalRecheck.ts): whether a goal is still theirs to look for.
   goal_recheck: "companion",
+  name_change: "ops",
   // Member-state nudges (services/memberStateNudges.ts): about their own life and what they said, except a deadline on a find.
   intro_nudge: "companion",
   goal_nudge: "companion",

@@ -21,10 +21,10 @@ const list = [
   { otherId: "u-ellis1", firstName: "Ellis", introducedAt: new Date("2026-09-20") },
   { otherId: "u-ellis2", firstName: "Ellis", introducedAt: new Date("2026-09-10") },
 ];
-check("the person is found by first name among Co's own intros", (SC.pickIntro(list, "Noor Haddad") as any)?.otherId === "u-noor" && (SC.pickIntro(list, "noor") as any)?.otherId === "u-noor");
-check("someone Co never introduced them to isn't recorded", SC.pickIntro(list, "Jordan") === null && SC.pickIntro(list, "") === null);
+check("the person is found by first name among Cue's own intros", (SC.pickIntro(list, "Noor Haddad") as any)?.otherId === "u-noor" && (SC.pickIntro(list, "noor") as any)?.otherId === "u-noor");
+check("someone Cue never introduced them to isn't recorded", SC.pickIntro(list, "Jordan") === null && SC.pickIntro(list, "") === null);
 check("a name that fits two intros is asked about, never guessed", SC.pickIntro(list, "Ellis") === "ambiguous");
-check("the fact is their side, in plain words, with the day they said it", SC.secondContactLabel("Noor", "met_again", new Date("2026-10-20T18:00:00Z")) === "Saw Noor again (said 2026-10-20; Co introduced them)" && /^Hasn't seen Noor again yet/.test(SC.secondContactLabel("Noor", "not_yet", new Date())));
+check("the fact is their side, in plain words, with the day they said it", SC.secondContactLabel("Noor", "met_again", new Date("2026-10-20T18:00:00Z")) === "Saw Noor again (said 2026-10-20; Cue introduced them)" && /^Hasn't seen Noor again yet/.test(SC.secondContactLabel("Noor", "not_yet", new Date())));
 check("met and talked count as a second contact; not yet and not going to don't", SC.MET.has("met_again") && SC.MET.has("talked_again") && !SC.MET.has("not_yet") && !SC.MET.has("not_going_to"));
 
 const s = src("services/secondContact.ts");
@@ -35,10 +35,10 @@ check("review of #147: archived members (reset test members) never count", /JOIN
 check("review of #147: each side's latest word stands, and the window counts from when they met when they said", /DISTINCT ON \(f\.owner_user_id, f\.meta->>'otherId'\)/.test(s) && /ORDER BY f\.owner_user_id, f\.meta->>'otherId', f\.happened_at DESC/.test(s) && /COALESCE\(\(f\.meta->>'metOn'\)::date::timestamptz, f\.happened_at\)/.test(s));
 
 const entry: any = Cap.ABILITIES.find((c: any) => c.tool === "noteMetAgain");
-check("Co decides when to record it: a tool in the capability registry, bounded per turn, their side only", !!entry && entry.limits?.perTurn === 2 && /never ask what the other person said, and never tell the other person/.test(entry.use ?? ""), entry);
+check("Cue decides when to record it: a tool in the capability registry, bounded per turn, their side only", !!entry && entry.limits?.perTurn === 2 && /never ask what the other person said, and never tell the other person/.test(entry.use ?? ""), entry);
 check("the same tool on calls", (CT.CALL_TOOL_NAMES as readonly string[]).includes("noteMetAgain"));
 const ct = src("agent/conversationTools.ts");
-check("the tool records only Co's own intros, asks when a name fits two", /noteMetAgain: tool\(/.test(ct) && /isn't someone Co introduced them to/.test(ct) && /More than one person Co introduced them to is called/.test(ct));
+check("the tool records only Cue's own intros, asks when a name fits two", /noteMetAgain: tool\(/.test(ct) && /isn't someone Cue introduced them to/.test(ct) && /More than one person Cue introduced them to is called/.test(ct));
 const facts = N.introNudgeFacts({ otherFirstName: "Noor", how: "network", eventName: null, reasonAsEmailed: "both building in climate", introducedAt: new Date("2026-10-01") }, new Date("2026-10-06"));
 check("the intro check-in is curious whether they've met or talked since (their side only)", facts.worth_asking === "whether the two of you have met or talked since");
 check("there's a read-only report for the number", /secondContactRate/.test(src("scripts/secondContact.ts")) && /"metric:second-contact": "tsx src\/scripts\/secondContact\.ts"/.test(fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8")));

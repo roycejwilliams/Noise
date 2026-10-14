@@ -11,12 +11,12 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import type { EntryKind } from "../harness/profileWrite.js";
 
-export const KIND_DEFINITIONS = `ASK: an errand with an end. Something Co can find, answer, write or do, after which it is done. "Find me weekend events." "Send me the link to Pitch Protocol." "Draft an intro to a VC I met." "How do I start the equity conversation with my cofounder?" "Who should I meet at tech week?"
-GOAL: direction with no end of its own. Where they are headed, or a role or mission they are taking on: "Get Co in front of users." "Plan out the event and take lead." "Build a community of founders." "Raise a pre-seed round before the new year." "Make friends who build things." A goal is never finished by one answer.
+export const KIND_DEFINITIONS = `ASK: an errand with an end. Something Cue can find, answer, write or do, after which it is done. "Find me weekend events." "Send me the link to Pitch Protocol." "Draft an intro to a VC I met." "How do I start the equity conversation with my cofounder?" "Who should I meet at tech week?"
+GOAL: direction with no end of its own. Where they are headed, or a role or mission they are taking on: "Get Cue in front of users." "Plan out the event and take lead." "Build a community of founders." "Raise a pre-seed round before the new year." "Make friends who build things." A goal is never finished by one answer.
 If you cannot tell, it is an ASK.`;
 
 export function classifyPrompt(text: string): string {
-  return `Someone told Co: "${text.slice(0, 300)}"
+  return `Someone told Cue: "${text.slice(0, 300)}"
 
 ${KIND_DEFINITIONS}
 
@@ -55,7 +55,7 @@ export function reclassifyPrompt(items: ReclassifyItem[]): string {
 
 ${KIND_DEFINITIONS}
 
-Entries (what a member told Co they want):
+Entries (what a member told Cue they want):
 ${items.map((i) => `${i.n}. [${i.said}, ${i.status}] ${i.text}`).join("\n")}
 
 Return ONLY JSON: {"entries": [{"n": "E1", "kind": "ask", "why": "five words"}]}`;

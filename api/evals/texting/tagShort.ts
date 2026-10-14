@@ -23,10 +23,10 @@ await Promise.all(
       const { text } = await generateText({
         model: anthropic(GRADER_MODEL),
         headers: GRADER_HEADERS,
-        prompt: `A member is texting Co, an AI companion. Decide what length of reply their latest text calls for, given the conversation.
+        prompt: `A member is texting Cue, an AI companion. Decide what length of reply their latest text calls for, given the conversation.
 
 "short": a quick reply of one or two sentences is right (a reaction, a quick question, small talk, a confirmation, a correction, logistics).
-"depth": a longer reply is right, because they asked for a plan, advice, detail, a walkthrough or for Co to lead, or they're mid-way through something where Co was asked to lay out the full answer, or they shared something heavy that deserves real room.
+"depth": a longer reply is right, because they asked for a plan, advice, detail, a walkthrough or for Cue to lead, or they're mid-way through something where Cue was asked to lay out the full answer, or they shared something heavy that deserves real room.
 
 The conversation so far:
 ${c.recentConversation.slice(-2500)}

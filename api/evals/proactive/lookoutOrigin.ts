@@ -31,30 +31,30 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 
 // 3. Recorded at open.
 {
-  check("a look-out Co opens from its own call promise is recorded as Co's", CG.promiseThreadTask({ what: "founder runs", quotes: ["I'll keep an ear out for founder runs"] }, "").lookoutOrigin === "co");
+  check("a look-out Cue opens from its own call promise is recorded as Cue's", CG.promiseThreadTask({ what: "founder runs", quotes: ["I'll keep an ear out for founder runs"] }, "").lookoutOrigin === "co");
   check("the reply loop's startTask records the origin it reads from their message", /const origin = lookout \? T\.lookoutOriginAt\(\{ message: ctx\.resolvedContent, quote: theirWords, lastCoMessage: ctx\.lastCoMessage, offerLogged \}\) : null;/.test(src("agent/conversationTools.ts")));
   // Review of #131: theirs only when they asked to be told over time, now.
   const at = (message: string, quote: string, lastCoMessage: string | null = null, offerLogged = true) => CT.lookoutOriginAt({ message, quote, lastCoMessage, offerLogged });
   check("\"let me know when the Lisbon run club posts dates\" is theirs", at("let me know when the Lisbon run club posts dates", "let me know when the Lisbon run club posts dates") === "member");
   check("\"keep an eye out for pottery classes in the Mission\" is theirs", at("can you keep an eye out for pottery classes in the Mission?", "keep an eye out for pottery classes") === "member");
-  check("a wish, not a request to watch (\"been wanting to try pottery\"), is Co's", at("I've been wanting to try pottery", "been wanting to try pottery") === "co");
-  check("a watch ask from an older message, quoted now, is Co's (asked now or not at all)", at("cool thanks", "let me know when the Lisbon run club posts dates") === "co");
-  check("\"yes\" to Co's \"want me to keep an eye out for...?\" is theirs", at("yes", "yes", "Want me to keep an eye out for founder runs this month?") === "member");
-  check("\"sure\" to Co's \"should I let you know when it opens?\" is theirs", at("sure", "sure", "Should I let you know when the waitlist opens?") === "member");
-  check("\"yes\" to an offer that isn't about watching is Co's", at("yes", "yes", "Want me to send you the menu?") === "co");
-  check("\"yes\" to a statement (no question) is Co's", at("yes", "yes", "I'll keep an eye out for founder runs.") === "co");
+  check("a wish, not a request to watch (\"been wanting to try pottery\"), is Cue's", at("I've been wanting to try pottery", "been wanting to try pottery") === "co");
+  check("a watch ask from an older message, quoted now, is Cue's (asked now or not at all)", at("cool thanks", "let me know when the Lisbon run club posts dates") === "co");
+  check("\"yes\" to Cue's \"want me to keep an eye out for...?\" is theirs", at("yes", "yes", "Want me to keep an eye out for founder runs this month?") === "member");
+  check("\"sure\" to Cue's \"should I let you know when it opens?\" is theirs", at("sure", "sure", "Should I let you know when the waitlist opens?") === "member");
+  check("\"yes\" to an offer that isn't about watching is Cue's", at("yes", "yes", "Want me to send you the menu?") === "co");
+  check("\"yes\" to a statement (no question) is Cue's", at("yes", "yes", "I'll keep an eye out for founder runs.") === "co");
   check("a short yes to a watching offer passes the reply loop's own yes check", CT.isYesToOffer("yeah", "Want me to keep an eye out for founder runs?"));
   // Re-review of #131: Co pays to open the door, in code.
-  check("a yes to a watching offer that was never logged as a find (a proactive or task text) opens Co's look-out", at("yeah", "yeah", "Want me to let you know when more dates open up?", false) === "co");
+  check("a yes to a watching offer that was never logged as a find (a proactive or task text) opens Cue's look-out", at("yeah", "yeah", "Want me to let you know when more dates open up?", false) === "co");
   check("\"tell me if this sounds crazy...\" isn't a watch ask", at("Tell me if this sounds crazy, I want to host a supper club", "Tell me if this sounds crazy") === "co");
   check("the reply loop looks the offer up on the ledger before calling it theirs", /const offerLogged = offer \? await import\("\.\.\/harness\/proactive\.js"\)\.then\(\(P\) => P\.replyWatchOfferLogged\(ctx\.userId, String\(ctx\.lastCoMessage \?\? ""\)\)\)/.test(src("agent/conversationTools.ts")));
-  check("the logged offer matches Co's last line however its beats were split", P.watchOfferMatches("Want me to keep an eye out for founder runs this month?", "Nice one. Want me to keep an eye out for founder runs this month?") && !P.watchOfferMatches("Want me to keep an eye out for founder runs?", "Want me to send the menu?"));
+  check("the logged offer matches Cue's last line however its beats were split", P.watchOfferMatches("Want me to keep an eye out for founder runs this month?", "Nice one. Want me to keep an eye out for founder runs this month?") && !P.watchOfferMatches("Want me to keep an eye out for founder runs?", "Want me to send the menu?"));
   check("the origin is kept in the task's followup JSON", JSON.parse(CT.followupJson({ source: "lookout", lookoutOrigin: "member" })!).lookoutOrigin === "member");
-  check("a look-out with no origin given is recorded as Co's", JSON.parse(CT.followupJson({ source: "lookout" })!).lookoutOrigin === "co");
+  check("a look-out with no origin given is recorded as Cue's", JSON.parse(CT.followupJson({ source: "lookout" })!).lookoutOrigin === "co");
   check("a non-look-out records no origin", CT.followupJson({ source: "ask" }) === null);
   check("the window and the origin sit together", (() => { const f = JSON.parse(CT.followupJson({ source: "lookout", lookoutOrigin: "co", window: { words: "by tonight" } as any })!); return f.lookoutOrigin === "co" && f.window?.words === "by tonight"; })());
   check("read back from the row", CT.lookoutOriginOf("lookout", { lookoutOrigin: "member" }) === "member" && CT.lookoutOriginOf("lookout", { lookoutOrigin: "co" }) === "co");
-  check("a look-out opened before origins reads as Co's (the only look-outs then were Co's promises)", CT.lookoutOriginOf("lookout", null) === "co");
+  check("a look-out opened before origins reads as Cue's (the only look-outs then were Cue's promises)", CT.lookoutOriginOf("lookout", null) === "co");
   check("a task that isn't a look-out has no origin", CT.lookoutOriginOf("ask", { lookoutOrigin: "member" }) === null);
 }
 
@@ -65,10 +65,10 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   const mine = TT.taskTurnPrompt({ task: task("member", "Lisbon run club dates", "let me know when the Lisbon run club posts dates"), firstName: "Jordan", now: "Fri Oct 9, 1pm", zone: null, recent: "" });
   check("a member look-out's turn says they asked and are waiting, never a call promise", /because they asked you to/.test(mine) && /They're waiting to hear/.test(mine) && !/as you told them on a call/.test(mine) && !/Nobody is waiting/.test(mine));
   const cos = TT.taskTurnPrompt({ task: task("co", "Keep an eye out, as promised on a call: founder runs", "(said on a call)"), firstName: "Jordan", now: "Fri Oct 9, 1pm", zone: null, recent: "" });
-  check("a Co look-out's turn is still Co's promise from a call", /as you told them on a call you would/.test(cos));
+  check("a Cue look-out's turn is still Cue's promise from a call", /as you told them on a call you would/.test(cos));
   const carry = (t: any) => MK.carryingOf({ tasks: [t], briefs: [], receipts: [], ledger: [], loops: [], promises: [], now: new Date("2026-10-09T20:00:00Z"), zone: null });
   check("a member look-out carries as their task, not \"your promise on a call\"", carry(task("member", "Lisbon run club dates", "let me know when")).every((c: any) => c.kind === "task"), carry(task("member", "x y z", "let me know when")));
-  check("a Co look-out still carries as Co's look-out", carry(task("co", "Keep an eye out, as promised on a call: founder runs", "(said on a call)")).some((c: any) => c.kind === "lookout"));
+  check("a Cue look-out still carries as Cue's look-out", carry(task("co", "Keep an eye out, as promised on a call: founder runs", "(said on a call)")).some((c: any) => c.kind === "lookout"));
 }
 
 // 1/2. What each counts as.
@@ -138,11 +138,11 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
 
 // (a) A watching offer Co makes inside a reply is logged as a Co-initiated find (Royce, 2026-10-09, option 1).
 {
-  check("the offer is found in what Co sent", CT.watchOfferIn("Nice. Want me to keep an eye out for founder runs this month?") === "Want me to keep an eye out for founder runs this month?");
+  check("the offer is found in what Cue sent", CT.watchOfferIn("Nice. Want me to keep an eye out for founder runs this month?") === "Want me to keep an eye out for founder runs this month?");
   check("\"should I let you know when the waitlist opens?\" is an offer", CT.watchOfferIn("Should I let you know when the waitlist opens?") !== null);
   check("a statement isn't an offer (no question)", CT.watchOfferIn("I'll keep an eye out for founder runs.") === null);
   check("a question that doesn't offer to watch isn't one", CT.watchOfferIn("Want me to send the menu?") === null);
-  check("a question about someone else isn't Co's offer (\"Did Maya let you know when it starts?\")", CT.watchOfferIn("Did Maya let you know when the party starts?") === null && !CT.isYesToWatchOffer("yes", "Did Maya let you know when the party starts?"));
+  check("a question about someone else isn't Cue's offer (\"Did Maya let you know when it starts?\")", CT.watchOfferIn("Did Maya let you know when the party starts?") === null && !CT.isYesToWatchOffer("yes", "Did Maya let you know when the party starts?"));
   check("the reply logs it after it went, never gates it", /const offer = \(await import\("\.\.\/services\/coTasks\.js"\)\)\.watchOfferIn\(state\.sentMessages\.join\("\\n"\)\);[\s\S]{0,200}recordReplyWatchOffer\(input\.userId, offer\)/.test(src("agent/conversationReply.ts")) && /if \(state\.sent && !opts\.dryRun && opts\.record !== false\) \{\s*const offer/.test(src("agent/conversationReply.ts")));
   check("it goes on the ledger as a find (exempt, so it never takes a cap)", /VALUES \(\$1, \$2, \$3, \$3, \$4, true, 'find', \$5\)/.test(src("harness/proactive.ts")) && P.REPLY_WATCH_OFFER_TYPE === "watch_offer");
   const now = new Date("2026-10-20T18:00:00Z");
@@ -180,9 +180,9 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
     return { r, log };
   };
   const coPdf = await run({ coInitiated: { kind: "find" } });
-  check("a Co look-out's PDF is claimed on the ledger as a find before it goes", coPdf.r.ok && coPdf.log.claims.length === 1 && coPdf.log.claims[0].kind === "find" && coPdf.log.delivered.includes("pdf_text"), coPdf);
+  check("a Cue look-out's PDF is claimed on the ledger as a find before it goes", coPdf.r.ok && coPdf.log.claims.length === 1 && coPdf.log.claims[0].kind === "find" && coPdf.log.delivered.includes("pdf_text"), coPdf);
   const held = await run({ coInitiated: { kind: "find" }, claim: "held" });
-  check("a Co look-out's document is held like a find (nothing delivered, a retry time back)", !held.r.ok && held.log.delivered.length === 0 && "nextAt" in held.r && !!held.r.nextAt && /held/.test(held.r.why), held);
+  check("a Cue look-out's document is held like a find (nothing delivered, a retry time back)", !held.r.ok && held.log.delivered.length === 0 && "nextAt" in held.r && !!held.r.nextAt && /held/.test(held.r.why), held);
   const failed = await run({ coInitiated: { kind: "find" }, delivered: false });
   // Re-review of #131: a throw before anything went releases too.
   const thrown = await (async () => {
@@ -196,11 +196,11 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   const member = await run({});
   check("a member look-out's document is owed: no claim, it goes", member.r.ok && member.log.claims.length === 0, member);
   const tt = src("services/taskTurn.ts");
-  check("the task passes a Co look-out's kind to its document send (PDF and Google Doc go through the same send)", /const kind = lookoutKind\(task\);[\s\S]{0,400}\.\.\.\(kind \? \{ coInitiated: \{ kind \} \} : \{\}\)/.test(tt));
+  check("the task passes a Cue look-out's kind to its document send (PDF and Google Doc go through the same send)", /const kind = lookoutKind\(task\);[\s\S]{0,400}\.\.\.\(kind \? \{ coInitiated: \{ kind \} \} : \{\}\)/.test(tt));
   check("a held document holds the task like a held text", /Not sent: held:/.test(tt) && /heldUntil = quietUntil/.test(tt));
   const dd = src("services/documentDelivery.ts");
   check("one claim covers every target of the send (PDF and Google Doc both go after it)", dd.indexOf("const c = await deps.claim(") < dd.indexOf("rd = await deliverAndRecord(") && /claimCoInitiatedSend\(\{ userId: c\.userId, type: "task_update"/.test(dd));
-  check("a Co document goes on the ledger as a task text, so it spaces the next text Co starts too", !P.spacingCheck({ now: new Date("2026-10-20T18:30:00Z"), sends: [{ type: "task_update", targetKey: "task:9:doc:1", topicKey: null, sentAt: new Date("2026-10-20T18:00:00Z"), exempt: true }] }).pass);
+  check("a Cue document goes on the ledger as a task text, so it spaces the next text Cue starts too", !P.spacingCheck({ now: new Date("2026-10-20T18:30:00Z"), sends: [{ type: "task_update", targetKey: "task:9:doc:1", topicKey: null, sentAt: new Date("2026-10-20T18:00:00Z"), exempt: true }] }).pass);
 }
 
 // (d) Explicit watch language routes to a look-out, not saveAsk.
@@ -209,7 +209,7 @@ const src = (p: string) => fs.readFileSync(new URL(`../../src/${p}`, import.meta
   const start = CAP.slice(CAP.indexOf('tool: "startTask"'), CAP.indexOf('id: "task_update"'));
   const save = CAP.slice(CAP.indexOf('tool: "saveAsk"'), CAP.indexOf('id: "reactions"'));
   check("startTask's guidance: explicit watch language is a look-out (lookout: true), never saveAsk", /Explicit watch language[\s\S]{0,200}startTask with lookout: true, never saveAsk/.test(start));
-  check("saveAsk's guidance: vaguer interest stays here; explicit watch language goes to the look-out", /vaguer interest/.test(save) && /startTask with lookout: true, not saveAsk/.test(save) && !/or they want Co to keep an eye out\./.test(save));
+  check("saveAsk's guidance: vaguer interest stays here; explicit watch language goes to the look-out", /vaguer interest/.test(save) && /startTask with lookout: true, not saveAsk/.test(save) && !/or they want Cue to keep an eye out\./.test(save));
 }
 
 console.log(`look-out origin: ${total - failed}/${total} passed`);

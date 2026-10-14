@@ -22,14 +22,14 @@ for (const [name, pool] of Object.entries(pools)) {
   for (const line of pool) {
     const filled = pickLine([line], { name: "Royce" });
     check(`${name}: no em dash: "${line.slice(0, 40)}"`, !/[—–]/.test(line));
-    check(`${name}: Co is only ever Co: "${line.slice(0, 40)}"`, !/copatible|matchmaker|assistant|concierge|\bAI\b/i.test(line));
+    check(`${name}: Cue is only ever Cue: "${line.slice(0, 40)}"`, !/copatible|matchmaker|assistant|concierge|\bAI\b/i.test(line));
     check(`${name}: starts with a capital: "${line.slice(0, 40)}"`, /^[A-Z]/.test(filled));
     check(`${name}: short enough for a text: "${line.slice(0, 40)}"`, filled.length <= 320);
     check(`${name}: never announces exclusivity: "${line.slice(0, 40)}"`, !/exclusive|invite-only|vip|elite/i.test(line));
   }
 }
 check("every first text asks for the invite code", GATE_ASK.every((l) => /invite code/i.test(l)));
-check("every first text says who Co is", GATE_ASK.every((l) => /\bCo\b/.test(l)));
+check("every first text says who Cue is", GATE_ASK.every((l) => /\bCue\b/.test(l)));
 check("every call offer uses their name", CALL_OFFER.every((l) => l.includes("{name}")));
 check("every call offer keeps texting an option", CALL_OFFER.every((l) => /text/i.test(l)));
 check("every call offer offers now or a time", CALL_OFFER.every((l) => /now/i.test(l) && /time/i.test(l)));
@@ -63,7 +63,7 @@ for (const auto of [
 ]) check(`reads as automated: ${auto}`, looksAutomated(auto));
 for (const human of [
   "hey",
-  "Hi Co, Sam invited me. Code: 6VGF76VK",
+  "Hi Cue, Sam invited me. Code: 6VGF76VK",
   "my code is 7JQ2K9XM",
   "can you help me get an invite?",
   "yes",
@@ -86,7 +86,7 @@ for (const human of [
 check("an automated message is never answered, even with budget left", decideGateReply({ text: "Reply STOP to unsubscribe.", recentGateReplies: 0 }) === "silent_automated");
 check("a person with budget left is answered", decideGateReply({ text: "hey", recentGateReplies: 0 }) === "send");
 check("a person can retry a code a few times", decideGateReply({ text: "ABCD2345", recentGateReplies: GATE_REPLY_BUDGET.max - 1 }) === "send");
-check("past the budget Co goes quiet", decideGateReply({ text: "ABCD2345", recentGateReplies: GATE_REPLY_BUDGET.max }) === "silent_budget");
+check("past the budget Cue goes quiet", decideGateReply({ text: "ABCD2345", recentGateReplies: GATE_REPLY_BUDGET.max }) === "silent_budget");
 {
   // Replay of the 09-20 loop: 32 inbound messages, each answered by Co in turn.
   let sends = 0;
@@ -130,7 +130,7 @@ check("past the budget Co goes quiet", decideGateReply({ text: "ABCD2345", recen
   check("'you're from' a place they never mentioned is caught", ungroundedIdentityClaims("Since you're from Paris this should feel familiar.", profile).join() === "Paris");
   check("'you're from' a place in their profile is fine", ungroundedIdentityClaims("Since you're from Texas this is a change of scene.", profile + " just moved from Texas").length === 0);
   check("'as a mom' with no basis is caught", ungroundedIdentityClaims("As a mom you'll like the kids' track.", profile).join() === "mom");
-  check("what they are doing is never a claim about who they are", ungroundedIdentityClaims("You're building Co, you're looking at accelerators, you're hosting an event Oct 10, you're in SF.", profile).length === 0);
+  check("what they are doing is never a claim about who they are", ungroundedIdentityClaims("You're building Cue, you're looking at accelerators, you're hosting an event Oct 10, you're in SF.", profile).length === 0);
   check("a post that merely mentions French founders is fine", ungroundedIdentityClaims("It's aimed at French founders coming to SF.", profile).length === 0);
   check("the drafting rule names the trap", IDENTITY_RULE.includes("French founders") && IDENTITY_RULE.includes("does not mean they belong"));
 }

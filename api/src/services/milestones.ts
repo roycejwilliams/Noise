@@ -48,11 +48,11 @@ export function deriveMilestones(s: Source): Omit<Milestone, "markedAt">[] {
   const now = new Date(s.now).getTime();
   for (const d of DAY_MARKS) {
     if (now - joined >= d * dayMs) {
-      out.push({ key: `days:${d}`, kind: "with_co", text: `They've been with Co for ${d >= 365 ? "a year" : `${d} days`}.`, then: null, now: null, happenedAt: new Date(joined + d * dayMs).toISOString() });
+      out.push({ key: `days:${d}`, kind: "with_co", text: `They've been with Cue for ${d >= 365 ? "a year" : `${d} days`}.`, then: null, now: null, happenedAt: new Date(joined + d * dayMs).toISOString() });
     }
   }
   for (const w of s.went) {
-    out.push({ key: `went:${w.itemKey}`, kind: "went", text: `They went to ${w.name}, which Co had sent them.`, then: null, now: null, happenedAt: new Date(w.at).toISOString() });
+    out.push({ key: `went:${w.itemKey}`, kind: "went", text: `They went to ${w.name}, which Cue had sent them.`, then: null, now: null, happenedAt: new Date(w.at).toISOString() });
   }
   for (const t of s.closed) {
     // Only with their own closing words: without them there's nothing to say it in.
@@ -80,9 +80,9 @@ export function storyLines(all: Milestone[], limit = 6): string[] {
   const recent = [...all].sort((a, b) => new Date(b.happenedAt).getTime() - new Date(a.happenedAt).getTime()).slice(0, limit);
   return recent.map((m) => {
     const when = m.happenedAt.slice(0, 10);
-    if (m.confirmed === false) return `Unconfirmed (${when}; ${UNCONFIRMED_RULE}): Co once read a text of theirs as going to something it sent them. ${m.text.replace(/^They went to /, "It was ").replace(/, which Co had sent them\.$/, ".")}`;
+    if (m.confirmed === false) return `Unconfirmed (${when}; ${UNCONFIRMED_RULE}): Cue once read a text of theirs as going to something it sent them. ${m.text.replace(/^They went to /, "It was ").replace(/, which (?:Co|Cue) had sent them\.$/, ".")}`;
     const words = m.then || m.now ? ` They first said: "${(m.then ?? "").slice(0, 160)}"${m.now ? ` and later: "${m.now.slice(0, 160)}"` : ""}.` : "";
-    return `In their story with Co (${when}): ${m.text}${words}`;
+    return `In their story with Cue (${when}): ${m.text}${words}`;
   });
 }
 

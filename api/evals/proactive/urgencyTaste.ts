@@ -51,8 +51,8 @@ const sendRec = (type: string, iso: string, exempt = false) => ({ type, targetKe
   check("an uncapped find waits only on spacing and hours (5:45pm)", P.nextSendSlot({ now: NOW, zone: SF, findLane: "room", findCounted: false, countedToday: { room: 5, other: 5 }, other: null }).toISOString() === "2026-10-10T00:45:00.000Z");
   check("a find's end is its own expiry or the end of its last day, whichever is first", P.findEndsAt(fleet, SF)?.toISOString() === "2026-10-10T06:59:59.000Z" && P.findEndsAt(cand("x", "event_offer", { lastDay: "2026-10-09" }), SF)?.toISOString() === "2026-10-10T06:59:59.999Z");
   const px = src("harness/proactive.ts");
-  check("dispatch picks the expiring find before asking Co to choose, with the reason logged", /const urgent = expiringFind\(ev\.eligible, \{ now: state\.now, zone: person\.timezone, sends: state\.sends \}\);/.test(px) && /expires before the next send slot \(ends/.test(px) && /: await choosePick\(ev\.eligible/.test(px));
-  check("the bundle still forms around it (leadPick), so its siblings ride along", /const c = leadPick\(picked\.pick, ev\.eligible\);/.test(px));
+  check("dispatch picks the expiring find before asking Cue to choose, with the reason logged", /const urgent = expiringFind\(pickable, \{ now: state\.now, zone: person\.timezone, sends: state\.sends \}\);/.test(px) && /expires before the next send slot \(ends/.test(px) && /: await choosePick\(pickable/.test(px));
+  check("the bundle still forms around it (leadPick), so its siblings ride along", /const c = leadPick\(picked\.pick, pickable\);/.test(px));
 }
 
 // (b) What doesn't jump.
@@ -66,7 +66,7 @@ const sendRec = (type: string, iso: string, exempt = false) => ({ type, targetKe
   for (const t of ["post_call", "pre_arrival", "event_brief", "brief_name_ask", "ask_solicitation"]) check(`never past a ${t}`, P.expiringFind([cand("x", t), picked("f", { lastDay: "2026-10-09" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("never past something else that ends first", P.expiringFind([cand("w", "window_followup", { expiresAt: "2026-10-10T04:00:00Z" }), picked("f", { lastDay: "2026-10-09" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("a find the daily picker didn't choose doesn't jump (taste was never weighed)", P.expiringFind([debrief, withPayload(cand("f", "event_offer"), { lastDay: "2026-10-09", askId: "a" })], { now: SEVEN, zone: SF, sends: [] }) === null);
-  check("only finds ready: nothing to jump (Co picks, the bundle forms)", P.expiringFind([picked("f", { lastDay: "2026-10-09" }), picked("g", {})], { now: SEVEN, zone: SF, sends: [] }) === null);
+  check("only finds ready: nothing to jump (Cue picks, the bundle forms)", P.expiringFind([picked("f", { lastDay: "2026-10-09" }), picked("g", {})], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("a find already past its end isn't picked", P.expiringFind([debrief, picked("f", { expiresAt: "2026-10-09T20:00:00Z" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   const two = P.expiringFind([debrief, picked("late", { lastDay: "2026-10-09" }), picked("soon", { expiresAt: "2026-10-10T05:00:00Z" })], { now: SEVEN, zone: SF, sends: [] });
   check("two expiring: the one ending first leads", two?.pick.id === "soon", two);
@@ -104,14 +104,14 @@ const sendRec = (type: string, iso: string, exempt = false) => ({ type, targetKe
   // Through the shared layer: a stored taste reaches the picker and the daily pick.
   const k = await MK.memberKnowledge("u", { include: ["preferences"] }, {
     profile: async () => ({ firstName: "R", city: "SF", goals: [], intent: [], updatedAt: new Date() }), zone: async () => SF, linkedNames: async () => [],
-    taste: async () => ({ text: "From what they've told Co about things it sent, they said weren't for them: Pitch Protocol.", at: new Date("2026-10-01T00:00:00Z") }),
+    taste: async () => ({ text: "From what they've told Cue about things it sent, they said weren't for them: Pitch Protocol.", at: new Date("2026-10-01T00:00:00Z") }),
     roomTaste: async () => [{ text: TASTE, at: new Date("2026-10-09T21:53:00Z") }],
   });
   check("member knowledge carries stated taste first, then how sends landed", k.preferences[0]?.source === "stated" && k.preferences[1]?.source === "taste", k.preferences);
   const facts = SC.factsFromKnowledge({ ...k, goals: [], exchanges: [], delivered: [], carrying: [], corrections: [], lessons: [], restraint: null } as any);
   check("the picker's facts carry it as its own section, not buried in learned", facts.roomTaste?.[0] === TASTE && !(facts.learned ?? []).some((l) => l.includes("drop my guard")), facts);
   const block = P.memberDraftBlock(k as any, MK.memberRules(k));
-  check("Co's own drafts see it as what they want, not as what landed", /What kind of room they've said they want \(their words\)/.test(block) && /What has landed with them before/.test(block));
+  check("Cue's own drafts see it as what they want, not as what landed", /What kind of room they've said they want \(their words\)/.test(block) && /What has landed with them before/.test(block));
   // Capture: their words, through a tool, not the team log.
   check("room_taste is an allowed memory type (co_memories_memory_type_check), so the write can land", /"room_taste",\s*\];/.test(src("db/migrations.ts")) && RT.ROOM_TASTE_MEMORY === "room_taste");
   check("what they want or avoid has to come from their quote (review of #132)", RT.tasteUnbacked({ wants: "a room where they can drop their guard", avoids: "performative events", quote: "I feel like everything is performative. I'm looking to be in a room that I can drop my guard" }) === null && RT.tasteUnbacked({ avoids: "loud parties", quote: "I'm so tired lately" }) !== null && RT.tasteUnbacked({ wants: "small rooms", quote: "smaller" }) !== null);
@@ -120,7 +120,7 @@ const sendRec = (type: string, iso: string, exempt = false) => ({ type, targetKe
   check("the daily pick gets stated taste as its own line, not mixed into what landed", /const statedTaste = known\?\.preferences\.filter\(\(p\) => p\.source === "stated"\)/.test(src("harness/proactive.ts")) && /What kind of room they've said they want \(their words\): \$\{about\.statedTaste\}/.test(src("harness/proactive.ts")));
   check("a stored taste reads back; a malformed one is ignored", RT.parseRoomTaste(JSON.stringify({ wants: "small rooms", avoids: null, quote: "smaller, no pitching" }))?.wants === "small rooms" && RT.parseRoomTaste("not json") === null && RT.parseRoomTaste(JSON.stringify({ quote: "x" })) === null);
   const cap = src("services/capabilities.ts");
-  check("noteRoomTaste is a capability Co chooses, and team feedback points room taste to it", /tool: "noteRoomTaste"/.test(cap) && /isn't feedback for the team: note it with noteRoomTaste/.test(cap));
+  check("noteRoomTaste is a capability Cue chooses, and team feedback points room taste to it", /tool: "noteRoomTaste"/.test(cap) && /isn't feedback for the team: note it with noteRoomTaste/.test(cap));
   const ct = src("agent/conversationTools.ts");
   const tool = ct.slice(ct.indexOf("noteRoomTaste: tool({"), ct.indexOf("noteReaction: tool({"));
   check("the tool stores only their own words (quote checked, teammate talk skipped)", tool.includes("T.wordsAreTheirs(quote,") && tool.includes("notToTeammate()") && tool.includes("recordRoomTaste(ctx.userId, taste)") && tool.indexOf("wordsAreTheirs") < tool.indexOf("recordRoomTaste"));

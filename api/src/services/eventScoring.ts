@@ -723,7 +723,7 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
   await writeMemory(
     person.user_id,
     "event_guest_match_nudge",
-    `Additive offer sent to ${person.first_name} at "${eventName}": ${newCandidates.length} more people checked in since their last match. Co asked if they want to hear who; no one has been named to them.`,
+    `Additive offer sent to ${person.first_name} at "${eventName}": ${newCandidates.length} more people checked in since their last match. Cue asked if they want to hear who; no one has been named to them.`,
   );
   await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
     console.error("eventScoring: additive offer text_exchange log failed (non-fatal):", err?.message ?? err),
@@ -762,7 +762,7 @@ export async function scoreMatchedGroup(
   opts: { dryRun?: boolean; honestLowConfidence?: boolean; requireTiming?: boolean } = {},
 ): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
   if (matched.length < 2) {
-    console.log(`eventScoring: ${eventId} has ${matched.length} matched Co user(s) — nothing to rank yet`);
+    console.log(`eventScoring: ${eventId} has ${matched.length} matched Cue user(s) — nothing to rank yet`);
     return { scoredCount: 0, solicitedCount: 0, matchedCount: matched.length };
   }
 

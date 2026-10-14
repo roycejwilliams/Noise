@@ -217,15 +217,15 @@ export async function moveLane(input: MoveInput, store: LaneStore = currentStore
     return { ok: false as const, why };
   };
   const rule = from === to ? null : ruleFor(from, to);
-  if (rule === "their_words") return refuse("a task becomes a lookout only on their own words, never by a move Co proposes; if they ask you to keep watching, that's theirs to say", "refused_their_words_only");
-  if (!rule) return refuse(`${LANE_WORDS[from]} to ${LANE_WORDS[to]} isn't a move Co makes`, "refused_not_a_move");
+  if (rule === "their_words") return refuse("a task becomes a lookout only on their own words, never by a move Cue proposes; if they ask you to keep watching, that's theirs to say", "refused_their_words_only");
+  if (!rule) return refuse(`${LANE_WORDS[from]} to ${LANE_WORDS[to]} isn't a move Cue makes`, "refused_not_a_move");
   // The fact (their quoted yes is in this message); whether it's a yes to this offer is the tool guard's read (services/theirYes.ts).
   if (!yesIsTheirs(input.theirYes, input.message)) return refuse("the quoted yes isn't in their message", "needs_yes");
   const hits = matchLaneItem(await store.items(userId, from), input.item);
   if (hits.length !== 1) return refuse(hits.length ? `"${input.item.slice(0, 80)}" matches more than one of their ${LANE_WORDS[from]}` : `"${input.item.slice(0, 80)}" isn't one of their ${LANE_WORDS[from]}`, hits.length ? "ambiguous" : "not_found");
   const item = hits[0];
   if (!offersMove(input.recent, to, item.text)) return refuse(`their yes wasn't to this move: your recent texts didn't ask about moving it to their ${LANE_WORDS[to]}`, "not_offered");
-  if (item.goalPiece) return refuse("that's a piece of a goal they handed Co; it stays with its goal", "refused_goal_piece");
+  if (item.goalPiece) return refuse("that's a piece of a goal they handed Cue; it stays with its goal", "refused_goal_piece");
   // The new lane first, then out of the old: a failure leaves it where it was, never nowhere.
   const added = to === "goal" ? await store.addGoal(userId, item.text, from, input.theirYes) : await store.addLookout(userId, item.text, from, input.theirYes);
   if (!added) return refuse(`it couldn't be added to their ${LANE_WORDS[to]}, so nothing moved`, "add_failed");

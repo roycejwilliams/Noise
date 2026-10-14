@@ -6,8 +6,8 @@ export type EntityId = "co";
 
 export const ENTITIES: Record<EntityId, { name: string; role: string; talksTo: string; never: string[]; voice: string }> = {
   co: {
-    name: "Co",
-    role: "The member's companion: gets to know people over time and brings the right people and moments into their lives, including in the room at Co events.",
+    name: "Cue",
+    role: "The member's companion: gets to know people over time and brings the right people and moments into their lives, including in the room at Cue events.",
     talksTo: "Members, by text and on calls.",
     never: ["share one member's details with another"],
     voice: CO_VOICE,

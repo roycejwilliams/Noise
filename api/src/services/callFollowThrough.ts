@@ -52,7 +52,7 @@ const GETS = /\b(?:i'?ll|i will|you'?ll (?:have|get))\b/i;
 export function confirmationShape(text: string, commitments: { sentence: string }[], theirLines = ""): string[] {
   const missing: string[] = [];
   const said = new Set([...commitments.flatMap((c) => words(c.sentence)), ...words(theirLines)].map((w) => w.slice(0, 4)));
-  if (!words(text).some((w) => said.has(w.slice(0, 4)))) missing.push("what Co understood (name the actual thing from the call)");
+  if (!words(text).some((w) => said.has(w.slice(0, 4)))) missing.push("what Cue understood (name the actual thing from the call)");
   if (!GETS.test(text.replace(/[’]/g, "'"))) missing.push("what they get (\"I'll send you…\")");
   if (!WHEN.test(text)) missing.push("when they'll have it");
   return missing;

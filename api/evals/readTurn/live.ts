@@ -22,7 +22,7 @@ const ctx: any = {
     { name: "daytonaio AI Builders Demo Night", url: "https://x.com/i/status/2102773693290336381" },
   ],
 };
-const grokNote = '[Replying to Co\'s text: "https://lu.ma/grokbotproduct-sf" (Short notice, but Grok Bot x Notion is throwing a product builders night in SF on Tuesday the 29th)]';
+const grokNote = '[Replying to Cue\'s text: "https://lu.ma/grokbotproduct-sf" (Short notice, but Grok Bot x Notion is throwing a product builders night in SF on Tuesday the 29th)]';
 const t1122 = `User said: I'm in ${grokNote}\nCo replied: Both are the same night, so it's one or the other. Given you're leaning toward taking a break from building and just showing up somewhere, I'd pick this one.`;
 const cases: { name: string; message: string; recent: string; openItems?: any[]; want: (r: any) => boolean }[] = [
   { name: "timing question", message: "Are they around the same time?", recent: t1122, want: (r) => ["logistics", "asking"].includes(r.moment.mode) && r.moment.dots.length === 0 && !!r.aboutSent },
@@ -37,8 +37,8 @@ const cases: { name: string; message: string; recent: string; openItems?: any[];
     message: `I'm in ${grokNote}`,
     recent: "Co replied: https://lu.ma/grokbotproduct-sf\nCo replied: Short notice, but Grok Bot x Notion is throwing a product builders night in SF on Tuesday the 29th.\nCo replied: https://x.com/i/status/2102773693290336381\nCo replied: Found the SF meetup you asked about: daytonaio's AI Builders Demo Night, Tuesday at WorkOS SF.\nCo replied: Does anything here catch your eye?",
     openItems: [
-      { id: "offer_reaction:39", kind: "offer_reaction", description: 'Co offered "Grok Bot x Notion for Product Builders night (SF)"', askedAt: null },
-      { id: "offer_reaction:38", kind: "offer_reaction", description: 'Co offered "daytonaio AI Builders Demo Night"', askedAt: null },
+      { id: "offer_reaction:39", kind: "offer_reaction", description: 'Cue offered "Grok Bot x Notion for Product Builders night (SF)"', askedAt: null },
+      { id: "offer_reaction:38", kind: "offer_reaction", description: 'Cue offered "daytonaio AI Builders Demo Night"', askedAt: null },
     ],
     want: (r) => r.moment.mode === "reacting" && r.router.answers?.itemId === "offer_reaction:39" && r.aboutSent?.startsWith("Grok"),
   },

@@ -67,7 +67,7 @@ await pool.end();
 console.log(`\nshould flag: ${caught}/${should} caught (${cueRight} with the expected cue)`);
 for (const [cue, [c, n]] of Object.entries(byCue)) console.log(`  ${cue}: ${c}/${n}`);
 console.log(`false flags (words already said it, or calm voice): ${falseKept}/${shouldnt}`);
-console.log(`kept flags on anything else (Co's lines, other words): ${offMoment}`);
+console.log(`kept flags on anything else (Cue's lines, other words): ${offMoment}`);
 console.log(`dropped by the checks: ${dropped}`);
 console.log(`\nbeyond the words (moments where the feeling was only in the voice, n=${should}):`);
 console.log(`  text read caught: ${textCaught}   voice flag caught: ${caught}`);

@@ -87,7 +87,7 @@ export function doorDecision(o: { view: DoorView; now?: Date; heavy: boolean; fr
   const s = doorOpen(o.view, o.now ?? new Date());
   if (!s.open) return { offer: false, why: s.why };
   if (o.heavy) return { offer: false, why: "a heavy moment" };
-  if (o.frustrated) return { offer: false, why: "frustrated with Co right now" };
+  if (o.frustrated) return { offer: false, why: "frustrated with Cue right now" };
   if (o.otherQuestion) return { offer: false, why: `this reply already has something else to offer (${o.otherQuestion})` };
   return { offer: true, why: s.why };
 }
@@ -261,8 +261,8 @@ export async function giveFirstRead(
       ok: true,
       timed: false,
       pending: { understood, lookFor, timed: false, taskId: null, at: null, words: null, zone: null },
-      fact: `First read: Co is saying back what it understood (${understood.slice(0, 160)}). No first look was scheduled.`,
-      note: `${playback} Co can't text them first right now, so don't name a time or promise a later text. Tell them plainly they can ask you about ${lookFor} any time.`,
+      fact: `First read: Cue is saying back what it understood (${understood.slice(0, 160)}). No first look was scheduled.`,
+      note: `${playback} Cue can't text them first right now, so don't name a time or promise a later text. Tell them plainly they can ask you about ${lookFor} any time.`,
     };
   }
 
@@ -301,7 +301,7 @@ export async function giveFirstRead(
     ok: true,
     timed: true,
     pending: { understood, lookFor, timed: true, taskId, at: look.at.toISOString(), words: look.words, zone },
-    fact: `Started task${taskId ? ` #${taskId}` : ""}: a first look for ${lookFor}. Co will text them by ${stamp} with the best real thing it finds, or plainly what didn't turn up.`,
+    fact: `Started task${taskId ? ` #${taskId}` : ""}: a first look for ${lookFor}. Cue will text them by ${stamp} with the best real thing it finds, or plainly what didn't turn up.`,
     note: look.clock
       ? `${playback} Then say you'll text them ${look.words} with the best real thing you find or plainly where it stands, in your own words. Never promise what you'll find.`
       : `${playback} Then say you'll text them by tomorrow with the best real thing you find or plainly where it stands. Their time zone isn't known, so say "by tomorrow" and never a clock time. Never promise what you'll find.`,
@@ -368,7 +368,7 @@ export function settleFromJudgment(p: Pick<FirstReadPending, "taskId" | "at">, j
 
 export function judgePrompt(p: Pick<FirstReadPending, "understood" | "lookFor" | "at" | "zone">, sent: string, now: Date): string {
   const zone = p.zone ?? "UTC";
-  return `Co (a texting companion) just sent a new member the text below. Co meant to (1) say back what it understood they're after, close to: "${p.understood}", and (2) tell them it will look for "${p.lookFor}" and text them by a time.
+  return `Cue (a texting companion) just sent a new member the text below. Cue meant to (1) say back what it understood they're after, close to: "${p.understood}", and (2) tell them it will look for "${p.lookFor}" and text them by a time.
 
 Now, their time: ${DateTime.fromJSDate(now).setZone(zone).toFormat("cccc yyyy-LL-dd HH:mm ZZ")}${p.zone ? "" : " (their zone isn't known; read times as UTC)"}.
 
@@ -377,7 +377,7 @@ The text that went out:
 
 Answer with ONLY strict JSON: {"playedBack": boolean, "promisedFollowUp": boolean, "when": string or null, "latestBy": string or null}.
 - playedBack: the text says back, in any words, what they're after (not just "got it").
-- promisedFollowUp: the text promises Co will text, tell or get back to them later.
+- promisedFollowUp: the text promises Cue will text, tell or get back to them later.
 - when: the time words of that promise as written ("by six tonight"), else null.
 - latestBy: the latest moment those words could mean, as an ISO 8601 time with offset ("tonight" means 21:00 their time, "this evening" 21:00, "tomorrow" 21:00 tomorrow, "by 6pm" 18:00), else null.`;
 }

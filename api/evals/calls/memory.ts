@@ -41,12 +41,12 @@ const NOW = new Date("2026-10-11T18:00:00Z");
   };
   const lines = CC.callFitLines(k, (t) => !/Oakland/.test(t), AV.availabilityIsLimit, (kk) => RG.heldClaimsFrom(kk, NOW)).join("\n\n");
   check("the room they want, in their words, with how to use it (one heading)", /Their room taste, newest first \(when you suggest anything, lean this way, and never pitch what clashes with it\):\n- wants a room where they can drop their guard/.test(lines), lines);
-  check("how what Co sent has landed", /How what you've sent them has landed: small dinners got a yes/.test(lines));
+  check("how what Cue sent has landed", /How what you've sent them has landed: small dinners got a yes/.test(lines));
   check("never suggest what they ruled out (and their own ask reopens it)", /Never suggest these kinds of things: they asked you to stop \("hackathons", "crypto events"\)/.test(lines) && /If they bring one up themselves/.test(lines));
   check("availability says whether it's a limit or a leaning", /"weeknights only" \(a limit/.test(lines) && /a leaning, not a limit/.test(CC.callFitLines({ ...k, claims: [], limits: { avoid: [], availability: "more flexible on weekends" } }, () => true, AV.availabilityIsLimit).join("\n")));
   const said = lines.split("What they've told you that still holds")[1]?.split("\n\n")[0] ?? "";
   check("review #1: the newest claims, not the oldest (the newest is in; the oldest are left past the limit)", /in Austin next week/.test(said) && !/older plan 1\b/.test(said) && !/older plan 2\b/.test(said) && (said.match(/^- /gm) ?? []).length === CC.CALL_CLAIMS_LIMIT, said);
-  check("review #2: Co's guesses are never under what they said, and are labeled as Co's read", !/exploring a move/.test(said) && /Co's own reads of them \(guesses, not things they told you: never say they said these\):\n- exploring a move to Austin \(Co's read, Oct 8\)/.test(lines), lines.slice(-400));
+  check("review #2: Cue's guesses are never under what they said, and are labeled as Cue's read", !/exploring a move/.test(said) && /Cue's own reads of them \(guesses, not things they told you: never say they said these\):\n- exploring a move to Austin \(Cue's read, Oct 8\)/.test(lines), lines.slice(-400));
   check("review #3: an end date is the day it ends, not the day after", /in Austin next week \(they said, Oct 9, until Oct 18\)/.test(said), said);
   check("a claim a correction retired is left out", !/Oakland/.test(lines));
   check("nothing on file, no sections (no empty headings)", CC.callFitLines({ ...k, preferences: [], limits: { avoid: [], availability: null }, claims: [] }).length === 0 && CC.callFitLines({ ...k, preferences: [], limits: null, claims: [] }).length === 0);
@@ -83,7 +83,7 @@ const NOW = new Date("2026-10-11T18:00:00Z");
 
 // ---------------------------------------------------------------- review of #139: the turn note
 {
-  check("review #10: the note says it's Co's, not their words, and needn't be mentioned", /^\(Co's note, not their words: /.test(CT.avoidNote(["mixers"]) ?? "") && /No need to mention it\.\)$/.test(CT.avoidNote(["mixers"]) ?? ""));
+  check("review #10: the note says it's Cue's, not their words, and needn't be mentioned", /^\(Cue's note, not their words: /.test(CT.avoidNote(["mixers"]) ?? "") && /No need to mention it\.\)$/.test(CT.avoidNote(["mixers"]) ?? ""));
   check("review #9: a failed limits read keeps the last good list mid-call (never an empty one)", /avoid: lim \? lim\.avoid : undefined/.test(src("services/callTools.ts")) && /if \(x\.avoid !== undefined\) lastAvoid\.set\(key, \{ at: Date\.now\(\), avoid: x\.avoid \}\);/.test(src("routes/callLlm.ts")) && /const LAST_AVOID_MS = 60 \* 60_000;/.test(src("routes/callLlm.ts")));
 }
 

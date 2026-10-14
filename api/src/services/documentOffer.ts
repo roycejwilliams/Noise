@@ -77,7 +77,7 @@ export function offerGate(s: Pick<OfferState, "now" | "needsCare" | "heavyNow" |
   const recent = s.history.filter((h) => h.source === "offered");
   const waiting = recent.find((h) => h.status === "offered" && (s.now.getTime() - h.at.getTime()) / 3_600_000 < OFFER.waitingHours);
   if (waiting) return "an offer is still waiting on their answer";
-  if (kind !== "drift" && recent.some((h) => parseTopic(h.topic).kind !== "drift" && days(h.at, s.now) < OFFER.cooldownDays)) return "Co offered within the last two weeks";
+  if (kind !== "drift" && recent.some((h) => parseTopic(h.topic).kind !== "drift" && days(h.at, s.now) < OFFER.cooldownDays)) return "Cue offered within the last two weeks";
   return null;
 }
 // Pure: offered before, same kind, same thing (never the same topic twice, whatever the answer was).
@@ -260,7 +260,7 @@ export function postCallRecapAllowed(o: { gate: Pick<OfferState, "now" | "needsC
   if (gate) return { ok: false, why: gate };
   if (o.localHour < 8 || o.localHour >= 21) return { ok: false, why: "it's night for them" };
   if (o.confirmationSent) return { ok: false, why: "the confirmation text already went" };
-  if (o.coCommitted) return { ok: false, why: "Co made a commitment on the call; that's what follows, not a recap" };
+  if (o.coCommitted) return { ok: false, why: "Cue made a commitment on the call; that's what follows, not a recap" };
   if (o.deliveredSinceCall) return { ok: false, why: "a document already went to them since the call" };
   if (offeredBefore(o.gate.history, "recap", o.callKey)) return { ok: false, why: "already offered for this call" };
   return { ok: true, topic: o.callKey };

@@ -131,7 +131,7 @@ export async function matchAndScoreEventMention(mentionId: string): Promise<void
   }).catch(() => {});
 
   console.log(
-    `eventMatching: mention ${mentionId} ("${mention.event_name_raw}") matched ${matches.length} other Co user(s) (event id: ${eventId}), scoring group`,
+    `eventMatching: mention ${mentionId} ("${mention.event_name_raw}") matched ${matches.length} other Cue user(s) (event id: ${eventId}), scoring group`,
   );
   await scoreMatchedGroup(eventId, mention.event_name_raw, matched, null);
 }

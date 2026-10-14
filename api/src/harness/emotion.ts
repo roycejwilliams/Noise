@@ -61,7 +61,8 @@ const ABOUT_CO = /\bco\b|\bco's\b|\bsearch|\bresults?\b|recommend|suggestion|sur
 export function signalTarget(s: Pick<EmotionSignal, "source" | "about" | "target">): EmotionTarget {
   if (s.target === "co" || s.target === "life") return s.target;
   if (s.source === "call") return "life";
-  return s.about && ABOUT_CO.test(s.about) ? "co" : "life";
+  // "Cue" only as the name: "missed my cue" is their life.
+  return s.about && (ABOUT_CO.test(s.about) || /\bCue\b(?!\s+up\b)/.test(s.about)) ? "co" : "life";
 }
 
 // ---------------------------------------------------------------------------
@@ -88,16 +89,16 @@ async function haikuTextEmotion(message: string, recentConversation: string, fun
       model: anthropic(MODELS.haiku),
       abortSignal,
       experimental_telemetry: { isEnabled: true, functionId },
-      prompt: `Read the latest text someone sent Co, with the conversation before it for context.
+      prompt: `Read the latest text someone sent Cue, with the conversation before it for context.
 
 Recent conversation, in order:
 ${recentConversation.slice(-1500) || "(start of the conversation)"}
 
 Latest message: "${message}"
 
-Does the latest message carry a real feeling Co should respond to (for example stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation to read it correctly: "fine" after bad news isn't fine. Ignore plain logistics, greetings, and tone you aren't confident about; most messages have none. "about" uses only what they actually said, never an assumed circumstance.
+Does the latest message carry a real feeling Cue should respond to (for example stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation to read it correctly: "fine" after bad news isn't fine. Ignore plain logistics, greetings, and tone you aren't confident about; most messages have none. "about" uses only what they actually said, never an assumed circumstance.
 
-"target" is who the feeling is about: "co" when it's about Co itself (what Co found or didn't find, Co's suggestions, replies, speed, or mistakes, like "you keep finding nothing" or "that's not what I asked"), otherwise "life" (their work, people, plans, health, anything else).
+"target" is who the feeling is about: "co" when it's about Cue itself (what Cue found or didn't find, Cue's suggestions, replies, speed, or mistakes, like "you keep finding nothing" or "that's not what I asked"), otherwise "life" (their work, people, plans, health, anything else).
 
 Return ONLY JSON: {"emotion": "one or two words" or null, "intensity": "low" | "medium" | "high", "valence": "negative" | "positive" | "mixed", "about": "what the feeling is about, in a few words, or null", "target": "co" | "life"}`,
     });
@@ -139,7 +140,7 @@ export function callLinesToRead(transcript: string, max = CALL_EMOTION_MAX_READS
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => (/^user:/i.test(l) ? { who: "Them", text: l.replace(/^user:\s*/i, "") } : { who: "Co", text: l.replace(/^assistant:\s*/i, "") }));
+    .map((l) => (/^user:/i.test(l) ? { who: "Them", text: l.replace(/^user:\s*/i, "") } : { who: "Cue", text: l.replace(/^assistant:\s*/i, "") }));
   const out: CallLine[] = [];
   lines.forEach((l, i) => {
     if (l.who !== "Them" || l.text.split(/\s+/).filter(Boolean).length < CALL_EMOTION_MIN_WORDS) return;
@@ -366,7 +367,7 @@ export function renderEmotionalContext(ctx: EmotionalContext, now = new Date()):
   if (ctx.needsCare) lines.push("They've been struggling in the last day.");
   if (ctx.withCo?.frustrated) {
     lines.push(
-      `They're frustrated with what Co has turned up lately${ctx.withCo.about ? ` (${ctx.withCo.about})` : ""}. That's about Co, not a hard day in their life: look wider and try harder rather than going quiet or getting smaller.`,
+      `They're frustrated with what Cue has turned up lately${ctx.withCo.about ? ` (${ctx.withCo.about})` : ""}. That's about Cue, not a hard day in their life: look wider and try harder rather than going quiet or getting smaller.`,
     );
   }
   return lines.join("\n");

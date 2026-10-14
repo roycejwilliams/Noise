@@ -47,9 +47,9 @@ export function reflectionKnown(k: Pick<MemberKnowledge, "goals" | "carrying" | 
   const lines = [
     active.length ? `- Where they say they're headed: ${active.map((g) => g.text).join("; ")}` : null,
     past.length ? `- Goals done or set aside (history, not current): ${past.map((g) => `${g.text} (${g.state})`).join("; ")}` : null,
-    carrying.length ? `- What Co is carrying for them: ${carrying.map((c) => `${c.what.slice(0, 120)} (${c.kind}, ${c.state})`).join("; ")}` : null,
+    carrying.length ? `- What Cue is carrying for them: ${carrying.map((c) => `${c.what.slice(0, 120)} (${c.kind}, ${c.state})`).join("; ")}` : null,
     k.corrections.length ? `- They corrected (only the corrected version exists): ${k.corrections.slice(0, 4).map((c) => `${c.field}: ${c.now ?? "(removed)"}`).join("; ")}` : null,
-    k.lessons.length ? `- What Co has learned about them: ${k.lessons.slice(0, 4).map((l) => l.text.slice(0, 160)).join("; ")}` : null,
+    k.lessons.length ? `- What Cue has learned about them: ${k.lessons.slice(0, 4).map((l) => l.text.slice(0, 160)).join("; ")}` : null,
   ].filter(Boolean);
   return lines.length ? lines.join("\n") : null;
 }
@@ -75,18 +75,18 @@ export function gateReflection(proposal: Partial<ReflectionMove>, facts: WeekFac
 }
 
 export function reflectionPrompt(firstName: string, f: WeekFacts): string {
-  return `Look back at Co's last week with ${firstName} and decide Co's one next move as their companion.
+  return `Look back at Cue's last week with ${firstName} and decide Cue's one next move as their companion.
 
-What Co texted them first this week (oldest first):
+What Cue texted them first this week (oldest first):
 ${f.sends.map((s) => `- [${localStamp(`${s.at}:00Z`, f.zone)}] (${s.purpose}) ${s.message.slice(0, 200)}`).join("\n") || "(nothing)"}
 
 Replies from them this week: ${f.replies}
-Share of Co's texts that were offers (events, people): ${f.offerShare == null ? "n/a" : `${Math.round(f.offerShare * 100)}%`}
+Share of Cue's texts that were offers (events, people): ${f.offerShare == null ? "n/a" : `${Math.round(f.offerShare * 100)}%`}
 
 What they're in the middle of:
 ${f.threads.length ? f.threads.map((t) => `[${t.id}] ${renderThreads([t], new Date(), f.zone ?? null).slice(2)}`).join("\n") : "(nothing open)"}
 ${f.known ? `\nWhat else you know about them (background):\n${f.known}\n` : ""}${f.restraint ? `\n${f.restraint}\n` : ""}
-Choose "check_in" on ONE of their threads when it would mean something to them now (it's been a while, a date passed, or Co has mostly been sending offers), or "hold" when Co should give them space. Say why in one or two plain sentences.
+Choose "check_in" on ONE of their threads when it would mean something to them now (it's been a while, a date passed, or Cue has mostly been sending offers), or "hold" when Cue should give them space. Say why in one or two plain sentences.
 
 Return ONLY JSON: {"move": "check_in" | "hold", "threadId": "id or null", "reasoning": "..."}`;
 }

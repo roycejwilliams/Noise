@@ -74,7 +74,7 @@ check("the real readout text passes", S.readoutLeak(R.renderText(stats), "Founde
   const a = await S.approveReadout("ev1", { by: "Royce", hostEmail: "host@venue.test", now: NOW });
   const upd = log.find((l) => /SET status = 'approved'/.test(l.sql))!;
   const token = a.ok ? a.link.split("/readout/")[1] : "";
-  check("approval: only from a draft, and gives a link on Co's own address", a.ok && /WHERE event_id = \$1 AND status = 'draft'/.test(upd.sql) && a.link.startsWith("https://test.copatible.com/readout/"));
+  check("approval: only from a draft, and gives a link on Cue's own address", a.ok && /WHERE event_id = \$1 AND status = 'draft'/.test(upd.sql) && a.link.startsWith("https://test.copatible.com/readout/"));
   check("approval: the link's token is kept only as its hash", upd.p[3] === createHash("sha256").update(token).digest("hex") && !upd.p.includes(token) && token.length >= 30);
   check("approval: the link lasts 30 days", Math.round((new Date(upd.p[4]).getTime() - NOW.getTime()) / 86_400_000) === 30);
   check("approval: who said yes and the host's address are recorded", upd.p[1] === "Royce" && upd.p[2] === "host@venue.test");

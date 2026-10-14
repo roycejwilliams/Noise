@@ -51,7 +51,7 @@ export function adviceLines(all: Advice[], now = new Date(), limit = 4): string[
   return all
     .filter((a) => now.getTime() - new Date(a.givenAt).getTime() <= STALE_AFTER_DAYS * dayMs)
     .slice(0, limit)
-    .map((a) => `Co advised them on ${a.givenAt.slice(0, 10)} about ${a.topic}: ${a.gist}${a.followedUpAt ? " (Co has asked how it went)" : ""}`);
+    .map((a) => `Cue advised them on ${a.givenAt.slice(0, 10)} about ${a.topic}: ${a.gist}${a.followedUpAt ? " (Cue has asked how it went)" : ""}`);
 }
 
 function rowTo(r: any): Advice {

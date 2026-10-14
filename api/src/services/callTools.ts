@@ -196,7 +196,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     return ok;
   };
   const did: string[] = [];
-  const all: Record<string, any> = i.tools ? guardTools(i.tools, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {}, recentExchange: i.recentExchange ?? (i.lastCoLine ? `Co: ${i.lastCoLine}` : null) }) : createConversationTools({
+  const all: Record<string, any> = i.tools ? guardTools(i.tools, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {}, recentExchange: i.recentExchange ?? (i.lastCoLine ? `Cue: ${i.lastCoLine}` : null) }) : createConversationTools({
     turnStartedAt: Date.now(),
     userId: i.userId,
     phoneNumber: i.member.phone,
@@ -316,7 +316,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
       if (!picked.updateTask) return;
       const w = taskFactBackstop({ turnWords: i.turnWords, spoken, ran, tasks: i.member.tasks });
       if (!w) return;
-      const r: any = await run("updateTask", { taskId: w.taskId, note: w.note, why: `They gave ${w.specifics.join(", ")} on the call and Co said it back without writing it down.` }, `backstop_${Date.now().toString(36)}`);
+      const r: any = await run("updateTask", { taskId: w.taskId, note: w.note, why: `They gave ${w.specifics.join(", ")} on the call and Cue said it back without writing it down.` }, `backstop_${Date.now().toString(36)}`);
       if (!i.dryRun) recordDecision({ layer: 8, decision: "call.task_fact_backstop", userId: i.userId, outcome: r?.ok === false ? "skip" : "act", action: "updateTask", proposal: { taskId: w.taskId, specifics: w.specifics }, reason: String(r?.error ?? "").slice(0, 200) }).catch(() => {});
     },
   };

@@ -21,16 +21,16 @@ const day = () => "Oct 8";
 // ---- 1. the context: one item once; what they have, apart
 {
   const lines = [
-    { text: "Oct 7: Promised on the call: draft and text a plan on Co's post-event presence. Sent.", from: "promise" as const, sent: true },
+    { text: "Oct 7: Promised on the call: draft and text a plan on Cue's post-event presence. Sent.", from: "promise" as const, sent: true },
     { text: "Oct 7: Promised on the call: text the drafted planning document. Not sent yet.", from: "promise" as const, sent: false },
-    { text: "Keep your word from the call: the plan for how Co keeps its presence after the Sequin AI November event: in progress (document finalized, send blocked until hours resume)", from: "loop" as const },
+    { text: "Keep your word from the call: the plan for how Cue keeps its presence after the Sequin AI November event: in progress (document finalized, send blocked until hours resume)", from: "loop" as const },
     { text: "Find a caterer for the November open house: searching, 2 options so far", from: "loop" as const },
   ];
-  const r = CC.collapseCarried(lines, [{ title: "Co Presence Plan: After the Sequin AI November Event", at: new Date("2026-10-08T16:00:00Z") }], day);
+  const r = CC.collapseCarried(lines, [{ title: "Cue Presence Plan: After the Sequin AI November Event", at: new Date("2026-10-08T16:00:00Z") }], day);
   check("a sent deliverable leaves 'where things stand' (promise, its loop and the not-sent line all go)", !r.open.some((l) => /presence|planning document/i.test(l.text)), r.open);
-  check("...and appears once, as something they have, with when", r.theyHaveIt.length === 1 && /Co Presence Plan/.test(r.theyHaveIt[0]) && /sent Oct 8/.test(r.theyHaveIt[0]), r.theyHaveIt);
+  check("...and appears once, as something they have, with when", r.theyHaveIt.length === 1 && /Cue Presence Plan/.test(r.theyHaveIt[0]) && /sent Oct 8/.test(r.theyHaveIt[0]), r.theyHaveIt);
   check("an open, different item stays where things stand", r.open.length === 1 && /caterer/.test(r.open[0].text));
-  check("a recap or thread sentence about what they have is covered (dropped from the context)", r.covered("Royce discussed the finished post-event presence doc, which will be sent to Royce's texts the next morning.") && !r.covered("Royce is stressed about what's next after building Co."));
+  check("a recap or thread sentence about what they have is covered (dropped from the context)", r.covered("Royce discussed the finished post-event presence doc, which will be sent to Royce's texts the next morning.") && !r.covered("Royce is stressed about what's next after building Cue."));
   // Review of #110: never drop what Co still owes, or the member's own life.
   const owed = CC.collapseCarried([
     { text: "Oct 5: Promised on the call: send the restaurant shortlist. Sent.", from: "promise" as const, sent: true },
@@ -72,9 +72,9 @@ const day = () => "Oct 8";
       { from: "co", text: "Jordan talked about Series A", call: true, verifiedAt: hoursAgo(5) },
       { from: "member", text: "we closed the Series A", call: false, verifiedAt: hoursAgo(2) },
     ],
-    delivered: [{ what: "Co Presence Plan: After the Sequin AI November Event", kind: "document", at: "2026-10-08T16:00:00.000Z", via: ["receipt"], url: null, reaction: null, verifiedAt: "2026-10-08T16:00:00.000Z" }, { what: "Oakland Join-Up", kind: "event", at: asOf, via: ["offer"], url: null, reaction: null, verifiedAt: asOf }],
+    delivered: [{ what: "Cue Presence Plan: After the Sequin AI November Event", kind: "document", at: "2026-10-08T16:00:00.000Z", via: ["receipt"], url: null, reaction: null, verifiedAt: "2026-10-08T16:00:00.000Z" }, { what: "Oakland Join-Up", kind: "event", at: asOf, via: ["offer"], url: null, reaction: null, verifiedAt: asOf }],
     carrying: [
-      { what: "draft and text a plan on Co's post-event presence", kind: "promise", state: "done", told: true, theyHaveIt: true, dueAt: null, ref: null, status: null, detail: null, verifiedAt: "2026-10-07T20:00:00.000Z" },
+      { what: "draft and text a plan on Cue's post-event presence", kind: "promise", state: "done", told: true, theyHaveIt: true, dueAt: null, ref: null, status: null, detail: null, verifiedAt: "2026-10-07T20:00:00.000Z" },
       { what: "send the restaurant shortlist", kind: "promise", state: "done", told: true, theyHaveIt: true, dueAt: null, ref: null, status: null, detail: null, verifiedAt: "2026-10-06T20:00:00.000Z" },
       { what: "find a pitch coach", kind: "promise", state: "outstanding", told: true, theyHaveIt: false, dueAt: null, ref: null, status: null, detail: null, verifiedAt: "2026-10-08T20:00:00.000Z" },
       { what: "Plan the partner event", kind: "task", state: "outstanding", told: true, theyHaveIt: false, dueAt: null, ref: "task #7", status: null, detail: null, verifiedAt: asOf },
@@ -88,18 +88,18 @@ const day = () => "Oct 8";
   check("corrections become the rows the settled/retired rules read", parts.corrections[0].old_value === "first paying customer" && parts.corrections[0].new_value === "Series A" && !!CC.retiredBy("figuring out the first paying customer", parts.corrections));
   const day = (d: Date | string) => new Date(d).toISOString().slice(0, 10);
   const { promises, delivered } = CC.callCarriedInputs(k, day);
-  check("only documents are what they have (an event Co offered isn't)", delivered.length === 1 && /Co Presence Plan/.test(delivered[0].title));
+  check("only documents are what they have (an event Cue offered isn't)", delivered.length === 1 && /Cue Presence Plan/.test(delivered[0].title));
   const covered = promises.find((p) => /post-event presence/.test(p.text));
   const sent = promises.find((p) => /restaurant shortlist/.test(p.text));
   const open = promises.find((p) => /pitch coach/.test(p.text));
   check("a handled promise a delivery covers stays unsent (the delivery is what they have, said once); one that went is 'Sent.'; an open one isn't", covered?.sent === false && sent?.sent === true && /Sent\.$/.test(sent.text) && open?.sent === false && /Not sent yet\.$/.test(open.text), promises);
   const carried = CC.collapseCarried(promises, delivered, day);
   check("...and collapse as before: only the open promise is where things stand; the delivered plan once, as theirs", carried.open.length === 1 && /pitch coach/.test(carried.open[0].text) && carried.theyHaveIt.filter((l) => /Presence Plan/.test(l)).length === 1, carried);
-  check("a task Co carries is never one of the call's promises", !promises.some((p) => /partner event/.test(p.text)));
+  check("a task Cue carries is never one of the call's promises", !promises.some((p) => /partner event/.test(p.text)));
   const late = { ...k, asOf: "2026-10-10T06:30:00.000Z", restraint: MK.restraintOf({ holdUntil: null, spaceUntil: null, safetyHold: false, emotional: null, suppressed: ["event_offer"] as any, trial: [], lastInboundAt: null, unansweredSends: [] }, new Date("2026-10-10T06:30:00.000Z")) };
   const block = CC.callRulesBlock(MK.memberRules(late)) ?? "";
   check("the member rules ride on the call: quiet hours in their zone (inside them now) and restraint, from memberRules(k)", /Quiet hours/.test(block) && /inside their quiet hours/.test(block) && /event_offer/.test(block) && block.includes(MK.memberRules(late).restraint), block);
-  const prompt = E.promptForElevenLabs("You are Co.");
+  const prompt = E.promptForElevenLabs("You are Cue.");
   const rules = MK.memberRules(k);
   check("the agent's prompt carries the same shared rules memberRules returns (discretion, grounding, member safety), not copies", prompt.includes(rules.discretion) && prompt.includes(rules.grounding) && prompt.includes(rules.memberSafety));
   check("the builder reads the layer once and keeps the call-only parts (last calls, threads, capacity, finds)", /loadContextParts\(userId, CALL_KNOWLEDGE, \{\}, knowledge\)/.test(src("services/callContext.ts")) && /offers: \(\) => sentItems/.test(src("services/callContext.ts")) && !/assembleContext\(/.test(src("services/callContext.ts")) && !/FROM document_deliveries|pgReceipts|memory_type = 'promise_result'/.test(src("services/callContext.ts")) && /k\.carrying\.filter\(\(c\) => c\.ref\?\.startsWith\("task #"\)\)/.test(src("services/callContext.ts")));
@@ -115,7 +115,7 @@ const day = () => "Oct 8";
   };
   let seenReq: any = null;
   const spy = (events: any[]) => (r: any) => { seenReq = r; return (async function* () { for (const e of events) yield e; })(); };
-  const body = { model: "x", stream: true, messages: [{ role: "system", content: "You are Co. # What you know about Jordan\nnothing" }, { role: "user", content: "my mentor died this week" }], tools: [{ type: "function", function: { name: "end_call", parameters: {} } }] } as any;
+  const body = { model: "x", stream: true, messages: [{ role: "system", content: "You are Cue. # What you know about Jordan\nnothing" }, { role: "user", content: "my mentor died this week" }], tools: [{ type: "function", function: { name: "end_call", parameters: {} } }] } as any;
   const run = async (reply: string, deps: any = {}) => {
     let out = "";
     for await (const c of P.runCallLlm(body, { stream: spy(text(reply)), voiceOnly: true, ...deps })) out += (c.choices[0].delta as any).content ?? "";
@@ -145,7 +145,7 @@ const day = () => "Oct 8";
     const { safetyCall } = await import("../../src/services/callLlmProxy.js");
     const call = (msgs: [string, string][]) => safetyCall({ messages: msgs.map(([role, content]) => ({ role, content })) });
     check("a safety call stays one: an earlier \"I don't feel safe\" lifts the limit on a later turn the pattern alone would miss", call([["user", "I don't feel safe"], ["assistant", "Are you safe right now?"], ["user", "I guess, it's just a lot"]]));
-    check("Co's own help line earlier in the call makes it a safety call", call([["user", "it's been heavy"], ["assistant", "You can call or text 988, any time."], ["user", "yeah"]]));
+    check("Cue's own help line earlier in the call makes it a safety call", call([["user", "it's been heavy"], ["assistant", "You can call or text 988, any time."], ["user", "yeah"]]));
     check("an ordinary call is not a safety call", !call([["user", "we played it safe with the menu"], ["assistant", "Smart. What's the headcount?"], ["user", "about forty, drive safe tonight"]]));
   }
   const stock = await run("Don't worry about the time. And I hear you. Feeling invisible in a full room is its own kind of tired. When did it start?");
@@ -188,17 +188,17 @@ const day = () => "Oct 8";
       }
       return { ended, said: said.trim() };
     };
-    const sys = { role: "system", content: "You are Co." };
+    const sys = { role: "system", content: "You are Cue." };
     const held = await ends([sys, { role: "user", content: "Get me some solid options and we can go from there." }], "Talk soon, Jordan. Take care.");
-    check(`Co's own goodbye is said, but the call stays open until theirs ("${held.said}", ended ${held.ended})`, !held.ended && /Talk soon/.test(held.said));
+    check(`Cue's own goodbye is said, but the call stays open until theirs ("${held.said}", ended ${held.ended})`, !held.ended && /Talk soon/.test(held.said));
     const thanks = await ends([sys, { role: "user", content: "Thanks for calling. And for listening." }], "Of course. Take care of yourself this week.");
     check("\"thanks for calling\" isn't their goodbye yet: the call stays open", !thanks.ended);
     const theirBye = await ends([sys, { role: "user", content: "Alright, I should probably get going. Talk soon!" }], "Talk soon, Jordan.");
     check("after their goodbye, end_call goes through", theirBye.ended);
     const afterCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Take care, Jordan." }, { role: "user", content: "you too" }], "");
-    check("their reply to Co's goodbye lets the call end", afterCo.ended);
+    check("their reply to Cue's goodbye lets the call end", afterCo.ended);
     const looseCo = await ends([sys, { role: "user", content: "anyway" }, { role: "assistant", content: "Enjoy tonight, bye!" }, { role: "user", content: "you too" }], "Night.");
-    check("a goodbye in Co's own words (\"Enjoy tonight, bye!\") then their reply ends the call, never dead air", looseCo.ended);
+    check("a goodbye in Cue's own words (\"Enjoy tonight, bye!\") then their reply ends the call, never dead air", looseCo.ended);
     {
       // A bare end_call mid-call is held too, and Co answers them instead: the second model call is the answer (never dead air).
       const calls: any[] = [];
@@ -211,17 +211,17 @@ const day = () => "Oct 8";
         if (d.tool_calls?.[0]?.function?.name === "end_call") ended = true;
         said += d.content ?? "";
       }
-      check(`a bare end_call before their goodbye is held, and Co answers instead ("${said.trim()}")`, !ended && /which caterer/.test(said) && calls.length === 2 && /haven't said goodbye/.test(JSON.stringify(calls[1].system)));
+      check(`a bare end_call before their goodbye is held, and Cue answers instead ("${said.trim()}")`, !ended && /which caterer/.test(said) && calls.length === 2 && /haven't said goodbye/.test(JSON.stringify(calls[1].system)));
     }
     const { memberClosed } = P as any;
-    const closes = ["Later!", "I'm off, thanks Co", "gotta jet", "Night!", "Peace.", "Cheers, Co.", "ttyl", "That's it for now.", "ok bye", "Nope, later!", "No that's all, thanks", "Nah I'm good, night", "All good, cheers"];
+    const closes = ["Later!", "I'm off, thanks Cue", "gotta jet", "Night!", "Peace.", "Cheers, Cue.", "ttyl", "That's it for now.", "ok bye", "Nope, later!", "No that's all, thanks", "Nah I'm good, night", "All good, cheers"];
     const opens = ["I'll go with the first one.", "I need to go to Paris next week for work.", "better go with the cheaper one", "Let you go ahead and book it.", "Thanks for calling. And for listening.", "I'm off work tomorrow so I could do lunch.", "Later this week works.", "I'm good with the second option, what do you think about the photographer though?", "Thanks.", "No, that's not what I meant."];
     check(`their closings are heard: missed ${closes.filter((x) => !memberClosed(x)).join(" | ") || "none"}`, closes.every((x) => memberClosed(x)));
     check(`mid-thought words never lift the hold: ${opens.filter((x) => memberClosed(x)).join(" | ") || "none"}`, opens.every((x) => !memberClosed(x)));
   }
   {
     // An inbound call's first reply ends at its question to them: they lead (2026-10-08 call eval, casual_hello).
-    const inb = { ...body, messages: [{ role: "system", content: "You are Co. This call is inbound." }, { role: "assistant", content: "Hey Jordan, it's Co." }, { role: "user", content: "hey Co, what's up" }] };
+    const inb = { ...body, messages: [{ role: "system", content: "You are Cue. This call is inbound." }, { role: "assistant", content: "Hey Jordan, it's Cue." }, { role: "user", content: "hey Cue, what's up" }] };
     let said = "";
     for await (const c of P.runCallLlm(inb, { stream: spy(text("Good, glad you called. What's on your mind? You've got the open house coming up in a few weeks.")), voiceOnly: true })) said += (c.choices[0].delta as any).content ?? "";
     check(`inbound first reply: nothing after its question to them ("${said.trim()}")`, /What's on your mind\?$/.test(said.trim()) && !/open house/.test(said));
@@ -230,7 +230,7 @@ const day = () => "Oct 8";
     for await (const c of P.runCallLlm(asked, { stream: spy(text("Did I find a caterer for the open house? Yes, two good ones in Nopa.")), voiceOnly: true })) answer += (c.choices[0].delta as any).content ?? "";
     check(`inbound first reply to their own question keeps the answer ("${answer.trim()}")`, /two good ones in Nopa/.test(answer));
     const { asksCo } = P as any;
-    check("a greeting's own question isn't asking Co something; a real question is", !asksCo("hey Co, what's up?") && !asksCo("Hey! How's it going? How are you doing?") && asksCo("hey, did you find a caterer?") && asksCo("what's up, when is the open house again?") && asksCo("hey what's up with the caterer") && asksCo("hey when's the open house again") && !asksCo("yo what's up Co?") && !asksCo("hey Co, what's up"));
+    check("a greeting's own question isn't asking Cue something; a real question is", !asksCo("hey Cue, what's up?") && !asksCo("Hey! How's it going? How are you doing?") && asksCo("hey, did you find a caterer?") && asksCo("what's up, when is the open house again?") && asksCo("hey what's up with the caterer") && asksCo("hey when's the open house again") && !asksCo("yo what's up Cue?") && !asksCo("hey Cue, what's up"));
     let later = "";
     const inb2 = { ...inb, messages: [...inb.messages, { role: "assistant", content: "What's on your mind?" }, { role: "user", content: "the caterer" }] };
     for await (const c of P.runCallLlm(inb2, { stream: spy(text("Which one? The Nopa folks were good.")), voiceOnly: true })) later += (c.choices[0].delta as any).content ?? "";
@@ -257,8 +257,8 @@ const day = () => "Oct 8";
     check("a short real question counts as the turn's one; an interjection or echo doesn't", countsAsQuestion("What changed?") && countsAsQuestion("Why not?") && countsAsQuestion("Did you?") && !countsAsQuestion("Honestly?") && !countsAsQuestion("Right?") && !countsAsQuestion("The dinner?"));
     const twoShort = await run("That's a big send. What changed? Did something just feel different or did you figure out a move?");
     check(`"What changed?" then another question: the second is dropped ("${twoShort}")`, /What changed\?$/.test(twoShort));
-    check("after they say they didn't say it, Co never insists they did", insistsAfterPushback("Um, actually I don't think I mentioned the dinner party thing", "You did actually say that, back when we talked through the open house plan.") && !insistsAfterPushback("yeah that's right", "You did actually say that."));
-    const pushed = { ...body, messages: [{ role: "system", content: "You are Co." }, { role: "user", content: "I don't think I mentioned the dinner party thing, but yeah." }] };
+    check("after they say they didn't say it, Cue never insists they did", insistsAfterPushback("Um, actually I don't think I mentioned the dinner party thing", "You did actually say that, back when we talked through the open house plan.") && !insistsAfterPushback("yeah that's right", "You did actually say that."));
+    const pushed = { ...body, messages: [{ role: "system", content: "You are Cue." }, { role: "user", content: "I don't think I mentioned the dinner party thing, but yeah." }] };
     let said = "";
     for await (const c of P.runCallLlm(pushed, { stream: spy(text("You did actually say that, back when we talked. Intimate it is, then.")), voiceOnly: true })) said += (c.choices[0].delta as any).content ?? "";
     check(`the insisting sentence is dropped, the rest is said ("${said.trim()}")`, !/You did/.test(said) && /Intimate it is/.test(said));
@@ -266,7 +266,7 @@ const day = () => "Oct 8";
   const named = await run("Your mentor Richard sounds like he was rare. What did he see in you?");
   check("voice-only: nothing is held back for an unbacked name (no fact check in this mode)", /Richard/.test(named));
   check("voice-only: no tools and no turn notes are added to the request", (seenReq?.tools ?? []).every((t: any) => t.name === "end_call") && !/This turn: they told you how they are/.test(JSON.stringify(seenReq?.system ?? "")));
-  check("the endpoint takes the mode from the agent's header and skips Co's tools in it", /req\.headers\["x-co-mode"\]/.test(src("routes/callLlm.ts")) && /userId && !voiceOnly && process\.env\.CALL_TOOLS/.test(src("routes/callLlm.ts")));
+  check("the endpoint takes the mode from the agent's header and skips Cue's tools in it", /req\.headers\["x-co-mode"\]/.test(src("routes/callLlm.ts")) && /userId && !voiceOnly && process\.env\.CALL_TOOLS/.test(src("routes/callLlm.ts")));
   const cfg: any = E.buildAgentConfig({ name: "t", prompt: "p", voiceId: "v", apiUrl: "https://x.test", proxy: { url: "https://x.test/co/el/llm", secretId: "s", voiceOnly: true } });
   check("the agent sends the voice-only header to the endpoint", cfg.conversation_config.agent.prompt.custom_llm.request_headers?.["x-co-mode"] === "voice");
   check("the push script sets it with ELEVENLABS_LLM_PROXY=voice", /ELEVENLABS_LLM_PROXY === "voice"/.test(src("scripts/pushElevenLabsAgent.ts")));

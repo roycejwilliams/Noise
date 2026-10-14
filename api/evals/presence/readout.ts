@@ -27,7 +27,7 @@ const few = R.describe({ ...base, askCount: 7, themes: { "Investors or funding":
 check("with too few asks no pattern is shown at all", few.lines.some((l) => /Too few members shared/.test(l)) && !few.lines.some((l) => /looking for, by category/.test(l)));
 const text = R.renderText(base);
 check("nothing in it names or quotes anyone", !/@|https?:\/\/|\b\d{3}[ .-]\d{3}[ .-]\d{4}\b|Maya|Jordan|Priya/.test(text) && !/Maya|Jordan|Priya/.test(R.renderHtml(base)));
-check("it says it is aggregate and what is hidden", /carries nothing any member told Co/.test(text) && /nothing about who talked to whom/.test(text) && /carries nothing any member told Co/.test(R.renderHtml(base)));
+check("it says it is aggregate and what is hidden", /carries nothing any member told Cue/.test(text) && /nothing about who talked to whom/.test(text) && /carries nothing any member told Cue/.test(R.renderHtml(base)));
 
 // The data step with a fake database: only counts and a fixed label leave it
 const { default: pool } = await import("../../src/db/db.js");

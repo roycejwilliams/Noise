@@ -504,7 +504,7 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
     if (m?.fit === "plate" || (onField && !m?.mono)) return `<span class="plate" style="background:${m?.ground ?? "#FFFFFF"}">${img(d.logo, `${d.title} logo`, cls)}</span>`;
     return img(d.logo, `${d.title} logo`, cls);
   };
-  const mark = `Made by Co · ${e(asOf(page.updatedAt, o.zone ?? null))}`;
+  const mark = `Made by Cue · ${e(asOf(page.updatedAt, o.zone ?? null))}`;
   const total = d.slides.length + 1;
   // Pictures Co found: a venue's photo through this deck's own link (the key stays on the server), a mood image hotlinked from
   // Unsplash as its guidelines ask; maps from tiles through the same link. artSrc: the bytes inlined instead (QA, the PDF).
@@ -550,7 +550,7 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
       return `<section class="slide title"><div class="frame t-field on-field" data-qa-frame data-ground="${ground(true)}"><div class="in"><div>${logoHtml(true)}</div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div></div><div class="foot"><span data-qa-text="label" data-ground="${scrimGround}">${mark}</span><span data-qa-text="label" data-ground="${scrimGround}">01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
     if (titleLayout === "centered")
       return `<section class="slide title"><div class="frame t-centered paper" data-qa-frame data-ground="${ground(false)}"><div class="in">${d.logo ? logoHtml(false) : ""}<h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p><div class="rule"></div></div>${foot()}</div></section>`;
-    return `<section class="slide title"><div class="frame t-editorial paper" data-qa-frame data-ground="${ground(false)}"><div class="in"><div class="top">${d.logo ? logoHtml(false) : (kickWords.length <= 40 ? `<span class="lab acc" data-qa-text="label">${e(kickWords)}</span>` : "<span></span>")}<span class="lab" data-qa-text="label">${e(asOf(page.updatedAt, o.zone ?? null))}</span></div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div></div><div class="strip"></div><div class="foot foot-ed"><span data-qa-text="label">Made by Co</span><span data-qa-text="label">01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
+    return `<section class="slide title"><div class="frame t-editorial paper" data-qa-frame data-ground="${ground(false)}"><div class="in"><div class="top">${d.logo ? logoHtml(false) : (kickWords.length <= 40 ? `<span class="lab acc" data-qa-text="label">${e(kickWords)}</span>` : "<span></span>")}<span class="lab" data-qa-text="label">${e(asOf(page.updatedAt, o.zone ?? null))}</span></div><div><h1 class="disp" data-qa-text="h1">${noOrphan(e(d.title))}</h1><p class="sub" data-qa-text="body">${e(d.subtitle)}</p></div></div><div class="strip"></div><div class="foot foot-ed"><span data-qa-text="label">Made by Cue</span><span data-qa-text="label">01 / ${String(total).padStart(2, "0")}</span></div></div></section>`;
   })();
 
   const slides = d.slides
@@ -625,7 +625,7 @@ ${o.print ? `@page{size:13.333in 7.5in;margin:0}html,body{margin:0}.slide{width:
 <meta property="og:type" content="article">
 <meta property="og:title" content="${e(d.title)}">
 <meta property="og:description" content="${e(d.subtitle)}">
-<meta property="og:site_name" content="Co">
+<meta property="og:site_name" content="Cue">
 ${o.url ? `<meta property="og:url" content="${e(o.url)}">` : ""}
 <meta name="twitter:card" content="summary">
 ${links.map((h) => `<link href="${e(h)}" rel="stylesheet">`).join("\n")}

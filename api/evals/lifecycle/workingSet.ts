@@ -106,8 +106,8 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   let threw = false;
   try { await W.writeExitFact({ userId: "u", kind: "find", itemKey: "k", label: "x", state: "rejected", reason: "no", scope: "" }); } catch { threw = true; }
   check("an exit without its own reason and scope is refused", threw);
-  const label = W.exitFactLabel({ kind: "find", label: "Tech Parents & Founders mixer", state: "rejected", reason: "Co's daily pick: an investor mixer tied to Tech Week, which reads as performative to him", scope: "this find, for: events this weekend; nothing broader about what they like" });
-  check("the fact carries the reason and the scope, never just a verdict", /Set aside the find "Tech Parents & Founders mixer": Co's daily pick: an investor mixer/.test(label) && /Scope: this find, for: events this weekend; nothing broader/.test(label), label);
+  const label = W.exitFactLabel({ kind: "find", label: "Tech Parents & Founders mixer", state: "rejected", reason: "Cue's daily pick: an investor mixer tied to Tech Week, which reads as performative to him", scope: "this find, for: events this weekend; nothing broader about what they like" });
+  check("the fact carries the reason and the scope, never just a verdict", /Set aside the find "Tech Parents & Founders mixer": Cue's daily pick: an investor mixer/.test(label) && /Scope: this find, for: events this weekend; nothing broader/.test(label), label);
   check("an ask exits fact first, then the one close (askKind.ts closeAsk)", (() => { const s = src("services/workingSet.ts"); const f = s.slice(s.indexOf("export async function exitAsk")); return f.indexOf("writeExitFact") < f.indexOf("closeAsk(") && /if \(!ok\) return false;/.test(f); })());
   check("a date-expired ask writes its fact before it closes", (() => { const s = src("services/askExpiry.ts"); return s.indexOf("writeExitFact") > -1 && s.indexOf("writeExitFact") < s.indexOf("UPDATE ask_checkins SET resolved_at = NOW(), expired_at = NOW()"); })());
   check("a goal set aside or done writes its fact first, once (only on a real change)", /if \(state !== "active" && prior !== state\) \{[\s\S]{0,300}writeExitFact[\s\S]{0,400}if \(!ok\) return false;\s*\}\s*await writeGoalState[\s\S]{0,80}return true;/.test(src("services/goalEdges.ts")));
@@ -131,7 +131,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
 // ---------------------------------------------------------------- lifecycle (c): only live items count
 {
   check("(c) an open ask is live; a closed one carries its exit state", W.askLifeState({ resolved_at: null }) === "live" && W.askLifeState({ resolved_at: "x", closed_reason: "expired" }) === "expired" && W.askLifeState({ resolved_at: "x", closed_reason: "member_gone" }) === "cancelled" && W.askLifeState({ resolved_at: "x", closed_reason: "nothing_found" }) === "expired");
-  check("a waiting find is live, a sent one fulfilled, a picker reject rejected, a stale one expired", W.candidateLifeState({ status: "pending" }) === "live" && W.candidateLifeState({ status: "sent" }) === "fulfilled" && W.candidateLifeState({ status: "skipped", skip_reason: "Co's daily pick: reject, …" }) === "rejected" && W.candidateLifeState({ status: "skipped", skip_reason: "stale: passed" }) === "expired");
+  check("a waiting find is live, a sent one fulfilled, a picker reject rejected, a stale one expired", W.candidateLifeState({ status: "pending" }) === "live" && W.candidateLifeState({ status: "sent" }) === "fulfilled" && W.candidateLifeState({ status: "skipped", skip_reason: "Cue's daily pick: reject, …" }) === "rejected" && W.candidateLifeState({ status: "skipped", skip_reason: "stale: passed" }) === "expired");
   check("every state is one of the six", ["live", "fulfilled", "expired", "rejected", "superseded", "cancelled"].join() === W.LIFE_STATES.join());
   // Backoff, then out.
   const now = new Date("2026-10-09T15:00:00Z");
@@ -141,7 +141,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("each run counts its empty runs (a find resets them)", W.nextEmptyRuns({ prev: 2, found: false, quiet: false, heldBefore: false }).emptyRuns === 3 && W.nextEmptyRuns({ prev: 2, found: true, quiet: false, heldBefore: false }).emptyRuns === 0 && /UPDATE ask_checkins SET empty_runs = \$2/.test(src("services/eventSurfacingSweep.ts")));
   // Person asks and action requests.
   check("a person to meet goes to intros, never the search", /Answer "person" if it's asking for one particular kind of person/.test(src("services/askKind.ts")) && /if \(row\.kind === "person"\) \{[\s\S]{0,400}attemptNetworkSurfacing/.test(src("jobs/index.ts")));
-  check("an action request (email, call, book) is help, never a find ask", /Answer "help" too when it asks Co to take an action for them \(email, call, text, book/.test(src("services/askKind.ts")));
+  check("an action request (email, call, book) is help, never a find ask", /Answer "help" too when it asks Cue to take an action for them \(email, call, text, book/.test(src("services/askKind.ts")));
   check("open find asks read under the old prompt are read once more", /COALESCE\(kind_version, 1\) < \$2/.test(src("services/askKind.ts")));
   // Identity in queries.
   check("a search never assumes who they are", Q.assumedIdentity("men's circle vulnerability sharing San Francisco", "seeking a room/gathering where they can drop their guard").join() === "men's");
@@ -187,7 +187,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
 // ---------------------------------------------------------------- tiers (d)/(f): a failed draft re-enters
 {
   check("tiers (d): a failed draft is not a decision; it re-enters the working set", W.isFailedAttempt("draft failed checks: draft_length: 507 chars (max 300)") && W.candidateLifeState({ status: "skipped", skip_reason: "draft failed checks: draft_length" }) === "live");
-  check("failed attempts alone don't decide a thing; a sent row, a reject or a stale skip does", !W.decidedByRows([{ skip_reason: "draft failed checks: draft_length: 507 chars (max 300)" }]) && W.decidedByRows([{ skip_reason: null }]) && W.decidedByRows([{ skip_reason: "Co's daily pick: reject" }]) && W.decidedByRows([{ skip_reason: "draft failed checks" }, { skip_reason: "stale: x" }]));
+  check("failed attempts alone don't decide a thing; a sent row, a reject or a stale skip does", !W.decidedByRows([{ skip_reason: "draft failed checks: draft_length: 507 chars (max 300)" }]) && W.decidedByRows([{ skip_reason: null }]) && W.decidedByRows([{ skip_reason: "Cue's daily pick: reject" }]) && W.decidedByRows([{ skip_reason: "draft failed checks" }, { skip_reason: "stale: x" }]));
   const ess = src("services/eventSurfacingSweep.ts");
   check("tiers (f): the founders dinner's failed Oct 6 row is cleared so the pick lands (the queue's one-row-per-thing insert used to do nothing)", /await reopenFailedAttempt\(userId, offerTargetKey\(item\)\);\s*const \{ queued \} = await enqueueCandidate/.test(ess) && /if \(!failed\.length \|\| failed\.length !== rows\.length\) return false;/.test(ess));
 }
@@ -198,8 +198,8 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("tiers (e): an event is pitched with its day", F.formLabel({ kind: "opportunity", form: "event", statedDates: { start: "2026-10-10" } }, "America/Los_Angeles", now) === "an event on Saturday");
   check("an opening with a deadline is pitched with it", F.formLabel({ kind: "opportunity", form: "opening", deadline: "2026-10-09" }, "America/Los_Angeles", now) === "an opening, applications close Friday");
   check("a rolling opening says so", F.formLabel({ kind: "opportunity", form: "opening" }, "America/Los_Angeles", now) === "an opening you can apply to or join now");
-  check("a Co event and a public event keep their names, with the day", F.formLabel({ kind: "co_event", event_date: "2026-10-08" }, "America/Los_Angeles", now) === "a Co event tomorrow" && F.formLabel({ kind: "public_event", event_date: "2026-10-20" }, "America/Los_Angeles", now) === "an event on Oct 20");
-  check("never the generic \"a real opportunity\"", !/a real opportunity"\s*;?\s*$/m.test(src("agent/eventDiscoverySurfacing.ts").replace(/\/\/.*$/gm, "")) && /return formLabel\(match, zone\);/.test(src("agent/eventDiscoverySurfacing.ts")) && !/\(a real opportunity Co pointed/.test(src("harness/proactiveRegistry.ts")));
+  check("a Cue event and a public event keep their names, with the day", F.formLabel({ kind: "co_event", event_date: "2026-10-08" }, "America/Los_Angeles", now) === "a Cue event tomorrow" && F.formLabel({ kind: "public_event", event_date: "2026-10-20" }, "America/Los_Angeles", now) === "an event on Oct 20");
+  check("never the generic \"a real opportunity\"", !/a real opportunity"\s*;?\s*$/m.test(src("agent/eventDiscoverySurfacing.ts").replace(/\/\/.*$/gm, "")) && /return formLabel\(match, zone\);/.test(src("agent/eventDiscoverySurfacing.ts")) && !/\(a real opportunity Cue pointed/.test(src("harness/proactiveRegistry.ts")));
 }
 
 // ---------------------------------------------------------------- review of #133: the 14 findings
@@ -217,7 +217,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   // 4. Web finds exit by name plus date (or link).
   const weekly = (d: string) => F.exitKey({ kind: "opportunity", name: "SF Chess Night", statedDates: { start: d } });
   check("#4 a weekly find that exits once can come back next week", weekly("2026-10-09") !== weekly("2026-10-16") && weekly("2026-10-09") === F.exitKey({ kind: "opportunity", name: "sf chess night ", statedDates: { start: "2026-10-09" } }));
-  check("#4 an undated find is keyed by its link; a Co event by its id", F.exitKey({ name: "A", url: "https://A.com/x" }) === "opportunity:a|https://a.com/x" && F.exitKey({ event_api_id: "evt_1", name: "Dinner" }) === "event:evt_1");
+  check("#4 an undated find is keyed by its link; a Cue event by its id", F.exitKey({ name: "A", url: "https://A.com/x" }) === "opportunity:a|https://a.com/x" && F.exitKey({ event_api_id: "evt_1", name: "Dinner" }) === "event:evt_1");
   // 5. A failed search isn't an empty run.
   const ess = src("services/eventSurfacingSweep.ts");
   const sf = src("services/sweepFind.ts");

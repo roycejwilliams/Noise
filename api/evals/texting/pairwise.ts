@@ -23,10 +23,10 @@ async function judge(c: TextCase, first: string, second: string): Promise<"1" | 
   const { text } = await generateText({
     model: anthropic(GRADER_MODEL),
     headers: GRADER_HEADERS,
-    prompt: `Two possible replies from Co, an AI companion that texts members of a private club over iMessage. Pick the one that reads more like a thoughtful real person texting on a phone, judged on:
+    prompt: `Two possible replies from Cue, an AI companion that texts members of a private club over iMessage. Pick the one that reads more like a thoughtful real person texting on a phone, judged on:
 ${Object.values(CRITERIA).map((v) => `- ${v}`).join("\n")}
 
-What Co knew about them: ${c.contextSummary.slice(0, 2000) || "(nothing)"}
+What Cue knew about them: ${c.contextSummary.slice(0, 2000) || "(nothing)"}
 
 The conversation so far:
 ${c.recentConversation.slice(-2500)}

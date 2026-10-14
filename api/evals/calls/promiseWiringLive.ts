@@ -33,7 +33,7 @@ for (const [id, transcript] of Object.entries(calls)) {
   if (!plan) { check(`${id}: the audit ran`, false); continue; }
   const opens = plan.promises.map((p) => ({ what: p.what, said: p.quotes[0]?.slice(0, 90), opens: G.promiseOpens(p) }));
   console.log(`  ${id}: ${JSON.stringify(opens)}`);
-  check(`${id}: Co's promises were found (${plan.promises.length})`, plan.promises.length > 0);
+  check(`${id}: Cue's promises were found (${plan.promises.length})`, plan.promises.length > 0);
   if (id === "help_over_days") check("help_over_days: the caterer/photographer commitment, said several ways, is the one task, never a second thread", plan.promises.filter((p) => /cater|photograph/i.test(p.what)).every((p) => G.promiseOpens(p) === "task_from_call"), opens);
   for (const p of plan.promises.filter((x) => G.promiseOpens(x) === "promise_thread")) {
     const t = G.promiseThreadTask(p, "");
@@ -41,7 +41,7 @@ for (const [id, transcript] of Object.entries(calls)) {
   }
 }
 const playful = await G.auditCall("eval-user", calls.playful, known, { dryRun: true, tasks: [] });
-check(`playful: "you'll hear from me" is caught as Co's own promise and opens a thread`, !!playful?.promises.some((p) => G.promiseOpens(p) === "promise_thread"), playful?.promises);
+check(`playful: "you'll hear from me" is caught as Cue's own promise and opens a thread`, !!playful?.promises.some((p) => G.promiseOpens(p) === "promise_thread"), playful?.promises);
 
 console.log(`promise wiring (live): ${total - failed}/${total} passed`);
 if (failed) process.exit(1);

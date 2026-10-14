@@ -253,7 +253,7 @@ ${text}
 </page>
 
 For each field you can find, give the value and an exact quote copied character-for-character from the page that states it. Leave out any field the page doesn't state; never guess. Fields: what (what kind of thing it is: event, program, application, product, article...), name, host, date, start (time), end (time), timezone, venue, address, online ("online", "in person" or "both"), audience (who it's for), cost, deadline (to apply or RSVP), sold_out ("yes" or "no").
-Also write "summary": one plain sentence on what this is, for Co's own reference.
+Also write "summary": one plain sentence on what this is, for Cue's own reference.
 
 Return ONLY JSON: {"fields": {"start": {"value": "...", "quote": "..."}, ...}, "summary": "..."}`;
 }
@@ -469,7 +469,7 @@ export function humanTime(value: string, zone: string | null): string {
 // Facts (verified fields only) and hints (the summary, unverified fields),
 // kept apart so the fact check only ever accepts the first.
 export function describeRead(label: string, r: LinkRead, now = new Date()): { facts: string[]; hints: string[] } {
-  if (r.status !== "ok") return { facts: [`Co couldn't read the page for "${label}": ${r.why ?? "unknown"}. Nothing on it is known.`], hints: [] };
+  if (r.status !== "ok") return { facts: [`Cue couldn't read the page for "${label}": ${r.why ?? "unknown"}. Nothing on it is known.`], hints: [] };
   const facts: string[] = [];
   const hints: string[] = [];
   const old = now.getTime() - r.fetchedAt.getTime() > VOLATILE_AFTER_MS;
@@ -491,7 +491,7 @@ export function describeRead(label: string, r: LinkRead, now = new Date()): { fa
   if (missing.length && r.source) facts.push(`The page for "${label}" doesn't state: ${missing.join(", ")}.`);
   const unverified = FIELDS.filter((k) => r.fields[k] && !r.fields[k]!.verified);
   if (unverified.length) hints.push(`Unconfirmed from the page for "${label}" (not on the page as quoted, don't state as fact): ${unverified.map((k) => `${k}: ${r.fields[k]!.value}`).join("; ")}.`);
-  if (r.summary) hints.push(`Co's own read of "${label}": ${r.summary}`);
+  if (r.summary) hints.push(`Cue's own read of "${label}": ${r.summary}`);
   return { facts, hints };
 }
 

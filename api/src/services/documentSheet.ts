@@ -43,13 +43,13 @@ export const WRITE_DOCUMENT_INPUT = z.object({
     .min(1)
     .max(10)
     .describe("Each a heading, a sentence or two of framing, then the points as short bullets: scannable, not dense paragraphs. ONLY what they said, in their words; your own ideas go in suggestions, never here."),
-  suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation, a framing you wrote for them, written out in full. It appears on the page marked as Co's suggestions, apart from their points. Each is the idea itself, never a note about the document or about Co. Leave it out when you have none."),
+  suggestions: z.array(z.string()).max(5).optional().describe("Anything of your own: an idea, an option, a recommendation, a framing you wrote for them, written out in full. It appears on the page marked as Cue's suggestions, apart from their points. Each is the idea itself, never a note about the document or about Cue. Leave it out when you have none."),
   kind: z.enum(["venue_brief", "partnership_plan", "readout", "other"]).optional().describe("What it is for: venue_brief (for a venue or space around an event), partnership_plan (working with a partner, sponsor or host), readout (what came of an event, for a host or partner), or other (anything else: their goals, a plan for themselves, a summary). Leave it out for other."),
   saveTo: z.enum(["pdf", "google_doc", "both"]).optional().describe("Leave this out: it comes as a PDF in this conversation. Only when they ask for a Google Doc in their own words set google_doc (or both, if they want the PDF too)."),
   revises: z.number().int().optional().describe("Only when they asked to change a document you already delivered: its doc number from \"Documents you've delivered\". Write the whole new version (start from readDocument), and it goes as the next version."),
   changed: z.string().optional().describe("With revises: what changed, in a few words they'd recognize (\"updated the budget section\"). It becomes the one line sent with the new version."),
   // The tool owns its one delivery line (Royce, 2026-10-08: one delivery is the attachment and one line, nothing else repeating it).
-  line: z.string().optional().describe("The one sentence that goes with the attachment, in your voice: what it is (\"Here's the plan for keeping Co present after the launch.\"). Sent later than they asked, it says when they asked (\"Here's the plan you asked for last night.\"). No dashes, no exclamation points. Leave it out and a plain line goes. Nothing else about it is sent, so don't repeat it in a reply."),
+  line: z.string().optional().describe("The one sentence that goes with the attachment, in your voice: what it is (\"Here's the plan for keeping Cue present after the launch.\"). Sent later than they asked, it says when they asked (\"Here's the plan you asked for last night.\"). No dashes, no exclamation points. Leave it out and a plain line goes. Nothing else about it is sent, so don't repeat it in a reply."),
 });
 export type WriteDocumentInput = z.infer<typeof WRITE_DOCUMENT_INPUT>;
 
@@ -161,11 +161,11 @@ const SMALL = new Set(["a", "an", "and", "or", "of", "the", "to", "for", "in", "
 export function docFilename(title: string, dateIso: string): string {
   const words = title.replace(/[^A-Za-z0-9' ]+/g, " ").replace(/'/g, "").split(/\s+/).filter(Boolean);
   // "Co: Product Positioning" is not "Co-Co-Product-Positioning": the name already starts with Co.
-  if (words.length > 1 && words[0].toLowerCase() === "co") words.shift();
+  if (words.length > 1 && ["co", "cue"].includes(words[0].toLowerCase())) words.shift();
   const named = words.map((w, i) => (i > 0 && SMALL.has(w.toLowerCase()) ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1)));
   let base = named.join("-").slice(0, 70).replace(/-+$/, "");
   if (!base) base = "Document";
-  return `Co-${base}-${/^\d{4}-\d{2}-\d{2}$/.test(dateIso) ? dateIso : "undated"}.pdf`;
+  return `Cue-${base}-${/^\d{4}-\d{2}-\d{2}$/.test(dateIso) ? dateIso : "undated"}.pdf`;
 }
 
 // ---------------------------------------------------------------- the page
@@ -251,10 +251,10 @@ h3 { margin: 0 0 8px 0; font-family: ${SANS}; font-size: 8.5px; font-weight: 600
 .sug li { color: ${C.soft}; }
 .end { border-top: 1px solid ${C.line}; }
 </style></head><body class="${density}">
-<div class="mast"><div class="mark">Co</div><div class="date">${e(o.date)}</div></div>
+<div class="mast"><div class="mark">Cue</div><div class="date">${e(o.date)}</div></div>
 <div class="head"><h1>${e(doc.title)}</h1><div class="for">Prepared for ${e(name)}</div>${doc.note ? `<p class="lede">${e(doc.note)}</p>` : ""}</div>
 ${doc.sections.map(section).join("")}
-${doc.suggestions.length ? `<section class="sug"><h3>Co's suggestions</h3><ul>${doc.suggestions.map((x) => `<li>${e(x)}</li>`).join("")}</ul></section>` : ""}
+${doc.suggestions.length ? `<section class="sug"><h3>Cue's suggestions</h3><ul>${doc.suggestions.map((x) => `<li>${e(x)}</li>`).join("")}</ul></section>` : ""}
 <div class="end"></div>
 </body></html>`;
 }

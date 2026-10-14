@@ -21,15 +21,15 @@ check("owning it passes: 'I don't have that from you, I shouldn't have said Frid
 check("asking passes: 'Is something coming up Friday?'", !fails("Is anything happening Friday I should know about?", ASK).includes("no_unsourced_attribution"));
 check("what they said in this thread, recently, can be stated back", !fails("You told me you're pitching investors, so I assumed that was it.", { message: "ok", recentConversation: "User said: I'm pitching investors this week\nCo replied: got it" }).includes("no_unsourced_attribution"));
 check("what they said in this very message can be stated back", !fails("You said you're weighing a raise, so let's start there.", { message: "I'm weighing a raise and don't know how to ask", recentConversation: "" }).includes("no_unsourced_attribution"));
-check("Co's own earlier line never counts as their words", fails("You've been prepping the investor ask.", { message: "huh", recentConversation: "Co replied: you've been prepping the investor ask for Friday" }).includes("no_unsourced_attribution"));
+check("Cue's own earlier line never counts as their words", fails("You've been prepping the investor ask.", { message: "huh", recentConversation: "Co replied: you've been prepping the investor ask for Friday" }).includes("no_unsourced_attribution"));
 const rf = G.baseReplyFacts();
-G.addFact(rf, "known", "What they have told Co that still holds (each with when they said it): They want an advisor paid in equity. (they said, Oct 5).");
+G.addFact(rf, "known", "What they have told Cue that still holds (each with when they said it): They want an advisor paid in equity. (they said, Oct 5).");
 check("a live claim given to the reply backs it (they did say it, and it still holds)", !fails("You told me you want an advisor paid in equity.", { message: "what do you remember", recentConversation: "" }, rf).includes("no_unsourced_attribution"));
 check("an ordinary reply with no attribution is untouched", fails("Sounds like a plan. Want me to look for options?", ASK).length === 0);
 
 // wiring: the reply is handed what they have told Co (with when), and the rule for being asked what Co meant
 const sb = src("routes/sendblue.ts");
-check("the reply is given their live claims, labelled with when", /What they have told Co that still holds \(each with when they said it\)/.test(sb) && /heldClaimsFrom\(turn\?\.knowledge\)/.test(sb) && /return renderLive\(k\.claims\.filter\(\(c\) => c\.text\.trim\(\)\)\.map/.test(src("harness/replyGrounding.ts")));
+check("the reply is given their live claims, labelled with when", /What they have told Cue that still holds \(each with when they said it\)/.test(sb) && /heldClaimsFrom\(turn\?\.knowledge\)/.test(sb) && /return renderLive\(k\.claims\.filter\(\(c\) => c\.text\.trim\(\)\)\.map/.test(src("harness/replyGrounding.ts")));
 check("and told: answer a challenge only from what they said, own the slip, never defend its own earlier text", /Your own earlier texts are never the source of what they said; never defend one/.test(sb) && /say you don't have that from them and own the slip/.test(sb));
 check("the check is in the reply gate's code checks, not only in a prompt", /name: "no_unsourced_attribution"/.test(src("harness/replyGrounding.ts")) && /attributedWithoutSource\(draft/.test(src("harness/replyGrounding.ts")));
 console.log(`reply double-down: ${total - failed}/${total} passed`);

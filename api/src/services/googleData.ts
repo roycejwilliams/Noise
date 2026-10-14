@@ -95,7 +95,7 @@ export async function googleFactsFor(userId: string, zone: string | null, now = 
       .catch(() => {})
       .finally(() => refreshing.delete(userId));
   }
-  if (!fetchedAt) return ["They connected their calendar or Gmail, but Co hasn't read it yet."];
+  if (!fetchedAt) return ["They connected their calendar or Gmail, but Cue hasn't read it yet."];
   return describeSnapshot({ busy: r.busy, waiting: r.waiting, fetchedAt }, zone, now);
 }
 
@@ -113,14 +113,14 @@ export function describeSnapshot(s: GoogleSnapshot, zone: string | null, now = n
       });
     out.push(
       blocks.length
-        ? `Their Google Calendar (busy times only, next ${DAYS_AHEAD} days, as of ${asOf}): busy ${blocks.slice(0, 12).join("; ")}. Any other time in that window shows free. Co sees only busy or free, never what the events are.`
-        : `Their Google Calendar shows them free for the next ${DAYS_AHEAD} days (as of ${asOf}). Co sees only busy or free, never what the events are.`,
+        ? `Their Google Calendar (busy times only, next ${DAYS_AHEAD} days, as of ${asOf}): busy ${blocks.slice(0, 12).join("; ")}. Any other time in that window shows free. Cue sees only busy or free, never what the events are.`
+        : `Their Google Calendar shows them free for the next ${DAYS_AHEAD} days (as of ${asOf}). Cue sees only busy or free, never what the events are.`,
     );
   }
   if (s.waiting) {
     out.push(
       s.waiting.length
-        ? `Emails they sent that haven't had a reply yet (Gmail, as of ${asOf}; Co sees who, subject and date, never the message): ${s.waiting
+        ? `Emails they sent that haven't had a reply yet (Gmail, as of ${asOf}; Cue sees who, subject and date, never the message): ${s.waiting
             .map((w) => `"${w.subject}" to ${w.to}, sent ${DateTime.fromISO(w.sentAt).setZone(z).toFormat("ccc MMM d")}`)
             .join("; ")}.`
         : `None of their recent sent emails is waiting on a reply (Gmail, as of ${asOf}).`,

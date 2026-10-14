@@ -31,7 +31,7 @@ const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000);
 const daysAgo = (d: number) => hoursAgo(d * 24);
 const calm = { current: null, lastCall: null, recurring: [], needsCare: false, withCo: { frustrated: false, about: null, count: 0 } } as any;
 const heavy = { ...calm, needsCare: true } as any;
-const frustrated = { ...calm, withCo: { frustrated: true, about: "what Co found", count: 2 } } as any;
+const frustrated = { ...calm, withCo: { frustrated: true, about: "what Cue found", count: 2 } } as any;
 const view = (seeds: ReturnType<typeof C.countSeeds>, history: any[] = [], joinedAt: Date | null = daysAgo(1)) => ({ seeds, history, joinedAt });
 const steer = (cs: any, emotional: any = calm, otherQuestion: string | null = null) => {
   const rf = RG.createReplyFacts();
@@ -39,7 +39,7 @@ const steer = (cs: any, emotional: any = calm, otherQuestion: string | null = nu
   return { rf, r, instruction: rf.instructions.find((i) => i === r?.instruction) ?? null };
 };
 const EMPTY = C.countSeeds({ goals: [], findAsks: [] });
-const ROYCE = ["partnering with Sequin AI for a November launch party", "have Co draft planning docs for branding and launch strategy with Sequin AI", "maintain Co's presence after the November event"];
+const ROYCE = ["partnering with Sequin AI for a November launch party", "have Cue draft planning docs for branding and launch strategy with Sequin AI", "maintain Cue's presence after the November event"];
 
 // ---- 1. seeds
 {
@@ -47,13 +47,13 @@ const ROYCE = ["partnering with Sequin AI for a November launch party", "have Co
   const two = C.countSeeds({ goals: ["find a run club in the Marina", "meet other climate founders"], findAsks: [] });
   check("two findable goals are seeded (the target is 2)", two.n === 2 && two.seeded && C.COLD_START.seedTarget === 2);
   const royce = C.countSeeds({ goals: ROYCE, findAsks: [], passedByLastPlan: [ROYCE[0]] });
-  check("Co's own tasks never count, and a goal the last sweep passed as having no findable side doesn't either", royce.n === 0 && royce.notFindable.length === 3, royce);
+  check("Cue's own tasks never count, and a goal the last sweep passed as having no findable side doesn't either", royce.n === 0 && royce.notFindable.length === 3, royce);
   const unread = C.countSeeds({ goals: [ROYCE[0]], findAsks: [] });
   check("...while a goal no sweep has read yet counts until one does", unread.n === 1);
   const states = new Map([[G.goalHash("find a run club in the Marina"), { state: "done" as const }], [G.goalHash("meet other climate founders"), { state: "stale" as const }]]);
   check("done and stale goals don't count", C.countSeeds({ goals: ["find a run club in the Marina", "meet other climate founders"], findAsks: [], states }).n === 0);
   check("an open find ask counts; one that restates a goal counts once", C.countSeeds({ goals: ["meet other climate founders"], findAsks: ["small founder dinners in SF", "meet other climate founders"] }).n === 2);
-  check("Co's own promise saved as an ask never counts", C.countSeeds({ goals: [], findAsks: ["I'll send the outline tonight"] }).n === 0);
+  check("Cue's own promise saved as an ask never counts", C.countSeeds({ goals: [], findAsks: ["I'll send the outline tonight"] }).n === 0);
   const tastes = C.countSeeds({ goals: [], findAsks: [], enjoys: ["hiking", "jazz", "ceramics", "natural wine"] });
   check("what they enjoy counts as ONE seed however many, so tastes alone still get one more question", tastes.n === 1 && !tastes.seeded && tastes.seeds[0].from === "enjoys");
   check("their direction is read like a goal", C.countSeeds({ goals: ["find a run club"], findAsks: [], direction: "build a life in SF with people who make things" }).n === 2);
@@ -71,8 +71,8 @@ const ROYCE = ["partnering with Sequin AI for a November launch party", "have Co
   check("guardrail: never a quiz (no list of questions, no form-style interests question, never says it's collecting)", /Never a list of questions/.test(t) && /like a form would ask/.test(t) && /never mention a profile, a search setup or that you're collecting/.test(t));
   check("guardrail: a message that needs an answer just gets the answer", /needs a real answer or is about something else, just answer it/.test(t));
   check("what they name is saved through the normal ask path (saveAsk), and not asked again", /save it with saveAsk in their words/.test(t) && /don't ask about it again/.test(t));
-  check("the instruction shows no quoted survey question for Co to copy", !/"what are your interests\?"|"tell me about your hobbies"/i.test(t));
-  check("written the way Co texts: no em dashes, no exclamation points", !/[—–]/.test(t) && !/!/.test(t));
+  check("the instruction shows no quoted survey question for Cue to copy", !/"what are your interests\?"|"tell me about your hobbies"/i.test(t));
+  check("written the way Cue texts: no em dashes, no exclamation points", !/[—–]/.test(t) && !/!/.test(t));
   const one = C.countSeeds({ goals: ["find a run club in the Marina"], findAsks: [] });
   check("with one seed it says what's there and still steers", /only one thing on file/.test(steer(view(one)).instruction ?? "") && /run club/.test(steer(view(one)).instruction ?? ""));
 }
@@ -82,7 +82,7 @@ const ROYCE = ["partnering with Sequin AI for a November launch party", "have Co
   const h = steer(view(EMPTY), heavy);
   check("never in a heavy moment: no instruction, recorded why", !h.r?.offered && !h.rf.instructions.some((i) => /ONE easy question/.test(i)) && h.r?.why === "a heavy moment");
   const f = steer(view(EMPTY), frustrated);
-  check("never while they're frustrated with Co", !f.r?.offered && /frustrated/.test(f.r?.why ?? ""));
+  check("never while they're frustrated with Cue", !f.r?.offered && /frustrated/.test(f.r?.why ?? ""));
   const after = steer(view(EMPTY, [{ action: "steered", at: hoursAgo(1), question: "What kind of rooms do you find yourself wanting more of lately?" }]));
   check("never two replies in a row that both steer", !after.r?.offered && after.r?.why === "the last reply steered");
   const rested = steer(view(EMPTY, [{ action: "rested", at: hoursAgo(0.5), question: null }, { action: "steered", at: hoursAgo(1), question: "What kind of rooms do you find yourself wanting more of lately?" }]));
@@ -191,10 +191,10 @@ const ROYCE = ["partnering with Sequin AI for a November launch party", "have Co
   // Extraction: an interest named in answer to Co's question lands as a find request.
   for (const scope of ["last_user_message", "whole_transcript"] as const) {
     const p = PE.captureIntentPrompt("assistant: What kind of rooms do you want more of?\nuser: honestly small dinners with other founders", scope);
-    check(`capture (${scope}): an interest named in answer to Co's question is still a seeking ask; facts about them aren't`, p.includes(PE.ANSWERED_INTEREST_RULE) && /answers to Co's questions/.test(p) && /Facts about who they are/.test(p));
+    check(`capture (${scope}): an interest named in answer to Cue's question is still a seeking ask; facts about them aren't`, p.includes(PE.ANSWERED_INTEREST_RULE) && /answers to Cue's questions/.test(p) && /Facts about who they are/.test(p));
   }
   const save = CAP.ABILITIES.find((a) => a.tool === "saveAsk");
-  check("saveAsk's entry tells Co to save an interest they mention in passing or in answer", /in passing or answering you/.test(save?.use ?? "") && /scene/.test(save?.use ?? ""));
+  check("saveAsk's entry tells Cue to save an interest they mention in passing or in answer", /in passing or answering you/.test(save?.use ?? "") && /scene/.test(save?.use ?? ""));
 }
 
 // Royce, 2026-10-08: "Cap it at 5 total. If 5 natural tries never produce a findable interest, stop asking and record that."

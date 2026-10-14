@@ -16,11 +16,11 @@ export async function privacyAlert(message: string, env: NodeJS.ProcessEnv = pro
     {
       other_person: {
         type: "boolean",
-        instructions: "Is `message` asking Co to reveal something about another specific person: their contact details, where they are, what they told Co, what's going on with them, or whether they're a member or going somewhere?",
+        instructions: "Is `message` asking Cue to reveal something about another specific person: their contact details, where they are, what they told Cue, what's going on with them, or whether they're a member or going somewhere?",
       },
       contact_someone: {
         type: "boolean",
-        instructions: "Is `message` asking Co to text, message, email or call someone else on their behalf?",
+        instructions: "Is `message` asking Cue to text, message, email or call someone else on their behalf?",
       },
     },
     1500,

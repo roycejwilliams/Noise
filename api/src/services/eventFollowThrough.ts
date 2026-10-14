@@ -80,7 +80,7 @@ export function noContactOrLinks(draft: string): boolean {
 
 // A note that promises something Co will do, or claims what the other person felt or said.
 export function claimsOthersWords(draft: string): boolean {
-  return /\b(?:co will|i'?ll have co|co can|my assistant|my ai)\b/i.test(draft) || /\b(?:told me (?:he|she|they)|said (?:he|she|they) (?:would|wanted|loved)|i heard (?:you|from))\b/i.test(draft);
+  return /\b(?:co will|cue will|i'?ll have (?:co|cue)|co can|cue can|my assistant|my ai)\b/i.test(draft) || /\b(?:told me (?:he|she|they)|said (?:he|she|they) (?:would|wanted|loved)|i heard (?:you|from))\b/i.test(draft);
 }
 
 export function sentenceCount(text: string): number {
@@ -92,7 +92,7 @@ export function noteProblem(draft: string, o: { theirNote: string; theirAsk: str
   const t = draft.trim();
   if (!t) return "empty";
   if (!noContactOrLinks(t)) return "carries a link, email or number";
-  if (claimsOthersWords(t)) return "claims what the other person said or promises something Co will do";
+  if (claimsOthersWords(t)) return "claims what the other person said or promises something Cue will do";
   if (/[—–]|!/.test(t)) return "has an em dash or an exclamation point";
   if (t.length > FOLLOW_THROUGH.maxNoteChars) return `too long (${t.length} chars)`;
   if (sentenceCount(t) > FOLLOW_THROUGH.maxSentencesPerNote + 1) return "too many sentences";
@@ -153,7 +153,7 @@ export async function extractMet(message: string, firstName: string): Promise<Me
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
     experimental_telemetry: { isEnabled: true, functionId: "agent.followThrough.extractMet", recordInputs: false, recordOutputs: false },
-    prompt: `${firstName} told Co about who they met at an event. List only the people they say they met or talked to, using only their message. For each: the name exactly as they wrote it, a few of their own words on what they said about the conversation (copied, not rephrased), and the tone: "positive" (they liked it or want to follow up), "neutral", or "critical" (it went badly or they didn't connect). Do not infer anyone not named. If no one is named, return an empty list.
+    prompt: `${firstName} told Cue about who they met at an event. List only the people they say they met or talked to, using only their message. For each: the name exactly as they wrote it, a few of their own words on what they said about the conversation (copied, not rephrased), and the tone: "positive" (they liked it or want to follow up), "neutral", or "critical" (it went badly or they didn't connect). Do not infer anyone not named. If no one is named, return an empty list.
 
 Message: """${message.slice(0, 1200)}"""
 
@@ -171,14 +171,14 @@ export async function draftNote(o: { firstName: string; other: Met; eventName: s
   const { text } = await generateText({
     model: anthropic(MODELS.sonnet),
     experimental_telemetry: { isEnabled: true, functionId: "agent.followThrough.draftNote", recordInputs: false, recordOutputs: false },
-    prompt: `Write a short note that ${o.firstName} could send to ${o.other.name}, whom they met at ${o.eventName}. Write it as ${o.firstName}, in their own register: it should sound like these messages they have written, not like Co.
+    prompt: `Write a short note that ${o.firstName} could send to ${o.other.name}, whom they met at ${o.eventName}. Write it as ${o.firstName}, in their own register: it should sound like these messages they have written, not like Cue.
 
 ${o.firstName}'s own recent messages (for the register only):
 ${o.voice.map((v) => `- ${v}`).join("\n") || "- (none: keep it plain and warm)"}
 
 What ${o.firstName} said about meeting ${o.other.name}: "${o.other.note}"
 ${o.ask ? `What ${o.firstName} is looking for: ${o.ask}\n` : ""}
-Rules: two or three short sentences. Thank them or pick up the thing ${o.firstName} said, and suggest one easy next step (a coffee, a call, sending something) without a date or place. Use ONLY the words and facts above: no new names, companies, numbers or details. Do not say what ${o.other.name} said, felt or wants. No links, emails or phone numbers. No exclamation points, no em dashes. Never mention Co, an assistant or AI.${o.feedback ? `\nYour last draft was rejected: ${o.feedback}. Fix that.` : ""}
+Rules: two or three short sentences. Thank them or pick up the thing ${o.firstName} said, and suggest one easy next step (a coffee, a call, sending something) without a date or place. Use ONLY the words and facts above: no new names, companies, numbers or details. Do not say what ${o.other.name} said, felt or wants. No links, emails or phone numbers. No exclamation points, no em dashes. Never mention Cue, an assistant or AI.${o.feedback ? `\nYour last draft was rejected: ${o.feedback}. Fix that.` : ""}
 
 Return ONLY the note.`,
   });
@@ -199,7 +199,7 @@ const REAL: Steps = { alreadySent, notGoing, extractMet, theirVoice, theirAsk, d
 
 export async function buildFollowThrough(o: { userId: string; firstName: string; eventId: string; eventName: string; theirMessage: string }, steps: Steps = REAL): Promise<{ messages: string[]; people: number } | { skip: string }> {
   if (await steps.alreadySent(o.userId, o.eventId)) return { skip: "already sent for this event" };
-  if (await steps.notGoing(o.userId, o.eventId)) return { skip: "they told Co they weren't going" };
+  if (await steps.notGoing(o.userId, o.eventId)) return { skip: "they told Cue they weren't going" };
   const met = worthKeeping(await steps.extractMet(o.theirMessage, o.firstName).catch(() => []), o.theirMessage);
   if (!met.length) return { skip: "they didn't name anyone worth a note" };
   const [voice, ask] = await Promise.all([steps.theirVoice(o.userId), steps.theirAsk(o.userId)]);

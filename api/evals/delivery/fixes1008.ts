@@ -139,7 +139,7 @@ const briefDeps = (h: ReturnType<typeof wired>, now: Date, extra: any = {}) => (
   check("F3: the plan shows under the documents delivered (newest: to their email)", /^Delivered "Saturday in Sonoma" \(doc #2, version 1\) to their email/.test(R.receiptLines(h.receipts.all, SF, t)[0] ?? ""), R.receiptLines(h.receipts.all, SF, t));
   check("F3: readDocument can answer from it (the section found, verbatim)", R.findSection(h.receipts.all[0].doc, "what time is the winery tasting?")?.text.includes("Tasting at the winery") === true);
   const dup = await DD.deliverAndRecord(doc, { userId: "u1", firstName: "Jordan", phone: person.phone, zone: SF, now: t }, { askedForGoogle: false, source: "reply:plan" }, { deliver, receipts: h.receipts, now: () => t });
-  check("F3: the same plan again on Co's own: refused", !!dup.duplicate && h.wire.length === 1);
+  check("F3: the same plan again on Cue's own: refused", !!dup.duplicate && h.wire.length === 1);
   check("F3: the table takes 'email' (the check widened on tables made before)", /channel IN \('pdf_text','google_docs','text_fallback','email'\)/.test(src("db/migrations.ts")) && /DROP CONSTRAINT IF EXISTS document_deliveries_channel_check/.test(src("db/migrations.ts")));
   const lt = src("agent/loopTools.ts");
   const ep = lt.slice(lt.indexOf("emailPlan: tool({"), lt.indexOf("researchBrief: tool({"));
@@ -150,16 +150,16 @@ const briefDeps = (h: ReturnType<typeof wired>, now: Date, extra: any = {}) => (
 {
   for (const m of ["can you send that plan again? I can't find it", "redo it", "regenerate it please", "send me that again", "can I get that again", "I lost it", "resend the plan please", "send it again"]) check(`F4: a re-ask: "${m}"`, DD.asksToResend(m));
   for (const m of ["can you update the plan with the budget", "redo it with the budget in", "send it again but add the dinner", "regenerate it without the second venue", "what does the budget section say?", "I can't make it tonight", "make it shorter"]) check(`F4: not a re-ask (a change, or not about it): "${m}"`, !DD.asksToResend(m));
-  const doc = DS.resolveDocument({ title: "Co Presence Plan: After the launch", kind: "partnership_plan", sections: [{ heading: "What you want", bullets: ["People still thinking about Co a week later", "Not a one night thing"] }, { heading: "Budget", bullets: ["Split with the host 50/50"] }] });
+  const doc = DS.resolveDocument({ title: "Cue Presence Plan: After the launch", kind: "partnership_plan", sections: [{ heading: "What you want", bullets: ["People still thinking about Cue a week later", "Not a one night thing"] }, { heading: "Budget", bullets: ["Split with the host 50/50"] }] });
   const h = wired();
   const send = (d: any, now: Date, o: any = {}) => DD.deliverAndRecord(d, { userId: "u1", firstName: "Jordan", phone: person.phone, zone: SF, now, line: "Here's the presence plan." }, { askedForGoogle: false, source: "reply", ...o }, { deliver: h.deliver, receipts: h.receipts, now: () => now });
   await send(doc, at("2026-10-08T17:00:00Z"));
   const refused = await send(doc, at("2026-10-08T18:00:00Z"));
-  check("F5: the same artifact on Co's own initiative: refused, and the refusal states the rule", !!refused.duplicate && /it goes again only when they ask for it again, never on your own/.test((refused.results[0] as any).why) && /readDocument/.test((refused.results[0] as any).why));
-  const rewritten = { ...doc, note: "A slightly different line Co wrote this time." };
+  check("F5: the same artifact on Cue's own initiative: refused, and the refusal states the rule", !!refused.duplicate && /it goes again only when they ask for it again, never on your own/.test((refused.results[0] as any).why) && /readDocument/.test((refused.results[0] as any).why));
+  const rewritten = { ...doc, note: "A slightly different line Cue wrote this time." };
   const again = await send(rewritten, at("2026-10-08T18:05:00Z"), { resend: true });
   check("F5: asked for it again, a rewrite of it isn't a new version: the version they have goes again, as is", again.sentOk.length === 1 && again.version === 1 && h.receipts.all[1].contentHash === h.receipts.all[0].contentHash && h.receipts.all[1].doc.note === doc.note);
-  const v2 = await send({ ...doc, sections: [...doc.sections, { heading: "Dinner", paragraphs: [], bullets: ["Co covers the dinner"] }] }, at("2026-10-08T19:00:00Z"), { revises: 1, changed: "added the dinner" });
+  const v2 = await send({ ...doc, sections: [...doc.sections, { heading: "Dinner", paragraphs: [], bullets: ["Cue covers the dinner"] }] }, at("2026-10-08T19:00:00Z"), { revises: 1, changed: "added the dinner" });
   check("F5: a change is the next version, with its change line as the caption", v2.version === 2 && h.wire[h.wire.length - 1].content === "Added the dinner.");
   const lines = R.receiptLines(h.receipts.all, SF, at("2026-10-08T20:00:00Z"));
   check("F5: receipt lines carry the same rule (or ask for it again)", lines.length === 1 && lines[0].includes(R.RESEND_RULE) && /only when they ask for it again/.test(R.RESEND_RULE) && /never on your own/.test(R.RESEND_RULE));
@@ -171,35 +171,35 @@ const briefDeps = (h: ReturnType<typeof wired>, now: Date, extra: any = {}) => (
 // ---------------------------------------------------------------- F6
 {
   const L = Cap.LIMITS.join("\n");
-  check("F6: 'can't chase down later' is scoped to outside a task", /Outside a task, Co can't go chase down a specific link, detail, or answer later/.test(L) && /startTask, a research brief, or a promise it keeps/.test(L) && !/Beyond that, Co can't go chase down/.test(L));
-  check("F6: 'no specific time' is scoped to companion check-ins", /never promises a specific time for a companion check-in/.test(L) && /for work it took on as a task, it can truthfully say when it'll get back to them/.test(L) && !Cap.LIMITS.includes("Co never promises a specific time for a check-in."));
+  check("F6: 'can't chase down later' is scoped to outside a task", /Outside a task, Cue can't go chase down a specific link, detail, or answer later/.test(L) && /startTask, a research brief, or a promise it keeps/.test(L) && !/Beyond that, Cue can't go chase down/.test(L));
+  check("F6: 'no specific time' is scoped to companion check-ins", /never promises a specific time for a companion check-in/.test(L) && /for work it took on as a task, it can truthfully say when it'll get back to them/.test(L) && !Cap.LIMITS.includes("Cue never promises a specific time for a check-in."));
 }
 
 // ---------------------------------------------------------------- F10/B2: the tool owns its one line
 {
   const now = at("2026-10-08T17:00:00Z");
-  const fresh = { title: "Co Presence Plan: After the launch", kind: "partnership_plan", sendAt: now, zone: SF };
-  check("F10: Co's own line is the caption", (await DD.captionFor({ ...fresh, line: "Here's the presence plan, built around the dinner" })) === "Here's the presence plan, built around the dinner.");
+  const fresh = { title: "Cue Presence Plan: After the launch", kind: "partnership_plan", sendAt: now, zone: SF };
+  check("F10: Cue's own line is the caption", (await DD.captionFor({ ...fresh, line: "Here's the presence plan, built around the dinner" })) === "Here's the presence plan, built around the dinner.");
   check("F10: no dashes, no exclamation points", (await DD.captionFor({ ...fresh, line: "Here's the plan — ready when you are!" })) === "Here's the plan, ready when you are.");
-  check("F10: no line: the plain line", (await DD.captionFor(fresh)) === "Here's the Co Presence Plan.");
-  check("F10: a line that runs on is replaced by the plain one", (await DD.captionFor({ ...fresh, line: "Here it is. It covers the dinner. And the budget. And the follow up." })) === "Here's the Co Presence Plan.");
+  check("F10: no line: the plain line", (await DD.captionFor(fresh)) === "Here's the Cue Presence Plan.");
+  check("F10: a line that runs on is replaced by the plain one", (await DD.captionFor({ ...fresh, line: "Here it is. It covers the dinner. And the budget. And the follow up." })) === "Here's the Cue Presence Plan.");
   const late = { ...fresh, askedAt: at("2026-10-08T05:30:00Z"), sendAt: at("2026-10-08T15:00:00Z") }; // asked 10:30pm, sent 8am
-  check("F10: a later delivery: no stale \"Got it\", and it must say when they asked", (await DD.captionFor({ ...late, line: "Got it, here's the presence plan." })) === "Here's the Co Presence Plan you asked for last night.");
+  check("F10: a later delivery: no stale \"Got it\", and it must say when they asked", (await DD.captionFor({ ...late, line: "Got it, here's the presence plan." })) === "Here's the Cue Presence Plan you asked for last night.");
   check("F10: ...Co's own line kept when it says when", (await DD.captionFor({ ...late, line: "Here's the presence plan you asked for last night, with the dinner up front." })) === "Here's the presence plan you asked for last night, with the dinner up front.");
   check("F10: the input carries the line, shared by a reply and a task", "line" in DS.WRITE_DOCUMENT_INPUT.shape);
   // A task's document uses Co's line through the same rules.
   const THEIRS = "After the launch I want the people we meet to remember us. Not a one night thing. Split with the host 50/50.";
-  const input = { title: "Co Presence Plan: After the launch", kind: "partnership_plan" as const, sections: [{ heading: "What you want", bullets: ["People we meet remember us", "Not a one night thing"] }, { heading: "Budget", bullets: ["Split with the host 50/50"] }], line: "Here's the presence plan you asked for last night." };
+  const input = { title: "Cue Presence Plan: After the launch", kind: "partnership_plan" as const, sections: [{ heading: "What you want", bullets: ["People we meet remember us", "Not a one night thing"] }, { heading: "Budget", bullets: ["Split with the host 50/50"] }], line: "Here's the presence plan you asked for last night." };
   const h = wired();
   const o = { userId: "u1", taskId: 9, firstName: "Jordan", phone: person.phone, zone: SF, taskTheirWords: THEIRS, read: "", askedAt: at("2026-10-08T05:30:00Z") };
   const r = await DD.sendDocumentForTask(input as any, o, { theirWords: async () => THEIRS, blocked: async () => null, deliver: h.deliver, record: async () => {}, now: () => at("2026-10-08T15:00:00Z"), receipts: h.receipts });
-  check("F10: a task's document goes with Co's line, one send", r.ok && h.wire.length === 1 && h.wire[0].content === "Here's the presence plan you asked for last night.", { r, wire: h.wire });
+  check("F10: a task's document goes with Cue's line, one send", r.ok && h.wire.length === 1 && h.wire[0].content === "Here's the presence plan you asked for last night.", { r, wire: h.wire });
   const lt = src("agent/loopTools.ts");
   const wd = lt.slice(lt.indexOf("writeDocument: tool({"), lt.indexOf("readDocument: tool({"));
   const ep = lt.slice(lt.indexOf("emailPlan: tool({"), lt.indexOf("researchBrief: tool({"));
   check("F10: both tools end with \"Delivered with its line; send nothing more about it unless you have a question for them.\"", LT.DELIVERED_NOTE === "Delivered with its line; send nothing more about it unless you have a question for them." && /DELIVERED_NOTE/.test(wd) && /DELIVERED_NOTE/.test(ep) && !/Say in one line what it covers/.test(lt) && !/Say in one line where it is; don't list the steps again/.test(lt));
-  check("F10: both tools pass Co's line through captionFor", /captionFor\(\{ line: input\.line/.test(wd) && /captionFor\(\{ line: input\.line/.test(ep));
-  check("F10: the registry tells Co the line is the whole delivery", /Give line: the one sentence that goes with the attachment/.test(Cap.ABILITIES.find((a) => a.id === "write_document")!.use ?? "") && /Give line: the one sentence that goes with the PDF/.test(Cap.ABILITIES.find((a) => a.id === "email_plan")!.use ?? ""));
+  check("F10: both tools pass Cue's line through captionFor", /captionFor\(\{ line: input\.line/.test(wd) && /captionFor\(\{ line: input\.line/.test(ep));
+  check("F10: the registry tells Cue the line is the whole delivery", /Give line: the one sentence that goes with the attachment/.test(Cap.ABILITIES.find((a) => a.id === "write_document")!.use ?? "") && /Give line: the one sentence that goes with the PDF/.test(Cap.ABILITIES.find((a) => a.id === "email_plan")!.use ?? ""));
 }
 
 // ---------------------------------------------------------------- B7: a hold line while the PDF is made

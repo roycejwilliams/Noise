@@ -400,7 +400,7 @@ async function welcomeLineFor(userId: string, phone: string, invitedBy: string |
   const stock = (inviter ? pickLine(WELCOME_INVITED, { inviter }) : "") || pickLine(WELCOME);
   // Co writes it (services/voiceLine.ts); the stock line is the fallback.
   const { text: line, written } = await lineInVoice({
-    purpose: "Welcome someone who just got into Co with a good invite code.",
+    purpose: "Welcome someone who just got into Cue with a good invite code.",
     facts: inviter ? [`${inviter}, a member, invited them.`, "They're in."] : ["They're in. Someone invited them."],
     examples: inviter ? WELCOME_INVITED.map((l) => l.replace("{inviter}", inviter)) : WELCOME,
     mustInclude: inviter ? [inviter] : [],
@@ -475,8 +475,8 @@ async function tellInviterTheyJoined(newUser: { id: string; first_name?: string 
   const stock = pickLine(INVITE_JOINED, { name: inviterName, friend: gate.friend, left });
   const { text: line } = stock
     ? await lineInVoice({
-        purpose: `Tell ${inviterName ?? "a member"} that the friend they invited just joined Co.`,
-        facts: [`${gate.friend} joined Co on their invite.`, `They have ${left} invite${left === 1 ? "" : "s"} left; one only counts once someone joins.`],
+        purpose: `Tell ${inviterName ?? "a member"} that the friend they invited just joined Cue.`,
+        facts: [`${gate.friend} joined Cue on their invite.`, `They have ${left} invite${left === 1 ? "" : "s"} left; one only counts once someone joins.`],
         examples: INVITE_JOINED.map((l) => l.replace("{friend}", gate.friend ?? "").replace("{name}", inviterName ?? "").replace("{left}", String(left))),
         mustInclude: gate.friend ? [gate.friend] : [],
         fallback: stock,
@@ -691,7 +691,7 @@ export function sendblueRouter(io: Server): Router {
             );
             const user = userResult.rows[0];
             if (user) {
-              const delivErrContent = `Co message failed to deliver: ${error_code} — ${error_message}`;
+              const delivErrContent = `Cue message failed to deliver: ${error_code} — ${error_message}`;
               const delivErrMemory = await pool.query(
                 `INSERT INTO co_memories (user_id, memory_type, content)
                  VALUES ($1, 'text_exchange', $2) RETURNING id`,
@@ -744,7 +744,7 @@ export function sendblueRouter(io: Server): Router {
           try {
             await sendblue.messages.send({
               number,
-              content: "You've been unsubscribed and won't receive further messages or calls from Co. Text START to resubscribe.",
+              content: "You've been unsubscribed and won't receive further messages or calls from Cue. Text START to resubscribe.",
               from_number: process.env.SENDBLUE_PHONE_NUMBER!,
             });
           } catch (err: any) {
@@ -1016,7 +1016,7 @@ export function sendblueRouter(io: Server): Router {
                 purpose: "Right after they gave their name and email: offer a quick five-minute call to get to know them, now or at a time they pick, and make clear texting is fine too.",
                 facts: [
                   `Their first name is ${first_name ?? "unknown"}.`,
-                  "A quick 5-minute call helps Co know who to introduce them to when they're in the room at Co events.",
+                  "A quick 5-minute call helps Cue know who to introduce them to when they're in the room at Cue events.",
                   "They can take the call now, pick a time, or keep texting.",
                 ],
                 examples: CALL_OFFER.map((l) => l.replace("{name}", first_name ?? "there")),
@@ -1030,7 +1030,7 @@ export function sendblueRouter(io: Server): Router {
               await pool
                 .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'call_offer_pending', $2)`, [
                   user.id,
-                  `${ONBOARDING_CALL_OFFER_PREFIX} Asked whether they'd rather keep texting or take a quick call to get started | Co offered: ${askedKickoff}`,
+                  `${ONBOARDING_CALL_OFFER_PREFIX} Asked whether they'd rather keep texting or take a quick call to get started | Cue offered: ${askedKickoff}`,
                 ])
                 .catch((err: any) => console.error("sendblue: onboarding call-or-text offer write failed (non-fatal):", err?.message ?? err));
             }
@@ -1160,7 +1160,7 @@ export function sendblueRouter(io: Server): Router {
                 if (!resolvedContent) resolvedContent = photoDescription ? `[sent a photo showing: ${photoDescription}]${assetNote}` : `[sent a photo]${assetNote}`;
               } else {
                 fileUnreadable = { kind: fileKind, why: null };
-                console.error(`sendblue: a file Co can't open arrived (${fileKind}, ${imageRes.headers.get("content-type") ?? "no type"})`);
+                console.error(`sendblue: a file Cue can't open arrived (${fileKind}, ${imageRes.headers.get("content-type") ?? "no type"})`);
               }
             } catch (imgErr: any) {
               console.error("Image fetch for vision failed (non-fatal):", imgErr?.message ?? imgErr);
@@ -1571,7 +1571,7 @@ export function sendblueRouter(io: Server): Router {
                   asks: t.asks.map((a) => a.text),
                   threads: t.threads,
                   offersThisWeek: t.offersThisWeek,
-                  now: `They just texted Co: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`,
+                  now: `They just texted Cue: "${resolvedContent}"${inlineTarget ? ` ${inlineNote(inlineTarget)}` : ""}`,
                   recent: recentConversation.split("\n").slice(-8).join("\n"),
                 }),
               );
@@ -1703,7 +1703,7 @@ export function sendblueRouter(io: Server): Router {
             addInstruction(replyFacts, lens.rule);
           }
           if (said && (said.enduring.length || said.theySaid.length)) {
-            addFact(replyFacts, "known", `What they have told Co that still holds (each with when they said it): ${[...said.enduring, ...said.theySaid].join("; ")}.`);
+            addFact(replyFacts, "known", `What they have told Cue that still holds (each with when they said it): ${[...said.enduring, ...said.theySaid].join("; ")}.`);
             addInstruction(replyFacts, "If they ask what you meant, or say they never said something, answer only from what they have told you (with when they said it) or say you have nothing from them on it and own the slip. Your own earlier texts are never the source of what they said; never defend one.");
           } else if (said) {
             addInstruction(replyFacts, "You have nothing current from them on any plan, deadline or event. If they ask what you meant by something you said about one, say you don't have that from them and own the slip; your own earlier text is not a source.");
@@ -1810,7 +1810,7 @@ export function sendblueRouter(io: Server): Router {
               type: "loop_check",
               targetKey: `loop_check:${loopId}:awaited_file`,
               topicKey: `loop:${loopId}`,
-              summary: "Ask once whether they still want help with the file Co couldn't open",
+              summary: "Ask once whether they still want help with the file Cue couldn't open",
               payload: { loopId, title: IF.awaitedFileTitle((fileNotKept ?? fileUnreadable)!.kind), note: `What works: ${IF.FILE_ROUTES.replace(/ \(you can go over them in this thread\)/, "")}.` },
               dueAt: new Date(Date.now() + IF.AWAITED_ASK_AFTER_HOURS * 3_600_000),
               expiresAt: new Date(Date.now() + 4 * 86_400_000),
@@ -1872,7 +1872,7 @@ export function sendblueRouter(io: Server): Router {
         }
         if (reportedIssue) {
           turnDidWork = true;
-          addFact(replyFacts, "did_this_turn", `Saved what they reported about how Co works, for the team to look at: "${reportedIssue.summary}"`);
+          addFact(replyFacts, "did_this_turn", `Saved what they reported about how Cue works, for the team to look at: "${reportedIssue.summary}"`);
           addInstruction(
             replyFacts,
             "They pointed out a problem with how you work. It's already saved for the team, so don't save it again. Acknowledge it plainly in a sentence, say you've passed it along to the team, and don't promise whether or when it gets fixed. If they gave other, separate feedback in the same message, save that with saveFeedbackForTeam. Then respond to anything else they said.",
@@ -2027,7 +2027,7 @@ export function sendblueRouter(io: Server): Router {
             );
             if (eventReplyAction === "interested" && isStale) {
               const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
-              addFact(replyFacts, "known", `The thing Co teased earlier already passed (${passedPhrase}).`);
+              addFact(replyFacts, "known", `The thing Cue teased earlier already passed (${passedPhrase}).`);
               addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}). Let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed. Never reveal the name "${match.name}" since there's nothing to act on now.`);
             } else if (eventReplyAction === "interested") {
               // Sent deterministically, not via agent tool-calling (Royce,
@@ -2114,7 +2114,7 @@ export function sendblueRouter(io: Server): Router {
                 type: "event_followthrough",
                 targetKey: `event_followthrough:${pendingCheckin.event_api_id}`,
                 topicKey: `event:${pendingCheckin.event_api_id}`,
-                summary: `They told Co who they met at "${pendingCheckin.event_name}": send notes they can use`,
+                summary: `They told Cue who they met at "${pendingCheckin.event_name}": send notes they can use`,
                 payload: { eventId: pendingCheckin.event_api_id, name: pendingCheckin.event_name, theirMessage: resolvedContent.slice(0, 1200) },
                 dueAt: new Date(Date.now() + 10 * 60_000),
                 expiresAt: new Date(Date.now() + 3 * 86_400_000),
@@ -2156,7 +2156,7 @@ export function sendblueRouter(io: Server): Router {
                 addFact(replyFacts, "did_this_turn", `Told them ${revealed.first_name} also got to the event and is worth meeting. ${revealed.first_name} hasn't been asked anything yet.`);
                 addInstruction(replyFacts, `They said yes to hearing who else arrived. Tell them: ${revealed.first_name} just got here and is worth finding, because of ${revealed.shareReason}. Ask if they'd like an intro. Say nothing else about ${revealed.first_name}, and name no one else.`);
               } else {
-                addInstruction(replyFacts, "They said yes to hearing who else arrived, but on a second look nobody new is someone Co can point them to right now. Say so plainly and warmly. Don't name or describe anyone.");
+                addInstruction(replyFacts, "They said yes to hearing who else arrived, but on a second look nobody new is someone Cue can point them to right now. Say so plainly and warmly. Don't name or describe anyone.");
               }
             } else {
             await handleMatchNudgeReply(
@@ -2237,8 +2237,8 @@ export function sendblueRouter(io: Server): Router {
               addInstruction(replyFacts, context);
               const other = resolvedIntro.item.ref.pending.candidate.first_name;
               if (classification === "not_interested") addFact(replyFacts, "did_this_turn", `Recorded that they passed on an intro to ${other}.`);
-              else if (/intro email/i.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes, so Co sent an intro email to both of them.`);
-              else addFact(replyFacts, "did_this_turn", `Asked ${other} whether they're open to an intro. Waiting to hear back; no intro has been made. If ${other} says yes, Co emails an intro to both of them.`);
+              else if (/intro email/i.test(context)) addFact(replyFacts, "did_this_turn", `${other} had already said yes, so Cue sent an intro email to both of them.`);
+              else addFact(replyFacts, "did_this_turn", `Asked ${other} whether they're open to an intro. Waiting to hear back; no intro has been made. If ${other} says yes, Cue emails an intro to both of them.`);
             }
           } catch (err: any) {
             console.error("sendblue: network intro-offer reply handling failed (non-fatal):", err?.message ?? err);
@@ -2265,7 +2265,7 @@ export function sendblueRouter(io: Server): Router {
             const { text: rawSchedule } = await generateText({
               model: anthropic(MODELS.haiku),
               experimental_telemetry: { isEnabled: true, functionId: "sendblue.scheduleCallExtract" },
-              prompt: `A user is texting Co to schedule a call for later. The date, time, and timezone can be spread across several messages (e.g. they gave a time earlier and are only now confirming the date/timezone Co asked for) — read the whole conversation, not just the latest message, to piece it together.
+              prompt: `A user is texting Cue to schedule a call for later. The date, time, and timezone can be spread across several messages (e.g. they gave a time earlier and are only now confirming the date/timezone Cue asked for) — read the whole conversation, not just the latest message, to piece it together.
 
 Recent conversation, in order:
 ${recentConversation || "(start of the conversation)"}
@@ -2304,7 +2304,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 addFact(
                   replyFacts,
                   "did_this_turn",
-                  `${superseded.rows.length ? "Rescheduled their call (replacing the earlier booking)" : "Scheduled a call"} for ${formattedTime} (${parsed.timezone}). Co will call them then.`,
+                  `${superseded.rows.length ? "Rescheduled their call (replacing the earlier booking)" : "Scheduled a call"} for ${formattedTime} (${parsed.timezone}). Cue will call them then.`,
                 );
                 addInstruction(
                   replyFacts,
@@ -2325,7 +2325,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
             }
           } catch (err: any) {
             console.error("sendblue: schedule_request extraction failed (non-fatal):", err?.message ?? err);
-            addFact(replyFacts, "did_this_turn", "No call was scheduled: Co couldn't work out the time they meant.");
+            addFact(replyFacts, "did_this_turn", "No call was scheduled: Cue couldn't work out the time they meant.");
             addInstruction(replyFacts, "They want to schedule a call for a specific time but something went wrong figuring out when. Ask them to state the day, time, and their timezone clearly. Do not place a call now.");
           }
         } else if (callAction === "cancel_scheduled_call") {
@@ -2360,7 +2360,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
         // misread as explicit_request would place real outbound Twilio
         // calls to people who were just asking how the feature works.
         if (callAction === "asks_about_calling") {
-          addInstruction(replyFacts, `They just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Co can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Co directly anytime: ${callLine()} Never write out any other digits. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`);
+          addInstruction(replyFacts, `They just asked a plain question about how calling works — answer it directly and honestly, don't place a call, and don't say or imply a call is happening. The true answer: Cue can call them — by text right now ("call me") or scheduled for later — and that's real and live. They can also call Cue directly anytime: ${callLine()} Never write out any other digits. Only mention this second part if it's actually what they're asking about; don't volunteer it unprompted.`);
         }
 
         // Burst limiter — separate from, and in addition to, the topic-aware
@@ -2413,7 +2413,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           for (const f of callNotPlacedFacts(callResult.error)) addFact(replyFacts, f.kind, f.text);
           addInstruction(
             replyFacts,
-            `They just asked you to call them. Co genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`,
+            `They just asked you to call them. Cue genuinely can call (this is real and live), but no call went out this time: ${why} Say plainly that you didn't call and why, in a line, and what they can do (text "call me" again once it's allowed). Never say you tried or that it didn't go through, don't promise to call back on your own, and don't say "calling you now."`,
           );
         }
 
@@ -2557,7 +2557,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
           if (moment) recordDecision({ layer: 3, decision: "reply.moment", userId: user.id, outcome: "act", action: moment.mode, proposal: { topic: moment.topic, pushback: moment.pushback, lesson: moment.lesson } }).catch(() => {});
           if (reactingToSent) {
             const why = whyContext(await askedAndDoing());
-            if (why) addInstruction(replyFacts, `They're reacting to something Co sent them. ${CO_WHY} ${why}`);
+            if (why) addInstruction(replyFacts, `They're reacting to something Cue sent them. ${CO_WHY} ${why}`);
           }
           const dotsNote = dotsInstruction(dots);
           if (dotsNote) {

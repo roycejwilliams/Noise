@@ -130,9 +130,9 @@ export async function extractPsychographicProfile(
 ): Promise<{ raw: string; extracted: ExtractedProfile }> {
   const { text: rawExtraction } = await generateText({
     model: anthropic(PROFILE_EXTRACT_MODEL),
-    prompt: `You are extracting psychographic profile data from a conversation transcript between Co (an assistant, "assistant" lines) and a person ("user" lines).
+    prompt: `You are extracting psychographic profile data from a conversation transcript between Cue (an assistant, "assistant" lines) and a person ("user" lines).
 
-        Only what the PERSON said (the "user" lines) can fill any field below. Something Co suggested, asked about, or offered ("assistant" lines) is never the person's own goal, blocker, preference, or activity unless the person's own reply actually confirms it.
+        Only what the PERSON said (the "user" lines) can fill any field below. Something Cue suggested, asked about, or offered ("assistant" lines) is never the person's own goal, blocker, preference, or activity unless the person's own reply actually confirms it.
 
         Based on this transcript, extract the following fields and return ONLY valid JSON with no preamble or markdown:
 
@@ -142,7 +142,7 @@ export async function extractPsychographicProfile(
           "connection_style": "", // one of: small_group, medium_group, large_social
           "activity_preferences": [], // array of activities they mentioned or implied enjoying
           "goals": [], // array of things they are working toward
-          "blockers": [], // array of challenges or struggles in their life they mentioned (never frustrations with Co itself)
+          "blockers": [], // array of challenges or struggles in their life they mentioned (never frustrations with Cue itself)
           "availability_pattern": "", // how often and when they want to connect (e.g. "weekday evenings", "weekends")
           "city": "", // ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target — "roles in NYC", "investors in NYC", "events in Miami" say nothing about where they are. Empty string if they didn't say.
           "emotional_state": "", // one word describing their current emotional state (e.g. anxious, energized, overwhelmed, motivated, isolated, confident, focused, excited, lost, burnout)
@@ -203,7 +203,7 @@ export async function assessConversationCoverage(
   try {
     const { text: raw } = await generateText({
       model: anthropic(NARROW_MODEL),
-      prompt: `${priorContextBlock}Transcript of an in-progress conversation so far between Co (an assistant) and a person, by phone or text:
+      prompt: `${priorContextBlock}Transcript of an in-progress conversation so far between Cue (an assistant) and a person, by phone or text:
 "${transcriptSoFar.trim() || "(nothing said yet in this conversation)"}"
 
 Which of these topics has the person substantively addressed — either in what's already known from before, or in this conversation so far? Judge by real, concrete information. A topic only counts as covered by prior context if it states something specific and substantive, not a vague hint.
@@ -451,9 +451,9 @@ export function buildResolutionPrompt(
 Goals: ${JSON.stringify(existingGoals)}
 Blockers: ${JSON.stringify(existingBlockers)}
 ${askListBlock}
-Based on this new transcript, which of the EXACT goals/blockers above (if any) has the person said is now achieved, resolved, or no longer relevant? Separately, which numbered open asks (if any) has the person said are now resolved, no longer needed, or no longer true? Only include something when the person clearly says so. Restating it, still wanting it, or Co mentioning it does not count. Leave it out if unclear.
+Based on this new transcript, which of the EXACT goals/blockers above (if any) has the person said is now achieved, resolved, or no longer relevant? Separately, which numbered open asks (if any) has the person said are now resolved, no longer needed, or no longer true? Only include something when the person clearly says so. Restating it, still wanting it, or Cue mentioning it does not count. Leave it out if unclear.
 
-For every item you include, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Co's).
+For every item you include, copy the person's exact words that show it, verbatim from the transcript (at least a few words, from their line, not Cue's).
 
 Transcript:
 "${transcript}"
@@ -503,12 +503,12 @@ async function extractCheckinCadencePreference(transcript: string): Promise<numb
   try {
     const { text: raw } = await generateText({
       model: anthropic(NARROW_MODEL),
-      prompt: `Here is a call transcript between Co and a caller. Near the end of the call, Co may have asked how often the caller would like Co to proactively call them to check in.
+      prompt: `Here is a call transcript between Cue and a caller. Near the end of the call, Cue may have asked how often the caller would like Cue to proactively call them to check in.
 
 Transcript:
 "${transcript}"
 
-Did the caller state a preference for how often Co should proactively call them? If so, classify it as the closest of:
+Did the caller state a preference for how often Cue should proactively call them? If so, classify it as the closest of:
 - "weekly" — roughly every week
 - "biweekly" — roughly every two weeks, or anything looser but still wanting proactive calls (e.g. "every so often", "once in a while")
 - "none" — they said not to call proactively, or said they'd rather just reach out themselves
@@ -749,7 +749,8 @@ export function mergeProfileList(existing: string[] | null | undefined, fresh: s
 // Complaints about Co ("lack of information from Co") aren't the person's
 // blockers. "co-founder" is not Co.
 export function isAboutCo(item: string): boolean {
-  return /\bco(?!-)\b|\bco's\b|\bcopatible\b/i.test(item);
+  // "Cue" only as the name (capitalized, not "Cue up"): "my cue to leave" or "a pool cue" is about them (ASR check, 2026-10-14).
+  return /\bco(?!-)\b|\bco's\b|\bcopatible\b/i.test(item) || /\bCue\b(?!\s+up\b)/.test(item);
 }
 
 // Corrections (harness/profileWrite.ts). Sonnet 5, since removing something
@@ -760,7 +761,7 @@ export function buildCorrectionPrompt(onFile: OnFile, newWords: string, context:
     .filter(([, v]) => (Array.isArray(v) ? v.length : v))
     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
     .join("\n");
-  return `Here is what Co has on file about this person:
+  return `Here is what Cue has on file about this person:
 ${fileLines}
 
 Recent conversation, for context only:
@@ -1207,7 +1208,7 @@ const MAX_ASKS_PER_CAPTURE = 8;
 // Co's questions about them" were never asks, so a findable interest said in answer ("small founder dinners") was lost and the
 // sweeps had nothing to search. Facts about who they are stay out; something they'd want found is a seeking ask however it came up.
 // Shared with the text path's one-pass read (services/turnLearning.ts) so both read it the same way.
-export const ANSWERED_INTEREST_RULE = `An answer to Co's question is still a seeking ask when what they name is something Co could go and find for them: a scene or kind of room they'd like to be in, a kind of event, a community, people they'd want to meet, a program or something they're exploring (asked what they'd want to hear about, "honestly, small dinners with other founders" is seeking small founder dinners). Facts about who they are (their work, where they live, how their week went) are never asks.`;
+export const ANSWERED_INTEREST_RULE = `An answer to Cue's question is still a seeking ask when what they name is something Cue could go and find for them: a scene or kind of room they'd like to be in, a kind of event, a community, people they'd want to meet, a program or something they're exploring (asked what they'd want to hear about, "honestly, small dinners with other founders" is seeking small founder dinners). Facts about who they are (their work, where they live, how their week went) are never asks.`;
 
 // Exported so evals/capture can check what counts as an ask.
 export function captureIntentPrompt(transcript: string, scope: IntentScope = "last_user_message"): string {
@@ -1215,9 +1216,9 @@ export function captureIntentPrompt(transcript: string, scope: IntentScope = "la
     scope === "whole_transcript"
       ? `This is a whole conversation and all of it is new, so capture EVERY distinct ask the user stated anywhere in it — including one they said early and then moved on from. What they happened to say LAST never cancels an ask they stated earlier: a conversation that ends on logistics ("I'm just going to text you the rest", "let's pick this up later"), small talk or a goodbye still carries every ask from earlier in it. Two wordings of the same request are one ask; genuinely different requests are separate asks.`
       : `Take it from the LAST user message, using the earlier conversation only to understand it — anything they asked for before that is context they already said, not a new ask. Return at most one ask, and none at all when that last message isn't asking for or offering something.`;
-  return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Co (the "assistant:" lines) said as if the user said it. A question Co asked that the user never answered is not an ask.
+  return `Read this transcript and extract four things. Only include what's actually stated by the user (the "user:" lines) — never guess or infer beyond what's said, and never treat something Cue (the "assistant:" lines) said as if the user said it. A question Cue asked that the user never answered is not an ask.
 
-1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} None of these is ever an ask: small talk, thanks, feedback about Co, questions about Co itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Co's questions about them. ${ANSWERED_INTEREST_RULE} ALSO include, as their own entries, the DIRECTION they said they are moving toward over the next few months (for example "get Co in front of users", "raise a pre-seed round"): those are goals, and they are typed when they are stored. If Co played back what it is carrying for them in this conversation and they corrected it, the CORRECTED version is the final list: extract from the correction, not from the first version.
+1. asks — specific things they are actively seeking or could offer to others (a connection, an introduction, a resource, expertise, a kind of event or community). Each one is a single clear sentence, classified as 'seeking' or 'offering'. ${askScope} None of these is ever an ask: small talk, thanks, feedback about Cue, questions about Cue itself ("how can you improve?", "anything you need to ask me?"), logistics, or answers to Cue's questions about them. ${ANSWERED_INTEREST_RULE} ALSO include, as their own entries, the DIRECTION they said they are moving toward over the next few months (for example "get Cue in front of users", "raise a pre-seed round"): those are goals, and they are typed when they are stored. If Cue played back what it is carrying for them in this conversation and they corrected it, the CORRECTED version is the final list: extract from the correction, not from the first version.
 2. concrete_preferences — named, specific things they mentioned liking or wanting, not vague vibes. A specific gym or workout style, a coffee/drink preference, a type of venue or neighborhood, a specific activity. "SoulCycle", "oat milk lattes", "speakeasy-style bars" — not "fitness" or "good coffee".
 3. wants — things they said they miss or want to find (a running group, a book club, a version of something from a previous city).
 4. availability — their stated GENERAL, RECURRING availability pattern, in their own words (e.g. "weekday evenings", "usually free on weekends"). A one-off request for a specific call or meeting at a specific time ("call me at 2pm today", "can we talk Thursday morning") is NOT a recurring availability pattern — leave this null for those, even if a specific time or day appears in the transcript. Only fill this in when they're describing when they're generally free, not when they want THIS ONE call to happen.
@@ -1527,7 +1528,7 @@ export async function persistCapturedIntent(
     wants.length ? `wants: ${wants.join(", ")}` : null,
     availability ? `availability: ${availability}` : null,
   ].filter(Boolean);
-  const memContent = `Co captured intent — ${memParts.join(" | ")}`;
+  const memContent = `Cue captured intent — ${memParts.join(" | ")}`;
   const mem = await pool.query(
     `INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'intent', $2) RETURNING id`,
     [user_id, memContent],
@@ -1588,7 +1589,7 @@ export async function judgeSameAsk(userId: string | null, newText: string, openT
 }
 
 export function sameAskPrompt(newText: string, openText: string): string {
-  return `Someone already has this open request with Co: "${openText}"
+  return `Someone already has this open request with Cue: "${openText}"
 They just said they're looking for: "${newText}"
 
 Is the new one the same request restated (same kind of thing, same purpose, maybe more detail or different wording)? Or a different request (a different kind of person, thing, or goal)? A narrower or more specific version of the same request counts as the same.
@@ -1637,14 +1638,14 @@ export async function extractPlannedEventMention(user_id: string, transcript: st
         generateText({
           model: anthropic(NARROW_MODEL),
           experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention" },
-          prompt: `Read this transcript. Only include what the user (the "user:" lines) actually stated — never guess or infer, never treat something Co said as if the user said it.
+          prompt: `Read this transcript. Only include what the user (the "user:" lines) actually stated — never guess or infer, never treat something Cue said as if the user said it.
 
 Did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering — not a vague "I should get out more")? If so extract:
 1. event_name — however they described it, in their own words.
 2. event_date — resolve this to an ISO date (YYYY-MM-DD) using today's date, ${today}, as the reference point. Only fill this in if you can confidently resolve it (a specific day, or an unambiguous relative reference like "this Thursday"). null if too vague ("sometime next month", no date mentioned at all) — do not guess.
 3. event_location — city or venue if mentioned, else null.
 
-Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is) or something Co offered is not. quote: their exact words that say they are going, copied from a "user:" line.
+Only when they say outright that they are going (an RSVP, "I'm going", "signed up", "got tickets", "see you there"); a question about an event (what to bring, where it is) or something Cue offered is not. quote: their exact words that say they are going, copied from a "user:" line.
 
 Return ONLY valid JSON, no preamble:
 {"event_name": "..." or null, "event_date": "YYYY-MM-DD" or null, "event_location": "..." or null, "quote": "..." or null}

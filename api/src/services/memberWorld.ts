@@ -122,24 +122,24 @@ function provenPast(on: string | null | undefined, clock: Pick<WorldClock, "toda
 }
 
 // Pure: what is running for them, from the turn's own fact lines and search coverage. runningWorkLine says these same items.
-const CARRIED_BRIEF = /^(?:Co is putting together research brief #|Research brief #\d+ for them, .* is finished but hasn't reached them yet)/;
+const CARRIED_BRIEF = /^(?:(?:Co|Cue) is putting together research brief #|Research brief #\d+ for them, .* is finished but hasn't reached them yet)/;
 export function runningItems(tasks: string[], briefs: string[], searching: SearchCoverage): (WorldItem & { label: string })[] {
   const out: (WorldItem & { label: string })[] = [];
   for (const t of tasks) {
-    const m = t.match(/^Co is working on task #(\d+) for them: "([^"]+)"/);
-    if (m) out.push({ kind: "task", label: `task #${m[1]}: "${m[2]}"`, fact: `Co's work for them: "${m[2]}"`, name: m[2] });
+    const m = t.match(/^(?:Co|Cue) is working on task #(\d+) for them: "([^"]+)"/);
+    if (m) out.push({ kind: "task", label: `task #${m[1]}: "${m[2]}"`, fact: `Cue's work for them: "${m[2]}"`, name: m[2] });
   }
   briefs.forEach((b) => {
-    const m = b.match(/^(?:Co is putting together research brief|Research brief) #(\d+) for them, "([^"]+)"/);
-    if (m && CARRIED_BRIEF.test(b)) out.push({ kind: "brief", label: `research brief #${m[1]}: "${m[2]}"`, fact: `the research Co is putting together for them: "${m[2]}"`, name: m[2] });
+    const m = b.match(/^(?:(?:Co|Cue) is putting together research brief|Research brief) #(\d+) for them, "([^"]+)"/);
+    if (m && CARRIED_BRIEF.test(b)) out.push({ kind: "brief", label: `research brief #${m[1]}: "${m[2]}"`, fact: `the research Cue is putting together for them: "${m[2]}"`, name: m[2] });
   });
-  for (const a of searching.asks) out.push({ kind: "search_ask", label: `Co's daily search (every morning: events, the web and X) for what they asked: "${a.slice(0, 160)}"`, fact: `Co's daily search for what they asked: "${a.slice(0, 160)}"`, name: a.slice(0, 160) });
-  for (const g of searching.goals) out.push({ kind: "search_goal", label: `Co's daily search for their goal: "${g.slice(0, 160)}"`, fact: `Co's daily search for their goal: "${g.slice(0, 160)}"`, name: g.slice(0, 160) });
+  for (const a of searching.asks) out.push({ kind: "search_ask", label: `Cue's daily search (every morning: events, the web and X) for what they asked: "${a.slice(0, 160)}"`, fact: `Cue's daily search for what they asked: "${a.slice(0, 160)}"`, name: a.slice(0, 160) });
+  for (const g of searching.goals) out.push({ kind: "search_goal", label: `Cue's daily search for their goal: "${g.slice(0, 160)}"`, fact: `Cue's daily search for their goal: "${g.slice(0, 160)}"`, name: g.slice(0, 160) });
   return out;
 }
 
 // Pure: the meaning words a sentence shares with a name. Two or more is a match; one shared word ("fundraising") never is.
-const GENERIC = ["daily", "search", "searching", "look", "looking", "goal", "task", "work", "working", "thing", "things", "co", "still", "today", "tomorrow", "morning", "night", "question", "back", "news", "real", "yet", "now",
+const GENERIC = ["daily", "search", "searching", "look", "looking", "goal", "task", "work", "working", "thing", "things", "co", "cue", "still", "today", "tomorrow", "morning", "night", "question", "back", "news", "real", "yet", "now",
   // Everyday words that would make a greeting "name" a thread ("Good to hear from you" against "waiting to hear back from the venue").
   "from", "about", "with", "into", "over", "just", "hear", "heard", "good", "great", "you", "your", "them", "they", "this", "that", "what", "when", "there", "here"];
 export function sharedWords(name: string, sentence: string): number {
@@ -231,16 +231,16 @@ export function buildMemberWorld(o: WorldInput): MemberWorld {
       else if (!since) {
         const question = keep(q.question);
         const name = keep(q.name);
-        if (question && name) waiting.push({ kind: "question", name, at: q.at, endsOn: q.endsOn, fact: `"${name}", which Co sent ${localStamp(q.at, o.zone)} asking "${question.slice(0, 160)}"; nothing from them on any channel since` });
+        if (question && name) waiting.push({ kind: "question", name, at: q.at, endsOn: q.endsOn, fact: `"${name}", which Cue sent ${localStamp(q.at, o.zone)} asking "${question.slice(0, 160)}"; nothing from them on any channel since` });
       }
     }
     for (const g of o.offeredGoals) {
       const title = keep(g.title);
-      if (title && !provenPast(g.momentOn, clock) && !coSince(g.offeredAt, title)) waiting.push({ kind: "goal_split", name: title, at: g.offeredAt, endsOn: g.momentOn ?? null, fact: `the split Co offered for their goal "${title}", waiting on their pick` });
+      if (title && !provenPast(g.momentOn, clock) && !coSince(g.offeredAt, title)) waiting.push({ kind: "goal_split", name: title, at: g.offeredAt, endsOn: g.momentOn ?? null, fact: `the split Cue offered for their goal "${title}", waiting on their pick` });
     }
     if (o.docOffer) {
       const topic = keep(o.docOffer.topic);
-      if (topic && !coSince(o.docOffer.at, topic)) waiting.push({ kind: "doc_offer", name: topic, at: o.docOffer.at ?? null, fact: `Co's offer to write up "${topic}", waiting on their yes` });
+      if (topic && !coSince(o.docOffer.at, topic)) waiting.push({ kind: "doc_offer", name: topic, at: o.docOffer.at ?? null, fact: `Cue's offer to write up "${topic}", waiting on their yes` });
     }
   }
   // Running: the turn's own items, already stripped by the turn; counted again here only if the strip blanks them now.
@@ -250,7 +250,7 @@ export function buildMemberWorld(o: WorldInput): MemberWorld {
   });
   // Searched but not shown (another member in them, or a failed strip): still running, so a check-in never hears "nothing's on".
   const hiddenSearch = o.searching.hidden ?? 0;
-  if (hiddenSearch && !running.length) running.push({ kind: "searching", name: null, fact: `Co's daily search for ${hiddenSearch} thing${hiddenSearch === 1 ? "" : "s"} they want (details not shown here)` });
+  if (hiddenSearch && !running.length) running.push({ kind: "searching", name: null, fact: `Cue's daily search for ${hiddenSearch} thing${hiddenSearch === 1 ? "" : "s"} they want (details not shown here)` });
   const searchingAny = o.searching.asks.length + o.searching.goals.length + hiddenSearch > 0;
   // Next: the soonest scheduled item, else the next morning's search.
   let next: WorldItem | null = null;
@@ -282,7 +282,7 @@ export function memberWorldFact(w: MemberWorld): string {
   const parts = [
     w.waiting.length ? `Waiting on them${leadMark}: ${w.waiting.slice(0, 2).map((x) => x.fact).join("; ")}.` : w.withheld ? null : "Nothing waits on them (not a thing to say).",
     w.running.length ? `Running${w.waiting.length ? " (background while something waits)" : leadMark}: ${w.running.slice(0, 3).map((x) => x.fact).join("; ")}${w.running.length > 3 ? `; ${w.running.length - 3} more` : ""}.` : w.withheld ? null : "Nothing is running (not a thing to say).",
-    w.next ? `Next from Co: ${w.next.fact}.` : null,
+    w.next ? `Next from Cue: ${w.next.fact}.` : null,
     w.thread ? `Their thread (theirs to tell: ask, never report): ${w.thread.fact}.` : null,
   ].filter(Boolean);
   return `Their world right now: ${parts.join(" ")} ${time}${held}`.replace(/\s+/g, " ").trim();
@@ -305,15 +305,15 @@ export function namesWorldItem(w: MemberWorld | null | undefined, sentence: stri
 }
 
 // Co's own machinery, said aloud: always cut, whatever the sentence names (services/speakable.ts NARRATION_RULES).
-const MACHINERY = NARRATION_RULES.filter((r) => r.why === "narrates Co's own machinery" || r.why === "task-tracker words");
+const MACHINERY = NARRATION_RULES.filter((r) => r.why === "narrates Cue's own machinery" || r.why === "task-tracker words");
 export function machineryTalk(sentence: string): boolean {
   return MACHINERY.some((r) => r.pattern.test(sentence));
 }
 // The narration rules a line about running work may get past: where it stands ("still on the Sequin planning docs"). Machinery,
 // tracker words and holding their thing behind Co's judgment ("once it's worth sending") never do.
 export const WORLD_STATUS_WHYS = new Set([
-  "opens on Co's own activity (task-tracker language)",
-  "narrates what Co is doing instead of what they get",
+  "opens on Cue's own activity (task-tracker language)",
+  "narrates what Cue is doing instead of what they get",
   "reports not having it yet",
   "a progress report instead of the thing",
 ]);
@@ -379,13 +379,13 @@ export function workClaimsNameThread(w: MemberWorld | null | undefined, claims: 
 export const sentenceKey = (s: string) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
 // The read's question, for every candidate in one reply at once.
 export function threadReadPrompt(thread: string, theirMessage: string, sentences: string[], theirWords: string[] = []): string {
-  return `Co, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: "${thread}". Only the member knows where it stands, so Co may only say where it stands when the member told Co.
-What they just told Co: "${theirMessage.slice(0, 300)}"
-${theirWords.length ? `What they texted Co before that, oldest first (their own words):\n${theirWords.map((w) => `- "${w}"`).join("\n")}\n` : ""}
+  return `Cue, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: "${thread}". Only the member knows where it stands, so Cue may only say where it stands when the member told Cue.
+What they just told Cue: "${theirMessage.slice(0, 300)}"
+${theirWords.length ? `What they texted Cue before that, oldest first (their own words):\n${theirWords.map((w) => `- "${w}"`).join("\n")}\n` : ""}
 Sentences:
 ${sentences.map((x, i) => `${i + 1}. "${x}"`).join("\n")}
 
-For each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Co?
+For each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Cue?
 A sentence that repeats, reacts to or builds on news the member gave (just now or before) is NOT a status report. For example, after "the venue said yes", "Great that the venue said yes" is not a report; with no news from them, "No word yet from the venue" is a report.
 
 Return ONLY JSON: {"reports": [the numbers of the sentences that state where it stands]}`;

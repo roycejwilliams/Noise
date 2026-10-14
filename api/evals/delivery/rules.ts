@@ -48,7 +48,7 @@ check("an ordinary check-in is never a loop without a yes, even asked twice", ["
 check("...but a short offer they said yes to, asked again, still is", askedTwice("Want to hear who?", "Sure")?.question === "Want to hear who?");
 check("a different subject after a yes isn't a repeat (the Nopa venue, then the SOMA loft)", repeatedQuestion("Want me to look into the SOMA loft?", turnsFromConversation("Co replied: Want me to look into the Nopa venue?\nUser said: yes")) === null);
 check("a question they haven't had time to answer isn't a repeat (nothing from them since)", repeatedQuestion(reask, turnsFromConversation(pitch.split("\n").slice(0, 2).join("\n"))) === null);
-check("a reply-to note on their text isn't read as what they said", turnsFromConversation("User said: Cool [Replying to Co's text: \"Want to hear who?\"]")[0].text === "Cool");
+check("a reply-to note on their text isn't read as what they said", turnsFromConversation("User said: Cool [Replying to Cue's text: \"Want to hear who?\"]")[0].text === "Cool");
 
 // ---------------------------------------------------------------- the tease loop (10/03, 9:30 AM and 1:00 PM)
 const tease = [
@@ -67,7 +67,7 @@ check("...and goes once that clears; other kinds of text are never held by it", 
 // The privacy check no longer fails on Co's own wording (the 'what ve said' shingle).
 const reason = `what they've said they're looking for: "Looking for good founder or tech events this weekend"`;
 const facts = (privateTexts: string[]) => ({ shareReason: reason, candidateStatedAsks: ["Looking for good founder or tech events this weekend"], candidatePrivateTexts: privateTexts, alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true });
-check("Co's own template wording in the candidate's memories doesn't fail the reveal check", checkShareReason(facts(["Co replied: from what they've said they're looking for I thought of you"])).pass && TEMPLATE_PREFIX.test(reason));
+check("Cue's own template wording in the candidate's memories doesn't fail the reveal check", checkShareReason(facts(["Co replied: from what they've said they're looking for I thought of you"])).pass && TEMPLATE_PREFIX.test(reason));
 check("but a real quote of their private text still does", !checkShareReason({ ...facts(["I keep thinking about founder or tech events"]), shareReason: `what they've said they're looking for: "founder or tech events this weekend"`, candidateStatedAsks: [] }).pass || !checkShareReason({ ...facts(["quietly raising money while burned out and worried about runway"]), shareReason: "quietly raising money while burned out and worried about runway" }).pass);
 
 // The tease can't go out without its answer.
@@ -90,16 +90,16 @@ check("...and the offer sentence is cut from the reply", stripUnsupported("Found
 addFact(rf, "known", findLines([{ name: "Pitch Protocol", url: "https://pitchprotocol.vc", facts: "agent-native VC", at: "2026-10-03T03:40:00Z" }])[0]);
 check("with the link on file the same offer is fine", !codeChecks("Want me to send you the link?", rf, { recentConversation: "", message: "", sentThisTurn: [] } as any).some((c) => c.name === "no_link_offer_without_link"));
 check("offers that aren't about a link are left alone", offersLinkWithoutOne("Want me to look into them?", "") === null && offersLinkWithoutOne("I'll send you the link", "") !== null && offersLinkWithoutOne("I can share the site", "") !== null);
-check("a researched find reads as a link Co has and should send when asked", /have its link: https:\/\/pitchprotocol\.vc/.test(findLines([{ name: "Pitch Protocol", url: "https://pitchprotocol.vc", facts: "", at: "" }])[0]) && /send this link/.test(findLines([{ name: "x", url: "https://x.co", facts: "", at: "" }])[0]));
+check("a researched find reads as a link Cue has and should send when asked", /have its link: https:\/\/pitchprotocol\.vc/.test(findLines([{ name: "Pitch Protocol", url: "https://pitchprotocol.vc", facts: "", at: "" }])[0]) && /send this link/.test(findLines([{ name: "x", url: "https://x.co", facts: "", at: "" }])[0]));
 check("'send it' and 'send the link again' are asking for a link; ordinary texts, and sending something else, aren't", ["Send the link again", "Nah just send it", "Send it", "what's their website", "ok please send that"].every(asksForLink) && !["Plan out the event though", "Keep digging", "Yes", "I'll send it to my boss", "we'll be on site Friday", "Do you think we can send them an invite"].some(asksForLink));
 const finds = [
   { name: "Pitch Protocol", url: "https://pitchprotocol.vc", facts: "", at: "3" },
   { name: "South Park Commons", url: "https://southparkcommons.com", facts: "", at: "2" },
   { name: "Nopa Private Events", url: "https://nopasf.com/private-events", facts: "", at: "1" },
 ];
-check("only the finds that matter are shown: those named, plus the newest if they ask for a link; none otherwise", relevantFinds(finds, "Send it", "Co: Pitch Protocol is a funding matchmaker", true)[0].name === "Pitch Protocol" && relevantFinds(finds, "How's the weather", "", false).length === 0 && relevantFinds(finds, "what about south park", "", false).map((f) => f.name).join() === "South Park Commons" && relevantFinds(Array.from({ length: 10 }, (_, i) => ({ name: `Thing${i}`, url: `https://t${i}.co`, facts: "", at: "" })), "send the link", "", true).length === 3);
-check("offering an invite link is Co's own to make, so it isn't cut for lacking a researched one", offersLinkWithoutOne("Want me to send you your invite link?", "") === null && offersLinkWithoutOne("Want me to send you the link?", "") !== null);
-check("with a link on file Co is told to send it; with none, to look it up now instead of shrugging", /send the one you have on file/.test(linkRequestInstruction("Send it", true) ?? "") && /look it up now/.test(linkRequestInstruction("Send it", false) ?? "") && /Don't ask permission and don't say you can't/.test(linkRequestInstruction("Send it", false) ?? "") && linkRequestInstruction("Keep digging", false) === null);
+check("only the finds that matter are shown: those named, plus the newest if they ask for a link; none otherwise", relevantFinds(finds, "Send it", "Cue: Pitch Protocol is a funding matchmaker", true)[0].name === "Pitch Protocol" && relevantFinds(finds, "How's the weather", "", false).length === 0 && relevantFinds(finds, "what about south park", "", false).map((f) => f.name).join() === "South Park Commons" && relevantFinds(Array.from({ length: 10 }, (_, i) => ({ name: `Thing${i}`, url: `https://t${i}.co`, facts: "", at: "" })), "send the link", "", true).length === 3);
+check("offering an invite link is Cue's own to make, so it isn't cut for lacking a researched one", offersLinkWithoutOne("Want me to send you your invite link?", "") === null && offersLinkWithoutOne("Want me to send you the link?", "") !== null);
+check("with a link on file Cue is told to send it; with none, to look it up now instead of shrugging", /send the one you have on file/.test(linkRequestInstruction("Send it", true) ?? "") && /look it up now/.test(linkRequestInstruction("Send it", false) ?? "") && /Don't ask permission and don't say you can't/.test(linkRequestInstruction("Send it", false) ?? "") && linkRequestInstruction("Keep digging", false) === null);
 const lt = read("agent/loopTools.ts");
 const rg = read("harness/replyGrounding.ts");
 check("a web search stores what it kept, at research time, and every reply reads them back", /recordResearchFinds\(ctx\.userId, r\.kept\.map/.test(lt) && /for \(const line of findLines\(finds\)\) addFact\(rf, "known", line\)/.test(rg) && /linkRequestInstruction\(message, /.test(rg));

@@ -29,7 +29,7 @@ export const BRIEF = {
   askUntilBeforeStartMs: 10 * 3_600_000,
 };
 
-export const NAME_QUESTION = "Can Co mention you by name in the member brief?";
+export const NAME_QUESTION = "Can Cue mention you by name in the member brief?";
 
 // ---------------------------------------------------------------- rules (pure)
 
@@ -60,7 +60,7 @@ export function nameAskDue(p: { registered: boolean; notGoing: boolean; alreadyA
 
 export function nameAskMessages(eventName: string, shareLine?: string | null): string[] {
   // Beside it, the shareable-asks question (services/askSharing.ts shareAskMessage) when they have undecided asks.
-  return [`You're on the list for ${eventName}.`, `One question: ${NAME_QUESTION.replace("Can Co mention you", "can I mention you")} Yes or no. If I don't hear, I won't.`, ...(shareLine ? [shareLine] : [])];
+  return [`You're on the list for ${eventName}.`, `One question: ${NAME_QUESTION.replace("Can Cue mention you", "can I mention you")} Yes or no. If I don't hear, I won't.`, ...(shareLine ? [shareLine] : [])];
 }
 
 // Their answer, from their own words in this message: a short, plain yes or no. Only the quote is not enough: the
@@ -247,7 +247,7 @@ export async function runEventBriefs(now = new Date()): Promise<{ asks: number; 
           type: "brief_name_ask",
           targetKey: `brief_name_ask:${event.api_id}`,
           topicKey: `event_brief_ask:${event.api_id}`,
-          summary: `They're on the list for "${event.name}": ask once if Co may name them in the member brief`,
+          summary: `They're on the list for "${event.name}": ask once if Cue may name them in the member brief`,
           payload: { eventId: event.api_id, name: event.name, startAt: event.start_at },
           dueAt: now,
           expiresAt: new Date(new Date(event.start_at).getTime() - BRIEF.askUntilBeforeStartMs),
@@ -305,7 +305,7 @@ async function queueShareQuestion(event: { api_id: string; name: string; start_a
     type: "room_share_ask",
     targetKey: `room_share_ask:${event.api_id}`,
     topicKey: `room_share_ask:${event.api_id}`,
-    summary: `Before "${event.name}": ask once whether Co may tell a good match in the room what they're looking for`,
+    summary: `Before "${event.name}": ask once whether Cue may tell a good match in the room what they're looking for`,
     payload: { eventId: event.api_id, name: event.name, startAt: event.start_at },
     dueAt: now,
     expiresAt: new Date(event.start_at),

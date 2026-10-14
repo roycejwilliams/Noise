@@ -11,10 +11,10 @@ const ROOT = join(import.meta.dirname, "..");
 const SKIP = [/^_archive\//, /^services\/coVoice\.ts$/, /^scripts\/checkCoVoice\.ts$/];
 
 const RULES: { pattern: RegExp; why: string }[] = [
-  { pattern: /You are Co\b(?!\.\s*Co gets to know)/, why: 'own "You are Co" intro; start from ${CO_VOICE}' },
-  { pattern: /\bconcierge\b/i, why: 'calls Co a "concierge"' },
-  { pattern: /\bCo(Patible)?'s AI\b|\bAI behind CoPatible\b/i, why: "describes Co as CoPatible's AI" },
-  { pattern: /\bShe's (learning|listening)\b/, why: 'refers to Co as "she"' },
+  { pattern: /You are (?:Co|Cue)\b(?!\.\s*(?:Co|Cue) gets to know)/, why: 'own "You are Cue" intro; start from ${CO_VOICE}' },
+  { pattern: /\bconcierge\b/i, why: 'calls Cue a "concierge"' },
+  { pattern: /\b(?:Co|Cue|CoPatible|Noise)'s AI\b|\bAI behind (?:CoPatible|Noise)\b/i, why: "describes Cue as Noise's AI" },
+  { pattern: /\bShe's (learning|listening)\b/, why: 'refers to Cue as "she"' },
 ];
 
 function walk(dir: string): string[] {
@@ -39,7 +39,7 @@ for (const file of walk(ROOT)) {
 }
 
 if (problems.length) {
-  console.error(`Co voice drift (${problems.length}):\n\n${problems.join("\n")}`);
+  console.error(`Cue voice drift (${problems.length}):\n\n${problems.join("\n")}`);
   process.exit(1);
 }
-console.log("Co voice check passed.");
+console.log("Cue voice check passed.");

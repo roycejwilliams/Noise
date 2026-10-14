@@ -62,7 +62,7 @@ async function draftFromRecap(firstName: string, recap: string, ownedWork: strin
     // returned SKIP and they never heard from Co again.
     task: `Find ONE specific open thread in the recap: something they were in the middle of, deciding, or looking forward to, that they'd plausibly have news about now. Write a short text that names that exact thing and asks how it went or where it landed. No next steps, nothing operational. If the recap has no specific open thread like that, return SKIP; a generic "thinking of you" is never acceptable. Never ask them about anything in work_you_owe_them: that is yours to deliver, not theirs to report on; leave it to its own message.
 
-One exception: if the recap shows Co barely knows them yet (little beyond joining and their name), don't SKIP. Write one short, warm, low-pressure text that picks up where things actually left off (the last thing Co asked, if the recap says) and invites them to share what's on their plate these days. No events, no offers, no pitch, no promise of anything Co will do.`,
+One exception: if the recap shows Cue barely knows them yet (little beyond joining and their name), don't SKIP. Write one short, warm, low-pressure text that picks up where things actually left off (the last thing Cue asked, if the recap says) and invites them to share what's on their plate these days. No events, no offers, no pitch, no promise of anything Cue will do.`,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 240 } };
@@ -84,11 +84,11 @@ async function draftFromHeavy(firstName: string, heavy: CompanionHeavy): Promise
       how_it_sat_with_them: heavy.emotion,
     },
     task: `They went through something hard (what_they_went_through) and you are checking on them the day after, the way a person from a close circle would who simply remembered. Write one short text tied to that specific thing, in their terms: ask how they are doing with it now, or how it sat overnight, in a few plain words. Let how_it_sat_with_them shape the tone only (gentler, lower pressure); never name the feeling or say what they must be feeling.
-Do not list or recap what they vented about, do not analyze it, give advice, or offer anything (no events, links, suggestions or introductions). Make no promise. Never hint that you scheduled this, remembered on purpose, keep notes, or are checking in on a schedule; it should read as a thought you had. Do not mention any other person. when_they_told_you is when they told you about it, not when the thing itself happens or happened: never say when the thing itself was, will be, or took place (it may be an upcoming event), and use no time words except "yesterday" for the conversation itself. Never say you have been thinking about them or about it, and never open with a line that would fit any person; start with the specific thing, not a greeting like "Hey". Not a wellness app: a club checking on one of its own, plain and warm. If what they went through involves hurting themselves, or was frustration with Co itself (its calls, search, results or replies) and not something in their life, return SKIP.`,
+Do not list or recap what they vented about, do not analyze it, give advice, or offer anything (no events, links, suggestions or introductions). Make no promise. Never hint that you scheduled this, remembered on purpose, keep notes, or are checking in on a schedule; it should read as a thought you had. Do not mention any other person. when_they_told_you is when they told you about it, not when the thing itself happens or happened: never say when the thing itself was, will be, or took place (it may be an upcoming event), and use no time words except "yesterday" for the conversation itself. Never say you have been thinking about them or about it, and never open with a line that would fit any person; start with the specific thing, not a greeting like "Hey". Not a wellness app: a club checking on one of its own, plain and warm. If what they went through involves hurting themselves, or was frustration with Cue itself (its calls, search, results or replies) and not something in their life, return SKIP.`,
     maxSentences: 2,
   });
   if (!text) return null;
-  return { text, rules: { maxSentences: 2, maxChars: 220, forbidden: [{ pattern: /\b(?:thinking|thought) (?:about|of)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Co was doing, and a line that fits anyone" }] } };
+  return { text, rules: { maxSentences: 2, maxChars: 220, forbidden: [{ pattern: /\b(?:thinking|thought) (?:about|of)\b|\bon my mind\b|\bcrossed my mind\b/i, reason: "a claim about what Cue was doing, and a line that fits anyone" }] } };
 }
 
 // Advice Co gave a few days ago (services/advice.ts): asks how it went, once.
@@ -119,7 +119,7 @@ async function draftFromStory(firstName: string, story: CompanionStory): Promise
       ...(story.then ? { their_words_when_it_started: story.then.slice(0, 300) } : {}),
       ...(story.now ? { their_words_when_it_landed: story.now.slice(0, 300) } : {}),
     },
-    task: `Mark this moment like a friend who has been beside them the whole way. Say what happened in a few plain words, and if their_words_when_it_started is there, let the contrast with where they are now show, in their terms. Use only what_happened and their words; add nothing that isn't there (no numbers, names, or time words like today or tonight of your own). Warm, not gushing, no exclamation-mark pile. Offer nothing, ask at most one short question, and never promise anything Co will do later. Start with the thought itself, not a greeting like "Hey".`,
+    task: `Mark this moment like a friend who has been beside them the whole way. Say what happened in a few plain words, and if their_words_when_it_started is there, let the contrast with where they are now show, in their terms. Use only what_happened and their words; add nothing that isn't there (no numbers, names, or time words like today or tonight of your own). Warm, not gushing, no exclamation-mark pile. Offer nothing, ask at most one short question, and never promise anything Cue will do later. Start with the thought itself, not a greeting like "Hey".`,
     maxSentences: 3,
   });
   if (!text) return null;
@@ -139,12 +139,12 @@ async function draftFromCuriosity(firstName: string, recap: string, curious: Com
     facts: {
       something_co_is_still_figuring_out_about_them: curious.about,
       your_recent_texts_with_them: curious.theirWords,
-      ways_co_can_help: "search now for events, communities or opportunities for something they want; point them to people worth meeting at Co events; a quick call to think something through",
+      ways_co_can_help: "search now for events, communities or opportunities for something they want; point them to people worth meeting at Cue events; a quick call to think something through",
       what_co_cannot_do: "find sponsors, investors or funders themselves (only events where they show up); promise to keep watching or keep an eye out",
       recap_for_background_only: recap.slice(0, 1500),
       work_you_owe_them: ownedWork.length ? ownedWork.join("; ") : null,
     },
-    task: `Text them first, like a friend who was paying attention. Look for one specific thing THEY said in your recent texts that naturally leads somewhere: either toward something_co_is_still_figuring_out_about_them, or toward one concrete way Co could help with it (only from ways_co_can_help, never what_co_cannot_do). Pick it up in their terms and ask one short, warm question, or offer that one way to help as a question. It has to feel like the next step of that conversation, never an interview question out of nowhere. If nothing they said leads there, return SKIP. Never ask them about anything in work_you_owe_them: that is yours to deliver, not theirs to report on; leave it to its own message.`,
+    task: `Text them first, like a friend who was paying attention. Look for one specific thing THEY said in your recent texts that naturally leads somewhere: either toward something_co_is_still_figuring_out_about_them, or toward one concrete way Cue could help with it (only from ways_co_can_help, never what_co_cannot_do). Pick it up in their terms and ask one short, warm question, or offer that one way to help as a question. It has to feel like the next step of that conversation, never an interview question out of nowhere. If nothing they said leads there, return SKIP. Never ask them about anything in work_you_owe_them: that is yours to deliver, not theirs to report on; leave it to its own message.`,
   });
   if (!text) return null;
   return { text, rules: { maxSentences: 2, maxChars: 240 } };
@@ -172,7 +172,7 @@ async function draftFromThread(
       item
         ? ` Then mention one_thing_found_for_it in one short sentence with its link, as something you came across that might help with it. If it wouldn't actually help with this, leave it out and offer nothing. Nothing else offered.`
         : ` Offer nothing: no events, no links, no suggestions.`
-    } Never promise anything Co will do later. Don't mention any other person. Start with the thought itself, not a greeting like "Hey".`,
+    } Never promise anything Cue will do later. Don't mention any other person. Start with the thought itself, not a greeting like "Hey".`,
     maxSentences: item ? 3 : 2,
   });
   if (!text) return null;

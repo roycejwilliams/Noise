@@ -35,7 +35,7 @@ function page(title: string, line: string, button: { href: string; label: string
 </head>
 <body>
 <main>
-  <div class="mark">Co</div>
+  <div class="mark">Cue</div>
   <h1>${esc(title)}</h1>
   <p>${esc(line)}</p>
   ${button ? `<a class="btn" href="${esc(button.href)}">${esc(button.label)}</a>` : ""}
@@ -73,7 +73,7 @@ export async function serveInvitePage(req: Request, res: Response) {
     return res.status(410).send(page("This invite has been used.", "Ask whoever sent it for a new one.", null));
   }
   const inviter: string | null = row.first_name?.trim() || null;
-  const title = inviter ? `${inviter} invited you to Co.` : "You're invited to Co.";
+  const title = inviter ? `${inviter} invited you to Cue.` : "You're invited to Cue.";
   const href = smsInviteHref(coPhone, inviteGreeting(inviter, code));
-  return res.status(200).send(page(title, "Tap below to text Co. Your invite code is already filled in.", { href, label: "Text Co" }));
+  return res.status(200).send(page(title, "Tap below to text Cue. Your invite code is already filled in.", { href, label: "Text Cue" }));
 }

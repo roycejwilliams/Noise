@@ -42,7 +42,7 @@ const k: any = {
 };
 const kt = TT.taskKnowledge(k, { taskId: 12, zone: NY });
 check("what they already have is there, with when (their time) and the link", /already have from you[\s\S]*Wave rooftop \(event, Thu Oct 8, 2pm EDT\) https:\/\/wave\.example\/r/.test(kt), kt);
-check("this task's own entry is not listed as something else Co carries; another task is", !/Find a DJ/.test(kt) && /Venue shortlist \(task, due\)/.test(kt));
+check("this task's own entry is not listed as something else Cue carries; another task is", !/Find a DJ/.test(kt) && /Venue shortlist \(task, due\)/.test(kt));
 check("done carrying isn't listed as still carried", !/Old brief/.test(kt));
 check("asks, corrections (the corrected version), lessons, taste, held claims, and their feeling all reach the turn", /a DJ for the block party/.test(kt) && /city: was "Oakland", now "Brooklyn"/.test(kt) && /Send fewer, better options/.test(kt) && /likes small rooms/.test(kt) && /Party is Oct 18 \(until 2026-10-18\)/.test(kt) && /stressed about the party/.test(kt));
 check("an empty knowledge read is no block", TT.taskKnowledge({ delivered: [], carrying: [], asks: [], corrections: [], lessons: [], preferences: [], claims: [], restraint: null }, { taskId: 1, zone: null }) === "");
@@ -63,7 +63,7 @@ check("the task reads every member-level rule, word for word", [R.grounding, R.m
   check("the task's restraint leaves out space, hold and the unanswered count", !/giving them space/.test(forTask) && !/starts nothing on its own until/.test(forTask) && !/no reply yet/.test(forTask), forTask);
   check("...and keeps safety hold, a hard time and muted kinds", /safety hold is on/.test(forTask) && /hard time lately/.test(forTask) && /event_offer/.test(forTask), forTask);
 }
-check("open asks are context only, like what Co carries", /still open \(context only: each is its own work, never worked or reported on here\)/.test(kt));
+check("open asks are context only, like what Cue carries", /still open \(context only: each is its own work, never worked or reported on here\)/.test(kt));
 check("the restraint state reaches the turn (a muted kind)", /Restraint:.*event_offer/.test(rules) && /Quiet hours:/.test(rules));
 const prompt = TT.taskTurnPrompt({ task: { id: 12, userId: "u", goal: "Find a DJ", theirWords: "need a DJ", steps: [], notes: [], wakes: 1, source: "user", createdAt: now.toISOString() } as any, firstName: "Sam", now: "Thu Oct 9, 4pm EDT", zone: NY, recent: stamped, knowledge: kt, rules });
 check("the task prompt carries the knowledge, the rules and the stamped thread", prompt.includes(kt) && prompt.includes(rules) && prompt.includes(stamped) && /each stamped with its time/.test(prompt));

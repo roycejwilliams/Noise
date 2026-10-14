@@ -65,7 +65,7 @@ export async function placeDueProactiveCalls(io: import("socket.io").Server | nu
           outcome: "skip",
           action: "checkin_cadence",
           proposal: { considered: held?.result.considered ?? [], nextCheckInDays: Number(row.checkin_call_cadence_days) || null },
-          reason: "only Co's own work (or nothing) to call about; the next cadence slot re-checks",
+          reason: "only Cue's own work (or nothing) to call about; the next cadence slot re-checks",
         });
         continue;
       }

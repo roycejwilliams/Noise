@@ -121,9 +121,9 @@ For each thing worth keeping, write one claim:
   Ephemeral (expires): plan, deadline, meeting, mood, exploring, worry, pending_decision.
   Something they named a date or a stretch of time for (a wedding, a trip, a move, a visit, a raise) is its own "plan" claim that
   keeps their date words in "text" exactly as they wrote them ("June 12 2027", "Oct 28 to Nov 6", "Thanksgiving week"), even when a
-  relationship or role claim says the rest: the date is what lets Co check a plan against it.
+  relationship or role claim says the rest: the date is what lets Cue check a plan against it.
 - "said_on": the date of the message holding the quote (YYYY-MM-DD).
-A test prompt, a hypothetical, advice they asked for about a made-up situation, or something Co said is NOT a claim about them. Never write a date or a day of the week into "text" unless they wrote it; do not turn a plan into a fact about the present. Skip anything you are not sure they said.
+A test prompt, a hypothetical, advice they asked for about a made-up situation, or something Cue said is NOT a claim about them. Never write a date or a day of the week into "text" unless they wrote it; do not turn a plan into a fact about the present. Skip anything you are not sure they said.
 
 What is already held (do not repeat it; say it again only if they said it again):
 ${held.map((c) => `- ${c.text}`).join("\n") || "(nothing)"}
@@ -184,10 +184,11 @@ export async function refreshClaims(userId: string, now = new Date(), deps: { pr
 // A recap read back into what they said and what Co read into it. A recap from before the claims rebuild (prose, unlabelled) is
 // all background: it can't back a date, an event or a commitment.
 export function splitRecap(recap: string): { theySaid: string; coRead: string } {
-  if (!/^(Who they are|What is going on right now|Co's read)/m.test(recap)) return { theySaid: "", coRead: recap };
+  if (!/^(Who they are|What is going on right now|(?:Co|Cue)'s read)/m.test(recap)) return { theySaid: "", coRead: recap };
   const sections = recap.split(/\n\n(?=[A-Z])/);
-  const coRead = sections.filter((s) => s.startsWith("Co's read")).join("\n\n");
-  return { theySaid: sections.filter((s) => !s.startsWith("Co's read")).join("\n\n"), coRead };
+  const isRead = (s: string) => /^(?:Co|Cue)'s read/.test(s);
+  const coRead = sections.filter(isRead).join("\n\n");
+  return { theySaid: sections.filter((s) => !isRead(s)).join("\n\n"), coRead };
 }
 
 // The recap: only live claims, each labelled; what they said apart from what Co read into it.
@@ -197,7 +198,7 @@ export function renderRecap(claims: Claim[], now: Date, zone: string | null = ZO
   return [
     sec("Who they are (they said):", r.enduring),
     sec("What is going on right now (they said it, and it is still inside its lifetime):", r.theySaid),
-    sec("Co's read (inference: orientation only, never state it back as something they told you):", r.coInferred),
+    sec("Cue's read (inference: orientation only, never state it back as something they told you):", r.coInferred),
   ].filter(Boolean).join("\n\n");
 }
 

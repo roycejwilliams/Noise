@@ -47,13 +47,13 @@ export function routerGateChecks(
         checks.push({
           name: "irreversible_co_just_asked",
           pass: fresh,
-          reason: fresh ? undefined : `Co's last message didn't ask about ${item.kind}`,
+          reason: fresh ? undefined : `Cue's last message didn't ask about ${item.kind}`,
         });
         const several = coAskedSeveralThings(openItems, turn);
         checks.push({
           name: "irreversible_single_question",
           pass: !several,
-          reason: several ? "Co asked more than one thing and the reply didn't say which" : undefined,
+          reason: several ? "Cue asked more than one thing and the reply didn't say which" : undefined,
         });
       } else if (valueOk) {
         checks.push({
@@ -65,7 +65,7 @@ export function routerGateChecks(
         checks.push({
           name: "followup_still_current",
           pass: current,
-          reason: current ? undefined : "Co's last message asked something else",
+          reason: current ? undefined : "Cue's last message asked something else",
         });
       }
     }

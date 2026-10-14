@@ -79,7 +79,7 @@ console.error = () => {};
   check("act: a plain text is judged act with nothing ruled out", d.kind === "act" && d.dontSay.length === 0);
   const { tools: t } = tools(d);
   const r = await t.reactInsteadOfReplying.execute({ reaction: "🥂" }, {});
-  check("act: a tapback is Co's own choice (allowed)", r.ok === true);
+  check("act: a tapback is Cue's own choice (allowed)", r.ok === true);
   systems.length = 0;
   const input = replyInput(d);
   const out = await runConversationReplyAgent(input, { dryRun: true, record: false });
@@ -132,7 +132,7 @@ console.error = () => {};
   check("deliver: 'what can you do' is judged deliver, with the list in what the reply drafts from", list.kind === "deliver" && list.instructions.length === 1 && !!B.ruledOut(list, "tapback"));
   const r2 = await tools(list).tools.reactInsteadOfReplying.execute({ reaction: "👍" }, {});
   check("deliver: a tapback can't answer the list", r2.ok === false && /They asked what you can do/.test(r2.error));
-  check("deliver: the call offer stays Co's choice (only an ask rules it out)", !B.ruledOut(owed, "call_offer") && !B.ruledOut(list, "call_offer"));
+  check("deliver: the call offer stays Cue's choice (only an ask rules it out)", !B.ruledOut(owed, "call_offer") && !B.ruledOut(list, "call_offer"));
 }
 
 // ======== wait (texts): the send is held, not dropped
@@ -166,7 +166,7 @@ console.error = () => {};
 // ======== briefings: deliver hands the call its finds; wait hands it none, so the spoken offer guard backs no find
 const finds = { available: true as const, lookingFor: "founder rooms", note: "Candidates, not picks.", items: [{ name: "Haunted Agent Night", details: ["Hosted by Heavybit."], link: "https://lu.ma/x", starts: "tomorrow, Tuesday, October 6 at 6:30 PM" }] };
 const offer = "There's Haunted Agent Night tomorrow at 6:30 PM, want me to text you the link?";
-const spokenAgainst = (findsNow: string) => spokenProblem(offer, callSources({ messages: [{ role: "system", content: `# What Co has found for them\n${findsNow}` }, { role: "user", content: "anything good this week?" }] } as any));
+const spokenAgainst = (findsNow: string) => spokenProblem(offer, callSources({ messages: [{ role: "system", content: `# What Cue has found for them\n${findsNow}` }, { role: "user", content: "anything good this week?" }] } as any));
 const NOW = new Date("2026-10-06T04:48:00Z");
 {
   const d = B.judgeBriefing({ userId: "u", now: NOW, clock: null, finds });
@@ -253,17 +253,17 @@ const NOW = new Date("2026-10-06T04:48:00Z");
     return { d: decisions[0], spoken, reqs, ended };
   };
   const OUT = "This call is outbound: you called them.";
-  const act = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "The dinner is next week."]], [say("Next week works. Which night? And how many people?")]);
+  const act = await turn(OUT, [["assistant", "Hey, it's Cue."], ["user", "The dinner is next week."]], [say("Next week works. Which night? And how many people?")]);
   check("call act: one question a turn is ruled out past the first, and the second isn't spoken", act.d?.kind === "act" && !!B.ruledOut(act.d, "second_question") && act.spoken.join(" ") === "Next week works. Which night?");
-  const ask = await turn("This call is inbound: they called you.", [["assistant", "Hey, it's Co."], ["user", "Hey, just catching up."]], [say("Good to hear from you. What's on your mind? I also found a dinner spot.")]);
+  const ask = await turn("This call is inbound: they called you.", [["assistant", "Hey, it's Cue."], ["user", "Hey, just catching up."]], [say("Good to hear from you. What's on your mind? I also found a dinner spot.")]);
   check("call ask: an inbound first reply is judged ask and ends at its question (they lead)", ask.d?.kind === "ask" && !!B.ruledOut(ask.d, "after_question") && !/dinner spot/.test(ask.spoken.join(" ")));
-  const safe = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "I don't feel safe right now."]], [say("I'm here. Are you safe right now? Is someone with you?")]);
+  const safe = await turn(OUT, [["assistant", "Hey, it's Cue."], ["user", "I don't feel safe right now."]], [say("I'm here. Are you safe right now? Is someone with you?")]);
   check("call act on a safety call: no question limit (both questions spoken)", safe.d?.guards.includes("safety") && !B.ruledOut(safe.d, "second_question") && /Is someone with you\?/.test(safe.spoken.join(" ")));
-  const held = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "Yeah the dinner is next week."]], [endCall, say("Next week works.")]);
+  const held = await turn(OUT, [["assistant", "Hey, it's Cue."], ["user", "Yeah the dinner is next week."]], [endCall, say("Next week works.")]);
   check("call: end_call is ruled out before they close, and the call isn't ended", !!B.ruledOut(held.d, "end_call") && !held.ended);
   const bye = await turn(OUT, [["assistant", "Talk soon."], ["user", "Ok, bye!"]], [endCall]);
   check("call: after their goodbye end_call isn't ruled out, and the call ends", !B.ruledOut(bye.d, "end_call") && bye.ended);
-  const drained = await turn(OUT, [["assistant", "Hey, it's Co."], ["user", "Honestly I'm exhausted, rough week."]], [say("That sounds heavy.")], { defs: [], names: new Set(), note: "TOOLS GUIDE", run: async () => ({ ok: true }), turnFacts: { turnWords: "Honestly I'm exhausted, rough week.", tasks: [], avoid: ["crypto events"], canWriteTasks: false } });
+  const drained = await turn(OUT, [["assistant", "Hey, it's Cue."], ["user", "Honestly I'm exhausted, rough week."]], [say("That sounds heavy.")], { defs: [], names: new Set(), note: "TOOLS GUIDE", run: async () => ({ ok: true }), turnFacts: { turnWords: "Honestly I'm exhausted, rough week.", tasks: [], avoid: ["crypto events"], canWriteTasks: false } });
   const sys = drained.reqs[0].system.map((x: any) => x.text).join("\n");
   const last = drained.reqs[0].messages[drained.reqs[0].messages.length - 1].content.map((c: any) => c.text).join("\n");
   check("call: the turn's notes come from the decision (the drained note and tools guide in the system, the stop list after their words)", /# This turn: they told you how they are/.test(sys) && /TOOLS GUIDE/.test(sys) && /never to suggest "crypto events"/.test(last) && !/crypto events/.test(sys) && drained.d.turnNote === B.avoidNote(["crypto events"]));
@@ -271,11 +271,11 @@ const NOW = new Date("2026-10-06T04:48:00Z");
 
 // ======== outgoing drafts (cutover 4): the dispatch acts only on the brain's decision
 {
-  const urgent = B.judgeDailyPick({ urgent: { id: "9", why: "expires before the next slot" }, chosen: { id: "3", why: "Co's pick", source: "co" }, noneHoldHours: 6 });
-  check("draft deliver: a find that would miss its slot is delivered ahead of Co's pick", urgent.kind === "deliver" && urgent.pick === "9" && urgent.source === "code" && B.sends(urgent, "9") && !B.sends(urgent, "3"));
+  const urgent = B.judgeDailyPick({ urgent: { id: "9", why: "expires before the next slot" }, chosen: { id: "3", why: "Cue's pick", source: "co" }, noneHoldHours: 6 });
+  check("draft deliver: a find that would miss its slot is delivered ahead of Cue's pick", urgent.kind === "deliver" && urgent.pick === "9" && urgent.source === "code" && B.sends(urgent, "9") && !B.sends(urgent, "3"));
   const none = B.judgeDailyPick({ urgent: null, chosen: { id: null, why: "nothing eligible", source: "code" }, noneHoldHours: 6 });
-  check("draft wait: Co picking nothing holds the day (6h) and sends nothing", none.kind === "wait" && none.holdHours === 6 && none.why === "pick: none (nothing eligible)" && !B.sends(none, "3"));
-  const co = B.judgeDailyPick({ urgent: null, chosen: { id: "3", why: "Co's pick of 2: fits", source: "co" }, noneHoldHours: 6 });
+  check("draft wait: Cue picking nothing holds the day (6h) and sends nothing", none.kind === "wait" && none.holdHours === 6 && none.why === "pick: none (nothing eligible)" && !B.sends(none, "3"));
+  const co = B.judgeDailyPick({ urgent: null, chosen: { id: "3", why: "Cue's pick of 2: fits", source: "co" }, noneHoldHours: 6 });
   const last = B.lastDayVeto(co, { id: "7", why: "its last day is today" });
   check("draft guard: a find on its last day goes first after the brain (re-pointed, still deliver)", last.kind === "deliver" && last.pick === "7" && last.source === "code" && B.sends(last, "7") && !B.sends(last, "3"));
   check("draft guard: the last-day rule never makes a hold send", B.lastDayVeto(none, { id: "7", why: "x" }).kind === "wait");
@@ -287,7 +287,7 @@ const NOW = new Date("2026-10-06T04:48:00Z");
   const at = new Date("2026-10-12T20:00:00Z");
   const live = B.afterComposeWait(co, "they're mid-conversation", at);
   check("draft wait: a live conversation makes the bundle wait until the hour", live.kind === "wait" && live.until === at && !B.sends(live, "3"));
-  const task = B.afterPayloadFirst(co, { handedTo: "41", why: "Co can just do it" });
+  const task = B.afterPayloadFirst(co, { handedTo: "41", why: "Cue can just do it" });
   check("draft act: payload first hands the work to a task and sends no question", task.kind === "act" && task.task === "41" && !B.sends(task, "3"));
   const held = B.afterPayloadFirst(co, { hold: "theirs to decide" });
   check("draft drop: a question that shouldn't be asked leaves the queue", held.kind === "wait" && held.drop === "payload first: theirs to decide" && !B.sends(held, "3"));

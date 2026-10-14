@@ -33,7 +33,7 @@ export function captureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.CAPTURE_USER_ISSUES === "true";
 }
 
-const ABOUT_CO = /\b(you|your|you're|youre|co|co's|this app|the app|the bot|texts?|messages?|link|links|search|call)\b/i;
+const ABOUT_CO = /\b(you|your|you're|youre|co|co's|cue|cue's|this app|the app|the bot|texts?|messages?|link|links|search|call)\b/i;
 const PROBLEM = /\b(bug|broken|glitch|error|issue|problem|wrong|incorrect|not working|doesn'?t work|didn'?t work|isn'?t working|won'?t|can'?t|couldn'?t|failed|fail|crash|twice|again and again|repeat(ed|ing)?|same (thing|message|event)|spam|slow|took (so )?long|forever|confus|weird|off|annoying|frustrat|should(n'?t)?|stop (doing|sending)|never (sent|came|got)|didn'?t (get|send|come)|missing|feedback|fix|so long|too long|takes? (you )?(so |too )?long|taking (so |too )?long|ignor\w*|didn'?t (answer|respond|reply|listen|read|hear)|not what i (asked|said|meant)|made (it|that|this) up|doesn'?t exist|not real|fake|invent\w*|hallucinat\w*|lying|lied)\b/i;
 const EXPLICIT = /\b(bug|feedback|report (a|an|this) (bug|issue|problem)|glitch)\b/i;
 
@@ -41,7 +41,7 @@ const EXPLICIT = /\b(bug|feedback|report (a|an|this) (bug|issue|problem)|glitch)
 // you don't have an understanding of the context... ask clarifying questions
 // ... rather than just ... sending them anything" had no problem word, was
 // never saved, and Co said it went "straight to the team").
-const SUGGESTION = /\b(something to (think about|consider)|(you|co) (should|shouldn'?t|need to|needs to|have to|has to|must|ought to)|we (should|must|need to|have to)|(ask|asking) (clarifying|me|first|before)|clarifying questions?|rather than|instead of|would be (nice|better|great)|it'?d be (nice|better|great)|make sure (you|to|co)|be (more )?(diligent|careful)|next time)\b/i;
+const SUGGESTION = /\b(something to (think about|consider)|(you|co|cue) (should|shouldn'?t|need to|needs to|have to|has to|must|ought to)|we (should|must|need to|have to)|(ask|asking) (clarifying|me|first|before)|clarifying questions?|rather than|instead of|would be (nice|better|great)|it'?d be (nice|better|great)|make sure (you|to|co|cue)|be (more )?(diligent|careful)|next time)\b/i;
 
 // Plain-rule gate. Wide on purpose: the model confirms.
 export function mayBeIssueReport(text: string): boolean {
@@ -51,15 +51,15 @@ export function mayBeIssueReport(text: string): boolean {
 }
 
 export function issuePrompt(message: string, recentConversation: string): string {
-  return `Someone is testing an AI texting companion called Co. Decide whether their latest message reports a problem with Co itself, or gives feedback on how Co works.
+  return `Someone is testing an AI texting companion called Cue. Decide whether their latest message reports a problem with Cue itself, or gives feedback on how Cue works.
 
 Recent conversation (oldest first):
 ${recentConversation.slice(-2500)}
 
 Their latest message: "${message}"
 
-It IS a report when they point out something Co did wrong or badly (sent the same thing twice, wrong or made-up info, a broken or missing link, ignored what they said, too slow, confusing), or say how Co should work differently.
-It is NOT a report when the problem is in their own life (a bad day, a hard week, a work issue), when they're just asking Co for something, or when they're pushing back on a normal answer without saying Co got something wrong.
+It IS a report when they point out something Cue did wrong or badly (sent the same thing twice, wrong or made-up info, a broken or missing link, ignored what they said, too slow, confusing), or say how Cue should work differently.
+It is NOT a report when the problem is in their own life (a bad day, a hard week, a work issue), when they're just asking Cue for something, or when they're pushing back on a normal answer without saying Cue got something wrong.
 
 Return ONLY JSON:
 {"isIssue": true or false, "summary": "one plain sentence a developer can act on, or null", "category": ${ISSUE_CATEGORIES.map((c) => `"${c}"`).join(" | ")}, "severity": "low" | "medium" | "high"}`;

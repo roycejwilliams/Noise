@@ -36,28 +36,28 @@ check("real reply isn't a greeting", !isVoicemailGreeting("yeah I'm doing okay, 
 
 check(
   "voicemail greeting alone isn't a real turn",
-  !hasRealUserTurn(`assistant: Hey it's Co, just calling to check in!\nuser: you've reached the voicemail of Alex, please leave a message after the tone`),
+  !hasRealUserTurn(`assistant: Hey it's Cue, just calling to check in!\nuser: you've reached the voicemail of Alex, please leave a message after the tone`),
 );
 check(
   "a bare hello isn't a real turn",
-  !hasRealUserTurn(`assistant: Hey it's Co, just calling to check in!\nuser: hello?`),
+  !hasRealUserTurn(`assistant: Hey it's Cue, just calling to check in!\nuser: hello?`),
 );
 check(
-  "a real reply after Co spoke is a real turn",
-  hasRealUserTurn(`assistant: Hey it's Co, just calling to check in!\nuser: hey, yeah things have been good, work's been busy`),
+  "a real reply after Cue spoke is a real turn",
+  hasRealUserTurn(`assistant: Hey it's Cue, just calling to check in!\nuser: hey, yeah things have been good, work's been busy`),
 );
 check(
-  "user speaking before Co ever does isn't enough on its own",
-  !hasRealUserTurn(`user: hello?\nassistant: Hey it's Co!`),
+  "user speaking before Cue ever does isn't enough on its own",
+  !hasRealUserTurn(`user: hello?\nassistant: Hey it's Cue!`),
 );
 check(
-  "only Co talking is not a real turn",
-  !hasRealUserTurn(`assistant: Hey it's Co, just calling to check in!\nassistant: Guess you're not around, I'll try again later.`),
+  "only Cue talking is not a real turn",
+  !hasRealUserTurn(`assistant: Hey it's Cue, just calling to check in!\nassistant: Guess you're not around, I'll try again later.`),
 );
 
-check("isRealUserUtterance requires Co to have spoken first", !isRealUserUtterance("hey what's up", false));
-check("isRealUserUtterance accepts a real reply once Co has spoken", isRealUserUtterance("hey what's up", true));
-check("isRealUserUtterance rejects a greeting even after Co has spoken", !isRealUserUtterance("please leave a message after the tone", true));
+check("isRealUserUtterance requires Cue to have spoken first", !isRealUserUtterance("hey what's up", false));
+check("isRealUserUtterance accepts a real reply once Cue has spoken", isRealUserUtterance("hey what's up", true));
+check("isRealUserUtterance rejects a greeting even after Cue has spoken", !isRealUserUtterance("please leave a message after the tone", true));
 
 check(
   "stripVoicemailGreetingLines drops only the greeting line",
@@ -149,7 +149,7 @@ check(
 // ---- call grounding: only the person's own ask gets saved (finding 13) ----
 
 check(
-  "Co's own unprompted promise isn't the person's ask",
+  "Cue's own unprompted promise isn't the person's ask",
   !personAskedForThis(`assistant: I'll look for some events for you while we're at it\nuser: sounds good, thanks`, "look for events for them"),
 );
 check(
@@ -167,7 +167,7 @@ user: This has nothing to do with Oct 10th, I was just asking about Tuesday.
 assistant: Got it.
 user: I'm heading to the Grok night either way.`;
   check("a lesson backed by their own words on the call is kept", CL.callLessonsFrom({ lessons: [{ lesson: "When he asks about logistics, answer the logistics.", quote: "this has nothing to do with Oct 10th" }] }, call).length === 1);
-  check("a lesson quoting Co, or quoting nothing, is dropped", CL.callLessonsFrom({ lessons: [{ lesson: "x", quote: "same night, so it's one or the other" }, { lesson: "y", quote: "" }] }, call).length === 0);
+  check("a lesson quoting Cue, or quoting nothing, is dropped", CL.callLessonsFrom({ lessons: [{ lesson: "x", quote: "same night, so it's one or the other" }, { lesson: "y", quote: "" }] }, call).length === 0);
   check("their lines are the user lines only", CL.theirLines(call).split("\n").length === 2 && !/one or the other/.test(CL.theirLines(call)));
   const prompt = CL.callLearningPrompt({ transcript: call, today: "2026-09-28", onFile: null, openAsks: [] });
   check("one call read covers profile, resolutions, corrections, cadence, planned event and lessons", ["\"profile\"", "\"resolved\"", "\"corrections\"", "\"cadence\"", "\"planned_event\"", "\"lessons\""].every((k) => prompt.includes(k)) && /The whole call is new: every "user" line counts/.test(prompt));
@@ -188,11 +188,11 @@ user: I'm heading to the Grok night either way.`;
   check("the old separate calls stay one switch away", /process\.env\.CALL_LEARNING === "off"/.test(co));
   check("a call opens with the shared picture (inbound and outbound registration)", /buildCallContextSummary\(userId\)\.catch\(\(\) => ""\)/.test(src("routes/co.ts")) && /takeCallContext\(userId, buildCallContextSummary\)/.test(src("routes/co.ts")) && /context_summary: withCallSituation\(o\.contextSummary, /.test(src("services/elevenLabsCalls.ts")));
   const cc = src("services/callContext.ts");
-  check("the call picture: lessons and what Co sent (with what's on file) come first", cc.indexOf("How to be with them, from times they corrected you") < cc.indexOf("What you sent them lately") && /sentDetailLines\(\{ sent \}, 7\)/.test(cc) && /fillDetails\(items\)/.test(cc) && !/assembleContext\(/.test(cc));
+  check("the call picture: lessons and what Cue sent (with what's on file) come first", cc.indexOf("How to be with them, from times they corrected you") < cc.indexOf("What you sent them lately") && /sentDetailLines\(\{ sent \}, 7\)/.test(cc) && /fillDetails\(items\)/.test(cc) && !/assembleContext\(/.test(cc));
   check("a call never waits on slow page reads", /CALL_CONTEXT_WAIT_MS = 3000/.test(cc));
   const { callAuditPrompt } = await import("../../src/harness/callGrounding.js");
-  const ap = callAuditPrompt("assistant: hi", "Co sent them X.", "Who they are: a builder.");
-  check("the audit: facts and impressions are separate, and an impression is never proof", /What Co knew going into the call \(facts\):\nCo sent them X\./.test(ap) && /never as proof/.test(ap) && /Who they are: a builder\./.test(ap));
+  const ap = callAuditPrompt("assistant: hi", "Cue sent them X.", "Who they are: a builder.");
+  check("the audit: facts and impressions are separate, and an impression is never proof", /What Cue knew going into the call \(facts\):\nCue sent them X\./.test(ap) && /never as proof/.test(ap) && /Who they are: a builder\./.test(ap));
   check("the audit still reads a plain summary the old way", !/impressions going in/.test(callAuditPrompt("assistant: hi", "known")));
   check("the audit gets facts and impressions from the call picture", /auditCall\(user_id, cleanTranscript, knownBeforeCall\)/.test(co) && /buildCallKnowledge\(user_id\)/.test(co));
   const prompt2 = readFileSync(new URL("../../prompts/co-system-prompt.md", import.meta.url), "utf8");

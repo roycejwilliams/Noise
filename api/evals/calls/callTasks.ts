@@ -10,7 +10,7 @@ let total = 0, failed = 0;
 const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
 
 const ASK = "So I would love for you to, like, kind of guide me, you know, just kind of throughout the week, just throw, like, different memos or different, you know, encouraging words that I, I may, you know, need, or ideas or resources or links that could be helpful for me";
-const TRANSCRIPT = `assistant: Hey Royce, it's Co. Any movement on the November event partnership?
+const TRANSCRIPT = `assistant: Hey Royce, it's Cue. Any movement on the November event partnership?
 user: Uh, not yet. We're just waiting and seeing, and coding different features this week.
 assistant: What kind of VC are you looking for?
 user: Yeah, definitely, uh, pre-seed. Um, we're definitely a pre-seed company. ${ASK}
@@ -34,7 +34,7 @@ const mk = (give: any[], o: { done?: boolean; startOk?: boolean } = {}) => {
   check("replay: what he asked for on the call becomes a task, with his own words as the quote", got.length === 1 && m.calls.length === 1 && /memos or different/.test(m.calls[0].theirWords) && m.calls[0].userId === "u1" && m.calls[0].source === "ask");
   check("the task opens like a text's would: no steps, a first plan that texts only when there's something real", Array.isArray(m.calls[0].steps) && m.calls[0].steps.length === 0 && /text them only when you have something real/.test(m.calls[0].firstPlan));
   check("the after-call text is told it started, with no promise of what or when", m.recorded.length === 1 && /^Started working on "Send pre-seed/.test(m.recorded[0]) && /no promise of what or when/.test(m.recorded[0]));
-  check("the model reads only HIS lines: Co's 'not how I work' never reaches it", !/not really how I work/.test(m.prompt()) && /guide me/.test(m.prompt()));
+  check("the model reads only HIS lines: Cue's 'not how I work' never reaches it", !/not really how I work/.test(m.prompt()) && /guide me/.test(m.prompt()));
 }
 {
   const m = mk([{ goal: "Send a weekly investor memo", quote: "I will send you a weekly investor memo every Monday" }]);
@@ -44,7 +44,7 @@ const mk = (give: any[], o: { done?: boolean; startOk?: boolean } = {}) => {
 {
   const m = mk([{ goal: "Look into the daily check-ins and resource drops", quote: "The daily check-ins and resource drops, that's not really how I work" }]);
   const got = await T.tasksFromCall("u1", TRANSCRIPT, m.deps);
-  check("a quote from Co's own line opens nothing: only what the member asked", got.length === 0 && m.calls.length === 0);
+  check("a quote from Cue's own line opens nothing: only what the member asked", got.length === 0 && m.calls.length === 0);
 }
 {
   const many = ["one", "two", "three", "four"].map((n) => ({ goal: `Work on thing ${n} for them`, quote: "kind of guide me, you know, just kind of throughout the week" }));
@@ -70,7 +70,7 @@ const mk = (give: any[], o: { done?: boolean; startOk?: boolean } = {}) => {
 {
   const m = mk([]);
   const got = await T.tasksFromCall("u1", "assistant: Hey.\nuser: Good, you?\nassistant: Great, talk soon.", m.deps);
-  check("a short call with nothing asked of Co reads nothing and opens nothing", got.length === 0 && m.calls.length === 0 && m.prompt() === "");
+  check("a short call with nothing asked of Cue reads nothing and opens nothing", got.length === 0 && m.calls.length === 0 && m.prompt() === "");
   const none = mk([]);
   check("a call where they asked for nothing like that opens nothing", (await T.tasksFromCall("u1", TRANSCRIPT, none.deps)).length === 0 && none.calls.length === 0);
 }
@@ -89,7 +89,7 @@ check("it uses the same task machinery as a text (so every limit holds), Sonnet 
 // 2026-10-08: "you're on it" became "Starting the plan ... once it's worth sending" live; the text now says what Co understood, that
 // they'll get it, and a when only if Co named one on the call, and never repeats a confirmation already sent (evals/calls/followThrough.ts).
 check("the after-call text never mentions promised work (#115: the delivery is its own message), and never narrates", /never mention it here, not that it's coming, not that you're on it, not that nothing turned up/.test(src("jobs/postCallFollowUp.ts")) && /Never narrate your own state/.test(src("jobs/postCallFollowUp.ts")));
-check("the call brain is told yes: it sets it up now, on the call (2026-10-08: calls run Co's tools)", /Say yes to this on a call and set it up then and there/.test(src("services/callBriefing.ts")) && /say yes and set it up now, on the call/.test(src("services/elevenLabsCalls.ts")));
+check("the call brain is told yes: it sets it up now, on the call (2026-10-08: calls run Cue's tools)", /Say yes to this on a call and set it up then and there/.test(src("services/callBriefing.ts")) && /say yes and set it up now, on the call/.test(src("services/elevenLabsCalls.ts")));
 console.log(`call tasks: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit(failed ? 1 : 0);

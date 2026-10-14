@@ -102,17 +102,17 @@ const qsrc = src("services/researchQuality.ts");
 check("an outcome is recorded only on a find shown to that member", /WHERE user_id = \$1 AND id = \$2 AND shown_at IS NOT NULL AND \(outcome IS NULL OR outcome = 'ignored'\)/.test(qsrc));
 check("unreacted finds become 'ignored' after 72 hours, on the task cron", Q.IGNORED_AFTER_HOURS === 72 && /markIgnoredFinds\(\)/.test(src("jobs/index.ts")));
 check("every find shown is recorded when the brief goes, and ranked before it's built", /if \(sent\) await Q\.recordShownFinds\(/.test(src("services/researchBrief.ts")) && /Q\.rankFinds\(/.test(src("services/researchBrief.ts")));
-check("Co records reactions through its own tool, matched to an option it actually sent", /findReaction: tool\(/.test(tool) && /recentShownFinds\(ctx\.userId\)/.test(tool) && /doesn't match an option you showed them/.test(tool));
+check("Cue records reactions through its own tool, matched to an option it actually sent", /findReaction: tool\(/.test(tool) && /recentShownFinds\(ctx\.userId\)/.test(tool) && /doesn't match an option you showed them/.test(tool));
 const caps = src("services/capabilities.ts");
-check("the reaction tool is in Co's registry", /id: "find_reaction"[\s\S]{0,400}tool: "findReaction"/.test(caps));
+check("the reaction tool is in Cue's registry", /id: "find_reaction"[\s\S]{0,400}tool: "findReaction"/.test(caps));
 check("their passes and likes go into their next query", /outcome IN \('yes','no','not_like_that'\)/.test(qsrc) && /likes: reacted\.rows/.test(qsrc) && /passes: reacted\.rows/.test(qsrc));
 
 // ---- point A to point B: a yes moves toward the booking, on sourced facts only
 const picked = { name: "The Interval", url: "https://longnow.org/interval/book/", fields: [{ key: "capacity", label: "Capacity", value: "Up to 75 guests", checkedAt: at }, { key: "rate", label: "Rate", value: null, checkedAt: at }] };
 const yes = Q.nextStepAfterReaction("yes", picked);
-check("a yes points Co at the inquiry and following it to an answer", /draft the inquiry/.test(yes) && /draftEmail/.test(yes) && /task/.test(yes) && /their date, headcount and budget/.test(yes));
+check("a yes points Cue at the inquiry and following it to an answer", /draft the inquiry/.test(yes) && /draftEmail/.test(yes) && /task/.test(yes) && /their date, headcount and budget/.test(yes));
 check("a yes rests only on the option's sourced fields (an unknown isn't passed on as a fact)", /Capacity: Up to 75 guests \(checked 2026-10-07\)/.test(yes) && !/Rate:/.test(yes) && /Nothing else about price or availability/.test(yes));
 check("'not like that' widens the search, never argues", /look again/.test(Q.nextStepAfterReaction("not_like_that", picked)) && /Don't argue/.test(Q.nextStepAfterReaction("not_like_that", picked)));
-check("the reaction tool hands Co the option and its next step", /next: Q\.nextStepAfterReaction\(input\.reaction, hit\)/.test(tool));
+check("the reaction tool hands Cue the option and its next step", /next: Q\.nextStepAfterReaction\(input\.reaction, hit\)/.test(tool));
 console.log(`search quality: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);

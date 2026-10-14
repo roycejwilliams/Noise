@@ -99,13 +99,13 @@ const onlineMatch: TierMatch = {
   event_api_id: "e3",
   event_date: "2026-09-20",
   name: "Online Founder AMA",
-  reason: "Matches a Co event happening Sunday, September 20, online.",
+  reason: "Matches a Cue event happening Sunday, September 20, online.",
   online: true,
   city: null,
 };
 c(
   checkLocation(onlineMatch, { ...baseFacts, now: evening, searchCity: "Fargo, ND" }).pass,
-  "an online Co event passes the location check for a searcher anywhere, with no radius filter",
+  "an online Cue event passes the location check for a searcher anywhere, with no radius filter",
 );
 
 const p1 = resolveCoEventPlace(null, { online: true, city: null }, "San Francisco");
@@ -190,7 +190,7 @@ c(xSearchBudget(99, "request", 100, 30).ok, "a direct ask can use the very last 
 // localToday / searchZone fallback: no zone known defaults to Co's home zone,
 // not the server's (UTC on Railway), and says so.
 const z1 = searchZone(null);
-c(z1.zone === "America/Los_Angeles" && z1.defaulted === true, "no timezone on file falls back to Co's home zone, not server/UTC, and records the default");
+c(z1.zone === "America/Los_Angeles" && z1.defaulted === true, "no timezone on file falls back to Cue's home zone, not server/UTC, and records the default");
 const z2 = searchZone("America/New_York");
 c(z2.zone === "America/New_York" && z2.defaulted === false, "a real timezone is used as-is, not defaulted");
 c(localToday(evening, null) === "2026-09-16", "localToday with no zone falls back to the Pacific date, never the server's UTC one (2026-10-07)");
@@ -229,8 +229,8 @@ c(triesInOrder([{ tier: 1 }, { tier: 2 }, { tier: 2 }, { tier: 2 }, { tier: 2 },
 // The search hears who they are, never their other asks or what's on their
 // mind (2026-09-18: a hiring question searched funding because the profile
 // listed their funding asks).
-const searchProfile = profileForSearch({ asOf: "2026-09-18T19:53", work: "Founder of Co, pre-seed", place: "San Francisco", worked: [], wantsNow: ["Find pre-seed VCs in SF", "Find grants for a founder event"], didntWork: [], weighingOn: ["stressed about fundraising"], valuesInPeople: ["laid-back founders"] } as any);
-c(searchProfile.includes("Founder of Co") && searchProfile.includes("laid-back founders"), "the search profile keeps who they are");
+const searchProfile = profileForSearch({ asOf: "2026-09-18T19:53", work: "Founder of Cue, pre-seed", place: "San Francisco", worked: [], wantsNow: ["Find pre-seed VCs in SF", "Find grants for a founder event"], didntWork: [], weighingOn: ["stressed about fundraising"], valuesInPeople: ["laid-back founders"] } as any);
+c(searchProfile.includes("Founder of Cue") && searchProfile.includes("laid-back founders"), "the search profile keeps who they are");
 c(!/VCs|grants|fundraising/.test(searchProfile), "the search profile leaves out their other asks and what's on their mind");
 
 // A what's-on follow-up keeps the time frame they just asked about (2026-09-18:
@@ -325,7 +325,7 @@ for (const [ok, label] of cases) {
   c(/the real complete list\. \$\{parts\.join\(" "\)\} Never add, drop, or invent anything beyond this\./.test(tools), "the grounded fact it hands the reply agent is explicit that this is the complete, real list");
   // 2026-09-22 code review: an offer isn't something Co looks for on their behalf,
   // and dates were in the server's zone.
-  c(/What they've offered to others, which Co matches to people who want it/.test(tools), "offering asks are described as offers, not as things Co is looking for");
+  c(/What they've offered to others, which Cue matches to people who want it/.test(tools), "offering asks are described as offers, not as things Cue is looking for");
   c(!/toDateString\(\)/.test(tools), "no date is formatted in the server's time zone");
   c(/d\.isValid \? d\.setZone\(zone\)/.test(tools), "dates are shown in the member's own zone, and an unreadable date is dropped instead of printing Invalid Date");
 }
@@ -351,7 +351,7 @@ for (const [ok, label] of cases) {
   c(/if \(p\.avoided === true && person\.avoid\?\.length\) return \{ fits: false, rightKind: false/.test(details), "a ruled-out kind never fits and can never go out as a closest-thing stretch, and 'avoided' only counts when something was actually ruled out");
   c(/avoidList\.length \? ' "avoided": true or false,' : ""/.test(details), "the avoided field is only asked for when there's something ruled out (it caused false rejections when always present)");
   c(/const prefs = await loadFitPreferences\(person\.userId\)/.test(details), "every fit check loads the member's ruled-out kinds and availability itself");
-  c(/They told Co to stop suggesting these kinds of things/.test(details), "the fit prompt carries the ruled-out kinds");
+  c(/They told Cue to stop suggesting these kinds of things/.test(details), "the fit prompt carries the ruled-out kinds");
   c(/When they've said they're usually free/.test(details), "the fit prompt carries their availability");
 }
 
@@ -443,7 +443,7 @@ for (const [ok, label] of cases) {
 // Several places in one ask (2026-09-27: "this weekend in Sacramento or SF"
 // became an SF-only search). In Co's own loop (2026-10-01) each event search
 // names its city, so Co searches each place it was asked about.
-c(/city: z\.string\(\)\.optional\(\)\.describe\("The city, when they named one/.test(readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8")), "Co's event search takes a city per search, so each place gets its own");
+c(/city: z\.string\(\)\.optional\(\)\.describe\("The city, when they named one/.test(readFileSync(new URL("../../src/agent/loopTools.ts", import.meta.url), "utf8")), "Cue's event search takes a city per search, so each place gets its own");
 
 console.log(`search rules: ${cases.length - failed}/${cases.length} passed`);
 if (failed) process.exitCode = 1;
