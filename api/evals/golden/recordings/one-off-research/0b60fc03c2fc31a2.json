@@ -1,0 +1,93 @@
+{
+  "hash": "0b60fc03c2fc31a2",
+  "case": "one-off-research",
+  "recorded_at": "2026-10-14T15:57:19.910Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2848,
+    "system": "",
+    "messages": 1,
+    "last": "user: A member asked Co for things. For each ask, read THEIR OWN WORDS and say which it is: - \"question\": they want an answer or a thing now, and one good reply finishes it (what's a good spot for dinner tonight, how do I word this, send me the link). - \"lookout\": they want Co to keep watching and tell th...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2848,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "A member asked Co for things. For each ask, read THEIR OWN WORDS and say which it is:\n- \"question\": they want an answer or a thing now, and one good reply finishes it (what's a good spot for dinner tonight, how do I word this, send me the link).\n- \"lookout\": they want Co to keep watching and tell them when something comes up (look out for, find me, keep an eye out, let me know when, any X coming up). It stays open until its date passes, they say stop, or they have what they wanted.\nJudge from their words, not from Co's summary of the ask. If their words don't show it either way, leave that ask out.\n\nA1. Co's summary: Research Sarah Hao before their call\n   Their words: \"Can you do some research on Sarah Hao before our call?\"\n\nReturn ONLY JSON: {\"asks\": [{\"ask\": \"A1\", \"intent\": \"question\" or \"lookout\", \"why\": \"a few words, quoting them\"}]}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"asks\": [{\"ask\": \"A1\", \"intent\": \"question\", \"why\": \"\\\"Can you do some research on Sarah Hao before our call?\\\" asks for a one-time piece of research with a clear endpoint (the call), not ongoing monitoring.\"}]}",
+      "usage": {
+        "input_tokens": 306,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 164,
+        "output_tokens_details": {
+          "thinking_tokens": 78
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2QQ5L7tdkwDS59for4m",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSjwYKEAgSGAI4AUIIdGhpbmtpbmcSDJ65ltzWGUnPVQCBUBoMNrhM/muZ+X7D8okVIjAKnsBsrR//0pGmwAJecDSjQ8Zh7ZjsdeRsM7EserAAOd25Luxi1N96J1YKmfWEIgkqrAWQU3avbFXJQUSAFmkmQwK7FdKqB9G5bL9k/SZFhL5Srj+C+Tr4P5tetDiATeqtyDCCNcW7iNya9+mJE8MEzZpPwB7FlPP79xSAbs72PpN4R2xgIqDcThkz4DtAFExwkSnowAFO4khNU8/vtrCsstWc1oOzDWhj9sZA8zEpgZIPKjkXRSCa18/oeaB7UEUFIz3PHUhX2aD+IqdKMuQb4pXSDh7E9na7QHMhGzlGX4E/hYaFe+UrgMGW5NVjaNPZFl6xQ9hHRakm11vxfCAmwWaua3DT9lc7s4m8UTlkuHGWcdIXP0Ck54Kr9Jv3rE2CUFnRk2IUbos8zOG6+jFtFkvx3h1zV6KO9J1sJoWhBE2eTCZpJlPKW0EOD1Vg8We2hqn3tew0jNRMw6IwnAJRteIM4tRweFkg6+AExG2SG+rv7v4DrlZhJnxBpEFAcKArkwxbqTaJ5iApO1qBra9B9THsiluI0yD9uBU5g+X6RozQ+vH9lEBH9DBWCdkk/1TurpdZJ3lZ907wei83FGVbWc6VD/VJ4loxjwBs01v4cPsph/cFIZFwpJBN1t1FeD1yra1X8DxA4Vnl2TQ+FZ6Y2r1emew5bMj4Ct9lnHkYFLo+edlelFOcp83gannqG54YYOsK1Jf2Zn/GQzGjW4C7aYVcjPEtVxGuHsdtWvYdWLbDbXF/fUw4GldnSUHKpHXWFtPlVpMdK5S2ZyIpOBqFa1+fKR5cAKMsFoo1mw0p6YaaU7yzPbMuWL5gI1Yq3c6JjWMjvc+QPF8KJfttEsHxKlOz9xAKFK1sxwIVgteTyB10oEaBUpLWi4meZoSAVnk/m7dDvg628BotoS7EXoQvAlkBWJuoFGAC6FDnlqmp2e90vvpy1OaZmKeGdGIJDd7zGvhhbXoBuzphsFQm63MYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"asks\": [{\"ask\": \"A1\", \"intent\": \"question\", \"why\": \"\\\"Can you do some research on Sarah Hao before our call?\\\" asks for a one-time piece of research with a clear endpoint (the call), not ongoing monitoring.\"}]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 306,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 164,
+          "output_tokens_details": {
+            "thinking_tokens": 78
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

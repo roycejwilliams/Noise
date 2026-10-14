@@ -1,0 +1,88 @@
+{
+  "hash": "898a7233aa15255e",
+  "case": "double-offer",
+  "recorded_at": "2026-10-14T15:56:25.615Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2058,
+    "system": "",
+    "messages": 1,
+    "last": "user: A text a companion is about to send: \"\"\"I can turn it back on if you like.\"\"\" Does it already offer to do something for them, or ask them to decide or answer anything, in any wording (\"I can start it if you like\", \"say the word and I'll look\", \"let me know if you want it back on\")? Answer only yes o...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2058,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "A text a companion is about to send:\n\"\"\"I can turn it back on if you like.\"\"\"\n\nDoes it already offer to do something for them, or ask them to decide or answer anything, in any wording (\"I can start it if you like\", \"say the word and I'll look\", \"let me know if you want it back on\")? Answer only yes or no.",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "Yes.",
+      "usage": {
+        "input_tokens": 104,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 6,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2QL87wCW6FySc6gNhwc",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Yes."
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 104,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 6,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

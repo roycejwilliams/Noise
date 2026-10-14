@@ -1,7 +1,8 @@
 // The test setup, tested (layer 1, zero tokens). Pins the two-layer policy so it can't quietly erode:
 //   - layer 1 stubs every model call and refuses every other outside call;
 //   - layer 2 runs on Haiku, lets only a grader through as Sonnet, stops at its cap, and prints its cost;
-//   - no eval that makes a live model call can run unmetered, and none is in the layer 1 list.
+//   - no eval that makes a live model call can run unmetered, and none is in the layer 1 list;
+//   - the golden cases replay committed recordings on a PR (no key, zero model calls); live runs are manual only (Royce, 2026-10-14).
 //   npx tsx evals/lib/rules.ts
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -9,7 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 let total = 0, failed = 0;
-const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
+// detail: what was seen, printed only when the check fails.
+const check = (label: string, ok: boolean, detail?: string) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}${detail ? `\n     ${detail}` : ""}`); } };
 const root = new URL("../..", import.meta.url).pathname;
 const read = (p: string) => readFileSync(join(root, p), "utf8");
 
@@ -48,28 +50,92 @@ check("the nightly default cap is at most 500,000 tokens and $1.00", live.caps.t
 const pkg = JSON.parse(read("package.json")).scripts as Record<string, string>;
 check("test, evals:code and the hook run layer 1 only", pkg.test === "node evals/runLayer1.mjs" && pkg["evals:code"] === pkg.test);
 check("layer 1 does not read the real api/.env (dotenv is pointed at nothing)", /DOTENV_CONFIG_PATH: "\/dev\/null"/.test(read("evals/runLayer1.mjs")));
+check("layer 1 typechecks the golden harness and the eval policy files", /\["tsc", "-p", "evals\/tsconfig\.golden\.json"\]/.test(read("evals/runLayer1.mjs")) && JSON.parse(read("evals/tsconfig.golden.json")).include.includes("golden/**/*.ts") && JSON.parse(read("evals/tsconfig.golden.json")).include.includes("lib/*.ts"));
 check("a timed-out test is killed with its whole process group", /detached: true/.test(read("evals/runLayer1.mjs")) && /process\.kill\(-p\.pid/.test(read("evals/runLayer1.mjs")));
 check("no per-change script runs a live eval", !/runLayer2|runLive|--live/.test(pkg.test + pkg["evals:code"]));
 const hook = read("../.githooks/pre-push");
 check("the pre-push hook runs layer 1 and never a live eval", /evals:code/.test(hook) && !/evals:live|evals:nightly|eval:live/.test(hook.replace(/^#.*$/gm, "")));
 const wf = read("../.github/workflows/co-evals.yml");
-const wfAll = wf;
-check("the workflow never puts a dispatch input into a shell command", !/run:[^\n]*\$\{\{\s*inputs\./.test(wfAll) && /ONLY: \$\{\{ inputs\.only \}\}/.test(wfAll)); const pushJob = wf.slice(wf.indexOf("\njobs:"), wf.indexOf("\n  golden:"));
-// Royce, 2026-10-13: the golden conversations are a required pre-merge check, so ONE paid job runs on a PR into co-test: the metered,
-// capped golden run and nothing else. Held exactly (review of the harness: a loose match let a widened trigger, an extra paid step,
-// allowed hosts or a raised cap through).
-const goldenJob = wf.slice(wf.indexOf("\n  golden:"), wf.indexOf("\n  live:"));
-const goldenRuns = [...goldenJob.matchAll(/^\s+(?:- )?run: (.+)$/gm)].map((m) => m[1].trim());
-const wfJobs = [...wf.slice(wf.indexOf("\njobs:")).matchAll(/^  ([A-Za-z_][\w-]*):\s*$/gm)].map((m) => m[1]);
-check("CI on a push or pull request runs layer 1, plus only the capped golden job on a PR into co-test",
-  /evals:code/.test(pushJob) && !/evals:nightly|evals:live|eval:live|secrets\./.test(pushJob) &&
+// ---- the workflows, every file in .github/workflows (a new file is held to the same rules). Read as text, comment lines dropped.
+const wfDir = join(root, "../.github/workflows");
+const wfFiles = readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f));
+const uncomment = (t: string) => t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+const workflows = wfFiles.map((f) => ({ file: f, text: uncomment(readFileSync(join(wfDir, f), "utf8")) }));
+const jobsOf = (text: string): Record<string, string> => {
+  const at = text.search(/^jobs:\s*$/m);
+  if (at < 0) return {};
+  const body = text.slice(at);
+  const heads = [...body.matchAll(/^  ([A-Za-z_][\w-]*):\s*$/gm)];
+  return Object.fromEntries(heads.map((m, i) => [m[1], body.slice(m.index!, heads[i + 1]?.index ?? body.length)]));
+};
+// What starts the workflow: `on: push`, `on: [push, pull_request]`, or a block of keys under `on:`.
+const triggersOf = (text: string): string[] => {
+  const m = text.match(/^(?:on|"on"|'on'):[ \t]*(.*)$/m);
+  if (!m) return ["(no on:)"];
+  if (m[1].trim()) return m[1].replace(/[[\]{}]/g, " ").split(/[\s,]+/).filter(Boolean);
+  const rest = text.slice(m.index! + m[0].length + 1).split("\n");
+  const keys: string[] = [];
+  for (const l of rest) { if (/^\S/.test(l)) break; const k = l.match(/^  ([\w-]+):/); if (k) keys.push(k[1]); }
+  return keys;
+};
+const SECRET = /\bsecrets\b/; // secrets.X, secrets['X'], toJSON(secrets), secrets: inherit
+const runsOf = (job: string) => [...job.matchAll(/^\s+(?:- )?run: (.+)$/gm)].map((m) => m[1].trim());
+const usesOf = (job: string) => [...job.matchAll(/^\s+(?:- )?uses: (.+)$/gm)].map((m) => m[1].trim());
+const stepsOf = (job: string) => (job.match(/^      - /gm) ?? []).length;
+// A job that can reach a paid API (any secret in it) never starts on a push, a PR or a schedule. In a workflow that has any other
+// trigger than a manual dispatch, its `if:` must name the event in every `||` branch (a branch without one runs on anything) and must
+// never negate (`!`, `!=`, `!(`). The one standing exception is the layer 2 nightly job `live` in co-evals.yml (not the golden harness),
+// which may also run on its schedule.
+const triggerOk = (file: string, name: string, job: string) => {
+  const triggers = triggersOf(workflows.find((w) => w.file === file)!.text);
+  if (triggers.length && triggers.every((t) => t === "workflow_dispatch")) return true;
+  const cond = job.match(/^    if: (.+)$/m)?.[1] ?? "";
+  const allowed = file === "co-evals.yml" && name === "live" ? ["workflow_dispatch", "schedule"] : ["workflow_dispatch"];
+  return !!cond && !/!|contains\(|startsWith\(|endsWith\(|fromJSON\(|format\(/.test(cond) && cond.split("||").every((branch) => { const ev = [...branch.matchAll(/github\.event_name == '(\w+)'/g)].map((m) => m[1]); return ev.length > 0 && ev.every((e) => allowed.includes(e)); });
+};
+const secretJobs = workflows.flatMap((w) => Object.entries(jobsOf(w.text)).filter(([, j]) => SECRET.test(j)).map(([name, j]) => ({ file: w.file, name, ok: triggerOk(w.file, name, j) })));
+check("no job that holds a secret runs on a push, a pull request or a schedule, in any workflow file (only the layer 2 nightly may use its schedule), and no secret is set workflow-wide",
+  workflows.every((w) => !SECRET.test(w.text.slice(0, Math.max(0, w.text.search(/^jobs:\s*$/m))))) && secretJobs.every((j) => j.ok) && !secretJobs.some((j) => j.file === "co-evals.yml" && (j.name === "golden" || j.name === "code")),
+  `jobs with secrets: ${secretJobs.map((j) => `${j.file}:${j.name}${j.ok ? "" : " (BAD TRIGGER)"}`).join(", ")}`);
+// An anchor or alias can hand a job another job's env (a key) without the job's own text saying so: none, in any workflow file.
+const anchors = workflows.filter((w) => /(^|[\s:\-[{,])[&*][A-Za-z0-9_][\w.-]*/m.test(w.text.replace(/"[^"\n]*"|'[^'\n]*'/g, '""'))).map((w) => w.file);
+check("no workflow file uses YAML anchors or aliases", anchors.length === 0, `anchors or aliases in ${anchors.join(", ")}`);
+// Every ${{ inputs.x }} sits alone on an env line (NAME: ${{ inputs.x }}), so no dispatch input is ever pasted into a shell line,
+// including the later lines of a multi-line run: block.
+const inputLines = workflows.flatMap((w) => w.text.split("\n")).filter((l) => /\$\{\{[^}]*\b(inputs|github\.event\.inputs)\b/.test(l));
+check("no workflow puts a dispatch input into a shell command", !/run:[^\n]*\$\{\{\s*inputs\./.test(wf) && /ONLY: \$\{\{ inputs\.only \}\}/.test(wf) && /GOLDEN_ONLY: \$\{\{ inputs\.golden_only \}\}/.test(wf) && inputLines.every((l) => /^\s+[A-Z_]+: \$\{\{ inputs\.[a-z_]+ \}\}\s*$/.test(l)), inputLines.join(" | "));
+// Royce, 2026-10-14: "golden cases must not hit the live API on every CI run ... Live API runs only on a deliberate manual trigger
+// (workflow_dispatch or equivalent), never automatically per PR." The golden job stays a required check on every PR into co-test, but
+// it replays committed recordings with no key in reach; the real-model run is its own job, on a manual dispatch only. Held exactly
+// (review of the harness: a loose match let a widened trigger, an extra paid step, allowed hosts or a raised cap through).
+const coJobs = jobsOf(uncomment(wf));
+const pushJob = coJobs.code ?? "";
+const goldenJob = coJobs.golden ?? "";
+const goldenLiveJob = coJobs["golden-live"] ?? "";
+const wfJobs = Object.keys(coJobs);
+const STEPS = ["actions/checkout@v4", "actions/setup-node@v4", "actions/upload-artifact@v4"];
+check("CI on a push or pull request runs layer 1 and the golden REPLAY only: no key, no expression, no live model call",
+  /evals:code/.test(pushJob) && !/evals:nightly|evals:live|eval:live/.test(pushJob) && !SECRET.test(pushJob) &&
   /\n    if: github\.event_name == 'pull_request' && github\.base_ref == 'co-test'\n/.test(goldenJob) &&
-  JSON.stringify(goldenRuns) === JSON.stringify(["npm ci", "npm run -s evals:golden"]) &&
-  !/EVAL_ALLOW_HOSTS|EVAL_WEB_SEARCH|EVAL_KEEP_MODEL|EVAL_COST_CAP_USD|EVAL_TOKEN_CAP/.test(goldenJob) &&
-  !/evals:nightly|evals:live|eval:live/.test(goldenJob) &&
+  JSON.stringify(runsOf(goldenJob)) === JSON.stringify(["npm ci", "npm run -s evals:golden"]) && JSON.stringify(usesOf(goldenJob)) === JSON.stringify(STEPS) && stepsOf(goldenJob) === 5 &&
+  !/\$\{\{/.test(goldenJob) && !SECRET.test(goldenJob) &&
+  !/ANTHROPIC_API_KEY|GOLDEN_MODE|EVAL_ALLOW_HOSTS|EVAL_WEB_SEARCH|EVAL_KEEP_MODEL|EVAL_REAL_MODELS|EVAL_COST_CAP_USD|EVAL_TOKEN_CAP|DOTENV/.test(goldenJob) &&
+  !/evals:nightly|evals:live|eval:live|evals:golden:record|evals:golden:live/.test(goldenJob) &&
   Number(goldenJob.match(/timeout-minutes: (\d+)/)?.[1] ?? 0) > 0 && Number(goldenJob.match(/timeout-minutes: (\d+)/)?.[1] ?? 999) <= 30 &&
-  JSON.stringify(wfJobs) === JSON.stringify(["code", "golden", "live"]), `jobs ${wfJobs.join(",")}; golden steps ${goldenRuns.join(" | ")}`);
-check("the golden run is metered, capped at $4 and isolated from the database and sends", read("package.json").includes('"evals:golden": "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 tsx --import ./evals/lib/meter.mjs evals/golden/run.ts"') && /^\s*import\s+["']\.\.\/lib\/requireMeter\.js["']/m.test(read("evals/golden/run.ts")));
+  JSON.stringify(wfJobs) === JSON.stringify(["code", "golden", "golden-live", "live"]),
+  `jobs ${wfJobs.join(",")}; golden runs ${runsOf(goldenJob).join(" | ")}; golden uses ${usesOf(goldenJob).join(" | ")}; steps ${stepsOf(goldenJob)}`);
+check("the real-model golden run is its own job, on a manual dispatch only, and records nothing",
+  /\n    if: github\.event_name == 'workflow_dispatch' && inputs\.golden_live\n/.test(goldenLiveJob) &&
+  JSON.stringify(runsOf(goldenLiveJob)) === JSON.stringify(["npm ci", "|"]) && JSON.stringify(usesOf(goldenLiveJob)) === JSON.stringify(STEPS) && stepsOf(goldenLiveJob) === 5 &&
+  /npm run -s evals:golden:live -- --only "\$GOLDEN_ONLY"; else npm run -s evals:golden:live; fi/.test(goldenLiveJob) &&
+  !/evals:golden:record|EVAL_ALLOW_HOSTS|EVAL_WEB_SEARCH|EVAL_COST_CAP_USD|EVAL_TOKEN_CAP/.test(goldenLiveJob),
+  `golden-live runs ${runsOf(goldenLiveJob).join(" | ")}; uses ${usesOf(goldenLiveJob).join(" | ")}`);
+const pkgJson = read("package.json");
+const ISOLATED = "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci DOTENV_CONFIG_PATH=/dev/null";
+const PRELOAD = "tsx --import ./evals/lib/meter.mjs --import ./evals/lib/goldenReplay.mjs evals/golden/run.ts";
+check("the golden replay holds no key, a zero cap, and reads no .env, so a bug in it cannot spend", pkgJson.includes(`"evals:golden": "${ISOLATED} ANTHROPIC_API_KEY=golden-replay OPENAI_API_KEY=golden-replay GOLDEN_MODE=replay EVAL_TOKEN_CAP=0 EVAL_COST_CAP_USD=0 ${PRELOAD}"`));
+check("recording and the live golden run are metered, capped at $4, read no .env and are isolated from the database and sends", pkgJson.includes(`"evals:golden:record": "${ISOLATED} GOLDEN_MODE=record EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 ${PRELOAD}"`) && pkgJson.includes(`"evals:golden:live": "${ISOLATED} GOLDEN_MODE=live EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 ${PRELOAD}"`) && /^\s*import\s+["']\.\.\/lib\/requireMeter\.js["']/m.test(read("evals/golden/run.ts")) && /__GOLDEN__/.test(read("evals/golden/run.ts")));
+check("the golden runner settles and fails on a miss anywhere in the run (late, or outside any case) before it exits", /await golden\.settle\(\)/.test(read("evals/golden/run.ts")) && /golden\.allMisses\(\)/.test(read("evals/golden/run.ts")));
 check("the live job runs only on the nightly schedule or a manual dispatch, and runs the capped nightly set", /github\.event_name == 'schedule'/.test(wf) && /workflow_dispatch/.test(wf) && /npm run -s evals:nightly/.test(wf));
 
 // ---- layer 1: the stub
@@ -122,6 +188,42 @@ check("the live job runs only on the nightly schedule or a manual dispatch, and 
   const callsMade = (env: Record<string, string>) => { const d2 = mkdtempSync(join(tmpdir(), "meter-test-")); spawnSync("node", ["--import", join(root, "evals/lib/fixtures/fakeAnthropic.mjs"), "--import", join(root, "evals/lib/meter.mjs"), join(root, "evals/lib/fixtures/meterProbe.mjs")], { encoding: "utf8", env: { ...process.env, FAKE_SEEN: join(d2, "seen.jsonl"), EVAL_LEDGER: join(d2, "ledger.jsonl"), ...env } }); return existsSync(join(d2, "seen.jsonl")) ? readFileSync(join(d2, "seen.jsonl"), "utf8").split("\n").filter(Boolean).length : 0; };
   check("a call that could pass the token cap is refused before it is made (cap 1,300: one call of 1,200 tokens, not two)", callsMade({ EVAL_TOKEN_CAP: "1300", EVAL_COST_CAP_USD: "5" }) === 1);
   check("and the same before the dollar cap", callsMade({ EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "0.00024" }) === 1);
+}
+
+// ---- the golden recorder: record once over a fake network, then replay with no key (zero tokens)
+{
+  const dir = mkdtempSync(join(tmpdir(), "golden-test-"));
+  const run = (mode: string, extra: Record<string, string>) => {
+    const env: Record<string, string | undefined> = { ...process.env, GOLDEN_MODE: mode, GOLDEN_RECORDINGS: join(dir, "rec"), FAKE_SEEN: join(dir, "seen.jsonl"), EVAL_LEDGER: join(dir, `ledger-${mode}.jsonl`), EVAL_TOKEN_CAP: "100000", EVAL_COST_CAP_USD: "5", ...extra };
+    if (!extra.ANTHROPIC_API_KEY) delete env.ANTHROPIC_API_KEY;
+    const r = spawnSync("node", ["--import", join(root, "evals/lib/fixtures/fakeAnthropic.mjs"), "--import", join(root, "evals/lib/meter.mjs"), "--import", join(root, "evals/lib/goldenReplay.mjs"), join(root, "evals/lib/fixtures/goldenProbe.mjs")], { encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    return { out: JSON.parse((r.stdout.match(/GOLDEN (\{.*)/) ?? [])[1] ?? "{}"), stdout: r.stdout };
+  };
+  const seen = () => (existsSync(join(dir, "seen.jsonl")) ? readFileSync(join(dir, "seen.jsonl"), "utf8").split("\n").filter(Boolean).length : 0);
+  const refused = run("record", { ANTHROPIC_API_KEY: "ci" });
+  check("record mode refuses to start a call with a placeholder key", /threw: GOLDEN RECORD: no ANTHROPIC_API_KEY/.test(refused.out.recorded ?? "") && seen() === 0);
+  const rec = run("record", { ANTHROPIC_API_KEY: "probe" });
+  const files = existsSync(join(dir, "rec/probe-case")) ? readdirSync(join(dir, "rec/probe-case")) : [];
+  const recs = files.map((f) => JSON.parse(readFileSync(join(dir, "rec/probe-case", f), "utf8")));
+  const file = recs.find((r) => r.responses?.length === 2) ?? {};
+  check("record mode calls through the meter and writes one readable recording per request (hash, request, response, usage, model, recorded_at)", rec.out.recorded === "ok" && rec.out.written === 3 && files.length === 2 && file.hash && file.request?.body?.messages && file.responses[0].usage && file.model && file.recorded_at && file.case === "probe-case", JSON.stringify(rec.out));
+  check("the key ignores JSON key order, so the same request is the same recording", rec.out.reordered === "ok" && files.length === 2);
+  check("a streamed answer is recorded as its events", rec.out.streamed === "streamed ok" && recs.some((r) => r.responses?.[0]?.events?.length === 7 && r.responses[0].text === "streamed ok"));
+  const before = seen();
+  // As the replay script runs it: a placeholder key (the SDKs refuse to start without one), never a real one.
+  const rep = run("replay", { ANTHROPIC_API_KEY: "golden-replay" });
+  const all: { case: string | null; miss: string }[] = rep.out.all ?? [];
+  check("replay answers a recorded call from the recording, with no key", rep.out.recorded === "ok" && rep.out.reordered === "ok" && rep.out.served === 3, JSON.stringify(rep.out));
+  check("replay rebuilds a recorded stream that the ai SDK reads as it read the real one", rep.out.streamed === "streamed ok");
+  check("replay never reaches the network: nothing new hit the fake network and the meter counted 0 model calls", seen() === before && /EVAL COST: \$0\.0000 \| 0 model calls/.test(rep.stdout));
+  check("a model call with no recording throws, fails its case, and says how to re-record", /^threw: GOLDEN REPLAY/.test(rep.out.unrecorded ?? "") && /re-record: npm run evals:golden:record -- --only probe-case/.test(rep.out.missTexts?.[0] ?? "") && /nearest recording/.test(rep.out.missTexts?.[0] ?? ""));
+  check("a repeat past what was recorded is a miss (\"called 3 times, recorded 2\"), never the last answer served again", /^threw: GOLDEN REPLAY: called 3 times, recorded 2/.test(rep.out.repeat ?? "") && rep.out.misses === 2);
+  check("(a) a model call outside any case throws and is counted for the run, even when the code catches it", /^threw: GOLDEN REPLAY/.test(rep.out.outside ?? "") && all.some((m) => m.case === null && /outside any golden case/.test(m.miss)));
+  check("(b) a late call that misses after its case returned is counted for the run, billed to that case", all.some((m) => m.case === "probe-case" && /a late call nobody recorded/.test(m.miss) && /attempt had already ended/.test(m.miss)) && !(rep.out.missTexts ?? []).some((t: string) => /late call/.test(t)));
+  check("(c) a worker one case started, fed by the next, has its miss counted for the run and billed to the case that started it", rep.out.bMisses === 0 && all.some((m) => m.case === "probe-worker" && /queued by probe-b/.test(m.miss) && /while case probe-b was running/.test(m.miss)));
+  check("the run's miss list holds every miss once (2 in the case, 1 late, 1 from the worker, 1 outside)", all.length === 5, JSON.stringify(all.map((m) => m.case)));
+  check("a golden case reaches nothing but models, in every mode", rec.out.otherHost === "refused" && rep.out.otherHost === "refused");
+  check("the clock and zone are pinned in every mode (the same prompt on every run)", [rec.out, rep.out].every((o) => o.now === "2026-10-13T21:00:00.000Z" && o.dateNow === Date.parse("2026-10-13T21:00:00.000Z") && o.tz === "UTC" && o.instance === true));
 }
 
 // ---- the prices the meter uses are the ones the app uses

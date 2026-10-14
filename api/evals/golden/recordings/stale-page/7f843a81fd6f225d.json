@@ -1,0 +1,93 @@
+{
+  "hash": "7f843a81fd6f225d",
+  "case": "stale-page",
+  "recorded_at": "2026-10-14T15:56:42.962Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2248,
+    "system": "",
+    "messages": 1,
+    "last": "user: Today is 2026-10-13. A companion is about to text a member about \"AI Grant\", an opening (an application, program or grant). Its own page, read just now: \"\"\"AI Grant AI Grant AI Grant &mdash; accelerator for seed-stage AI startups $250,000 on an uncapped SAFE for your AI-native product startup $350,0...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2248,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Today is 2026-10-13. A companion is about to text a member about \"AI Grant\", an opening (an application, program or grant). Its own page, read just now:\n\"\"\"AI Grant AI Grant AI Grant &mdash; accelerator for seed-stage AI startups $250,000 on an uncapped SAFE for your AI-native product startup $350,000 in Azure credits + $250,000 in additional credits Summit in San Francisco with advisors and founders Demo Day with world-class investors Applications for Batch 4 are closed Advisors and speakers: David Holz , CEO of Midjourney and Leap Motion Andrej Karpathy , founding member of OpenAI Patrick Collison , CEO of Stripe Tobi Lütke , CEO of Shopify Lukas Biewald , CEO of Weights and Biases Alexandr Wang , CEO of Scale.ai Aaron Levie , CEO of Box Amjad Masad , CEO of Replit Noam Shazeer , co-creator of transformers and CEO of Character Mike Krieger , cofounder of Instagram Guillermo Rauch , CEO of Vercel Christina Cacioppo , CEO of Vanta Dylan Field , CEO of Figma Aravind Srinivas , CEO of Perplexity Looking for our open source grant program? Check out aigrant.org . AI Grant companies — batch 4 Goodfire — Interpretability tools Silurian — Weather forecasting foundation models Granola — AI notepad for meetings Pulse AI — Intelligent document extraction InspectMind AI — AI plan checker for construction Hamming — Testing for AI voice agents Agency — AI agents for B2B customer success Artificial Analysis — Independent benchmarks and evaluations Pursuit — Public sector sales Graylark — Geospatial intelligence for defense and enterprise Haize Labs — AI model hazing Sync — AI lipsync Rowan — AI molecular simulation Vapi — Simple voice agent API Juicebox — Autopilot for recruiting Supertrace AI — AI network engineers Inception Labs — diffusion large language models AI Grant companies — batch 3 Antimetal — AI-powered cloud management Matic Robots — Autonomous indoor robots Omnivore — AI-enabled media consumption app Momentic — QA automation Reworkd AI — Web extraction at scale Spark AI — Workflow automation for energy projects K-Scale Labs — Consumer humanoid robots Matrices — AI-native spreadsheet Browserbase — Browser infrastructure for AI applications Didero — Autonomous supply chains Consensus — LLM-powered search for research Method Security — Autonomous cyber defense Yuma AI — Automated customer service for Shopify Abel — AI for local governments Virtual Staging AI — AI tools for realtors Symphonic Labs — Wearable silent speech interfaces DayDream Dental — Automated financial operations for dentists Creatify AI — Short-form marketing videos Womp Labs — Training data optimization AI Grant companies — batch 2 Pika — cutting-edge generative video ggml — run AI models anywhere MatX — specialized chips for AI Lindy — AI personal assistant Freed — AI medical scribe Mathpix — AI-powered document automation Abstract AI &mdash; 100% AI-handled customer support Julius — AI data scientist Hume AI — AI toolkit to understand emotional expression Cofactory — factory for generating companies with LLMs Induced — AI-first browser RPA platform Zeta Labs — automate routine online tasks Common Sense Machines — game-engine ready \"\"\"\n\nIs \"AI Grant\" itself still open as of today: still taking applications or sign-ups, or still ahead? Answer \"closed\" only if the page says this one is closed, over, full, sold out or past (applications closed, batch closed, registration ended), and quote that whole sentence exactly as the page has it. Answer \"open\" if the page shows it still open or ahead. Answer \"unclear\" if the page doesn't say, or the closed words are about something else (another event, another year, a past batch when a new one is open).\n\nReturn ONLY JSON: {\"state\": \"open\" | \"closed\" | \"unclear\", \"quote\": \"the page's exact words\" or null}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"state\": \"closed\", \"quote\": \"Applications for Batch 4 are closed\"}",
+      "usage": {
+        "input_tokens": 1450,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 334,
+        "output_tokens_details": {
+          "thinking_tokens": 304
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2QMGjPCsLhh2kQmyodU",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSmgsKEAgSGAI4AUIIdGhpbmtpbmcSDK9CNmf2YMkhbMnt/RoMvGtmtX8NQP07lRUgIjDnAnEO26y/aV37xWxNSWNV/Iwz5Z7jVZIqtvD7LoVaq4mmTj9GupmYLkIOvh9ytG8qtwqlsM5islC6owZItlDpcBBnnTyrNDvPGH8g3v3toBz/7BS9ssMAaYVPUs8BKiLrtpJ8hjQR3lOZv4ipIODIfNca+TKarBGSxqqRF5p0FmyFhMiN82tamQx7g1yT96HQZ2TnvZjGBTjujAZ95o39e3rGwQIICYqKUOmEvESjZGGHGsogBqEgE+Gl06L1jrccy1aXriCUvdPB+B9svnR0b8dPZOep/05aABNOVoJnVP4lA2p1CKlqlw7dFxKglkXuEcMQ8rBD0lqbrqDYvj4IXQVOnGIAP3ZLd8RfYYrwVRC98TtHtcbYD7pzVQFeXXZkXa5R3cDKwWCZF1WgIomouvNRPw6HiKIQk4br27q2bTRHX3oKNuyjZjduktKFXY+pvynWfelC9GzzE1zqFcLKEFEsCD4tnl27Xjujvo6Sq4YEMAj0kbcDig/rvb7HHSFPHCwWoRzV9chClC66nPXtc4Ax+xG/Nvs0y+v6fAKDOmRFz4i848BLkDYaYAixQWsNM3RoBiIHDZ/sJ1n0KYtDkQiyW0ubGQshSSozvs6DdiAZW5kM/7hPT+9FtYqqeRjbxKgo37mZTyDx0LvcNfvIR4eCwMiQ9/D3vdOACUtpdWWU/aYkO1/Gq/JFcctg5ZKASmLVeRZIB/4IoakJDENZxJS1ont/2ZAG/VK0gQ4k/yLxYfHYxmydwTKeRZPAQDpY31Kx74Zz6rCKy7TM6mYQzAwe/BKeXMNcL2fp5iGct6Rj8u9NrmMzKEc3nm4crEtGKU+QPpOeGSpZ9ekuNJnRmIOxwx46X16a5VgHbLxkR8GbtQzOMNddDNT0ctKkkt/TPPow0WRg+kBAnnQAM2xpKmANWDz00GanpDfKXtaQVAReH6TdOy/CokX0d7kYI7+bghmeR2jskhkTEFwdXJ0nsXBgO2Zqmyap+J86sFIMjhMQXypljKpMtVSVLoxYNpKjQ1r+DxJip98eZQczbcuPv0d9MEYuBUMZM+gJ795iC8Wk1voofwm46jkuv+ee9XGvY5VEAxlKNqxFp1jag/A/QtQSVfKoFJzP3Hat0/vZPLQ/720m6k4Q1e16fNqq3XV3FsNfgEPUfjtSEFszGXD1qgzIkAKcxHJ1DL54dp2jZqBEZ7tNy7MpEW4GeByLP4z5YVUhcNZ1Wfpto/EgIw1eke1mJtclbvPUlHnmFFLtOQxEeyCobobEqhLTg8JJkOTA3+qp6TCfWcLe/B6k9owCpnkqCAnv8bruTON1tN0gXYznGyXB+peI4mLIBJMQcGc9z3bztg3OEg2TZFWCG38B8CT9VN7kTY0DiiPkcF+tB+csMzzGsCv9Cn+jiKxbIKgZ2EPyaTCbxGHKpsBc6cRMbGBgS2BvyKtOKG6oFvhjfCOaJPKMNIAPyXcJtF9qpQNQtjpYHDjdTC8oN6cMBi7zPg7dFt/l0cF9yELs8y936c8497xp3WU5J6FBK6FbkuzO99cak0+tMjN0VcKhQKSNsaheKWKczPpp913nWdnXzB9W+AiIupQauNIjl0/Da1ZWSGf5TNpxQVMg9XvCTpMVHVgb0VwSvno7ZnCHCTjcXCfuEyzGPTNPgIif1K4M9XCgfH9RnFLPA3ICCpU3R4FLqEQAaK/crNzaWF8OLcZ7XIOfFcJbyk9Qu1xt9L4ia5OalJ10PSqLiDdkqc3vMVYjxvalC4AQeXlFU1TFrUyokQEUkxpqo4mVmc/aOC5j1WSrdC7nbl0jnis6VZcGTADhuUUg9LTIZQzsqtVVEIa9NZprf9qZ21HG7KYYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"state\": \"closed\", \"quote\": \"Applications for Batch 4 are closed\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 1450,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 334,
+          "output_tokens_details": {
+            "thinking_tokens": 304
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

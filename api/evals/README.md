@@ -38,6 +38,12 @@ A hard failure in layer 2 ran on Haiku, so it is a tripwire, not the production 
 One script, metered (probes, replays, anything with real calls): `npm run eval:live -- evals/<suite>/<file>.ts [args]`.
 Options: `--only router,intro`, `--sample 3`. Caps by env: `EVAL_TOKEN_CAP`, `EVAL_COST_CAP_USD`.
 
+## Golden cases: `npm run evals:golden`
+
+The required `golden` check on a PR into co-test replays committed recordings of the model's answers (`evals/golden/recordings`):
+no key, no network, $0. Recording (`npm run evals:golden:record -- --only <case>`) and the live drift check (`evals:golden:live`, or
+the `golden-live` job on a manual dispatch) are the only golden runs that call a model. See `evals/golden/README.md`.
+
 ## The rule that keeps it this way
 
 Every script under `evals/` that is not in layer 1 must `import "…/lib/requireMeter.js"` first (or be a listed harness/data module in

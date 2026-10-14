@@ -1,0 +1,6 @@
+{
+  "_": "Typechecks the golden harness and the eval policy files (evals/lib) on every layer 1 run. The rest of evals/ is not typechecked (it carries older type errors); add a folder here once it is clean.",
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "noEmit": true, "rootDir": "..", "declaration": false, "sourceMap": false },
+  "include": ["golden/**/*.ts", "lib/*.ts", "testEnv.ts", "../src/**/*.d.ts"]
+}
