@@ -167,7 +167,7 @@ const stub = (answers: any[]) => {
   const pr = B.composePrompt(input());
   check("review #8: the prompt names CONFIRMED_FACTS and says member rules are never a reason to skip", /THE THINGS \(CONFIRMED_FACTS for each/.test(pr) && /The member rules further down are never a reason to skip; fit is/.test(pr));
   check("review #9: the composer's call is bounded (timeout and output cap)", /maxOutputTokens: 4000, providerOptions: \{ anthropic: \{ effort: "medium" \} \}, abortSignal: AbortSignal\.timeout\(45_000\)/.test(src("harness/bundleComposer.ts")));
-  check("review #10: a dry run writes nothing on the new path", /if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", prep\.skip\);/.test(src("harness/proactive.ts")) && /if \(!opts\.dryRun\) \{\s*if \(res\.leadSkipped\)/.test(src("harness/proactive.ts")));
+  check("review #10: a dry run writes nothing on the new path", /if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", prep\.skip\);/.test(src("harness/proactive.ts")) && /if \(!opts\.dryRun\) \{\s*for \(const a of failedBundleActions\(res, c\.attempts\)\)/.test(src("harness/proactive.ts")));
 }
 
 console.log(`phase C, assemble: ${total - failed}/${total} passed`);
