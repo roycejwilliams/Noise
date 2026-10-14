@@ -108,6 +108,11 @@ const searched = (fp: { plan: any }) => (fp.plan ? goalItemsFromPlan(fp.plan, (e
   const timerRead = /last_surfaced_at|cooldown|last_attempted_at|GOAL_PLAN_MAX_AGE|INTERVAL|created_at >|proactive_sends|weekly_cap|unanswered|engagement_pace/;
   const bad = path.filter(([, f]) => timerRead.test(f.toString())).map(([n]) => n);
   check("structural: no function on the floor's goal call path reads a cooldown, the sweep schedule, a send timer or a plan age query", bad.length === 0, bad);
+  // The floor's member read and its whole per-member sweep (asks and goals) too: no cooldown column, no profile_surfacing_state, no
+  // last_attempted_at, anywhere (review of the tier PR: a cooldown re-added to MEMBERS_SQL plus a skip in the goal loop passed).
+  const floorRead = /cooldown_cleared|last_surfaced_at|profile_surfacing_state|last_attempted_at/;
+  check("structural: the floor's member query reads no cooldown or sweep schedule", !floorRead.test(DS.MEMBERS_SQL), floorRead.exec(DS.MEMBERS_SQL)?.[0]);
+  check("structural: the floor's per-member sweep (every line of it) reads no cooldown or sweep schedule", !floorRead.test(DS.sweepMember.toString()), floorRead.exec(DS.sweepMember.toString())?.[0]);
   // Function sources are compared with their whitespace taken out (the runner may minify them).
   const flat = (f: Function) => f.toString().replace(/\s+/g, "");
   const ageReaders = path.filter(([, f]) => /PLAN_BACKSTOP_DAYS|getTime\(\)-/.test(flat(f))).map(([n]) => n);

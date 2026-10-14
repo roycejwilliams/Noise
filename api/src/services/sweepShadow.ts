@@ -15,7 +15,7 @@ import { DateTime } from "luxon";
 import { recordDecision } from "../harness/core.js";
 import { judgeSweepItem } from "../brain/index.js";
 import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
-import { carryGuardedRuns, contextIds, holdDueDates, memberWhyOf, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
+import { ageOutFitOnly, carryGuardedRuns, contextIds, holdDueDates, memberWhyOf, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
 import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
 import { memberZone } from "./memberTime.js";
 import { exitKey } from "./findForm.js";
@@ -261,13 +261,8 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   const r = await selectForMember(ctx, { model: process.env.SWEEP_SELECT_MODEL || SELECT_MODEL, userId });
   // A reject the guard held counts its runs in a row, so a claim the picker keeps making without a record stops buying daily runs
   // (sweepSelect.ts holdDueDates).
-  r.judgments = carryGuardedRuns(r.judgments, (last?.proposal?.judgments ?? []) as Judgment[], { morning: !!opts.morning });
-  // A claim check that couldn't run is an alarm, not a shrug (Royce, 2026-10-14): one row per failed run, with the member, the finds it
-  // held and the error; the hourly monitor counts them (harness/monitor.ts picker_claim_check_failed). Never an email.
-  if (r.claimCheck?.read === "failed" && !opts.dryRun) {
-    const held = (r.claimCheck.heldIds ?? []).map((id) => ctx.pool.find((p) => p.id === id)?.name ?? id);
-    await recordDecision({ layer: 5, decision: "picker.claim_check_failed", userId, outcome: "skip", action: "held", reason: r.claimCheck.error ?? "unknown", proposal: { day: today, finds: held, error: r.claimCheck.error ?? null, morning: !!opts.morning } }).catch(() => {});
-  }
+  r.judgments = carryGuardedRuns(r.judgments, (last?.proposal?.judgments ?? []) as Judgment[], { morning: !!opts.morning, day: today });
+  if (!opts.dryRun) await logClaimCheckFailure(userId, r.claimCheck, ctx.pool, { day: today, morning: !!opts.morning });
   // A failed selection is logged as an error, never as a run: it isn't the
   // "last run" tomorrow's unchanged check compares against, so it can't be
   // silently skipped (review of #57).
@@ -310,6 +305,15 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     },
   });
   return { day: today, signature, skipped: false, judgments: r.judgments, pool: ctx.pool };
+}
+
+// A claim check that couldn't run is an alarm, not a shrug (Royce, 2026-10-14): one row per failed run, with the member, the finds it
+// held and the error; the hourly monitor counts them (harness/monitor.ts picker_claim_check_failed). Never an email. record: injectable.
+export async function logClaimCheckFailure(userId: string, check: import("./sweepSelect.js").ClaimCheck | undefined, poolItems: PoolItem[], o: { day: string; morning: boolean }, record: typeof recordDecision = recordDecision): Promise<boolean> {
+  if (check?.read !== "failed") return false;
+  const held = (check.heldIds ?? []).map((id) => poolItems.find((p) => p.id === id)?.name ?? id);
+  await record({ layer: 5, decision: "picker.claim_check_failed", userId, outcome: "skip", action: "held", reason: check.error ?? "unknown", proposal: { day: o.day, finds: held, error: check.error ?? null, morning: o.morning } }).catch(() => {});
+  return true;
 }
 
 type Waiting = { askId: string; askText: string; fromProfile: boolean; match: any; reminder?: boolean; again?: boolean };
@@ -469,10 +473,14 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
     const left = P.findsLeftToday(await P.findsSentToday(userId, await memberZone(userId), new Date()).catch(() => P.DAILY_FIND_CAP));
     const tierOfQ = (q: Queued) => judgments.find((j) => j.key === shadowKey(String(q.match?.name ?? ""), dateOf(q.match)))?.tierPick ?? 9;
     plan.queue.sort((a, b) => tierOfQ(a) - tierOfQ(b));
-    for (const cut of plan.queue.splice(left)) {
+    // Answers to their asks are never capped; discovery picks past what's left are cut.
+    let room = left;
+    const keep = plan.queue.filter((q) => !P.isDiscoveryFind({ type: "event_offer", payload: { askId: q.askId, fromProfile: q.fromProfile, again: q.again, reminder: q.reminder } }) || room-- > 0);
+    for (const cut of plan.queue.filter((q) => !keep.includes(q))) {
       cutKeys.add(shadowKey(String(cut.match?.name ?? ""), dateOf(cut.match)));
       report.notQueued.push({ name: String(cut.match?.name ?? ""), why: `${DAY_CAP_NOTE} (${P.DAILY_FIND_CAP})` });
     }
+    plan.queue.splice(0, plan.queue.length, ...keep);
   }
   // Out first, so a held row doesn't block its own re-queue later.
   for (const d of plan.reject) {
@@ -519,6 +527,9 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
     const why = memberSafeWhy(memberWhyOf(j), ids);
     return queuePickedOffer(userId, { askId: from.askId, askText: from.askText, fromProfile: from.fromProfile, match: from.match, reminder: from.reminder, again: from.again, why, lastDay: null, pick: { whyMember: why, whyNow: "", set: null, tierPick: true } }).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 200)}`);
   });
+  // After the picks (and any tier fallback) are applied: fit-only holds on their last morning age out and leave with their fact.
+  const aged = ageOutFitOnly(judgments);
+  if (aged.length) await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, rejectedFindsOf(aged, backlog, ids), realPruneDeps)).catch((err: any) => console.error("picker: exiting aged-out finds failed (non-fatal):", err?.message ?? err));
   return plan;
 }
 

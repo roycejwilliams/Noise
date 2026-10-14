@@ -785,22 +785,33 @@ export function sendIsExempt(primary: Candidate, extras: Candidate[], ignorePaci
 // Reminders (a deadline heads-up) ride alone.
 // How many of the daily pick's choices go in one message (its own send limit).
 export const MAX_PICKED_TOGETHER = 3;
-// Up to three finds a day, whatever sends them (Royce's ruling relayed 2026-10-14: "one per tier means up to 3 morning finds a day"):
-// the morning bundle counts toward it, a later pick that day goes only while the day's count is under it, and a retried morning run
-// never queues past it (services/sweepShadow.ts). The weekly cap stays skipped for the morning; silence pacing is the guardrail.
+// Up to three discovery finds a day, whatever sends them (Royce's ruling relayed 2026-10-14: "one per tier means up to 3 morning finds a
+// day"): the morning bundle counts toward it, a later pick that day goes only while the day's count is under it, and a retried morning
+// run never queues past it (services/sweepShadow.ts). Answers to what they asked for are never capped (#55: answers are uncapped), and
+// don't count. The weekly cap stays skipped for the morning; silence pacing is the guardrail.
 export const DAILY_FIND_CAP = 3;
-// Pure: how many more finds may go today.
+// Pure: a find Co brings up itself (not an answer to their ask, not a deadline reminder): what the day's cap counts.
+export function isDiscoveryFind(c: Pick<Candidate, "type" | "payload">): boolean {
+  return c.type === "event_offer" && !(c.payload as { reminder?: boolean } | null)?.reminder && !isAnswering(c);
+}
+// Pure: how many more discovery finds may go today.
 export function findsLeftToday(sentToday: number): number {
   return Math.max(0, DAILY_FIND_CAP - sentToday);
 }
-// Finds (event offers, not deadline reminders) that went out today, in their day. Unreadable reads as the cap reached: nothing extra goes
-// on a guess.
-export async function findsSentToday(userId: string, zone: string | null, now: Date): Promise<number> {
+// Pure: a find bundle under the day's cap. An answer leads whatever the count; a discovery lead waits for tomorrow at the cap; discovery
+// siblings are trimmed to what's left, answers never.
+export function capBundle<T extends Pick<Candidate, "type" | "payload">>(lead: T, sibs: T[], left: number): { deferLead: boolean; sibs: T[] } {
+  if (isDiscoveryFind(lead) && left <= 0) return { deferLead: true, sibs: [] };
+  let room = left - (isDiscoveryFind(lead) ? 1 : 0);
+  return { deferLead: false, sibs: sibs.filter((x) => !isDiscoveryFind(x) || room-- > 0) };
+}
+// The SQL twin of isDiscoveryFind, for a candidate row's payload.
+const DISCOVERY_SQL = `type = 'event_offer' AND COALESCE(payload->>'reminder', 'false') <> 'true' AND NOT (COALESCE(payload->>'askId', '') NOT IN ('', 'profile') AND COALESCE(payload->>'fromProfile', 'false') <> 'true' AND COALESCE(payload->>'again', 'false') <> 'true')`;
+// Discovery finds that went out today, in their day. db: the send's own locked connection when re-checked at send time. Unreadable reads
+// as the cap reached at the call sites: nothing extra goes on a guess.
+export async function findsSentToday(userId: string, zone: string | null, now: Date, db: Queryable = pool): Promise<number> {
   const start = DateTime.fromJSDate(now).setZone(hoursZone(zone)).startOf("day").toJSDate();
-  const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND COALESCE(payload->>'reminder', 'false') <> 'true' AND COALESCE(decided_at, updated_at) >= $2`,
-    [userId, start],
-  );
+  const { rows } = await db.query(`SELECT COUNT(*)::int AS n FROM proactive_candidates WHERE user_id = $1 AND status = 'sent' AND ${DISCOVERY_SQL} AND COALESCE(decided_at, updated_at) >= $2`, [userId, start]);
   return Number(rows[0]?.n ?? 0);
 }
 const isPicked = (c: Candidate) => c.type === "event_offer" && Boolean((c.payload as { picked?: boolean })?.picked) && !(c.payload as { reminder?: boolean })?.reminder;
@@ -849,6 +860,14 @@ export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Ca
     out.push(c);
   }
   return out;
+}
+
+// Pure: what a failed bundle does to its lead. A lead the composer skipped is dropped (a skipped tier pick also queues its tier's next
+// best); any other failure counts an attempt and drops it at the last one (as before the tier PR: review, the tier-next branch had
+// captured this else).
+export function failedBundleActions(res: { leadSkipped?: boolean; tierSkipped?: boolean }, attempts: number): ("drop_skipped" | "queue_tier_next" | "count_attempt" | "drop_failed")[] {
+  if (res.leadSkipped) return res.tierSkipped ? ["drop_skipped", "queue_tier_next"] : ["drop_skipped"];
+  return attempts + 1 >= RULES.maxDraftAttempts ? ["count_attempt", "drop_failed"] : ["count_attempt"];
 }
 
 // Deterministic pick: a companion message first (2026-09-22, Royce: Co is a
@@ -1664,6 +1683,12 @@ async function sendWithLedger(
       ),
       ...candidateChecks(c, { now, sends, lastInboundAt, joinedAt, undeliveredYes: c.type === "network_tease" ? await import("../services/networkIntroNudge.js").then((m) => m.lastTeaseUndelivered(person.userId)).catch(() => false) : false, suppressedKinds: await loadKindRestraint(client, person.userId, now).then((r) => suppressedKinds(r.verdicts)).catch(() => opts.suppressedKinds ?? []) }, { answering }),
     ];
+    // The day's discovery cap, read again inside the lock, so two sends at once can't both pass it (review of the tier PR).
+    const discovery = [c, ...extras.map((e) => e.candidate)].filter(isDiscoveryFind).length;
+    if (discovery) {
+      const sentToday = await findsSentToday(person.userId, person.timezone, now, client).catch(() => DAILY_FIND_CAP);
+      checks.push({ name: "daily_find_cap", pass: sentToday + discovery <= DAILY_FIND_CAP, reason: `${sentToday} discovery find(s) went today; this send has ${discovery}; the day's cap is ${DAILY_FIND_CAP}` });
+    }
     const g = gate(checks);
     if (!g.ok) {
       await client.query("ROLLBACK");
@@ -2221,9 +2246,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   if (bundled) {
     const B = await import("./bundleComposer.js");
     const { prepareOffer } = await import("./proactiveRegistry.js");
-    // The day's find cap: none left, and this find waits for tomorrow (it isn't dropped); some left, and the bundle is trimmed to them.
+    // The day's discovery cap (capBundle): a discovery lead at the cap waits for tomorrow (it isn't dropped); an answer always goes;
+    // discovery siblings are trimmed to what's left.
     const left = findsLeftToday(await findsSentToday(userId, person.timezone, state.now).catch(() => DAILY_FIND_CAP));
-    if (left <= 0) {
+    const capped = capBundle(c, pickSiblingOffers(c, ev.eligible), left);
+    if (capped.deferLead) {
       if (!opts.dryRun) {
         const tomorrow = DateTime.fromJSDate(state.now).setZone(hoursZone(person.timezone)).plus({ days: 1 }).startOf("day").toJSDate();
         await pool.query(`UPDATE proactive_candidates SET due_at = GREATEST(due_at, $2), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [c.id, tomorrow]);
@@ -2233,7 +2260,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       return;
     }
     const sibs: Candidate[] = [];
-    for (const sib of pickSiblingOffers(c, ev.eligible).slice(0, left - 1)) {
+    for (const sib of capped.sibs) {
       if (needsRelevanceCheck(sib, state.now)) {
         const r = await stillRelevant(sib, { recentConversation: recentStamped, now: state.now, timezone: person.timezone }).catch(() => null);
         if (!opts.dryRun) await settleRelevance(sib, r);
@@ -2311,12 +2338,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     }
     if ("fail" in res) {
       if (!opts.dryRun) {
-        if (res.leadSkipped) await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
-        // A morning tier pick is never left out for fit without its tier's next best going (review of the tier PR).
-        if (res.leadSkipped && res.tierSkipped) await import("../services/sweepShadow.js").then((S) => S.queueTierNext(userId, c, `the composer skipped the tier's pick: ${res.fail}`)).catch(() => null);
-        else {
-          await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
-          if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${res.fail}`);
+        for (const a of failedBundleActions(res, c.attempts)) {
+          if (a === "drop_skipped") await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
+          // A morning tier pick is never left out for fit without its tier's next best going (review of the tier PR).
+          if (a === "queue_tier_next") await import("../services/sweepShadow.js").then((S) => S.queueTierNext(userId, c, `the composer skipped the tier's pick: ${res.fail}`)).catch(() => null);
+          if (a === "count_attempt") await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
+          if (a === "drop_failed") await dropCandidate(registry, c, "skipped", `draft failed checks: ${res.fail}`);
         }
       }
       // Logged the way every failed draft is, so the proactive_blocked monitor counts composed bundles too (review of #135).

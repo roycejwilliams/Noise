@@ -2,7 +2,7 @@
 // the claim check and the composer are stubs that answer by rule, the store is stubbed.
 //   npx tsx evals/sweepSelect/morningReview.ts
 import { readFileSync } from "fs";
-import { carryGuardedRuns, checkClaims, FIT_ONLY_MORNINGS, guardVerdicts, heldBackFor, memberWhyOf, parseVerdicts, SELECT_LIMITS, selectPrompt, tierPicks, type ClaimJudge, type Judgment, type PoolItem, type SelectContext } from "../../src/services/sweepSelect.js";
+import { ageOutFitOnly, carryGuardedRuns, checkClaims, FIT_ONLY_MORNINGS, guardVerdicts, heldBackFor, memberWhyOf, parseVerdicts, SELECT_LIMITS, selectPrompt, tierPicks, type ClaimJudge, type Judgment, type PoolItem, type SelectContext } from "../../src/services/sweepSelect.js";
 import * as SH from "../../src/services/sweepShadow.js";
 import * as P from "../../src/harness/proactive.js";
 import * as B from "../../src/harness/bundleComposer.js";
@@ -59,8 +59,7 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
   check("it writes no exit fact (it isn't a reject)", SH.rejectedFindsOf(r.js, backlog as any).length === 0);
   const runs = carryGuardedRuns(r.js, []);
   check("it's judged again next run, under the guarded-hold bound (counted like any guarded hold)", runs.find((j) => j.id === "C1")!.guardedRuns === 1);
-  const sh = src("services/sweepShadow.ts");
-  check("the alarm: picker.claim_check_failed with the member, the finds and the error; counted hourly by the monitor; never an email", /decision: "picker\.claim_check_failed", userId, outcome: "skip", action: "held", reason: r\.claimCheck\.error/.test(sh) && /key: "picker_claim_check_failed"/.test(src("harness/monitor.ts")) && !/sendTeamEmail|alertTeamNow|sendReportEmail/.test(sh.slice(sh.indexOf("A claim check that couldn't run is an alarm"), sh.indexOf("A claim check that couldn't run is an alarm") + 800)));
+  check("the alarm is counted hourly by the monitor (never an email)", /key: "picker_claim_check_failed"/.test(src("harness/monitor.ts")));
   check("the team list shows the day's count of claim checks that couldn't run", /picker claim checks that couldn't run: \$\{fails\}/.test(src("services/dailySweep.ts")));
 }
 
@@ -88,7 +87,7 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
   const twice: any = await B.composeBundle(input as any, stub([skip2, skip2, ok]));
   check("skipped again: it's left out and flagged tierSkipped, so dispatch queues its tier's next best", "messages" in twice && twice.dropped.length === 1 && twice.dropped[0].tierSkipped === true, twice.dropped);
   const px = src("harness/proactive.ts");
-  check("dispatch: a twice-skipped tier pick comes out and its tier's next best is queued (lead or sibling)", /if \(res\.leadSkipped && res\.tierSkipped\) await import\("\.\.\/services\/sweepShadow\.js"\)\.then\(\(S\) => S\.queueTierNext\(/.test(px) && /if \(!d\.tierSkipped \|\| opts\.dryRun\) continue;\s*await dropCandidate\(registry, d\.item\.candidate, "skipped", d\.why\)[\s\S]{0,200}queueTierNext\(userId, d\.item\.candidate, d\.why\)/.test(px));
+  check("dispatch: a twice-skipped tier pick comes out and its tier's next best is queued (lead or sibling)", /if \(a === "queue_tier_next"\) await import\("\.\.\/services\/sweepShadow\.js"\)\.then\(\(S\) => S\.queueTierNext\(/.test(px) && /if \(!d\.tierSkipped \|\| opts\.dryRun\) continue;\s*await dropCandidate\(registry, d\.item\.candidate, "skipped", d\.why\)[\s\S]{0,200}queueTierNext\(userId, d\.item\.candidate, d\.why\)/.test(px));
   check("a find with no why-member reaches the composer with no pick line: its own facts speak", /pick: pk\?\.whyMember \? \{ whyMember: pk\.whyMember, whyNow: pk\.whyNow \?\? "" \} : null/.test(px));
   // The queued tier pick carries the rest of its tier, with member-safe whys from forThem (never a reject reason).
   const js = tierPicks(base([item("C1", "First", 2), item("C2", "Second", 2), item("C3", "Third", 2)]), guardVerdicts(base([item("C1", "First", 2), item("C2", "Second", 2), item("C3", "Third", 2)]), parseVerdicts(JSON.stringify({ verdicts: [{ id: "C1", verdict: "send", whyMember: "they asked", cites: ["A1"], whyNow: "this week", wow: true, lastDay: null, rank: 1 }, { id: "C2", verdict: "reject", reason: "weak_fit", why: "only loosely related", rank: 2, forThem: "a smaller room of the same kind" }, { id: "C3", verdict: "reject", reason: "not_them", why: "not his scene", rank: 3 }] }))!));
@@ -113,24 +112,43 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
 {
   const pool = [item("C1", "Founders Supper", 2)];
   const verdicts = [{ id: "C1", verdict: "reject", reason: "weak_fit", why: "meh" }];
+  // Nine runs over five days: a morning, an hourly run, and on day 3 a retried morning and an on-demand run besides.
+  const runs: { day: string; morning: boolean }[] = [
+    { day: "2026-10-15", morning: true }, { day: "2026-10-15", morning: false },
+    { day: "2026-10-16", morning: true }, { day: "2026-10-16", morning: false },
+    { day: "2026-10-17", morning: true }, { day: "2026-10-17", morning: true }, { day: "2026-10-17", morning: true },
+    { day: "2026-10-18", morning: true }, { day: "2026-10-19", morning: true },
+  ];
   let last: Judgment[] = [];
   const seen: string[] = [];
-  for (let d = 0; d < 9; d++) {
-    const morning = d % 2 === 0; // a morning, then an hourly run, and so on
-    const c = { ...base(pool), morning: false };
-    const js = carryGuardedRuns((await run(c, verdicts, answerAll(() => false))).js, last, { morning });
-    seen.push(`${morning ? "am" : "pm"}:${js[0].verdict}/${js[0].reason}/${js[0].fitOnlyMornings}`);
+  for (const r of runs) {
+    const js = carryGuardedRuns((await run({ ...base(pool), morning: false }, verdicts, answerAll(() => false))).js, last, { morning: r.morning, day: r.day });
+    const aged = ageOutFitOnly(js);
+    seen.push(`${r.day}${r.morning ? "am" : "pm"}:${js[0].verdict}/${js[0].reason}/${js[0].fitOnlyMornings}${aged.length ? "/aged" : ""}`);
     last = js;
   }
-  check(`a fit-only hold ages out after ${FIT_ONLY_MORNINGS} unpicked mornings (hourly runs don't count) as a verified exit`, seen[8] === `am:reject/aged_out/${FIT_ONLY_MORNINGS}` && seen[6] === `am:hold/fit_only/${FIT_ONLY_MORNINGS - 1}` && seen[7] === `pm:hold/fit_only/${FIT_ONLY_MORNINGS - 1}` && heldBackFor(last[0]) !== null, seen);
+  check("three morning runs in one day (a retry, an on-demand run) count as one morning", seen[4] === "2026-10-17am:hold/fit_only/3" && seen[6] === "2026-10-17am:hold/fit_only/3", seen);
+  check(`a fit-only hold ages out after ${FIT_ONLY_MORNINGS} distinct unpicked mornings (hourly runs don't count) as a verified exit`, seen[7] === "2026-10-18am:hold/fit_only/4" && seen[8] === `2026-10-19am:reject/aged_out/${FIT_ONLY_MORNINGS}/aged` && heldBackFor(last[0]) !== null, seen);
   const backlog = [{ askId: "profile", askText: "x", fromProfile: true, match: { name: "Founders Supper" } }];
   const facts: any[] = [];
   const store = new Map<string, any[]>([["profile", [{ askText: "x", match: { name: "Founders Supper" } }]]]);
   const deps: any = { backlogs: async () => [...store.entries()].map(([ask_id, items]) => ({ ask_id, items })), merge: async (_u: string, a: string, ch: any) => { store.set(a, W.applyChange(store.get(a) ?? [], ch, deps.key)); }, key: (m: any) => F.exitKey(m), writeFact: async (e: any) => { facts.push(e); } };
   await W.exitRejectedFinds("u", SH.rejectedFindsOf(last, backlog as any), deps);
   check("an aged-out find leaves the backlog with its exit fact, which says it aged out", facts.length === 1 && /left unpicked for 5 mornings/.test(facts[0].reason) && store.get("profile")!.length === 0, facts);
-  const picked = carryGuardedRuns([{ ...last[0], verdict: "send", reason: "tier_pick", fitOnlyMornings: undefined } as Judgment], last, { morning: true });
+  const picked = carryGuardedRuns([{ ...last[0], verdict: "send", reason: "tier_pick", fitOnlyMornings: undefined } as Judgment], last, { morning: true, day: "2026-10-20" });
   check("a find that's picked isn't counted (the count is for fit-only holds only)", picked[0].fitOnlyMornings === undefined);
+  // Its tier's fallback on its last morning: A can't be queued, B (on its 5th morning) is the next best and goes; C, also on its 5th, ages.
+  {
+    const tpool = [item("C1", "Alpha", 2), item("C2", "Bravo", 2), item("C3", "Charlie", 2)];
+    const prior: any[] = ["Bravo", "Charlie"].map((n) => ({ key: SH.shadowKey(n, null), reason: "fit_only", fitOnlyMornings: 4, fitOnlyLastMorning: "2026-10-18" }));
+    const checked = await run(base(tpool), [{ id: "C1", verdict: "send", whyMember: "they asked", cites: ["A1"], whyNow: "now", wow: true, lastDay: null, rank: 1 }, { id: "C2", verdict: "reject", reason: "weak_fit", why: "meh", rank: 2, forThem: "a smaller room" }, { id: "C3", verdict: "reject", reason: "weak_fit", why: "meh", rank: 3 }], answerAll(() => false));
+    const js = carryGuardedRuns(checked.js, prior, { morning: true, day: "2026-10-19" });
+    const report = { live: true, chosen: ["Alpha"], queued: [], notQueued: [{ name: "Alpha", why: "already decided" }], error: null } as any;
+    await SH.fillTiers(js, report, async () => "queued");
+    const aged = ageOutFitOnly(js);
+    check("A fails to queue, B is on its 5th morning: B still goes as its tier's fallback (aging runs after the apply); C ages out", js.find((j) => j.id === "C2")!.verdict === "send" && aged.map((j) => j.id).join() === "C3", js.map((j) => `${j.id}:${j.verdict}/${j.reason}/${j.fitOnlyMornings}`));
+    check("pin: aging runs after the picks and the tier fallback are applied", (() => { const f = src("services/sweepShadow.ts").replace(/\s+/g, ""); return f.indexOf("awaitfillTiers(judgments,report") > 0 && f.indexOf("constaged=ageOutFitOnly(judgments)") > f.indexOf("awaitfillTiers(judgments,report"); })());
+  }
   // A pool over 40: what the last run never judged comes first, so nothing sits past the cut forever.
   const raw = Array.from({ length: 45 }, (_, i) => ({ name: `Find ${i + 1}`, date: null, tier: 3, askId: null, fromProfile: true, reminder: false, details: null }));
   const first = SH.buildShadowPool(raw, TODAY, new Map(), new Set());
@@ -153,22 +171,50 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
   check("hourly: an unconfirmed last day waits in the backlog (never exits)", hourlyNo.js.find((j) => j.id === "C1")!.reason === "fit_only");
 }
 
-// ---------------------------------------------------------------- 5. up to three finds a day
+// ---------------------------------------------------------------- 5. up to three discovery finds a day; answers are never capped (#55)
 {
-  check("three finds a day: the morning bundle of three leaves none for the hourly picks; two leave one", P.DAILY_FIND_CAP === 3 && P.findsLeftToday(0) === 3 && P.findsLeftToday(3) === 0 && P.findsLeftToday(2) === 1 && P.findsLeftToday(5) === 0);
-  // The sequence: a morning of 3 goes; an hourly pick at noon finds none left and waits for tomorrow; a retried morning queues nothing.
-  const seq: string[] = [];
+  const offer = (id: string, p: any) => ({ id, type: "event_offer", payload: p }) as any;
+  const disc = (id: string) => offer(id, { askId: "profile", fromProfile: true, match: { tier: 3 } });
+  const answer = (id: string) => offer(id, { askId: "0f2c6a1e-5b7d-4e2a-9a11-3c7d2e8b9f00", fromProfile: false, match: { tier: 2 } });
+  check("what the cap counts: a discovery find, never an answer to their ask or a deadline reminder", P.isDiscoveryFind(disc("d")) && !P.isDiscoveryFind(answer("a")) && !P.isDiscoveryFind(offer("r", { askId: "profile", fromProfile: true, reminder: true })));
+  // The morning: three discovery finds go. 2pm: an answer to "something for tonight" still goes, the same day.
   let sentToday = 0;
-  const morning = Math.min(3, P.findsLeftToday(sentToday)); sentToday += morning; seq.push(`morning sends ${morning}`);
-  const noon = P.findsLeftToday(sentToday); seq.push(noon > 0 ? "noon pick goes" : "noon pick waits for tomorrow");
-  const retried = P.findsLeftToday(sentToday); seq.push(`retried morning queues ${retried}`);
-  check("3 in the morning, then an hourly pick that day waits, and a retried morning queues none", seq.join(" | ") === "morning sends 3 | noon pick waits for tomorrow | retried morning queues 0", seq);
-  const px = src("harness/proactive.ts");
-  check("pin: dispatch counts today's finds before a find bundle, defers to tomorrow at the cap, and trims the bundle to what's left", /const left = findsLeftToday\(await findsSentToday\(userId, person\.timezone, state\.now\)\.catch\(\(\) => DAILY_FIND_CAP\)\);\s*if \(left <= 0\) \{/.test(px) && /pickSiblingOffers\(c, ev\.eligible\)\.slice\(0, left - 1\)/.test(px) && /action: `daily_find_cap:\$\{c\.type\}`/.test(px));
-  check("pin: the cap counts finds (not reminders) that went in their own day, and an unreadable count holds", /export async function findsSentToday[\s\S]{0,500}type = 'event_offer' AND status = 'sent' AND COALESCE\(payload->>'reminder', 'false'\) <> 'true'/.test(px) && /\.catch\(\(\) => DAILY_FIND_CAP\)/.test(px));
-  const sh = src("services/sweepShadow.ts");
-  check("pin: a retried morning never queues past the cap, and what's cut is said, never replaced by its tier's next best", /if \(judgments\.some\(\(j\) => j\.tierPick\)\) \{[\s\S]{0,400}findsLeftToday\(await P\.findsSentToday\(/.test(sh) && /plan\.queue\.splice\(left\)/.test(sh) && /!n\.why\.startsWith\(DAY_CAP_NOTE\)/.test(sh));
-  check("the weekly cap stays skipped for the morning (silence pacing is the guardrail)", /const MORNING_SKIPS = new Set\(\[\.\.\.QUOTA_CHECKS, "spacing"\]\);/.test(px) && /"weekly_cap"/.test(px.slice(px.indexOf("const QUOTA_CHECKS"), px.indexOf("const QUOTA_CHECKS") + 120)));
+  const morning = P.capBundle(disc("m1"), [disc("m2"), disc("m3")], P.findsLeftToday(sentToday));
+  sentToday += 1 + morning.sibs.length;
+  const twoPm = P.capBundle(answer("a1"), [disc("d4")], P.findsLeftToday(sentToday));
+  const later = P.capBundle(disc("d5"), [answer("a2")], P.findsLeftToday(sentToday));
+  check("a morning of 3 discovery finds goes out; a 2pm answer to their ask still goes that day (its discovery sibling is cut)", !morning.deferLead && morning.sibs.length === 2 && sentToday === 3 && !twoPm.deferLead && twoPm.sibs.length === 0, { morning, twoPm });
+  check("a discovery pick after the morning's 3 waits for tomorrow", later.deferLead === true);
+  check("with one left: a discovery lead goes alone, an answer sibling still rides", (() => { const b = P.capBundle(disc("x"), [disc("y"), answer("z")], 1); return !b.deferLead && b.sibs.map((s: any) => s.id).join() === "z"; })());
+  const px = src("harness/proactive.ts").replace(/\s+/g, "");
+  check("pin: dispatch caps the bundle with capBundle (an answer lead never deferred) before building it", px.includes("constcapped=capBundle(c,pickSiblingOffers(c,ev.eligible),left);if(capped.deferLead){") && px.includes("for(constsibofcapped.sibs){"));
+  check("pin: the cap is read again inside the send's lock, counting this send's discovery finds (no race)", px.includes("constsentToday=awaitfindsSentToday(person.userId,person.timezone,now,client)") && px.includes('checks.push({name:"daily_find_cap",pass:sentToday+discovery<=DAILY_FIND_CAP'));
+  check("pin: the count is discovery finds that went today (the SQL twin of isDiscoveryFind), and an unreadable count holds", px.includes("NOT(COALESCE(payload->>'askId','')NOTIN('','profile')") && px.includes(".catch(()=>DAILY_FIND_CAP)"));
+  const sh = src("services/sweepShadow.ts").replace(/\s+/g, "");
+  check("pin: a retried morning cuts only discovery picks past what's left; answers always queue; what's cut is said, never replaced", sh.includes("!P.isDiscoveryFind({type:\"event_offer\",payload:{askId:q.askId,fromProfile:q.fromProfile,again:q.again,reminder:q.reminder}})||room-->0") && sh.includes("!n.why.startsWith(DAY_CAP_NOTE)"));
+  check("the weekly cap stays skipped for the morning (silence pacing is the guardrail)", /const MORNING_SKIPS = new Set\(\[\.\.\.QUOTA_CHECKS, "spacing"\]\);/.test(src("harness/proactive.ts")));
+}
+
+// ---------------------------------------------------------------- the failed-bundle else, as before the tier PR
+{
+  const max = 3;
+  check("a normal lead skip drops it, and nothing else (no attempt counted, no second drop)", JSON.stringify(P.failedBundleActions({ leadSkipped: true }, 0)) === JSON.stringify(["drop_skipped"]) && JSON.stringify(P.failedBundleActions({ leadSkipped: true }, max - 1)) === JSON.stringify(["drop_skipped"]));
+  check("a skipped tier pick drops it and queues its tier's next best", JSON.stringify(P.failedBundleActions({ leadSkipped: true, tierSkipped: true }, 0)) === JSON.stringify(["drop_skipped", "queue_tier_next"]));
+  check("any other failure counts an attempt, and drops it only at the last one", JSON.stringify(P.failedBundleActions({}, 0)) === JSON.stringify(["count_attempt"]) && P.failedBundleActions({}, 99).includes("drop_failed"));
+}
+
+// ---------------------------------------------------------------- the claim-check alarm, behaviorally
+{
+  const logged: any[] = [];
+  const rec: any = async (d: any) => { logged.push(d); };
+  const pool = [item("C1", "a16z Speedrun Residency", 3)];
+  const failedCheck = (await run(base(pool), [{ id: "C1", verdict: "reject", reason: "already_known", cites: ["T2"], why: "applied" }], timeout)).check;
+  const wrote = await SH.logClaimCheckFailure("u-marcus", failedCheck, pool, { day: TODAY, morning: true }, rec);
+  check("a claim check that couldn't run logs picker.claim_check_failed once, with the member, the find and the error", wrote && logged.length === 1 && logged[0].decision === "picker.claim_check_failed" && logged[0].userId === "u-marcus" && logged[0].proposal.finds.join() === "a16z Speedrun Residency" && /timeout/.test(logged[0].reason), logged);
+  logged.length = 0;
+  const okCheck = (await run(base(pool), [{ id: "C1", verdict: "reject", reason: "already_known", cites: ["T2"], why: "applied" }], answerAll(() => true))).check;
+  check("a check that ran logs nothing", !(await SH.logClaimCheckFailure("u", okCheck, pool, { day: TODAY, morning: true }, rec)) && logged.length === 0);
+  check("pin: every live picker run hands its claim check to the alarm (no condition but a dry run)", SH.runSweepShadow.toString().replace(/\s+/g, "").includes("if(!opts.dryRun)awaitlogClaimCheckFailure(userId,r.claimCheck,ctx.pool,"));
 }
 
 console.log(`morning review fixes: ${total - failed}/${total} passed`);

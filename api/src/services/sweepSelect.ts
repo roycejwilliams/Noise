@@ -242,7 +242,7 @@ export function parseVerdicts(text: string): Verdict[] | null {
 // One row per candidate: what was decided and why, including what code changed.
 // claimed: the reject code a guarded hold came from (reason "uncited_claim"); guardedRuns: how many runs in a row the same find was
 // held that way (carryGuardedRuns).
-export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null ; taste?: TasteFit; claimed?: RejectReason; guardedRuns?: number; rank?: number; forThem?: string; late?: boolean; tierPick?: number; tierAlternates?: string[]; verified?: boolean; notSentWhy?: string; fitOnlyMornings?: number; checkFailed?: boolean };
+export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null ; taste?: TasteFit; claimed?: RejectReason; guardedRuns?: number; rank?: number; forThem?: string; late?: boolean; tierPick?: number; tierAlternates?: string[]; verified?: boolean; notSentWhy?: string; fitOnlyMornings?: number; fitOnlyLastMorning?: string; checkFailed?: boolean };
 
 // Pure: does a record's text name this find? The same normalized name match the shadow pool uses for what was already sent
 // (sweepShadow.ts sentNames), as a whole-word run inside the record.
@@ -632,28 +632,39 @@ export function holdDueDates(judgments: { verdict: string; until?: string | null
     .map((j) => j.until ?? plusDays(runDay, UNDATED_HOLD_DAYS));
 }
 // Pure: each guarded hold counts the runs in a row its find has been held that way, from the last run's judgments.
-// morning: this is the 9am run. A fit-only hold counts the mornings it has gone unpicked (fitOnlyMornings, carried through hourly runs);
-// at FIT_ONLY_MORNINGS it ages out: a reject (reason "aged_out", a verified reason), so it leaves the backlog with its exit fact
-// (review of the tier PR: fit-only holds never left, so the backlog grew without bound past the prompt's 40). Five: a working week of
-// mornings on which the picker had it in view and chose something else from its tier each time; a find that loses five mornings
-// running isn't going to be the one, and the backlog stays near five days of finds.
+// morning: this is the 9am run, on day `day`. A fit-only hold counts the distinct mornings it has gone unpicked (fitOnlyMornings, with
+// the last counted day, carried through hourly runs): a retried or on-demand morning run the same day counts once (review of the tier
+// PR). Aging itself happens after the run's picks are applied (ageOutFitOnly), so a find on its last morning can still go as its tier's
+// fallback that morning.
+// Five: a working week of mornings on which the picker had it in view and chose something else from its tier each time; a find that
+// loses five mornings running isn't going to be the one, and the backlog stays near five days of finds.
 export const FIT_ONLY_MORNINGS = 5;
-export function carryGuardedRuns(judgments: Judgment[], last: Pick<Judgment, "key" | "reason" | "guardedRuns" | "fitOnlyMornings">[], o: { morning?: boolean } = {}): Judgment[] {
+export function carryGuardedRuns(judgments: Judgment[], last: Pick<Judgment, "key" | "reason" | "guardedRuns" | "fitOnlyMornings" | "fitOnlyLastMorning">[], o: { morning?: boolean; day?: string } = {}): Judgment[] {
   return judgments.map((j) => {
     if (j.reason === "fit_only") {
-      const before = last.find((x) => x.key === j.key && x.reason === "fit_only")?.fitOnlyMornings ?? 0;
-      const n = before + (o.morning ? 1 : 0);
-      if (n >= FIT_ONLY_MORNINGS) {
-        const note = `left unpicked for ${n} mornings as a fit-only hold (Co said ${j.claimed ?? "it only loosely fits"})`;
-        // Its why becomes the exit fact's reason (sweepShadow.ts rejectedFindsOf): it says it aged out, with the picker's own why.
-        return { ...j, verdict: "reject", reason: "aged_out", fitOnlyMornings: n, why: `${note}: ${j.why}`, guard: `${note}: it leaves the backlog` };
-      }
-      return { ...j, fitOnlyMornings: n };
+      const prev = last.find((x) => x.key === j.key && x.reason === "fit_only");
+      const counted = o.morning && o.day && prev?.fitOnlyLastMorning !== o.day;
+      const n = (prev?.fitOnlyMornings ?? 0) + (counted ? 1 : 0);
+      const lastDay = counted ? o.day : prev?.fitOnlyLastMorning;
+      return { ...j, fitOnlyMornings: n, ...(lastDay ? { fitOnlyLastMorning: lastDay } : {}) };
     }
     if (j.reason !== "uncited_claim") return j;
     const before = last.find((x) => x.key === j.key && x.reason === "uncited_claim");
     return { ...j, guardedRuns: (before ? before.guardedRuns ?? 1 : 0) + 1 };
   });
+}
+// After the picks are applied: a fit-only hold left unpicked for FIT_ONLY_MORNINGS mornings ages out, a reject (reason "aged_out", a
+// verified reason) whose why becomes its exit fact's reason (review of the tier PR: fit-only holds never left, so the backlog grew without
+// bound past the prompt's 40). One used as its tier's fallback that morning is a send by then and doesn't age. Returns the aged ones.
+export function ageOutFitOnly(judgments: Judgment[]): Judgment[] {
+  const aged: Judgment[] = [];
+  judgments.forEach((j, i) => {
+    if (j.verdict !== "hold" || j.reason !== "fit_only" || (j.fitOnlyMornings ?? 0) < FIT_ONLY_MORNINGS) return;
+    const note = `left unpicked for ${j.fitOnlyMornings} mornings as a fit-only hold (Co said ${j.claimed ?? "it only loosely fits"})`;
+    judgments[i] = { ...j, verdict: "reject", reason: "aged_out", why: `${note}: ${j.why}`, guard: `${note}: it leaves the backlog` };
+    aged.push(judgments[i]);
+  });
+  return aged;
 }
 export function selectSignature(c: SelectContext, holdsUntil: (string | null)[] = []): string {
   const soon = c.pool.filter((p) => p.date && daysBetween(c.today, p.date) <= 3).map((p) => `soon:${p.key}`);

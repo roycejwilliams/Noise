@@ -124,7 +124,7 @@ export function goalItemsFromPlan(plan: any, searchText: (edge: any) => string |
 }
 
 // The goal cooldown (profile_surfacing_state) isn't read here: it limits the hourly goal sweep's own extra finds, never this floor.
-const MEMBERS_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_number, COALESCE(u.sms_opted_out, false) AS opted_out,
+export const MEMBERS_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_number, COALESCE(u.sms_opted_out, false) AS opted_out,
         cp.city, cp.goals, cp.intent, cp.activity_preferences, cp.long_term_direction
    FROM users u
    LEFT JOIN co_profiles cp ON cp.user_id = u.id
@@ -340,7 +340,7 @@ export async function runDailySweepNow(userId: string, now = new Date()): Promis
   return { ran: true, why: "ran; its summary is on the dashboard" };
 }
 
-async function sweepMember(row: any, userId: string, now: Date, base: { day: string; zone: string; trigger?: "manual" }, earlier: any[], errorsToday: number): Promise<void> {
+export async function sweepMember(row: any, userId: string, now: Date, base: { day: string; zone: string; trigger?: "manual" }, earlier: any[], errorsToday: number): Promise<void> {
   const E = await import("./eventSurfacingSweep.js");
   const { sweepHold } = await import("../harness/proactive.js");
   const { goalTexts } = await import("./goalJourney.js");
@@ -368,7 +368,7 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
 
   // ---- asks: every open one; find asks in all three places
   const { rows: asks } = await pool.query(
-    `SELECT ac.id, ac.ask_text, ac.kind, ac.split_read, (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
+    `SELECT ac.id, ac.ask_text, ac.kind, ac.split_read
        FROM ask_checkins ac WHERE ac.user_id = $1 AND ac.resolved_at IS NULL ORDER BY COALESCE(ac.last_mentioned_at, ac.created_at) DESC`,
     [userId],
   );
@@ -399,7 +399,7 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
       }
     }
     const searchB = askText === String(a.ask_text ?? "") ? b : { ...b, searchedPart: askText.slice(0, 160) };
-    await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: a.cooldown_cleared });
+    await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true });
   }
 
   // ---- goals: each one their current plan holds, on its own, in all three places (floorGoalPlan: reused while their goals are the
