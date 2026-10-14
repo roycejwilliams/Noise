@@ -1,0 +1,93 @@
+{
+  "hash": "c7f26bcaec604931",
+  "case": "one-off-research",
+  "recorded_at": "2026-10-14T15:57:20.933Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2058,
+    "system": "",
+    "messages": 1,
+    "last": "user: Someone asked Co for this: \"Can you do some research on Sarah Hao before our call?\" Answer \"find\" if Co could meet it by finding something out in the world: an event, a group or community (including researching which ones exist), people to meet or befriend (even when it's worded as wanting to connec...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2058,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Someone asked Co for this: \"Can you do some research on Sarah Hao before our call?\"\n\nAnswer \"find\" if Co could meet it by finding something out in the world: an event, a group or community (including researching which ones exist), people to meet or befriend (even when it's worded as wanting to connect with a kind of person), a program or an opportunity.\n\nAnswer \"help\" only if it's asking Co to work something out with them: advice, deciding, planning, writing, organizing, figuring out what to offer. Finding sponsors or investors by name is \"help\": Co's search can't find those.\n\nAnswer \"help\" as well when it isn't something to find at all: something Co said it would do or deliver (a plan, a draft, a text, an intro), a status (\"will be delivered once ready\"), or a statement of what they're doing themselves (offering to partner with a company, launching, hosting, a deal in progress) with nothing in it to go and find.\n\nAnswer \"help\" too when it asks Co to take an action for them (email, call, text, book, reserve, contact someone or somewhere): that's something to do, not something to find.\n\nAnswer \"person\" if it's asking for one particular kind of person to meet or talk to one on one (an advisor, a founder who has done something, a mentor, someone to introduce them to). People in general (a community, friends, a crowd to be around) are \"find\".\n\nAnswer with one word: find, help or person.",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "find",
+      "usage": {
+        "input_tokens": 446,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 62,
+        "output_tokens_details": {
+          "thinking_tokens": 59
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2QQBcQ4TGLuJA7fFDE6",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS2AUKEAgSGAI4AUIIdGhpbmtpbmcSDKy2VM4xCN0UcaUTdhoMjVVCLkT+DXcPqIHnIjC7+iPfQwCAk9qjLYtPUTtUF5HGEL6gfgFRCWyIf0S8XGRkCiA2ZNIt7pv8XvWgwQMq9QQfBX4yh97+apWdcITXAydnY9X6R6aGYwffgrVsgqoX50wvWJcvnBtKpGdngfugezvmb7QOh7VQsxjf8yqehS1wqpC3P7Ot5KMB1tKq/QsJ8T749OjaHVGYP1EnIlPXqKIz+3sEZn3X/GPY/wAQfe72q8OIMof67POV5WTTNajXljD3lwAQE7Wrzy1e91hov/2h7nTnDxhoFzhSVC3mMldGE+7JPWp77IYN15b9UjUieENjSmif6gF+/5VT4YIMPAPYSbNXf7elxj5HZHt2UypYuwtnRx9vSxhpmtKSorlLO3NC/vCkvMJ3l2HoMvgqTLa4DNo6OztpQD4Tg7MejPOelFhBMRvUTGhpIWYzDeewW5pzVNtQdTWhRp+GDIlWZS0AzxJ1xu3+moYepM6UOqS7cndeEMplFcMBe0I07FxbWm3le/DPLZNHcc33UrQErMfHEOWIupvuKRl8TXIZE/6Gga4/HLIe6Z7Tet/T5fWoLm/URokh97eHJ2IgzEEQQ6m9opvKOvol56bgttVwc5EniQ7J53M9fDd7v+jKWuU7UTSWI61uLCzkzR4v3nEpAG5q9EPuAFPOEsQ9P5VvbOcf7g3hDIumldxJlNNFbV66QAcmgGs/vyRq9QmVkH88cl7YpslSInFNk+38Oxsp/61g9dxaZp2A2NqxJI+KiA7RWhKogROL/SSI207IS8Lq4ngsMynd4JeoNwdQJxP778epgMXGOOLAzW53M/tQrwn5Ueohdf0jDE3LPc7RvsUK8wnFljIKykl+6KHpUZ+H257RUfVQqTTSMm7/Ucqbffcme6kjdszOe6oRHAsrotdLTKRgvvtAtxgB"
+          },
+          {
+            "type": "text",
+            "text": "find"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 446,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 62,
+          "output_tokens_details": {
+            "thinking_tokens": 59
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

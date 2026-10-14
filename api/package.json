@@ -33,7 +33,9 @@
     "test": "node evals/runLayer1.mjs",
     "evals:nightly": "node evals/runLayer2.mjs",
     "eval:live": "node evals/runLive.mjs",
-    "evals:golden": "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 tsx --import ./evals/lib/meter.mjs evals/golden/run.ts"
+    "evals:golden": "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci DOTENV_CONFIG_PATH=/dev/null ANTHROPIC_API_KEY=golden-replay OPENAI_API_KEY=golden-replay GOLDEN_MODE=replay EVAL_TOKEN_CAP=0 EVAL_COST_CAP_USD=0 tsx --import ./evals/lib/meter.mjs --import ./evals/lib/goldenReplay.mjs evals/golden/run.ts",
+    "evals:golden:record": "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci DOTENV_CONFIG_PATH=/dev/null GOLDEN_MODE=record EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 tsx --import ./evals/lib/meter.mjs --import ./evals/lib/goldenReplay.mjs evals/golden/run.ts",
+    "evals:golden:live": "DATABASE_URL=postgres://ci:ci@127.0.0.1:1/ci SENDBLUE_API_KEY=ci SENDBLUE_SECRET_KEY=ci RESEND_API_KEY=re_ci DOTENV_CONFIG_PATH=/dev/null GOLDEN_MODE=live EVAL_REAL_MODELS=1 EVAL_TOKEN_CAP=1500000 EVAL_COST_CAP_USD=4 tsx --import ./evals/lib/meter.mjs --import ./evals/lib/goldenReplay.mjs evals/golden/run.ts"
   },
   "keywords": [],
   "author": "",

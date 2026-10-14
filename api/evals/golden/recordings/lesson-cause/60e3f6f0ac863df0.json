@@ -1,0 +1,93 @@
+{
+  "hash": "60e3f6f0ac863df0",
+  "case": "lesson-cause",
+  "recorded_at": "2026-10-14T15:56:49.292Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2448,
+    "system": "",
+    "messages": 1,
+    "last": "user: A member pushed back on a companion's texts, and a lesson was guessed from it. Check the guess against the log of the companion's last replies: what the companion drafted, what a reply check let go out instead, and why. Their message: \"That's not what I asked\" What they pushed back on: Co offered to...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2448,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "A member pushed back on a companion's texts, and a lesson was guessed from it. Check the guess against the log of the companion's last replies: what the companion drafted, what a reply check let go out instead, and why.\n\nTheir message: \"That's not what I asked\"\nWhat they pushed back on: Co offered to start something instead of saying what it looks for\nThe guessed lesson: describe it in their terms\n\nThe log (oldest first):\nThey texted: \"What do you actually look for for me?\"\n\nCo's reply (stripped):\nCo drafted: \"I look for events and openings that fit what you're after, like the jazz nights you asked about and small founder dinners. I'll text you when one is worth your evening.\"\nWhat went out: \"Nothing's running on that right now. Want me to start on it?\"\nWhy the check changed it: work_status claim not backed by a running task\n\nThey texted: \"No, I mean what are you looking for right now\"\n\nCo's reply (cut):\nCo drafted: \"Right now I'm watching for jazz nights and small founder dinners in the city, the kind you said you'd actually go to.\"\nWhat went out: \"Nothing's running on that right now. Want me to start on it?\"\nWhy the check changed it: work_status claim not backed by a running task\n\nThey texted: \"Like what kinds of things\"\n\nCo's reply (stripped):\nCo drafted: \"Live music nights, jazz mostly, and founder dinners with eight to twelve people. That's what I keep an eye on for you.\"\nWhat went out: \"Nothing's running on that right now. Want me to start on it?\"\nWhy the check changed it: work_status claim not backed by a running task\n\nThey texted: \"That's not what I asked\"\n\nDecide what caused the thing they pushed back on. Follow the chain, not just the last reply: if the reply check cut or replaced a true answer earlier in this log, and the replies after it went off course from there (the companion answering the replaced line, narrowing or reframing to make sense of it), the cause is the check.\n- \"check\": it is in what went out but not in what the companion drafted (the reply check cut, replaced or added it), or it follows from an earlier reply the check changed. The companion's own behavior didn't start it.\n- \"co\": the companion drafted it, and it went out as drafted.\n- \"unknown\": the log doesn't show the thing they pushed back on.\nThen write the lesson that fits the real cause, in one short sentence: for \"check\", say which line came from the reply check and what was true instead, if the log shows it; for \"co\", keep or correct the guess so it addresses what the draft actually did; for \"unknown\", keep the guess. causeLine: one short plain line naming the cause from the log (for example \"the reply check replaced Co's answer with 'Nothing's running on that right now' (claim_work_status)\"), or null for unknown.\n\nReturn ONLY JSON: {\"cause\": \"check\" | \"co\" | \"unknown\", \"lesson\": \"...\", \"causeLine\": \"...\" or null}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"cause\": \"check\", \"lesson\": \"The reply check swapped Co's real answer about what it looks for (jazz nights and small founder dinners) for a status line about running tasks, so the user got a non-answer; Co should describe its criteria directly and not claim ongoing work that isn't running.\", \"causeLine\": \"the reply check replaced Co's answer with 'Nothing's running on that right now' (work_status claim not backed by a running task)\"}",
+      "usage": {
+        "input_tokens": 939,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 681,
+        "output_tokens_details": {
+          "thinking_tokens": 536
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2QMeYJMn9yvhfWDxb1x",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"cause\": \"check\", \"lesson\": \"The reply check swapped Co's real answer about what it looks for (jazz nights and small founder dinners) for a status line about running tasks, so the user got a non-answer; Co should describe its criteria directly and not claim ongoing work that isn't running.\", \"causeLine\": \"the reply check replaced Co's answer with 'Nothing's running on that right now' (work_status claim not backed by a running task)\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 939,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 681,
+          "output_tokens_details": {
+            "thinking_tokens": 536
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

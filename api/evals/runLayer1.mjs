@@ -42,6 +42,9 @@ const t0 = Date.now();
 if (!only.length) {
   const tsc = await run("npx", ["tsc", "--noEmit"]);
   if (tsc.code !== 0) { console.log(tsc.out.split("\n").slice(0, 25).join("\n")); console.log("\nLAYER 1: typecheck failed."); process.exit(1); }
+  // The golden harness and the eval policy files are typechecked too (evals/tsconfig.golden.json); the rest of evals/ is not yet.
+  const evalTsc = await run("npx", ["tsc", "-p", "evals/tsconfig.golden.json"]);
+  if (evalTsc.code !== 0) { console.log(evalTsc.out.split("\n").slice(0, 25).join("\n")); console.log("\nLAYER 1: typecheck of evals/golden and evals/lib failed."); process.exit(1); }
 }
 const results = [];
 let next = 0;
