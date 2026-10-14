@@ -15,7 +15,7 @@ import { DateTime } from "luxon";
 import { recordDecision } from "../harness/core.js";
 import { judgeSweepItem } from "../brain/index.js";
 import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
-import { carryGuardedRuns, contextIds, holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
+import { carryGuardedRuns, contextIds, holdDueDates, memberWhyOf, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
 import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
 import { memberZone } from "./memberTime.js";
 import { exitKey } from "./findForm.js";
@@ -47,7 +47,9 @@ type RawCandidate = { name: string; date: string | null; tier: number; askId: st
 // offers): deduped by name + date, past ones and things already sent dropped
 // (a reminder, or a month-later resurface, of a sent thing stays, as in the
 // live sweep), each tagged with the asks it serves. A find for an ask that has closed is dead and left out (a reminder stays).
-export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>, closedAsks: ReadonlySet<string> = new Set()): PoolItem[] {
+// judgedKeys: what the last run judged. A find it never judged comes first, so the prompt's first SELECT_LIMITS.maxPool always reach the
+// newest finds and nothing sits past the cut forever (review of the tier PR; fit-only holds also age out, sweepSelect.ts FIT_ONLY_MORNINGS).
+export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: Map<string, string>, sentNames: Set<string>, closedAsks: ReadonlySet<string> = new Set(), judgedKeys: ReadonlySet<string> = new Set()): PoolItem[] {
   const items = new Map<string, PoolItem>();
   for (const r of raw) {
     if (!r.name || (r.date && r.date < today)) continue;
@@ -61,7 +63,8 @@ export function buildShadowPool(raw: RawCandidate[], today: string, askNumber: M
     if (!it.details && r.details) it.details = r.details;
     items.set(key, it);
   }
-  return [...items.values()].map((it, i) => ({ ...it, id: `C${i + 1}` }));
+  const all = [...items.values()];
+  return [...all.filter((it) => !judgedKeys.has(it.key)), ...all.filter((it) => judgedKeys.has(it.key))].map((it, i) => ({ ...it, id: `C${i + 1}` }));
 }
 
 // Pure: the backlogs with every find waiting for a closed ask taken out (a reminder stays), and what came out, by the key each
@@ -164,7 +167,9 @@ export const URGENT_PICK_RUNS_PER_DAY = 3;
 // trigger "retry": the hourly retry (jobs/index.ts) of a day whose run errored, or never ran. A day that keeps failing stops after
 // PICK_ERRORS_PER_DAY errors, so a failure that won't clear doesn't pay for a picker run every hour.
 export const PICK_ERRORS_PER_DAY = 3;
-export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" | "retry" | "after_sweep" } = {}): Promise<ShadowRun | null> {
+// morning: the 9am floor's run (runPickerAfterSweep "daily"): one find per tier goes out (sweepSelect.ts tierPicks), and an unchanged
+// pool is still picked from (the morning send is every day; a quiet pool is no reason to send nothing).
+export async function runSweepShadow(userId: string, now = new Date(), opts: { dryRun?: boolean; trigger?: "urgent_find" | "retry" | "after_sweep"; morning?: boolean } = {}): Promise<ShadowRun | null> {
   const q: Q = async (sql, args = []) => (await pool.query(sql, args as any[])).rows;
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
   const zone = await memberZone(userId);
@@ -240,13 +245,15 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
       ...(knowledge?.delivered ?? []).map((d) => d.what),
     ].map(norm).filter(Boolean),
   );
-  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames, closed) };
+  // The last run: what it judged orders the pool (never-judged first), and its signature and holds decide the unchanged skip.
+  const [last] = await q(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]);
+  const judgedKeys = new Set<string>(((last?.proposal?.judgments ?? []) as Judgment[]).filter((j) => j.verdict !== "no_verdict").map((j) => j.key));
+  const ctx: SelectContext = { ...(await loadMemberContext(q, userId, now, { knowledge })), today, weekday, asks, pool: buildShadowPool(raw, today, idFor, sentNames, closed, judgedKeys), ...(opts.morning ? { morning: true } : {}) };
 
   // Skip unchanged days: same signature as the last run (holds that came due count as a change).
-  const [last] = await q(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]);
   const holds = holdDueDates((last?.proposal?.judgments ?? []) as Judgment[], String(last?.proposal?.day ?? today));
   const signature = selectSignature(ctx, holds);
-  if (!ctx.pool.length || (last?.proposal?.signature === signature && !opts.dryRun)) {
+  if (!ctx.pool.length || (last?.proposal?.signature === signature && !opts.dryRun && !opts.morning)) {
     if (!opts.dryRun) await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: ctx.pool.length ? "unchanged" : "empty_pool", proposal: { day: today, signature, poolSize: ctx.pool.length } });
     return { day: today, signature, skipped: true, judgments: [], pool: ctx.pool };
   }
@@ -254,7 +261,13 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   const r = await selectForMember(ctx, { model: process.env.SWEEP_SELECT_MODEL || SELECT_MODEL, userId });
   // A reject the guard held counts its runs in a row, so a claim the picker keeps making without a record stops buying daily runs
   // (sweepSelect.ts holdDueDates).
-  r.judgments = carryGuardedRuns(r.judgments, (last?.proposal?.judgments ?? []) as Judgment[]);
+  r.judgments = carryGuardedRuns(r.judgments, (last?.proposal?.judgments ?? []) as Judgment[], { morning: !!opts.morning });
+  // A claim check that couldn't run is an alarm, not a shrug (Royce, 2026-10-14): one row per failed run, with the member, the finds it
+  // held and the error; the hourly monitor counts them (harness/monitor.ts picker_claim_check_failed). Never an email.
+  if (r.claimCheck?.read === "failed" && !opts.dryRun) {
+    const held = (r.claimCheck.heldIds ?? []).map((id) => ctx.pool.find((p) => p.id === id)?.name ?? id);
+    await recordDecision({ layer: 5, decision: "picker.claim_check_failed", userId, outcome: "skip", action: "held", reason: r.claimCheck.error ?? "unknown", proposal: { day: today, finds: held, error: r.claimCheck.error ?? null, morning: !!opts.morning } }).catch(() => {});
+  }
   // A failed selection is logged as an error, never as a run: it isn't the
   // "last run" tomorrow's unchanged check compares against, so it can't be
   // silently skipped (review of #57).
@@ -283,6 +296,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     proposal: {
       day: today,
       signature,
+      ...(opts.morning ? { morning: true } : {}),
       model: r.model,
       usage: r.usage,
       // The claim check's read (sweepSelect.ts checkClaims), and any active goals over the lens ceiling.
@@ -328,8 +342,10 @@ export function memberSafeWhy(why: string, ids?: ReadonlySet<string>): string {
 //   - a waiting find the picker never saw is left alone.
 // whyMember and whyNow stay apart for the composer (Phase C3: they were joined into one string, the "why now" lost as such); `why` is
 // both, for the find's own whyItFits.
-type Queued = Waiting & { why: string; whyMember: string; whyNow: string; lastDay?: string | null };
-export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[], ids?: ReadonlySet<string>): { queue: Queued[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
+// tierNext: for a morning tier pick, the rest of its tier in order (key and member-safe why), carried on the queued find so dispatch can
+// queue the next best if the composer still skips it (queueTierNext).
+type Queued = Waiting & { why: string; whyMember: string; whyNow: string; lastDay?: string | null; tierNext?: { key: string; why: string }[] };
+export function planPicks(judgments: (Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay"> & Partial<Pick<Judgment, "id" | "tierPick" | "tierAlternates" | "forThem" | "reason">>)[], backlog: Waiting[], waitingKeys: { id: string; key: string }[], ids?: ReadonlySet<string>): { queue: Queued[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
   const verdictOf = new Map(judgments.map((j) => [j.key, j]));
   // What each guarded verdict does is the brain's decision (brain/index.ts judgeSweepItem): deliver queues, a drop comes out for good,
   // a wait goes back to waiting. The queue acts only on those.
@@ -338,7 +354,8 @@ export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | 
   const rank = (b: Waiting) => (b.reminder || b.again ? 0 : 1) * 2 + Number(b.fromProfile);
   for (const j of judgments.filter((x) => decided.get(x.key)?.kind === "deliver")) {
     const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => rank(a) - rank(b))[0];
-    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" "), ids), whyMember: memberSafeWhy(j.why ?? "", ids), whyNow: memberSafeWhy(j.whyNow ?? "", ids), lastDay: j.lastDay ?? null });
+    const tierNext = j.tierPick ? (j.tierAlternates ?? []).map((id) => judgments.find((x) => x.id === id)).filter((x): x is NonNullable<typeof x> => !!x).map((x) => ({ key: x.key, why: memberSafeWhy(memberWhyOf(x as any), ids) })) : undefined;
+    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" "), ids), whyMember: memberSafeWhy(j.why ?? "", ids), whyNow: memberSafeWhy(j.whyNow ?? "", ids), lastDay: j.lastDay ?? null, ...(tierNext ? { tierNext } : {}) });
   }
   const why = (j: { verdict: string; why?: string } | undefined) => `Co's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
   const reject = waitingKeys.filter((w) => decided.get(w.key)?.drop === true).map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
@@ -390,6 +407,52 @@ export function rejectedFindsOf(judgments: Pick<Judgment, "key" | "name" | "verd
   return [...new Map(rejected.map((r) => [r.key, r])).values()];
 }
 
+// A morning tier pick the composer still skipped after being told it goes (harness/proactive.ts): its tier's next best is queued, under
+// the ordinary pacing and the day's find cap (it doesn't ride a second morning text). Returns the name queued, or null; every outcome
+// is logged (sweep.tier_next).
+export async function queueTierNext(userId: string, cand: { payload: any }, why: string): Promise<string | null> {
+  const next: { key: string; why: string }[] = Array.isArray(cand.payload?.pick?.tierNext) ? cand.payload.pick.tierNext : [];
+  const tried: { name: string; why: string }[] = [];
+  if (next.length) {
+    const { queuePickedOffer } = await import("./eventSurfacingSweep.js");
+    const backlogs = (await pool.query(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId])).rows;
+    for (const n of next) {
+      const from = backlogs.flatMap((b: any) => (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ b, it }))).find(({ it }: any) => shadowKey(String(it?.match?.name ?? ""), dateOf(it?.match)) === n.key);
+      if (!from) { tried.push({ name: n.key, why: "not in the backlog" }); continue; }
+      const ok = await queuePickedOffer(userId, { askId: String(from.b.ask_id), askText: String(from.it?.askText ?? ""), fromProfile: from.b.ask_id === "profile", match: from.it.match, reminder: !!from.it.reminder, again: !!from.it.again, why: n.why, lastDay: null, pick: { whyMember: n.why, whyNow: "", set: null } }).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 160)}`);
+      if (ok === "queued") {
+        await recordDecision({ layer: 5, decision: "sweep.tier_next", userId, outcome: "act", action: "queued", reason: why, proposal: { skipped: cand.payload?.match?.name ?? null, queued: from.it.match?.name ?? n.key, tried } }).catch(() => {});
+        return String(from.it.match?.name ?? n.key);
+      }
+      tried.push({ name: String(from.it.match?.name ?? n.key), why: ok });
+    }
+  }
+  await recordDecision({ layer: 5, decision: "sweep.tier_next", userId, outcome: "skip", action: next.length ? "none_queued" : "no_next", reason: why, proposal: { skipped: cand.payload?.match?.name ?? null, tried } }).catch(() => {});
+  return null;
+}
+
+const DAY_CAP_NOTE = "the day's find cap is reached";
+// A tier pick that didn't queue, by name (report.notQueued holds why). For each, the tier's next best is tried in order until one
+// queues; it becomes the tier's send in the run's judgments (so the record says what went), and every one tried and refused is logged.
+export async function fillTiers(judgments: Judgment[], report: ApplyReport, tryQueue: (j: Judgment) => Promise<string>): Promise<void> {
+  const failed = (j: Judgment) => report.notQueued.some((n) => n.name === j.name && !n.why.startsWith(DAY_CAP_NOTE)) && !report.queued.includes(j.name);
+  for (const pick of judgments.filter((j) => j.verdict === "send" && j.tierPick && failed(j))) {
+    for (const altId of pick.tierAlternates ?? []) {
+      const i = judgments.findIndex((j) => j.id === altId);
+      if (i < 0 || judgments[i].verdict === "reject") continue;
+      const alt = judgments[i];
+      const ok = await tryQueue(alt);
+      if (ok === "queued") {
+        report.queued.push(alt.name);
+        report.chosen.push(alt.name);
+        judgments[i] = { ...alt, verdict: "send", reason: "tier_pick", why: memberWhyOf(alt), notSentWhy: alt.why, whyNow: "", until: null, tierPick: pick.tierPick, guard: `the next best of its tier: "${pick.name}" couldn't be queued` };
+        break;
+      }
+      report.notQueued.push({ name: alt.name, why: `tier fallback for "${pick.name}": ${ok}` });
+    }
+  }
+}
+
 async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: any[], set: string | null, report: ApplyReport, ids?: ReadonlySet<string>): Promise<ReturnType<typeof planPicks>> {
   const { queuePickedOffer, onEventOfferDropped } = await import("./eventSurfacingSweep.js");
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
@@ -398,6 +461,19 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
   const rows = (await pool.query(`SELECT id, payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])).rows;
   const waiting = rows.map((r: any) => ({ id: String(r.id), key: shadowKey(String(r.payload?.match?.name ?? ""), dateOf(r.payload?.match)) }));
   const plan = planPicks(judgments, backlog, waiting, ids);
+  // A morning run (it made tier picks) never queues past the day's find cap: a retried morning after finds already went queues only
+  // what's left (harness/proactive.ts DAILY_FIND_CAP), in tier order. What's cut is said, and never replaced by its tier's next best.
+  const cutKeys = new Set<string>();
+  if (judgments.some((j) => j.tierPick)) {
+    const P = await import("../harness/proactive.js");
+    const left = P.findsLeftToday(await P.findsSentToday(userId, await memberZone(userId), new Date()).catch(() => P.DAILY_FIND_CAP));
+    const tierOfQ = (q: Queued) => judgments.find((j) => j.key === shadowKey(String(q.match?.name ?? ""), dateOf(q.match)))?.tierPick ?? 9;
+    plan.queue.sort((a, b) => tierOfQ(a) - tierOfQ(b));
+    for (const cut of plan.queue.splice(left)) {
+      cutKeys.add(shadowKey(String(cut.match?.name ?? ""), dateOf(cut.match)));
+      report.notQueued.push({ name: String(cut.match?.name ?? ""), why: `${DAY_CAP_NOTE} (${P.DAILY_FIND_CAP})` });
+    }
+  }
   // Out first, so a held row doesn't block its own re-queue later.
   for (const d of plan.reject) {
     await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [d.id, d.why.slice(0, 300)]);
@@ -416,7 +492,7 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
   const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
   for (const q of plan.queue) {
     // The pick's view of the set rides with each find it chose today, only when it chose more than one (Phase C3).
-    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set, ids) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}) } }).catch((err: any) => {
+    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set, ids) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}), ...(q.tierNext ? { tierPick: true, tierNext: q.tierNext } : {}) } }).catch((err: any) => {
       const msg = String(err?.message ?? err).slice(0, 200);
       console.error("picker: queueing a pick failed:", msg);
       // One pick erroring fails the day too: its retry queues what's missing, and what did queue merges into its own row.
@@ -429,10 +505,20 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
   }
   // A chosen pick with no backlog copy to queue: one already waiting in the queue is queued; anything else is said, never silent.
   const planned = new Set(plan.queue.map((x) => shadowKey(String(x.match?.name ?? ""), dateOf(x.match))));
-  for (const j of judgments.filter((x) => x.verdict === "send" && !planned.has(x.key))) {
+  for (const j of judgments.filter((x) => x.verdict === "send" && !planned.has(x.key) && !cutKeys.has(x.key))) {
     if (waiting.some((w) => w.key === j.key)) report.queued.push(j.name);
     else report.notQueued.push({ name: j.name, why: "error: not in the backlog or the queue" });
   }
+  // A morning tier pick that couldn't be queued (already decided, past, or not in the backlog): the next best in its tier is tried the
+  // same morning, down the tier (Royce's ruling relayed 2026-10-14). Every one that didn't queue is on the record.
+  await fillTiers(judgments, report, async (j) => {
+    const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => Number(a.fromProfile) - Number(b.fromProfile))[0];
+    // Its queued row, if it had one, came out above as a hold: only its backlog copy can be queued now.
+    if (!from) return "not in the backlog";
+    // The member's why is the alternate's own forThem line, never its hold or reject reason (memberWhyOf); empty, its details speak.
+    const why = memberSafeWhy(memberWhyOf(j), ids);
+    return queuePickedOffer(userId, { askId: from.askId, askText: from.askText, fromProfile: from.fromProfile, match: from.match, reminder: from.reminder, again: from.again, why, lastDay: null, pick: { whyMember: why, whyNow: "", set: null, tierPick: true } }).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 200)}`);
+  });
   return plan;
 }
 
@@ -495,7 +581,8 @@ export async function rerunPickerForTaste(userId: string): Promise<void> {
 // that account's 10am run stays on top. A failure is logged as that member's picker error; their next sweep runs it again.
 export async function runPickerAfterSweep(userId: string, after: "daily" | "hourly" | "goal" | "call" | "new_ask"): Promise<void> {
   if (!pickerLive()) return;
-  await runSweepShadow(userId, new Date(), { trigger: "after_sweep" }).then((r) => {
+  // The 9am floor's run is the morning send: one find per tier (Royce, 2026-10-14). Hourly, goal, call and new-ask runs are unchanged.
+  await runSweepShadow(userId, new Date(), { trigger: "after_sweep", ...(after === "daily" ? { morning: true } : {}) }).then((r) => {
     // Counted for the team-only dashboard (how often the picker runs after sweeps, to set a cap from).
     if (r && !r.skipped) void recordDecision({ layer: 5, decision: "sweep.picker_after", userId, outcome: r.error ? "skip" : "act", action: r.error ? "error" : "ran", proposal: { after, day: r.day } });
   }).catch(async (err: any) => {

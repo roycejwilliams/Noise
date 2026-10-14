@@ -785,14 +785,35 @@ export function sendIsExempt(primary: Candidate, extras: Candidate[], ignorePaci
 // Reminders (a deadline heads-up) ride alone.
 // How many of the daily pick's choices go in one message (its own send limit).
 export const MAX_PICKED_TOGETHER = 3;
+// Up to three finds a day, whatever sends them (Royce's ruling relayed 2026-10-14: "one per tier means up to 3 morning finds a day"):
+// the morning bundle counts toward it, a later pick that day goes only while the day's count is under it, and a retried morning run
+// never queues past it (services/sweepShadow.ts). The weekly cap stays skipped for the morning; silence pacing is the guardrail.
+export const DAILY_FIND_CAP = 3;
+// Pure: how many more finds may go today.
+export function findsLeftToday(sentToday: number): number {
+  return Math.max(0, DAILY_FIND_CAP - sentToday);
+}
+// Finds (event offers, not deadline reminders) that went out today, in their day. Unreadable reads as the cap reached: nothing extra goes
+// on a guess.
+export async function findsSentToday(userId: string, zone: string | null, now: Date): Promise<number> {
+  const start = DateTime.fromJSDate(now).setZone(hoursZone(zone)).startOf("day").toJSDate();
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'sent' AND COALESCE(payload->>'reminder', 'false') <> 'true' AND COALESCE(decided_at, updated_at) >= $2`,
+    [userId, start],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
 const isPicked = (c: Candidate) => c.type === "event_offer" && Boolean((c.payload as { picked?: boolean })?.picked) && !(c.payload as { reminder?: boolean })?.reminder;
 // Most time-bound first: priority (a pick's last day sets it), then whichever expires soonest, then oldest.
 const byUrgency = (a: Candidate, b: Candidate) => b.priority - a.priority || (a.expiresAt?.getTime() ?? Infinity) - (b.expiresAt?.getTime() ?? Infinity) || a.dueAt.getTime() - b.dueAt.getTime();
+// A morning find (payload.morningDay): the 9am floor's picks go out together, ahead of any earlier pick still waiting.
+const morningOf = (c: Candidate) => (c.payload as { morningDay?: string } | null)?.morningDay ?? null;
 // Pure: when the pick is one of the daily pick's choices, the bundle leads with the most time-bound of them (Royce, 2026-10-09:
-// Fleet Week first), whichever of them was picked.
+// Fleet Week first), whichever of them was picked. A morning find leads among that morning's finds only.
 export function leadPick(primary: Candidate, eligible: Candidate[]): Candidate {
   if (!isPicked(primary)) return primary;
-  return [primary, ...eligible.filter((c) => c.id !== primary.id && isPicked(c))].sort(byUrgency)[0];
+  const day = morningOf(primary);
+  return [primary, ...eligible.filter((c) => c.id !== primary.id && isPicked(c) && (!day || morningOf(c) === day))].sort(byUrgency)[0];
 }
 
 export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Candidate[] {
@@ -804,9 +825,23 @@ export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Ca
   const ranked = [...eligible]
     .filter((c) => c.type === "event_offer" && c.id !== primary.id && !isReminder(c))
     .sort(byUrgency);
-  // The daily pick's choices go together, whatever their tier (Royce, 2026-10-09: "One message replaces the drip"): each with its
-  // link and caption, one question after the last. Still the one find-send a day.
-  if (isPicked(primary)) return ranked.filter(isPicked).slice(0, MAX_PICKED_TOGETHER - 1);
+  // The daily pick's choices go together (Royce, 2026-10-09: "One message replaces the drip"): each with its link and caption, one
+  // question after the last. Still the one find-send a day. One per tier, never two from the same tier (Royce, 2026-10-14: "one find
+  // per tier"), so at most MAX_PICKED_TOGETHER; a morning's finds go with that morning's finds first.
+  if (isPicked(primary)) {
+    const day = morningOf(primary);
+    // The picker's tiers (sweepSelect.ts tierOf): 1 Co events, 2 events, anything else an opening.
+    const pickTier = (c: Candidate) => { const t = tierOf(c); return t === 1 || t === 2 ? t : 3; };
+    const taken = new Set([pickTier(primary)]);
+    const picked = ranked.filter(isPicked).sort((a, b) => Number(!!day && morningOf(b) === day) - Number(!!day && morningOf(a) === day));
+    for (const c of picked) {
+      const t = pickTier(c);
+      if (taken.has(t)) continue;
+      taken.add(t);
+      out.push(c);
+    }
+    return out.slice(0, MAX_PICKED_TOGETHER - 1);
+  }
   for (const c of ranked) {
     const t = tierOf(c);
     if (seen.has(t)) continue;
@@ -1388,6 +1423,11 @@ async function loadMidConversation(db: Queryable, userId: string, now: Date): Pr
   return midConversationFrom({ now, lastInboundAt: r.stamped_at ? new Date(r.stamped_at) : null, lastCoReplyAt: r.co_reply_at ? new Date(r.co_reply_at) : null, turnRunning: !!r.running });
 }
 
+// Their last message to Co on any channel (a text, or a call where they spoke): a timestamp only, never what they said. Also the 9am
+// floor's engagement read (services/dailySweep.ts searchCadence).
+export async function lastInboundAt(userId: string): Promise<Date | null> {
+  return loadLastInbound(pool, userId);
+}
 async function loadLastInbound(db: Queryable, userId: string): Promise<Date | null> {
   const { rows } = await db.query(
     `SELECT MAX(created_at) AS at FROM co_memories
@@ -1985,12 +2025,18 @@ export function heldNow(s: Pick<MemberSendState, "holdUntil" | "spaceUntil">, no
 // Never a hold or the space after a task (review of #134): a hold is the pick's "nothing to send now", which a new find clears, so
 // holding the sweep on it would keep the new find from ever coming; the space is hours. Hours, the daily cap and spacing clear within
 // the day too. Returns why it's held; empty: it runs.
-export type SweepKind = "ask" | "goal";
+export type SweepKind = "ask" | "goal" | "floor_goal";
 export const SWEEP_BLOCKERS: Record<SweepKind, readonly string[]> = {
   ask: ["not_opted_out", "safety_hold"],
   // away_hold (services/away.ts): a goal's discovery sweep finds things where they live; while they're away it would only pile up.
   goal: ["not_opted_out", "safety_hold", "kind_restraint", "weekly_cap", "engagement_pace", "unanswered_pause", "away_hold"],
+  // The 9am floor's goal search (services/dailySweep.ts): the timers a send sets (the weekly cap, the engagement pace, the unanswered
+  // pause) gate only the send, never the search (Royce, 2026-10-14: "no timer may gate whether a member's goals get searched ... A send
+  // can never reduce what Co knows"). What it finds goes to the pool and waits for the send step. What isn't a timer still holds it.
+  floor_goal: ["not_opted_out", "safety_hold", "kind_restraint", "away_hold"],
 };
+// The send-set timers a search never waits on (the floor's goal search; pinned in evals/goals/planCurrent.ts).
+export const SEND_TIMERS: readonly string[] = ["weekly_cap", "engagement_pace", "unanswered_pause", "daily_cap", "spacing"];
 export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | "spaceUntil">, kind: SweepKind, paused: string[] = pausedTypes()): string[] {
   const find: Candidate = {
     id: "sweep",
@@ -2002,7 +2048,7 @@ export function sweepBlockedBy(s: Pick<MemberSendState, "state" | "holdUntil" | 
     priority: 50,
     dueAt: s.state.now,
     expiresAt: null,
-    payload: kind === "ask" ? { askId: "sweep-ask", fromProfile: false } : { askId: PROFILE_ASK_ID_FOR_GATE, fromProfile: true },
+    payload: kind === "ask" ? { askId: "sweep-ask", fromProfile: false } : { askId: PROFILE_ASK_ID_FOR_GATE, fromProfile: true }, // goal and floor_goal alike
     attempts: 0,
     createdAt: s.state.now,
   };
@@ -2175,8 +2221,19 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   if (bundled) {
     const B = await import("./bundleComposer.js");
     const { prepareOffer } = await import("./proactiveRegistry.js");
+    // The day's find cap: none left, and this find waits for tomorrow (it isn't dropped); some left, and the bundle is trimmed to them.
+    const left = findsLeftToday(await findsSentToday(userId, person.timezone, state.now).catch(() => DAILY_FIND_CAP));
+    if (left <= 0) {
+      if (!opts.dryRun) {
+        const tomorrow = DateTime.fromJSDate(state.now).setZone(hoursZone(person.timezone)).plus({ days: 1 }).startOf("day").toJSDate();
+        await pool.query(`UPDATE proactive_candidates SET due_at = GREATEST(due_at, $2), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [c.id, tomorrow]);
+        await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `daily_find_cap:${c.type}`, proposal: { ...proposal, picked: c.id, deferTo: tomorrow.toISOString() }, checks: [...ev.userChecks, ...pickChecks], reason: `the day's ${DAILY_FIND_CAP} finds have gone out: it waits for tomorrow` });
+      }
+      done(c.type);
+      return;
+    }
     const sibs: Candidate[] = [];
-    for (const sib of pickSiblingOffers(c, ev.eligible)) {
+    for (const sib of pickSiblingOffers(c, ev.eligible).slice(0, left - 1)) {
       if (needsRelevanceCheck(sib, state.now)) {
         const r = await stillRelevant(sib, { recentConversation: recentStamped, now: state.now, timezone: person.timezone }).catch(() => null);
         if (!opts.dryRun) await settleRelevance(sib, r);
@@ -2219,8 +2276,9 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
         if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: prep.exited ? "exited" : prep.held ? "held" : "not_ready", reason: prep.skip, proposal: { candidate: x.id } }).catch(() => {});
         continue;
       }
-      const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string } }).pick;
-      items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again) });
+      const pk = (x.payload as { pick?: { whyMember?: string; whyNow?: string; tierPick?: boolean } }).pick;
+      // No why-member (a tier pick the picker didn't send itself): no pick line, the find's own facts speak for it.
+      items.push({ candidate: x, item: prep.item, pick: pk?.whyMember ? { whyMember: pk.whyMember, whyNow: pk.whyNow ?? "" } : null, again: Boolean((x.payload as { again?: boolean }).again), ...(pk?.tierPick && morningFind(x, state.now, person.timezone) ? { tierPick: true } : {}) });
     }
     // The pick's set line only for a bundle of exactly the finds it chose together (review of #135: a set line could describe finds
     // that didn't make it into the message).
@@ -2254,6 +2312,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     if ("fail" in res) {
       if (!opts.dryRun) {
         if (res.leadSkipped) await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
+        // A morning tier pick is never left out for fit without its tier's next best going (review of the tier PR).
+        if (res.leadSkipped && res.tierSkipped) await import("../services/sweepShadow.js").then((S) => S.queueTierNext(userId, c, `the composer skipped the tier's pick: ${res.fail}`)).catch(() => null);
         else {
           await pool.query(`UPDATE proactive_candidates SET attempts = attempts + 1, updated_at = NOW() WHERE id = $1`, [c.id]);
           if (c.attempts + 1 >= RULES.maxDraftAttempts) await dropCandidate(registry, c, "skipped", `draft failed checks: ${res.fail}`);
@@ -2283,6 +2343,13 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       }
     }
     for (const d of res.dropped) if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "composer", reason: d.why, proposal: { candidate: d.item.candidate.id } }).catch(() => {});
+    // A morning tier pick left out after being told it goes: its tier's next best is queued (review of the tier PR).
+    // The skipped pick itself comes out (skipped twice for fit), so its tier never sends two.
+    for (const d of res.dropped) {
+      if (!d.tierSkipped || opts.dryRun) continue;
+      await dropCandidate(registry, d.item.candidate, "skipped", d.why).catch(() => {});
+      await import("../services/sweepShadow.js").then((S) => S.queueTierNext(userId, d.item.candidate, d.why)).catch(() => null);
+    }
   }
 
   let draft: DraftResult;

@@ -107,7 +107,7 @@ const one = (r: any, o: any = {}) => decide([r], o)[0];
     states: async () => states, setState: async () => true, corrections: async () => [], retired: () => null, findAsks: async () => [], helpAsk: async () => {}, log: async () => {},
   });
   check("the goal sweep never reads or searches an idle goal", prompts.length === 1 && !prompts[0].includes(RUN) && p.searchText === "look for: SF pottery classes", { prompt: prompts[0]?.slice(0, 300), s: p.searchText });
-  check("the 9am sweep skips a goal set aside since its plan", /if \(st && st\.state !== "active"\) \{ items\.push\(\{ \.\.\.b, status: "skipped", why: `set aside since its plan/.test(src("services/dailySweep.ts")));
+  check("the 9am sweep skips a goal set aside since its plan", /if \(st && st\.state !== "active"\) return \{ status: "skipped", why: `set aside since its plan/.test(src("services/dailySweep.ts")));
 }
 
 // ---- 4. revive on mention; the deploy backfill asks nobody

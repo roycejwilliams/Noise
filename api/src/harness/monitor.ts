@@ -88,6 +88,9 @@ export const SIGNALS: Signal[] = [
   // Cold start (services/coldStart.ts, 2026-10-08): a sweep for a member in their first week that came back with nothing for them
   // is a product failure, not a quiet day. Any one is worth a look: the level over the last day, at most one alert a day. The
   // decision carries their seeds, what was tried and why.
+  // A picker claim check that couldn't run (services/sweepShadow.ts): its finds were held for the morning. Royce, 2026-10-14: "a broken
+  // verification path is an alarm, not a shrug". Counted per day across members, so repeated failures stand out as a number.
+  { key: "picker_claim_check_failed", label: "Picker claim checks that couldn't run (their finds held; the verification path is broken)", bad: `decision = 'picker.claim_check_failed'`, total: `(decision = 'picker.claim_check_failed' OR (decision = 'sweep.select.shadow' AND outcome = 'act'))`, floor: 0.01, minCount: 1, steady: { window: "24 hours", repeatHours: 24 } },
   { key: "cold_start_miss", label: "New members (first week) whose sweep found nothing for them", bad: `decision = 'sweep.cold_start_miss'`, total: `decision IN ('sweep.cold_start_miss', 'sweep.cold_start_hit')`, floor: 0.01, minCount: 1, steady: { window: "24 hours", repeatHours: 24 } },
   // Steering toward findable interests that read like a quiz: a steering reply with more than one question in it.
   { key: "cold_start_quiz", label: "Cold-start steering replies that asked more than one question", bad: `decision = 'coldstart.reply' AND action = 'steered' AND COALESCE((proposal->>'questions')::int, 0) > 1`, total: `decision = 'coldstart.reply' AND action = 'steered'`, floor: 0.3, minCount: 2, steady: { window: "7 days", repeatHours: 72 } },

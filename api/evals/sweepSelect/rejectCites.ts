@@ -51,6 +51,8 @@ const stubJudge = (o: { fail?: "throw" | "garbage" } = {}): ClaimJudge => async 
   const answers: { id: string; yes: boolean }[] = [];
   for (const m of prompt.matchAll(/^(R\d+): this thing: [^\n]*\n\s+the record: ([^\n]*)$/gm)) answers.push({ id: m[1], yes: /speedrun/i.test(m[2]) });
   for (const m of prompt.matchAll(/^(W\d+): "([^\n]*)"$/gm)) answers.push({ id: m[1], yes: /\b(closed|done|set aside|finished|already)\b/i.test(m[2]) });
+  // Timing: over or too late only when the find's own line says so.
+  for (const m of prompt.matchAll(/^(L\d+): ([^\n]*)$/gm)) answers.push({ id: m[1], yes: /closed|already over/i.test(m[2]) });
   return { text: JSON.stringify({ answers }), input: 400, output: 30 };
 };
 
@@ -155,6 +157,8 @@ async function runOnce(raw: string, c: SelectContext = ctx, judge: ClaimJudge = 
 const reject = (reason: string, cites?: string[], why = "it's for a goal that's closed", id = "C1") => JSON.stringify({ verdicts: [{ id, verdict: "reject", reason, ...(cites ? { cites } : {}), why }] });
 const kept = (r: { j: Judgment; exited: number }) => r.j.verdict === "reject" && r.exited === 1;
 const held = (r: { j: Judgment; exited: number; left: any[] }) => r.j.verdict === "hold" && r.j.reason === "uncited_claim" && r.exited === 0 && r.left.length === 1;
+// A fit-only reject (since one find per tier, 2026-10-14): a hold that stays in the backlog, never an exit.
+const waits = (r: { j: Judgment; exited: number; left: any[] }) => r.j.verdict === "hold" && r.j.reason === "fit_only" && r.exited === 0 && r.left.length === 1;
 
 // ---------------------------------------------------------------- the fixture reads as his state did
 check("fixture: the replaced accelerator goal isn't listed (#188); set aside in their words, lapsed and done are", !(ctx.goalsPast ?? []).some((g) => g.text.startsWith("get into an accelerator")) && ctx.goalsPast!.find((g) => g.id === SETASIDE_G)!.state === "set_aside" && ctx.goalsPast!.find((g) => g.id === LAPSED_G)!.state === "lapsed" && ctx.goalsPast!.find((g) => g.id === DONE_G)!.state === "done", ctx.goalsPast);
@@ -208,28 +212,29 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
   // The read fails toward the find.
   const thrown = await runOnce(reject("already_known", ["T9"], "they already applied to Speedrun"), withApplied, stubJudge({ fail: "throw" }));
   const garbage = await runOnce(reject("already_known", ["T9"], "they already applied to Speedrun"), withApplied, stubJudge({ fail: "garbage" }));
-  check("a claim check that throws, or answers what can't be read, holds the find", held(thrown) && held(garbage) && /couldn't be read/.test(thrown.j.guard ?? "") && garbage.check.read === "failed", { thrown: thrown.j, garbage: garbage.check });
+  check("a claim check that throws, or answers what can't be read, holds the find (flagged, never exited) and says why", held(thrown) && held(garbage) && thrown.j.checkFailed === true && /the claim check couldn't run \(gateway down\)/.test(thrown.j.guard ?? "") && garbage.check.read === "failed" && garbage.check.heldIds?.join() === "C1", { thrown: thrown.j, garbage: garbage.check });
 }
 
 // ---------------------------------------------------------------- 3. judgment rejects, and a why that claims a record
 {
+  // Since one find per tier (2026-10-14): a judgment reject never takes a find out; it waits in the backlog with the picker's why.
   for (const code of ["not_them", "weak_fit", "too_late", "other"]) {
     const r = await runOnce(reject(code, undefined, "not the room they want"));
-    check(`${code} without cites, judging fit, still rejects and exits`, kept(r) && r.calls === 1, r.j);
+    check(`${code} without a verified reason waits in the backlog (a fit-only hold, never an exit)`, waits(r) && r.calls === 1 && r.j.claimed === code && /not the room they want/.test(r.j.why), r.j);
   }
   const prose = await runOnce(reject("weak_fit", undefined, "the goal behind it is closed and funding was set aside"));
   check("a weak_fit whose why claims something closed is a record claim: no cite, so it holds, its why kept", held(prose) && /its why claims something finished or known; no record cited/.test(prose.j.guard ?? "") && /funding was set aside/.test(prose.j.why), prose.j);
   const proseCited = await runOnce(reject("other", ["T9"], "they already applied to Speedrun"), withApplied);
-  check("an other whose why claims a record and cites one about this find stays a reject", kept(proseCited) && proseCited.calls === 1);
+  check("an other whose why claims a record and cites one about this find stays a reject (verified)", kept(proseCited) && proseCited.calls === 1 && proseCited.j.verified === true);
   const proseFact = await runOnce(reject("weak_fit", ["S1"], "already sent it"));
   check("a weak_fit claiming a record with a cite code can tie to the find stays a reject", kept(proseFact));
   const unreadWhy = await runOnce(reject("weak_fit", undefined, "not their scene"), ctx, stubJudge({ fail: "throw" }));
-  check("when the read of a why fails, it's held as a claim (fails toward the find)", held(unreadWhy) && /the read of its why failed/.test(unreadWhy.j.guard ?? ""), unreadWhy.j);
+  check("when the claim check can't run at all, a judgment reject is held too (flagged), never exited", held(unreadWhy) && unreadWhy.j.checkFailed === true, unreadWhy.j);
   // Several rejects: one read for the whole run.
   const two: SelectContext = { ...withApplied, pool: [RESIDENCY, { id: "C2", key: "pitch night|2026-10-20", name: "Pitch Night", date: "2026-10-20", tier: 2, kind: "discovery", asks: [] }] };
   const before = judgeLog.calls;
   const both = await checkClaims(two, guardVerdicts(two, parseVerdicts(JSON.stringify({ verdicts: [{ id: "C1", verdict: "reject", reason: "closed", cites: ["A2", "T9"], why: "applied already" }, { id: "C2", verdict: "reject", reason: "weak_fit", why: "a pitch night isn't their scene" }] }))!), stubJudge());
-  check("one claim check per run, batching every reject that needs a read", judgeLog.calls - before === 1 && both.check.items === 3 && both.judgments.every((j) => j.verdict === "reject"), both);
+  check("one claim check per run, batching every reject that needs a read", judgeLog.calls - before === 1 && both.check.items === 3 && both.judgments[0].verdict === "reject" && both.judgments[1].reason === "fit_only", both);
 }
 
 // ---------------------------------------------------------------- 4. covered must name a candidate still in the running
@@ -239,14 +244,14 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
   const sendC2 = { id: "C2", verdict: "send", whyMember: "they're applying to SPC", cites: ["T2"], whyNow: "opens now", wow: true, lastDay: "2026-11-15" };
   const run = async (cov: any, other: any) => (await checkClaims(c2, guardVerdicts(c2, parseVerdicts(JSON.stringify({ verdicts: [cov, other] }))!), stubJudge())).judgments.find((j) => j.id === "C1")!;
   const ok = await run({ id: "C1", verdict: "reject", reason: "covered", cites: ["C2"], why: "the SPC fellowship does the same job better" }, sendC2);
-  check("covered citing a candidate going out today stays a reject", ok.verdict === "reject" && ok.reason === "covered", ok);
+  check("covered citing a candidate going out today: a fit-only hold that waits (covered is judgment, never an exit)", ok.verdict === "hold" && ok.reason === "fit_only" && ok.claimed === "covered", ok);
   const noCite = await run({ id: "C1", verdict: "reject", reason: "covered", why: "another one is better" }, sendC2);
   const rejectedOther = await run({ id: "C1", verdict: "reject", reason: "covered", cites: ["C2"], why: "C2 is better" }, { id: "C2", verdict: "reject", reason: "weak_fit", why: "not their scene" });
   const self = await run({ id: "C1", verdict: "reject", reason: "covered", cites: ["C1"], why: "itself" }, sendC2);
   const outside = await run({ id: "C1", verdict: "reject", reason: "covered", cites: ["C7"], why: "C7 is better" }, sendC2);
   check("covered with no candidate cited, one that's rejected, itself, or one not in the pool holds", [noCite, rejectedOther, self, outside].every((j) => j.verdict === "hold" && j.claimed === "covered" && /covered names no candidate in today's pool still in the running/.test(j.guard ?? "")), [noCite, rejectedOther, self, outside]);
   const heldOther = await run({ id: "C1", verdict: "reject", reason: "covered", cites: ["C2"], why: "C2 is better" }, { id: "C2", verdict: "hold", why: "opens Nov 1", until: "2026-11-01" });
-  check("covered citing a held candidate stays a reject (it's still in the running)", heldOther.verdict === "reject");
+  check("covered citing a held candidate passes the cite check (still in the running) and waits as a fit-only hold", heldOther.verdict === "hold" && heldOther.reason === "fit_only");
 }
 
 // ---------------------------------------------------------------- 5. a guarded hold is judged again, and can't loop forever (across days)
@@ -346,12 +351,12 @@ check("every active goal is the lens, newest first: the accelerator goals beyond
 {
   const src = readFileSync(new URL("../../src/services/sweepSelect.ts", import.meta.url), "utf8");
   const g = src.slice(src.indexOf("export function guardVerdicts"));
-  check("pin: guardVerdicts checks a record-claim reject's cites and holds it when they fail", /RECORD_CLAIMS\.includes\(v\.reason\) \? checkCites\(c, p, v\.cites, known\) : null/.test(g) && /if \(bad\) out\.push\(\{ \.\.\.base, verdict: "hold", reason: "uncited_claim"/.test(g));
+  check("pin: guardVerdicts checks a record-claim reject's cites and holds it when they fail", /RECORD_CLAIMS\.includes\(v\.reason\) \? checkCites\(c, p, v\.cites, known, v\.reason\) : null/.test(g) && /if \(bad\) out\.push\(\{ \.\.\.base, verdict: "hold", reason: "uncited_claim"/.test(g));
   check("pin: the picker run guards, then runs the claim check, before anything is applied", /const checked = await checkClaims\(c, guardVerdicts\(c, verdicts\), opts\.judge\);/.test(src));
-  check("pin: both record codes are in RECORD_CLAIMS", /export const RECORD_CLAIMS: readonly RejectReason\[\] = \["closed", "already_known"\];/.test(src));
+  check("pin: the record codes are in RECORD_CLAIMS (closed, already_known, and ruled_out since one-per-tier)", /export const RECORD_CLAIMS: readonly RejectReason\[\] = \["closed", "already_known", "ruled_out"\];/.test(src));
   check("pin: the claim check is Haiku, one call", /export const CLAIM_CHECK_MODEL = MODELS\.haiku;/.test(src) && (src.match(/await judge\(/g) ?? []).length === 1);
   const sh = readFileSync(new URL("../../src/services/sweepShadow.ts", import.meta.url), "utf8");
-  check("pin: the run counts guarded holds against the last run before recording, and applies with the run's ids", /r\.judgments = carryGuardedRuns\(r\.judgments, \(last\?\.proposal\?\.judgments \?\? \[\]\) as Judgment\[\]\);/.test(sh) && sh.indexOf("carryGuardedRuns(r.judgments") < sh.indexOf("applyPicks(userId, r.judgments") && /applyPicks\(userId, r\.judgments, backlogs, today, r\.set \?\? null, applied, contextIds\(ctx\)\)/.test(sh) && /claimCheck: r\.claimCheck \?\? null/.test(sh));
+  check("pin: the run counts guarded holds against the last run before recording, and applies with the run's ids", /r\.judgments = carryGuardedRuns\(r\.judgments, \(last\?\.proposal\?\.judgments \?\? \[\]\) as Judgment\[\], \{ morning: !!opts\.morning \}\);/.test(sh) && sh.indexOf("carryGuardedRuns(r.judgments") < sh.indexOf("applyPicks(userId, r.judgments") && /applyPicks\(userId, r\.judgments, backlogs, today, r\.set \?\? null, applied, contextIds\(ctx\)\)/.test(sh) && /claimCheck: r\.claimCheck \?\? null/.test(sh));
   const cx = readFileSync(new URL("../../src/services/sweepSelectContext.ts", import.meta.url), "utf8");
   check("pin: no 6-goal cut left in the picker's context", !/slice\(0, 6\)/.test(cx));
 }

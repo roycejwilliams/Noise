@@ -1,0 +1,86 @@
+{
+  "hash": "b7d4742740cd9800",
+  "case": "plan-backstop-rebuilt",
+  "recorded_at": "2026-10-14T18:18:11.851Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6048,
+    "system": "",
+    "messages": 1,
+    "last": "user: A member of a private club in San Francisco has these goals on file, oldest first (today is 2026-10-13): 1. meet other climate founders who actually see each other 2. find a Saturday hiking crew in the Bay Area 3. raise a pre-seed round for a climate software startup Who they are (Co's record): Runs...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6048,
+      "messages": [
+        {
+          "content": "A member of a private club in San Francisco has these goals on file, oldest first (today is 2026-10-13):\n1. meet other climate founders who actually see each other\n2. find a Saturday hiking crew in the Bay Area\n3. raise a pre-seed round for a climate software startup\n\nWho they are (Co's record): Runs product at a small climate startup; new to SF.\n\nThe kind of room they've told Co they want, in their words: \"small rooms, people who see each other again\". Write edges for that kind of room; never one for the kind they said they don't want.\n\n\nCo searches the world each day for things worth texting them about: events and gatherings, programs and cohorts, open calls, fellowships and grants, communities, people worth meeting. For each goal:\n- kind: \"findable\" if the goal itself is something like that to look for; \"work\" if it's their own work plan (partnering, pitching, building, launching, raising); \"co_task\" if it's something Co itself is doing for them (drafting, sending, planning, keeping something going).\n- edges: up to 2 short searches for the FINDABLE side of the goal, things that would actually help it along, named the way a good researcher would search for the thing itself, in a few words (\"SF AI founder events November\", \"consumer AI pre-seed open calls\", \"founder wellness community SF\"). Never a name (theirs, their company, partners or people), never a description of them, never the goal reworded, never a strategy, a how-to or advice. A work plan or Co task gets only its findable side; if it has none, give no edges.\n- until: the last day it can still matter (YYYY-MM-DD) when the goal is tied to a date or window (\"the November launch\" -> its last day in November); null when it has none.\n- superseded_by: the number of a LATER goal in this list that replaces it (a changed plan, a cancelled date), else null.\n- place_bound: true when what would help it happens near where they live (events, venues, local groups and places in their city); false when it can be done from anywhere (funding, programs, jobs, learning, anything remote).\n- why: one short reason, especially when there are no edges.\n\nAnswer only with JSON: [{\"n\": 1, \"kind\": \"...\", \"edges\": [\"...\"], \"until\": null, \"superseded_by\": null, \"place_bound\": false, \"why\": \"...\"}, ...]",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5",
+      "thinking": {
+        "type": "disabled"
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "```json\n[\n  {\"n\": 1, \"kind\": \"findable\", \"edges\": [\"small climate founders dinner San Francisco\", \"climate tech founder meetup SF recurring small group\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is finding small recurring rooms of climate founders in SF, so searches target intimate, repeat-attendance gatherings in the city.\"},\n  {\"n\": 2, \"kind\": \"findable\", \"edges\": [\"Bay Area Saturday hiking group\", \"San Francisco weekend hiking meetup\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is joining an existing Saturday hiking crew locally, so searches target local group hikes.\"},\n  {\"n\": 3, \"kind\": \"work\", \"edges\": [], \"until\": null, \"superseded_by\": null, \"place_bound\": false, \"why\": \"Raising a pre-seed round is their own fundraising work plan; the findable side (pre-seed climate investors) would need a search of open programs, which the goal does not yet specify, so no edge is given.\"}\n]\n```",
+      "usage": {
+        "input_tokens": 738,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 362,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2b94caB7BZgTcsW1FZa",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "```json\n[\n  {\"n\": 1, \"kind\": \"findable\", \"edges\": [\"small climate founders dinner San Francisco\", \"climate tech founder meetup SF recurring small group\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is finding small recurring rooms of climate founders in SF, so searches target intimate, repeat-attendance gatherings in the city.\"},\n  {\"n\": 2, \"kind\": \"findable\", \"edges\": [\"Bay Area Saturday hiking group\", \"San Francisco weekend hiking meetup\"], \"until\": null, \"superseded_by\": null, \"place_bound\": true, \"why\": \"Goal is joining an existing Saturday hiking crew locally, so searches target local group hikes.\"},\n  {\"n\": 3, \"kind\": \"work\", \"edges\": [], \"until\": null, \"superseded_by\": null, \"place_bound\": false, \"why\": \"Raising a pre-seed round is their own fundraising work plan; the findable side (pre-seed climate investors) would need a search of open programs, which the goal does not yet specify, so no edge is given.\"}\n]\n```"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 738,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 362,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}
