@@ -11,9 +11,10 @@ import path from "node:path";
 
 // The model, scripted by what each prompt is for. Counted, so a check can say which reads ran.
 const calls: string[] = [];
-// When each read started (ms since the turn began), and how long a scripted read takes, for the timing check.
-const starts: { kind: string; at: number }[] = [];
-const delayMs: Record<string, number> = {};
+// Which reads started, in order, and reads the test holds open until it releases them: the ordering check uses no clock.
+const starts: string[] = [];
+const holds: Record<string, Promise<void>> = {};
+const settled: Record<string, boolean> = {};
 let redraftText: string | null = null;
 // The scripted read's idea of a status report: news, a reply, nothing back, still waiting, confirmed.
 const STATUS_WORDS = /\b(no (real )?(word|news|reply)|nothing (back|yet)|heard back|still waiting|confirmed|replied|booked)\b/i;
@@ -34,8 +35,12 @@ globalThis.fetch = (async (input: any, init?: any) => {
   if (!/api\.anthropic\.com/.test(url)) return prior(input, init);
   const body = String(init?.body ?? "");
   const kind = /Only the member knows where it stands/.test(body) ? "thread_read" : /You check a text message Co is about to send/.test(body) ? "claims" : /Does this line assert anything that happened/.test(body) ? "admission" : "other";
-  starts.push({ kind, at: performance.now() });
-  if (delayMs[kind]) await new Promise((r) => setTimeout(r, delayMs[kind]));
+  starts.push(kind);
+  if (holds[kind]) {
+    settled[kind] = false;
+    await holds[kind];
+    settled[kind] = true;
+  }
   let text = "no";
   if (/Does this line assert anything that happened/.test(body)) {
     calls.push("admission");
@@ -331,13 +336,18 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     const tf = G.createReplyFacts();
     G.addMemberWorld(tf, w);
     starts.length = 0;
-    delayMs.thread_read = 300;
-    const t0 = performance.now();
-    await G.groundReply("Good to hear from you. Still nothing back from Hayes Valley, and the dinner is Nov 14.", tf, { message: "Just checking in", recentConversation: "" }, { userId: null, record: false });
-    delete delayMs.thread_read;
-    const tr = starts.find((x) => x.kind === "thread_read");
-    const cl = starts.find((x) => x.kind === "claims");
-    check("the claim read starts within a few ms of the thread read, not after it", !!tr && !!cl && Math.abs(cl.at - tr.at) < 50 && cl.at - t0 < 100, { thread: tr && tr.at - t0, claims: cl && cl.at - t0 });
+    // The thread read never answers until released. If the claim read waited on it, it could never start: the turn is given a fixed
+    // number of event-loop turns (no clock) to start it, then the thread read is released either way, so a regression fails, never hangs.
+    let release!: () => void;
+    holds.thread_read = new Promise<void>((r) => (release = r));
+    const turn = G.groundReply("Good to hear from you. Still nothing back from Hayes Valley, and the dinner is Nov 14.", tf, { message: "Just checking in", recentConversation: "" }, { userId: null, record: false });
+    for (let i = 0; i < 2000 && !starts.includes("claims"); i++) await new Promise((r) => setImmediate(r));
+    const claimStarted = starts.includes("claims");
+    const threadPending = starts.includes("thread_read") && settled.thread_read === false;
+    release();
+    delete holds.thread_read;
+    await turn;
+    check("the claim read starts while the thread read is still pending (they run together)", claimStarted && threadPending && settled.thread_read === true, { starts, threadPending });
   }
   // A work claim citing their world must name a running item.
   const worldId = rf.facts.find((f) => M.WORLD_FACT.test(f.text))!.id;
