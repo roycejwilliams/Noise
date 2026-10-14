@@ -426,6 +426,7 @@ check("a lookout, a goal, or an offer of theirs is not", !L.isOneOffAsk({ entryK
     "services/laneMoves.ts": "a confirmed move out of, or back into, goals",
     "services/whatCoKnows.ts": "a corrected or removed goal drops its state at their yes",
     "services/goalRecheck.ts": "the stale-goal recheck (#193): idle after one unanswered question, back to active on their mention",
+    "services/askRetire.ts": "pick it back up: a goal the recheck idled, back to active at their word after its stopped-looking note",
   };
   const stateWriters = files.filter(({ c }) => /INSERT\s+INTO\s+goal_states|DELETE\s+FROM\s+goal_states|setGoalState\(/.test(c) || sets(c, "goal_states").some((x) => /\bstate\s*=/.test(x))).map((x) => x.f).sort();
   check("goal states change only through the reviewed writers", stateWriters.join(",") === Object.keys(GOAL_STATE_WRITERS).sort().join(","), stateWriters);

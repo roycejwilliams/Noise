@@ -136,7 +136,7 @@ const rawIn = (text: string | null, goals: string[]) => !!text && goals.some((g)
     { n: 3, kind: "co_task", edges: [], until: null, superseded_by: null, why: "" },
   ]), { asks });
   const p = await plan(h, ROYCE);
-  check("goal-derived find requests (work, Co tasks, Co's promises) become help: no more searches, no more X", h.helped.sort().join() === "1,2,3" && p.retiredAsks === 3, h.helped);
+  check("goal-derived find requests (work, Co tasks, Co's promises) are marked retire-due (they retire through the ask-once flow, services/askRetire.ts)", h.helped.sort().join() === "1,2,3" && p.retiredAsks === 3, h.helped);
   check("a real find request stays a find request", !h.helped.includes(4));
   check("help asks are never searched by the ask sweep (find and person only, and person asks go to intros, never the search)", /if \(row\.kind === "person"\) \{[\s\S]{0,400}attemptNetworkSurfacing[\s\S]{0,200}continue;\s*\}\s*try \{\s*await attemptEventSurfacing/.test(src("jobs/index.ts")) && /WHERE ac\.resolved_at IS NULL AND ac\.kind IN \('find', 'person'\)\s+AND u\.archived_at IS NULL/.test(src("jobs/index.ts")));
 }

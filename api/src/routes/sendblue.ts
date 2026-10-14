@@ -1724,6 +1724,9 @@ export function sendblueRouter(io: Server): Router {
           const lens = goalLens(turn?.knowledge, turn?.profile?.intent);
           // A goal their text names shows life: its recheck clock moves, and an idle one comes back (services/goalRecheck.ts).
           import("../services/goalRecheck.js").then((R) => R.noteTextSignals(user.id, content)).catch((err: any) => console.error("goal recheck: noting their text failed (non-fatal):", err?.message ?? err));
+          // An ask marked retire-due that their text names stays searched; with its question out, their answer is read after the reply's
+          // path (services/askRetire.ts): a yes keeps it, a no stops it.
+          import("../services/askRetire.js").then((A) => A.noteAskText(user.id, content, { lastCoText: A.lastCoBlock(recentConversation) })).catch((err: any) => console.error("ask retire: noting their text failed (non-fatal):", err?.message ?? err));
           const [notes, loops, timeline] = await Promise.all([
             loadBrief(user.id).then(describeNotes).catch(() => null),
             // Every open loop and where it stands (services/openLoops.ts).

@@ -2820,6 +2820,26 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE goal_states ADD COLUMN IF NOT EXISTS recheck_asked_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("goal_states recheck_asked_at init failed:", err));
+  // Ask retirement (Royce, 2026-10-13, services/askRetire.ts): a find ask that restates a work or Co-task goal retires through the
+  // recheck's ask-once flow. retire_due_at: the plan marked it; retire_goals: the goal hashes it's tied to (the recheck acts first);
+  // retire_asked_at: the question went out; retire_hints: replies that carried it unasked; retire_hold_until: they said keep it;
+  // retired_at: it idled (kind help); retire_told_at: the one stopped-looking note went out (or the goal's note covered it).
+  await pool
+    .query(
+      `ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS retire_due_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS retire_goals TEXT[],
+         ADD COLUMN IF NOT EXISTS retire_asked_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS retire_hints INT NOT NULL DEFAULT 0,
+         ADD COLUMN IF NOT EXISTS retire_hold_until TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS retired_at TIMESTAMPTZ,
+         ADD COLUMN IF NOT EXISTS retire_told_at TIMESTAMPTZ`,
+    )
+    .catch((err: Error) => console.error("ask_checkins retirement columns init failed:", err));
+  // The stopped-looking line, written once when it idles (services/askRetire.ts writeStopLine): retire_note for an ask, idle_note for a
+  // goal the recheck idled; retired_with_goal: the goal an ask idled with (its note is the goal's, and it comes back with the goal).
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS retire_note TEXT, ADD COLUMN IF NOT EXISTS retired_with_goal TEXT`)
+    .catch((err: Error) => console.error("ask_checkins retirement note columns init failed:", err));
+  await pool
+    .query(`ALTER TABLE goal_states ADD COLUMN IF NOT EXISTS idle_note TEXT`)
+    .catch((err: Error) => console.error("goal_states.idle_note init failed:", err));
   // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
   // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.

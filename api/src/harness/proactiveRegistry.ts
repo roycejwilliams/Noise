@@ -689,6 +689,22 @@ export const proactiveRegistry: ProactiveRegistry = {
   goal_recheck: {
     async draft(c, person) {
       const R = await import("../services/goalRecheck.js");
+      // A find ask's retirement question rides the same type (services/askRetire.ts, 2026-10-13): one in flight, one at a time.
+      if (c.payload?.kind === "ask") {
+        const A = await import("../services/askRetire.js");
+        const due = await A.retireTextStillDue(c.userId, String(c.payload.askId), c.payload.queuedAt ?? null);
+        if (!due.ok) return skip(due.why);
+        const text = await draftProactive({
+          functionId: "askRetire.text.draft",
+          firstName: person.firstName,
+          facts: { what_they_asked_you_to_look_for: due.text.slice(0, 200) },
+          task: "Ask one short, light question with the word still in it, in the shape \"Still want me looking for X, or should I let it go?\". Name it in their own plain words, and make it easy to let it go. One sentence. Never the words keep looking or keep an eye out, no exclamation point, no date, nothing about how long it has been, no advice.",
+        });
+        if (!text) return skip("model chose SKIP");
+        const read = await R.judgeRecheckAsked(due.text, text, undefined, "ask");
+        if (!read.asked) return skip(`the draft didn't ask whether they still want it looked for (${read.reason})`);
+        return { messages: [text], text, rules: { maxSentences: 2, maxChars: 200, forbidden: [{ pattern: /!/, reason: "exclamation point" }] } };
+      }
       const still = await R.recheckTextStillDue(c.userId, String(c.payload.goalHash), { queuedAt: c.payload.queuedAt ?? null, lastSignalAt: c.payload.lastSignalAt ?? null });
       if (!still.ok) return skip(still.why);
       const text = await draftProactive({
@@ -704,6 +720,10 @@ export const proactiveRegistry: ProactiveRegistry = {
       return { messages: [text], text, rules: { maxSentences: 2, maxChars: 200, forbidden: [{ pattern: /!/, reason: "exclamation point" }] } };
     },
     async onSent(c) {
+      if (c.payload?.kind === "ask") {
+        await import("../services/askRetire.js").then((A) => A.markRetireAsked(c.userId, String(c.payload.askId), String(c.payload.text ?? ""), "text"));
+        return;
+      }
       const R = await import("../services/goalRecheck.js");
       await R.markRecheckAsked(c.userId, String(c.payload.goalHash), String(c.payload.goal ?? ""), "text");
     },

@@ -140,6 +140,7 @@
     "evals/lanes/moves.ts",
     "evals/goals/readCutOff.ts",
     "evals/goals/recheck.ts",
+    "evals/goals/retire.ts",
     "evals/sweepFind/queries.ts",
     "evals/coldstart/rules.ts",
     "evals/proactive/memberState.ts",

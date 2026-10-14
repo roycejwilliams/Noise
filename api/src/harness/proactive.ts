@@ -2391,6 +2391,25 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // A composed bundle goes out as written: each find's link and caption, the tie-back line, and its closing question
   // (harness/bundleComposer.ts). Each included find is ledgered with its own link and caption.
   const outgoing = draft.messages;
+  // A stopped-looking line owed for RECHECK_TEXT_AFTER_DAYS (no reply carried it) rides in this text, which goes anyway
+  // (services/askRetire.ts, Royce 2026-10-13: no silent expiries, never a text of its own). Code-written, once. Never in a composed
+  // bundle: what goes out there is what the composer wrote.
+  let rideNote: import("../services/askRetire.js").StopNote | null = null;
+  let sending = outgoing;
+  if (!composed) {
+    const A = await import("../services/askRetire.js");
+    // Never a heavy check-in, never while they're struggling; through the member fence, the first owed note that passes it whole.
+    // The dispatch's one restraint read (memberSendState): struggling now means no note.
+    if (A.noteMayRide(c, !!member.state.needsCare)) {
+      const { memberFence } = await import("../services/sourceFence.js");
+      const fence = await memberFence(userId).catch(() => null);
+      rideNote = fence && !fence.failed ? await A.pendingStopNotes(userId).then((n) => A.firstSurviving(A.notesToRide(n, state.now), fence.strip)).catch(() => null) : null;
+      if (rideNote) {
+        const { carryLaneNotes } = await import("../services/laneMoves.js");
+        sending = A.rideAlong(outgoing, rideNote.line, (d, p) => carryLaneNotes(d, p));
+      }
+    }
+  }
   const extras: { candidate: Candidate; messages: string[] }[] = composed ? composed.perItem.slice(1) : [];
 
   // Bound: only a deliver of this candidate goes out (brain/index.ts sends).
@@ -2401,14 +2420,14 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
   done(c.type);
   if (opts.dryRun) {
-    console.log(`[dispatch dryRun] would send ${outgoing.length} text(s) for ${c.targetKey} plus ${extras.length} batched:`);
-    outgoing.forEach((m, i) => console.log(`  ${i + 1}. ${m.replace(/\n/g, " / ")}`));
+    console.log(`[dispatch dryRun] would send ${sending.length} text(s) for ${c.targetKey} plus ${extras.length} batched:`);
+    sending.forEach((m, i) => console.log(`  ${i + 1}. ${m.replace(/\n/g, " / ")}`));
     return;
   }
 
   let result: Awaited<ReturnType<typeof sendWithLedger>>;
   try {
-    result = await sendWithLedger(c, person, outgoing, { ...opts, suppressedKinds: state.suppressedKinds }, extras);
+    result = await sendWithLedger(c, person, sending, { ...opts, suppressedKinds: state.suppressedKinds }, extras);
   } catch (err: any) {
     // Send failed and the ledger row rolled back. Retry on a later tick, up
     // to the attempt limit, instead of every 15 minutes until it expires.
@@ -2433,6 +2452,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
   // Co's record of what it did (services/coFacts.ts).
   if (result.delivered.length) await recordProactiveText(userId, c.type, result.delivered.join(" "), c.id);
+  // The stopped-looking line, told once it was delivered (services/askRetire.ts).
+  if (rideNote) {
+    const A = await import("../services/askRetire.js");
+    if (A.noteCarried(result.delivered.join("\n"), rideNote)) await A.markNotesTold(userId, [rideNote], "text").catch((err: any) => console.error("proactive: marking the stopped-looking line told failed (non-fatal):", err?.message ?? err));
+  }
   await registry[c.type].onSent?.(c, person, result.delivered).catch((err: any) =>
     console.error(`proactive: onSent(${c.type}) failed (non-fatal):`, err?.message ?? err),
   );
@@ -2447,7 +2471,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     userId,
     outcome: "act",
     action: `send:${c.type}`,
-    proposal: { ...proposal, picked: c.id, pickSource: picked.source, pickWhy: picked.reason, messages: outgoing, batched: extras.map((e) => e.candidate.targetKey), delivered: result.delivered.length },
+    proposal: { ...proposal, picked: c.id, pickSource: picked.source, pickWhy: picked.reason, messages: sending, batched: extras.map((e) => e.candidate.targetKey), delivered: result.delivered.length },
     checks: [...ev.userChecks, ...pickChecks, ...draftChecks],
     reason: result.delivered.length < draft.messages.length ? `${picked.reason} (partial send: ${result.delivered.length}/${draft.messages.length} delivered)` : picked.reason,
   });
