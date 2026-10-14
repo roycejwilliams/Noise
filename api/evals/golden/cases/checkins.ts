@@ -119,6 +119,31 @@ function voiceMisses(text: string): string[] {
 }
 const ONE_BREATH = "Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things?";
 
+// Case 27's grade: the fellowship as something there for them, never an answer they owe (Royce: never phrase a wait as a debt). The
+// 10-14 recording's "Still waiting to hear what you think on the Harbor Light fellowship" must fail it.
+const OWES = /\b(still )?waiting (to hear|on you|for you|on your)|waiting to hear (what|from) you|haven'?t heard (back )?from you|get back to me|let me know what you think|your (answer|reply|take) on\b/i;
+export async function grade27(text: string): Promise<string[]> {
+  const misses = voiceMisses(text);
+  if (!/Harbor Light|fellowship/i.test(text)) misses.push("doesn't name the fellowship waiting on them");
+  if (/rooftop|Sequin/i.test(text)) misses.push("brings up the running search too (one item: what waits on them leads)");
+  if (OWES.test(text)) misses.push("treats the wait as an answer they owe Co");
+  const j = await judge(text, `It's 2pm. Yesterday at 5:30pm Co sent the member the ${FELLOWSHIP} and asked "Worth a look before you decide on funding timing?"; they never answered. Co's daily search is also looking for a rooftop venue. The member texted "Just checking in".`, `Does the text give presence AND bring up the ${FELLOWSHIP} as the one item, as something there for them to pick up if they want, WITHOUT implying they owe Co an answer or that Co is waiting on them (no "still waiting to hear what you think", no "get back to me"), and without a status report? ${ONE_BREATH} Answer yes only if all of that holds.`);
+  if (!j.yes) misses.push(`judge: ${j.reason}`);
+  return misses;
+}
+// Case 28's grade: presence and an open question only (Royce: "pure presence is right ... Never a dashboard dump"). The 10-14
+// recording's "Nothing waiting on you right now, just the Thursday dinner on your radar" must fail it.
+const SAYS_EMPTY = /\bnothing (is |'?s )?(waiting|running|pending|new|on (my|your) (end|plate|radar|list))\b|\bno(thing)? (updates?|news) (from|on) (me|my end)\b|\bon your radar\b|\ball quiet\b/i;
+export async function grade28(text: string): Promise<string[]> {
+  const misses = voiceMisses(text);
+  if (/\b(search|searching|looking (for|into)|working on|task|running|on file)\b/i.test(text)) misses.push("talks about work or searches with nothing running");
+  if (SAYS_EMPTY.test(text)) misses.push("says nothing is waiting or running, or lists what's on their plate (a dashboard line)");
+  if (!text.includes("?")) misses.push("no open question");
+  const j = await judge(text, "Nothing is running for the member and nothing from Co is waiting on them. They texted \"Hey co, just checking in\".", "Is the text ONLY warm presence plus an open question inviting them to share what's on their mind? Answer no if it mentions that nothing is waiting or running, gives any status, lists or names things on their plate (plans, dinners, events), or invents anything about their plans.");
+  if (!j.yes) misses.push(`judge: ${j.reason}`);
+  return misses;
+}
+
 export const CASES: GoldenCase[] = [
   {
     n: 26,
@@ -143,12 +168,7 @@ export const CASES: GoldenCase[] = [
     from: "Royce, 2026-10-14, golden case (2), the 10-14 failure in daylight: Founder Fellows sent at 5:30pm ending on a question he never answered",
     run: async () => {
       const r = await reply({ firstName: "Noor", now: DAY, exchange: [...THREAD_BEFORE, ...FELLOWSHIP_SEND], sent: [{ name: FELLOWSHIP, sentAt: SENT_AT, endsOn: "2026-12-15" }], searching: SEQUIN, facts: FELLOWSHIP_FACTS, message: "Just checking in" });
-      const misses = voiceMisses(r.text);
-      if (!/Harbor Light|fellowship/i.test(r.text)) misses.push("doesn't name the fellowship waiting on them");
-      if (/rooftop|Sequin/i.test(r.text)) misses.push("brings up the running search too (one item: what waits on them leads)");
-      const j = await judge(r.text, `It's 2pm. Yesterday at 5:30pm Co sent the member the ${FELLOWSHIP} and asked "Worth a look before you decide on funding timing?"; they never answered. Co's daily search is also looking for a rooftop venue. The member texted "Just checking in".`, `Does the text give presence AND bring up the ${FELLOWSHIP} (the open question waiting on them) as the one item, as something they can pick up, without a status report? ${ONE_BREATH} Answer yes only if all of that holds.`);
-      if (!j.yes) misses.push(`judge: ${j.reason}`);
-      return done(misses, r);
+      return done(await grade27(r.text), r);
     },
   },
   {
@@ -159,12 +179,7 @@ export const CASES: GoldenCase[] = [
     from: "Royce, 2026-10-14, golden case (3): \"the warmth isn't the bug, skipping the check is\"; genuinely nothing gets presence only",
     run: async () => {
       const r = await reply({ firstName: "Ellis", now: DAY, exchange: THREAD_BEFORE, searching: NONE, message: "Hey co, just checking in" });
-      const misses = voiceMisses(r.text);
-      if (/\b(search|searching|looking (for|into)|working on|task|running|on file)\b/i.test(r.text)) misses.push("talks about work or searches with nothing running");
-      if (!r.text.includes("?")) misses.push("no open question");
-      const j = await judge(r.text, "Nothing is running for the member and nothing from Co is waiting on them. They texted \"Hey co, just checking in\".", "Is the text warm presence plus an open question inviting them to share what's on their mind, WITHOUT any status about searches, tasks or what Co is doing, and without inventing anything about their plans? Answer yes only if all of that holds.");
-      if (!j.yes) misses.push(`judge: ${j.reason}`);
-      return done(misses, r);
+      return done(await grade28(r.text), r);
     },
   },
   {

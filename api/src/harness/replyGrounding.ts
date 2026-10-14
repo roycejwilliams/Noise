@@ -40,7 +40,7 @@ import { tasteSummary } from "../services/outcomes.js";
 import { TEAM_BUILDER_LINE, handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { NO_COVERAGE, type SearchCoverage } from "../services/searchCoverage.js";
-import { CHECKIN_RULE, deadAir, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
+import { CHECKIN_RULE, cutNamesThread, deadAir, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
 import { SAFETY_INSTRUCTION } from "../services/safetyText.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
 import { memberZone, validZone, wordsZone } from "../services/memberTime.js";
@@ -1946,11 +1946,17 @@ async function bindThisReply(draft: string, rf: ReplyFacts, src: GroundingSource
 // Pure: dead air on this turn (services/memberWorld.ts deadAir), after every path that says something truer has had its turn: the
 // nothing-running line (a cut work claim with nothing running), a false "I don't have that" (the redraft corrects it), an invite cut
 // (the invite line), a safety turn, a discreet turn. The honest no-answer keeps an empty or near-empty cut (deadAir needs 3+ words).
+// Pure: the nothing-running line (#190) applies: a cut work claim while nothing runs, about Co's own work. Never when the cut sentence
+// named the member's own thread (services/memberWorld.ts cutNamesThread): it's theirs, so "want me to start on it?" would offer to take
+// over something only they own (case 30, 2026-10-14). #190 is unchanged for Co's own work.
+export function nothingRunningLineApplies(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts }): boolean {
+  return o.failed.some((c) => c.name === "claim_work_status") && nothingRunsAt(o.rf) && !startedThisTurn(o.rf) && !cutNamesThread(o.rf.world, o.draft, o.cut);
+}
 export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts; src: GroundingSources }): boolean {
   if (o.rf.instructions.includes(SAFETY_INSTRUCTION) || isDiscreetTurn(o.rf.instructions)) return false;
   if (o.failed.some((c) => c.name === "no_invite_sent_claim")) return false;
   if (deniesWhatTheyToldCo(o.failed, o.src)) return false;
-  if (o.failed.some((c) => c.name === "claim_work_status") && nothingRunsAt(o.rf) && !startedThisTurn(o.rf)) return false;
+  if (nothingRunningLineApplies(o)) return false;
   return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.sentThisTurn });
 }
 
@@ -2010,7 +2016,7 @@ export async function groundReply(
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
     if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent) {
-      result = { final: await withNothingRunningLine(cut, effectiveFailed1, rf), outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+      result = { final: nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf }) ? await withNothingRunningLine(cut, effectiveFailed1, rf) : cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
       let kept: { text: string; checks: GateCheck[] } | null = null;
@@ -2056,7 +2062,7 @@ export async function groundReply(
         const honest = after === "honest" ? await honestNoAnswer(src.message, rf.facts.find((f) => f.kind === "scheduled" && AHEAD_LINE.test(f.text))?.text ?? null).catch(() => null) : null;
         const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" ? "" : honest ?? MINIMAL_FALLBACK;
         // A cut "still working on it" ends on the honest line instead (item 3), never on a bare "not sure".
-        const workCut = effectiveFailed1.some((c) => c.name === "claim_work_status") && after !== "nothing" && !startedThisTurn(rf) && nothingRunsAt(rf);
+        const workCut = after !== "nothing" && nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf });
         // Dead air with a true line in their world: what's left, then that line, never "not sure" or nothing.
         // Code acts only on Co's own answer: the lead when the redraft said check-in; otherwise at most what the cut sentence named.
         const world = silent && after === "cut" ? deadAirLine({ checkin, world: rf.world, draft, cut }) : null;

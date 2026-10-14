@@ -1,0 +1,88 @@
+{
+  "hash": "95cb52eb21ff727b",
+  "case": "checkin-live-thread",
+  "recorded_at": "2026-10-14T17:18:55.201Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Co sent a member of a private club. The situation: Yesterday the MEMBER emailed a Hayes Valley venue about their Nov 14 dinner and said they were waiting to hear back; Co has no way to know whether the venue has answered them since. Nothing else is running or pe...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Co sent a member of a private club.\n\nThe situation: Yesterday the MEMBER emailed a Hayes Valley venue about their Nov 14 dinner and said they were waiting to hear back; Co has no way to know whether the venue has answered them since. Nothing else is running or pending. They texted \"Just checking in\".\n\nCo's text:\n\"\"\"All good here. Any word yet from Hayes Valley?\"\"\"\n\nDoes the text give presence AND pick up the venue thread by ASKING the member whether they've heard back (not stating it as fact), naturally, the way a friend who remembered would? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Any word yet from Hayes Valley?\\\" asks rather than asserts, one item, one breath\"}",
+      "usage": {
+        "input_tokens": 305,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 51,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg2WcxLV5fpoDW2DKzf1V",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Any word yet from Hayes Valley?\\\" asks rather than asserts, one item, one breath\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 305,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 51,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}
