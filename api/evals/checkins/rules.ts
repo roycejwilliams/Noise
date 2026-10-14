@@ -16,12 +16,14 @@ const starts: { kind: string; at: number }[] = [];
 const delayMs: Record<string, number> = {};
 let redraftText: string | null = null;
 // The scripted read's idea of a status report: news, a reply, nothing back, still waiting, confirmed.
-const STATUS_WORDS = /\b(no (real )?(word|news|reply)|nothing back|heard back|still waiting|confirmed|replied|booked)\b/i;
+const STATUS_WORDS = /\b(no (real )?(word|news|reply)|nothing (back|yet)|heard back|still waiting|confirmed|replied|booked)\b/i;
+// The last redraft prompt, for the thread-redraft checks.
+let lastRedraft = "";
 // The scripted read's idea of "the member told Co": their own texts in the prompt carry the news.
 const THEIR_NEWS = /\b(said yes|confirmed|booked|heard back|got back to me)\b/i;
 const backedByThem = (prompt: string) => {
   const p = prompt.replace(/\\"/g, '"');
-  const theirs = (p.match(/What the member texted Co lately[^\n]*\n((?:- "[^\n]*"\n)+)/)?.[1] ?? "") + (p.match(/Their message just now: "([^\n]*)"/)?.[1] ?? "");
+  const theirs = (p.replace(/\\n/g, "\n").match(/What they texted Co before that[^\n]*\n((?:- "[^\n]*"\n)+)/)?.[1] ?? "") + (p.match(/What they just told Co: "([^"]*)"/)?.[1] ?? "");
   return THEIR_NEWS.test(theirs);
 };
 const prior = globalThis.fetch;
@@ -46,6 +48,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
     text = JSON.stringify({ reports: backedByThem(body) ? [] : listed.filter((m) => STATUS_WORDS.test(m[2])).map((m) => Number(m[1])) });
   } else if (/Your draft reply:/.test(body)) {
     calls.push("redraft");
+    lastRedraft = body;
     text = redraftText ?? "";
   } else calls.push("other");
   return new Response(JSON.stringify({ id: "msg", type: "message", role: "assistant", model: "scripted", content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
@@ -268,6 +271,8 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const withTask = G.createReplyFacts();
   G.addMemberWorld(withTask, base({ exchange: QUIET, searching: NOTHING, tasks: ['Co is working on task #52 for them: "Draft the Sequin AI planning docs" (their words: "x").'] }));
   check("a task line naming the task passes", !narr("I'm still working on the Sequin AI planning docs.", withTask));
+  check("a bare \"my end\" is machinery: \"No news my end.\"", !!narr("No news my end."));
+  check("\"my side\" is machinery: \"Nothing new from my side.\"", !!narr("Nothing new from my side."));
   for (const m of ["Good to hear from you. Nothing new on my end since this morning.", "All quiet in my systems tonight.", "The Sequin rooftop search hit a limit on my end.", "The Sequin rooftop search is in my queue."]) check(`machinery stays cut, whatever it names: "${m}"`, !!narr(m), m);
   check("holding their thing behind Co's judgment stays cut even when it names it", !!narr("I'll send the Sequin rooftop options once they're worth sending."));
   check("a sentence naming nothing of theirs gets no pass", !!narr("Still looking into a few things."));
@@ -296,12 +301,13 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const cut = G.stripUnsupported("Good to hear from you. No real news yet from the Hayes Valley venue.", G.codeChecks("Good to hear from you. No real news yet from the Hayes Valley venue.", cutRun.f, src).filter((c) => !c.pass));
   check("the thread report is cut sentence for sentence", cut === "Good to hear from you.", cut);
   const prompt = M.threadReadPrompt(THREAD.text, "Just checking in", ["No word yet from the Hayes Valley venue."]);
-  check("the read asks where the thread stands, against advice, a plan, a question or their own words", /does it state where that thread stands, as a fact \(news, a reply, still waiting, nothing back, confirmed, booked, cancelled\), rather than advice, a plan, a question, or saying back what the member themselves told Co \(just now or in their texts above\)\?/.test(prompt) && /\{"reports":/.test(prompt));
+  check("the read asks where the thread stands, against advice, a plan, a question or their own words", /does it state where that thread stands, as a fact \(news, a reply, still waiting, nothing back, confirmed, booked, cancelled\), rather than advice, a plan, a question, or saying back what the member themselves told Co\?/.test(prompt) && /\{"reports":/.test(prompt));
+  check("their message this turn comes first, labelled, and an echo of their news is named as not a report, with one example each way", prompt.indexOf('What they just told Co: "Just checking in"') < prompt.indexOf("Sentences:") && /A sentence that repeats, reacts to or builds on news the member gave \(just now or before\) is NOT a status report/.test(prompt) && /"Great that the venue said yes" is not a report; with no news from them, "No word yet from the venue" is a report/.test(prompt));
   check("a thread-report cut is Co's own wording: the fence keeps the draft readable for lessons", SF.redactCuts("x", [{ name: "no_thread_report", reason: 'thread_report: "x"' }]) === "x");
   // Their news from an earlier turn may be said back; a status they never gave is still cut (review, 2026-10-14).
   const told = [...QUIET, { at: at("2026-10-14T05:00:00Z"), from: "member" as const, text: "Hayes Valley said yes for the 14th" }, { at: at("2026-10-14T05:00:20Z"), from: "co" as const, text: "That's a relief." }, { at: at("2026-10-14T05:02:00Z"), from: "member" as const, text: "ok what next" }];
   const echoWorld = base({ threads: [THREAD], exchange: told });
-  check("their recent texts reach the read (fenced, theirs only)", echoWorld.theirWords.includes("Hayes Valley said yes for the 14th") && !echoWorld.theirWords.includes("That's a relief.") && /What the member texted Co lately, oldest first \(their own words\):\n(?:.*\n)*- "Hayes Valley said yes for the 14th"/.test(M.threadReadPrompt(THREAD.text, "ok what next", ["x"], echoWorld.theirWords)));
+  check("their recent texts reach the read (fenced, theirs only)", echoWorld.theirWords.includes("Hayes Valley said yes for the 14th") && !echoWorld.theirWords.includes("That's a relief.") && /What they texted Co before that, oldest first \(their own words\):\n(?:.*\n)*- "Hayes Valley said yes for the 14th"/.test(M.threadReadPrompt(THREAD.text, "ok what next", ["x"], echoWorld.theirWords)));
   check("an echo of their news from two turns ago is kept: \"Since Hayes Valley confirmed, let's plan the menu.\"", !(await reportRun("Since Hayes Valley confirmed, let's plan the menu.", { message: "ok what next", recentConversation: "" }, judge, echoWorld)).check);
   check("the same line with no news from them is still cut", !!(await reportRun("Since Hayes Valley confirmed, let's plan the menu.", { message: "ok what next", recentConversation: "" }, judge, base({ threads: [THREAD], exchange: QUIET }))).check);
   check("an unbacked status line is still cut even when they talked about the venue", !!(await reportRun("Still nothing back from Hayes Valley.", { message: "ok what next", recentConversation: "" }, judge, base({ threads: [THREAD], exchange: [...QUIET, { at: at("2026-10-14T05:00:00Z"), from: "member" as const, text: "I emailed Hayes Valley about the 14th" }] }))).check);
@@ -455,6 +461,43 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
     redraftText = null;
     const own = await G.groundReply("Hey Jordan, good to hear from you. Still searching for jazz bars for you.", of, { message: "hey", recentConversation: "" }, { userId: null, record: false });
     check("a cut work claim about Co's own search, nothing running: the nothing-running line fires as before", /Nothing's running on that right now/.test(own.final) && G.nothingRunningLineApplies({ draft: "Hey Jordan, good to hear from you. Still searching for jazz bars for you.", cut: "Hey Jordan, good to hear from you.", failed: [{ name: "claim_work_status", pass: false }] as any, rf: of }), own);
+  }
+  // A cut thread report always gets one redraft (case 30's exact draft, 2026-10-14): it asks about the thread, and the "it" that
+  // pointed at the cut line never goes out. Rechecked like any rewrite; cut again, the cut goes out, never a second redraft.
+  {
+    const threadOnly = base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] });
+    const draft30 = "Nothing yet from the Hayes Valley place. I'll be glad to hear it the second you do.";
+    const run30 = async (rewrite: string, instr: string[] = []) => {
+      const f = G.createReplyFacts();
+      G.addFact(f, "known", G.runningWorkLine([], [], NOTHING));
+      G.addMemberWorld(f, threadOnly);
+      for (const i of instr) G.addInstruction(f, i);
+      redraftText = rewrite;
+      calls.length = 0;
+      lastRedraft = "";
+      const r = await G.groundReply(draft30, f, { message: "Just checking in", recentConversation: "" }, { userId: null, record: false });
+      return { r, redrafts: calls.filter((c) => c === "redraft").length, prompt: lastRedraft };
+    };
+    const asked = await run30("Any word yet from the Hayes Valley place?");
+    check("case 30's draft: the thread report is cut and the one redraft asks about Hayes Valley", asked.r.outcome === "redrafted" && asked.r.final === "Any word yet from the Hayes Valley place?" && asked.redrafts === 1 && asked.r.checks.some((c) => c.name === "no_thread_report" && !c.pass), asked.r);
+    check("the dangling \"it\" never goes out", !/hear it the second/.test(asked.r.final));
+    check("the redraft is told the thread is theirs: ask about it or leave it, nothing pointing back", asked.prompt.includes(G.THREAD_REDRAFT_NOTE) && /Return ONLY the message/.test(asked.prompt) && !/Return ONLY the JSON/.test(asked.prompt));
+    const again = await run30("Still nothing back from Hayes Valley.");
+    check("a redraft that's cut again: the cut goes out, with no second redraft", again.redrafts === 1 && again.r.outcome === "stripped" && again.r.final === "I'll be glad to hear it the second you do.", again.r);
+    const empty = await run30("");
+    check("a redraft that fails: the cut goes out, with no second redraft", empty.redrafts === 1 && empty.r.final === "I'll be glad to hear it the second you do.", empty.r);
+    const { SAFETY_INSTRUCTION } = await import("../../src/services/safetyText.js");
+    const safe = await run30("Any word yet from the Hayes Valley place?", [SAFETY_INSTRUCTION]);
+    check("never on a safety turn: no redraft from this path, the cut goes out", safe.redrafts === 0 && safe.r.final === "I'll be glad to hear it the second you do.", safe.r);
+    const D = await import("../../src/harness/discretion.js");
+    check("never on a discreet turn or an invite cut", !G.threadRedraftAt({ failed: [{ name: "no_thread_report", pass: false }] as any, rf: (() => { const f = G.createReplyFacts(); G.addInstruction(f, `${D.DISCRETION_MARK} keep it`); return f; })() }) && !G.threadRedraftAt({ failed: [{ name: "no_thread_report", pass: false }, { name: "no_invite_sent_claim", pass: false }] as any, rf: G.createReplyFacts() }));
+    const f = G.createReplyFacts();
+    G.addFact(f, "known", G.runningWorkLine([], [], NOTHING));
+    G.addMemberWorld(f, threadOnly);
+    redraftText = "Night Jordan.";
+    calls.length = 0;
+    const other = await G.groundReply("Night Jordan, sleep well. Talk at 9am about the Nov 14 plan.", f, { message: "ok thanks, night", recentConversation: "" }, { userId: null, record: false });
+    check("a cut that isn't a thread report gets no redraft from this path", !calls.includes("redraft") && other.final === "Night Jordan, sleep well." && !G.threadRedraftAt({ failed: [{ name: "time_on_file", pass: false }] as any, rf: f }), other);
   }
   // The reviewer's probes: not check-ins, no status cut.
   const nopa = await turn(w, "", "Yes, I booked Nopa for you.", "Did you book Nopa?");

@@ -1,7 +1,7 @@
 {
-  "hash": "25489a566f200180",
+  "hash": "771ce89019ca2546",
   "case": "checkin-thread-echo",
-  "recorded_at": "2026-10-14T17:20:13.080Z",
+  "recorded_at": "2026-10-14T17:38:45.339Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-haiku-5-5",
   "request": {
@@ -20,7 +20,7 @@
         {
           "content": [
             {
-              "text": "Does this text message actually offer that CO will call THEM — Co proposing to place an outbound call to the person, not just telling them how they can call Co themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Co offering to call them.\n\nMessage: \"That's great news. Nov 14 is locked in then.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "text": "Does this text message actually offer that CO will call THEM — Co proposing to place an outbound call to the person, not just telling them how they can call Co themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Co offering to call them.\n\nMessage: \"That's great, congrats on locking it in.\n\nNext up I'd nail down your final headcount, since that drives the menu and the room setup with them. Then get the menu or catering squared away, lock any deposit or contract details they sent over, and send out invites with an RSVP date so you know numbers in time.\n\nHow many are you expecting on the 14th?\"\n\nReturn ONLY \"yes\" or \"no\".",
               "type": "text"
             }
           ],
@@ -37,26 +37,31 @@
       "model": "claude-haiku-5-5",
       "text": "no",
       "usage": {
-        "input_tokens": 148,
+        "input_tokens": 239,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_creation": {
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 3,
+        "output_tokens": 49,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 46
         },
         "service_tier": "standard",
         "inference_geo": "global"
       },
       "body": {
         "model": "claude-haiku-5-5",
-        "id": "msg_011Cg2WiiwzY31N3GoQgmcYL",
+        "id": "msg_011Cg2Y8h8tttb5SHs6yEza1",
         "type": "message",
         "role": "assistant",
         "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSqgUKEAgSGAI4AUIIdGhpbmtpbmcSDLKBkYR5oSSArYz+xRoMNrHA8Jk3AoKYEz5AIjArWCfusH4xIxtNLCRe5uLdxRaKAQ0yK81lxqQ5tv9t5k/D4UNTcjZn0W1f7RhSHC8qxwSvQ8cbxS2HPcllNB87VveCCSh+MGGq2T4J/giaMeWBGMMieH7GvfzVGhV4EFSuCc+TMKAYLlzSR23jX+QcdqMrnpN9z76m1uz1hOH4c25871Enyfjm9Yc9LyRE15fYh+AX8GWnhpIacOyZ8DlB/YCUFXZzptwSh8m5/Rvgj2vwFshFYYLp/VZMekNLtFOac68utdB781EZiIzz4m4g6zsNXqOmLztVmBQ5DM4hKvQj3wpT3FI6HKAXCNcttSalp5t107zlotkWzFVE4ACVleirrYtjpoZc+badP/9p/kvfQlJ3cAUNCpLVtIGMxFPmt3NL3ivEobCaReoJVBdYFq4AISXRum6vUxa8ybFU9SQ6DhoZnZlic2tvNqFsoSb+dTMhuAexGhU7vDbY/8NlJUVs+4YT+1xZv2VPvNfflmXNH9Bt8jIgrsZjpRF1VLCFcCZ8o+m4cQtqQJ32AzY66HAHneVPQhmUmjruXmi5ccQWu/yWX/hhPWCCiMWn+okgZ1TpNkZybVGcaykZoKISmFRiJALXeHrAq0lgCFnyVUB5TZJ4n5M2moSa4U5UFfmhKpHybNwHlCTyuvOm6iUAlSV3YYxuqq9Db57iVdpj2dO1MJTqR0xvHIbVCc5lmF5t7aCDRqVdDROxot3MGRVGPI+WZwGEDZSwojkbpIeNl8KUqtLAxukFjwuLMls2bvL/BMXsgDrsOon3aYo/aZJgalRPjwEN7N4OUGa5kY4C7I8UjtF0PDopFZs71Nljwr9Rmfcqly7Nqa8XGAE="
+          },
           {
             "type": "text",
             "text": "no"
@@ -67,16 +72,16 @@
         "stop_sequence": null,
         "stop_details": null,
         "usage": {
-          "input_tokens": 148,
+          "input_tokens": 239,
           "cache_creation_input_tokens": 0,
           "cache_read_input_tokens": 0,
           "cache_creation": {
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 3,
+          "output_tokens": 49,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 46
           },
           "service_tier": "standard",
           "inference_geo": "global"

@@ -1,7 +1,7 @@
 {
   "hash": "aa29a1b5f0b7e91c",
   "case": "checkin-live-thread",
-  "recorded_at": "2026-10-14T17:18:44.122Z",
+  "recorded_at": "2026-10-14T17:38:23.279Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -4167,39 +4167,39 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "[tool_use sendReply {\"message\":\"All good here. Still waiting to hear from Hayes Valley, nothing new since this morning.\"}]",
+      "text": "[tool_use sendReply {\"message\":\"Good to hear from you. Any word yet from the Hayes Valley place?\"}]",
       "usage": {
         "input_tokens": 2,
-        "cache_creation_input_tokens": 9864,
-        "cache_read_input_tokens": 48440,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 58304,
         "cache_creation": {
-          "ephemeral_5m_input_tokens": 9864,
+          "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 89,
+        "output_tokens": 109,
         "output_tokens_details": {
-          "thinking_tokens": 11
+          "thinking_tokens": 37
         },
         "service_tier": "standard",
         "inference_geo": "global"
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cg2Wc6GT2EVUS4yPrk1Kb",
+        "id": "msg_011Cg2Y729pejufoA5xWx56u",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EsYDCsoCCBIYAipA6jyZMOcCOnvT9Bqd6+i5HhOOvkg7uIrWlag17bXGbbYdMMy2LHEabitwfCk5LXaNhCzVXkmuOBSZTkogOD1ydDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB8/K+1gbCAUAIBhAAGhIBRNgBRM8Cd2oDTzcFKM4EJq0gAzIEEnHPJToE94i9P0IEYhhVhUoEcqrY4VBFWgTZBeFWYAJoAXAC2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA6DknI5eLgwhtmqz9BnSi+zZ4YfYYJSWxTsTjyP+/hhCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyDCFf5Fu5XjAnIuscaDNwiV5U36qPhywUUIyIwHGdUizmbmMTKkL28kB43uhUTN4yIrMwTe4DZQdZkaUluAMzyRaAgy/5Jz93LX+lRKikRY3PNGCeXDFfgd9/IkXVcJoC1qMzpFmX3tck6uOkAJ4QfbnMuZ5zvyhgB"
+            "signature": "EpYECsoCCBIYAipARFmfQON1jOv+aPLQhtbfK7pECnw6xI3O3HagBF/4Q9cOvF5wE1uXXj1oCuDlFmkdosSadM6nqB64Jorg9IV6fjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBj/y+1gbCAUAIBhAAGhIBRNgBRM8Cd2oDTzcFKM4EJq0gAzIEEnHPJToE94i9P0IEYhhVhUoEcqrY4VBFWgTZBeFWYAJoAXAC2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA6DknI5eLgwhtmqz9BnSi+zZ4YfYYJSWxTsTjyP+/hhCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgw3yXWmHds6EdbdQCsaDJR72sWJ7yfzEpXnQSIwlnuIyOHiXSw+aDvq9Sl+SrooMCwFBINcYtGtHy5ubtv66juaNeoznDi7m5HLWPxSKnk3HtxICqIKxk8pEume1/q0cqhluEJgXAvVg7VDYqzUpPxSxB9MN8CHcuc4YpgYjqcMGQLYJmejXXpdaQkst5F6grF0oYCc65G9MUrHXRu7/W3VUbQjBalTIQ0STzj9OigB7qwZvPbAGcQVHo9d+fr2W225IgwMOqFfGAE="
           },
           {
             "type": "tool_use",
-            "id": "toolu_01PdPQ4RmDKjtqEzjs1djezz",
+            "id": "toolu_01G8yRPtixcuARkpRCnqaqe9",
             "name": "sendReply",
             "input": {
-              "message": "All good here. Still waiting to hear from Hayes Valley, nothing new since this morning."
+              "message": "Good to hear from you. Any word yet from the Hayes Valley place?"
             },
             "caller": {
               "type": "direct"
@@ -4212,15 +4212,15 @@
         "stop_details": null,
         "usage": {
           "input_tokens": 2,
-          "cache_creation_input_tokens": 9864,
-          "cache_read_input_tokens": 48440,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 58304,
           "cache_creation": {
-            "ephemeral_5m_input_tokens": 9864,
+            "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 89,
+          "output_tokens": 109,
           "output_tokens_details": {
-            "thinking_tokens": 11
+            "thinking_tokens": 37
           },
           "service_tier": "standard",
           "inference_geo": "global"

@@ -27,7 +27,9 @@ type Scene = {
   facts?: [Kind, string][];
   message: string;
 };
-type Reply = { text: string; tools: string[]; checked: string[]; world: string };
+// reacted: Co answered with a reaction move (a tapback, or leaving it at one) instead of a text: Co's choice (tapbacks are quiet).
+type Reply = { text: string; tools: string[]; checked: string[]; world: string; reacted: boolean };
+const REACTION_TOOLS = ["reactInsteadOfReplying", "leaveItAtReaction"];
 
 const NONE = { asks: [] as string[], goals: [] as string[], held: [] as string[] };
 const SEQUIN = { asks: [] as string[], goals: ["a rooftop venue for the Sequin AI launch party"], held: [] as string[] };
@@ -80,7 +82,8 @@ async function reply(s: Scene): Promise<Reply> {
     { dryRun: true, record: false, stubSearch: true },
   ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] }));
   const checked = (r.grounding ?? []).filter((g: any) => g.outcome && g.outcome !== "as_drafted" && g.outcome !== "unchecked").map((g: any) => `${g.outcome}: ${(g.checks ?? []).filter((x: any) => !x.pass || x.name === "world_line").map((x: any) => x.reason ?? x.name).join(" | ").slice(0, 200)}`);
-  return { text: String(r.replyText ?? ""), tools: r.toolsCalled ?? [], checked, world: M.memberWorldFact(world) };
+  const tools: string[] = r.toolsCalled ?? [];
+  return { text: String(r.replyText ?? ""), tools, checked, world: M.memberWorldFact(world), reacted: tools.some((t) => REACTION_TOOLS.includes(t)) };
 }
 
 // One yes/no question about the reply, quoted. A failed or unparsed judge is a miss, never a pass.
@@ -252,12 +255,13 @@ export const CASES: GoldenCase[] = [
   {
     n: 32,
     id: "checkin-thread-echo",
-    title: "\"Hayes Valley just confirmed!\": Co saying their own news back (\"Great that Hayes Valley confirmed\") is kept, never cut as a status report",
+    title: "\"Hayes Valley just confirmed! What should I sort out next?\": Co saying their own news back (\"Great that Hayes Valley confirmed\") is kept, never cut as a status report",
     status: { live: true },
     from: "Third review of the check-in PR, 2026-10-14: the thread guard must keep an echo of what the member told Co",
     run: async () => {
       const thread = "Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner";
-      const message = "Hayes Valley just confirmed!";
+      // Asks for words, so a text reply is called for (a bare "just confirmed!" drew a tapback first in 3 of 3 live runs, 2026-10-14).
+      const message = "Hayes Valley just confirmed! What should I sort out next for the 14th?";
       const exchange: Line[] = [
         { at: new Date("2026-10-12T19:10:00Z"), from: "member", text: "Emailed the Hayes Valley place about the 14th. Fingers crossed they get back to me." },
         { at: new Date("2026-10-12T19:10:40Z"), from: "co", text: "Good call reaching out early. Tell me what they say." },
@@ -279,9 +283,10 @@ export const CASES: GoldenCase[] = [
       if (G.codeChecks(echo, rf, { message, recentConversation: "" }).some((c) => c.name === "no_thread_report")) misses.push(`"${echo}" was cut as a status report`);
       // And the reply turn: whatever Co writes back to their news, no line of it is cut as a thread report.
       const r = await reply({ firstName: "Ellis", now: DAY, exchange: exchange.slice(0, 2), searching: NONE, threads, message });
-      misses.push(...voiceMisses(r.text));
+      // A reaction alone is a real answer (Co's quiet move); neither a text nor a reaction is a miss (voiceMisses: "no reply").
+      if (!(r.reacted && !r.text.trim())) misses.push(...voiceMisses(r.text));
       if (r.checked.some((c) => /thread_report/.test(c))) misses.push("the reply had a line cut as a thread report");
-      if (!/Hayes|venue|dinner|confirm|14/i.test(r.text)) misses.push("doesn't respond to their news");
+      if (!r.reacted && !/Hayes|venue|dinner|confirm|14/i.test(r.text)) misses.push("doesn't respond to their news");
       return result(misses, `${observed(r)}  [read of "${echo}": ${read ? JSON.stringify(read.reports) : "none"}]`);
     },
   },

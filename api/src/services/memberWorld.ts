@@ -354,12 +354,13 @@ export const sentenceKey = (s: string) => s.replace(/[’‘]/g, "'").replace(/\
 // The read's question, for every candidate in one reply at once.
 export function threadReadPrompt(thread: string, theirMessage: string, sentences: string[], theirWords: string[] = []): string {
   return `Co, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: "${thread}". Only the member knows where it stands, so Co may only say where it stands when the member told Co.
-${theirWords.length ? `What the member texted Co lately, oldest first (their own words):\n${theirWords.map((w) => `- "${w}"`).join("\n")}\n` : ""}Their message just now: "${theirMessage.slice(0, 300)}"
-
+What they just told Co: "${theirMessage.slice(0, 300)}"
+${theirWords.length ? `What they texted Co before that, oldest first (their own words):\n${theirWords.map((w) => `- "${w}"`).join("\n")}\n` : ""}
 Sentences:
 ${sentences.map((x, i) => `${i + 1}. "${x}"`).join("\n")}
 
-For each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Co (just now or in their texts above)?
+For each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Co?
+A sentence that repeats, reacts to or builds on news the member gave (just now or before) is NOT a status report. For example, after "the venue said yes", "Great that the venue said yes" is not a report; with no news from them, "No word yet from the venue" is a report.
 
 Return ONLY JSON: {"reports": [the numbers of the sentences that state where it stands]}`;
 }

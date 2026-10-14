@@ -1483,7 +1483,7 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
 
 // The redraft's extra line when the cut left dead air (deadAir): Co decides whether their message was a check-in.
 export const WORLD_REDRAFT_NOTE = "What's left of the draft is a few words of presence, and their world (\"Their world right now\" in the facts) has a true line. First decide whether their message was a check-in or a casual opener with no ask. If it was, the smallest true reply is that presence plus the one item their world leads with, in your own words and their register (late at night, soft and open first), never your own machinery (\"nothing new on my end\"); it may run one short line longer than the draft. If it wasn't (a goodnight, a hard moment, a question, anything else), write the smallest true reply as below and bring in nothing from their world. Return ONLY JSON: {\"checkin\": true or false, \"reply\": \"the message\"}.";
-async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources, earlierTry: string | null = null, note: string | null = null): Promise<string | null> {
+async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources, earlierTry: string | null = null, note: string | null = null, json = false): Promise<string | null> {
   const tail = src.recentConversation.split("\n").slice(-14).join("\n");
   const { text } = await generateText({
     model: anthropic(LAYER3_MODELS.redraft),
@@ -1508,7 +1508,7 @@ Your draft reply:
 These parts of the draft aren't supported by the facts or the conversation:
 ${failed.map((f) => `- ${f.reason ?? f.name}`).join("\n")}
 ${earlierTry ? `\nAn earlier rewrite also had unsupported parts (listed above too): "${earlierTry}"\nThis time, answer what they just asked first, in words the facts above actually support, even if the honest answer is short.\n` : ""}${note ? `\n${note}\n` : ""}
-Deleting the unsupported parts left too little to answer them, so write the smallest true reply instead. Keep every supported sentence of the draft word for word. Where a flagged part can be corrected from a FACT (the real time, what was actually sent), correct it with the FACT's own words. When the FACTS say where something of theirs stands (a search, a task, your working notes, what you sent), and what's left doesn't answer them, answer with that state: what's found, what's unconfirmed, the next move. That is the answer, never a remark about what you can't measure, describe or nail down (2026-10-01: "how proactive are you?" became a disclaimer while their venue search's status sat in the facts). Otherwise say once, plainly, the one thing you don't have. Never add a new recommendation or change which option the draft recommends, never add an event, person, place, number, date or link that isn't in the draft or the FACTS (people and details from what they've told you before about their own life may stay or be used), never say you don't have something that what they've told you before gives, and never add anything about how they're feeling or what they're going through. No promises, no "let me look" or "one sec". If they want something found and a FACT shows work under way for it, say what you're doing about it now, from that FACT; never offer it back to them as a question. Match the draft's capitalization style. ${note ? "At most one short line longer than the draft. Return ONLY the JSON." : "Same length or shorter. Return ONLY the message."}`,
+Deleting the unsupported parts left too little to answer them, so write the smallest true reply instead. Keep every supported sentence of the draft word for word. Where a flagged part can be corrected from a FACT (the real time, what was actually sent), correct it with the FACT's own words. When the FACTS say where something of theirs stands (a search, a task, your working notes, what you sent), and what's left doesn't answer them, answer with that state: what's found, what's unconfirmed, the next move. That is the answer, never a remark about what you can't measure, describe or nail down (2026-10-01: "how proactive are you?" became a disclaimer while their venue search's status sat in the facts). Otherwise say once, plainly, the one thing you don't have. Never add a new recommendation or change which option the draft recommends, never add an event, person, place, number, date or link that isn't in the draft or the FACTS (people and details from what they've told you before about their own life may stay or be used), never say you don't have something that what they've told you before gives, and never add anything about how they're feeling or what they're going through. No promises, no "let me look" or "one sec". If they want something found and a FACT shows work under way for it, say what you're doing about it now, from that FACT; never offer it back to them as a question. Match the draft's capitalization style. ${json ? "At most one short line longer than the draft. Return ONLY the JSON." : note ? "At most one short line longer than the draft. Return ONLY the message." : "Same length or shorter. Return ONLY the message."}`,
   });
   const out = text.trim().replace(/^"|"$/g, "");
   return out || null;
@@ -1952,9 +1952,18 @@ async function bindThisReply(draft: string, rf: ReplyFacts, src: GroundingSource
 export function nothingRunningLineApplies(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts }): boolean {
   return o.failed.some((c) => c.name === "claim_work_status") && nothingRunsAt(o.rf) && !startedThisTurn(o.rf) && !cutNamesThread(o.rf.world, o.draft, o.cut);
 }
+// Pure: a turn no redraft of these two kinds runs on (dead air, a cut thread report): a safety turn, a discreet turn, an invite cut.
+export function redraftHeldBack(rf: ReplyFacts, failed: GateCheck[]): boolean {
+  return rf.instructions.includes(SAFETY_INSTRUCTION) || isDiscreetTurn(rf.instructions) || failed.some((c) => c.name === "no_invite_sent_claim");
+}
+// Pure: a cut thread report gets one redraft, whatever is left (case 30, 2026-10-14: cutting "Nothing yet from the Hayes Valley
+// place." left "I'll be glad to hear it the second you do.", its "it" pointing at nothing). One Sonnet call, only on such a cut.
+export function threadRedraftAt(o: { failed: GateCheck[]; rf: ReplyFacts }): boolean {
+  return o.failed.some((c) => c.name === "no_thread_report") && !redraftHeldBack(o.rf, o.failed);
+}
+export const THREAD_REDRAFT_NOTE = "A sentence saying where their own thread stands was cut: only they know that. Don't say where it stands; ask about it, or leave it out, and make sure nothing left points back at what was cut.";
 export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts; src: GroundingSources }): boolean {
-  if (o.rf.instructions.includes(SAFETY_INSTRUCTION) || isDiscreetTurn(o.rf.instructions)) return false;
-  if (o.failed.some((c) => c.name === "no_invite_sent_claim")) return false;
+  if (redraftHeldBack(o.rf, o.failed)) return false;
   if (deniesWhatTheyToldCo(o.failed, o.src)) return false;
   if (nothingRunningLineApplies(o)) return false;
   return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.sentThisTurn });
@@ -2013,9 +2022,12 @@ export async function groundReply(
     // the cut left a few words of presence while their world has a true line. The draft is retried with the facts; if that can't be
     // kept, the true line is said from their world (services/memberWorld.ts worldLine), the way #190 grounds the nothing-running line.
     const silent = deadAirAt({ draft, cut, failed: effectiveFailed1, rf, src });
+    // A cut thread report always gets the one redraft (threadRedraftAt); its rewrite is rechecked like any other, thread read
+    // included, and if that fails too the cut goes out: never a second redraft.
+    const threadCut = threadRedraftAt({ failed: effectiveFailed1, rf });
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
-    if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent) {
+    if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent && !threadCut) {
       result = { final: nothingRunningLineApplies({ draft, cut, failed: effectiveFailed1, rf }) ? await withNothingRunningLine(cut, effectiveFailed1, rf) : cut, outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
@@ -2023,7 +2035,10 @@ export async function groundReply(
       let checkin: boolean | null = null;
       const t0 = Date.now();
       try {
-        const raw = await redraft(draft, effectiveFailed1, rf, src, null, silent ? WORLD_REDRAFT_NOTE : null);
+        // The same redraft path: the dead-air note (and its {checkin, reply} answer) when that's the reason, the thread note when a
+        // thread report was cut, both when both.
+        const note = [silent ? WORLD_REDRAFT_NOTE : null, threadCut ? THREAD_REDRAFT_NOTE : null].filter(Boolean).join("\n");
+        const raw = await redraft(draft, effectiveFailed1, rf, src, null, note || null, silent);
         // On dead air the redraft says whether their message was a check-in (Co decides); a reply that isn't that shape isn't used.
         const parsed = silent ? parseWorldRedraft(raw) : null;
         if (parsed) checkin = parsed.checkin;
