@@ -168,7 +168,7 @@ const deps = (o: Partial<Deps> = {}): Deps => ({
   check("a gate that can't be read holds (nothing spent on a guess)", /deps\.held\(row\.user_id\)\.catch\(\(\) => \["gate_unreadable"\]\)/.test(src("services/goalSweep.ts")));
   const jobs = src("jobs/index.ts");
   const gate = jobs.slice(jobs.indexOf("// Zero sweeps for a member dispatch would hold every find for"), jobs.indexOf("const localToday = DateTime.now()"));
-  check("the ask sweep checks the gate once per member, only when an ask is due (run-today, backoff, daily cap), before any search", /askSearchDue\(r\)\)/.test(gate) && /ranToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY\) return;/.test(gate) && /sweepHold\(userRows\[0\]\.user_id, "ask"\)[\s\S]{0,200}decision: "sweep\.held"[\s\S]{0,200}return;/.test(gate) && jobs.indexOf('sweepHold(userRows[0].user_id, "ask")') < jobs.indexOf("await attemptEventSurfacing({"));
+  check("the ask sweep checks the gate once per member, only when an ask is due (run-today, backoff, daily cap), before any search", /askSearchDue\(r\)( && cadenceDue\(r\))?\)/.test(gate) && /ranToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY\) return;/.test(gate) && /sweepHold\(userRows\[0\]\.user_id, "ask"\)[\s\S]{0,200}decision: "sweep\.held"[\s\S]{0,200}return;/.test(gate) && jobs.indexOf('sweepHold(userRows[0].user_id, "ask")') < jobs.indexOf("await attemptEventSurfacing({"));
   check("review of #134: a held ask is never marked attempted (a held day doesn't move its backoff clock)", !/UPDATE ask_checkins/.test(gate));
 
   // ---------------------------------------------------------------- A4 + the work order's third test: the goal cooldown is enforced

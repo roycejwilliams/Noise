@@ -21,8 +21,7 @@ const quietDeps = (lastInboundAt: Date | null, log: string[]) => ({
 });
 
 // ---------------------------------------------------------------- 40
-// Silent for 9 days (the tapered band). Silent for exactly 7 is still daily with today's thresholds (SEARCH_TAPER.dailyUpToDays = 7:
-// wrote within 7 days is engaged or active), so the case uses 9, which searches every 3 days.
+// Silent for 9 days, inside the tapered band (from 7 days of silence, every 3 days: SEARCH_TAPER.dailyUpToDays = 6).
 const silentTapered: GoldenCase = {
   n: 40,
   id: "taper-silent-member",

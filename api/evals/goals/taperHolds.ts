@@ -30,8 +30,8 @@ const NOW = at("2026-10-30");
 {
   // Their message at 11am their time on that day.
   const t = (d: string | null) => DS.quietTapered({ now: NOW, zone: Z, lastInboundAt: d ? at(d, 18) : null });
-  check("wrote 7 days ago: not tapered (engaged and active are untouched)", !t("2026-10-23") && !t("2026-10-29"));
-  check("quiet 8 days or more: tapered", t("2026-10-22") && t("2026-09-01"));
+  check("wrote 6 days ago or less: not tapered (engaged and active are untouched)", !t("2026-10-24") && !t("2026-10-29"));
+  check("quiet 7 days or more: tapered (a week is the unit, Royce 2026-10-14)", t("2026-10-23") && t("2026-10-22") && t("2026-09-01"));
   check("no message on record: not tapered (never taper on missing data)", !t(null));
   check("it matches the cadence: tapered exactly when the search cadence is past daily", ["2026-10-29", "2026-10-23", "2026-10-22", "2026-10-15", "2026-10-01"].every((d) => t(d) === (DS.searchCadence({ now: NOW, zone: Z, lastInboundAt: at(d, 18), lastSearchAt: at("2026-10-29") }).everyDays > 1)));
 }
@@ -212,6 +212,31 @@ const NOW = at("2026-10-30");
   const v = parseVerdicts(JSON.stringify({ verdicts: [{ id: "C1", verdict: "send", whyMember: "small rooms", cites: ["T1"], whyNow: "this week", wow: true, lastDay: null, rank: 1 }, { id: "C2", verdict: "send", whyMember: "small rooms", cites: ["T1"], whyNow: "this week", wow: true, lastDay: null, rank: 2 }, { id: "C3", verdict: "send", whyMember: "they asked", cites: ["T1"], whyNow: "now", wow: true, lastDay: null, rank: 1 }] }))!;
   const js = tierPicks(c, guardVerdicts(c, v));
   check("the first full morning after resume is a normal morning: one per tier (two held finds in one tier send one), not a dump", js.filter((j) => j.verdict === "send").map((j) => j.name).sort().join() === "A judged before,B held 1" && js.find((j) => j.name === "C held 2")!.reason === "tier_taken");
+}
+
+// ---------------------------------------------------------------- the hourly ask sweep follows the same cadence (Royce, 2026-10-14)
+{
+  // Per ask: the ask's own last search against their own last message, the same rule as the 9am floor.
+  const ask = (inbound: string | null, lastSearch: string | null) => DS.searchCadence({ now: NOW, zone: Z, lastInboundAt: inbound ? at(inbound, 18) : null, lastSearchAt: lastSearch ? at(lastSearch, 17) : null });
+  check("quiet ask: engaged member's ask (wrote 2 days ago) is due daily", ask("2026-10-28", "2026-10-29").search);
+  check("quiet ask: 10 days quiet, searched yesterday: not due (every 3 days)", !ask("2026-10-20", "2026-10-29").search && ask("2026-10-20", "2026-10-29").everyDays === 3);
+  check("quiet ask: 10 days quiet, searched 3 days ago: due", ask("2026-10-20", "2026-10-27").search);
+  check("quiet ask: 30 days quiet, searched 3 days ago: not due (weekly); 7 days ago: due", !ask("2026-09-30", "2026-10-27").search && ask("2026-09-30", "2026-10-23").search);
+  check("quiet ask: they wrote since the ask's last search: due on the next tick (same-day resume)", DS.searchCadence({ now: NOW, zone: Z, lastInboundAt: at("2026-10-30", 15), lastSearchAt: at("2026-10-27", 17) }).search);
+  check("quiet ask: never searched: due", ask("2026-09-30", null).search);
+
+  const j = src("jobs/index.ts").replace(/\s+/g, "");
+  check("pin: the hourly ask sweep reads the same cadence, from their last message and the ask's own last search only",
+    j.includes("constcadenceDue=(r:any):boolean=>lastIn===undefined||searchCadence({now:newDate(),zone:timezone,lastInboundAt:lastIn,lastSearchAt:r.last_attempted_at?newDate(r.last_attempted_at):null}).search;"));
+  check("pin: a silence read that fails searches as usual (it only slows, never deletes)", j.includes("constlastIn=awaitlastInboundAt(userRows[0].user_id).catch(()=>undefined);") && j.includes("lastIn===undefined||"));
+  const loop = j.slice(j.indexOf("for(constrowofuserRows){"));
+  check("pin: a tapered ask is skipped before it counts as a search or moves its last search (nothing written, nothing deleted)",
+    loop.indexOf("if(!cadenceDue(row))continue;") > 0 && loop.indexOf("if(!cadenceDue(row))continue;") < loop.indexOf("searchedToday++") && loop.indexOf("if(!cadenceDue(row))continue;") < loop.indexOf("UPDATEask_checkinsSETlast_attempted_at"));
+  check("pin: the due check before the sweep hold uses the cadence too", j.includes("askSearchDue(r)&&cadenceDue(r));"));
+  check("pin: a tapered member's asks are said once a day (sweep.ask_tapered), never skipped in silence",
+    j.includes("decision='sweep.ask_tapered'ANDuser_id=$1ANDproposal->>'day'=$2") && j.includes('decision:"sweep.ask_tapered"'));
+  check("pin: no send-side input reaches the ask cadence (only lastInboundAt and last_attempted_at)",
+    !/cadenceDue=[^;]*(last_surfaced_at|sent_at|outbound|proactive_candidates)/.test(j));
 }
 
 console.log(`taper holds: ${total - failed}/${total} passed`);
