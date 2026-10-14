@@ -40,6 +40,8 @@ import { tasteSummary } from "../services/outcomes.js";
 import { TEAM_BUILDER_LINE, handoffFor, isTeamMember, teamSheet } from "../services/extensions.js";
 import { ledgerFacts } from "../services/coFacts.js";
 import { NO_COVERAGE, type SearchCoverage } from "../services/searchCoverage.js";
+import { CHECKIN_RULE, deadAir, deadAirLine, memberWorldFact, namesRunningItem, parseWorldRedraft, runningItems, sentenceKey as threadKey, threadCandidates, threadReadPrompt, WORLD_FACT, worldLineAllowed, type MemberWorld } from "../services/memberWorld.js";
+import { SAFETY_INSTRUCTION } from "../services/safetyText.js";
 import { DEFAULT_ZONE, dateNote, itemDays, localToday, readDates, type Days } from "../services/dateGuard.js";
 import { memberZone, validZone, wordsZone } from "../services/memberTime.js";
 import { sourceOf } from "../services/messageFormat.js";
@@ -117,7 +119,13 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // a steering question, and why or why not; recorded after the reply goes out (agent/conversationReply.ts).
 // door: a new member's first read (services/theDoor.ts): whether this reply was offered the moment, and why or why not.
 // retireAsk: the find ask this reply may ask about (services/askRetire.ts); stopNote: the one stopped-looking line code carries in it.
-export type ReplyFacts = { retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string> };
+// world: the member's world this turn (services/memberWorld.ts): what the check-in rule draws on, and what the reply check reads to
+// keep a backed world line and to end dead air with a true one.
+export type ReplyFacts = { retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string>; world?: MemberWorld | null; thread?: ThreadReads };
+// What the thread read decided this turn (judgeThreadReports): each sentence asked about, by key, and whether it reports where their
+// thread stands; plus each read, for the log.
+// pending: sentences a read is out for right now, so two reads running together never ask the same sentence twice.
+export type ThreadReads = { judged: Map<string, boolean>; pending: Map<string, Promise<void>>; reads: { sentences: string[]; reports: number[] | null; ms: number }[] };
 export type ColdStartFacts = { offered: boolean; why: string; seeds: SeedCount; instruction: string | null };
 export type DoorFacts = { offered: boolean; why: string; instruction: string | null };
 
@@ -447,6 +455,9 @@ export async function gatherReplyFacts(
   // What is actually running for them, read from task state every turn (2026-10-12, item 3): only this backs saying Co is working on
   // something; with nothing running, Co says so.
   if (opts.turn) addFact(rf, "known", runningWorkLine(opts.turn.tasks ?? [], opts.turn.briefs ?? [], opts.turn.searching));
+  // Their world in one line, and the check-in rule (services/memberWorld.ts, Royce 2026-10-14): every text turn, so a check-in or a
+  // casual opener has their real world to draw on. Co decides whether the message is one.
+  if (opts.turn?.world) addMemberWorld(rf, opts.turn.world);
   // Their message may be about something Co is already doing (services/statusCheck.ts, Royce 2026-10-13): the candidate and where it
   // stands; Co decides whether it's a status check. Co's own words; this fact backs them.
   if (opts.turn?.statusCheck) {
@@ -519,6 +530,14 @@ export async function gatherReplyFacts(
     }
   }
   return rf;
+}
+
+// Pure: their world on this reply's facts (services/memberWorld.ts): one fact line, the check-in rule, and the world itself for the
+// reply check. The fact is "known": the claim read cites it like any other.
+export function addMemberWorld(rf: ReplyFacts, world: MemberWorld): void {
+  addFact(rf, "known", memberWorldFact(world));
+  addInstruction(rf, CHECKIN_RULE);
+  rf.world = world;
 }
 
 // ---------------------------------------------------------------- member knowledge on a text reply (services/memberKnowledge.ts)
@@ -890,12 +909,8 @@ const RUNNING_LIST = /^What is actually running for them right now/;
 const SAYS_NOT_RUNNING = /\b(?:nothing|not|no|isn't|aren't|haven't|hasn't|n't)\b/i;
 export function runningWorkLine(tasks: string[], briefs: string[], searching: SearchCoverage = NO_COVERAGE): string {
   const hidden = searching.hidden ? [`${searching.hidden} more piece${searching.hidden === 1 ? "" : "s"} of work or search Co has going for them (details not shown here)`] : [];
-  const running = [
-    ...tasks.map((t) => t.match(/^Co is working on task #(\d+) for them: "([^"]+)"/)).filter(Boolean).map((m) => `task #${m![1]}: "${m![2]}"`),
-    ...briefs.map((b) => b.match(/^(?:Co is putting together research brief|Research brief) #(\d+) for them, "([^"]+)"/)).filter((m, i) => m && CARRIED_WORK.test(briefs[i])).map((m) => `research brief #${m![1]}: "${m![2]}"`),
-    ...searching.asks.map((a) => `Co's daily search (every morning: events, the web and X) for what they asked: "${a.slice(0, 160)}"`),
-    ...searching.goals.map((g) => `Co's daily search for their goal: "${g.slice(0, 160)}"`),
-  ];
+  // The same items the member-world read lists as running (services/memberWorld.ts runningItems), so the two never disagree.
+  const running = runningItems(tasks, briefs, searching).map((r) => r.label);
   running.push(...hidden);
   // Never the hold's reason (a safety hold, an opt-out): only that it's paused, which Co doesn't explain.
   const held = searching.held.length ? ` ${SEARCH_HELD} Don't explain why or name a reason.` : "";
@@ -1031,6 +1046,40 @@ export function offersLinkWithoutOne(draft: string, available: string): string |
   return m && !/https?:\/\//i.test(`${available}\n${draft}`) ? m[0] : null;
 }
 
+// One small read for the sentences that name their thread (services/memberWorld.ts threadCandidates), batched per reply, each sentence
+// asked once a turn: does it state where the thread stands, rather than advice, a plan or what they told Co? Only a clear yes cuts
+// (codeChecks no_thread_report); a read that fails or doesn't parse keeps every sentence, and the claim check still guards facts.
+export type ThreadJudge = (prompt: string) => Promise<string>;
+const THREAD_READ_TIMEOUT_MS = 6_000;
+const haikuThreadJudge: ThreadJudge = async (prompt) =>
+  (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 60, abortSignal: AbortSignal.timeout(THREAD_READ_TIMEOUT_MS), experimental_telemetry: { isEnabled: true, functionId: "reply.grounding.thread_read" }, prompt })).text;
+export async function judgeThreadReports(draft: string, rf: ReplyFacts, src: Pick<GroundingSources, "message">, judge: ThreadJudge = haikuThreadJudge): Promise<void> {
+  const name = rf.world?.thread?.name;
+  if (!name) return;
+  const T: ThreadReads = (rf.thread ??= { judged: new Map(), pending: new Map(), reads: [] });
+  const candidates = [...new Set(threadCandidates(rf.world, draft))].filter((s) => !T.judged.has(threadKey(s)));
+  const waits = candidates.map((s) => T.pending.get(threadKey(s))).filter((p): p is Promise<void> => !!p);
+  const ask = candidates.filter((s) => !T.pending.has(threadKey(s)));
+  if (!ask.length) {
+    await Promise.all(waits);
+    return;
+  }
+  const read = (async () => {
+    const t0 = Date.now();
+    let reports: number[] | null = null;
+    try {
+      const out = parseModelJson<{ reports?: unknown }>(await judge(threadReadPrompt(name, src.message, ask, rf.world?.theirWords ?? [])));
+      if (Array.isArray(out?.reports)) reports = out.reports.map(Number).filter((n) => Number.isInteger(n) && n >= 1 && n <= ask.length);
+    } catch {
+      reports = null;
+    }
+    ask.forEach((s, i) => T.judged.set(threadKey(s), !!reports?.includes(i + 1)));
+    T.reads.push({ sentences: ask, reports, ms: Date.now() - t0 });
+  })();
+  for (const s of ask) T.pending.set(threadKey(s), read);
+  await Promise.all([read, ...waits]).finally(() => ask.forEach((s) => T.pending.delete(threadKey(s))));
+}
+
 export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources): GateCheck[] {
   const emotionLabel = checkNoEmotionLabel(draft);
   const checks: GateCheck[] = [];
@@ -1154,8 +1203,16 @@ export function codeChecks(draft: string, rf: ReplyFacts, src: GroundingSources)
   // "It hasn't come through on my end" is about the file they sent, not Co's machinery: allowed when their file record says nothing
   // readable arrived (services/inboundFile.ts, 2026-10-10 rows 10405/10410), the same fact that backs it in claimChecks below.
   const nothingReadable = recordSaysNothingReadable(rf.facts);
-  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) });
+  // A line about their world that names an item on file isn't machinery (services/memberWorld.ts worldLineAllowed, Royce 2026-10-14);
+  // the claim read below still holds it to the facts.
+  const narrated = narratesInternalState(draft, { allow: (sentence) => (nothingReadable && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) });
   if (narrated) checks.push({ name: "no_internal_narration", pass: false, reason: `narrates Co's own state instead of what they get (${narrated})` });
+  // Their thread is asked about, never reported (Royce, 2026-10-14): Co has no record of where it stands. Only a sentence the thread
+  // read said reports its status is cut (judgeThreadReports, run before this); a read that failed or never ran keeps it. Quoted, so
+  // stripUnsupported cuts exactly that sentence.
+  for (const s of threadCandidates(rf.world, draft)) {
+    if (rf.thread?.judged.get(threadKey(s)) === true) checks.push({ name: "no_thread_report", pass: false, reason: `thread_report: "${s}" (says where their thread stands; only they know, so ask)` });
+  }
   // A stored spot count, time or price said as current when every fact behind it is marked stale (Phase B, B3, services/asOf.ts):
   // say it as of its read, or it's cut. The sentence is quoted so stripUnsupported cuts exactly it.
   for (const s of staleCurrentClaims(draft, rf.facts.filter((f) => f.kind !== "hint").map((f) => f.text))) {
@@ -1368,7 +1425,10 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
       const fromState = !!cited && cited.kind === "known" && (RUNNING_LIST.test(cited.text) || (NOTHING_RUNNING.test(cited.text) && SAYS_NOT_RUNNING.test(c.text)));
       // A held search backs nothing; an ask saved this turn backs itself (nothingRunsAt is false then).
       const fromSearch = !!cited && cited.kind === "ongoing" && /^Co's daily search is (?:now )?looking for/.test(cited.text) && !nothingRunsAt(rf) && !searchHeld(rf);
-      if (!cited || (!workBacksPromise(cited) && !fromState && !fromSearch)) {
+      // Their world line (services/memberWorld.ts) lists the same running items: it backs work said as running only when the claim names
+      // one of them (two or more shared meaning words), and "nothing is running" when it lists none.
+      const fromWorld = !!cited && cited.kind === "known" && WORLD_FACT.test(cited.text) && !!rf.world && (rf.world.running.length > 0 ? !!namesRunningItem(rf.world, c.text) : SAYS_NOT_RUNNING.test(c.text));
+      if (!cited || (!workBacksPromise(cited) && !fromState && !fromSearch && !fromWorld)) {
         pass = false;
         reason += nothingRunsAt(rf) ? ` (${NOTHING_RUNNING_REASON})` : " (that work isn't among what the running-work line lists for them)";
       }
@@ -1421,7 +1481,9 @@ export function claimChecks(claims: Claim[], rf: ReplyFacts, src: GroundingSourc
   });
 }
 
-async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources, earlierTry: string | null = null): Promise<string | null> {
+// The redraft's extra line when the cut left dead air (deadAir): Co decides whether their message was a check-in.
+export const WORLD_REDRAFT_NOTE = "What's left of the draft is a few words of presence, and their world (\"Their world right now\" in the facts) has a true line. First decide whether their message was a check-in or a casual opener with no ask. If it was, the smallest true reply is that presence plus the one item their world leads with, in your own words and their register (late at night, soft and open first), never your own machinery (\"nothing new on my end\"); it may run one short line longer than the draft. If it wasn't (a goodnight, a hard moment, a question, anything else), write the smallest true reply as below and bring in nothing from their world. Return ONLY JSON: {\"checkin\": true or false, \"reply\": \"the message\"}.";
+async function redraft(draft: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources, earlierTry: string | null = null, note: string | null = null): Promise<string | null> {
   const tail = src.recentConversation.split("\n").slice(-14).join("\n");
   const { text } = await generateText({
     model: anthropic(LAYER3_MODELS.redraft),
@@ -1445,8 +1507,8 @@ Your draft reply:
 
 These parts of the draft aren't supported by the facts or the conversation:
 ${failed.map((f) => `- ${f.reason ?? f.name}`).join("\n")}
-${earlierTry ? `\nAn earlier rewrite also had unsupported parts (listed above too): "${earlierTry}"\nThis time, answer what they just asked first, in words the facts above actually support, even if the honest answer is short.\n` : ""}
-Deleting the unsupported parts left too little to answer them, so write the smallest true reply instead. Keep every supported sentence of the draft word for word. Where a flagged part can be corrected from a FACT (the real time, what was actually sent), correct it with the FACT's own words. When the FACTS say where something of theirs stands (a search, a task, your working notes, what you sent), and what's left doesn't answer them, answer with that state: what's found, what's unconfirmed, the next move. That is the answer, never a remark about what you can't measure, describe or nail down (2026-10-01: "how proactive are you?" became a disclaimer while their venue search's status sat in the facts). Otherwise say once, plainly, the one thing you don't have. Never add a new recommendation or change which option the draft recommends, never add an event, person, place, number, date or link that isn't in the draft or the FACTS (people and details from what they've told you before about their own life may stay or be used), never say you don't have something that what they've told you before gives, and never add anything about how they're feeling or what they're going through. No promises, no "let me look" or "one sec". If they want something found and a FACT shows work under way for it, say what you're doing about it now, from that FACT; never offer it back to them as a question. Match the draft's capitalization style. Same length or shorter. Return ONLY the message.`,
+${earlierTry ? `\nAn earlier rewrite also had unsupported parts (listed above too): "${earlierTry}"\nThis time, answer what they just asked first, in words the facts above actually support, even if the honest answer is short.\n` : ""}${note ? `\n${note}\n` : ""}
+Deleting the unsupported parts left too little to answer them, so write the smallest true reply instead. Keep every supported sentence of the draft word for word. Where a flagged part can be corrected from a FACT (the real time, what was actually sent), correct it with the FACT's own words. When the FACTS say where something of theirs stands (a search, a task, your working notes, what you sent), and what's left doesn't answer them, answer with that state: what's found, what's unconfirmed, the next move. That is the answer, never a remark about what you can't measure, describe or nail down (2026-10-01: "how proactive are you?" became a disclaimer while their venue search's status sat in the facts). Otherwise say once, plainly, the one thing you don't have. Never add a new recommendation or change which option the draft recommends, never add an event, person, place, number, date or link that isn't in the draft or the FACTS (people and details from what they've told you before about their own life may stay or be used), never say you don't have something that what they've told you before gives, and never add anything about how they're feeling or what they're going through. No promises, no "let me look" or "one sec". If they want something found and a FACT shows work under way for it, say what you're doing about it now, from that FACT; never offer it back to them as a question. Match the draft's capitalization style. ${note ? "At most one short line longer than the draft. Return ONLY the JSON." : "Same length or shorter. Return ONLY the message."}`,
   });
   const out = text.trim().replace(/^"|"$/g, "");
   return out || null;
@@ -1486,10 +1548,11 @@ const RECHECK_MODEL = process.env.GROUNDING_RECHECK_MODEL === "haiku" ? MODELS.h
 async function recheck(draft: string, rewrite: string, failed: GateCheck[], rf: ReplyFacts, src: GroundingSources): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
   // GROUNDING_FULL_RECHECK only exists so evals/grounding can compare the old full re-read.
   if (process.env.GROUNDING_FULL_RECHECK) return onlyCuts(draft, rewrite) ? { checks: [...codeChecks(rewrite, rf, src), { name: "claim_read", pass: true, reason: "only cuts" }], modelOk: true, ms: 0 } : check(rewrite, rf, src);
-  const code = codeChecks(rewrite, rf, src);
+  // The thread read of the whole rewrite and the claim read of what changed start together; the code checks run once both settle.
   const changed = sentencesToRecheck(draft, rewrite, failed);
-  if (!changed.length) return { checks: [...code, { name: "claim_read", pass: true, reason: "the rewrite only kept or cut already-checked words" }], modelOk: true, ms: 0 };
-  const r = await check(changed.join(" "), rf, src, RECHECK_MODEL);
+  const [, r] = await Promise.all([judgeThreadReports(rewrite, rf, src), changed.length ? check(changed.join(" "), rf, src, RECHECK_MODEL) : Promise.resolve(null)]);
+  const code = codeChecks(rewrite, rf, src);
+  if (!r) return { checks: [...code, { name: "claim_read", pass: true, reason: "the rewrite only kept or cut already-checked words" }], modelOk: true, ms: 0 };
   return { checks: [...code, ...r.checks.filter((c) => c.name.startsWith("claim"))], modelOk: r.modelOk, ms: r.ms };
 }
 
@@ -1805,19 +1868,28 @@ export function needsClaimCheck(draft: string): boolean {
 // review): a single bad JSON response or a transient failure used to send
 // the draft "unchecked," with only the cheap regex checks behind it.
 async function check(draft: string, rf: ReplyFacts, src: GroundingSources, model?: string): Promise<{ checks: GateCheck[]; modelOk: boolean; ms: number }> {
-  await admitNarratedSentences(draft, rf);
-  const code = codeChecks(draft, rf, src);
-  if (!needsClaimCheck(draft)) return { checks: [...code, { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const extracted = await extractClaims(draft, rf, src, model);
-      if (extracted) return { checks: [...code, ...claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims))], modelOk: true, ms: extracted.latencyMs };
-      console.error(`replyGrounding: claim check returned unusable JSON on attempt ${attempt}${attempt === 1 ? ", retrying once" : ""}`);
-    } catch (err: any) {
-      console.error(`replyGrounding: claim check failed on attempt ${attempt}${attempt === 1 ? ", retrying once" : " (non-fatal, giving up)"}:`, err?.message ?? err);
-    }
+  // The admission read, the thread read and the claim read start together (review, 2026-10-14: the thread read ran first and held the
+  // claim read back a whole Haiku round trip); the code checks read the first two's answers, so they run once all have settled.
+  const pre = Promise.all([admitNarratedSentences(draft, rf), judgeThreadReports(draft, rf, src)]);
+  if (!needsClaimCheck(draft)) {
+    await pre;
+    return { checks: [...codeChecks(draft, rf, src), { name: "claim_read", pass: true, reason: "nothing claim-shaped, model read skipped" }], modelOk: true, ms: 0 };
   }
-  return { checks: code, modelOk: false, ms: 0 };
+  const claimed = (async () => {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const extracted = await extractClaims(draft, rf, src, model);
+        if (extracted) return { checks: claimChecks(extracted.claims, rf, src, await admissionsFor(extracted.claims)), ms: extracted.latencyMs };
+        console.error(`replyGrounding: claim check returned unusable JSON on attempt ${attempt}${attempt === 1 ? ", retrying once" : ""}`);
+      } catch (err: any) {
+        console.error(`replyGrounding: claim check failed on attempt ${attempt}${attempt === 1 ? ", retrying once" : " (non-fatal, giving up)"}:`, err?.message ?? err);
+      }
+    }
+    return null;
+  })();
+  const [, claims] = await Promise.all([pre, claimed]);
+  const code = codeChecks(draft, rf, src);
+  return claims ? { checks: [...code, ...claims.checks], modelOk: true, ms: claims.ms } : { checks: code, modelOk: false, ms: 0 };
 }
 
 // The claim read alone, for another speaker's reply (Mo's, mo/teamAgent.ts):
@@ -1871,6 +1943,17 @@ async function bindThisReply(draft: string, rf: ReplyFacts, src: GroundingSource
   }
 }
 
+// Pure: dead air on this turn (services/memberWorld.ts deadAir), after every path that says something truer has had its turn: the
+// nothing-running line (a cut work claim with nothing running), a false "I don't have that" (the redraft corrects it), an invite cut
+// (the invite line), a safety turn, a discreet turn. The honest no-answer keeps an empty or near-empty cut (deadAir needs 3+ words).
+export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; rf: ReplyFacts; src: GroundingSources }): boolean {
+  if (o.rf.instructions.includes(SAFETY_INSTRUCTION) || isDiscreetTurn(o.rf.instructions)) return false;
+  if (o.failed.some((c) => c.name === "no_invite_sent_claim")) return false;
+  if (deniesWhatTheyToldCo(o.failed, o.src)) return false;
+  if (o.failed.some((c) => c.name === "claim_work_status") && nothingRunsAt(o.rf) && !startedThisTurn(o.rf)) return false;
+  return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.sentThisTurn });
+}
+
 export async function groundReply(
   rawDraft: string,
   rf: ReplyFacts,
@@ -1915,21 +1998,30 @@ export async function groundReply(
     // 1. Delete what's unsupported (2026-09-28, remove-only). What's left was
     // already checked, so it needs no second model read; code checks still run.
     // The same allowance the narration check made (a true "it hasn't come through", services/inboundFile.ts).
-    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) };
+    const allowArrival = { allow: (sentence: string) => (recordSaysNothingReadable(rf.facts) && arrivalDenial(sentence)) || admittedSentence(rf, sentence) || honestNothingRunning(rf, sentence) || worldLineAllowed(rf.world, sentence) };
     let cut = stripUnsupported(draft, effectiveFailed1, allowArrival);
     const cutCode = codeChecks(cut, rf, src).filter((c) => !c.pass);
     if (cutCode.length) cut = stripUnsupported(cut, cutCode, allowArrival);
     const inviteCut = effectiveFailed1.some((c) => c.name === "no_invite_sent_claim") && !rf.facts.some((f) => /invites are used/i.test(f.text));
+    // Dead air (Royce, 2026-10-14: "Good to hear from you." was all that went out at 12:04am, with a question of Co's waiting on him):
+    // the cut left a few words of presence while their world has a true line. The draft is retried with the facts; if that can't be
+    // kept, the true line is said from their world (services/memberWorld.ts worldLine), the way #190 grounds the nothing-running line.
+    const silent = deadAirAt({ draft, cut, failed: effectiveFailed1, rf, src });
     // What's left must not be only an apology (2026-10-03: "Sorry for the false
     // start." was all that remained of a reply about someone else).
-    if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src)) {
+    if (enoughLeft(cut, draft) && !apologyOnly(cut) && !inviteCut && !deniesWhatTheyToldCo(effectiveFailed1, src) && !silent) {
       result = { final: await withNothingRunningLine(cut, effectiveFailed1, rf), outcome: "cut", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
     } else {
       // 2. Too little left: one model rewrite, kept only if it adds nothing.
       let kept: { text: string; checks: GateCheck[] } | null = null;
+      let checkin: boolean | null = null;
       const t0 = Date.now();
       try {
-        const rewrite = await redraft(draft, effectiveFailed1, rf, src);
+        const raw = await redraft(draft, effectiveFailed1, rf, src, null, silent ? WORLD_REDRAFT_NOTE : null);
+        // On dead air the redraft says whether their message was a check-in (Co decides); a reply that isn't that shape isn't used.
+        const parsed = silent ? parseWorldRedraft(raw) : null;
+        if (parsed) checkin = parsed.checkin;
+        const rewrite = silent ? parsed?.reply || null : raw;
         stages.redraftMs = Date.now() - t0;
         const cleaned = rewrite ? cleanCoMessage(rewrite) : null;
         // Their own words from memories may come into the rewrite (never
@@ -1965,7 +2057,11 @@ export async function groundReply(
         const final = after === "invite" ? [enough && !/invite/i.test(cut) ? cut : "", INVITE_FALLBACK].filter(Boolean).join(" ") : after === "cut" ? cut : after === "nothing" ? "" : honest ?? MINIMAL_FALLBACK;
         // A cut "still working on it" ends on the honest line instead (item 3), never on a bare "not sure".
         const workCut = effectiveFailed1.some((c) => c.name === "claim_work_status") && after !== "nothing" && !startedThisTurn(rf) && nothingRunsAt(rf);
-        result = { final: workCut ? await withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final, outcome: "stripped", checks: first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+        // Dead air with a true line in their world: what's left, then that line, never "not sure" or nothing.
+        // Code acts only on Co's own answer: the lead when the redraft said check-in; otherwise at most what the cut sentence named.
+        const world = silent && after === "cut" ? deadAirLine({ checkin, world: rf.world, draft, cut }) : null;
+        const out = world ? [cut.trim(), world].filter(Boolean).join(" ") : workCut ? await withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final;
+        result = { final: out, outcome: "stripped", checks: world ? [...first.checks, { name: "world_line", pass: true, reason: `dead air after the cut (check-in: ${checkin === null ? "unread" : checkin}); said from their world: "${world}"` }] : first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }
   }
@@ -2016,6 +2112,11 @@ export async function groundReply(
   if (opts.record !== false && overpromised.length) {
     const { recordGuardDrop } = await import("../services/guardDrops.js");
     recordGuardDrop({ guard: "overpromise", where: "reply.grounding", userId: opts.userId ?? null, count: overpromised.length, reason: `${result.outcome}: ${[...new Set(overpromised.map((c) => c.name.replace(/^claim_/, "")))].join(", ")}` });
+  }
+  // The thread reads this reply made (judgeThreadReports), logged on their own.
+  if (opts.record !== false && rf.thread?.reads.length) {
+    const reads = rf.thread.reads.splice(0);
+    recordDecision({ layer: 3, decision: "reply.thread_read", userId: opts.userId ?? null, outcome: reads.some((r) => r.reports?.length) ? "act" : "skip", action: reads.some((r) => r.reports === null) ? "read_failed" : "read", proposal: { reads } }).catch(() => {});
   }
   if (opts.record !== false) {
     await recordDecision({

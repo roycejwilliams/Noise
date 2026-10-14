@@ -1,0 +1,93 @@
+{
+  "hash": "b5540e0bcb892fff",
+  "case": "checkin-thread-echo",
+  "recorded_at": "2026-10-14T17:11:36.265Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2108,
+    "system": "",
+    "messages": 1,
+    "last": "user: Co, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Co may only say where it stands when the member told Co. What the m...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2108,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Co, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Co may only say where it stands when the member told Co.\nWhat the member texted Co lately, oldest first (their own words):\n- \"Emailed the Hayes Valley place about the 14th. Fingers crossed they get back to me.\"\n- \"Hayes Valley just confirmed!\"\nTheir message just now: \"Hayes Valley just confirmed!\"\n\nSentences:\n1. \"Great that Hayes Valley confirmed.\"\n\nFor each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Co (just now or in their texts above)?\n\nReturn ONLY JSON: {\"reports\": [the numbers of the sentences that state where it stands]}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"reports\": []}",
+      "usage": {
+        "input_tokens": 341,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 119,
+        "output_tokens_details": {
+          "thinking_tokens": 110
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg2W4c8B6XDop2qCx2gcs",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS3wYKEAgSGAI4AUIIdGhpbmtpbmcSDMVEyeSwS3rTPlz8gRoM/AXcZ3ACfsAJ8Li6IjBfbPHzY0qTIBJPeUfo+1OpzuKp/y5zZTr9seOt6/711akXXfwUVQA+7qBfardPHyYq/AUKf2sKlZbhZn6M3/uCOY+l48oo7g56io6yBbf7NShdkiIQdvbkJT8EOgFIi8ga1F9NMBV2F2U5GSoWc4TfFaulHe5Li4/DqS1CQJztXCPTmo5cAjhcXZERKMqJ8OzOi8VucgSVfCfuivGAooSNok8SL7fEGWQzLHNQJYI1b9A99bdQJdUDyrbRXArzECeY46IAA3DsWFX1isfl/Tg28Fbi+3yDgxaHGkTEhY49R8niO9uUC9DMcKqW86Qepk50V4JGJCCkavjHI5S5hrcRdgeOZzHjg7b1M8oDpF8kiS0AF1vPiIiQYGct+LHfgLH9xGehIUZybhUqWfxYC5dnMHpGkl/IMazMRXmseMiPWh1oe34oXDRdJOjnBpdZY3I8zdhJbbfCiMtdVty78QdQf+nvZ1tnntB6IItdXnSU11p9BT9PRq0A33SVgotwmPIBdiSBfxEaaj3gnePsu8HYge8w+Ylhe+CYAFwy/tRPx+p5tB7RPz6Rs0riYKMEHJLR6096E3RPI0As4UfFV90rJLfqVqznUA9wXmlX70stBtLJ+K9BxgzhgusMJEeZte5OfIrweJDal72mVvv//j0Xp0gvh75KebZL1wXrObLF0Y/3v4RbteVC4LohYyPm9dHRu3gd4bo6KEgDxGln3Zgn94Gxullrti4SCmNl1L3vb4bnqr3Hx2CSulzri/0nEkUW4WwDWPxnsVcVAae+tOlX9cMa1wWVgfkJQLuCMnxZx0GldAJ9q9yuLj2OFjEy1Qi6C2AnzKOx4QKfqF/709F/kg/qaCs0/uR+76nXrcSVu4YIuHxb5RLrjkfV20W7XYq95lXlXgLl+OrfqCOZMsgBIBX4BqxCfOkor8QVNf+1toqmcXX8Y+9kr7HDmM99YERSp8mwVpoBfRQeGWXLR8iBTWaiaqOp4Ahmov6nxLlvH8uSkLJUpx1NaxYSLPkE99BXA6XPPVA2HxF926cV/sMHY6NEDpnXwv7K1D/YJ1qFxl0uuNAqj0h7JfLD8IrXWhgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"reports\": []}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 341,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 119,
+          "output_tokens_details": {
+            "thinking_tokens": 110
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

@@ -48,4 +48,16 @@ router.get("/own-work", requireTesterLoginApi, requireTeam, async (_req, res) =>
     res.status(500).json({ success: false, error: "The own-work list couldn't be read." });
   }
 });
+// When members engage, measured only (api/src/services/engagementRhythm.ts): their local hours and weekdays of the conversations they
+// opened, and how they answered Co's proactive texts. Team only, read-only; nothing reads it to time a send.
+router.get("/rhythm", requireTesterLoginApi, requireTeam, async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(1, Number(req.query.days ?? 28) || 28));
+    const { engagementRhythm } = await import("../../../api/src/services/engagementRhythm.js");
+    res.json({ success: true, rows: (await engagementRhythm(days)).map(({ userId: _u, ...r }) => r) });
+  } catch (err: any) {
+    console.error("rhythm view failed:", err?.message ?? err);
+    res.status(500).json({ success: false, error: "The rhythm view couldn't be read." });
+  }
+});
 export default router;
