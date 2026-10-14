@@ -26,4 +26,26 @@ router.get("/promises", requireTesterLoginApi, requireTeam, async (req, res) => 
     res.status(500).json({ success: false, error: "The promises rollup couldn't be read." });
   }
 });
+// Asks the old morning job likely switched off (api/src/services/askSplit.ts legacyFlips): open help asks that read as Co's own work,
+// classified well after they were made. Team only, read-only: listed to look at, never corrected from here.
+router.get("/legacy-flips", requireTesterLoginApi, requireTeam, async (_req, res) => {
+  try {
+    const { legacyFlips } = await import("../../../api/src/services/askSplit.js");
+    res.json({ success: true, rows: (await legacyFlips()).map((f) => ({ firstName: f.firstName, text: f.text, createdAt: f.createdAt, checkedAt: f.checkedAt })) });
+  } catch (err: any) {
+    console.error("legacy flips failed:", err?.message ?? err);
+    res.status(500).json({ success: false, error: "The legacy flips couldn't be read." });
+  }
+});
+// Own work nothing is carrying (api/src/services/askSplit.ts unclaimedWork): work with no task, a mixed request's work part with no
+// task, or one left unclaimed when it was split. Searched meanwhile, never quietly skipped. Team only, read-only.
+router.get("/own-work", requireTesterLoginApi, requireTeam, async (_req, res) => {
+  try {
+    const { unclaimedWork } = await import("../../../api/src/services/askSplit.js");
+    res.json({ success: true, rows: await unclaimedWork(7) });
+  } catch (err: any) {
+    console.error("own work list failed:", err?.message ?? err);
+    res.status(500).json({ success: false, error: "The own-work list couldn't be read." });
+  }
+});
 export default router;

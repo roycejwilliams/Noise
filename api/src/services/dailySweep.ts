@@ -8,6 +8,8 @@
 //   - finds go to the pool (the event backlog), the picker chooses right after (sweepShadow.ts runPickerAfterSweep), and what it chose
 //     goes to the member then as their morning finds (sendMorningFinds: each find's link, then its description);
 //   - every ask and goal it doesn't search says why, and each run writes one summary line per member (sweep.daily);
+//   - an ask that is Co's own work isn't searched (no web, no X, no model loop): it's "followed as its task", the work goes on through
+//     the task, and a mixed one is searched for its find part only (services/askSplit.ts, Royce 2026-10-13; planAsk);
 //   - a failed run is a failed day: logged as an error and run again on a later hour, at most DAILY_SWEEP_ERRORS_PER_DAY a day.
 // Its own cron (jobs/index.ts, :05), never overlapping itself, and a member is claimed while a sweep works on them (claimMember),
 // so it and the hourly ask sweep never search one member at the same time.
@@ -47,8 +49,12 @@ export type ItemResult = {
   kind: "ask" | "goal";
   id: string;
   text: string;
-  status: "searched" | "skipped" | "error";
+  status: "searched" | "skipped" | "error" | "followed_as_task";
   why?: string;
+  // Followed as its task (planAsk): the task it follows, when one matches (services/statusCheck.ts).
+  taskId?: number;
+  // A mixed request searched for its find part only (services/askSplit.ts).
+  searchedPart?: string;
   sources?: { events: boolean; web: boolean; x: boolean };
   failures?: string[];
   found?: number;
@@ -59,7 +65,7 @@ export type ItemResult = {
 };
 
 // Pure: the day's one summary line, from what each ask and goal did.
-export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; errors: number; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
+export function dailySummary(items: ItemResult[]): { action: string; totals: { asksSearched: number; goalsSearched: number; skipped: number; followed: number; errors: number; sources: { events: number; web: number; x: number }; kept: number; pooled: number; queued: number } } {
   const searched = items.filter((i) => i.status === "searched");
   const sources = { events: 0, web: 0, x: 0 };
   for (const i of searched) for (const s of ["events", "web", "x"] as const) if (i.sources?.[s]) sources[s]++;
@@ -67,13 +73,14 @@ export function dailySummary(items: ItemResult[]): { action: string; totals: { a
     asksSearched: searched.filter((i) => i.kind === "ask").length,
     goalsSearched: searched.filter((i) => i.kind === "goal").length,
     skipped: items.filter((i) => i.status === "skipped").length,
+    followed: items.filter((i) => i.status === "followed_as_task").length,
     errors: items.filter((i) => i.status === "error").length,
     sources,
     kept: searched.reduce((n, i) => n + (i.found ?? 0), 0),
     pooled: searched.reduce((n, i) => n + (i.pooled ?? 0), 0),
     queued: searched.reduce((n, i) => n + (i.queued ?? 0), 0),
   };
-  const action = `asks searched ${totals.asksSearched}, goals searched ${totals.goalsSearched}, sources events ${sources.events}/web ${sources.web}/x ${sources.x}, finds kept ${totals.kept}, new in the pool ${totals.pooled}, queued ${totals.queued}${totals.skipped ? `, skipped ${totals.skipped}` : ""}${totals.errors ? `, errors ${totals.errors}` : ""}`;
+  const action = `asks searched ${totals.asksSearched}, goals searched ${totals.goalsSearched}, sources events ${sources.events}/web ${sources.web}/x ${sources.x}, finds kept ${totals.kept}, new in the pool ${totals.pooled}, queued ${totals.queued}${totals.skipped ? `, skipped ${totals.skipped}` : ""}${totals.followed ? `, followed as tasks ${totals.followed}` : ""}${totals.errors ? `, errors ${totals.errors}` : ""}`;
   return { action, totals };
 }
 
@@ -82,6 +89,18 @@ export function searchedEarlierToday(earlier: { proposal: any }[]): Map<string, 
   const done = new Map<string, ItemResult>();
   for (const e of earlier) for (const i of (e.proposal?.items ?? []) as ItemResult[]) if (i.status === "searched") done.set(`${i.kind}:${i.id}`, { ...i, earlierRun: true });
   return done;
+}
+
+// Pure: what the floor does with one open ask (services/askSplit.ts floorPlan): search it (its find part, for a mixed one), or follow
+// it as its task with no search at all. Reads nothing; the split read and the matching task are handed in.
+// Followed only when the read says it's Co's own work AND a task really is that work (task); a part with no task leaves a note.
+export type AskPlan = { search: string | null; item: ItemResult | null; plan: import("./askSplit.js").FloorPlan };
+export function planAsk(b: { kind: "ask"; id: string; text: string }, askText: string, read: import("./askSplit.js").SplitRead | null, task: { id: number } | null, floorPlan: typeof import("./askSplit.js").floorPlan): AskPlan {
+  const p = floorPlan(askText, read, task?.id ?? null);
+  if (p.followed && task) return { search: null, item: { ...b, status: "followed_as_task", why: p.why, taskId: task.id }, plan: p };
+  // Co's own promise with no task: not searched, said why (the note lists it for the team).
+  if (p.search === null) return { search: null, item: { ...b, status: "skipped", why: p.why }, plan: p };
+  return { search: p.search, item: null, plan: p };
 }
 
 // Pure: a search that looked nowhere failed (the loop threw, their record couldn't be read, or every place failed): an error, so the
@@ -215,7 +234,8 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
   const done = searchedEarlierToday(earlier);
   const items: ItemResult[] = [];
   const goals = goalTexts(row.intent, row.goals);
-  const search = async (b: { kind: "ask" | "goal"; id: string; text: string }, cand: Omit<import("./eventSurfacingSweep.js").SurfacingCandidate, "onReport" | "allSources">) => {
+  const AS = await import("./askSplit.js");
+  const search = async (b: { kind: "ask" | "goal"; id: string; text: string; searchedPart?: string }, cand: Omit<import("./eventSurfacingSweep.js").SurfacingCandidate, "onReport" | "allSources">) => {
     let rep: import("./eventSurfacingSweep.js").SurfacingReport | null = null;
     try {
       await E.attemptEventSurfacing({ ...cand, allSources: true, onReport: (x) => { rep = x; } });
@@ -233,7 +253,7 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
 
   // ---- asks: every open one; find asks in all three places
   const { rows: asks } = await pool.query(
-    `SELECT ac.id, ac.ask_text, ac.kind, (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
+    `SELECT ac.id, ac.ask_text, ac.kind, ac.split_read, (ac.last_surfaced_at IS NULL OR ac.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
        FROM ask_checkins ac WHERE ac.user_id = $1 AND ac.resolved_at IS NULL ORDER BY COALESCE(ac.last_mentioned_at, ac.created_at) DESC`,
     [userId],
   );
@@ -248,7 +268,23 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
     // Closed while this run was working through their asks: never searched.
     const [still] = (await pool.query(`SELECT resolved_at, closed_reason FROM ask_checkins WHERE id = $1`, [a.id])).rows;
     if (still?.resolved_at) { items.push({ ...b, status: "skipped", why: `closed mid-run (${still.closed_reason ?? "closed"})` }); continue; }
-    await search(b, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: a.ask_text, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: a.cooldown_cleared });
+    // Co's own work (services/askSplit.ts, Royce 2026-10-13): followed as its task, never searched; a mixed one is searched for its find
+    // part only; a split read that fails searches it whole, as before. Its kind is never changed.
+    let askText = String(a.ask_text ?? "");
+    if (AS.isOwnWork(askText)) {
+      // One read per ask text, kept on the ask (askSplit.ts askSearchPlan), shared with the hourly sweep.
+      const { read, taskId } = await AS.askSearchPlan(userId, a);
+      const plan = planAsk(b, askText, read, taskId != null ? { id: taskId } : null, AS.floorPlan);
+      // Own work with no task, or a mixed request's work part with no task: listed for the team once a day.
+      if (plan.plan.note) await AS.notePlan(plan.plan, { id: b.id, user_id: userId, ask_text: askText }, { taskId, day: base.day, sweep: "daily" }).catch(() => {});
+      if (plan.item) { items.push(plan.item); continue; }
+      if (plan.search && plan.search !== askText) {
+        askText = plan.search;
+        await recordDecision({ layer: 5, decision: "ask.split", userId, outcome: "act", action: "floor_find_part", reason: "a mixed request on file: only its find part is searched", proposal: { askId: b.id, ask: b.text, work: read?.split?.work ?? null, find: askText, findIsLookout: read?.split?.findIsLookout ?? false } }).catch(() => {});
+      }
+    }
+    const searchB = askText === String(a.ask_text ?? "") ? b : { ...b, searchedPart: askText.slice(0, 160) };
+    await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: a.cooldown_cleared });
   }
 
   // ---- goals: each one the hourly goal sweep's latest plan holds, on its own, in all three places

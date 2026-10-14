@@ -139,6 +139,7 @@
     "evals/goals/lifecycle.ts",
     "evals/lanes/moves.ts",
     "evals/asks/statusCheck.ts",
+    "evals/asks/mixed.ts",
     "evals/goals/readCutOff.ts",
     "evals/goals/recheck.ts",
     "evals/goals/retire.ts",

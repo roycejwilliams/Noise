@@ -91,17 +91,10 @@ export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify
     const kind = r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : await classify(r.ask_text);
     await setAskKind(db, { id: r.id, read: { kind: r.kind ?? null, intent: r.intent ?? null }, kind, version: ASK_KIND_VERSION }).catch(() => {});
   }
-  // Open "find" asks saved before the guard above that are Co's own promise
-  // or deliverable stop being searched (no model call; the ask stays open). Never a lookout.
-  const { rows: found } = await db
-    .query(`SELECT id, ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND kind = 'find' AND intent IS DISTINCT FROM 'lookout'`)
-    .catch(() => ({ rows: [] as any[] }));
-  for (const r of found) {
-    if (!isCoCommitment(String(r.ask_text ?? ""))) continue;
-    if (await setAskKind(db, { id: r.id, read: { kind: r.kind ?? null, intent: r.intent ?? null }, kind: "help" }).catch(() => false)) {
-      console.log(`Ask kinds: ask ${r.id} is Co's own promise or deliverable, no longer searched`);
-    }
-  }
+  // Open "find" asks that read as Co's own promise or deliverable are NOT switched off here any more (Royce, 2026-10-13: a member
+  // restating something Co is already doing is a status check, and "the search keeps running"; a silent stop is what the rules
+  // forbid). They stay as they are: asking about one gets "already on it, here's where it stands" (services/statusCheck.ts), and
+  // retirement leaves them in the status-check lane (services/askRetire.ts). A new ask is still classified at birth (classifyAsk).
   return rows.length;
 }
 

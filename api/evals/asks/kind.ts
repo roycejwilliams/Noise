@@ -55,10 +55,18 @@ check("the prompt says statements of what they're doing (a partnership) are help
 check("the prompt keeps find for events, people, programs", /an event, a group or community/.test(p) && /a program or an opportunity/.test(p));
 check("the prompt has no em dash or exclamation point", !/[—–!]/.test(p));
 
-// Asks already saved as find are re-marked by the guard (no model, still open).
-check("open find asks Co owes are moved to help before each sweep", /WHERE resolved_at IS NULL AND kind = 'find'/.test(ak) && /isCoCommitment\(String\(r\.ask_text/.test(ak) && /setAskKind\(db, \{ id: r\.id, read: \{ kind: r\.kind \?\? null, intent: r\.intent \?\? null \}, kind: "help" \}\)/.test(ak));
+// Royce, 2026-10-13: an open find ask that reads as Co's own work keeps being searched (the status-check lane): the morning job no
+// longer switches it to help without a word. Only a new ask is classified at birth.
+{
+  const job = ak.slice(ak.indexOf("export async function classifyOpenAsks"), ak.indexOf("export async function closeAsk"));
+  check("open find asks that read as Co's own work are left searched (no silent switch)", !/isCoCommitment\(/.test(job) && !/kind: "help"/.test(job));
+  const writes: string[] = [];
+  const db = { query: async (sql: string) => { if (/^\s*(UPDATE|INSERT|DELETE)/i.test(sql)) writes.push(sql.slice(0, 60)); return /kind = 'find' AND intent IS DISTINCT/.test(sql) ? { rows: [{ id: "a1", ask_text: "draft the launch plan for the Sequin party", kind: "find", intent: "question" }] } : { rows: [] as any[], rowCount: 0 }; } };
+  await K.classifyOpenAsks(25, { db, classify: async () => "help" });
+  check("the morning job writes nothing for an already-classified Co-work ask", writes.length === 0, writes.join(" | "));
+}
 // A lookout's kind is never changed by the kind job (lane moves, 2026-10-13): every kind write goes through laneMoves.ts setAskKind.
-check("the kind job never writes ask_checkins kind itself", !/UPDATE ask_checkins SET kind/.test(ak) && /intent IS DISTINCT FROM 'lookout'/.test(ak));
+check("the kind job never writes ask_checkins kind itself", !/UPDATE ask_checkins SET kind/.test(ak) && /r\.intent === "lookout"/.test(ak));
 check("re-marking never closes or reopens an ask", !/resolved_at = (NOW|NULL)/.test(ak.slice(ak.indexOf("export async function classifyOpenAsks"), ak.indexOf("export async function closeAsk"))));
 
 console.log(`ask kinds: ${total - failed}/${total} passed`);
