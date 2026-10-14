@@ -757,6 +757,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone(`Nothing on goal #${goalId} was started: ${r.why}.`);
           return { ok: false, error: r.why };
         }
+        // Picking pieces of a goal is a signal for the goals on file it names (services/goalRecheck.ts).
+        await import("../services/goalRecheck.js").then((R) => R.noteGoalActionText(ctx.userId, `${r.goal.title} ${r.goal.theirWords ?? ""}`)).catch(() => {});
         for (const s of r.started) ctx.facts?.add("did_this_turn", `Started task #${s.taskId}: "${s.text}", their goal's piece they handed Co. Co sends it when it lands.`);
         if (r.checkin) ctx.facts?.add("did_this_turn", `Started task #${r.checkin.taskId}: Co's check-in on their goal "${r.goal.title}", set for ${localStamp(r.checkin.at, zone)}. Co can say it'll check back then.`);
         for (const x of r.refused) notDone(x.n ? `Item ${x.n} of goal #${goalId} wasn't taken: ${x.why}.` : `${x.why}.`);

@@ -723,7 +723,8 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // A set-aside goal the reply was told about: told once a sent text raised it, else one more hint used (services/goalEdges.ts).
   const aside = input.facts.goalSetAside;
   if (aside && state.sent && !opts.dryRun && opts.record !== false) {
-    await import("../services/goalEdges.js").then((g) => g.noteGoalHints(input.userId, [aside], state.sentMessages.join("\n"))).catch((err: any) => console.error("conversationReply: noting the goal hint failed (non-fatal):", err?.message ?? err));
+    // Not awaited: the recheck's Haiku read runs after the send, off the reply's path.
+    void import("../services/goalEdges.js").then((g) => g.noteGoalHints(input.userId, [aside], state.sentMessages.join("\n"), { turnStartedAt: input.turnStartedAt ?? null })).catch((err: any) => console.error("conversationReply: noting the goal hint failed (non-fatal):", err?.message ?? err));
   }
 
   // A member with fewer than two findable interests on file: what this reply did with the steering question (services/coldStart.ts),

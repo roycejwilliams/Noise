@@ -33,7 +33,9 @@ export type GoalKind = "findable" | "work" | "co_task";
 export type GoalState = "active" | "done" | "stale";
 // explicit: the kind came from a model answer that was read (or Co's own task in code), not the fallback when it couldn't be read.
 export type GoalEdge = { goal: string; kind: GoalKind; edges: string[]; why: string; until: string | null; supersededBy: string | null; explicit?: boolean };
-export type GoalStateRow = { goalHash: string; goal: string; state: GoalState; reason: string; source: "context" | "member" | "co"; changedAt: Date; toldAt: Date | null; hints: number };
+// lastSignalAt / recheckAskedAt: the goal recheck's clock (services/goalRecheck.ts). recheck: set only on a row handed to the reply as
+// the recheck question ("ask": raise it; "asked": it went out, read their answer).
+export type GoalStateRow = { goalHash: string; goal: string; state: GoalState; reason: string; source: "context" | "member" | "co"; changedAt: Date; toldAt: Date | null; hints: number; lastSignalAt?: Date | null; recheckAskedAt?: Date | null; recheck?: "ask" | "asked" };
 export type Correction = { field: string; old_value: string | null; new_value: string | null; corrected_at: string | Date };
 
 // maxTokens: room for every goal's answer (2026-10-09: 17 goals ran past 900 tokens, the answer was cut off mid-list, and every goal
@@ -273,7 +275,7 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
 
 // ---------- real deps
 
-const fromStateRow = (r: any): GoalStateRow => ({ goalHash: String(r.goal_hash), goal: String(r.goal_text), state: r.state, reason: String(r.reason ?? ""), source: r.source, changedAt: new Date(r.changed_at), toldAt: r.told_at ? new Date(r.told_at) : null, hints: Number(r.hints ?? 0) });
+export const fromStateRow = (r: any): GoalStateRow => ({ goalHash: String(r.goal_hash), goal: String(r.goal_text), state: r.state, reason: String(r.reason ?? ""), source: r.source, changedAt: new Date(r.changed_at), toldAt: r.told_at ? new Date(r.told_at) : null, hints: Number(r.hints ?? 0), lastSignalAt: r.last_signal_at ? new Date(r.last_signal_at) : null, recheckAskedAt: r.recheck_asked_at ? new Date(r.recheck_asked_at) : null });
 
 export async function goalStates(userId: string): Promise<Map<string, GoalStateRow>> {
   const { rows } = await pool.query(`SELECT * FROM goal_states WHERE user_id = $1`, [userId]);
@@ -285,7 +287,8 @@ export async function goalStates(userId: string): Promise<Map<string, GoalStateR
 // left and its scope; going back to active writes none.
 // Returns whether it changed (review of #133: a tool reported "marked done" when the fact write had failed and nothing changed). A short
 // or empty reason gets a scoped default, so "done" never throws.
-export async function setGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]): Promise<boolean> {
+// told: the member already heard about it (the goal recheck's idle: they were asked), so a context set-aside isn't raised again.
+export async function setGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"], o: { told?: boolean } = {}): Promise<boolean> {
   const prior = await pool.query(`SELECT state FROM goal_states WHERE user_id = $1 AND goal_hash = $2`, [userId, goalHash(goal)]).then((r) => r.rows[0]?.state ?? "active").catch(() => "active");
   if (state !== "active" && prior !== state) {
     const { writeExitFact } = await import("./workingSet.js");
@@ -294,17 +297,17 @@ export async function setGoalState(userId: string, goal: string, state: GoalStat
     const ok = await writeExitFact({ userId, kind: "goal", itemKey: `goal:${goalHash(goal)}`, label: goal, state: state === "done" ? "fulfilled" : "expired", reason: why, scope: "this goal only; saying it again makes it current" }).catch(() => false);
     if (!ok) return false;
   }
-  await writeGoalState(userId, goal, state, reason, source);
+  await writeGoalState(userId, goal, state, reason, source, !!o.told);
   return true;
 }
-async function writeGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"]): Promise<void> {
+async function writeGoalState(userId: string, goal: string, state: GoalState, reason: string, source: GoalStateRow["source"], told = false): Promise<void> {
   await pool.query(
     `INSERT INTO goal_states (user_id, goal_hash, goal_text, state, reason, source, changed_at, told_at, hints)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW(), CASE WHEN $6 = 'context' AND $4 <> 'active' THEN NULL ELSE NOW() END, 0)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW(), COALESCE(CASE WHEN $7::boolean THEN NOW() END, CASE WHEN $6 = 'context' AND $4 <> 'active' THEN NULL ELSE NOW() END), 0)
      ON CONFLICT (user_id, goal_hash) DO UPDATE SET goal_text = EXCLUDED.goal_text, state = EXCLUDED.state, reason = EXCLUDED.reason, source = EXCLUDED.source,
        changed_at = NOW(), told_at = EXCLUDED.told_at, hints = 0
      WHERE goal_states.state IS DISTINCT FROM EXCLUDED.state OR goal_states.source IS DISTINCT FROM EXCLUDED.source`,
-    [userId, goalHash(goal), goal.slice(0, 500), state, reason.slice(0, 300), source],
+    [userId, goalHash(goal), goal.slice(0, 500), state, reason.slice(0, 300), source, told],
   );
 }
 
@@ -323,9 +326,19 @@ export function raisedGoal(sent: string, goal: string): boolean {
   return shared >= Math.min(3, Math.ceil(g.size / 2)) && /\?/.test(sent);
 }
 
-// After a reply went out: told when it raised the goal; else one more hint used.
-export async function noteGoalHints(userId: string, rows: GoalStateRow[], sent: string): Promise<void> {
+// After a reply went out: told when it raised the goal; else one more hint used. A recheck question (services/goalRecheck.ts) counts
+// as asked only when a Haiku read of the sent text says it asked whether they still want it (judgeRecheckAsked: after the send, fails
+// closed) and nothing moved the goal's clock since the turn started (turnStartedAt); else one more hint used. A recheck already asked
+// is only read, never counted. judge: tests stub the read.
+export async function noteGoalHints(userId: string, rows: GoalStateRow[], sent: string, o: { turnStartedAt?: Date | null; judge?: import("./goalRecheck.js").RecheckJudge } = {}): Promise<void> {
   for (const r of rows) {
+    if (r.recheck) {
+      if (r.recheck !== "ask") continue;
+      const R = await import("./goalRecheck.js");
+      if ((await R.judgeRecheckAsked(r.goal, sent, o.judge)).asked) await R.markRecheckAsked(userId, r.goalHash, r.goal, "reply", { signalBefore: o.turnStartedAt ?? r.lastSignalAt ?? null });
+      else await R.noteRecheckHint(userId, r.goalHash);
+      continue;
+    }
     if (raisedGoal(sent, r.goal)) await pool.query(`UPDATE goal_states SET told_at = NOW() WHERE user_id = $1 AND goal_hash = $2`, [userId, r.goalHash]);
     else await pool.query(`UPDATE goal_states SET hints = hints + 1 WHERE user_id = $1 AND goal_hash = $2`, [userId, r.goalHash]);
   }

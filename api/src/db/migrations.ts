@@ -2805,6 +2805,21 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("goal_states table init failed:", err));
+  // Goal recheck (Royce, 2026-10-13, services/goalRecheck.ts): last_signal_at is the last time a goal showed life (their text named
+  // it, they reacted to a find for it, a goal action); recheck_asked_at is when Co's one "still something to look for?" went out.
+  // Existing rows start at NOW() plus a 0 to 6 day offset from the goal's hash (goalRecheck.ts backfillOffsetDays), so nobody is asked
+  // anything for RECHECK_AFTER_DAYS after deploy and the goals on file then don't all come due on one day. Filled once (NULL only).
+  // The default goes on before the fill, so a row written meanwhile gets NOW(), never NULL; NOT NULL only after the fill.
+  await pool
+    .query(`ALTER TABLE goal_states ADD COLUMN IF NOT EXISTS last_signal_at TIMESTAMPTZ`)
+    .then(() => pool.query(`ALTER TABLE goal_states ALTER COLUMN last_signal_at SET DEFAULT NOW()`))
+    .then(() => pool.query(`UPDATE goal_states SET last_signal_at = NOW() + ((('x' || substr(goal_hash, 1, 7))::bit(28)::int % 7) * INTERVAL '1 day') WHERE last_signal_at IS NULL`))
+    .then(() => pool.query(`ALTER TABLE goal_states ALTER COLUMN last_signal_at SET NOT NULL`))
+    .catch((err: Error) => console.error("goal_states last_signal_at init failed:", err));
+  // Its own statement: a failure above can't skip it.
+  await pool
+    .query(`ALTER TABLE goal_states ADD COLUMN IF NOT EXISTS recheck_asked_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("goal_states recheck_asked_at init failed:", err));
   // Restraint with memory (2026-10-08, services/kindRestraint.ts): the kind of each proactive send (find, intro_followup, deadline,
   // goal_nudge, member_commitment; NULL when untracked), and the kinds a member let pass twice in a row, which Co stopped sending until
   // they answer one (state 'suppressed'; 'enabled' after they answered). evidence: the proactive_sends ids behind it.

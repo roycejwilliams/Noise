@@ -101,6 +101,9 @@ export type GoalSweepDeps = {
   held?: (userId: string) => Promise<string[]>;
   // A run that didn't search (held, or a find surfaced within the cooldown), for the log.
   skipped?: (row: any, why: string, detail: string[]) => Promise<void>;
+  // The goal recheck (services/goalRecheck.ts), before anything else this run: a quiet goal is asked about once, an unanswered one
+  // goes idle, and planning then reads only what's still active. Optional; it runs whatever the cooldown or a hold says.
+  recheck?: (row: any) => Promise<void>;
 };
 const realDeps: GoalSweepDeps = {
   rows: async () => (await pool.query(GOAL_SWEEP_SQL)).rows,
@@ -145,6 +148,9 @@ const realDeps: GoalSweepDeps = {
     const { noteColdStartSweep } = await import("./coldStart.js");
     await noteColdStartSweep({ userId: row.user_id, sweep: "goal", searched: null, found: false, why, tried: [], turnedAway: passed.map((p) => `${p.goal.slice(0, 100)}: ${p.why.slice(0, 80)}`) });
   },
+  recheck: async (row) => {
+    await (await import("./goalRecheck.js")).runGoalRecheck(row.user_id, goalSweepGoals(row) ?? []);
+  },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   held: async (userId) => (await import("../harness/proactive.js")).sweepHold(userId, "goal"),
   skipped: async (row, why, detail) => {
@@ -178,6 +184,7 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
       const last = deps.lastSeedSig ? await deps.lastSeedSig(row.user_id).catch(() => sig) : sig;
       if (!goalSweepRuns(row, sig, last).run) return;
     }
+    await deps.recheck?.(row).catch((err: any) => console.error(`Goal recheck failed for ${row.user_id}:`, err?.message ?? err));
     // One find per GOAL_SURFACE_COOLDOWN_DAYS (Phase A4: the cooldown was computed and only logged, so a member who'd just had a find
     // still got a full goal sweep every day). The budget is marked, so it's looked at again on the next one.
     if (row.cooldown_cleared === false) {

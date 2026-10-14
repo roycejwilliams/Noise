@@ -28,6 +28,7 @@ import { loopsMentioned } from "./openLoops.js";
 import { notToTeammate } from "./teamLines.js";
 import { GOAL_CHECKIN, dueGoalCheckin } from "./goalJourney.js";
 import type { ProactiveKind } from "./kindRestraint.js";
+import { recheckAskOpen } from "./goalRecheck.js";
 
 export type NudgeType = "intro_nudge" | "deadline_nudge" | "goal_nudge" | "commitment_nudge";
 export const NUDGE_TYPES: NudgeType[] = ["intro_nudge", "deadline_nudge", "goal_nudge", "commitment_nudge"];
@@ -109,7 +110,8 @@ export type CaredItem = {
   // A day-before reminder for it is already queued or sent by the sweep (services/eventSurfacingSweep.ts): one heads-up, not two.
   reminderQueued: boolean;
 };
-export type GoalFact = { id: string; text: string; confirmedAt: Date | null; state: "active" | "done" | "stale"; coTask: boolean };
+// hash: its goal_states key. underRecheck: the goal recheck asked about it and is waiting on them (services/goalRecheck.ts): no nudge.
+export type GoalFact = { id: string; text: string; confirmedAt: Date | null; state: "active" | "done" | "stale"; coTask: boolean; hash?: string; underRecheck?: boolean };
 export type CommitmentFact = { threadId: string; text: string; quote: string; openedAt: Date; dueDate: string; status: string; followedUp: boolean };
 export type Snapshot = {
   userId: string;
@@ -120,7 +122,7 @@ export type Snapshot = {
   cared: CaredItem[];
   goals: GoalFact[];
   intent: unknown;
-  // The last goal_checkin or goal_nudge that went out (the seasonal window covers both).
+  // The last goal_checkin, goal_nudge or goal_recheck that went out (the seasonal window covers all three).
   lastGoalSurfaceAt: Date | null;
   // The last time they kept a find or said yes to something (movement).
   lastKeptAt: Date | null;
@@ -270,7 +272,7 @@ export function detectGoalNudge(s: Snapshot): NudgeEntry[] {
   if (dueGoalCheckin(s.intent, s.lastGoalSurfaceAt, s.now)) return [];
   const quietSince = new Date(s.now.getTime() - NUDGE.goalQuietDays * DAY);
   const slipping = s.goals
-    .filter((g) => g.state === "active" && !g.coTask && g.confirmedAt)
+    .filter((g) => g.state === "active" && !g.coTask && !g.underRecheck && g.confirmedAt)
     .filter((g) => {
       const age = s.now.getTime() - g.confirmedAt!.getTime();
       return age >= NUDGE.goalQuietDays * DAY && age < GOAL_CHECKIN.minAgeDays * DAY;
@@ -289,7 +291,7 @@ export function detectGoalNudge(s: Snapshot): NudgeEntry[] {
       fingerprint: fingerprint(["goal", g.id, g.text.trim().toLowerCase(), g.confirmedAt ? localDay(g.confirmedAt, s.zone) : null, lastSaid ? localDay(lastSaid.at, s.zone) : null]),
       summary: `A goal gone quiet for ${Math.floor((s.now.getTime() - g.confirmedAt!.getTime()) / DAY)} days: "${g.text.slice(0, 80)}"`,
       facts: { the_goal_in_their_words: g.text.slice(0, 200) },
-      meta: { goalId: g.id },
+      meta: { goalId: g.id, goalHash: g.hash ?? null },
       dueAt,
       expiresAt: new Date(dueAt.getTime() + 5 * DAY),
     },
@@ -486,13 +488,13 @@ export async function loadSnapshot(userId: string, now = new Date()): Promise<Sn
   const zone = await memberZone(userId).catch(() => null);
   const { goalEntries } = await import("../harness/profileWrite.js");
   const { goalHash, goalStates, isCoTaskGoal } = await import("./goalEdges.js");
-  const [ownLines, intros, cared, prof, states, surface, kept, threads] = await Promise.all([
+  const [ownLines, intros, cared, prof, states, surface, kept, threads, rechecked] = await Promise.all([
     ownLinesOf(userId),
     introsOf(userId).catch(() => [] as IntroFact[]),
     caredOf(userId, zone).catch(() => [] as CaredItem[]),
     pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [userId]),
     goalStates(userId).catch(() => new Map()),
-    pool.query(`SELECT max(sent_at) AS at FROM proactive_sends WHERE user_id = $1 AND type IN ('goal_checkin', 'goal_nudge')`, [userId]),
+    pool.query(`SELECT max(sent_at) AS at FROM proactive_sends WHERE user_id = $1 AND type IN ('goal_checkin', 'goal_nudge', 'goal_recheck')`, [userId]),
     pool.query(
       `SELECT GREATEST((SELECT max(outcome_at) FROM research_finds WHERE user_id = $1 AND outcome = 'yes'),
                        (SELECT max(created_at) FROM suggestion_outcomes WHERE user_id = $1 AND result IN ('interested', 'acted', 'helped'))) AS at`,
@@ -504,12 +506,14 @@ export async function loadSnapshot(userId: string, now = new Date()): Promise<Sn
        FROM member_threads t WHERE t.user_id = $1 AND t.kind = 'commitment' AND t.status IN ('open', 'waiting') AND t.due_date IS NOT NULL AND t.due_date >= CURRENT_DATE - 1`,
       [userId],
     ),
+    // The goal recheck's last question (services/goalRecheck.ts, reply or text): a goal surface too, so no nudge lands right after it.
+    pool.query(`SELECT max(created_at) AS at FROM harness_decisions WHERE user_id = $1 AND decision = 'goal.recheck_asked' AND action <> 'answered'`, [userId]).catch(() => ({ rows: [] as any[] })),
   ]);
   const intent = prof.rows[0]?.intent ?? null;
   const goals: GoalFact[] = goalEntries(intent).map((g: any) => {
     const st = states.get(goalHash(String(g.text)));
     const confirmed = g.confirmed_at ?? g.created_at ?? null;
-    return { id: String(g.id ?? goalHash(String(g.text))), text: String(g.text), confirmedAt: confirmed ? new Date(confirmed) : null, state: st?.state ?? "active", coTask: isCoTaskGoal(String(g.text)) };
+    return { id: String(g.id ?? goalHash(String(g.text))), text: String(g.text), confirmedAt: confirmed ? new Date(confirmed) : null, state: st?.state ?? "active", coTask: isCoTaskGoal(String(g.text)), hash: goalHash(String(g.text)), underRecheck: recheckAskOpen(st?.recheckAskedAt) };
   });
   return {
     userId,
@@ -520,7 +524,7 @@ export async function loadSnapshot(userId: string, now = new Date()): Promise<Sn
     cared,
     goals,
     intent,
-    lastGoalSurfaceAt: surface.rows[0]?.at ? new Date(surface.rows[0].at) : null,
+    lastGoalSurfaceAt: [surface.rows[0]?.at, rechecked.rows[0]?.at].filter(Boolean).map((x: any) => new Date(x)).sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
     lastKeptAt: kept.rows[0]?.at ? new Date(kept.rows[0].at) : null,
     commitments: threads.rows.map((t: any) => ({
       threadId: String(t.id),
@@ -682,6 +686,9 @@ export async function draftStateNudge(c: Cand, person: Person, deps: { current?:
 
 export async function onStateNudgeSent(c: Cand, messages: string[]): Promise<void> {
   await markEntry(c.userId, String(c.payload?.entryKey ?? ""), String(c.payload?.fingerprint ?? ""), "sent");
+  // A goal nudge is the goal recheck's question too (services/goalRecheck.ts) when the judge reads it as asking whether they still
+  // want the goal: one covers both.
+  if (c.type === "goal_nudge" && c.payload?.meta?.goalHash) await import("./goalRecheck.js").then((R) => R.noteRecheckSent(c.userId, String(c.payload.meta.goalHash), String(c.payload?.facts?.the_goal_in_their_words ?? ""), messages.join("\n"), "goal_nudge")).catch(() => {});
   const { writeMemory } = await import("./memory.js");
   await writeMemory(c.userId, "check_in", `Co noticed on its own (${c.type.replace(/_nudge$/, "")}): ${messages[0] ?? ""}`).catch(() => {});
 }
