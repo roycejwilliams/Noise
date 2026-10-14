@@ -262,8 +262,8 @@ export function memberWorldFact(w: MemberWorld): string {
   const held = w.withheld ? ` ${w.withheld} more not shown here, so never say there's nothing.` : "";
   const leadMark = " (a check-in's one item)";
   const parts = [
-    w.waiting.length ? `Waiting on them${leadMark}: ${w.waiting.slice(0, 2).map((x) => x.fact).join("; ")}.` : w.withheld ? null : "Nothing waits on them.",
-    w.running.length ? `Running${w.waiting.length ? " (background while something waits)" : leadMark}: ${w.running.slice(0, 3).map((x) => x.fact).join("; ")}${w.running.length > 3 ? `; ${w.running.length - 3} more` : ""}.` : w.withheld ? null : "Nothing is running.",
+    w.waiting.length ? `Waiting on them${leadMark}: ${w.waiting.slice(0, 2).map((x) => x.fact).join("; ")}.` : w.withheld ? null : "Nothing waits on them (not a thing to say).",
+    w.running.length ? `Running${w.waiting.length ? " (background while something waits)" : leadMark}: ${w.running.slice(0, 3).map((x) => x.fact).join("; ")}${w.running.length > 3 ? `; ${w.running.length - 3} more` : ""}.` : w.withheld ? null : "Nothing is running (not a thing to say).",
     w.next ? `Next from Co: ${w.next.fact}.` : null,
     w.thread ? `Their thread (theirs to tell: ask, never report): ${w.thread.fact}.` : null,
   ].filter(Boolean);
@@ -272,7 +272,7 @@ export function memberWorldFact(w: MemberWorld): string {
 
 // What the reply is told every text turn (Co decides whether their message is a check-in; the facts are always there).
 export const CHECKIN_RULE =
-  "A check-in or casual opener with no ask (you judge that from the thread) gets presence plus at most one item from \"Their world right now\", in their register, ending on something they can pull: what waits on them first, else what's running; a warm thread is asked about (\"any word from that venue?\"), never reported; with nothing running or waiting, presence and an open question. That one item only, offered lightly, never as a debt. One breath: no list, no status report, never your own machinery (\"nothing new on my end\"). Late at night their time (about 11pm to 5am) open soft (\"you're up late, everything ok?\"); the world line is optional then. Recent feelings shape the tone, never whether they hear their world. \"Tell me more\" expands that same item, with no new greeting.";
+  "A check-in or casual opener with no ask (you judge that from the thread) gets presence plus at most one item from \"Their world right now\", in their register, ending on something they can pull: what waits on them first, else what's running; a warm thread is asked about (\"any word from that venue?\"), never reported; with nothing running or waiting, presence and an open question only (\"good to hear from you, what's on your mind?\"), never a line saying nothing is waiting or running. That one item only, as something there for them (\"the Harbor Light fellowship is there if funding's on your mind\"), never as an answer they owe. One breath: no list, no status report, never your own machinery (\"nothing new on my end\"). Late at night their time (about 11pm to 5am) open soft (\"you're up late, everything ok?\"); the world line is optional then. Recent feelings shape the tone, never whether they hear their world. \"Tell me more\" expands that same item, with no new greeting.";
 
 // Pure: the running item a sentence names (two or more shared meaning words), or null. Only running work: never a thread, never what
 // waits on them. Word overlap misses a paraphrase ("still looking for a rooftop" against "a rooftop venue for the Sequin AI launch
@@ -344,6 +344,12 @@ export function threadCandidates(w: MemberWorld | null | undefined, text: string
       return own.length ? own.some((x) => words.has(x)) : sharedWords(t.name!, s) >= 2;
     });
 }
+// Pure: did the cut take out a sentence that names their live thread (threadCandidates' match)? Then the cut was about their thread,
+// never Co's own work: nothing of Co's should "start" on it (harness/replyGrounding.ts, the nothing-running line).
+export function cutNamesThread(w: MemberWorld | null | undefined, draft: string, cut: string): boolean {
+  const kept = cut.replace(/[’‘]/g, "'").replace(/\s+/g, " ").toLowerCase();
+  return threadCandidates(w, draft).some((s) => !kept.includes(s.replace(/\s+/g, " ").toLowerCase()));
+}
 export const sentenceKey = (s: string) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
 // The read's question, for every candidate in one reply at once.
 export function threadReadPrompt(thread: string, theirMessage: string, sentences: string[], theirWords: string[] = []): string {
@@ -366,7 +372,8 @@ Return ONLY JSON: {"reports": [the numbers of the sentences that state where it 
 export const PRESENCE_MAX_WORDS = 8;
 export const STATUS_CUTS = new Set(["no_internal_narration", "claim_work_status"]);
 export function deadAir(o: { draft: string; cut: string; world: MemberWorld | null | undefined; failed: { name: string; pass: boolean }[]; sentThisTurn?: string[] }): boolean {
-  if (!o.world?.lead) return false;
+  // A live thread counts too: a check-in can ask about it, though code never adds a line about it (deadAirLine).
+  if (!o.world?.lead && !o.world?.thread) return false;
   if ((o.sentThisTurn ?? []).some((m) => m.trim())) return false;
   if (!o.failed.some((c) => !c.pass && STATUS_CUTS.has(c.name))) return false;
   const cut = o.cut.trim();

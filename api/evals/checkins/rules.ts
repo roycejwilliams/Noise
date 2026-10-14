@@ -39,7 +39,7 @@ globalThis.fetch = (async (input: any, init?: any) => {
   } else if (/You check a text message Co is about to send/.test(body)) {
     calls.push("claims");
     const about = body.split("Message Co is about to send:").pop() ?? "";
-    text = JSON.stringify({ claims: /Nothing new on my end/.test(about) ? [{ text: "Nothing new on my end since this morning.", type: "work_status", supported: false, factId: null, quote: null }] : /booked Nopa/.test(about) ? [{ text: "Yes, I booked Nopa for you.", type: "past_action", supported: false, factId: null, quote: null }] : [] });
+    text = JSON.stringify({ claims: /Nothing new on my end/.test(about) ? [{ text: "Nothing new on my end since this morning.", type: "work_status", supported: false, factId: null, quote: null }] : /booked Nopa/.test(about) ? [{ text: "Yes, I booked Nopa for you.", type: "past_action", supported: false, factId: null, quote: null }] : /Hayes Valley myself/.test(about) ? [{ text: "Still waiting to hear from Hayes Valley myself.", type: "work_status", supported: false, factId: null, quote: null }] : /searching for jazz bars/.test(about) ? [{ text: "Still searching for jazz bars for you.", type: "work_status", supported: false, factId: null, quote: null }] : [] });
   } else if (/Only the member knows where it stands/.test(body)) {
     calls.push("thread_read");
     const listed = [...body.replace(/\\"/g, '"').matchAll(/(\d+)\. "([^"]+)"/g)];
@@ -149,12 +149,12 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("running work is background while something waits", /Running \(background while something waits\): Co's daily search for their goal: "a rooftop for the Sequin AI launch party"/.test(fact), fact);
   check("the fact is the one the reply check knows", M.WORLD_FACT.test(fact));
   const running = M.memberWorldFact(base({ exchange: QUIET }));
-  check("with nothing waiting, running work is the check-in's one item", /Nothing waits on them\. Running \(a check-in's one item\): Co's daily search/.test(running), running);
+  check("with nothing waiting, running work is the check-in's one item", /Nothing waits on them \(not a thing to say\)\. Running \(a check-in's one item\): Co's daily search/.test(running), running);
   check("a goal split Co offered waits on their pick, ahead of running work", base({ exchange: QUIET, offeredGoals: [{ title: "Raise a pre-seed round", offeredAt: "2026-10-13T20:00:00Z" }] }).lead?.kind === "goal_split");
   check("a document Co offered waits on their yes", base({ exchange: QUIET, docOffer: { topic: "the launch venue shortlist" } }).lead?.kind === "doc_offer");
   const nothing = base({ exchange: QUIET, searching: NOTHING });
   const nf = M.memberWorldFact(nothing);
-  check("genuinely nothing (all read): no lead, and the fact says so", nothing.lead === null && nothing.withheld === 0 && /Nothing waits on them\. Nothing is running\./.test(nf), nf);
+  check("genuinely nothing (all read): no lead, and the fact says so", nothing.lead === null && nothing.withheld === 0 && /Nothing waits on them \(not a thing to say\)\. Nothing is running \(not a thing to say\)\./.test(nf), nf);
   const thread = base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] });
   check("a live thread shows, marked theirs to tell, and is never the lead", thread.thread?.kind === "thread" && thread.lead === null && /Their thread \(theirs to tell: ask, never report\): Waiting to hear back from the Hayes Valley venue/.test(M.memberWorldFact(thread)));
   const next = base({ exchange: QUIET, searching: NOTHING, ahead: { tasks: [{ id: 41, goal: "Weekly branding check-in", kind: "followup", nextCheckAt: "2026-10-16T16:00:00Z", deadline: null }], queuedFinds: 0 } });
@@ -226,7 +226,8 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   const r = M.CHECKIN_RULE;
   check("the rule: Co judges whether it's a check-in; presence plus at most one item", /you judge that from the thread/.test(r) && /presence plus at most one item from "Their world right now"/.test(r));
   check("the rule: waiting first, else running; a warm thread asked about, never reported; presence and an open question when nothing", /what waits on them first, else what's running/.test(r) && /a warm thread is asked about \("any word from that venue\?"\), never reported/.test(r) && /with nothing running or waiting, presence and an open question/.test(r));
-  check("the rule: one item, offered lightly, never as a debt; one breath, no list, no machinery", /That one item only, offered lightly, never as a debt/.test(r) && /One breath: no list, no status report, never your own machinery/.test(r));
+  check("the rule: with nothing, presence and an open question only, never a line saying nothing is waiting or running", /presence and an open question only \("good to hear from you, what's on your mind\?"\), never a line saying nothing is waiting or running/.test(r));
+  check("the rule: the one item as something there for them, never an answer they owe; one breath, no list, no machinery", /That one item only, as something there for them \("the Harbor Light fellowship is there if funding's on your mind"\), never as an answer they owe/.test(r) && /One breath: no list, no status report, never your own machinery/.test(r));
   check("the rule: feelings shape the tone, never whether they hear their world", /Recent feelings shape the tone, never whether they hear their world/.test(r));
   check("the rule: tell me more expands the same item without a greeting", /"Tell me more" expands that same item, with no new greeting/.test(r));
   check("the rule and the fact are in Co's voice: no em dash, no exclamation, no role noun, never the old brand", [r, M.memberWorldFact(base()), G.WORLD_REDRAFT_NOTE].every((t) => !/[—–]/.test(t) && !/!/.test(t) && !/\b(assistant|concierge)\b/i.test(t) && !/copatible/i.test(t)));
@@ -431,6 +432,30 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   calls.length = 0;
   const again = await G.groundReply(appended, rf2, { message: "Just checking in", recentConversation: "" }, { userId: null, record: false });
   check("checked again, the appended reply goes as it is, the line once", again.outcome === "as_drafted" && again.final === appended && appended.split("whenever you want it").length === 2 && !calls.includes("redraft"), again);
+  // Case 30 (2026-10-14): a cut work claim about THEIR thread never gets the #190 "want me to start on it?" line; the turn goes on to
+  // dead air, where a check-in redraft may ask about it. #190 is unchanged for Co's own work.
+  {
+    const threadOnly = base({ exchange: QUIET, searching: NOTHING, threads: [THREAD] });
+    const ownDraft = "All good here. Still waiting to hear from Hayes Valley myself.";
+    const ask = "All good here. Any word back from the Hayes Valley venue?";
+    const tf = G.createReplyFacts();
+    G.addFact(tf, "known", G.runningWorkLine([], [], NOTHING));
+    G.addMemberWorld(tf, threadOnly);
+    redraftText = asJson(true, ask);
+    calls.length = 0;
+    const r = await G.groundReply(ownDraft, tf, { message: "Just checking in", recentConversation: "" }, { userId: null, record: false });
+    check("a cut claim about their own thread, nothing running: no nothing-running line, and the check-in redraft asking about it goes out", !/Nothing's running on that|start on it/i.test(r.final) && r.final === ask && r.outcome === "redrafted" && calls.includes("redraft"), r);
+    check("the nothing-running line doesn't apply to their thread", !G.nothingRunningLineApplies({ draft: ownDraft, cut: "All good here.", failed: [{ name: "claim_work_status", pass: false }] as any, rf: tf }) && M.cutNamesThread(threadOnly, ownDraft, "All good here."));
+    redraftText = "";
+    const alone = await G.groundReply(ownDraft, tf, { message: "Just checking in", recentConversation: "" }, { userId: null, record: false });
+    check("with no usable redraft, the cut goes out alone (no thread line from code, no offer)", alone.final === "All good here." && !alone.checks.some((c) => c.name === "world_line"), alone);
+    const of = G.createReplyFacts();
+    G.addFact(of, "known", G.runningWorkLine([], [], NOTHING));
+    G.addMemberWorld(of, threadOnly);
+    redraftText = null;
+    const own = await G.groundReply("Hey Jordan, good to hear from you. Still searching for jazz bars for you.", of, { message: "hey", recentConversation: "" }, { userId: null, record: false });
+    check("a cut work claim about Co's own search, nothing running: the nothing-running line fires as before", /Nothing's running on that right now/.test(own.final) && G.nothingRunningLineApplies({ draft: "Hey Jordan, good to hear from you. Still searching for jazz bars for you.", cut: "Hey Jordan, good to hear from you.", failed: [{ name: "claim_work_status", pass: false }] as any, rf: of }), own);
+  }
   // The reviewer's probes: not check-ins, no status cut.
   const nopa = await turn(w, "", "Yes, I booked Nopa for you.", "Did you book Nopa?");
   check("\"Did you book Nopa?\": a fully cut draft gets the honest no-answer path, never their world", !/Harbor Light|whenever you want it/.test(nopa.r.final) && !nopa.r.checks.some((c) => c.name === "world_line") && nopa.r.outcome === "stripped", nopa.r);
