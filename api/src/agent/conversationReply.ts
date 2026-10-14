@@ -109,8 +109,6 @@ export type ConversationReplyInput = {
   sendCoReply: SendCoReply;
   // On the team (users.mo_approver). Looked up when not given.
   isTeam?: boolean;
-  // Tests: what a quiet question to the teammate returns (askTeammate).
-  consult?: (question: string) => Promise<{ facts: string[]; note: string } | null>;
   // Runs a retry of this same reply later, guarded by the caller (phone lock,
   // nothing newer from them, nothing answered since). When given, an empty
   // reply says "give me a minute" and retries once from their message instead
@@ -308,7 +306,6 @@ export async function runConversationReplyAgent(
     stubSearch: opts.stubSearch ?? false,
     messageHandle: input.messageHandle ?? null,
     lastReaction: input.lastReaction ?? null,
-    consult: input.consult,
     replyOwed: input.replyOwed ?? false,
     safetyConcern: input.safetyConcern ?? false,
     decision,

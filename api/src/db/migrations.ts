@@ -147,83 +147,7 @@ export async function runMigrations(): Promise<void> {
         sent_at TIMESTAMPTZ,
         withdrawn_at TIMESTAMPTZ
       )`))
-    // Member-facing Mo (mo/memberFlow.ts): a member's opt-in and approved voice, their batches, the people in them, and a
-    // receipt for every contact. Separate from mo_prospects: the team's queue never reaches a member, and a member only
-    // ever reads their own rows.
-    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_member_optin (
-        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-        status TEXT CHECK (status IN ('yes','no')),
-        asked_at TIMESTAMPTZ,
-        answered_at TIMESTAMPTZ,
-        quote TEXT,
-        voice_text TEXT,
-        voice_named BOOLEAN NOT NULL DEFAULT false,
-        voice_approved_at TIMESTAMPTZ,
-        voice_quote TEXT,
-        paused_at TIMESTAMPTZ,
-        hunt_last_at TIMESTAMPTZ,
-        offer_checked_at TIMESTAMPTZ
-      )`))
     .then(() => pool.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS vouched_by UUID REFERENCES users(id) ON DELETE SET NULL`))
-    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_member_batches (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        ask_text TEXT NOT NULL,
-        need_text TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','approved','expired','cancelled')),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        presented_at TIMESTAMPTZ,
-        approved_at TIMESTAMPTZ,
-        expires_at TIMESTAMPTZ NOT NULL
-      )`))
-    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_member_candidates (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        batch_id UUID NOT NULL REFERENCES mo_member_batches(id) ON DELETE CASCADE,
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        n INT NOT NULL,
-        x_user_id TEXT,
-        x_handle TEXT,
-        name TEXT,
-        email TEXT,
-        source TEXT NOT NULL DEFAULT 'x',
-        post_text TEXT,
-        evidence_quote TEXT NOT NULL,
-        why TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','sending','skipped','contacted','replied','declined','invited','joined','closed','blocked')),
-        approved_text TEXT,
-        intro_seeded_at TIMESTAMPTZ,
-        approved_at TIMESTAMPTZ,
-        approved_quote TEXT,
-        contacted_at TIMESTAMPTZ,
-        channel TEXT,
-        followed_up_at TIMESTAMPTZ,
-        replied_at TIMESTAMPTZ,
-        invite_code TEXT,
-        joined_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-        joined_at TIMESTAMPTZ,
-        intro_quote TEXT,
-        intro_at TIMESTAMPTZ,
-        last_dm_event_id TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (batch_id, n)
-      )`))
-    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_mo_member_candidates_x ON mo_member_candidates (x_user_id)`))
-    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS mo_contact_receipts (
-        id BIGSERIAL PRIMARY KEY,
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        batch_id UUID,
-        candidate_id UUID,
-        kind TEXT NOT NULL CHECK (kind IN ('approach','follow_up','reply','intro')),
-        channel TEXT,
-        to_key TEXT,
-        text TEXT NOT NULL DEFAULT '',
-        member_yes_quote TEXT,
-        caps JSONB NOT NULL DEFAULT '{}'::jsonb,
-        outcome TEXT NOT NULL CHECK (outcome IN ('pending','sent','failed','blocked')),
-        reason TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )`))
-    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_mo_contact_receipts_user ON mo_contact_receipts (user_id, created_at DESC)`))
     // What Co holds about a member, each claim labelled (user_said / co_inferred) with a lifetime (services/claims.ts).
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS member_claims (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -458,7 +382,9 @@ export async function runMigrations(): Promise<void> {
       // The text before a Co event (services/preArrival.ts).
       "event_pre_arrival",
       // The member brief and the question that lets it name them (services/eventBrief.ts).
-      "event_brief", "event_brief_ask", "event_follow_through", "mo_member", "mo_member_offer",
+      "event_brief", "event_brief_ask", "event_follow_through",
+      // Written by the outreach agent removed on 2026-10-14; kept so its stored rows stay valid.
+      "mo_member", "mo_member_offer",
       // What a web search kept, with its link, so "send it" works on a later turn
       // (services/researchFinds.ts, 2026-10-03).
       "research_find",
@@ -940,8 +866,7 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("outbound_messages table init failed:", err));
-  // Who sent it: "co", or an extension on the same number ("mo"), so a reply
-  // under Mo's text goes to Mo (services/sendblue.ts sendingAs).
+  // Who sent it: "co" (older rows also hold "mo" and "ops").
   await pool
     .query(`ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS sender TEXT NOT NULL DEFAULT 'co'`)
     .catch((err: Error) => console.error("outbound_messages.sender migration failed:", err));
@@ -1718,89 +1643,11 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_document_offers_user ON document_offers (user_id, offered_at DESC)`))
     .catch((err: Error) => console.error("document_offers table init failed:", err));
 
-  // Mo (2026-09-22) — see src/mo/. People worth inviting, found on
-  // X and through web search, contacted only after a person approves.
+  // The team flag (users.mo_approver): who builds Co (services/extensions.ts isTeamMember). The outreach agent's own tables and
+  // columns, removed with it on 2026-10-14, are left in place unused (branch archive/mo-backup-2026-10-14 has their migrations).
   await pool
-    .query(
-      `CREATE TABLE IF NOT EXISTS mo_prospects (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        no SERIAL UNIQUE,
-        source TEXT NOT NULL CHECK (source IN ('x', 'linkedin')),
-        x_user_id TEXT UNIQUE,
-        x_handle TEXT,
-        name TEXT,
-        bio TEXT,
-        location TEXT,
-        post_id TEXT,
-        post_url TEXT,
-        post_text TEXT,
-        linkedin_url TEXT UNIQUE,
-        headline TEXT,
-        reason TEXT NOT NULL,
-        evidence_quote TEXT NOT NULL,
-        draft_reply TEXT,
-        draft_dm TEXT,
-        draft_email_subject TEXT,
-        draft_email_body TEXT,
-        email TEXT,
-        status TEXT NOT NULL DEFAULT 'shortlisted',
-        channel TEXT,
-        approved_by UUID,
-        approved_at TIMESTAMPTZ,
-        warmed_at TIMESTAMPTZ,
-        warm_reply_id TEXT,
-        contacted_at TIMESTAMPTZ,
-        followed_up_at TIMESTAMPTZ,
-        last_inbound_at TIMESTAMPTZ,
-        last_dm_event_id TEXT,
-        pending_question TEXT,
-        invite_code TEXT,
-        digest_sent_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )`,
-    )
-    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_mo_prospects_status ON mo_prospects (status)`))
-    .then(() =>
-      pool.query(
-        `CREATE TABLE IF NOT EXISTS mo_suppression (
-          key TEXT PRIMARY KEY,
-          reason TEXT NOT NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`,
-      ),
-    )
-    .then(() =>
-      pool.query(
-        `ALTER TABLE users ADD COLUMN IF NOT EXISTS mo_approver BOOLEAN NOT NULL DEFAULT false,
-           ADD COLUMN IF NOT EXISTS mo_pending_no INTEGER,
-           ADD COLUMN IF NOT EXISTS mo_pending_kind TEXT,
-           ADD COLUMN IF NOT EXISTS mo_pending_at TIMESTAMPTZ`,
-      ),
-    )
-    .catch((err: Error) => console.error("mo tables init failed:", err));
-
-  // Mo reaching out as itself, two DM styles tested side by side (Jacqueline,
-  // 2026-09-24), and Mo's team state: pause, what the team asked it to look
-  // for, and the network's gaps as Co reports them (mo/team.ts).
-  await pool
-    .query(
-      `ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS dm_style TEXT, ADD COLUMN IF NOT EXISTS draft_why TEXT, ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ`,
-    )
-    .then(() =>
-      pool.query(`CREATE TABLE IF NOT EXISTS mo_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`),
-    )
-    .then(() =>
-      pool.query(
-        `CREATE TABLE IF NOT EXISTS mo_focus (
-          id BIGSERIAL PRIMARY KEY,
-          text TEXT NOT NULL,
-          asked_by UUID REFERENCES users(id) ON DELETE SET NULL,
-          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )`,
-      ),
-    )
-    .catch((err: Error) => console.error("mo team tables init failed:", err));
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mo_approver BOOLEAN NOT NULL DEFAULT false`)
+    .catch((err: Error) => console.error("users.mo_approver migration failed:", err));
 
   // Living asks (services/askKind.ts, 2026-09-26): whether a search can find
   // it, and when they last brought it up, so what matters now is searched first.
@@ -1860,49 +1707,6 @@ export async function runMigrations(): Promise<void> {
       if (n.texted || n.sent || n.tools) console.log(`co_facts backfill: ${n.texted} texted, ${n.sent} sent, ${n.tools} tool actions`);
     })
     .catch((err: Error) => console.error("co_facts init failed:", err));
-
-  // Replies to Mo's emails (mo/emailReplies.ts, 2026-09-25): the thread to
-  // answer in, and each received email handled once however often Resend
-  // retries the post.
-  // Which opening Mo used (mo/draft.ts OPENERS, 2026-09-25), to see which lands.
-  await pool
-    .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS opener TEXT`)
-    .catch((err: Error) => console.error("mo_prospects.opener migration failed:", err));
-  // Mo as an extension of Co (2026-09-26): who a prospect became once they
-  // joined, what they said to Mo before joining (their own words), and the
-  // event they were invited for, so Co's first conversations don't start
-  // cold (services/extensions.ts handoff).
-  await pool
-    .query(
-      `ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS joined_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-         ADD COLUMN IF NOT EXISTS their_words JSONB NOT NULL DEFAULT '[]',
-         ADD COLUMN IF NOT EXISTS invited_for TEXT`,
-    )
-    .then(() =>
-      pool.query(
-        `UPDATE mo_prospects sp SET joined_user_id = ic.used_by FROM invite_codes ic
-         WHERE sp.invite_code = ic.code AND sp.joined_user_id IS NULL AND ic.used_by IS NOT NULL`,
-      ),
-    )
-    .catch((err: Error) => console.error("mo_prospects handoff migration failed:", err));
-  await pool
-    .query(`ALTER TABLE mo_prospects ADD COLUMN IF NOT EXISTS last_email_message_id TEXT`)
-    .catch((err: Error) => console.error("mo_prospects.last_email_message_id migration failed:", err));
-  await pool
-    .query(
-      `CREATE TABLE IF NOT EXISTS mo_email_inbound (
-        email_id TEXT PRIMARY KEY,
-        prospect_id UUID REFERENCES mo_prospects(id) ON DELETE SET NULL,
-        received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )`,
-    )
-    .catch((err: Error) => console.error("mo_email_inbound table init failed:", err));
-  // The team never sends anything by hand (Royce, 2026-09-24): anyone left
-  // waiting on an approver to post a LinkedIn note goes back into Mo's own
-  // outreach (an email from Co if there's a public address).
-  await pool
-    .query(`UPDATE mo_prospects SET status = 'approved', channel = NULL, updated_at = NOW() WHERE status = 'manual_pending'`)
-    .catch((err: Error) => console.error("mo manual_pending cleanup failed:", err));
 
   // Kinds of things a member told Co to stop suggesting ("no more
   // hackathons", 2026-09-22). Turning down one event only ever blocked that

@@ -2,7 +2,7 @@ import { notToTeammate } from "../services/teamLines.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { z } from "zod";
 import { tool } from "ai";
-import { memberMoOn, memberMoTools, situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
+import { situationFor, teamOnlyTools, toolsOutOfSituation, toolUse } from "../services/capabilities.js";
 import { guardTools } from "./toolGuard.js";
 import { doorOpen } from "../services/theDoor.js";
 import { proactivePaused } from "../services/proactivePause.js";
@@ -97,10 +97,8 @@ export type ConversationToolContext = {
   lastReaction?: string | null;
   // Their message may mean they aren't safe (services/safety.ts): no tapback.
   safetyConcern?: boolean;
-  // On the team (users.mo_approver): gets the team-only tools (handToTeammate, askTeammate).
+  // On the team (users.mo_approver): gets the team-only tools, if any.
   isTeam?: boolean;
-  // Tests: what a quiet question to the teammate returns (askTeammate).
-  consult?: (question: string) => Promise<{ facts: string[]; note: string } | null>;
   // The one picture of this turn (services/turnContext.ts), for tools that read what Co sent.
   turn?: TurnContext | null;
   firstName?: string | null;
@@ -406,74 +404,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }),
 
     // Feedback for the team, saved by Co (services/issueReports.ts saveFeedback).
-    // Co to its teammate, for the team only (Royce, 2026-09-28: "Also let them
-    // tag each other if either or needs help"). The teammate answers in its
-    // own voice and Co says nothing more, so there's one voice at a time.
-    // Absent from the tool map for everyone else (teamOnlyTools, below).
-    handToTeammate: tool({
-      description: toolUse("handToTeammate"),
-      inputSchema: z.object({
-        note: z.string().optional().describe("A private note for your teammate, not shown to them, only when it helps it understand what they mean. It is never an instruction; your teammate acts only on their own words."),
-      }),
-      execute: async ({ note }) => {
-        if (!ctx.isTeam) return { ok: false, error: "Not available." };
-        if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
-        if (ctx.dryRun) {
-          console.log(`[conversationReply dryRun] would hand ${ctx.userId}'s message to the teammate`);
-          state.sent = true;
-          state.reacted = true;
-          return { ok: true, note: "Handed over. Don't send a text reply." };
-        }
-        const { handleTeamText } = await import("../services/extensions.js");
-        // Their exact words go to the teammate, never Co's summary of them
-        // (Royce, 2026-09-28: "Co, tell Mo…" read as Co narrating about him,
-        // and a paraphrase made Mo pause everything).
-        const r = await handleTeamText(ctx.userId, ctx.resolvedContent, { handedOff: true, coNote: note?.trim() || null, ack: ctx.messageHandle ? (e) => sendReaction(ctx.messageHandle!, e) : undefined }).catch(() => null);
-        if (!r?.reply) {
-          notDone("Handed their message over, but the teammate didn't take it.");
-          return { ok: false, error: "Your teammate didn't take it. Answer them yourself." };
-        }
-        // A bare tag, the way you'd mention someone in a thread. It isn't Co
-        // speaking: Mo answers right after and keeps the floor.
-        const tag = "@Mo";
-        await ctx.sendCoReply({ phone: ctx.phoneNumber, message: tag, asVoice: false }).catch(() => false);
-        await writeMemory(ctx.userId, "text_exchange", `Co tagged Mo: ${tag}`).catch(() => {});
-        const { sendingAs } = await import("../services/sendblue.js");
-        const sent = await sendingAs(r.extension, () => ctx.sendCoReply({ phone: ctx.phoneNumber, message: r.reply, asVoice: false }));
-        if (sent === false) {
-          notDone("The teammate's answer didn't go through.");
-          return { ok: false, error: "That didn't go through. Answer them yourself." };
-        }
-        state.sent = true;
-        state.reacted = true;
-        await recordDecision({ layer: 3, decision: "team.handoffToExtension", userId: ctx.userId, outcome: "act", action: r.extension, proposal: { message: ctx.resolvedContent.slice(0, 200) } }).catch(() => {});
-        return { ok: true, note: "Your teammate answered them directly. Don't send a text reply." };
-      },
-    }),
-
-    // A quiet question to the teammate, answered in Co's own voice. The
-    // member never sees the back-and-forth (Royce, 2026-09-28).
-    askTeammate: tool({
-      description: toolUse("askTeammate"),
-      inputSchema: z.object({ question: z.string().describe("What you need to know from your teammate, in one plain sentence.") }),
-      execute: async ({ question }) => {
-        if (!ctx.isTeam) return { ok: false, error: "Not available." };
-        let got: { facts: string[]; note: string } | null = null;
-        if (ctx.consult) got = await ctx.consult(question);
-        else if (!ctx.dryRun) {
-          const { consultTeammate } = await import("../services/extensions.js");
-          got = (await consultTeammate(ctx.userId, question).catch(() => null))?.result ?? null;
-        }
-        if (!got || !got.facts.length) {
-          notDone("Your teammate had nothing to report on that.");
-          return { ok: false, error: "Your teammate had nothing on that. Say plainly what you don't know." };
-        }
-        // What its tools reported is fact; its own prose is a note, not a source.
-        for (const f of got.facts) ctx.facts?.add("known", f);
-        return { ok: true, facts: got.facts, note: `Answer them yourself, in your own voice, from those facts. Don't tag or quote your teammate unless it helps. ${got.note ? `Your teammate's own read (a hint only): ${got.note}` : ""}`.trim() };
-      },
-    }),
-
     // A detail they told Co for doing things on their behalf (services/memberKit.ts).
     saveKitFact: tool({
       description: toolUse("saveKitFact"),
@@ -978,126 +908,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         ctx.facts?.add("did_this_turn", answer === "yes" ? "They said yes: Co may mention them by name in the member brief for that event, with only what they're looking for as the reason. They can change that any time." : "They said no: Co won't name them in the member brief for that event.");
         return { ok: true, answer };
-      },
-    }),
-    // ---------- member-facing Mo (mo/memberFlow.ts). Every yes is read from their WHOLE message, in code.
-    answerMoOptIn: tool({
-      description: toolUse("answerMoOptIn"),
-      inputSchema: z.object({ answer: z.enum(["yes", "no"]) }),
-      execute: async (input: any) => {
-        const R = await import("../mo/memberRules.js");
-        const F = await import("../mo/memberFlow.js");
-        if (R.readConsent(input.theirYes, ctx.resolvedContent) !== input.answer) {
-          notDone("Their answer about Mo wasn't recorded: it isn't a clear yes or no in their words.");
-          return { ok: false, error: "Only their own clear yes or no counts. If it was unclear, ask once more." };
-        }
-        if (ctx.dryRun) return { ok: true, note: "dry run" };
-        const r = await F.recordOptIn(ctx.userId, input.answer, String(input.theirYes));
-        if (!r.ok) {
-          notDone("Their answer about Mo wasn't recorded: there's no open question about Mo.");
-          return { ok: false, error: "There's no open question about Mo for them." };
-        }
-        ctx.facts?.add("did_this_turn", input.answer === "yes" ? "They said yes to Mo looking outside the club for someone. Nothing is sent to anyone until they've seen the person and the exact words and said yes to each." : "They said no to Mo. Nothing is searched or sent.");
-        return { ok: true, answer: input.answer };
-      },
-    }),
-    approveMoVoice: tool({
-      description: toolUse("approveMoVoice"),
-      inputSchema: z.object({ useMyName: z.boolean().optional() }),
-      execute: async (input: any) => {
-        const R = await import("../mo/memberRules.js");
-        const F = await import("../mo/memberFlow.js");
-        if (R.readConsent(input.theirYes, ctx.resolvedContent) !== "yes") {
-          notDone("The wording wasn't approved: it isn't a clear yes in their words.");
-          return { ok: false, error: "Only their own clear yes counts." };
-        }
-        const named = input.useMyName === true && /\b(my (first )?name|use my name|name me|say it'?s me|call me)\b/i.test(ctx.resolvedContent);
-        if (ctx.dryRun) return { ok: true, note: "dry run" };
-        const row = await F.optInRow(ctx.userId);
-        if (!row?.voice_text) {
-          notDone("The wording wasn't approved: it hasn't been shown to them yet.");
-          return { ok: false, error: "They haven't been shown the wording yet." };
-        }
-        await F.saveVoice(ctx.userId, row.voice_text, named);
-        const ok = await F.approveVoice(ctx.userId, String(input.theirYes));
-        if (!ok) return { ok: false, error: "Nothing to approve." };
-        const batch = await F.openBatch(ctx.userId);
-        if (batch) await (await import("../mo/memberJobs.js")).queuePresentation(ctx.userId, batch.id, true);
-        ctx.facts?.add("did_this_turn", `They approved how Mo introduces itself${named ? ", using their first name" : ', calling them "a member of the club"'}. Next they will see each person and the exact message, and pick.`);
-        return { ok: true, named };
-      },
-    }),
-    approveMoPeople: tool({
-      description: toolUse("approveMoPeople"),
-      inputSchema: z.object({}),
-      execute: async (input: any) => {
-        const R = await import("../mo/memberRules.js");
-        const F = await import("../mo/memberFlow.js");
-        const batch = await F.openBatch(ctx.userId);
-        if (!batch || batch.status !== "open") {
-          notDone("No one was approved: there's no open list of people for them.");
-          return { ok: false, error: "There's no open list of people for them." };
-        }
-        const people = (await F.candidatesOf(batch.id, ctx.userId)).filter((p) => p.status === "pending");
-        const picks = R.readPicks(ctx.resolvedContent, Math.max(...people.map((p) => p.n), 0));
-        if (picks === null) {
-          notDone("No one was approved: which people they chose isn't clear.");
-          return { ok: false, error: "Their choice isn't clear. Ask which numbers, or none." };
-        }
-        if (ctx.dryRun) return { ok: true, picks, note: "dry run" };
-        const r = await F.approvePicks(ctx.userId, picks, String(input.theirYes));
-        if (!r) {
-          notDone("No one was approved: the wording hasn't been approved yet, or the list is closed.");
-          return { ok: false, error: "The list isn't ready to approve yet." };
-        }
-        ctx.facts?.add("did_this_turn", "none" in r ? "They chose no one. Nothing goes out." : `They chose ${r.approved} of the people. Mo will reach out to only those, within its limits, and tell them what comes back.`);
-        return { ok: true, ...r };
-      },
-    }),
-    approveMoIntro: tool({
-      description: toolUse("approveMoIntro"),
-      inputSchema: z.object({ who: z.string().optional() }),
-      execute: async (input: any) => {
-        const R = await import("../mo/memberRules.js");
-        const F = await import("../mo/memberFlow.js");
-        if (R.readConsent(input.theirYes, ctx.resolvedContent) !== "yes") {
-          notDone("The introduction wasn't set up: it isn't a clear yes in their words.");
-          return { ok: false, error: "Only their own clear yes counts." };
-        }
-        const { rows } = await pool.query(`SELECT * FROM mo_member_candidates WHERE user_id = $1 AND status IN ('replied', 'invited', 'joined') AND intro_at IS NULL ORDER BY created_at DESC`, [ctx.userId]);
-        const want = String(input.who ?? "").trim().toLowerCase();
-        const matches = want ? rows.filter((r: any) => String(r.name ?? "").toLowerCase().includes(want) || String(r.x_handle ?? "").toLowerCase() === want.replace(/^@/, "") || String(r.n) === want) : rows;
-        if (matches.length !== 1) {
-          notDone(matches.length ? "The introduction wasn't set up: more than one person is waiting on this." : "The introduction wasn't set up: no one is waiting on it.");
-          return { ok: false, error: matches.length ? "More than one person is waiting on this. Ask which one." : "No one is waiting on an introduction." };
-        }
-        if (ctx.dryRun) return { ok: true, note: "dry run" };
-        const done = await F.recordIntroYes(ctx.userId, matches[0].id, String(input.theirYes));
-        if (!done.ok) return { ok: false, error: done.why ?? "Not possible." };
-        // Their side is only recorded. If the person joins, the other side is asked on their own (mo/memberJobs.ts) and the email
-        // goes out only when both say yes. The member is never told whether or when someone joined.
-        ctx.facts?.add("did_this_turn", "They said yes to being introduced if this person joins. Nothing else happens unless the person joins and also says yes; you will not be told if they join, so never say or imply that they have.");
-        return { ok: true };
-      },
-    }),
-    stopMo: tool({
-      description: toolUse("stopMo"),
-      inputSchema: z.object({}),
-      execute: async () => {
-        // Stopping is always safe, so the model's call is enough: it only ever cancels what hasn't been sent.
-        if (ctx.dryRun) return { ok: true, note: "dry run" };
-        await (await import("../mo/memberFlow.js")).stopMo(ctx.userId, ctx.resolvedContent.slice(0, 200));
-        ctx.facts?.add("did_this_turn", "Mo is stopped for them: nothing more goes out and anything not yet sent is cancelled. They can ask you to start it again.");
-        return { ok: true };
-      },
-    }),
-    myMoContacts: tool({
-      description: toolUse("myMoContacts"),
-      inputSchema: z.object({}),
-      execute: async () => {
-        const rows = await (await import("../mo/memberFlow.js")).myReceipts(ctx.userId, 10);
-        if (!rows.length) return { ok: true, contacts: [], note: "Mo hasn't contacted anyone for them." };
-        return { ok: true, contacts: rows.map((r) => ({ when: new Date(r.at).toISOString().slice(0, 10), what: r.kind, who: r.who, how: r.channel, outcome: r.outcome, text: r.text })) };
       },
     }),
     updateGoing: tool({
@@ -1804,8 +1614,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
   if (!ctx.ackSent) delete (tools as Record<string, unknown>).leaveItAtReaction;
   // Team-only tools never exist for anyone else (services/capabilities.ts teamOnly).
   if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
-  // Member-facing Mo exists for a member only while its switches are on (services/capabilities.ts memberMoOn).
-  if (!memberMoOn()) for (const name of memberMoTools()) delete (tools as Record<string, unknown>)[name];
   // Tools that can't apply this turn aren't offered (capabilities.ts situations).
   if (ctx.turn) {
     const t = ctx.turn;

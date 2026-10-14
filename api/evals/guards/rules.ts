@@ -67,7 +67,6 @@ check("a companion text the member never answered still blocks the next one (unc
 // Their texts to a teammate agent are logged as "User said: … [to Mo]". A reader that treats
 // their lines as facts about them must skip those. Readers that only count activity may not.
 const ACTIVITY_ONLY: Record<string, string> = {
-  "mo/learn.ts": "counts replies from people Mo brought in",
   "harness/memberReflection.ts": "counts replies in the week for the reflection",
   "harness/callGate.ts": "recency of any activity, for call timing",
   // Its content reads are held to notToTeammate by section 5; readActivityTimes returns timestamps only, any channel.

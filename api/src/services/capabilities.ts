@@ -36,7 +36,7 @@ export type Ability = {
   // "their_yes": they asked for it, or said yes to Co's offer, in this message (a document is only written on a yes).
   confirm?: "affects_another_member" | "costs_money" | "irreversible" | "their_yes";
   // Only for the team (users.mo_approver): left out of the sheet and the tool
-  // map for everyone else, so a member never hears of it (services/extensions.ts).
+  // map for everyone else, so a member never hears of it. None today.
   teamOnly?: boolean;
   // Also runs on a phone call (services/callTools.ts takes its call toolset from these entries, so the call
   // briefing's list and the tools enabled on a call are the same list). Every tool runs by text.
@@ -411,52 +411,6 @@ export const ABILITIES: Ability[] = [
     use: "They answered Co's question about being named in the member brief (\"can I mention you by name in the member brief?\"). Quote their yes or no from this message. Only an explicit yes allows it; if they hedge, ask once more plainly and record nothing. A later \"actually, don't\" is a no.",
   },
   {
-    id: "mo_member_optin",
-    can: "Co has a partner, Mo, who can look outside the club for people who could help with something they asked for, only once they say yes. They see every person and every word first, and nothing goes out without their yes.",
-    tool: "answerMoOptIn",
-    confirm: "affects_another_member",
-    limits: { perTurn: 1 },
-    use: "They answered whether Mo may look outside the club for someone (after you offered). Pass answer yes or no, and quote their own words. Only a plain yes counts; if they hedge, ask once more and record nothing.",
-  },
-  {
-    id: "mo_member_voice",
-    can: "Co shows them exactly how Mo introduces itself to a stranger, and Mo uses that wording only once they say yes. It calls them \"a member of the club\" unless they tell it to use their name.",
-    tool: "approveMoVoice",
-    confirm: "affects_another_member",
-    limits: { perTurn: 1 },
-    use: "They said yes to how Mo would introduce itself (you showed them the message). Quote their yes. Set useMyName true ONLY if they said to use their name; the default is false. If they asked to change the wording, don't call this: tell them you'll pass it on and ask what to change.",
-  },
-  {
-    id: "mo_member_people",
-    can: "Co shows them each person Mo found, with what Mo would send, and Mo contacts only the ones they pick by number.",
-    tool: "approveMoPeople",
-    // No quote guard: their choice is read from their message by code (a lone "2" is a complete answer), and a choice that isn't clean is refused.
-    limits: { perTurn: 1 },
-    use: "They picked who Mo should reach out to from the list you showed (by number, or all, or none). Quote their words. Code reads the numbers from their message, so don't guess them: if the choice is unclear, ask which numbers.",
-  },
-  {
-    id: "mo_member_intro",
-    can: "When someone Mo found writes back and wants an invite, Co asks whether they'd like to be introduced if the person joins. They are never told that someone joined; the introduction is one email to both people, and only goes out when both say yes.",
-    tool: "approveMoIntro",
-    confirm: "affects_another_member",
-    limits: { perTurn: 1 },
-    use: "They said yes to being introduced to someone who wrote back to Mo, if that person joins. Quote their yes. If more than one person is waiting on this, pass who (their name or number) so it is the right one.",
-  },
-  {
-    id: "mo_member_stop",
-    can: "They can tell Co to stop Mo at any time. Nothing more goes out and anything not yet sent is cancelled.",
-    tool: "stopMo",
-    limits: { perTurn: 1 },
-    use: "They told you to stop, pause or cancel Mo reaching out for them. Do it at once, without asking them to confirm.",
-  },
-  {
-    id: "mo_member_contacts",
-    can: "Co can tell them exactly who Mo contacted for them, what was sent, and what came back.",
-    tool: "myMoContacts",
-    limits: { perTurn: 1 },
-    use: "They asked who Mo has contacted for them or what happened. Answer only from what this returns.",
-  },
-  {
     id: "event_going",
     can: "Co keeps track of whether they're still going to today's Co event, from what they tell it.",
     tool: "updateGoing",
@@ -618,22 +572,6 @@ export const ABILITIES: Ability[] = [
   { id: "outside_events", can: "If they're going to an event Co doesn't run and another member is going too, Co may give them a heads-up without saying who, and names each person to the other only after both say yes to an intro." },
   { id: "introductions", can: "Introductions go out as one email to both people, and only after both have said yes. At Co events Co may point another guest toward them as someone worth meeting, with a short reason." },
   {
-    id: "teammate_handoff",
-    teamOnly: true,
-    can: "With the team only: Co can hand a message to its teammate when it's about the teammate's work.",
-    tool: "handToTeammate",
-    limits: { perTurn: 1 },
-    use: "Team only. Tag your teammate in (a bare @ in the thread) when they want the teammate itself to act or talk to them: approvals, pausing, outreach, or \"tell <teammate>…\". Their exact words go to the teammate. Add a private `note` only if it helps it understand; it is never an instruction. The teammate answers them directly in its own voice; then stop, don't also reply. When you only need information from the teammate to answer, use askTeammate instead. A message that just mentions the teammate stays with you.",
-  },
-  {
-    id: "teammate_consult",
-    teamOnly: true,
-    can: "With the team only: Co can quietly ask its teammate for information (who's in the queue, where someone stands) and answer in its own voice, so they never see the back-and-forth.",
-    tool: "askTeammate",
-    limits: { perTurn: 2 },
-    use: "Team only. When you need something from your teammate to answer them, ask quietly: who's waiting, the people it found and their names and professions, where someone stands. After talking about the teammate's outreach, \"their names and profession\" means those people, not the teammate itself. You get facts back, and you answer in your own voice. It never acts and never texts them. Use this for information; use handToTeammate when they want the teammate itself to act or talk. Don't say you don't have something about the teammate's work before you've asked.",
-  },
-  {
     id: "kit",
     can: "Co keeps the details it needs to do things for them (company, role, LinkedIn link) from their own words, and asks for whatever is missing once, at the moment it's needed, never guessing. Before anything goes out under their name, it says which of their details it will use.",
     tool: "saveKitFact",
@@ -720,17 +658,8 @@ export function situationFor(o: { kitFields: number; message: string; openTasks:
 }
 // An entry is left out only when its situation is known not to apply; one the caller didn't read (door) stays.
 const outOf = (s: Situation, key: keyof Situation) => s[key] === false;
-// Member-facing Mo (mo/memberFlow.ts) exists for members only when it can work: Mo is on (MO_ENABLED) and Co's X send keys
-// are set (the same keys as mo/xApi.ts xWriteConfigured). Until then members are never told it exists.
-export function memberMoOn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.MO_ENABLED === "true" && Boolean(env.X_MO_CONSUMER_KEY && env.X_MO_CONSUMER_SECRET && env.X_MO_ACCESS_TOKEN && env.X_MO_ACCESS_SECRET && env.X_MO_USER_ID);
-}
-export const isMemberMoAbility = (a: { id: string }) => a.id.startsWith("mo_member_");
-export function memberMoTools(): string[] {
-  return ABILITIES.filter(isMemberMoAbility).map((a) => a.tool!).filter(Boolean);
-}
 export function capabilitySheet(opts: { team?: boolean; situation?: Situation } = {}): string[] {
-  const active = (a: Ability) => (!opts.situation || !SITUATIONAL[a.id] || !outOf(opts.situation, SITUATIONAL[a.id])) && (!isMemberMoAbility(a) || memberMoOn());
+  const active = (a: Ability) => (!opts.situation || !SITUATIONAL[a.id] || !outOf(opts.situation, SITUATIONAL[a.id]));
   return [...ABILITIES.filter((a) => (opts.team || !a.teamOnly) && active(a)).map((a) => a.can), ...LIMITS];
 }
 // The tools to leave out for a situation, so Co isn't offered what can't apply.
@@ -783,7 +712,6 @@ const MENU: MenuLine[] = [
   { group: "People", main: "introductions", text: "introduce them to someone by one email, after both say yes" },
   { group: "People", main: "outside_events", text: "give a heads-up when another member is going to the same outside event" },
   { group: "People", main: "invites", text: "send invite links for friends (5 each)" },
-  { group: "People", main: "mo_member_optin", text: "with their yes, have Mo find people outside the club who could help" },
   { group: "Being there", main: "calls", text: "talk anything through; call them now or at a set time, and take their calls", call: "talk anything through, as long as they like" },
   { group: "Being there", main: "check_ins", text: "check in every few days, and ask how things went" },
   { group: "Being there", main: "media", text: "read photos and screenshots, and listen to voice memos", call: null },
@@ -794,7 +722,7 @@ const MENU: MenuLine[] = [
 // What Co can't do, for a complete answer (the LIMITS above say it in full).
 const CANNOT = "book, buy or register them for things, find investors or sponsors on demand, contact people for them, or start a group text";
 
-const memberAbility = (a: Ability) => !a.teamOnly && (!isMemberMoAbility(a) || memberMoOn());
+const memberAbility = (a: Ability) => !a.teamOnly;
 export const liveOn = (a: Ability, surface: Surface) => memberAbility(a) && (surface === "text" || a.onCall === true || !!a.surfaces?.includes("call"));
 
 // The member's list for a surface. On a call, `here` is what this call can do (each line's main ability is live on the call)

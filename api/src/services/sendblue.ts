@@ -1,6 +1,5 @@
 import { isTestHandle, isTestNumber, testHandle } from "./testNumbers.js";
 import { stripCues } from "./voiceCues.js";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { sendLimiter } from "./sendLimiter.js";
 import { claimReaction, confirmReaction, releaseReaction } from "./tapbacks.js";
 import { createHash, timingSafeEqual } from "crypto";
@@ -137,37 +136,16 @@ function reportSendBreaker(number: string, count: number, resumesAt: number, rea
     .catch((err: any) => console.error("sendblue: breaker follow-up failed (non-fatal):", err?.message ?? err));
 }
 
-// Who a send is from: Co, or an extension speaking on the same number (Mo).
-// Set around a send with sendingAs("mo", ...), read when the handle is saved,
-// so an inline reply to Mo's text goes back to Mo (2026-09-28: Royce replied
-// under Mo's "So on Harneet…" and Co answered instead).
-const senderContext = new AsyncLocalStorage<string>();
-export function sendingAs<T>(sender: string, fn: () => Promise<T>): Promise<T> {
-  return senderContext.run(sender, fn);
-}
-
+// Every send is Co's (outbound_messages.sender keeps its default, "co").
 function recordOutbound(handle: string, number: string, content: string): void {
-  const sender = senderContext.getStore() ?? "co";
   import("../db/db.js")
     .then(({ default: pool }) =>
       pool.query(
-        `INSERT INTO outbound_messages (message_handle, user_id, content, sender)
-         SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3, $4
+        `INSERT INTO outbound_messages (message_handle, user_id, content)
+         SELECT $1, (SELECT id FROM users WHERE right(regexp_replace(phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($2, '\\D', '', 'g'), 10) LIMIT 1), $3
          ON CONFLICT (message_handle) DO NOTHING`,
-        [handle, number, content.slice(0, 2000), sender],
-      ).then(async () => {
-        // Mo's texts join the thread Co reads, as "Mo replied:" (Royce,
-        // 2026-09-28: Co couldn't see Mo's side, so "Pause on it" was
-        // misread). Everyone reads one record; each line says who spoke.
-        if (sender === "mo") {
-          await pool.query(
-            `INSERT INTO co_memories (user_id, memory_type, content)
-             SELECT u.id, 'text_exchange', $2 FROM users u
-             WHERE right(regexp_replace(u.phone_number, '\\D', '', 'g'), 10) = right(regexp_replace($1, '\\D', '', 'g'), 10) LIMIT 1`,
-            [number, `Mo replied: ${content.slice(0, 2000)}`],
-          );
-        }
-      }),
+        [handle, number, content.slice(0, 2000)],
+      ),
     )
     .catch((err: any) => console.error("sendblue: outbound handle not recorded (non-fatal):", err?.message ?? err));
 }

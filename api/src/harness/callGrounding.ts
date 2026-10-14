@@ -24,7 +24,7 @@ import { captureIntentForTurn } from "../services/profileExtraction.js";
 import { writeMemory } from "../services/memory.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { callKey } from "../services/callKey.js";
-import { ABILITIES, LIMITS, isMemberMoAbility } from "../services/capabilities.js";
+import { ABILITIES, LIMITS } from "../services/capabilities.js";
 import { memberRecordText, overlap, sameCallCommitment, sameCommitment, significant, specificsIn, specificsOnRecord } from "../services/followThrough.js";
 import { wordsAreTheirs } from "../services/coTasks.js";
 import type { MemberKnowledge } from "../services/memberKnowledge.js";
@@ -58,7 +58,7 @@ const CALL_ONLY_LIMITS = [
 // The registry, as the audit reads it: what Co can do by id, and what it can't by number (team-only abilities left out).
 export function auditRegistry(): { abilities: { id: string; can: string }[]; limits: string[] } {
   return {
-    abilities: ABILITIES.filter((a) => !a.teamOnly && !isMemberMoAbility(a)).map((a) => ({ id: a.id, can: a.can })),
+    abilities: ABILITIES.filter((a) => !a.teamOnly).map((a) => ({ id: a.id, can: a.can })),
     limits: [...LIMITS, ...CALL_ONLY_LIMITS],
   };
 }

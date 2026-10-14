@@ -346,7 +346,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     await set.run("updateNotes", { what: "dinner", userId: "member-b", phone: "+10000000000" }, "x");
     check("tools act only for the call's member: an id or number in the model's input is dropped by the schema", seen.length === 1 && !("userId" in seen[0]) && !("phone" in seen[0]) && seen[0].what === "dinner", seen);
     const other = await set.run("sendReply", { message: "hi" }, "y");
-    check("only the call subset exists on a call (no texting send, no Mo, no intros)", (other as any)?.ok === false && !CT.CALL_TOOL_NAMES.includes("sendReply" as any) && !CT.CALL_TOOL_NAMES.some((n) => /requestEventIntro|shareFinds|webSearch|draftEmail/.test(n)));
+    check("only the call subset exists on a call (no texting send, no intros)", (other as any)?.ok === false && !CT.CALL_TOOL_NAMES.includes("sendReply" as any) && !CT.CALL_TOOL_NAMES.some((n) => /requestEventIntro|shareFinds|webSearch|draftEmail/.test(n)));
     // What one call did is remembered for that call only, never shown on another member's call.
     CT._resetCallMemoryForTest();
     const a = CT.buildCallTools({ userId: "member-a", callKey: "member-a:tokA", turnWords: "", callWords: "", lastCoLine: null, member, dryRun: true, tools: { startTask: aiTool({ description: "s", inputSchema: z.object({ goal: z.string() }), execute: async () => ({ ok: true }) }) } });

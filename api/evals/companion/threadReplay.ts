@@ -13,7 +13,6 @@ process.env.SENDBLUE_API_API_KEY ||= "x";
 process.env.SENDBLUE_API_API_SECRET ||= "x";
 const { runConversationReplyAgent } = await import("../../src/agent/conversationReply.js");
 const G = await import("../../src/harness/replyGrounding.js");
-const { teamSheet } = await import("../../src/services/extensions.js");
 const K = await import("../../src/services/memberKit.js");
 const { renderSnapshot } = await import("../../src/harness/personSnapshot.js");
 const d = JSON.parse(readFileSync(new URL("./thread.local.json", import.meta.url), "utf8"));
@@ -28,7 +27,6 @@ async function reply(label: string, msg: string, runs = 3) {
   if (only && only !== label) return;
   for (let i = 0; i < runs; i++) {
     const facts = G.baseReplyFacts();
-    for (const l of teamSheet()) G.addFact(facts, "known", l);
     for (const l of K.kitLines({ full_name: "Royce Williams", email: "x@y.z", company: "Lantern", role: "founder", city: "San Francisco" })) G.addFact(facts, "known", l);
     for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Co's summary of what they've told it: ${line}`);
     if (extra) {
@@ -64,7 +62,6 @@ if (process.env.FRESH === "1") {
   let pass = 0, total = 0;
   for (const [kind, msg, ok] of fresh) for (let i = 0; i < 2; i++) {
     const facts = G.baseReplyFacts();
-    for (const l of teamSheet()) G.addFact(facts, "known", l);
     for (const l of K.kitLines({ full_name: "Royce Williams", email: "x@y.z", company: "Lantern", role: "founder", city: "San Francisco" })) G.addFact(facts, "known", l);
     for (const line of renderSnapshot(d.snapshot).split("\n").filter(Boolean)) G.addHint(facts, `Co's summary of what they've told it: ${line}`);
     if (process.env.EXTRA === "2") {

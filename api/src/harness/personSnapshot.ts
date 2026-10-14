@@ -75,7 +75,6 @@ Rules:
 - Newer statements replace older ones. If they said they're Series A, they're not pre-seed anymore, whatever the old picture says.
 - Only what they actually said or what's listed above. No guesses about their feelings or circumstances.
 - Only about them. Never about Co, Co's mistakes, or complaints about Co.
-- Mo is an AI agent that works alongside Co, not a person in their life. Never list Mo as a cofounder, colleague or friend, even if an older picture did: drop it.
 - Refer to them by name or as "they". Never "he" or "she" unless they told Co their pronouns (2026-09-22: a picture called a member "he" from their name alone).
 - Keep every list short (at most 4 items), specific, and current. Drop anything resolved or contradicted.
 

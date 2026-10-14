@@ -15,7 +15,6 @@
 // them locally; the cron emails the summary).
 import { sendReportEmail } from "../services/reportEmail.js";
 import { ABILITIES } from "../services/capabilities.js";
-import { EXTENSIONS } from "../services/extensions.js";
 import { Resend } from "resend";
 import pool from "../db/db.js";
 import { recordDecision } from "./core.js";
@@ -96,7 +95,7 @@ export const SIGNALS: Signal[] = [
   { key: "cold_start_quiz", label: "Cold-start steering replies that asked more than one question", bad: `decision = 'coldstart.reply' AND action = 'steered' AND COALESCE((proposal->>'questions')::int, 0) > 1`, total: `decision = 'coldstart.reply' AND action = 'steered'`, floor: 0.3, minCount: 2, steady: { window: "7 days", repeatHours: 72 } },
   // Drift in Co's own choices (2026-09-25, toolGuard.ts): how often a tool
   // it chose didn't actually happen, and how often it hit a hard limit.
-  { key: "tool_not_done", label: "Tools Co (or an extension) chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
+  { key: "tool_not_done", label: "Tools Co chose that didn't go through", bad: `decision LIKE 'tool.%' AND action = 'not_done'`, total: `decision LIKE 'tool.%'`, floor: 0.2, minCount: 3 },
   { key: "tool_limited", label: "Tool calls refused by a limit or missing yes", bad: `decision LIKE 'tool.%' AND action IN ('limited', 'needs_yes')`, total: `decision LIKE 'tool.%'`, floor: 0.25, minCount: 3 },
   // How often each tool is used per reply, so a sudden jump in any one shows.
   ...ABILITIES.filter((a) => a.tool && !["sendReply", "markTopicAsked"].includes(a.tool)).map((a) => ({
@@ -107,18 +106,6 @@ export const SIGNALS: Signal[] = [
     floor: 0.35,
     minCount: 3,
   })),
-  // The same for each extension's tools (services/extensions.ts), per turn
-  // it took with the team (logged as <id>.teamTurn).
-  ...EXTENSIONS.flatMap((e) =>
-    e.abilities.filter((a) => a.tool).map((a) => ({
-      key: `tool_use_${a.tool}`,
-      label: `${e.name} turns that used ${a.tool}`,
-      bad: `decision = 'tool.${a.tool}'`,
-      total: `decision = '${e.id}.teamTurn'`,
-      floor: 0.5,
-      minCount: 3,
-    })),
-  ),
 ];
 
 export type SignalReading = { signal: Signal; recentBad: number; recentTotal: number; recentRate: number; baselineRate: number };

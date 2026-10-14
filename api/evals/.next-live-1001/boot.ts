@@ -56,7 +56,6 @@ Object.assign(process.env, {
   TWILIO_PHONE_NUMBER: "+14155550198",
   HUME_CONFIG_ID: "harness-config",
   BROWSER_READ: "off",
-  MO_ENABLED: "",
 });
 for (const k of ["LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_BASE_URL", "KEANA_PHONE_NUMBER", "OTEL_EXPORTER_OTLP_ENDPOINT"]) delete process.env[k];
 export const secretsPresent = { DATABASE_URL: !!process.env.DATABASE_URL, ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY, OPENAI_API_KEY: !!process.env.OPENAI_API_KEY };
