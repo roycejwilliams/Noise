@@ -28,6 +28,8 @@ import { oauthSignature } from "../../src/mo/xApi.js";
 import { queryLeaks } from "../../src/mo/find.js";
 import { sendingStatus, tokenMatches, unsubscribeToken, codeMessage, moHours } from "../../src/mo/outreach.js";
 import { reviewText, questionText, who, namesThisItem } from "../../src/mo/review.js";
+// The read of their answer (services/theirYes.ts) is a model call: stubbed to yes, so these checks are about the guard's facts.
+(await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
 
 let failed = 0;
 let total = 0;

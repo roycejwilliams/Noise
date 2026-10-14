@@ -31,6 +31,7 @@ import { DateTime } from "luxon";
 import { googleTools } from "../services/googleTools.js";
 import { loopTools, newLoopState } from "./loopTools.js";
 import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
+import { carryLaneNotes, LANE_WORDS, laneNote, laneStoreFor, lookoutRestatesTask, moveLane, noteLabel, offersMove, ruleFor } from "../services/laneMoves.js";
 
 // A date as the member would say it, in their own zone (2026-09-22 code
 // review: toDateString() used the server's zone, so a Pacific evening showed
@@ -68,6 +69,8 @@ export type ConversationToolContext = {
   answerOwed?: string | null;
   // When their text arrived; the loop's time budget runs from here.
   turnStartedAt?: number;
+  // A confirmed lane move's line an earlier try at this reply never carried (conversationReply.ts retry): this reply carries it.
+  laneNotesOwed?: string[];
   userId: string;
   phoneNumber: string;
   resolvedContent: string;
@@ -104,6 +107,8 @@ export type ConversationToolContext = {
   // Without one (calls, tests), the turn's own flags above stand in for it.
   decision?: import("../brain/index.js").Decision | null;
   lastCoMessage?: string | null;
+  // The exchange before their message (services/theirYes.ts exchangeText): what a yes answers. Without it, Co's last line alone.
+  recentExchange?: string | null;
   // Facts for this reply (replyGrounding). Tools add what they actually did
   // so the grounding check accepts it, and shareLink only sends links on file.
   facts?: { add: (kind: "did_this_turn" | "known" | "ongoing" | "not_done" | "capability", text: string) => void; text: () => string };
@@ -113,6 +118,9 @@ export type ConversationToolContext = {
   // after a "looking" line, the way the first search result always was.
   threadNext?: () => void;
 };
+
+// The exchange a yes answers: the caller's, else Co's last line alone.
+const recentOf = (ctx: Pick<ConversationToolContext, "recentExchange" | "lastCoMessage">): string | null => ctx.recentExchange ?? (ctx.lastCoMessage ? `Co: ${ctx.lastCoMessage}` : null);
 
 // Whether this turn needs words, not a reaction: the brain's decision when there is one (its tapback rule), else the turn's flags.
 function wordsDue(ctx: Pick<ConversationToolContext, "decision" | "safetyConcern" | "replyOwed">): { why: string; tell?: string } | null {
@@ -140,7 +148,17 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // reasoning as askCheckin.ts's state.sent — generateText's return value
   // doesn't cleanly expose which tools actually executed.
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false };
+  // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
+  // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], closedTaskGoals: [] as string[] };
+  // What went out carries these lane lines: they're said now, and never again this turn.
+  const markLaneNotesSent = (went: string) => {
+    const said = (n: string) => went.toLowerCase().replace(/\s+/g, " ").includes(n.toLowerCase());
+    const out = state.laneNotes.filter(said);
+    if (!out.length) return;
+    state.laneNotesSent.push(...out);
+    state.laneNotes = state.laneNotes.filter((n) => !said(n));
+  };
   ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
   ctx.noteAnswerSent = (answer: string) => {
     state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${answer}` : answer;
@@ -204,6 +222,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
             // Nothing went, so an owed answer is still owed.
             stillOwed();
             notDone("A reply repeating what already went with the link wasn't sent again.");
+            // A lane move's line still has to go (laneMoves.ts): one short new line carries it.
+            if (state.laneNotes.length) return { ok: false, error: "That already went with the link. Send one short new line with sendReply; code adds the move's line to it." };
             return { ok: true, note: "That already went with the link; nothing more went out." };
           }
           const { afterLinkAnswers } = await import("./linkAnswer.js");
@@ -212,18 +232,22 @@ export function createConversationTools(ctx: ConversationToolContext) {
             const { recordDecision } = await import("../harness/core.js");
             await recordDecision({ layer: 3, decision: "reply.after_link", userId: ctx.userId, outcome: answers ? "act" : "skip", action: owed ? "sent_owed_answer" : answers ? "sent_answer" : "held_commentary", proposal: { draft: draft.slice(0, 300), ...(owed ? { owed: owed.slice(0, 200) } : {}) } }).catch(() => {});
           }
-          if (!answers) {
+          // A lane move's line pending lets one reply through after the link: it's the only way the line reaches them (laneMoves.ts).
+          if (!answers && !state.laneNotes.length) {
             notDone("A reply about the link after the link wasn't sent (the link's text is the whole delivery).");
             return { ok: false, error: "Not sent: it was about the page or deck, and the link's text is the whole delivery. Don't call sendReply again this turn." };
           }
         }
-        const message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
+        let message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
         // An owed answer the check emptied never went: not "already answered", it's said again plainly.
         if (!message.trim() && owed) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         // The fact check left nothing to add after what already went out this turn.
         if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
         // Never an empty text (2026-10-12 audit, row 11661): with nothing sent yet, Co says it again from what's true.
         if (!message.trim()) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
+        // A confirmed lane move's line rides in this reply, exactly once, after the check (laneMoves.ts carryLaneNotes, Royce 2026-10-13):
+        // never a text of its own, never repeated in a second reply this turn.
+        if (state.laneNotes.length || state.laneNotesSent.length) message = carryLaneNotes(message, state.laneNotes, state.laneNotesSent).text;
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
         // Texted in beats: each paragraph its own message (services/beats.ts).
         // A voice note stays one clip.
@@ -249,6 +273,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
               // (conversationReply.ts), never on the bare first beat.
               notDone(`Only part of the reply went out: "${beat.slice(0, 120)}" didn't send.`);
               const went = sentBeats.join("\n\n");
+              markLaneNotesSent(went);
               state.sentMessages.push(went);
               state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${went}` : went;
               state.sent = true;
@@ -265,6 +290,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
             sentBeats.push(beat);
           }
           const sentText = sentBeats.join("\n\n");
+          markLaneNotesSent(sentText);
           state.partialUnsent = null;
           state.sentMessages.push(sentText);
           state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${sentText}` : sentText;
@@ -293,6 +319,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           }
         }
         state.partialUnsent = null;
+        markLaneNotesSent(message);
         state.sentMessages.push(message);
         state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${message}` : message;
         if (ctx.dryRun) {
@@ -526,6 +553,22 @@ export function createConversationTools(ctx: ConversationToolContext) {
           notDone("No task was started: the quote isn't in their words.");
           return { ok: false, error: "theirWords must be copied exactly from what they wrote. Don't start a task they didn't ask for." };
         }
+        // A task becomes a lookout only on their words (laneMoves.ts, Royce 2026-10-13): unless their own message asks Co to watch (and
+        // the quote is from it), a lookout never restates one of their tasks or open asks (closed this turn or still open). A yes to Co's
+        // offer to watch doesn't count: Co never offers to turn a task into a lookout (review, 2026-10-13).
+        if (lookout && !(T.WATCH_ASK.test(ctx.resolvedContent) && T.wordsAreTheirs(theirWords, ctx.resolvedContent))) {
+          const open = ctx.dryRun
+            ? []
+            : await Promise.all([
+                T.openTasks(ctx.userId).then((ts) => ts.filter((t) => t.source !== "lookout").map((t) => t.goal)),
+                pool.query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND intent IS DISTINCT FROM 'lookout'`, [ctx.userId]).then((r) => r.rows.map((x: any) => String(x.ask_text))),
+              ]).then(([a, b]) => [...a, ...b]).catch(() => [] as string[]);
+          const task = lookoutRestatesTask(goal, [...state.closedTaskGoals, ...open]);
+          if (task) {
+            notDone(`No lookout was started: "${task.slice(0, 80)}" is one of their tasks, and a task becomes a lookout only on their words.`);
+            return { ok: false, error: `That's their task "${task.slice(0, 80)}". A task becomes a lookout only when they ask you to keep watching, in their words; don't offer it. Keep working it as a task.` };
+          }
+        }
         // A deadline they gave, checked against their words and their time zone.
         let dl: { deadline: string; finalCheckAt: string } | null = null;
         const zone = await memberZone(ctx.userId);
@@ -605,10 +648,12 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const T = await import("../services/coTasks.js");
         // Their own word, from this message, is what makes a drop theirs; without it a drop counts as a promise Co didn't keep.
         const theirWord = theirWords && T.wordsAreTheirs(theirWords, ctx.resolvedContent) ? theirWords : null;
+        const closing = await T.getTask(ctx.userId, taskId).catch(() => null);
         if (!(await T.closeTask(ctx.userId, taskId, status, outcome, { theirWord }))) {
           notDone(`Task #${taskId} wasn't closed: it isn't one of their open tasks.`);
           return { ok: false, error: "No open task with that id." };
         }
+        if (closing && closing.source !== "lookout") state.closedTaskGoals.push(closing.goal);
         ctx.facts?.add("did_this_turn", `Closed task #${taskId} (${status}): ${outcome}`);
         return { ok: true };
       },
@@ -764,6 +809,51 @@ export function createConversationTools(ctx: ConversationToolContext) {
         for (const x of r.refused) notDone(x.n ? `Item ${x.n} of goal #${goalId} wasn't taken: ${x.why}.` : `${x.why}.`);
         await recordDecision({ layer: 3, decision: "goal.picked", userId: ctx.userId, outcome: "act", action: `goal:${goalId}`, proposal: { started: r.started, checkin: r.checkin, refused: r.refused } }).catch(() => {});
         return { ok: true, started: r.started.map((s) => ({ text: s.text })), checkIn: r.checkin ? localStamp(r.checkin.at, zone) : null, notTaken: r.refused };
+      },
+    }),
+
+    // Lane moves (services/laneMoves.ts, Royce 2026-10-13): Co proposes, their yes in this message moves it (toolGuard.ts their_yes),
+    // and the move's one line rides in the reply, once (sendReply, carryLaneNotes). A task never becomes a lookout here.
+    moveLane: tool({
+      description: toolUse("moveLane"),
+      inputSchema: z.object({
+        item: z.string().describe("The thing as it's listed: a task as \"task #12\", anything else in its own words."),
+        from: z.enum(["task", "lookout", "goal"]).describe("Its lane now."),
+        to: z.enum(["task", "lookout", "goal"]).describe("Where it goes."),
+        label: z.string().optional().describe("A few words naming it for the line (\"the jazz nights\")."),
+      }),
+      execute: async (input: any) => {
+        const { item, from, to, label } = input as { item: string; from: "task" | "lookout" | "goal"; to: "task" | "lookout" | "goal"; label?: string };
+        const store = laneStoreFor(ctx.dryRun);
+        let line: string;
+        let what = item;
+        if (!store) {
+          // A dry run reads and writes nothing: the rule and the line only.
+          const rule = from === to ? null : ruleFor(from, to);
+          if (rule === "confirmed" && !offersMove(recentOf(ctx), to, item)) {
+            notDone("Nothing moved: their yes wasn't to this move.");
+            return { ok: false, error: "Nothing moved: your last text didn't ask them about this move. Offer it first in one line; move it on their yes." };
+          }
+          if (rule !== "confirmed") {
+            notDone(`Nothing moved: ${rule === "their_words" ? "a task becomes a lookout only on their own words" : `${LANE_WORDS[from]} to ${LANE_WORDS[to]} isn't a move Co makes`}.`);
+            return { ok: false, error: "Nothing moved: that isn't a move you offer. Don't offer it again." };
+          }
+          // A task's number is never said to them: "that task" when Co gave no name.
+          line = laneNote(/#\s*\d+/.test(item) ? label?.trim() || "that task" : noteLabel(label, item), from, to);
+        } else {
+          const r = await moveLane({ userId: ctx.userId, from, to, item, label: label ?? null, theirYes: String(input?.theirYes ?? ""), message: ctx.resolvedContent, recent: recentOf(ctx) }, store);
+          if (!r.ok) {
+            notDone(`Nothing moved: ${r.why}.`);
+            return { ok: false, error: `Nothing moved: ${r.why}. Say so plainly if it matters; don't offer this move again.` };
+          }
+          line = r.note;
+          what = r.item;
+        }
+        if (!state.laneNotes.includes(line) && !state.laneNotesSent.includes(line)) state.laneNotes.push(line);
+        ctx.facts?.add("did_this_turn", `${ctx.dryRun && !store ? "(dry run) " : ""}Moved "${what.slice(0, 120)}" from their ${LANE_WORDS[from]} to their ${LANE_WORDS[to]}, on their yes. The line "${line}" goes in your reply by code.`);
+        // Run after the reply already went: the line still needs a text, so one short reply now carries it.
+        if (state.replyCount > 0) return { ok: true, line, note: "Moved. Your reply already went, so send one short reply now with sendReply; code puts that line in it. Don't say the move in your own words, and don't recap anything." };
+        return { ok: true, line, note: "Moved. Code puts that line in your reply once; don't say the move in your own words, and don't recap anything." };
       },
     }),
 
@@ -1036,6 +1126,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
       execute: async () => {
         if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
         if (ctx.safetyConcern || ctx.replyOwed || wordsDue(ctx) || coAskedQuestion(ctx.lastCoMessage)) return { ok: false, error: "They need words this time. Reply properly." };
+        // A move made this turn says so in the reply's words (laneMoves.ts).
+        if (state.laneNotes.length) return { ok: false, error: "You moved something for them this turn, and its line goes in a text. Reply with sendReply." };
         state.sent = true;
         state.reacted = true;
         if (!ctx.dryRun) await recordDecision({ layer: 3, decision: "turn.closing", userId: ctx.userId, outcome: "act", action: `left at ${ctx.ackSent}`, proposal: { message: ctx.resolvedContent } }).catch(() => {});
@@ -1052,6 +1144,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
       }),
       execute: async ({ reaction: picked }) => {
         if (state.replyCount > 0) return { ok: false, error: "You already replied this turn." };
+        // A move made this turn says so in the reply's words, never a tapback (laneMoves.ts).
+        if (state.laneNotes.length) {
+          notDone("No tapback: something moved this turn, and its line goes in a text.");
+          return { ok: false, error: "You moved something for them this turn, and its line goes in a text. Reply with sendReply." };
+        }
         const reaction = parseAck(picked);
         if (!reaction) return { ok: false, error: "A reaction is exactly one emoji, and not a startup-cute one (rocket, raised hands, confetti). Pick one that fits this message, or reply." };
         if (ctx.lastReaction && sameReaction(ctx.lastReaction, reaction)) {
@@ -1674,6 +1771,6 @@ export function createConversationTools(ctx: ConversationToolContext) {
   Object.assign(tools, googleTools(ctx, notDone));
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
-  guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone });
+  guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });
   return { tools, state, flushLinks };
 }

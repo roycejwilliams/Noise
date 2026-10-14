@@ -8,6 +8,8 @@ const P = await import("../../src/services/callLlmProxy.js");
 const G = await import("../../src/services/offerGuard.js");
 const R = await import("../../src/routes/callLlm.js");
 const S = await import("../../src/services/speakable.js");
+// The read of their answer (services/theirYes.ts) is a model call: stubbed to yes, so these checks are about the guard's facts.
+(await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub", read: true }));
 let total = 0, failed = 0;
 const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`, detail ?? ""); } };
 const fixture = JSON.parse(fs.readFileSync(new URL("./fixtures/call-2026-10-06.json", import.meta.url), "utf8"));
@@ -305,7 +307,7 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const up = scripted([[...text("Let me write that up."), ...tool("w1", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}')], text("I'll hold off until you say so.")]);
     await go(baseBody(), { stream: up.stream, tools: noYes });
     const fed = up.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
-    check("a tool needing their yes is refused when their words this turn hold no yes", wrote === 0 && /needs their own yes/.test(fed), fed);
+    check("a tool needing their yes is refused when their words this turn hold no yes", wrote === 0 && /Quote only the words in their message that say yes/.test(fed), fed);
     const yes = CT.buildCallTools({ userId: "u-call", callKey: "u-call:t1", turnWords: "Yes please, take the lead on it.", callWords: "Yes please, take the lead on it.", lastCoLine: null, member, dryRun: true, tools: raw() });
     const up2 = scripted([[...tool("w2", "writeDocument", '{"title":"Partner plan","theirYes":"yes please"}', 0)], text("It's on its way by text.")]);
     await go(baseBody(), { stream: up2.stream, tools: yes });

@@ -22,19 +22,22 @@ import { recordToolAction } from "../services/coFacts.js";
 // Replies and bookkeeping aren't choices worth logging one by one.
 const UNGUARDED = new Set(["sendReply", "markTopicAsked"]);
 
+import { confirmYes, QUOTE_RETRY, yesIsTheirs } from "../services/theirYes.js";
+
 const norm = (s: unknown) => String(s ?? "").toLowerCase().replace(/[’‘]/g, "'").replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
 
-// Their yes has to be in what they sent this turn, not made up.
-export function yesIsTheirs(theirYes: unknown, message: string): boolean {
-  const y = norm(theirYes);
-  return y.length >= 2 && norm(message).includes(y);
-}
+// Their yes (services/theirYes.ts, 2026-10-13): the quoted words are in what they sent this turn (code), and a short read says it's a
+// yes to this offer (Haiku, only when a tool that needs it is called). One check for every tool that needs it.
+export { yesIsTheirs };
 
 type GuardCtx = {
   userId: string;
   resolvedContent: string;
   dryRun: boolean;
   notDone: (what: string) => void;
+  // The exchange before their message (services/theirYes.ts exchangeText): where the offer their yes answers is. A thread's log or a
+  // call's turns, built by the caller.
+  recentExchange?: string | null;
   // Whose abilities these tools are. Co's registry by default.
   abilityFor?: (tool: string) => Ability | undefined;
 };
@@ -76,9 +79,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
               reason: String(input?.why ?? "").slice(0, 300),
               proposal: { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
             }).catch(() => {});
-      const refuse = async (receipt: Receipt, receiptText: string, tell: string) => {
+      const refuse = async (receipt: Receipt, receiptText: string, tell: string, detail: Record<string, unknown> = {}) => {
         ctx.notDone(receiptText);
-        await log(receipt);
+        await log(receipt, detail);
         return { ok: false, error: tell };
       };
 
@@ -123,8 +126,15 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
           : { rows: [] as any[] };
         if (rows.length) return refuse("limited", `${name} wasn't run: it was already done for ${input.personName}.`, "Already requested for this person. Don't ask again.");
       }
-      if (ability.confirm && !yesIsTheirs(input?.theirYes, ctx.resolvedContent)) {
-        return refuse("needs_yes", `${name} wasn't run yet: it needs their clear yes first.`, "Not done: this needs their own yes in this message first. Propose it and ask them.");
+      if (ability.confirm) {
+        const yes = await confirmYes({ theirYes: input?.theirYes, message: ctx.resolvedContent, recent: ctx.recentExchange ?? null, ability: ability.can });
+        if (!yes.ok) {
+          const detail = { yesCheck: yes.kind, yesWhy: yes.why };
+          // The quote wasn't their words: a clean retry with the right quote, never asking them again.
+          if (yes.kind === "quote") return refuse("needs_yes", `${name} wasn't run yet: the quoted yes isn't in their message.`, `Not done yet. ${QUOTE_RETRY}`, detail);
+          if (yes.kind === "unread") return refuse("needs_yes", `${name} wasn't run: their yes couldn't be checked just now.`, "Not done: their yes couldn't be checked just now. Say plainly it didn't go through yet; don't ask them to say it again.", detail);
+          return refuse("needs_yes", `${name} wasn't run: their message isn't a yes to it.`, "Not done: their message doesn't read as a yes to this. Answer what they said; don't ask again in this reply.", detail);
+        }
       }
 
       usedThisTurn.set(name, used + 1);

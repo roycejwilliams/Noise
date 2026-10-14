@@ -137,6 +137,7 @@
     "evals/delivery/fixes1008.ts",
     "evals/reply-flow/fixes1008.ts",
     "evals/goals/lifecycle.ts",
+    "evals/lanes/moves.ts",
     "evals/goals/readCutOff.ts",
     "evals/goals/recheck.ts",
     "evals/sweepFind/queries.ts",

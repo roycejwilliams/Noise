@@ -169,6 +169,8 @@ export type CallToolsInput = {
   callWords: string;
   // Co's last line before this turn, so "yes" to an offer is read as that.
   lastCoLine: string | null;
+  // The call's last few turns before this one (services/theirYes.ts exchangeText): what a yes on the call answers.
+  recentExchange?: string | null;
   member: MemberOnCall;
   dryRun?: boolean;
   stubSearch?: boolean;
@@ -194,7 +196,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     return ok;
   };
   const did: string[] = [];
-  const all: Record<string, any> = i.tools ? guardTools(i.tools, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {} }) : createConversationTools({
+  const all: Record<string, any> = i.tools ? guardTools(i.tools, { userId: i.userId, resolvedContent: i.turnWords, dryRun: !!i.dryRun, notDone: () => {}, recentExchange: i.recentExchange ?? (i.lastCoLine ? `Co: ${i.lastCoLine}` : null) }) : createConversationTools({
     turnStartedAt: Date.now(),
     userId: i.userId,
     phoneNumber: i.member.phone,
@@ -211,6 +213,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     sendLinkText: i.dryRun ? undefined : textThem,
     firstName: i.member.firstName,
     lastCoMessage: i.lastCoLine,
+    recentExchange: i.recentExchange ?? null,
     // What a tool reads about the turn: the whole call's words (a document rests on what they said on the call), their city.
     // Their open tasks too, so updateTask and closeTask are offered only when there is one (capabilities.ts situations).
     turn: { userId: i.userId, message: i.callWords, profile: { city: i.member.city }, tasks: i.member.tasks.map((t) => `#${t.id} ${t.goal}`) } as any,

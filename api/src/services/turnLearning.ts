@@ -77,6 +77,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
   - connection_style: one of small_group, medium_group, large_social.
   - activity_preferences: activities they mentioned or implied enjoying.
   - goals: things they are working toward.
+  - goals and activity_preferences come only from what they say about themselves or want for themselves, never from the subject of a one-off request (research, a document, advice, a single search): "find me venues for my launch party" alone is not a goal or an interest; "I'm launching in November, find me venues" gives the goal "launch in November".
   - blockers: challenges or struggles in their life they mentioned (never frustrations with Co itself).
   - availability_pattern: how often and when they want to connect (e.g. "weekday evenings").
   - city: ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target ("roles in NYC", "investors in NYC", "events in Miami"). Empty string if they didn't say.
@@ -211,9 +212,22 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
     // Same gates and writes as the separate calls. Corrections still only
     // count when what they just said can be a correction (mightBeCorrection).
     const correctionsRaw = JSON.stringify({ corrections: mightBeCorrection(input.message) ? learned.corrections : [] });
+    // The ask first, so the profile write knows what kind of ask this turn carried (lane moves, Royce 2026-10-13): a one-off ask
+    // (research, a document, advice, a single search) never becomes a goal or an interest: the extraction's rule (profile, goals) and,
+    // for its exact restatement, code (laneMoves.ts turnAskLane, profileExtraction.ts heldAsOneOff).
+    const written = await persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message").catch((err: any) => {
+      console.error("turnLearning: intent write failed (non-fatal):", err?.message ?? err);
+      return null;
+    });
+    // Couldn't read it: the extraction's own rule stands, nothing is held in code (review, 2026-10-13: fail open, never into holding).
+    const turnAsk = await import("./laneMoves.js").then((L) => L.turnAskLane(input.userId, written)).catch((err: any) => {
+      console.error("turnLearning: reading the turn's ask failed (non-fatal):", err?.message ?? err);
+      return null;
+    });
     await Promise.all([
       storeProfile(input.userId, learned.profile as any, transcript, {
         newWords: input.message,
+        turnAsk,
         // Nothing on file to retire: the old check didn't run at all then.
         precomputed: {
           resolutionRaw: onFile?.goals.length || onFile?.blockers.length || openAsks.length ? JSON.stringify(learned.resolved ?? {}) : "{}",
@@ -222,9 +236,6 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
           cadence: learned.cadence,
         },
       }).catch((err: any) => console.error("turnLearning: profile write failed (non-fatal):", err?.message ?? err)),
-      persistIntentFrom(input.userId, learned.intent, transcript, "last_user_message").catch((err: any) =>
-        console.error("turnLearning: intent write failed (non-fatal):", err?.message ?? err),
-      ),
       storePlannedEventMention(input.userId, learned.planned_event, input.message).catch((err: any) =>
         console.error("turnLearning: planned event write failed (non-fatal):", err?.message ?? err),
       ),

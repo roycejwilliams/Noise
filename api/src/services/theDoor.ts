@@ -235,6 +235,8 @@ export type FirstReadResult =
   | { ok: false; error: string };
 
 const FIRST_LOOK_GOAL = "First look for them:";
+// How a first look whose promise never went out closes (settleFirstRead): withdrawn on the ledger (commitmentLog.ts outcomeOf).
+export const FIRST_LOOK_WITHDRAWN = "The first look's promise was not in the text that went out, so it was withdrawn: never said, never owed.";
 
 // The first read. Its first look is scheduled as a task when a task could really text them; it counts as given only once a sent
 // text carries the playback (settleFirstRead), so a reply that drops it leaves the door open, and a second call reuses the task
@@ -338,14 +340,15 @@ export type FirstReadJudgment = { playedBack: boolean; promisedFollowUp: boolean
 export type TaskFate =
   | { kind: "keep" }
   | { kind: "move"; at: string }
-  | { kind: "co_initiated" }
-  | { kind: "drop" }
+  | { kind: "withdraw" }
   | { kind: "none" };
 
 // Pure: two separate decisions from one judgment. (a) The read is given when the text played it back or promised the follow-up;
 // otherwise once more, and a second miss closes the door. (b) The task: a promise that went out is kept as a promise, moved earlier
-// when the text promised sooner than the task's time; a playback with no promise keeps the look but as Co's own (paced and capped
-// like any text Co starts); nothing offered at all drops it. A judge that failed (null) keeps everything: given, promise kept.
+// when the text promised sooner than the task's time. A text that promised nothing withdraws it (Royce, 2026-10-13: "A new member's
+// first request never becomes a lookout without their words"): never searched, never paced as Co's own look, nothing sent; their
+// request becomes a lookout only if their own words ask Co to keep an eye out (the intent split, askLifecycle.ts). A judge that
+// failed (null) keeps everything: given, promise kept.
 export function settleFromJudgment(p: Pick<FirstReadPending, "taskId" | "at">, j: FirstReadJudgment | null, priorUnsaid: number, now: Date): { given: boolean; action: string; task: TaskFate } {
   if (!j) return { given: true, action: "judge_failed_kept", task: p.taskId ? { kind: "keep" } : { kind: "none" } };
   const given = j.playedBack || j.promisedFollowUp || priorUnsaid >= 1;
@@ -360,7 +363,7 @@ export function settleFromJudgment(p: Pick<FirstReadPending, "taskId" | "at">, j
     }
     return { given, action, task: { kind: "keep" } };
   }
-  return { given, action, task: j.playedBack ? { kind: "co_initiated" } : { kind: "drop" } };
+  return { given, action, task: { kind: "withdraw" } };
 }
 
 export function judgePrompt(p: Pick<FirstReadPending, "understood" | "lookFor" | "at" | "zone">, sent: string, now: Date): string {
@@ -419,16 +422,12 @@ export async function settleFirstRead(userId: string, p: FirstReadPending, sent:
   const d = settleFromJudgment(p, j, prior, now);
   if (p.taskId) {
     const id = p.taskId;
-    if (d.task.kind === "drop") {
+    if (d.task.kind === "withdraw") {
+      // Never said, so never owed: withdrawn on the ledger (commitmentLog.ts outcomeOf reads this wording), not missed.
       const { closeTask } = await import("./coTasks.js");
-      await closeTask(userId, id, "dropped", "Nothing about the first look went out in a text.").catch(() => {});
+      await closeTask(userId, id, "dropped", FIRST_LOOK_WITHDRAWN).catch(() => {});
     } else if (d.task.kind === "move") {
       await pool.query(`UPDATE co_tasks SET next_check_at = $3, final_check_at = $3, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, id, d.task.at]).catch(() => {});
-    } else if (d.task.kind === "co_initiated") {
-      // No promise went out: the look is Co's own, paced and capped like any text Co starts, with no last check owed to them.
-      await pool
-        .query(`UPDATE co_tasks SET source = 'lookout', followup = COALESCE(followup, '{}'::jsonb) || '{"lookoutOrigin":"co","lookoutFrom":"first_read"}'::jsonb, final_check_at = NULL, deadline = NULL, updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, id])
-        .catch(() => {});
     }
   }
   const { recordDecision } = await import("../harness/core.js");

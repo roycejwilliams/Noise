@@ -67,6 +67,7 @@ ${o.openAsks.length ? `\nOpen asks (numbered):\n${o.openAsks.map((a, i) => `${i}
   - connection_style: one of small_group, medium_group, large_social.
   - activity_preferences: activities they mentioned or implied enjoying.
   - goals: things they are working toward.
+  - goals and activity_preferences come only from what they say about themselves or want for themselves, never from the subject of a one-off request (research, a document, advice, a single search): "find me venues for my launch party" alone is not a goal or an interest; "I'm launching in November, find me venues" gives the goal "launch in November".
   - blockers: challenges or struggles in their life they mentioned (never frustrations with Co itself).
   - availability_pattern: how often and when they want to connect (e.g. "weekday evenings").
   - city: ONLY where they live now or are actually moving to ("I'm in Oakland", "moving to Austin next month"). Never a city that only comes up as a preference or target ("roles in NYC", "investors in NYC", "events in Miami"). Empty string if they didn't say.
