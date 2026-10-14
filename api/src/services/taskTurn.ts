@@ -844,7 +844,8 @@ async function onFileFor(userId: string, task: CoTask): Promise<OnFile[]> {
   return out.slice(0, 20);
 }
 
-// Names Co's latest daily pick rejected for them (services/sweepShadow.ts; empty for anyone the picker doesn't run for).
+// Names Co's latest daily pick rejected for them (services/sweepShadow.ts; empty for anyone the picker doesn't run for). A reject the
+// guard held for not citing the closed or known record it claimed is a hold, not listed here: the find is still live.
 async function pickerRejected(userId: string): Promise<string[]> {
   const { rows } = await pool.query(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.select.shadow' AND user_id = $1 AND outcome = 'act' ORDER BY created_at DESC LIMIT 1`, [userId]).catch(() => ({ rows: [] as any[] }));
   const js = (rows[0]?.proposal?.judgments ?? []) as { name?: string; verdict?: string }[];

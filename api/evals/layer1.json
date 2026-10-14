@@ -88,6 +88,7 @@
     "evals/presence/readout.ts",
     "evals/lib/rules.ts",
     "evals/sweepSelect/rules.ts",
+    "evals/sweepSelect/rejectCites.ts",
     "evals/mo/memberRules.ts",
     "evals/mo/memberFlow.ts",
     "evals/proactive/specifics.ts",

@@ -15,7 +15,7 @@ import { DateTime } from "luxon";
 import { recordDecision } from "../harness/core.js";
 import { judgeSweepItem } from "../brain/index.js";
 import { digestRecipient, reviewEnabled } from "../harness/devReview.js";
-import { holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
+import { carryGuardedRuns, contextIds, holdDueDates, selectForMember, selectSignature, SELECT_MODEL, type Judgment, type PoolItem, type SelectContext } from "./sweepSelect.js";
 import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./sweepSelectContext.js";
 import { memberZone } from "./memberTime.js";
 import { exitKey } from "./findForm.js";
@@ -252,6 +252,9 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   }
 
   const r = await selectForMember(ctx, { model: process.env.SWEEP_SELECT_MODEL || SELECT_MODEL, userId });
+  // A reject the guard held counts its runs in a row, so a claim the picker keeps making without a record stops buying daily runs
+  // (sweepSelect.ts holdDueDates).
+  r.judgments = carryGuardedRuns(r.judgments, (last?.proposal?.judgments ?? []) as Judgment[]);
   // A failed selection is logged as an error, never as a run: it isn't the
   // "last run" tomorrow's unchanged check compares against, so it can't be
   // silently skipped (review of #57).
@@ -265,7 +268,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   // runs it again (Royce, 2026-10-12: it swallowed its errors and still marked the day done). The retry is idempotent: a pick a
   // partial apply already queued merges into its own row (one per thing), and one already sent is out of the pool.
   const applied = newApplyReport(r.judgments);
-  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today, r.set ?? null, applied);
+  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today, r.set ?? null, applied, contextIds(ctx));
   const applyError = opts.dryRun ? null : applyFailed(applied);
   if (applyError) {
     await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: applyError, proposal: { day: today, signature, model: r.model, usage: r.usage, poolSize: ctx.pool.length, judgments: r.judgments, applied } });
@@ -282,6 +285,9 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
       signature,
       model: r.model,
       usage: r.usage,
+      // The claim check's read (sweepSelect.ts checkClaims), and any active goals over the lens ceiling.
+      claimCheck: r.claimCheck ?? null,
+      ...(ctx.goalsTrimmed ? { goalsTrimmed: ctx.goalsTrimmed } : {}),
       pool: ctx.pool.map((p) => ({ id: p.id, key: p.key, name: p.name, date: p.date, kind: p.kind, asks: p.asks })),
       asks: asks.map((a) => ({ id: a.id, text: a.text.slice(0, 160) })),
       judgments: r.judgments,
@@ -294,14 +300,19 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
 
 type Waiting = { askId: string; askText: string; fromProfile: boolean; match: any; reminder?: boolean; again?: boolean };
 
-// Pure: the picker's reason, as a member may read it. Its judgments cite records by internal id (A17, T3, S2, O1, C9), which
-// must never reach a text (review of #116).
-export function memberSafeWhy(why: string): string {
+// Pure: the picker's reason, as a member may read it. Its judgments cite records by internal id (A17, T3, S2, O1, C9, G2, D4), which
+// must never reach a text (review of #116). The A/T/S/O/C pattern is always stripped, real or made up ("A9", "T45", "C7"). G# and D#
+// (past goals, delivered items) only when the run had that id (ids: sweepSelect.ts contextIds), so "the G20 Summit" stays; "D1
+// athletes" loses its "D1" when the run had a D1.
+export function memberSafeWhy(why: string, ids?: ReadonlySet<string>): string {
+  const list = ids ? [...ids].filter((x) => /^[GD]\d+$/.test(x)).sort((a, b) => b.length - a.length) : [];
+  const ID = list.length ? `(?:[ATSOC]\\d+|(?:${list.join("|")})(?!\\d))` : "[ATSOC]\\d+";
+  const re = (src: string, flags: string) => new RegExp(src.replace(/ID/g, ID), flags);
   return why
-    .replace(/\s*[([]\s*(?:[ATSOC]\d+\s*(?:[,/\-\u2013]|and)?\s*)+[)\]]/g, "")
-    .replace(/\b[ATSOC]\d+\s*[-\u2013]\s*[ATSOC]\d+\b/g, "")
-    .replace(/\b(?:asks?|texts?|outcomes?|sends?)\s+[ATSOC]\d+(?:\s*(?:,|and|\/)\s*[ATSOC]\d+)*\b/gi, (m) => m.replace(/\s+[ATSOC]\d+.*$/i, ""))
-    .replace(/\b[ATSOC]\d+(?:\s*(?:,|\/|and)\s*[ATSOC]\d+)*(?:'s)?\b/g, "")
+    .replace(re("\\s*[([]\\s*(?:ID\\s*(?:[,/\\-\u2013]|and)?\\s*)+[)\\]]", "g"), "")
+    .replace(re("\\bID\\s*[-\u2013]\\s*ID\\b", "g"), "")
+    .replace(re("\\b(?:asks?|texts?|outcomes?|sends?)\\s+ID(?:\\s*(?:,|and|\\/)\\s*ID)*\\b", "gi"), (m) => m.replace(re("\\s+ID.*$", "i"), ""))
+    .replace(re("\\bID(?:\\s*(?:,|\\/|and)\\s*ID)*(?:'s)?\\b", "g"), "")
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([,.;:])/g, "$1")
     .trim();
@@ -311,13 +322,14 @@ export function memberSafeWhy(why: string): string {
 //   - each "send" queues its thing: a reminder or month-later resurface first (its original pitch is already sent), then an
 //     ask's copy, then a goal find;
 //   - a waiting find the picker rejected comes out for good;
-//   - a waiting find the picker held (its own hold, or over the day's send limit) goes back to waiting in the backlog only,
+//   - a waiting find the picker held (its own hold, over the day's send limit, or a reject the guard held because it claimed a closed
+//     or known record it didn't cite) goes back to waiting in the backlog only,
 //     so a later "send" can queue it again; it never sends while held.
 //   - a waiting find the picker never saw is left alone.
 // whyMember and whyNow stay apart for the composer (Phase C3: they were joined into one string, the "why now" lost as such); `why` is
 // both, for the find's own whyItFits.
 type Queued = Waiting & { why: string; whyMember: string; whyNow: string; lastDay?: string | null };
-export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[]): { queue: Queued[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
+export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | "whyNow" | "name" | "lastDay">[], backlog: Waiting[], waitingKeys: { id: string; key: string }[], ids?: ReadonlySet<string>): { queue: Queued[]; reject: { id: string; why: string }[]; unqueue: { id: string; why: string }[] } {
   const verdictOf = new Map(judgments.map((j) => [j.key, j]));
   // What each guarded verdict does is the brain's decision (brain/index.ts judgeSweepItem): deliver queues, a drop comes out for good,
   // a wait goes back to waiting. The queue acts only on those.
@@ -326,7 +338,7 @@ export function planPicks(judgments: Pick<Judgment, "key" | "verdict" | "why" | 
   const rank = (b: Waiting) => (b.reminder || b.again ? 0 : 1) * 2 + Number(b.fromProfile);
   for (const j of judgments.filter((x) => decided.get(x.key)?.kind === "deliver")) {
     const from = backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).sort((a, b) => rank(a) - rank(b))[0];
-    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" ")), whyMember: memberSafeWhy(j.why ?? ""), whyNow: memberSafeWhy(j.whyNow ?? ""), lastDay: j.lastDay ?? null });
+    if (from) queue.push({ ...from, why: memberSafeWhy([j.why, j.whyNow].filter(Boolean).join(" "), ids), whyMember: memberSafeWhy(j.why ?? "", ids), whyNow: memberSafeWhy(j.whyNow ?? "", ids), lastDay: j.lastDay ?? null });
   }
   const why = (j: { verdict: string; why?: string } | undefined) => `Co's daily pick: ${j?.verdict}${j?.why ? `, ${String(j.why).slice(0, 160)}` : ""}`;
   const reject = waitingKeys.filter((w) => decided.get(w.key)?.drop === true).map((w) => ({ id: w.id, why: why(verdictOf.get(w.key)) }));
@@ -351,12 +363,13 @@ export function applyFailed(a: ApplyReport): string | null {
   return null;
 }
 
-export async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null, report: ApplyReport): Promise<void> {
+// ids: the run's record ids (sweepSelect.ts contextIds), so only real ids are stripped from what a member may read.
+export async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null, report: ApplyReport, ids?: ReadonlySet<string>): Promise<void> {
   let plan: ReturnType<typeof planPicks> | null = null;
   try {
     if (!pickerLive() || !(await pickerUserIds()).includes(userId)) return;
     report.live = true;
-    plan = await applyPicksInner(userId, judgments, backlogs, set, report);
+    plan = await applyPicksInner(userId, judgments, backlogs, set, report, ids);
   } catch (err: any) {
     report.error = String(err?.message ?? err).slice(0, 200);
     console.error("picker: applying the picks failed:", report.error);
@@ -366,14 +379,25 @@ export async function applyPicks(userId: string, judgments: Judgment[], backlogs
   }
 }
 
-async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: any[], set: string | null, report: ApplyReport): Promise<ReturnType<typeof planPicks>> {
+// Pure: the backlog finds a run's rejects take out for good, one per exit key. Only verdict "reject" exits: a reject the guard
+// turned into a hold (it claimed a closed or known record it didn't cite) is a hold here, so no exit fact is written and the find stays
+// in the backlog for the next run (2026-10-14).
+export function rejectedFindsOf(judgments: Pick<Judgment, "key" | "name" | "verdict" | "why" | "reason">[], backlog: Waiting[], ids?: ReadonlySet<string>): { key: string; name: string; why: string; askText: string }[] {
+  const rejected = judgments
+    .filter((j) => j.verdict === "reject")
+    // The reason goes through the member-safe filter: no record ids (A17), no internal labels (review of #133).
+    .flatMap((j) => backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).map((b) => ({ key: exitKeyOf(b.match), name: String(b.match?.name ?? j.name), why: memberSafeWhy(String(j.why ?? j.reason ?? ""), ids), askText: b.askText })));
+  return [...new Map(rejected.map((r) => [r.key, r])).values()];
+}
+
+async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: any[], set: string | null, report: ApplyReport, ids?: ReadonlySet<string>): Promise<ReturnType<typeof planPicks>> {
   const { queuePickedOffer, onEventOfferDropped } = await import("./eventSurfacingSweep.js");
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
     (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ askId: String(b.ask_id), askText: String(it?.askText ?? ""), fromProfile: b.ask_id === "profile", match: it?.match, reminder: !!it?.reminder, again: !!it?.again })),
   );
   const rows = (await pool.query(`SELECT id, payload FROM proactive_candidates WHERE user_id = $1 AND type = 'event_offer' AND status = 'pending'`, [userId])).rows;
   const waiting = rows.map((r: any) => ({ id: String(r.id), key: shadowKey(String(r.payload?.match?.name ?? ""), dateOf(r.payload?.match)) }));
-  const plan = planPicks(judgments, backlog, waiting);
+  const plan = planPicks(judgments, backlog, waiting, ids);
   // Out first, so a held row doesn't block its own re-queue later.
   for (const d of plan.reject) {
     await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [d.id, d.why.slice(0, 300)]);
@@ -385,18 +409,14 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
   for (const d of plan.unqueue) await pool.query(`DELETE FROM proactive_candidates WHERE id = $1 AND status = 'pending'`, [d.id]);
   // Every find the picker rejected, queued or not, leaves every backlog for good with its fact (services/workingSet.ts): before, only
   // queued rows came out, so the rest were judged again every morning.
-  const rejectedFinds = judgments
-    .filter((j) => j.verdict === "reject")
-    // The reason goes through the member-safe filter: no record ids (A17), no internal labels (review of #133).
-    .flatMap((j) => backlog.filter((b) => shadowKey(String(b.match?.name ?? ""), dateOf(b.match)) === j.key).map((b) => ({ key: exitKeyOf(b.match), name: String(b.match?.name ?? j.name), why: memberSafeWhy(String(j.why ?? j.reason ?? "")), askText: b.askText })));
-  const uniq = [...new Map(rejectedFinds.map((r) => [r.key, r])).values()];
+  const uniq = rejectedFindsOf(judgments, backlog, ids);
   await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
   // The finds the pick chose together, by the key each is queued under: the set line rides only with a bundle of exactly these.
   const setKeys = () => plan.queue.map((x) => offerTargetKeyOf({ match: x.match, reminder: x.reminder, again: x.again }));
   const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
   for (const q of plan.queue) {
     // The pick's view of the set rides with each find it chose today, only when it chose more than one (Phase C3).
-    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}) } }).catch((err: any) => {
+    const ok = await queuePickedOffer(userId, { askId: q.askId, askText: q.askText, fromProfile: q.fromProfile, match: q.match, reminder: q.reminder, again: q.again, why: q.why, lastDay: q.lastDay ?? null, pick: { whyMember: q.whyMember, whyNow: q.whyNow, set: plan.queue.length > 1 && set ? memberSafeWhy(set, ids) : null, ...(plan.queue.length > 1 && set ? { setKeys: setKeys() } : {}) } }).catch((err: any) => {
       const msg = String(err?.message ?? err).slice(0, 200);
       console.error("picker: queueing a pick failed:", msg);
       // One pick erroring fails the day too: its retry queues what's missing, and what did queue merges into its own row.
@@ -541,9 +561,10 @@ export function renderShadowReport(sections: ShadowSection[]): string {
     lines.push(`Co would send (${by("send").length}):`);
     for (const j of by("send")) lines.push(`  + ${j.name}${date(j.id) ? ` (${date(j.id)})` : ""}\n      why them: ${j.why}${j.cites?.length ? ` [${j.cites.join(", ")}]` : ""}\n      why now: ${j.whyNow ?? ""}`);
     lines.push(`Co would hold (${by("hold").length}):`);
-    for (const j of by("hold")) lines.push(`  ~ ${j.name}${j.until ? ` until ${j.until}` : ""}: ${j.why}${j.guard ? ` (${j.guard})` : ""}`);
+    // A reject the guard held shows what the picker claimed and why, beside the guard.
+    for (const j of by("hold")) lines.push(`  ~ ${j.name}${j.until ? ` until ${j.until}` : ""}: ${j.claimed ? `Co said reject [${j.claimed}${j.cites?.length ? `: ${j.cites.join(", ")}` : ""}]: ` : ""}${j.why}${j.guard ? ` (${j.guard}${j.guardedRuns && j.guardedRuns > 1 ? `, ${j.guardedRuns} runs in a row` : ""})` : ""}`);
     lines.push(`Co would reject (${by("reject").length}):`);
-    for (const j of by("reject")) lines.push(`  - ${j.name} [${j.reason}]: ${j.guard ? `guard: ${j.guard}` : j.why}`);
+    for (const j of by("reject")) lines.push(`  - ${j.name} [${j.reason}${j.cites?.length ? `: ${j.cites.join(", ")}` : ""}]: ${j.guard ? `guard: ${j.guard}` : j.why}`);
     const none = by("no_verdict");
     if (none.length) lines.push(`No verdict (${none.length}): ${none.map((j) => j.name).join("; ")}`);
   }

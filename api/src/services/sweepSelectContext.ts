@@ -18,15 +18,16 @@
 // to suggestions (O#) and discovery left this week, stripped like the texts.
 import { isDidResult, isStated, UNCONFIRMED_RULE } from "./provenance.js";
 import { DateTime } from "luxon";
-import type { SelectContext } from "./sweepSelect.js";
-import { memberKnowledge, memberRules, type MemberKnowledge } from "./memberKnowledge.js";
+import type { PastGoal, SelectContext } from "./sweepSelect.js";
+import { memberKnowledge, memberRules, type Goal, type MemberKnowledge } from "./memberKnowledge.js";
 import { wordsZone } from "./memberTime.js";
+import { RECHECK_IDLE_REASON } from "./goalRecheck.js";
 
 export type Q = (sql: string, args?: unknown[]) => Promise<any[]>;
 
 // The picker reads 40 texts over 14 days (SELECT_LIMITS.texts).
 export const PICKER_KNOWLEDGE = { exchanges: 40, exchangeDays: 14 } as const;
-const LIMITS = { delivered: 25, carrying: 10, learned: 10, person: 1500 } as const;
+const LIMITS = { delivered: 25, carrying: 10, learned: 10, person: 1500, goalsPast: 10 } as const;
 
 // The member's knowledge for a live picker run, or null when it can't be read stripped (the layer throws when the linked-name
 // lookup fails: fails closed, so the picker then sees none of their facts rather than unstripped ones).
@@ -54,7 +55,38 @@ export async function loadAsks(q: Q, userId: string, now: Date, alsoIds: string[
 }
 
 type MemberPart = Omit<SelectContext, "asks" | "pool" | "today" | "weekday">;
-type Facts = Pick<MemberPart, "firstName" | "city" | "zone" | "goals" | "goalsPast" | "texts" | "feeling" | "delivered" | "carrying" | "learned" | "person" | "rules" | "roomTaste">;
+type Facts = Pick<MemberPart, "firstName" | "city" | "zone" | "goals" | "goalsTrimmed" | "goalsPast" | "texts" | "feeling" | "delivered" | "carrying" | "learned" | "person" | "rules" | "roomTaste">;
+
+// Pure: the member's past goals for the picker, G1.., each with why it is past. A goal replaced by a newer one (goalEdges.ts writes
+// 'replaced by a newer goal: "<newer>"') isn't listed: its direction goes on in the newer goal, which is in `goals` (Royce, 2026-10-13:
+// Founder Fellows was rejected as matching "the accelerator goal he set aside" when that goal had only been replaced; kept hidden,
+// Royce 2026-10-14). done, or set aside in their own words (they said so, or it was set in conversation), is theirs; a window that
+// passed, no answer to a recheck, or a state nothing says who set is Co's bookkeeping ("lapsed"), which never carries a closed claim.
+const REPLACED = /^replaced by a newer goal/;
+const THEY_SAID = /^they said/;
+export function pastGoals(goals: Pick<Goal, "text" | "state" | "reason" | "source">[], limit: number = LIMITS.goalsPast): PastGoal[] {
+  return goals
+    .filter((g) => g.state !== "active" && !REPLACED.test(g.reason ?? ""))
+    .slice(0, limit)
+    .map((g, i) => {
+      const id = `G${i + 1}`;
+      if (g.state === "done") return { id, text: g.text, state: "done" as const };
+      const theirs = THEY_SAID.test(g.reason ?? "") || ((g.source === "member" || g.source === "co") && g.reason !== RECHECK_IDLE_REASON && !/^its window passed/.test(g.reason ?? ""));
+      return theirs ? { id, text: g.text, state: "set_aside" as const } : { id, text: g.text, state: "lapsed" as const, why: g.reason ?? null };
+    });
+}
+
+// Every active goal is the lens, newest first (Royce, 2026-10-14: "Yes on the cap... the guard's own check runs 'with all your active
+// goals in view', which only holds if the cap is gone. Newest-first matters too, since the cap was cutting your newest goals"). The
+// old cut of 6 dropped "apply to South Park Commons or Blueprint II" on 10-14. A safety ceiling far above any real member's count
+// stays, and a cut is logged, never silent.
+export const GOALS_CEILING = 30;
+export function activeGoals(goals: (Pick<Goal, "text" | "state"> & { verifiedAt?: string | Date | null })[], ceiling: number = GOALS_CEILING): { goals: string[]; trimmed: number } {
+  const at = (g: { verifiedAt?: string | Date | null }) => (g.verifiedAt ? Date.parse(String(g.verifiedAt instanceof Date ? g.verifiedAt.toISOString() : g.verifiedAt)) || 0 : 0);
+  // Newest first; goals stamped the same moment keep the later-written first.
+  const active = goals.map((g, i) => ({ g, i })).filter((x) => x.g.state === "active").sort((a, b) => at(b.g) - at(a.g) || b.i - a.i).map((x) => x.g.text);
+  return { goals: active.slice(0, ceiling), trimmed: Math.max(0, active.length - ceiling) };
+}
 
 // Pure: the member's facts for the picker, from the shared layer. Only active goals are the lens; done and stale ones are
 // history. Exchange stamps are in their zone. Nothing here strips: the layer already did.
@@ -68,20 +100,20 @@ export function factsFromKnowledge(k: MemberKnowledge): Facts {
     ...k.lessons.map((l) => `Lesson: ${l.text}`),
     ...k.preferences.filter((p) => p.source !== "stated").map((p) => `Taste: ${p.text}`),
   ].slice(0, LIMITS.learned);
+  const lens = activeGoals(k.goals);
+  if (lens.trimmed) console.warn(`picker: ${lens.trimmed} active goal(s) over the ceiling of ${GOALS_CEILING} left out of the lens (oldest first)`);
   return {
     firstName: k.identity.firstName ?? "them",
     city: k.identity.city,
     zone,
-    goals: k.goals.filter((g) => g.state === "active").map((g) => g.text).slice(0, 6),
-    // A goal replaced by a newer one (goalEdges.ts supersededBy) isn't history: its direction goes on in the newer goal, which is in
-    // `goals`. Left out here, so the picker never reads a replaced goal as abandoned (Royce, 2026-10-13: Founder Fellows was rejected
-    // as matching "the accelerator goal he set aside" when that goal had only been replaced by "apply to South Park Commons").
-    goalsPast: k.goals.filter((g) => g.state !== "active" && !/^replaced by a newer goal/.test(g.reason ?? "")).map((g) => `${g.text} (${g.state === "done" ? "done" : "set aside"})`).slice(0, 6),
+    goals: lens.goals,
+    ...(lens.trimmed ? { goalsTrimmed: lens.trimmed } : {}),
+    goalsPast: pastGoals(k.goals),
     texts: k.exchanges
       .filter((e) => e.text.trim())
       .map((e, i) => ({ id: `T${i + 1}`, at: stamp(e.verifiedAt, "LLL d HH:mm"), from: e.from, text: e.text })),
     feeling: k.restraint?.feeling ?? null,
-    delivered: k.delivered.slice(0, LIMITS.delivered).map((d) => ({ what: d.what, kind: d.kind, at: stamp(d.at, "LLL d"), reaction: d.reaction })),
+    delivered: k.delivered.slice(0, LIMITS.delivered).map((d, i) => ({ id: `D${i + 1}`, what: d.what, kind: d.kind, at: stamp(d.at, "LLL d"), reaction: d.reaction })),
     carrying: k.carrying.filter((c) => c.state !== "done" && !c.theyHaveIt).slice(0, LIMITS.carrying).map((c) => `${c.what} (${c.kind}${c.state === "due" ? ", due" : ""})`),
     learned,
     // What kind of room they've said they want (services/roomTaste.ts): its own section, ranked by, never buried in "learned".
@@ -117,6 +149,9 @@ export async function loadMemberContext(q: Q, userId: string, now: Date, opts: {
     // What they did, only as they stated it (services/provenance.ts).
     result: isDidResult(String(o.result)) && !isStated(o.provenance) ? `${o.result} (${UNCONFIRMED_RULE})` : String(o.result),
     note: o.note && safe ? safe(String(o.note)) : null,
+    // They declined it, or said themselves that they did it: a record an "already known" reject may rest on. An unconfirmed result
+    // may only drive a question, so it carries nothing.
+    closes: String(o.result) === "declined" || (isDidResult(String(o.result)) && isStated(o.provenance)),
   }));
   const [{ n: discoverySent }] = await q(
     `SELECT COUNT(*)::int n FROM proactive_sends s JOIN proactive_candidates c ON c.id = s.candidate_id
@@ -139,7 +174,7 @@ async function factsAsOf(q: Q, userId: string, now: Date, zone: string, safe: ((
   // Where they are headed: the lens every candidate is judged against alongside their asks (services/goalJourney.ts). No goal
   // states as of a past day exist, so the replay reads the goals on file.
   const [prof] = await q(`SELECT goals, intent FROM co_profiles WHERE user_id = $1`, [userId]);
-  const goals = (await import("./goalJourney.js")).goalTexts(prof?.intent, prof?.goals).slice(0, 6);
+  const goals = (await import("./goalJourney.js")).goalTexts(prof?.intent, prof?.goals).slice(0, GOALS_CEILING);
   return {
     firstName: me?.first_name ?? "them",
     city: me?.city ?? null,
