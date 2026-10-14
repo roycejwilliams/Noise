@@ -43,10 +43,10 @@ check("a reminder is queued before its original pitch", S.planPicks([{ key: key(
 
 // HOW stays the queue's: a pick goes through enqueueCandidate as an event_offer, the same row the send step bundles by tier.
 const ess = src("services/eventSurfacingSweep.ts");
-check("a pick is queued as an ordinary event_offer through enqueueCandidate (bundled by tier, one per tier, caps, hours)", /export async function queuePickedOffer[\s\S]{0,1600}enqueueCandidate\(\{[\s\S]{0,200}type: "event_offer"/.test(ess));
+check("a pick is queued as an ordinary event_offer through enqueueCandidate (bundled by tier, one per tier, caps, hours)", /export async function queuePickedOffer[\s\S]{0,2200}enqueueCandidate\(\{[\s\S]{0,200}type: "event_offer"/.test(ess));
 check("a pick checks it isn't already sent/decided or past before queueing", /queuePickedOffer[\s\S]{0,900}alreadyDecided\(userId, item\)[\s\S]{0,120}isPastEvent\(o\.match, zone\)/.test(ess));
 check("for a picker account the per-ask sweep only feeds the backlog (no queueing of its own)", /if \(await pickerDecides\(candidate\.userId\)\) \{\s*await log\("act", "fed_to_picker"\);[\s\S]{0,600}?return \{ queued: false, fed: true \};/.test(ess) && !/fed_to_picker"\);[\s\S]{0,600}?(?:enqueueCandidate|queuePickedOffer)[\s\S]{0,200}?return \{ queued: false, fed: true \}/.test(ess) && ess.indexOf("fed_to_picker") < ess.indexOf("const { rows: waiting }"));
-check("the send step still bundles every waiting tier with the picked one (pickSiblingOffers)", /for \(const sib of pickSiblingOffers\(c, ev\.eligible\)\)/.test(src("harness/proactive.ts")));
+check("the send step still bundles every waiting tier with the picked one (pickSiblingOffers)", /for \(const sib of pickSiblingOffers\(c, ev\.eligible\)\.slice\(0, left - 1\)\)/.test(src("harness/proactive.ts")));
 check("live only where the review runs (co-test), for the picker accounts", /export const pickerLive = \(\) => reviewEnabled\(\);/.test(src("services/sweepShadow.ts")) && /S\.pickerLive\(\) && \(await S\.pickerUserIds\(\)\)\.includes\(userId\)/.test(ess));
 {
   const sh = src("services/sweepShadow.ts");

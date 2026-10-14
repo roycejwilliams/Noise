@@ -105,43 +105,54 @@ export type GoalSweepDeps = {
   // goes idle, and planning then reads only what's still active. Optional; it runs whatever the cooldown or a hold says.
   recheck?: (row: any) => Promise<void>;
 };
+// What a plan reads for a member, shared by the hourly plan and the 9am floor's build (services/dailySweep.ts): the member record
+// (Phase A4: their goals with state, the kind of room they want, what they ruled out, what their asks already search, who they are)
+// and the active goals on file, in their own words (the record's text is stripped, which would change the goal's hash and orphan its
+// state; review of #134), chosen by the record's hash. A record that can't be read (a failed name read fails closed) throws: no plan.
+export async function planInputs(row: any): Promise<{ goals: string[]; city: string | null; zone: string | null; firstName: string | null; direction: string | null; enjoys: string[] | null; specifics: string[] | null; record: import("./goalEdges.js").PlanRecord }> {
+  const { PLAN_RECORD_LIMITS } = await import("./goalEdges.js");
+  const { memberKnowledge } = await import("./memberKnowledge.js");
+  const k = await memberKnowledge(row.user_id, { include: ["goals", "asks", "preferences", "limits", "person"] });
+  if (!k.limits) throw new Error("their limits couldn't be read");
+  const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
+  return {
+    goals: planGoals(row, k.goals),
+    city: k.identity.city ?? row.city ?? null,
+    zone: k.identity.zone,
+    firstName: row.first_name ?? null,
+    direction: row.long_term_direction ? String(row.long_term_direction) : null,
+    enjoys: row.activity_preferences ?? null,
+    specifics: latest.concrete_preferences ?? null,
+    record: {
+      person: (k.person?.text ?? "").slice(0, PLAN_RECORD_LIMITS.person),
+      statedTaste: k.preferences.filter((p) => p.source === "stated").map((p) => p.text),
+      avoid: k.limits.avoid,
+      openAsks: k.asks.map((a) => a.text),
+    },
+  };
+}
+
+// Their latest plan that read whole, however old (a plan's age never decides anything but the backstop rebuild).
+export async function latestPlan(userId: string): Promise<{ proposal: any; created_at: Date } | null> {
+  const { rows } = await pool.query(
+    `SELECT proposal, created_at FROM harness_decisions WHERE decision = 'goal_sweep.plan' AND user_id = $1 AND COALESCE(action, '') NOT IN ('read_failed', 'read_cut_off') ORDER BY created_at DESC LIMIT 1`,
+    [userId],
+  );
+  return rows[0] ?? null;
+}
+
 const realDeps: GoalSweepDeps = {
   rows: async () => (await pool.query(GOAL_SWEEP_SQL)).rows,
   plan: async (row, seedSig) => {
-    const { planGoalSweep, realGoalDeps, PLAN_RECORD_LIMITS } = await import("./goalEdges.js");
-    // The member record (Phase A4): their goals with state, the kind of room they want, what they ruled out, what their asks already
-    // search, who they are. A record that can't be read (a failed name read fails closed) means no plan this run.
-    const { memberKnowledge } = await import("./memberKnowledge.js");
-    const k = await memberKnowledge(row.user_id, { include: ["goals", "asks", "preferences", "limits", "person"] });
-    if (!k.limits) throw new Error("their limits couldn't be read");
-    const latest = Array.isArray(row.intent) ? (row.intent as any[])[row.intent.length - 1] ?? {} : {};
-    return planGoalSweep(
-      row.user_id,
-      // Active goals on file: a goal entry they closed or set aside, or a state row whose goal is gone, is never planned from. Their
-      // own words (the record's text is stripped, which would change the goal's hash and orphan its state; review of #134), chosen by
-      // the record's hash.
-      planGoals(row, k.goals),
-      {
-        city: k.identity.city ?? row.city ?? null,
-        zone: k.identity.zone,
-        now: new Date(),
-        firstName: row.first_name ?? null,
-        direction: row.long_term_direction ? String(row.long_term_direction) : null,
-        enjoys: row.activity_preferences ?? null,
-        specifics: latest.concrete_preferences ?? null,
-        seedSig,
-        record: {
-          person: (k.person?.text ?? "").slice(0, PLAN_RECORD_LIMITS.person),
-          statedTaste: k.preferences.filter((p) => p.source === "stated").map((p) => p.text),
-          avoid: k.limits.avoid,
-          openAsks: k.asks.map((a) => a.text),
-        },
-      },
-      realGoalDeps,
-    );
+    const { planGoalSweep, realGoalDeps } = await import("./goalEdges.js");
+    const { goals, ...o } = await planInputs(row);
+    // Their latest plan: when it was read from these same goals inside the backstop, its reading is used again (no model call).
+    const stored = await latestPlan(row.user_id);
+    return planGoalSweep(row.user_id, goals, { ...o, now: new Date(), seedSig, stored: stored ? { goalsSig: stored.proposal?.goalsSig ?? null, builtAt: stored.proposal?.builtAt ?? null, derived: stored.proposal?.derived ?? null, at: stored.created_at } : null }, realGoalDeps);
   },
   lastSeedSig: async (userId) => {
-    const { rows } = await pool.query(`SELECT proposal->>'seedSig' AS sig FROM harness_decisions WHERE user_id = $1 AND decision = 'goal_sweep.plan' ORDER BY created_at DESC LIMIT 1`, [userId]);
+    // The hourly plans only: a 9am floor build carries no seed signature (dailySweep.ts floorGoalPlan), so it never reads as "seeds changed".
+    const { rows } = await pool.query(`SELECT proposal->>'seedSig' AS sig FROM harness_decisions WHERE user_id = $1 AND decision = 'goal_sweep.plan' AND COALESCE(proposal->>'builtBy', '') <> 'floor' ORDER BY created_at DESC LIMIT 1`, [userId]);
     return rows[0]?.sig ?? null;
   },
   coldStartMiss: async (row, why, passed) => {
@@ -187,11 +198,13 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
       if (!goalSweepRuns(row, sig, last).run) return;
     }
     await deps.recheck?.(row).catch((err: any) => console.error(`Goal recheck failed for ${row.user_id}:`, err?.message ?? err));
-    // One find per GOAL_SURFACE_COOLDOWN_DAYS (Phase A4: the cooldown was computed and only logged, so a member who'd just had a find
-    // still got a full goal sweep every day). The budget is marked, so it's looked at again on the next one.
+    // The cooldown has one job (Royce, 2026-10-14): it limits how often this hourly sweep sends extra goal finds, one per
+    // GOAL_SURFACE_COOLDOWN_DAYS. It never decides whether their goals get searched: the 9am floor searches them every day from a plan
+    // that stays current until their goals change (dailySweep.ts floorGoalPlan), whatever went out. The budget is marked, so it's looked
+    // at again on the next one.
     if (row.cooldown_cleared === false) {
       await deps.mark(row.user_id);
-      await deps.skipped?.(row, "cooldown", [`a find went out within ${GOAL_SURFACE_COOLDOWN_DAYS} days`]).catch(() => {});
+      await deps.skipped?.(row, "cooldown", [`a find went out within ${GOAL_SURFACE_COOLDOWN_DAYS} days: this sweep's extra search and send held; the 9am floor still plans and searches their goals`]).catch(() => {});
       return;
     }
     // Zero sweeps for a member dispatch would hold a goal find for (Phase A3): a hold, a safety hold, kind restraint, the weekly cap,

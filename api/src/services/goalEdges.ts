@@ -33,7 +33,10 @@ export const PLAN_RECORD_LIMITS = { person: 700, asks: 6 } as const;
 export type GoalKind = "findable" | "work" | "co_task";
 export type GoalState = "active" | "done" | "stale";
 // explicit: the kind came from a model answer that was read (or Co's own task in code), not the fallback when it couldn't be read.
-export type GoalEdge = { goal: string; kind: GoalKind; edges: string[]; why: string; until: string | null; supersededBy: string | null; explicit?: boolean };
+// placeBound: what helps the goal happens near where they live (true) or anywhere (false); null when the read didn't say. While they're
+// away, the 9am floor skips place-bound goals and keeps searching the rest (Royce, 2026-10-14: "Place-bound goals ... pause; portable
+// goals ... keep running"); unknown counts as portable, so searching goes on.
+export type GoalEdge = { goal: string; kind: GoalKind; edges: string[]; why: string; until: string | null; supersededBy: string | null; explicit?: boolean; placeBound?: boolean | null };
 // lastSignalAt / recheckAskedAt: the goal recheck's clock (services/goalRecheck.ts). recheck: set only on a row handed to the reply as
 // the recheck question ("ask": raise it; "asked": it went out, read their answer).
 export type GoalStateRow = { goalHash: string; goal: string; state: GoalState; reason: string; source: "context" | "member" | "co"; changedAt: Date; toldAt: Date | null; hints: number; lastSignalAt?: Date | null; recheckAskedAt?: Date | null; recheck?: "ask" | "asked" };
@@ -78,9 +81,10 @@ Co searches the world each day for things worth texting them about: events and g
 - edges: up to ${EDGE_LIMITS.perGoal} short searches for the FINDABLE side of the goal, things that would actually help it along, named the way a good researcher would search for the thing itself, in a few words ("SF AI founder events November", "consumer AI pre-seed open calls", "founder wellness community SF"). Never a name (theirs, their company, partners or people), never a description of them, never the goal reworded, never a strategy, a how-to or advice. A work plan or Co task gets only its findable side; if it has none, give no edges.
 - until: the last day it can still matter (YYYY-MM-DD) when the goal is tied to a date or window ("the November launch" -> its last day in November); null when it has none.
 - superseded_by: the number of a LATER goal in this list that replaces it (a changed plan, a cancelled date), else null.
+- place_bound: true when what would help it happens near where they live (events, venues, local groups and places in their city); false when it can be done from anywhere (funding, programs, jobs, learning, anything remote).
 - why: one short reason, especially when there are no edges.
 
-Answer only with JSON: [{"n": 1, "kind": "...", "edges": ["..."], "until": null, "superseded_by": null, "why": "..."}, ...]`;
+Answer only with JSON: [{"n": 1, "kind": "...", "edges": ["..."], "until": null, "superseded_by": null, "place_bound": false, "why": "..."}, ...]`;
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -159,7 +163,8 @@ export function parseEdges(goals: string[], raw: string, firstName?: string | nu
     const supersededBy = Number.isInteger(by) && by > i + 1 && by <= goals.length && by - 1 !== o.direction ? goals[by - 1] : null;
     // A goal the answer never reached (a cut-off read) is unread, not "no findable side".
     const why = !found[i] && !isCoTaskGoal(goal) ? "couldn't be read this time" : String(r.why ?? "").trim().slice(0, 200) || (edges.length ? "" : "no findable side");
-    return { goal, kind, edges, why, until, supersededBy, explicit };
+    const placeBound = r.place_bound === true ? true : r.place_bound === false ? false : null;
+    return { goal, kind, edges, why, until, supersededBy, explicit, placeBound };
   });
 }
 
@@ -192,7 +197,71 @@ export function edgeSearchText(edges: GoalEdge[], extra: { enjoys?: string[] | n
 
 // ---------- the run
 
-export type GoalPlan = { searchText: string | null; active: GoalEdge[]; passed: { goal: string; why: string }[]; setAside: { goal: string; state: GoalState; reason: string }[]; retiredAsks: number; read?: EdgeRead | null };
+export type GoalPlan = { searchText: string | null; active: GoalEdge[]; passed: { goal: string; why: string }[]; setAside: { goal: string; state: GoalState; reason: string }[]; retiredAsks: number; read?: EdgeRead | "reused" | null };
+
+// ---------- A plan stays current until their goals change (Royce, 2026-10-14: "a plan stays current until goals change ... no timer
+// may gate whether a member's goals get searched. Not a cooldown, not a sweep schedule, not a plan age. A send can never reduce what
+// Co knows"). Each plan records the goals it was read from (goalsSig: their active goals as written, a goal idled or retired drops
+// out, so it counts as a change) and when the model read them (builtAt). Same goals: the plan is used however old. Changed goals, no
+// plan, or a read older than PLAN_BACKSTOP_DAYS: it is read again. The backstop only ever rebuilds, never skips.
+export const PLAN_BACKSTOP_DAYS = 7;
+
+// Pure: the goals a plan reads, the same list everywhere: their goals and long-term direction, each once, minus any whose state isn't
+// active (done, idle or set aside).
+export function liveGoals(goals: string[], direction: string | null | undefined, states: ReadonlyMap<string, Pick<GoalStateRow, "state">>): string[] {
+  const uniq = [...new Set([...goals, ...(direction ? [direction] : [])].map((g) => g.trim()).filter(Boolean))];
+  return uniq.filter((g) => {
+    const s = states.get(goalHash(g));
+    return !s || s.state === "active";
+  });
+}
+
+// Pure: the fingerprint of the goals a plan was read from. Order and spacing don't count; any edit, addition, removal or idle does.
+export function goalsSignature(live: string[]): string {
+  return createHash("sha1").update([...new Set(live.map((g) => g.trim().toLowerCase().replace(/\s+/g, " ")))].sort().join("\n")).digest("hex").slice(0, 16);
+}
+
+// What a stored plan says about itself (goal_sweep.plan's proposal). A plan from before 2026-10-14 has no goalsSig: it reads as changed.
+export type StoredPlan = { goalsSig?: string | null; builtAt?: string | Date | null; derived?: GoalEdge[] | null; at: string | Date };
+// Pure: may this plan be used for these goals now, and why.
+export function planCurrent(stored: StoredPlan | null, sig: string, now: Date): { reuse: boolean; why: "no_plan" | "goals_changed" | "backstop" | "same_goals" } {
+  if (!stored) return { reuse: false, why: "no_plan" };
+  if (!stored.goalsSig || stored.goalsSig !== sig) return { reuse: false, why: "goals_changed" };
+  const built = new Date(String(stored.builtAt ?? stored.at)).getTime();
+  if (!Number.isFinite(built) || now.getTime() - built > PLAN_BACKSTOP_DAYS * 86_400_000) return { reuse: false, why: "backstop" };
+  return { reuse: true, why: "same_goals" };
+}
+
+// The model's read of their live goals: each one's kind and findable edges, nothing written. Shared by the hourly plan and the 9am build.
+export async function readGoalEdges(live: string[], o: { city: string | null; today: string; firstName?: string | null; direction?: string | null; record?: PlanRecord | null }, model: GoalDeps["model"]): Promise<{ derived: GoalEdge[]; read: EdgeRead | null; readCount: number }> {
+  const raw = live.length ? await model(edgePrompt(live, { city: o.city, today: o.today, record: o.record ?? null })).catch(() => "") : "";
+  const answer = readEdgeAnswer(raw);
+  const readCount = live.length ? new Set(answer.arr.map((x) => Number(x?.n)).filter((n) => n >= 1 && n <= live.length)).size : 0;
+  // Every goal came back, only the list's closing bracket didn't: that's a whole read.
+  // A closed list that leaves goals out didn't read them all either (review of #128): that's a cut-off read, flagged.
+  const read: EdgeRead | null = !live.length ? null : readCount === live.length && answer.read !== "failed" ? "full" : answer.read === "full" && readCount < live.length ? "cut_off" : answer.read;
+  const dir = o.direction ? live.indexOf(o.direction.trim()) : -1;
+  return { derived: parseEdges(live, raw, o.firstName, { today: o.today, direction: dir >= 0 ? dir : null, avoid: o.record?.avoid ?? [] }), read, readCount };
+}
+
+// The 9am floor's own plan (services/dailySweep.ts): only the search list, read fresh when their goals changed, there's no plan, or the
+// last read is past the backstop. No lifecycle: no goal state is written, no ask is retired, no recheck; that housekeeping stays with
+// the hourly goal sweep. A goal whose stated window has passed isn't searched (it is only passed over here; the hourly sweep sets it
+// aside). Written as goal_sweep.plan (builtBy "floor"), so later runs reuse it.
+export async function buildFloorPlan(userId: string, live: string[], o: { city: string | null; zone: string | null; now: Date; firstName?: string | null; direction?: string | null; record?: PlanRecord | null; why: string }, deps: Pick<GoalDeps, "model" | "log">): Promise<{ proposal: Record<string, unknown>; read: EdgeRead | null }> {
+  const today = DateTime.fromJSDate(o.now).setZone(o.zone && DateTime.now().setZone(o.zone).isValid ? o.zone : "America/Los_Angeles").toISODate()!;
+  const { derived, read, readCount } = await readGoalEdges(live, { city: o.city, today, firstName: o.firstName, direction: o.direction, record: o.record }, deps.model);
+  const active: GoalEdge[] = [], passed: { goal: string; why: string }[] = [];
+  for (const e of derived) {
+    if (e.until && e.until < today) passed.push({ goal: e.goal, why: `its window passed (${e.until}); the hourly sweep sets it aside` });
+    else if (e.edges.length) active.push(e);
+    else passed.push({ goal: e.goal, why: `${e.kind}: ${e.why || "no findable side"}` });
+  }
+  const failed = read === "failed" || read === "cut_off";
+  const proposal = { read, goalsRead: readCount, goalsLive: live.length, searching: active.length > 0, edges: active.map((e) => ({ goal: e.goal, kind: e.kind, edges: e.edges, placeBound: e.placeBound ?? null })), passed, setAside: [], retiredAsks: 0, goalsSig: goalsSignature(live), builtAt: o.now.toISOString(), builtBy: "floor", rebuiltBecause: o.why, derived };
+  await deps.log({ userId, action: read === "failed" ? "read_failed" : read === "cut_off" ? "read_cut_off" : "built_at_9am", reason: failed ? (read === "failed" ? "the goals couldn't be read this time" : `the answer was cut off: ${readCount} of ${live.length} goals read`) : `built at 9am: ${o.why.replace(/_/g, " ")}`, proposal, ...(failed ? { failed: true } : {}) }).catch(() => {});
+  return { proposal, read };
+}
 
 export type GoalDeps = {
   model: (prompt: string) => Promise<string>;
@@ -217,23 +286,22 @@ export type GoalDeps = {
 // direction: their long-term direction, read as a goal but never superseding one (review of #107).
 // seedSig: a fingerprint of what this run read (services/coldStart.ts seedSignature), logged so a new member's sweep reruns only when
 // their seeds change (services/goalSweep.ts goalSweepRuns).
-export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null; direction?: string | null; seedSig?: string; record?: PlanRecord | null }, deps: GoalDeps): Promise<GoalPlan> {
+// stored: their latest plan (goal_sweep.plan). When it was read from these same goals inside the backstop and kept its reading
+// (derived), that reading is used again: no model call, the lifecycle below still runs on it against today (a window that passed still
+// sets its goal aside). Otherwise the goals are read fresh.
+export async function planGoalSweep(userId: string, goals: string[], o: { city: string | null; zone: string | null; now: Date; enjoys?: string[] | null; specifics?: string[] | null; firstName?: string | null; direction?: string | null; seedSig?: string; record?: PlanRecord | null; stored?: StoredPlan | null }, deps: GoalDeps): Promise<GoalPlan> {
   const today = DateTime.fromJSDate(o.now).setZone(o.zone && DateTime.now().setZone(o.zone).isValid ? o.zone : "America/Los_Angeles").toISODate()!;
-  const uniq = [...new Set([...goals, ...(o.direction ? [o.direction] : [])].map((g) => g.trim()).filter(Boolean))];
   const states = await deps.states(userId).catch(() => new Map<string, GoalStateRow>());
   // Done or stale goals stay on file and out of the search; only active ones are read and derived.
-  const live = uniq.filter((g) => {
-    const s = states.get(goalHash(g));
-    return !s || s.state === "active";
-  });
-  const raw = live.length ? await deps.model(edgePrompt(live, { city: o.city, today, record: o.record ?? null })).catch(() => "") : "";
-  const answer = readEdgeAnswer(raw);
-  const readCount = live.length ? new Set(answer.arr.map((x) => Number(x?.n)).filter((n) => n >= 1 && n <= live.length)).size : 0;
-  // Every goal came back, only the list's closing bracket didn't: that's a whole read.
-  // A closed list that leaves goals out didn't read them all either (review of #128): that's a cut-off read, flagged.
-  const read: EdgeRead | null = !live.length ? null : readCount === live.length && answer.read !== "failed" ? "full" : answer.read === "full" && readCount < live.length ? "cut_off" : answer.read;
-  const dir = o.direction ? live.indexOf(o.direction.trim()) : -1;
-  const derived = parseEdges(live, raw, o.firstName, { today, direction: dir >= 0 ? dir : null, avoid: o.record?.avoid ?? [] });
+  const live = liveGoals(goals, o.direction, states);
+  const goalsSig = goalsSignature(live);
+  const current = planCurrent(o.stored ?? null, goalsSig, o.now);
+  const reuse = current.reuse && Array.isArray(o.stored?.derived) && o.stored!.derived!.length > 0;
+  const fresh = reuse ? null : await readGoalEdges(live, { city: o.city, today, firstName: o.firstName, direction: o.direction, record: o.record ?? null }, deps.model);
+  const derived: GoalEdge[] = reuse ? o.stored!.derived! : fresh!.derived;
+  const readCount = reuse ? live.length : fresh!.readCount;
+  const read: EdgeRead | "reused" | null = reuse ? "reused" : fresh!.read;
+  const builtAt = reuse ? String(o.stored!.builtAt ?? o.stored!.at) : o.now.toISOString();
   const corrections = await deps.corrections(userId).catch(() => [] as Correction[]);
   const active: GoalEdge[] = [], passed: { goal: string; why: string }[] = [], setAside: GoalPlan["setAside"] = [];
   for (const e of derived) {
@@ -265,7 +333,7 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
       retiredAsks++;
     }
   }
-  if (read === "full") await deps.keepRetireFlags?.(userId, flagged).catch(() => {});
+  if (read === "full" || read === "reused") await deps.keepRetireFlags?.(userId, flagged).catch(() => {});
   const searchText = edgeSearchText(active, { enjoys: o.enjoys, specifics: o.specifics });
   // A read that didn't come back whole logs as a failure, whatever it still searches (Royce, 2026-10-09: "no silent success"). A
   // cut-off read still searches the goals it did read; a failed one searches only what they enjoy, if anything.
@@ -279,7 +347,7 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
         : read === "cut_off"
           ? `the answer was cut off: ${readCount} of ${live.length} goals read`
           : searchText ? null : passed.length || setAside.length ? "no active goal with a findable side" : "no active goals",
-      proposal: { read, goalsRead: readCount, goalsLive: live.length, searching: !!searchText, edges: active.map((e) => ({ goal: e.goal, kind: e.kind, edges: e.edges })), passed, setAside, retiredAsks, ...(o.seedSig ? { seedSig: o.seedSig } : {}) },
+      proposal: { read, goalsRead: readCount, goalsLive: live.length, searching: !!searchText, edges: active.map((e) => ({ goal: e.goal, kind: e.kind, edges: e.edges, placeBound: e.placeBound ?? null })), passed, setAside, retiredAsks, ...(o.seedSig ? { seedSig: o.seedSig } : {}), goalsSig, builtAt, builtBy: "hourly", ...(reuse ? { reusedBecause: current.why } : { readBecause: current.why }), derived },
       ...(readFailed ? { failed: true } : {}),
     })
     .catch(() => {});

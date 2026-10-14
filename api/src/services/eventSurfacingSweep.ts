@@ -585,7 +585,9 @@ export type EventOfferPayload = {
   lastDay?: string;
   // The pick's own why, kept apart, and its view of the day's set (Phase C3): what the bundle composer writes from.
   // setKeys: the target keys of every find the pick chose together; its set line only describes a bundle of exactly those.
-  pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] };
+  // tierPick/tierNext: a morning tier pick and the rest of its tier in order (key and the member-safe why), so dispatch can queue the
+  // next best if the composer still skips it (sweepShadow.ts queueTierNext).
+  pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[]; tierPick?: boolean; tierNext?: { key: string; why: string }[] };
   // How many times a live conversation has made this wait (Phase C5); capped by dispatch.
   waits?: number;
   askId: string;
@@ -854,13 +856,13 @@ export async function pickerDecides(userId: string): Promise<boolean> {
 // What queueing a pick did (Royce, 2026-10-12: why a chosen pick didn't queue took a manual trace): queued, or why not. A thrown
 // error is the caller's fourth answer.
 export type PickQueued = "queued" | "already decided" | "past" | "already exists";
-export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[] } }): Promise<PickQueued> {
+export async function queuePickedOffer(userId: string, o: { askId: string; askText: string; fromProfile: boolean; match: TierMatch; reminder?: boolean; again?: boolean; why: string; lastDay?: string | null; pick?: { whyMember: string; whyNow: string; set: string | null; setKeys?: string[]; tierPick?: boolean; tierNext?: { key: string; why: string }[] } }): Promise<PickQueued> {
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   if (await alreadyDecided(userId, item)) return "already decided";
   if (isPastEvent(o.match, zone)) return "past";
   const match = await enrichMatch({ ...o.match, whyItFits: o.why || o.match.whyItFits });
-  // picked: the daily pick chose it, so the send step bundles it with the other picks waiting (any tier). lastDay: the last day
+  // picked: the daily pick chose it, so the send step bundles it with the other picks waiting (per tier). lastDay: the last day
   // it's worth sending (Royce, 2026-10-09: "Fleet Week should never lose its slot to something that will still exist next week").
   const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.pick ? { pick: o.pick } : {}), ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   const timeBound = pickPriority(o.lastDay ?? null, zone);

@@ -30,7 +30,8 @@ export const BUNDLE_LIMITS = { openingChars: 280, closingChars: 140, captionChar
 // The pick's own reading of one find (services/sweepSelect.ts): why it's for this member, and why now. Null for a find that didn't come
 // through the pick.
 export type PickWhy = { whyMember: string; whyNow: string } | null;
-export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean };
+// tierPick: the best of its tier for them this morning (services/sweepSelect.ts tierPicks): never skipped for fit (composeBundle).
+export type BundleItem = { candidate: Candidate; item: RevealItem; pick: PickWhy; again: boolean; tierPick?: boolean };
 export type ComposeInput = {
   firstName: string;
   items: BundleItem[];
@@ -86,7 +87,8 @@ export type Composed = {
   // The words Co wrote, joined (for payload first, the ledger and the log).
   text: string;
   included: BundleItem[];
-  dropped: { item: BundleItem; why: string }[];
+  // tierSkipped: a morning tier pick the composer still skipped after being told it goes (dispatch queues its tier's next best).
+  dropped: { item: BundleItem; why: string; tierSkipped?: boolean }[];
   opening: string | null;
   closing: string | null;
   // Each included thing's own messages (its link and its caption), in order, for the send ledger.
@@ -94,7 +96,7 @@ export type Composed = {
   calls: number;
   notes: string[];
 };
-export type ComposeResult = Composed | { wait: string; calls: number } | { fail: string; leadSkipped?: boolean; calls: number; notes: string[] };
+export type ComposeResult = Composed | { wait: string; calls: number } | { fail: string; leadSkipped?: boolean; tierSkipped?: boolean; calls: number; notes: string[] };
 
 // ---------------------------------------------------------------- set and wait (pure)
 
@@ -122,7 +124,7 @@ export function composePrompt(i: ComposeInput, o: { problems?: string[]; last?: 
   const items = i.items
     .map((b, n) => {
       const pick = b.pick ? `\nwhy Co's daily pick chose it for them: ${b.pick.whyMember}${b.pick.whyNow ? `\nwhy now: ${b.pick.whyNow}` : ""}` : "";
-      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? " (you mentioned it over a month ago with no reply; it's still open: circle back once, lightly)" : ""}\n${renderFacts(b.item.facts)}${pick}`;
+      return `THING ${n + 1}${n === 0 ? " (it leads)" : ""}${b.tierPick ? " (the best of its kind for them this morning: it goes; never skip it for fit, caption it from its own facts)" : ""}${b.item.url ? " (its link goes out as its own message right before your caption)" : ""}${b.item.shortNotice ? " (short notice: say so plainly, no pressure)" : ""}${b.again ? " (you mentioned it over a month ago with no reply; it's still open: circle back once, lightly)" : ""}\n${renderFacts(b.item.facts)}${pick}`;
     })
     .join("\n\n");
   return `${CO_VOICE}
@@ -137,7 +139,7 @@ ${many ? "- After the last thing, end with your own line (it goes in \"opening\"
 - ${IDENTITY_RULE} ${AUDIENCE_RULE} ${OFFER_HONESTY}
 - A thing they didn't ask for is something you noticed for them: never say or imply they asked for it.
 - Only the facts listed for a thing back what you say about it. Days, dates, prices, counts: only as written there.
-- If one of them doesn't actually fit them, skip it (say why) rather than stretch. The member rules further down are never a reason to skip; fit is.
+- If one of them doesn't actually fit them, skip it (say why) rather than stretch, unless it's marked the best of its kind this morning: that one goes, captioned from its own facts. The member rules further down are never a reason to skip; fit is.
 - The closing asks which one, or whether any, interests them. It never offers to do something ("want me to...", "should I..."): what they want next is theirs to say.
 
 THE THINGS (CONFIRMED_FACTS for each: the only facts you may state about it)
@@ -260,6 +262,7 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
   let calls = 0;
   let problems: string[] = [];
   let last: string | null = null;
+  const tierAsked = new Set<string>();
   while (calls < BUNDLE_LIMITS.calls) {
     const now: ComposeInput = { ...input, items };
     calls++;
@@ -279,9 +282,18 @@ export async function composeBundle(input: ComposeInput, deps: ComposeDeps = rea
     }
     // A thing the composer skipped is taken out, and the rest composed again, so every caption is written for the set that goes.
     const skips = d.items.filter((x) => x.skip && x.n >= 1 && x.n <= items.length);
+    // A morning tier pick is never skipped for fit (review of the tier PR): the first time, it's written again with that said; only a
+    // second skip takes it out, and dispatch then queues its tier's next best.
+    const tierSkips = skips.filter((x) => items[x.n - 1].tierPick && !tierAsked.has(items[x.n - 1].candidate.id));
+    if (tierSkips.length) {
+      for (const x of tierSkips) tierAsked.add(items[x.n - 1].candidate.id);
+      problems = tierSkips.map((x) => `thing ${x.n} is the best of its kind for them this morning: it goes, never skipped for fit; caption it from its own facts`);
+      last = raw.slice(0, 800);
+      continue;
+    }
     if (skips.length) {
-      if (skips.some((x) => x.n === 1)) return { fail: `the first thing doesn't fit: ${skips.find((x) => x.n === 1)!.skip}`, leadSkipped: true, calls, notes };
-      for (const s of skips) dropped.push({ item: items[s.n - 1], why: `skipped by the composer: ${s.skip}` });
+      if (skips.some((x) => x.n === 1)) return { fail: `the first thing doesn't fit: ${skips.find((x) => x.n === 1)!.skip}`, leadSkipped: true, ...(items[0].tierPick ? { tierSkipped: true } : {}), calls, notes };
+      for (const s of skips) dropped.push({ item: items[s.n - 1], why: `skipped by the composer: ${s.skip}`, ...(items[s.n - 1].tierPick ? { tierSkipped: true } : {}) });
       items = items.filter((_, idx) => !skips.some((s) => s.n === idx + 1));
       // The pick's view of the set was about the set it chose: once the set changes, it no longer describes what goes.
       input = { ...input, set: null };

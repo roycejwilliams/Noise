@@ -1,8 +1,10 @@
 // The 9am daily sweep (Royce, 2026-10-13: "Bring back the real 9 am sweep"). A floor under the hourly sweeps:
 //   - once per member per day, from 9am their time, inside waking hours (localHours.ts), for every member;
 //   - every open find ask searched in all three places (events, web, X; sweepFind.ts SWEEP_SOURCES), leaning to what's new
-//     (sweepFind.ts RECENT_HOURS), and each active goal searched on its own, from the goal plan the hourly goal sweep last made
-//     (read, never re-planned: planning sets goal states and retires asks, which is the lifecycle this must not touch);
+//     (sweepFind.ts RECENT_HOURS), and each active goal searched on its own, from their latest goal plan while it was read from the
+//     goals they have now; when their goals changed, there's no plan, or the read is past the week's backstop, the search list is
+//     built right then (floorGoalPlan; only the list: goal states, retiring asks and the recheck stay with the hourly goal sweep).
+//     No timer decides whether their goals are searched (Royce, 2026-10-14): not the goal cooldown, not a sweep schedule, not a plan's age;
 //   - no source selectivity and no empty-streak backoff here; and it leaves the ask lifecycle alone: it never moves an ask's
 //     last_attempted_at or its empty-run count (eventSurfacingSweep.ts), so the hourly sweeps run exactly as before, on top;
 //   - finds go to the pool (the event backlog), the picker chooses right after (sweepShadow.ts runPickerAfterSweep), and what it chose
@@ -23,8 +25,6 @@ export const DAILY_SWEEP_HOUR = 9;
 // A failed day is run again on a later hour, at most this many failed runs a day (the picker's rule, sweepShadow.ts PICK_ERRORS_PER_DAY).
 export const DAILY_SWEEP_ERRORS_PER_DAY = 3;
 export const DAILY_SWEEP_CONCURRENCY = 3;
-// The goal plan the floor reads: the hourly goal sweep's latest, if it's this recent.
-export const GOAL_PLAN_MAX_AGE_DAYS = 3;
 
 // Members a sweep is working on right now (this process: co-test runs one). The hourly ask sweep and this one both claim a member
 // before searching, and skip one that's taken, so the two never search one member's asks at once.
@@ -111,23 +111,23 @@ export function searchFailed(rep: { sources: { events: boolean; web: boolean; x:
 
 // Pure: what the floor searches for each goal, from the hourly goal sweep's latest plan (goal_sweep.plan): each active goal's
 // findable edges, on their own (not mixed with another goal's or what they enjoy), and each goal the plan passed or set aside, with why.
-export function goalItemsFromPlan(plan: any, searchText: (edge: any) => string | null): { goal: string; search: string | null; why: string | null }[] {
-  const out: { goal: string; search: string | null; why: string | null }[] = [];
+// placeBound: the plan's read of the goal (goalEdges.ts GoalEdge.placeBound); only an explicit true is place-bound (unknown is portable).
+export function goalItemsFromPlan(plan: any, searchText: (edge: any) => string | null): { goal: string; search: string | null; why: string | null; placeBound?: boolean }[] {
+  const out: { goal: string; search: string | null; why: string | null; placeBound?: boolean }[] = [];
   for (const e of Array.isArray(plan?.edges) ? plan.edges : []) {
     const s = searchText(e);
-    out.push({ goal: String(e.goal ?? ""), search: s, why: s ? null : "its plan has nothing findable to search" });
+    out.push({ goal: String(e.goal ?? ""), search: s, why: s ? null : "its plan has nothing findable to search", ...(e.placeBound === true ? { placeBound: true } : {}) });
   }
   for (const p of Array.isArray(plan?.passed) ? plan.passed : []) out.push({ goal: String(p.goal ?? ""), search: null, why: `nothing findable to search: ${String(p.why ?? "").slice(0, 160)}` });
   for (const a of Array.isArray(plan?.setAside) ? plan.setAside : []) out.push({ goal: String(a.goal ?? ""), search: null, why: `set aside (${a.state ?? "not active"}): ${String(a.reason ?? "").slice(0, 160)}` });
   return out.filter((g) => g.goal);
 }
 
+// The goal cooldown (profile_surfacing_state) isn't read here: it limits the hourly goal sweep's own extra finds, never this floor.
 const MEMBERS_SQL = `SELECT u.id AS user_id, u.first_name, u.phone_number, COALESCE(u.sms_opted_out, false) AS opted_out,
-        cp.city, cp.goals, cp.intent, cp.activity_preferences,
-        (pss.last_surfaced_at IS NULL OR pss.last_surfaced_at <= NOW() - INTERVAL '3 days') AS cooldown_cleared
+        cp.city, cp.goals, cp.intent, cp.activity_preferences, cp.long_term_direction
    FROM users u
    LEFT JOIN co_profiles cp ON cp.user_id = u.id
-   LEFT JOIN profile_surfacing_state pss ON pss.user_id = u.id
   WHERE u.archived_at IS NULL AND u.phone_number IS NOT NULL AND u.phone_number NOT LIKE '%#%'
     AND u.identity_captured = true AND u.invite_verified = true`;
 
@@ -138,6 +138,110 @@ async function writeDaily(userId: string, outcome: "act" | "skip", action: strin
     `INSERT INTO harness_decisions (layer, decision, user_id, outcome, action, proposal, checks, confidence, reason) VALUES (5, 'sweep.daily', $1, $2, $3, $4, '[]', NULL, $5)`,
     [userId, outcome, action, JSON.stringify(proposal), reason],
   );
+}
+
+// ------------------------------------------------------------------ the floor's goal plan (Royce, 2026-10-14: "a plan stays current until
+// goals change ... Same goals: use the plan, however old. Goals changed or no plan: build a new plan right then (one small model call),
+// then search. The 9am run builds only the search list ... Backstop: ... one week ... a stale plan triggers a rebuild at 9am, never a
+// skip"). How: "reused" (the plan was read from the goals they have now), "built" (read now), "fallback" (the build failed, so their
+// last plan is used: a stale plan beats searching nothing, and it's said), "none" (no live goals). failed: why no plan could be had.
+// uncovered: on a fallback, the live goals the old plan doesn't hold (new since it): each is a failed item, retried (review of the tier PR).
+export type FloorGoalPlan = { plan: any | null; live: string[]; how: "reused" | "built" | "fallback" | "none"; why: string; note: string | null; failed: string | null; uncovered?: string[] };
+export type FloorPlanDeps = {
+  inputs: (row: any) => Promise<Awaited<ReturnType<typeof import("./goalSweep.js").planInputs>>>;
+  states: (userId: string) => Promise<Map<string, import("./goalEdges.js").GoalStateRow>>;
+  stored: (userId: string) => Promise<{ proposal: any; created_at: Date | string } | null>;
+  build: typeof import("./goalEdges.js").buildFloorPlan;
+  model: import("./goalEdges.js").GoalDeps["model"];
+  log: import("./goalEdges.js").GoalDeps["log"];
+};
+export const realFloorPlanDeps = async (): Promise<FloorPlanDeps> => {
+  const [GS, GE] = await Promise.all([import("./goalSweep.js"), import("./goalEdges.js")]);
+  return { inputs: GS.planInputs, states: GE.goalStates, stored: GS.latestPlan, build: GE.buildFloorPlan, model: GE.realGoalDeps.model, log: GE.realGoalDeps.log };
+};
+export async function floorGoalPlan(row: any, now: Date, deps?: FloorPlanDeps): Promise<FloorGoalPlan> {
+  const d = deps ?? (await realFloorPlanDeps());
+  const GE = await import("./goalEdges.js");
+  const userId = String(row.user_id);
+  const stored = await d.stored(userId).catch(() => null);
+  const fallback = (why: string, failed: string): FloorGoalPlan =>
+    stored
+      ? { plan: stored.proposal, live: [], how: "fallback", why, note: `${failed}; searched from their plan of ${new Date(String(stored.created_at)).toISOString().slice(0, 10)}`, failed: null }
+      : { plan: null, live: [], how: "none", why, note: failed, failed };
+  let inputs: Awaited<ReturnType<FloorPlanDeps["inputs"]>>;
+  let states: Map<string, import("./goalEdges.js").GoalStateRow>;
+  try {
+    [inputs, states] = await Promise.all([d.inputs(row), d.states(userId)]);
+  } catch (err: any) {
+    return fallback("record_unreadable", `their goals couldn't be read for the plan (${String(err?.message ?? err).slice(0, 120)})`);
+  }
+  const live = GE.liveGoals(inputs.goals, inputs.direction, states);
+  // No live goals: nothing to search, and no old plan is searched in their place.
+  if (!live.length) return { plan: null, live, how: "none", why: "no_live_goals", note: null, failed: null };
+  const sig = GE.goalsSignature(live);
+  const cur = GE.planCurrent(stored ? { goalsSig: stored.proposal?.goalsSig ?? null, builtAt: stored.proposal?.builtAt ?? null, at: stored.created_at } : null, sig, now);
+  if (cur.reuse) return { plan: withoutPassedWindows(stored!.proposal, now, inputs.zone), live, how: "reused", why: cur.why, note: null, failed: null };
+  const built = await d.build(userId, live, { city: inputs.city, zone: inputs.zone, now, firstName: inputs.firstName, direction: inputs.direction, record: inputs.record, why: cur.why }, { model: d.model, log: d.log }).catch((err: any) => ({ proposal: null as any, read: "failed" as const, err }));
+  if (built.proposal && built.read !== "failed" && built.read !== "cut_off") return { plan: built.proposal, live, how: "built", why: cur.why, note: `their goal plan was built at 9am (${cur.why.replace(/_/g, " ")})`, failed: null };
+  const r = { ...fallback(cur.why, `the 9am plan build (${cur.why.replace(/_/g, " ")}) couldn't read their goals${built.read === "cut_off" ? " whole" : ""}`), live };
+  if (r.plan) {
+    // The old plan searches what it holds; a goal it doesn't hold (new since) is a failed item, retried next hour.
+    const held = new Set(goalItemsFromPlan(r.plan, () => null).map((g) => g.goal.trim().toLowerCase()));
+    r.plan = withoutPassedWindows(r.plan, now, inputs.zone);
+    r.uncovered = live.filter((g) => !held.has(g.trim().toLowerCase()));
+  }
+  return r;
+}
+
+// Pure: a reused plan without the goals whose own read said their window has passed (derived.until before today in their zone): those
+// are passed over, never searched (the hourly sweep sets them aside). A plan without that read (older) is used as it is.
+export function withoutPassedWindows(plan: any, now: Date, zone: string | null): any {
+  const derived: any[] = Array.isArray(plan?.derived) ? plan.derived : [];
+  if (!derived.length) return plan;
+  const today = DateTime.fromJSDate(now).setZone(hoursZone(zone)).toISODate()!;
+  const gone = new Map(derived.filter((e) => typeof e?.until === "string" && e.until < today).map((e) => [String(e.goal), String(e.until)]));
+  if (!gone.size) return plan;
+  return { ...plan, edges: (plan.edges ?? []).filter((e: any) => !gone.has(String(e.goal))), passed: [...(plan.passed ?? []), ...[...gone].map(([goal, until]) => ({ goal, why: `its window passed (${until}); the hourly sweep sets it aside` }))] };
+}
+
+// Pure: whether the floor searches one planned goal, or the item that says why not (null: search it). Its inputs are the plan, the goal
+// states, the floor's own gate (proactive.ts SWEEP_BLOCKERS.floor_goal: never a send timer) and whether either read failed: no cooldown,
+// no sweep schedule, no plan age (pinned in evals/goals/planCurrent.ts). An unreadable read is an error, retried, never a quiet skip.
+// Away pauses only place-bound goals: portable ones (funding, jobs, programs) keep being searched (Royce, 2026-10-14); unknown is portable.
+export function floorGoalDecision(g: { search: string | null; why: string | null; placeBound?: boolean }, o: { states: Map<string, { state: string; reason: string }> | null; statesError: string | null; gateError: string | null; hold: string[]; goalId: string }): { status: "skipped" | "error"; why: string } | null {
+  if (!g.search) return { status: "skipped", why: g.why ?? "nothing to search" };
+  if (!o.states) return { status: "error", why: `its state couldn't be read${o.statesError ? `: ${o.statesError}` : ""}` };
+  if (o.gateError) return { status: "error", why: o.gateError };
+  const st = o.states.get(o.goalId);
+  if (st && st.state !== "active") return { status: "skipped", why: `set aside since its plan (${st.state}: ${st.reason.slice(0, 120)})` };
+  const otherHolds = o.hold.filter((h) => h !== "away_hold");
+  if (otherHolds.length) return { status: "skipped", why: `held: ${otherHolds.join(", ")}` };
+  if (o.hold.includes("away_hold") && g.placeBound === true) return { status: "skipped", why: "away: place-bound" };
+  return null;
+}
+
+// ------------------------------------------------------------------ search cadence follows engagement (Royce, 2026-10-14: "Quiet member
+// tapers daily to every few days to weekly, with instant resume on any reply. Same guardrail as your silence pacing, applied to search
+// cost"). The one timer the floor's search may follow, a deliberate exception to "no timer may gate whether a member's goals get searched":
+// it reads only their own silence (their last message to Co, any channel, a timestamp), never anything Co sent, and it only spaces the
+// searches out: weekly is the floor, never none. Thresholds are the engagement tiers' (harness/proactive.ts ENGAGEMENT): engaged or
+// active (wrote within 7 days) daily; quiet (8 to 14 days) every 3 days; dormant or longer (over 14) weekly. A message from them since
+// the last search means the next 9am searches everything.
+export const SEARCH_TAPER = { dailyUpToDays: 7, everyFewUpToDays: 14, everyFewDays: 3, weeklyDays: 7 } as const;
+// Pure: whether today's floor searches, and if not, why and when it next does. The inputs are the member's own last message and the
+// floor's own last search: nothing Co sends is an input.
+export function searchCadence(o: { now: Date; zone: string | null; lastInboundAt: Date | null; lastSearchAt: Date | null }): { search: boolean; quietDays: number | null; everyDays: number; next: string | null; why: string } {
+  const z = hoursZone(o.zone);
+  const day = (d: Date) => DateTime.fromJSDate(d).setZone(z).startOf("day");
+  const today = day(o.now);
+  const quietDays = o.lastInboundAt ? Math.floor(today.diff(day(o.lastInboundAt), "days").days) : null;
+  const everyDays = quietDays === null || quietDays <= SEARCH_TAPER.dailyUpToDays ? 1 : quietDays <= SEARCH_TAPER.everyFewUpToDays ? SEARCH_TAPER.everyFewDays : SEARCH_TAPER.weeklyDays;
+  if (!o.lastSearchAt) return { search: true, quietDays, everyDays, next: null, why: "no search on record" };
+  if (o.lastInboundAt && o.lastInboundAt.getTime() > o.lastSearchAt.getTime()) return { search: true, quietDays, everyDays, next: null, why: "they wrote since the last search" };
+  const since = Math.floor(today.diff(day(o.lastSearchAt), "days").days);
+  if (since >= everyDays) return { search: true, quietDays, everyDays, next: null, why: everyDays === 1 ? "engaged: daily" : `quiet ${quietDays} days: every ${everyDays} days` };
+  const next = day(o.lastSearchAt).plus({ days: everyDays }).toISODate()!;
+  return { search: false, quietDays, everyDays, next, why: `tapered: quiet ${quietDays} days, next search ${next}` };
 }
 
 let floorRunning = false;
@@ -187,6 +291,17 @@ export async function runDailySweep(row: any, now = new Date()): Promise<void> {
   }
   if (row.opted_out) {
     await writeDaily(userId, "skip", "opted_out", "they opted out of texts, so nothing is searched for them", { ...base, items: [] });
+    return;
+  }
+  // Search cadence follows their engagement (searchCadence): a tapered day is said, never silent, and searches nothing.
+  const { lastInboundAt } = await import("../harness/proactive.js");
+  const [lastSearch] = (await pool.query(
+    `SELECT MAX(created_at) AS at FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND outcome = 'act' AND COALESCE(proposal->>'trigger', '') <> 'manual'`,
+    [userId],
+  )).rows;
+  const cadence = searchCadence({ now, zone, lastInboundAt: await lastInboundAt(userId), lastSearchAt: lastSearch?.at ? new Date(lastSearch.at) : null });
+  if (!cadence.search) {
+    await writeDaily(userId, "skip", "tapered", cadence.why, { ...base, items: [], taper: { quietDays: cadence.quietDays, everyDays: cadence.everyDays, next: cadence.next } });
     return;
   }
   // The hourly ask sweep is on them right now: next hour (nothing decided yet, so nothing to log).
@@ -287,30 +402,39 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
     await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: a.cooldown_cleared });
   }
 
-  // ---- goals: each one the hourly goal sweep's latest plan holds, on its own, in all three places
-  const [plan] = (await pool.query(
-    `SELECT proposal, created_at FROM harness_decisions WHERE decision = 'goal_sweep.plan' AND user_id = $1 AND COALESCE(action, '') NOT IN ('read_failed', 'read_cut_off') AND created_at > NOW() - ($2 || ' days')::interval ORDER BY created_at DESC LIMIT 1`,
-    [userId, String(GOAL_PLAN_MAX_AGE_DAYS)],
-  )).rows;
-  const goalNote = goals.length && !plan ? `they have ${goals.length} goal(s) but no goal plan from the last ${GOAL_PLAN_MAX_AGE_DAYS} days yet (the hourly goal sweep plans them), so no goal was searched` : null;
-  const planned = plan ? goalItemsFromPlan(plan.proposal, (e) => edgeSearchText([e])) : [];
-  const goalHold = planned.some((g) => g.search) ? await sweepHold(userId, "goal", now).catch(() => ["their send gates couldn't be read"]) : [];
+  // ---- goals: each one their current plan holds, on its own, in all three places (floorGoalPlan: reused while their goals are the
+  // same, built now when they changed, there's none, or it's past the backstop)
+  const fp = goals.length || row.long_term_direction ? await floorGoalPlan(row, now) : null;
+  const goalNote = fp?.note ?? null;
+  const planned = fp?.plan ? goalItemsFromPlan(fp.plan, (e) => edgeSearchText([e])) : [];
+  // No plan could be had (the build failed and there was none before): each goal is a failed item, never a quiet skip, so the day is
+  // retried on a later hour.
+  if (fp && !fp.plan && fp.failed) {
+    if (fp.live.length) for (const g of fp.live) items.push({ kind: "goal", id: goalHash(g), text: g.slice(0, 160), status: "error", why: fp.failed });
+    else items.push({ kind: "goal", id: "goals", text: "their goals", status: "error", why: fp.failed });
+  }
+  // Searched from an old plan because the rebuild failed: the goals it doesn't hold are failed items, retried.
+  for (const g of fp?.uncovered ?? []) items.push({ kind: "goal", id: goalHash(g), text: g.slice(0, 160), status: "error", why: `${fp?.note ?? "the plan build failed"}; this goal isn't in that plan` });
+  // Only what isn't a send-set timer holds the goal search (proactive.ts SWEEP_BLOCKERS.floor_goal): a weekly cap or an unanswered pause
+  // gates the send, and the finds wait in the pool for it.
+  // A gate that can't be read is an error, retried, never a quiet skip (review of the tier PR).
+  let gateError: string | null = null;
+  const goalHold = planned.some((g) => g.search) ? await sweepHold(userId, "floor_goal", now).catch((err: any) => { gateError = `their send gates couldn't be read: ${String(err?.message ?? err).slice(0, 120)}`; return [] as string[]; }) : [];
   // A goal set aside since the plan was made (the goal recheck's idle, services/goalRecheck.ts, or done) isn't searched off that plan.
-  const states = planned.some((g) => g.search) ? await goalStates(userId).catch(() => null) : new Map();
+  let statesError: string | null = null;
+  const states = planned.some((g) => g.search) ? await goalStates(userId).catch((err: any) => { statesError = String(err?.message ?? err).slice(0, 120); return null; }) : new Map();
   for (const g of planned) {
     const b = { kind: "goal" as const, id: goalHash(g.goal), text: g.goal.slice(0, 160) };
     const prior = done.get(`goal:${b.id}`);
     if (prior) { items.push(prior); continue; }
-    if (!g.search) { items.push({ ...b, status: "skipped", why: g.why ?? "nothing to search" }); continue; }
-    if (!states) { items.push({ ...b, status: "skipped", why: "its state couldn't be read" }); continue; }
-    const st = states.get(b.id);
-    if (st && st.state !== "active") { items.push({ ...b, status: "skipped", why: `set aside since its plan (${st.state}: ${st.reason.slice(0, 120)})` }); continue; }
-    if (goalHold.length) { items.push({ ...b, status: "skipped", why: `held: ${goalHold.join(", ")}` }); continue; }
-    await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search, fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
+    const decide = floorGoalDecision(g, { states, statesError, gateError, hold: goalHold, goalId: b.id });
+    if (decide) { items.push({ ...b, ...decide }); continue; }
+    // cooldownCleared is only logged by the search; the floor never reads the goal cooldown, so it's always clear here.
+    await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search ?? "", fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true });
   }
 
   const { action, totals } = dailySummary(items);
-  const proposal = { ...base, items, totals, picker, ...(goalNote ? { goalNote } : {}), ...(asks.length || planned.length || goals.length ? {} : { note: "no open asks and no active goals: nothing to search" }) };
+  const proposal = { ...base, items, totals, picker, ...(fp ? { goalPlan: { how: fp.how, why: fp.why } } : {}), ...(goalNote ? { goalNote } : {}), ...(asks.length || planned.length || goals.length ? {} : { note: "no open asks and no active goals: nothing to search" }) };
   const failed = items.filter((i) => i.status === "error").map((i) => `${i.kind} "${i.text.slice(0, 60)}": ${i.why}`);
   if (failed.length) {
     const last = errorsToday + 1 >= DAILY_SWEEP_ERRORS_PER_DAY;
@@ -413,7 +537,7 @@ export type RollupRow = {
   day: string;
   userId: string;
   name: string;
-  status: "ran" | "nothing to search" | "error" | "missed" | "opted out" | "not yet" | "silent";
+  status: "ran" | "nothing to search" | "error" | "missed" | "opted out" | "not yet" | "silent" | "tapered";
   detail: string;
   asksSearched: number;
   goalsSearched: number;
@@ -436,7 +560,7 @@ function rollupFloorDay(records: { outcome: string; action: string; reason: stri
   const t = (final?.proposal?.totals ?? {}) as Record<string, number>;
   const counts = { asksSearched: t.asksSearched ?? 0, goalsSearched: t.goalsSearched ?? 0, kept: t.kept ?? 0, queued: t.queued ?? 0, sends };
   if (final) {
-    const status = final.action === "missed" ? "missed" : final.action === "opted_out" ? "opted out" : final.outcome === "act" ? "ran" : "nothing to search";
+    const status = final.action === "missed" ? "missed" : final.action === "opted_out" ? "opted out" : final.action === "tapered" ? "tapered" : final.outcome === "act" ? "ran" : "nothing to search";
     return { status, detail: final.reason ?? final.action, ...counts };
   }
   if (errors.length) return { status: "error", detail: `${errors.length} failed run(s): ${errors[errors.length - 1].reason ?? "no reason"}`, ...counts };
@@ -454,6 +578,11 @@ export async function dailySweepRollup(days = 14, now = new Date()): Promise<Rol
     `SELECT user_id, COALESCE(decided_at, updated_at) AS at FROM proactive_candidates WHERE type = 'event_offer' AND status = 'sent' AND COALESCE(decided_at, updated_at) > NOW() - ($1 || ' days')::interval`,
     [String(days + 1)],
   );
+  // Picker claim checks that couldn't run (services/sweepShadow.ts): counted per member per day on the team list.
+  const { rows: checkFails } = await pool.query(
+    `SELECT user_id, proposal->>'day' AS day, COUNT(*)::int AS n FROM harness_decisions WHERE decision = 'picker.claim_check_failed' AND created_at > NOW() - ($1 || ' days')::interval GROUP BY 1, 2`,
+    [String(days + 1)],
+  ).catch(() => ({ rows: [] as any[] }));
   // Days before the first record anywhere are before this existed: not shown as silent.
   const first = recs.map((r: any) => String(r.proposal?.day ?? "")).filter(Boolean).sort()[0] ?? null;
   const out: RollupRow[] = [];
@@ -468,7 +597,9 @@ export async function dailySweepRollup(days = 14, now = new Date()): Promise<Rol
       const sends = sent.filter((s: any) => s.user_id === m.id && DateTime.fromJSDate(new Date(s.at)).setZone(zone).toISODate() === day).length;
       const dayOver = i > 0 || local.hour >= REASONABLE_HOUR_END;
       const started = i > 0 || local.hour >= DAILY_SWEEP_HOUR;
-      out.push({ day, userId: m.id, name: [m.first_name, m.last_name].filter(Boolean).join(" ") || "(no name)", ...rollupDay(mine, sends, dayOver, started) });
+      const r = rollupDay(mine, sends, dayOver, started);
+      const fails = checkFails.find((f: any) => f.user_id === m.id && f.day === day)?.n ?? 0;
+      out.push({ day, userId: m.id, name: [m.first_name, m.last_name].filter(Boolean).join(" ") || "(no name)", ...r, ...(fails ? { detail: `${r.detail} · picker claim checks that couldn't run: ${fails}` } : {}) });
     }
   }
   return out.sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : a.name.localeCompare(b.name)));

@@ -64,6 +64,8 @@ export type SelectContext = {
   roomTaste?: string[];
   discoveryLeft: number; // discovery sends left this week
   pool: PoolItem[];
+  // The 9am floor's run (services/dailySweep.ts): one find per tier goes out (tierPicks), and the prompt says so.
+  morning?: boolean;
 };
 
 // A goal that's no longer the lens, and why (G#). done and set_aside are the member's own word (they closed it, or said so); lapsed is
@@ -73,17 +75,22 @@ export type PastGoal = { id: string; text: string; state: "done" | "set_aside" |
 
 // How a candidate fits the room they've said they want: ranks sends within their kind (slotOrder). "neutral" when nothing was said.
 export type TasteFit = "matches" | "neutral" | "clashes";
+// rank and forThem: on the morning run, the candidate's place within its own tier (1 = the one to send from it) and one line on what it
+// offers them, used when it is the one that goes from its tier whatever its verdict (tierPicks).
+type MorningRead = { rank?: number | null; forThem?: string | null };
 export type Verdict =
-  | { id: string; verdict: "send"; whyMember: string; cites: string[]; whyNow: string; wow: boolean; lastDay: string | null; taste?: TasteFit }
-  | { id: string; verdict: "hold"; why: string; until: string | null }
-  | { id: string; verdict: "reject"; reason: RejectReason; why: string; cites: string[] };
+  | ({ id: string; verdict: "send"; whyMember: string; cites: string[]; whyNow: string; wow: boolean; lastDay: string | null; taste?: TasteFit } & MorningRead)
+  | ({ id: string; verdict: "hold"; why: string; until: string | null } & MorningRead)
+  | ({ id: string; verdict: "reject"; reason: RejectReason; why: string; cites: string[] } & MorningRead);
 
 // closed: it rests on something finished (a closed ask, a past goal done or set aside). already_known: they mentioned it, are going,
 // already have it, or said no. Both are claims about a record, so both must cite it (RECORD_CLAIMS, checked in guardVerdicts); the
 // rest are judgment and need no cite.
-export const REJECT_REASONS = ["not_them", "weak_fit", "too_late", "covered", "closed", "already_known", "other"] as const;
+// ruled_out: their own words (an ask or a text of theirs) rule out this thing or this kind of thing (Royce, 2026-10-14: "not giant
+// mixers" against a large community); a claim about their words, so it cites them and the claim check reads them against the find.
+export const REJECT_REASONS = ["not_them", "weak_fit", "too_late", "covered", "closed", "already_known", "ruled_out", "other"] as const;
 export type RejectReason = (typeof REJECT_REASONS)[number];
-export const RECORD_CLAIMS: readonly RejectReason[] = ["closed", "already_known"];
+export const RECORD_CLAIMS: readonly RejectReason[] = ["closed", "already_known", "ruled_out"];
 
 // The part that's the same for every member: cached across a sweep batch.
 export const SELECT_SYSTEM = `You're Co. You know this member well. A search already gathered a pool of things that might be worth texting them about. Your job is to decide, for each one, whether it goes out today.
@@ -93,9 +100,9 @@ The bar is: they'd reply "wow". Not "seems relevant", not "fits a keyword in the
 For every candidate, give one verdict:
 - "send": it clears the bar today. Say why this member, citing the records it rests on by id (A# their asks, T# texts, S# what Co sent before, O# how they reacted), why now, and "wow": true only if you'd genuinely expect that reaction. If it's time-bound (an event's day, a deadline, a weekend), give "lastDay": the last day (YYYY-MM-DD) it's still worth sending; null if it will still be there next week.
 - "hold": good for them, but the thing itself isn't ready yet (it opens later, or it's too far out to act on), or it would crowd a stronger send today. Say when it would be right, as a date (YYYY-MM-DD) if you can. You judge whether it fits them and its timing, never their attention: don't hold something because they seem busy, focused elsewhere or in a mood. They decide what they're too busy for. Something open now with a deadline, or applications open, is never held for that.
-- "reject": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate in today's pool does the same job better; cite its C# in "cites"), closed (it rests on something finished: an ask that's closed, or a past goal that's done or set aside), already_known (they mentioned it, are going, already have it, or said no), other. Add one line why.
+- "reject": not for them. Give a reason code: not_them (doesn't match who they are), weak_fit (only loosely related), too_late (passed or too short notice to act on), covered (another candidate in today's pool does the same job better; cite its C# in "cites"), closed (it rests on something finished: an ask that's closed, or a past goal that's done or set aside), already_known (they mentioned it, are going, already have it, or said no), ruled_out (their own words rule out this thing or this kind of thing; cite the ask or text, A# or T#, where they said it), other. Add one line why.
 
-A closed or already_known reject is a claim about a record, so it cites that record by id in "cites": a closed ask (A#), a past goal that's done or set aside (G#), something Co sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.
+A ruled_out reject cites their own words (A# or T#) that rule it out. A closed or already_known reject is a claim about a record, so it cites that record by id in "cites": a closed ask (A#), a past goal that's done or set aside (G#), something Co sent or they already have (S#, D#), their own text (T#), or how they reacted (O#: they declined it, or did it). The record has to be about this candidate itself: they mentioned this very thing, already have it, are going, said no to it, or finished it. A closed ask or a finished goal about a different program doesn't close this one, even when it's the same kind of thing, and never while one of their active goals still carries the aim. If you can't point to such a record, it isn't closed or known: judge the candidate on fit instead. Don't call something closed, done, set aside, finished or already known under any other code; use closed or already_known and cite it. A reject that claims a record without citing one about this candidate isn't applied: the candidate stays and comes back to you.
 
 Past goals each say why they're past. done and set aside are their word. lapsed is Co's own bookkeeping (a window that passed, a recheck they didn't answer), not theirs, and is never the reason something is closed. A closed one-off question (find me a couple of these) doesn't close an aim one of their active goals still carries either.
 
@@ -109,6 +116,9 @@ When you send more than one, add "set": one line on why these go together today 
 
 Return ONLY JSON:
 {"set":"...","verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08","taste":"matches"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."},{"id":"C4","verdict":"reject","reason":"already_known","cites":["S3"],"why":"..."}]}`;
+
+// The morning run's own instructions (member prompt, so SELECT_SYSTEM stays the same for every run and keeps its cache).
+export const MORNING_NOTE = `THIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Co event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate "rank": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and "forThem": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or "not a wow" only moves it down its kind; it never empties a kind.`;
 
 // What the thing is, not a rank: tier numbers read as a quality score (the
 // 2026-10-02 replay rejected things for being "tier 3").
@@ -147,6 +157,7 @@ export function selectPrompt(c: SelectContext): string {
   }
   if (c.rules?.length) lines.push("", "Member rules (for judging what goes; the send step still holds timing and caps):", c.rules.join("\n"));
   if (c.roomTaste?.length) lines.push("", "WHAT KIND OF ROOM THEY'VE TOLD CO THEY WANT (their own words, newest first; the strongest signal you have about fit). Rank by it: give every candidate a taste of \"matches\", \"neutral\" or \"clashes\". One that matches goes up; one that clashes goes down and needs a strong reason to send at all:", c.roomTaste.map((t) => `- ${clip(t, 300)}`).join("\n"));
+  if (c.morning) lines.push("", MORNING_NOTE);
   lines.push(`\nThe pool (${c.pool.length}):`);
   lines.push(
     c.pool
@@ -220,9 +231,10 @@ export function parseVerdicts(text: string): Verdict[] | null {
   for (const v of j.verdicts) {
     const id = String(v?.id ?? "");
     if (!id) continue;
-    if (v.verdict === "send") out.push({ id, verdict: "send", whyMember: String(v.whyMember ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [], whyNow: String(v.whyNow ?? "").trim(), wow: v.wow === true , lastDay: /^\d{4}-\d{2}-\d{2}$/.test(String(v.lastDay ?? "")) ? String(v.lastDay) : null, taste: tasteFitOf(v.taste) });
-    else if (v.verdict === "hold") out.push({ id, verdict: "hold", why: String(v.why ?? "").trim(), until: /^\d{4}-\d{2}-\d{2}$/.test(String(v.until ?? "")) ? String(v.until) : null });
-    else if (v.verdict === "reject") out.push({ id, verdict: "reject", reason: (REJECT_REASONS as readonly string[]).includes(v.reason) ? v.reason : "other", why: String(v.why ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [] });
+    const mr: MorningRead = { ...(Number.isFinite(Number(v.rank)) && Number(v.rank) > 0 ? { rank: Number(v.rank) } : {}), ...(typeof v.forThem === "string" && v.forThem.trim() ? { forThem: v.forThem.trim().slice(0, 300) } : {}) };
+    if (v.verdict === "send") out.push({ ...mr, id, verdict: "send", whyMember: String(v.whyMember ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [], whyNow: String(v.whyNow ?? "").trim(), wow: v.wow === true , lastDay: /^\d{4}-\d{2}-\d{2}$/.test(String(v.lastDay ?? "")) ? String(v.lastDay) : null, taste: tasteFitOf(v.taste) });
+    else if (v.verdict === "hold") out.push({ ...mr, id, verdict: "hold", why: String(v.why ?? "").trim(), until: /^\d{4}-\d{2}-\d{2}$/.test(String(v.until ?? "")) ? String(v.until) : null });
+    else if (v.verdict === "reject") out.push({ ...mr, id, verdict: "reject", reason: (REJECT_REASONS as readonly string[]).includes(v.reason) ? v.reason : "other", why: String(v.why ?? "").trim(), cites: Array.isArray(v.cites) ? v.cites.map(String) : [] });
   }
   return out;
 }
@@ -230,7 +242,7 @@ export function parseVerdicts(text: string): Verdict[] | null {
 // One row per candidate: what was decided and why, including what code changed.
 // claimed: the reject code a guarded hold came from (reason "uncited_claim"); guardedRuns: how many runs in a row the same find was
 // held that way (carryGuardedRuns).
-export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null ; taste?: TasteFit; claimed?: RejectReason; guardedRuns?: number };
+export type Judgment = { id: string; key: string; name: string; kind: PoolItem["kind"]; verdict: "send" | "hold" | "reject" | "no_verdict"; reason: string; why: string; cites?: string[]; whyNow?: string; until?: string | null; guard?: string; lastDay?: string | null ; taste?: TasteFit; claimed?: RejectReason; guardedRuns?: number; rank?: number; forThem?: string; late?: boolean; tierPick?: number; tierAlternates?: string[]; verified?: boolean; notSentWhy?: string; fitOnlyMornings?: number; checkFailed?: boolean };
 
 // Pure: does a record's text name this find? The same normalized name match the shadow pool uses for what was already sent
 // (sweepShadow.ts sentNames), as a whole-word run inside the record.
@@ -248,10 +260,15 @@ export const UNCITED_CLAIM_GUARD = "reject claimed a closed or known record it d
 
 // Pure: every cite must exist, and at least one must be a record that can be about this find (Royce, 2026-10-14: "a reject claiming
 // 'closed' or 'already known' has to cite the actual record or the find survives"; review: the actual record is one about THIS find).
-export function checkCites(c: SelectContext, p: Pick<PoolItem, "id" | "name">, cites: string[], known: ReadonlySet<string>): CiteRead {
+export function checkCites(c: SelectContext, p: Pick<PoolItem, "id" | "name">, cites: string[], known: ReadonlySet<string>, reason?: string): CiteRead {
   if (!cites.length) return { problem: "no record cited" };
   const missing = cites.filter((x) => !known.has(x));
   if (missing.length) return { problem: `cites a record that isn't there (${missing.join(", ")})` };
+  // ruled_out rests on their own words: an ask of theirs, or their own text. The claim check reads whether those words rule this out.
+  if (reason === "ruled_out") {
+    const words = cites.filter((x) => c.asks.some((a) => a.id === x) || c.texts.some((t) => t.id === x && t.from === "member"));
+    return words.length ? { facts: [], judge: words } : { problem: `cites none of their own words, an ask or a text of theirs (${cites.join(", ")})` };
+  }
   const facts = cites.filter(
     (x) =>
       c.sent.some((s) => s.id === x && namesFind(s.what, p.name)) ||
@@ -303,7 +320,7 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
     const p = byId.get(v.id);
     if (!p || seen.has(v.id)) continue;
     seen.add(v.id);
-    const base = { id: p.id, key: p.key, name: p.name, kind: p.kind };
+    const base = { id: p.id, key: p.key, name: p.name, kind: p.kind, ...(v.rank ? { rank: v.rank } : {}), ...(v.forThem ? { forThem: v.forThem } : {}) };
     if (v.verdict === "send") {
       const bad = !v.whyMember || !v.whyNow ? "no why-member or why-now" : !v.wow ? "not a wow" : v.cites.some((x) => !known.has(x)) ? `cites a record that isn't there (${v.cites.filter((x) => !known.has(x)).join(", ")})` : !v.cites.some((x) => theirs.has(x)) ? "cites nothing they said or asked" : p.date && p.date < c.today ? "already past" : null;
       if (bad) out.push({ ...base, verdict: "reject", reason: "guard", why: v.whyMember || v.whyNow, cites: v.cites, whyNow: v.whyNow, guard: bad });
@@ -318,10 +335,11 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
     } else if (v.verdict === "hold") out.push({ ...base, verdict: "hold", reason: "not_today", why: v.why, until: v.until });
     else {
       // A reject that claims a closed or known record must cite one that can be about this find (Royce, 2026-10-14: "a reject claiming
-      // 'closed' or 'already known' has to cite the actual record or the find survives"). One that doesn't is held, not exited: it takes
-      // no slot today and comes back the next day (GUARDED_HOLD_DAYS). Code never sends it; it only refuses a claim it can't find.
+      // 'closed' or 'already known' has to cite the actual record or the find survives"). One that doesn't is held, never exited, and
+      // comes back the next day (GUARDED_HOLD_DAYS). On an hourly run it takes no send slot; on the 9am run it is still in its tier, so
+      // it can be the tier's pick (tierPicks). Code refuses the claim it can't find; it never decides to send for that reason.
       // Whether a cited text, closed ask or goal really is about this find is the claim check's read (checkClaims).
-      const read = RECORD_CLAIMS.includes(v.reason) ? checkCites(c, p, v.cites, known) : null;
+      const read = RECORD_CLAIMS.includes(v.reason) ? checkCites(c, p, v.cites, known, v.reason) : null;
       const bad = read && "problem" in read ? read.problem : null;
       if (bad) out.push({ ...base, verdict: "hold", reason: "uncited_claim", why: v.why, cites: v.cites, until: plusDays(c.today, GUARDED_HOLD_DAYS), guard: `${UNCITED_CLAIM_GUARD}: ${bad}`, claimed: v.reason });
       else out.push({ ...base, verdict: "reject", reason: v.reason, why: v.why, ...(v.cites.length ? { cites: v.cites } : {}) });
@@ -331,7 +349,7 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
   for (const x of clearing) {
     if (slotted.has(x.at)) continue;
     const j = out[x.at];
-    out[x.at] = { id: j.id, key: j.key, name: j.name, kind: j.kind, verdict: "hold", reason: "over_send_limit", why: j.why, cites: j.cites, whyNow: j.whyNow, until: null, taste: j.taste, guard: `over ${SELECT_LIMITS.maxSends} sends${x.kind === "discovery" && clearing.some((y) => y.kind === "answer" && slotted.has(y.at)) ? "; what they asked for went first" : ""}${x.taste === "clashes" ? "; it clashes with the room they said they want" : x.taste === "neutral" && clearing.some((y) => y.kind === x.kind && y.taste === "matches" && slotted.has(y.at)) ? "; a better fit for the room they said they want went first" : ""}` };
+    out[x.at] = { id: j.id, key: j.key, name: j.name, kind: j.kind, ...(j.rank ? { rank: j.rank } : {}), ...(j.forThem ? { forThem: j.forThem } : {}), verdict: "hold", reason: "over_send_limit", why: j.why, cites: j.cites, whyNow: j.whyNow, until: null, taste: j.taste, guard: `over ${SELECT_LIMITS.maxSends} sends${x.kind === "discovery" && clearing.some((y) => y.kind === "answer" && slotted.has(y.at)) ? "; what they asked for went first" : ""}${x.taste === "clashes" ? "; it clashes with the room they said they want" : x.taste === "neutral" && clearing.some((y) => y.kind === x.kind && y.taste === "matches" && slotted.has(y.at)) ? "; a better fit for the room they said they want went first" : ""}` };
   }
   for (const p of c.pool) if (!seen.has(p.id)) out.push({ id: p.id, key: p.key, name: p.name, kind: p.kind, verdict: "no_verdict", reason: "no_verdict", why: "" });
   // covered: another candidate in today's pool does the job better. It must cite that candidate, and the candidate must still be in
@@ -346,12 +364,18 @@ export function guardVerdicts(c: SelectContext, verdicts: Verdict[]): Judgment[]
 }
 
 // ---------- The claim check: is the cited record about THIS find, and does a judgment reject's why claim a record?
-// One Haiku read per picker run, batched (the house pattern for narrow judges, services/memberLimits.ts). It answers two things:
+// One Haiku read per picker run, batched (the house pattern for narrow judges, services/memberLimits.ts). It answers:
 //   R: for each record-claim reject whose cites code can't tie to the find (their text, a closed ask, a goal they closed), does the
 //      record show they already know about, are going to, said no to, or finished THIS thing, with all their active goals in view;
-//   W: for each judgment reject (not_them, weak_fit, too_late, covered, other), does its why claim something is finished, closed or
+//   U: for a ruled_out reject, do their own cited words rule out this thing or this kind of thing;
+//   L: for a too_late reject (the picker's, or a send whose last day it said has passed), is it really over or too late, from the
+//      find's own date and details;
+//   W: for each other judgment reject (not_them, weak_fit, covered, other), does its why claim something is finished, closed or
 //      already known. A yes makes it a record claim, held to the same cites.
-// A no, or a read that fails, holds the find: the check fails toward the find surviving. Code never sends it.
+// A no keeps the find: it is never exited for that claim (it waits in the backlog, and on the 9am run it stays in its tier). A read that
+// couldn't run (timeout, error, unreadable) holds the find for that morning (Royce, 2026-10-14: "A failed check buys a hold, never a
+// send"): never exited, never its tier's pick (heldBackFor), judged again on the next run under the guarded-hold bound, and logged as
+// picker.claim_check_failed (sweepShadow.ts), which the hourly monitor counts (harness/monitor.ts).
 export type ClaimJudge = (prompt: string) => Promise<{ text: string; input: number; output: number }>;
 export const CLAIM_CHECK_MODEL = MODELS.haiku;
 export const realClaimJudge: ClaimJudge = async (prompt) => {
@@ -366,7 +390,12 @@ export const realClaimJudge: ClaimJudge = async (prompt) => {
   }
 };
 
-export type ClaimItem = { id: string; kind: "record"; at: number; find: string; cite: string; record: string } | { id: string; kind: "why"; at: number; why: string };
+// record: is the cited record about THIS find (q "known": they know, are going, said no, finished it; q "words": their own words rule
+// it out). why: does a judgment reject's why claim a record. late: is a too_late reject really past or too late.
+export type ClaimItem =
+  | { id: string; kind: "record"; q: "known" | "words"; at: number; find: string; cite: string; record: string }
+  | { id: string; kind: "why"; at: number; why: string }
+  | { id: string; kind: "late"; at: number; find: string };
 
 // Pure: what the run's rejects need read. A record-claim reject with a cite code already tied to this find needs nothing.
 export function claimItems(c: SelectContext, judgments: Judgment[]): ClaimItem[] {
@@ -377,20 +406,27 @@ export function claimItems(c: SelectContext, judgments: Judgment[]): ClaimItem[]
     const t = c.texts.find((y) => y.id === x);
     if (t) return `their own text ${x}: "${clip(t.text, 280)}"`;
     const a = c.asks.find((y) => y.id === x);
-    if (a) return `an ask of theirs, now closed, ${x}: "${clip(a.text, 220)}"`;
+    if (a) return `an ask of theirs${a.closed ? ", now closed" : ""}, ${x}: "${clip(a.text, 220)}"`;
     const g = (c.goalsPast ?? []).find((y) => y.id === x);
     return g ? `a goal of theirs, ${pastWhy(g)}, ${x}: "${clip(g.text, 200)}"` : x;
   };
   judgments.forEach((j, at) => {
-    if (j.verdict !== "reject" || j.guard) return;
+    // A send the guard turned into too_late (the picker's own last day has passed) is read like any too_late: the date is the picker's.
+    if (j.verdict !== "reject" || (j.guard && !(j.reason === "too_late" && j.guard.startsWith("its last day")))) return;
     const p = byId.get(j.id);
     if (!p) return;
     const find = `${p.name}${p.date ? ` (${p.date})` : ""}${p.details ? `: ${clip(p.details, 160)}` : ""}`;
-    const read = checkCites(c, p, j.cites ?? [], known);
+    const read = checkCites(c, p, j.cites ?? [], known, j.reason);
     const record = RECORD_CLAIMS.includes(j.reason as RejectReason);
+    // Whether a too_late is real: it's the one reason a find leaves for its timing (heldBackFor), on any run.
+    if (j.reason === "too_late") {
+      items.push({ id: `L${items.length + 1}`, kind: "late", at, find });
+      return;
+    }
     if (!record) items.push({ id: `W${items.length + 1}`, kind: "why", at, why: clip(j.why, 300) });
     if ("problem" in read || read.facts.length) return;
-    for (const cite of read.judge) items.push({ id: `R${items.length + 1}`, kind: "record", at, find, cite, record: describe(cite) });
+    const q = j.reason === "ruled_out" ? ("words" as const) : ("known" as const);
+    for (const cite of read.judge) items.push({ id: `${q === "words" ? "U" : "R"}${items.length + 1}`, kind: "record", q, at, find, cite, record: describe(cite) });
   });
   return items;
 }
@@ -398,12 +434,22 @@ export function claimItems(c: SelectContext, judgments: Judgment[]): ClaimItem[]
 // Pure: the claim check's prompt. Every active goal is in it (the same list the picker reads), so a closed record about a different
 // program can't pass for this one while a live goal carries the aim.
 export function claimCheckPrompt(c: SelectContext, items: ClaimItem[]): string {
-  const recs = items.filter((i): i is Extract<ClaimItem, { kind: "record" }> => i.kind === "record");
+  const recs = items.filter((i): i is Extract<ClaimItem, { kind: "record" }> => i.kind === "record" && i.q === "known");
+  const words = items.filter((i): i is Extract<ClaimItem, { kind: "record" }> => i.kind === "record" && i.q === "words");
   const whys = items.filter((i): i is Extract<ClaimItem, { kind: "why" }> => i.kind === "why");
+  const lates = items.filter((i): i is Extract<ClaimItem, { kind: "late" }> => i.kind === "late");
   const lines = ["You check Co's reasons for leaving something out of a member's day. Answer only from what's written here.", "", "Their active goals (what they're working toward now):", (c.goals ?? []).length ? (c.goals ?? []).map((g) => `- ${clip(g, 200)}`).join("\n") : "(none on file)"];
   if (recs.length) {
     lines.push("", "RECORDS. For each, does the cited record show that the member already knows about, is going to, said no to, or finished THIS specific thing? A finished or closed record about a different program, ask or goal does not count, even if it is the same kind.");
     for (const r of recs) lines.push(`${r.id}: this thing: ${r.find}\n    the record: ${r.record}`);
+  }
+  if (words.length) {
+    lines.push("", "THEIR WORDS. For each, do their own words in the record rule out this specific thing, or this kind of thing? Words about something else, or a preference this thing still fits, don't count.");
+    for (const r of words) lines.push(`${r.id}: this thing: ${r.find}\n    the record: ${r.record}`);
+  }
+  if (lates.length) {
+    lines.push("", `TIMING. Today is ${c.weekday} ${c.today}. For each, from this thing's own date and details, is it already over, closed, or too soon to act on (it starts before they could reasonably get there or apply)? Unsure is no.`);
+    for (const l of lates) lines.push(`${l.id}: ${l.find}`);
   }
   if (whys.length) {
     lines.push("", "REASONS. For each, does this reason claim that something is finished, closed, done, set aside or already known to them (a goal or ask that ended, something they already have, are going to, or said no to)? Judging fit alone (not their scene, only loosely related, too far, too late) is not such a claim.");
@@ -425,28 +471,34 @@ export function readClaimCheck(raw: string, items: ClaimItem[]): Map<string, boo
   return items.some((i) => m.has(i.id)) ? m : null;
 }
 
-export type ClaimCheck = { calls: number; input: number; output: number; items: number; read: "model" | "failed" | "none" };
+export type ClaimCheck = { calls: number; input: number; output: number; items: number; read: "model" | "failed" | "none"; error?: string; heldIds?: string[] };
 
 // The claim check on a run's guarded judgments: a record claim whose record isn't about this find, and a judgment reject whose why
 // claims a record it can't back, become holds (reason "uncited_claim", the model's why kept, the guard saying what failed).
 export async function checkClaims(c: SelectContext, judgments: Judgment[], judge: ClaimJudge = realClaimJudge): Promise<{ judgments: Judgment[]; check: ClaimCheck }> {
   const items = claimItems(c, judgments);
-  if (!items.length) return { judgments, check: { calls: 0, input: 0, output: 0, items: 0, read: "none" } };
+  // Every run ends the same way: only a verified reason takes a find out; a fit-only reject waits in the backlog (onlyVerifiedExits).
+  if (!items.length) return { judgments: onlyVerifiedExits(judgments), check: { calls: 0, input: 0, output: 0, items: 0, read: "none" } };
   let answers: Map<string, boolean> | null = null;
   let input = 0, output = 0;
+  let error: string | undefined;
   try {
     const r = await judge(claimCheckPrompt(c, items));
     input = r.input;
     output = r.output;
     answers = readClaimCheck(r.text, items);
+    if (!answers) error = `the answer couldn't be read: ${r.text.slice(0, 120)}`;
   } catch (err: any) {
-    console.error("picker: the claim check failed (the finds it was checking are held):", err?.message ?? err);
+    error = String(err?.message ?? err).slice(0, 200);
+    console.error("picker: the claim check failed (the finds it was checking are held for this morning):", error);
   }
   const known = contextIds(c);
   const byId = new Map(c.pool.map((p) => [p.id, p]));
   const out = judgments.map((j, at) => {
     const mine = items.filter((i) => i.at === at);
     if (!mine.length) return j;
+    // The check couldn't run: held for this morning, never sent for it, never exited (Royce, 2026-10-14).
+    if (!answers) return { ...j, verdict: "hold" as const, reason: "uncited_claim", until: plusDays(c.today, GUARDED_HOLD_DAYS), guard: `the claim check couldn't run (${error ?? "unknown"}): held, judged again next run`, claimed: (REJECT_REASONS as readonly string[]).includes(j.reason) ? (j.reason as RejectReason) : undefined, checkFailed: true };
     const hold = (detail: string): Judgment => ({ ...j, verdict: "hold", reason: "uncited_claim", until: plusDays(c.today, GUARDED_HOLD_DAYS), guard: `${UNCITED_CLAIM_GUARD}: ${detail}`, claimed: j.reason as RejectReason });
     const w = mine.find((i) => i.kind === "why");
     let claimNote = "";
@@ -455,16 +507,104 @@ export async function checkClaims(c: SelectContext, judgments: Judgment[], judge
       // A judgment reject that doesn't claim a record stands as it is.
       if (says === false) return j;
       claimNote = says === true ? "its why claims something finished or known; " : "the read of its why failed; ";
-      const read = checkCites(c, byId.get(j.id)!, j.cites ?? [], known);
+      const read = checkCites(c, byId.get(j.id)!, j.cites ?? [], known, j.reason);
       if ("problem" in read) return hold(`${claimNote}${read.problem}`);
-      if (read.facts.length) return j;
+      if (read.facts.length) return { ...j, verified: true };
     }
+    // Timing: a confirmed too_late stays a reject and is a real reason (heldBackFor); otherwise it is only a judgment, which never takes
+    // a find out (onlyVerifiedExits) and which the morning's tier pick may still send.
+    const l = mine.find((i) => i.kind === "late");
+    if (l) return answers?.get(l.id) === true ? { ...j, late: true } : j;
     const recs = mine.filter((i) => i.kind === "record");
-    if (recs.some((r) => answers?.get(r.id) === true)) return j;
+    if (recs.some((r) => answers?.get(r.id) === true)) return w ? { ...j, verified: true } : j;
     return hold(`${claimNote}${!answers ? "the record check couldn't be read" : `no cited record is about this find (${recs.map((r) => (r as any).cite).join(", ")})`}`);
   });
-  return { judgments: out, check: { calls: 1, input, output, items: items.length, read: answers ? "model" : "failed" } };
+  return { judgments: onlyVerifiedExits(out), check: { calls: 1, input, output, items: items.length, read: answers ? "model" : "failed", ...(answers ? {} : { error: error ?? "unknown", heldIds: out.filter((j) => j.checkFailed).map((j) => j.id) }) } };
 }
+
+// ---------- One find per tier, every morning (Royce, 2026-10-14: "we are suppose to send one find per tier, but one not being available
+// shouldn't stop things from being sent out"; 9/21: "always surface the 3 tiers if they are available", "we shouldn't force offers").
+// On the 9am floor's run, for each tier with anything in the pool (1 Co events, 2 events, 3 openings), the best find in it goes. The
+// picker ranks within a tier (fit and taste decide WHICH find goes, never WHETHER the tier sends), what they asked for first. A find is
+// held back only for a reason code can verify (heldBackFor): it's past or confirmed too late to act on; they already have it, are going
+// or said no to it, or it rests on something finished, with a cite the claim check tied to THIS find; or their own words rule it out,
+// confirmed the same way. Then the next best in that tier goes. A tier is empty only when every find in it has such a reason.
+export const tierOf = (p: Pick<PoolItem, "tier">): 1 | 2 | 3 => (p.tier === 1 || p.tier === 2 ? p.tier : 3);
+// Pure: the verified reason a find can't go this morning, or null.
+export function heldBackFor(j: Judgment): string | null {
+  // A find whose claim check couldn't run is held for the morning: never its tier's pick.
+  if (j.checkFailed) return `the claim check couldn't run: ${j.guard ?? ""}`;
+  if (j.verdict !== "reject") return null;
+  if (j.reason === "guard") return j.guard === "already past" ? "already past" : null;
+  // Too late only when the claim check confirmed it from the find's own date and details, the picker's own last day included.
+  if (j.reason === "too_late") return j.late ? `too late: ${j.guard ?? j.why}` : null;
+  // Left unpicked for FIT_ONLY_MORNINGS mornings as a fit-only hold (carryGuardedRuns): it leaves, with its fact.
+  if (j.reason === "aged_out") return j.guard ?? "aged out";
+  if (RECORD_CLAIMS.includes(j.reason as RejectReason) && !j.guard) return `${j.reason}: ${j.why}`;
+  // A judgment reject whose why claimed a record, backed by one about this find (checkClaims).
+  if (j.verified) return `${j.reason}, backed by a record about this find: ${j.why}`;
+  return null;
+}
+const VERDICT_CLASS = (j: Judgment) => (j.verdict === "send" || j.reason === "over_send_limit" ? 0 : j.verdict === "hold" && j.reason !== "fit_only" ? 1 : 2);
+// Pure: the why a member may read for a find that goes. The picker's own why-member for a send; otherwise only its forThem line, never a
+// reject's or a hold's reason (review of the tier PR: the composer was fed "doesn't match his practice area" as why it fits). Empty
+// means the find's own details speak for it (queuePickedOffer falls back to the find's own whyItFits; the composer to its facts).
+export function memberWhyOf(j: Pick<Judgment, "verdict" | "why" | "forThem" | "reason">): string {
+  if (j.verdict === "send" && j.reason !== "tier_pick") return j.why;
+  return j.forThem ?? "";
+}
+
+// Pure: the morning's sends, one per tier, from the run's guarded and checked judgments. The chosen find is a send (reason "tier_pick"
+// unless the picker sent it itself), carrying the picker's why, or its forThem line for one it didn't send. Every other find in a tier:
+// a held-back one keeps its reject (it exits as before); a send or a fit-only reject waits in the backlog (reason "tier_taken": its tier
+// went this morning), so fit ranks a morning and never removes a find.
+export function tierPicks(c: SelectContext, judgments: Judgment[]): Judgment[] {
+  const order = new Map(c.pool.map((p, i) => [p.id, i]));
+  const byId = new Map(c.pool.map((p) => [p.id, p]));
+  const chosen = new Map<number, Judgment>();
+  const alternates = new Map<string, string[]>();
+  for (const t of [1, 2, 3] as const) {
+    const inTier = judgments
+      // A candidate the picker gave no verdict was never looked at: it waits (it has no why to send with).
+      .filter((j) => byId.has(j.id) && tierOf(byId.get(j.id)!) === t && j.verdict !== "no_verdict" && !heldBackFor(j))
+      .sort((a, b) => Number(b.kind === "answer") - Number(a.kind === "answer") || (a.rank ?? Infinity) - (b.rank ?? Infinity) || VERDICT_CLASS(a) - VERDICT_CLASS(b) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    if (inTier.length) {
+      chosen.set(t, inTier[0]);
+      // The rest of the tier, in order: tried the same morning if the chosen one can't be queued (sweepShadow.ts fillTiers).
+      alternates.set(inTier[0].id, inTier.slice(1).map((j) => j.id));
+    }
+  }
+  const chosenIds = new Set([...chosen.values()].map((j) => j.id));
+  return judgments.map((j) => {
+    const p = byId.get(j.id);
+    if (!p) return j;
+    const t = tierOf(p);
+    if (chosenIds.has(j.id)) {
+      const sent = j.verdict === "send";
+      return { ...j, verdict: "send", reason: sent ? j.reason : "tier_pick", why: sent ? j.why : memberWhyOf(j), notSentWhy: sent ? undefined : j.why, whyNow: sent || j.reason === "over_send_limit" ? j.whyNow ?? "" : "", until: null, tierPick: t, tierAlternates: alternates.get(j.id) ?? [], ...(sent ? {} : { guard: `the best of its tier this morning${j.reason === "fit_only" || j.verdict === "reject" ? ` (Co said ${j.claimed ?? j.reason}, not a reason to hold it back)` : j.verdict === "hold" ? " (Co would have held it; not a reason to hold it back)" : ""}` }) };
+    }
+    if (heldBackFor(j) || j.verdict === "no_verdict") return j;
+    const by = chosen.get(t);
+    if (j.verdict === "hold" && j.reason !== "over_send_limit") return j;
+    return { ...j, verdict: "hold", reason: "tier_taken", until: null, guard: `one find per tier: ${by ? `"${by.name}"` : "another"} went from its tier this morning${j.verdict === "reject" ? `; Co said ${j.reason}, which only ranks it` : ""}` };
+  });
+}
+
+// ---------- Only a verified reason takes a find out (Royce, 2026-10-14, after one find per tier: weak_fit never holds a tier back, so no
+// run may delete what tomorrow's morning would send). A reject the picker gave without one (not_them, weak_fit, covered, other, an
+// unconfirmed too_late, or the send guard's "not a wow") becomes a hold, reason "fit_only": it stays in the backlog with the picker's
+// why, never exits, and never buys a picker run of its own (holdDueDates leaves it out), so it can't loop; it is judged again at the
+// next change. Verified reasons still exit as before: past or confirmed too late, closed or already_known with a cite about this find,
+// or ruled_out confirmed against their own words.
+export function onlyVerifiedExits(judgments: Judgment[]): Judgment[] {
+  return judgments.map((j) =>
+    j.verdict !== "reject" || heldBackFor(j)
+      ? j
+      : { ...j, verdict: "hold", reason: "fit_only", until: null, claimed: (REJECT_REASONS as readonly string[]).includes(j.reason) ? (j.reason as RejectReason) : undefined, guard: `${j.guard ? `${j.guard}; ` : ""}no verified reason to take it out (Co said ${j.reason}): it waits in the backlog` },
+  );
+}
+// Holds code made that never buy a run of their own: a fit-only reject, and a tier's runner-up (the next morning runs anyway).
+export const NO_RUN_HOLDS: readonly string[] = ["fit_only", "tier_taken"];
 
 // Skip unchanged days: the same pool, the same asks and nothing new from them
 // since the last run gets the same answer, so it isn't paid for again. Time
@@ -486,14 +626,30 @@ export const plusDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:0
 export function holdDueDates(judgments: { verdict: string; until?: string | null; reason?: string; guardedRuns?: number }[], runDay: string): string[] {
   // Past its rechecks, a guarded hold is left out: it buys no run of its own. Leaving it out costs one extra run at the cap (what's due
   // changes once), and nothing after: a due date pinned to the run's day re-armed a run every day after any later change (review of the
-  // picker guard, 2026-10-14).
+  // picker guard, 2026-10-14). A fit-only hold and a tier's runner-up are left out from the start (NO_RUN_HOLDS).
   return judgments
-    .filter((j) => j.verdict === "hold" && !(j.reason === "uncited_claim" && (j.guardedRuns ?? 1) > GUARDED_RECHECKS))
+    .filter((j) => j.verdict === "hold" && !NO_RUN_HOLDS.includes(j.reason ?? "") && !(j.reason === "uncited_claim" && (j.guardedRuns ?? 1) > GUARDED_RECHECKS))
     .map((j) => j.until ?? plusDays(runDay, UNDATED_HOLD_DAYS));
 }
 // Pure: each guarded hold counts the runs in a row its find has been held that way, from the last run's judgments.
-export function carryGuardedRuns(judgments: Judgment[], last: Pick<Judgment, "key" | "reason" | "guardedRuns">[]): Judgment[] {
+// morning: this is the 9am run. A fit-only hold counts the mornings it has gone unpicked (fitOnlyMornings, carried through hourly runs);
+// at FIT_ONLY_MORNINGS it ages out: a reject (reason "aged_out", a verified reason), so it leaves the backlog with its exit fact
+// (review of the tier PR: fit-only holds never left, so the backlog grew without bound past the prompt's 40). Five: a working week of
+// mornings on which the picker had it in view and chose something else from its tier each time; a find that loses five mornings
+// running isn't going to be the one, and the backlog stays near five days of finds.
+export const FIT_ONLY_MORNINGS = 5;
+export function carryGuardedRuns(judgments: Judgment[], last: Pick<Judgment, "key" | "reason" | "guardedRuns" | "fitOnlyMornings">[], o: { morning?: boolean } = {}): Judgment[] {
   return judgments.map((j) => {
+    if (j.reason === "fit_only") {
+      const before = last.find((x) => x.key === j.key && x.reason === "fit_only")?.fitOnlyMornings ?? 0;
+      const n = before + (o.morning ? 1 : 0);
+      if (n >= FIT_ONLY_MORNINGS) {
+        const note = `left unpicked for ${n} mornings as a fit-only hold (Co said ${j.claimed ?? "it only loosely fits"})`;
+        // Its why becomes the exit fact's reason (sweepShadow.ts rejectedFindsOf): it says it aged out, with the picker's own why.
+        return { ...j, verdict: "reject", reason: "aged_out", fitOnlyMornings: n, why: `${note}: ${j.why}`, guard: `${note}: it leaves the backlog` };
+      }
+      return { ...j, fitOnlyMornings: n };
+    }
     if (j.reason !== "uncited_claim") return j;
     const before = last.find((x) => x.key === j.key && x.reason === "uncited_claim");
     return { ...j, guardedRuns: (before ? before.guardedRuns ?? 1 : 0) + 1 };
@@ -536,6 +692,8 @@ export async function selectForMember(c: SelectContext, opts: { model?: string; 
     };
     if (!verdicts) return { judgments: guardVerdicts(c, []), raw: r.text, usage, model, error: "unreadable verdicts" };
     const checked = await checkClaims(c, guardVerdicts(c, verdicts), opts.judge);
+    // The 9am floor's run: one find per tier (tierPicks), after the guard and the claim check have said what's really held back.
+    if (c.morning) checked.judgments = tierPicks(c, checked.judgments);
     return { judgments: checked.judgments, set: parseSet(r.text), raw: r.text, usage, model, claimCheck: checked.check };
   } catch (err: any) {
     return { judgments: guardVerdicts(c, []), raw: "", usage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, model, error: String(err?.message ?? err) };
