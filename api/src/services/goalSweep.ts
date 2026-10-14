@@ -104,6 +104,9 @@ export type GoalSweepDeps = {
   // The goal recheck (services/goalRecheck.ts), before anything else this run: a quiet goal is asked about once, an unanswered one
   // goes idle, and planning then reads only what's still active. Optional; it runs whatever the cooldown or a hold says.
   recheck?: (row: any) => Promise<void>;
+  // Tapered (services/dailySweep.ts memberTapered): their own silence past a week. Their goals are held: no recheck (which idles a goal
+  // nobody answered), no lifecycle, no ask retiring, no search (Royce, 2026-10-14: the taper "never deletes goals, plans, or finds").
+  quiet?: (userId: string) => Promise<boolean>;
 };
 // What a plan reads for a member, shared by the hourly plan and the 9am floor's build (services/dailySweep.ts): the member record
 // (Phase A4: their goals with state, the kind of room they want, what they ruled out, what their asks already search, who they are)
@@ -166,6 +169,7 @@ const realDeps: GoalSweepDeps = {
   },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   held: async (userId) => (await import("../harness/proactive.js")).sweepHold(userId, "goal"),
+  quiet: async (userId) => (await import("./dailySweep.js")).memberTapered(userId),
   skipped: async (row, why, detail) => {
     const { recordDecision } = await import("../harness/core.js");
     await recordDecision({ layer: 7, decision: "goal_sweep.skip", userId: row.user_id, outcome: "skip", action: why, proposal: { detail } });
@@ -196,6 +200,12 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
     if (!goalSweepDue(row)) {
       const last = deps.lastSeedSig ? await deps.lastSeedSig(row.user_id).catch(() => sig) : sig;
       if (!goalSweepRuns(row, sig, last).run) return;
+    }
+    // Quiet: their goals are held as they are, said, never silent. A read that fails holds too (holding loses nothing).
+    if (deps.quiet && (await deps.quiet(row.user_id).catch(() => true))) {
+      await deps.mark(row.user_id);
+      await deps.skipped?.(row, "tapered", ["they've been quiet over a week: their goals are held as they are (no recheck, no plan changes, no search) until they write"]).catch(() => {});
+      return;
     }
     await deps.recheck?.(row).catch((err: any) => console.error(`Goal recheck failed for ${row.user_id}:`, err?.message ?? err));
     // The cooldown has one job (Royce, 2026-10-14): it limits how often this hourly sweep sends extra goal finds, one per

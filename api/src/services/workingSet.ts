@@ -255,7 +255,9 @@ export function backlogVerdict(match: any, today: string, f: { lifeEnd: (m: any)
 // The prune runs before the daily pick: its reads are capped by count (classifyLimit) and by time (classifyMs), so the pick's start is
 // bounded; what's left is read tomorrow.
 export const PRUNE_CLASSIFY_MS = 120_000;
-export async function pruneBacklogs(userId: string, today: string, deps: PruneDeps, opts: { classifyLimit?: number; classifyMs?: number } = {}): Promise<{ exited: number; dated: number; kept: number }> {
+// quiet: the member is tapered (services/sweepShadow.ts holdWhileQuiet): only a find whose date or deadline has passed leaves, its fact
+// saying "passed while quiet"; nothing is read to be dated, and nothing exits for being unread or stalled (it waits for them).
+export async function pruneBacklogs(userId: string, today: string, deps: PruneDeps, opts: { classifyLimit?: number; classifyMs?: number; quiet?: boolean } = {}): Promise<{ exited: number; dated: number; kept: number }> {
   const started = Date.now();
   const F = await import("./findForm.js");
   const zone = await deps.zone(userId).catch(() => null);
@@ -277,6 +279,19 @@ export async function pruneBacklogs(userId: string, today: string, deps: PruneDe
       }
       const held: Unread | null = it?.unread ?? null;
       let v = backlogVerdict(match, today, { lifeEnd, form: F.formOf });
+      if (opts.quiet) {
+        if (v !== "past") {
+          kept++;
+          continue;
+        }
+        const ok = await writeExitFact({ userId, kind: "backlog", itemKey: k, label: String(match.name ?? ""), state: "expired", reason: `${F.formOf(match) === "opening" ? "its deadline" : "its date"} (${lifeEnd(match)}) passed while quiet`, scope: `this ${F.formOf(match) ?? "find"}${it?.askText ? `, found for: ${String(it.askText).slice(0, 100)}` : ""}` }, deps);
+        if (ok) {
+          gone.add(k);
+          change.remove.add(k);
+          exited++;
+        } else kept++;
+        continue;
+      }
       let nowHeld: Unread | null = null;
       if (held?.why === "stalled" && v !== "past") {
         if (held.days.includes(today)) {

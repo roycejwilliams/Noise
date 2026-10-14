@@ -92,6 +92,7 @@
     "evals/sweepSelect/tierPicks.ts",
     "evals/sweepSelect/morningReview.ts",
     "evals/goals/planCurrent.ts",
+    "evals/goals/taperHolds.ts",
     "evals/mo/memberRules.ts",
     "evals/mo/memberFlow.ts",
     "evals/proactive/specifics.ts",

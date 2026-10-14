@@ -174,6 +174,8 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   // Their day, in their zone (memberTime.ts, the one source; Pacific only when none is known).
   const zone = await memberZone(userId);
   const { today, weekday } = dayOf(now, zone);
+  // While they're quiet (tapered), the picker doesn't run: nothing is aged, rejected or sent; only a find whose date passed leaves.
+  if (!opts.dryRun && (await holdWhileQuiet(userId, today, now))) return { day: today, signature: "", skipped: true, judgments: [], pool: [] };
   // Once a day, unless they told Co what kind of room they want since today's run: that re-runs it (Royce, 2026-10-09).
   const done = await q(
     `SELECT 1 FROM harness_decisions d WHERE d.decision = 'sweep.select.shadow' AND d.user_id = $1 AND d.proposal->>'day' = $2 AND d.action IS DISTINCT FROM 'error'
@@ -305,6 +307,23 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
     },
   });
   return { day: today, signature, skipped: false, judgments: r.judgments, pool: ctx.pool };
+}
+
+// While a member is tapered (dailySweep.ts quietTapered: their own silence past a week), no picker run: no aging tick, no fit-only or
+// reject exit, no send (Royce, 2026-10-14: "The taper only slows searching. It never deletes goals, plans, or finds. Anything found while
+// tapered is held and surfaces on resume"). The one exception: a find whose date or deadline has passed can't surface, so it leaves,
+// its fact saying "passed while quiet". Each held run is logged. Returns true when the run was held. deps: injectable.
+export type QuietDeps = { tapered: (userId: string, now: Date) => Promise<boolean>; prunePast: (userId: string, today: string) => Promise<{ exited: number }>; record: typeof recordDecision };
+export const realQuietDeps: QuietDeps = {
+  tapered: async (userId, now) => (await import("./dailySweep.js")).memberTapered(userId, now),
+  prunePast: async (userId, today) => (await import("./workingSet.js")).pruneBacklogs(userId, today, realPruneDeps, { quiet: true }),
+  record: recordDecision,
+};
+export async function holdWhileQuiet(userId: string, today: string, now: Date, deps: QuietDeps = realQuietDeps): Promise<boolean> {
+  if (!(await deps.tapered(userId, now))) return false;
+  const pruned = await deps.prunePast(userId, today).catch((err: any) => { console.error("picker: pruning passed finds while quiet failed (non-fatal):", err?.message ?? err); return { exited: 0 }; });
+  await deps.record({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "tapered_hold", reason: `tapered: they've been quiet over a week; finds are held for when they write${pruned.exited ? `; ${pruned.exited} passed while quiet` : ""}`, proposal: { day: today, passedWhileQuiet: pruned.exited } }).catch(() => {});
+  return true;
 }
 
 // A claim check that couldn't run is an alarm, not a shrug (Royce, 2026-10-14): one row per failed run, with the member, the finds it
