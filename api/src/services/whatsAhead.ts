@@ -6,7 +6,6 @@
 //     these tasks, services/commitmentLog.ts)
 //   - Co's daily search, when it is covering something for them (services/searchCoverage.ts)
 //   - finds already queued to go to them (proactive_candidates pending), counted only: each arrives as its own text
-import pool from "../db/db.js";
 import { localStamp } from "./memberTime.js";
 import type { SearchCoverage } from "./searchCoverage.js";
 import { isCommitment } from "./commitmentLog.js";
@@ -17,17 +16,14 @@ export type Ahead = { tasks: AheadTask[]; queuedFinds: number };
 
 const AHEAD_MAX = 8;
 
-export async function loadAhead(userId: string, now = new Date()): Promise<Ahead> {
-  const [tasks, queuedFinds] = await Promise.all([
-    pool
-      .query(`SELECT id, goal, kind, source, followup, next_check_at, deadline FROM co_tasks WHERE user_id = $1 AND status = 'open' AND next_check_at IS NOT NULL AND next_check_at > $2 ORDER BY next_check_at LIMIT ${AHEAD_MAX}`, [userId, now])
-      .then((r) => r.rows.map((x: any): AheadTask => ({ id: Number(x.id), goal: String(x.goal ?? ""), kind: x.kind ?? null, nextCheckAt: new Date(x.next_check_at).toISOString(), deadline: x.deadline ? String(x.deadline instanceof Date ? x.deadline.toISOString().slice(0, 10) : x.deadline) : null, promised: isCommitment({ source: x.source, followup: x.followup, kind: x.kind }) })))
-      .catch(() => [] as AheadTask[]),
-    pool
-      .query(`SELECT count(*)::int AS n FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND type = 'event_offer'`, [userId])
-      .then((r) => Number(r.rows[0]?.n ?? 0))
-      .catch(() => 0),
-  ]);
+// Read through the one source fence (services/sourceFence.ts): Co's own tasks and queue for them. A task whose words the strip
+// blanked keeps its place with an empty goal, so aheadLine counts it without showing it.
+// A failed read rejects (no ahead line at all, so nothing says "nothing is scheduled" from a read that didn't happen).
+export async function loadAhead(userId: string, now = new Date(), given?: import("./sourceFence.js").Fence): Promise<Ahead> {
+  const F = await import("./sourceFence.js");
+  const fence = given ?? (await F.memberFence(userId));
+  const [rows, queuedFinds] = await Promise.all([F.readScheduled(fence, now, AHEAD_MAX), F.readQueuedFindCount(fence)]);
+  const tasks = rows.map((x): AheadTask => ({ id: x.id, goal: x.goal ?? "", kind: x.kind, nextCheckAt: x.nextCheckAt, deadline: x.deadline, promised: isCommitment({ source: x.source, followup: x.followup, kind: x.kind }) }));
   return { tasks, queuedFinds };
 }
 

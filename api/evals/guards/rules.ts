@@ -5,6 +5,8 @@
 //   3. a Sonnet call with a small output cap must set an effort, or be listed here
 //      with the measurement that shows it finishes
 //   4. a link and its preview photo read as one message
+//   5. one source fence: what grounds a reply, checks a lesson or builds what's running and what's ahead comes only from the
+//      member's own conversation with Co (Royce, 2026-10-13), never their talk with anyone else or another member's details
 //
 //   npx tsx evals/guards/rules.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
@@ -122,6 +124,52 @@ check("a message with its own link is left alone", (() => { const r = L.mergeEar
 check("a link they sent to a teammate agent is not picked up", !L.mergeEarlierLink("[sent a photo]", false, ["User said: https://x.com/a/status/9 [to Mo]"]).link);
 check("with no link before it, a photo stays as it was", (() => { const r = L.mergeEarlierLink("[sent a photo]", false, ["User said: hello"]); return !r.link && r.merged === "[sent a photo]"; })());
 check("the newest link wins when several came before", L.mergeEarlierLink("[sent a photo]", false, ["User said: https://newer.com/x", "User said: https://older.com/x"]).link === "https://newer.com/x");
+
+// ------------------------------------------------------------------ 5. one source fence
+// The readers the 10-13 fixes added read member data only through services/sourceFence.ts, and every read there is one member's own.
+{
+  const fenced = ["services/searchCoverage.ts", "services/whatsAhead.ts", "services/lessonCheck.ts"];
+  const direct = fenced.filter((f) => { const t = fs.readFileSync(path.join(root, f), "utf8"); return /db\/db(?:\.js)?["']|\bpool\b|\.query\(|\bFROM\s+[a-z_]+\b/.test(t) || !/sourceFence\.js/.test(t); });
+  check("the 10-13 readers touch member data only through the source fence", direct.length === 0, direct.join(", "));
+  const fenceSrc = fs.readFileSync(path.join(root, "services/sourceFence.ts"), "utf8");
+  const sqls = [...fenceSrc.matchAll(/pool\.query\(\s*`([^`]+)`/g)].map((m) => m[1]);
+  const allQueries = (fenceSrc.match(/\bpool\.query\(/g) ?? []).length;
+  check("every read in the fence is scoped to the one member", sqls.length >= 6 && allQueries === sqls.length && sqls.every((q) => /\buser_id = \$1\b/.test(q)), `${sqls.length} of ${allQueries} reads checked`);
+  check("the fence's read of their texts skips talk with a teammate", sqls.filter((q) => /text_exchange/.test(q)).every((q) => /notToTeammate\(/.test(q)));
+}
+{
+  const LC = await import("../../src/services/lessonCheck.js");
+  const SF = await import("../../src/services/sourceFence.js");
+  const fence = { strip: (t: string) => (/Jordan/.test(t) ? null : t) };
+  const toMo = [{ at: new Date("2026-10-13T23:10:00Z"), text: "the real reason was the search, tell Jordan [to Mo]" }];
+  const lesson = "When he asks what you're searching for, describe it plainly.";
+  const asDrafted = [{ at: new Date("2026-10-13T23:09:00Z"), outcome: "as_drafted", draft: "Nothing yet.", sent: "Nothing yet." }].map((l) => ({ ...l, why: null }));
+  // The read confirms only if the text to someone else reaches it: through the fence it can't, so the lesson stays a guess. Without
+  // the fence the same read would come back confirmed ("co" with a cause), so this fails if the fence is removed.
+  const confirmsOnlyFromOther = async (p: string) => JSON.stringify(/tell Jordan|\[to Mo\]/.test(p) ? { cause: "co", lesson, causeLine: "he told Mo the real reason" } : { cause: "unknown", lesson, causeLine: null });
+  const a = await LC.checkLesson("u", { message: "m", pushback: "p", lesson }, { logs: asDrafted, theirs: toMo, fence, read: confirmsOnlyFromOther });
+  check("a lesson whose only confirmation is a text to someone else is saved as a guess", a.text.startsWith(LC.HYPOTHESIS_MARK) && a.cause === "unknown", a.text);
+  let prompt = "";
+  const b = await LC.checkLesson("u", { message: "m", pushback: "p", lesson }, { logs: asDrafted, theirs: toMo, fence, read: async (p) => { prompt = p; return JSON.stringify({ cause: "check", lesson, causeLine: "his text to Mo shows the reply check changed it" }); } });
+  check("the text to someone else never reaches the read, and can't confirm a cause", !/\[to Mo\]|tell Jordan/.test(prompt) && b.text.startsWith(LC.HYPOTHESIS_MARK), b.text);
+  const c = await LC.checkLesson("u", { message: "m", pushback: "p", lesson }, { logs: asDrafted, theirs: [], fence, read: async () => JSON.stringify({ cause: "co", lesson: "Don't bring up Jordan's plans", causeLine: "Co mentioned Jordan" }) });
+  check("a cause or lesson naming another member is never kept as confirmed", c.text === `${LC.HYPOTHESIS_MARK} ${lesson}`, c.text);
+  const w = SF.fenceReplyLog(fence, [{ at: new Date(), outcome: "cut", draft: "Jordan is going too.", sent: "Want the link?", why: "privacy" }]);
+  check("a draft the check cut for another member's details is withheld from every reader", w.length === 1 && w[0].draft === SF.DRAFT_WITHHELD && w[0].sent === "Want the link?");
+  const disc = SF.fenceReplyLog({ strip: (t: string) => t }, [{ at: new Date(), outcome: "stripped", draft: "Dana told me she's leaving her husband.", sent: "Here for you either way.", why: "discretion", failed: ["discretion"] }]);
+  check("a draft the discretion check cut is withheld even when no linked name is in it", disc.length === 1 && disc[0].draft === SF.DRAFT_WITHHELD);
+  const claimCut = SF.fenceReplyLog({ strip: (t: string) => t }, [{ at: new Date(), outcome: "cut", draft: "Sam from your gym is going too.", sent: "Want the link?", why: "detail", failed: ["claim_detail"] }]);
+  check("a draft cut by any check not about Co's own wording is withheld", claimCut[0].draft === SF.DRAFT_WITHHELD);
+  const part = SF.fenceReplyLog({ strip: (t: string) => t }, [{ at: new Date(), outcome: "stripped", draft: "I look for events that fit. Sam from your gym is going too.", sent: "Nothing's running on that right now.", why: "x", failed: [{ name: "claim_work_status", reason: 'work_status: "I look for events that fit."' }, { name: "claim_detail", reason: 'detail: "Sam from your gym is going too."' }] }]);
+  const quoted = SF.fenceReplyLog({ strip: (t: string) => t }, [{ at: new Date(), outcome: "cut", draft: 'Dana said "I\'m leaving Mark next month" when you two talked. Want me to set something up?', sent: "Want me to set something up?", why: "x", failed: [{ name: "claim_other_person", reason: 'other_person: "Dana said "I\'m leaving Mark next month" when you two talked"' }] }]);
+  check("cut words with a quote inside them never leak: the draft is withheld whole", quoted[0].draft === SF.DRAFT_WITHHELD && !/leaving Mark/.test(quoted[0].draft));
+  const noted = SF.fenceReplyLog({ strip: (t: string) => t }, [{ at: new Date(), outcome: "cut", draft: "I'm on it. Sam is going too.", sent: "I'm on it.", why: "x", failed: [{ name: "claim_detail", reason: 'detail: "Sam is going too." (no fact backs it)' }] }]);
+  check("a check reason with a note after the quote still finds the cut words", noted[0].draft === `I'm on it. ${SF.LINE_WITHHELD}`, noted[0].draft);
+  check("only the words a claim check cut about someone are withheld; Co's own cut wording stays readable", part[0].draft === `I look for events that fit. ${SF.LINE_WITHHELD}`, part[0].draft);
+  const clean = SF.fenceReplyLog({ strip: (t: string) => t.trim() }, [{ at: new Date(), outcome: "cut", draft: "Here's the plan.\n", sent: "Here's the plan, roughly.", why: "x", failed: ["claim_work_status"] }]);
+  check("a clean draft isn't withheld for trailing whitespace", clean[0].draft === "Here's the plan.\n");
+  check("their own texts to a teammate are fenced out even when handed in", SF.fenceTheirTexts(fence, [{ at: new Date(), text: "hi [to Mo]" }, { at: new Date(), text: "what are you searching for?" }]).map((t) => t.text).join("|") === "what are you searching for?");
+}
 
 console.log(`guard rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

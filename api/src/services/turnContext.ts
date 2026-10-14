@@ -346,8 +346,10 @@ export async function assembleContext(
     return null;
   });
   // Running work and what's ahead, read from real state every turn (Royce, 2026-10-13), started now so they cost no extra wait.
-  const searchingP = import("./searchCoverage.js").then((C) => C.searchCoverage(userId).catch(() => C.UNREADABLE));
-  const aheadP = import("./whatsAhead.js").then((W) => W.loadAhead(userId)).catch(() => null);
+  // One source fence for the whole turn (services/sourceFence.ts): every member-data read below is stripped by it.
+  const fenceP = Promise.all([import("./sourceFence.js"), import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null)]).then(([F, line]) => F.fenceFrom(userId, line));
+  const searchingP = Promise.all([import("./searchCoverage.js"), fenceP]).then(([C, fence]) => C.searchCoverage(userId, fence).catch(() => C.UNREADABLE));
+  const aheadP = Promise.all([import("./whatsAhead.js"), fenceP]).then(([W, fence]) => W.loadAhead(userId, new Date(), fence)).catch(() => null);
   const [profile, snapshot, sent, knowledge, threads, offersThisWeek, emotional, inlineTarget, ledger] = await Promise.all([
     pool.query(`SELECT * FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     getPersonSnapshot(userId).catch(() => null),
@@ -373,7 +375,8 @@ export async function assembleContext(
   ]);
   // Another member's details stripped from everything this context carries that isn't their own words (2026-10-09 audit and
   // review of #118). Fails closed: if the names can't be read, none of these are sent.
-  const safe = await import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null);
+  const fence = await fenceP.catch(() => null);
+  const safe = fence && !fence.failed ? fence.strip : null;
   const keep = (x: string | null | undefined) => (safe && x ? safe(String(x)) : null);
   const keepAll = (xs: string[]) => xs.map(keep).filter((x): x is string => !!x);
   // Open asks (the newest 12) and Co's lessons (the newest 6), from member knowledge.
@@ -433,7 +436,10 @@ export async function assembleContext(
   // Asks and goals read raw go through keep like everything else here (another member's details stripped, fails closed).
   const rawSearching = await searchingP;
   const keptAsks = keepAll(rawSearching.asks), keptGoals = keepAll(rawSearching.goals);
-  const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length };
+  // With the fence failed, their open tasks and running briefs are left out of the facts (keep withholds them); they still run, so
+  // they're counted here and the running-work line never says nothing is running.
+  const withheldWork = safe ? 0 : tasks.length + briefs.filter((b) => /^Co is putting together|hasn't reached them yet/.test(b)).length;
+  const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: (rawSearching.hidden ?? 0) + rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length + withheldWork };
   const rawAhead = await aheadP;
   const ahead = rawAhead ? await import("./whatsAhead.js").then((W) => W.aheadLine(rawAhead, searching, zone, keep)).catch(() => undefined) : undefined;
   return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };

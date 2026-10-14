@@ -6,7 +6,6 @@
 //   - goals: the goals the latest daily run actually searched (its sweep.daily record: a goal its pace held shows as skipped there).
 //   - held: why the floor won't search at all (paused, no phone, opted out, a safety hold). A held member's asks and goals are listed
 //     as nothing; the codes stay internal and are never put in front of Co (runningWorkLine words it neutrally).
-import pool from "../db/db.js";
 
 // hidden: how many searched asks or goals the member-safe strip left out (another member named in them, or the strip failing closed).
 // They are still searched, so they still count as running, without their words.
@@ -26,20 +25,20 @@ export function searchedGoals(proposal: any): string[] {
 // "nothing's running" denial (review of the 10-13 fixes).
 export const UNREADABLE: SearchCoverage = { asks: [], goals: [], held: [], hidden: 1 };
 
-export async function searchCoverage(userId: string): Promise<SearchCoverage> {
-  const asksRead = await pool
-    .query(`SELECT ask_text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find' ORDER BY COALESCE(last_mentioned_at, created_at) DESC`, [userId])
-    .then((r) => r.rows.map((x: any) => String(x.ask_text ?? "").trim()).filter(Boolean))
-    .catch(() => null);
-  if (!asksRead) return UNREADABLE;
-  const [asks, goals] = await Promise.all([
-    Promise.resolve(asksRead),
-    pool
-      .query(`SELECT proposal FROM harness_decisions WHERE decision = 'sweep.daily' AND user_id = $1 AND created_at > NOW() - ($2 || ' hours')::interval ORDER BY created_at DESC LIMIT 1`, [userId, String(DAILY_RUN_MAX_AGE_HOURS)])
-      .then((r) => searchedGoals(r.rows[0]?.proposal))
-      .catch(() => [] as string[]),
-  ]);
+export async function searchCoverage(userId: string, given?: import("./sourceFence.js").Fence): Promise<SearchCoverage> {
+  // Read through the one source fence (services/sourceFence.ts): their own asks and Co's own record of its daily run, stripped of
+  // other members' details there; anything blanked or unreadable is counted in hidden, never dropped (a failed read is never a denial).
+  const F = await import("./sourceFence.js");
+  const fence = given ?? (await F.memberFence(userId));
+  const read = await F.readOpenFindAsks(fence).catch(() => null);
+  if (!read) return UNREADABLE;
+  const goalsRaw = await F.readLastDailyRun(fence, DAILY_RUN_MAX_AGE_HOURS).then((p) => searchedGoals(p)).catch(() => null);
+  const goals = (goalsRaw ?? []).map(fence.strip).filter((g): g is string => !!g);
+  const hidden = read.hidden + (goalsRaw ? goalsRaw.length - goals.length : 1);
   // What holds every search (the same reader the floor uses for asks): nothing is being searched while it holds, goals included.
-  const held = asks.length || goals.length ? await import("../harness/proactive.js").then((P) => P.sweepHold(userId, "ask")).catch(() => ["unreadable"]) : [];
-  return held.length ? { asks: [], goals: [], held } : { asks, goals, held };
+  // A hold that can't be read isn't a hold: what's there stays counted.
+  const any = read.asks.length + goals.length + hidden > 0;
+  const held = any ? await import("../harness/proactive.js").then((P) => P.sweepHold(userId, "ask")).catch(() => null) : [];
+  if (held === null) return { asks: read.asks, goals, held: [], hidden: hidden || 1 };
+  return held.length ? { asks: [], goals: [], held } : { asks: read.asks, goals, held, ...(hidden ? { hidden } : {}) };
 }
