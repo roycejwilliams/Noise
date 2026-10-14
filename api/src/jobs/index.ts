@@ -599,6 +599,16 @@ export function registerJobs(io: Server) {
         const timezone = userRows[0].city ? await getTimezoneForCity(userRows[0].city) : null;
         if (!isReasonableLocalHour(timezone)) return; // wrong hour for this user — nothing touched, retried next hourly tick
 
+        // Search cadence follows their engagement here too (Royce, 2026-10-14: "Slow quiet members' ask searches too, under the same
+        // taper rules as everything else ... The $0.16/day per quiet ask is the silent spend we're killing"). Per ask, the same rule as
+        // the 9am floor (services/dailySweep.ts searchCadence): daily while they've written in the last 6 days, every 3 days at 7 to 14
+        // quiet, weekly after that, and due again on the next tick once they've written since the ask's last search. Its only inputs are
+        // their own last message and the ask's own last search. A read that fails searches as usual: it only slows, never deletes.
+        const { searchCadence } = await import("../services/dailySweep.js");
+        const { lastInboundAt } = await import("../harness/proactive.js");
+        const lastIn = await lastInboundAt(userRows[0].user_id).catch(() => undefined);
+        const cadenceDue = (r: any): boolean => lastIn === undefined || searchCadence({ now: new Date(), zone: timezone, lastInboundAt: lastIn, lastSearchAt: r.last_attempted_at ? new Date(r.last_attempted_at) : null }).search;
+
         // Zero sweeps for a member dispatch would hold every find for (harness/proactive.ts sweepHold, Phase A3): opted out, a safety hold,
         // finds paused for everyone. An answer to their ask skips the discovery pace, so only these stop it. Checked only when an ask is
         // really due this tick (not run today, past its backoff), and nothing is marked when it holds: a held day never moves an ask's
@@ -606,7 +616,16 @@ export function registerJobs(io: Server) {
         {
           const today = DateTime.now().setZone(hoursZone(timezone)).toISODate();
           const { askSearchDue } = await import("../services/workingSet.js");
-          const due = userRows.filter((r) => (!r.last_attempted_at || DateTime.fromJSDate(r.last_attempted_at).setZone(hoursZone(timezone)).toISODate() !== today) && askSearchDue(r));
+          const due = userRows.filter((r) => (!r.last_attempted_at || DateTime.fromJSDate(r.last_attempted_at).setZone(hoursZone(timezone)).toISODate() !== today) && askSearchDue(r) && cadenceDue(r));
+          // A tapered member's asks that would otherwise be due today are said once a day, never skipped in silence.
+          const tapered = userRows.filter((r) => (!r.last_attempted_at || DateTime.fromJSDate(r.last_attempted_at).setZone(hoursZone(timezone)).toISODate() !== today) && askSearchDue(r) && !cadenceDue(r));
+          if (tapered.length) {
+            const [said] = (await pool.query(`SELECT 1 FROM harness_decisions WHERE decision = 'sweep.ask_tapered' AND user_id = $1 AND proposal->>'day' = $2 LIMIT 1`, [userRows[0].user_id, today])).rows;
+            if (!said) {
+              const c = searchCadence({ now: new Date(), zone: timezone, lastInboundAt: lastIn ?? null, lastSearchAt: tapered[0].last_attempted_at ? new Date(tapered[0].last_attempted_at) : null });
+              await recordDecision({ layer: 5, decision: "sweep.ask_tapered", userId: userRows[0].user_id, outcome: "skip", action: "tapered", reason: `quiet ${c.quietDays} days: their asks are searched every ${c.everyDays} days until they write`, proposal: { day: today, asks: tapered.map((r) => String(r.id)), quietDays: c.quietDays, everyDays: c.everyDays } }).catch(() => {});
+            }
+          }
           const ranToday = userRows.filter((r) => r.last_attempted_at && DateTime.fromJSDate(r.last_attempted_at).setZone(hoursZone(timezone)).toISODate() === today).length;
           if (!due.length || ranToday >= MAX_ASK_SEARCHES_PER_USER_PER_DAY) return;
           const { sweepHold } = await import("../harness/proactive.js");
@@ -631,6 +650,7 @@ export function registerJobs(io: Server) {
           // An ask that keeps coming back empty backs off (services/workingSet.ts askSearchDue): every few days, not every morning.
           const { askSearchDue } = await import("../services/workingSet.js");
           if (!askSearchDue(row)) continue;
+          if (!cadenceDue(row)) continue; // tapered: their own silence spaces this ask's searches out (logged above, once a day)
           // Co's own work (services/askSplit.ts, Royce 2026-10-13: "nothing wasted"): followed as its task only when a task really is it,
           // never searched then and not counted as a search; otherwise searched (a mixed one, its find part only), and a part with no
           // task is listed for the team. Each logged once on their day. Kind never changes.

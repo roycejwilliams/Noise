@@ -235,10 +235,10 @@ export function floorGoalDecision(g: { search: string | null; why: string | null
 // tapers daily to every few days to weekly, with instant resume on any reply. Same guardrail as your silence pacing, applied to search
 // cost"). The one timer the floor's search may follow, a deliberate exception to "no timer may gate whether a member's goals get searched":
 // it reads only their own silence (their last message to Co, any channel, a timestamp), never anything Co sent, and it only spaces the
-// searches out: weekly is the floor, never none. Thresholds are the engagement tiers' (harness/proactive.ts ENGAGEMENT): engaged or
-// active (wrote within 7 days) daily; quiet (8 to 14 days) every 3 days; dormant or longer (over 14) weekly. A message from them since
-// the last search means the next 9am searches everything.
-export const SEARCH_TAPER = { dailyUpToDays: 7, everyFewUpToDays: 14, everyFewDays: 3, weeklyDays: 7 } as const;
+// searches out: weekly is the floor, never none. A week is the unit (Royce, 2026-10-14: "Taper starts at 7 days of silence, not 8"):
+// wrote within the last 6 days, daily; quiet 7 to 14 days, every 3 days; quiet over 14 days, weekly. A message from them since the last
+// search means the next run searches everything. The hourly ask sweep follows the same cadence per ask (jobs/index.ts).
+export const SEARCH_TAPER = { dailyUpToDays: 6, everyFewUpToDays: 14, everyFewDays: 3, weeklyDays: 7 } as const;
 // Pure: whether today's floor searches, and if not, why and when it next does. The inputs are the member's own last message and the
 // floor's own last search: nothing Co sends is an input.
 export function searchCadence(o: { now: Date; zone: string | null; lastInboundAt: Date | null; lastSearchAt: Date | null }): { search: boolean; quietDays: number | null; everyDays: number; next: string | null; why: string } {
@@ -265,7 +265,7 @@ export function searchCadence(o: { now: Date; zone: string | null; lastInboundAt
 //   - the hourly goal sweep holds their goals (no recheck idling, no lifecycle, no ask retiring: goalSweep.ts);
 //   - an ask with no time frame doesn't expire on its 30 days (askExpiry.ts); one whose named time passed does, "passed while quiet";
 //   - a queued find whose send window ended goes back to the backlog, not out (eventSurfacingSweep.ts onEventOfferDropped).
-// Engaged members (quiet 7 days or less) go through none of it.
+// Engaged members (quiet 6 days or less) go through none of it.
 // Pure: tapered, from their own last message only.
 export function quietTapered(o: { now: Date; zone: string | null; lastInboundAt: Date | null }): boolean {
   if (!o.lastInboundAt) return false;
