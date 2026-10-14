@@ -51,6 +51,7 @@ export function kindOf(type: string, payload: unknown = null): ProactiveKind | n
       return "intro_followup";
     case "goal_nudge":
     case "goal_checkin":
+    case "goal_recheck":
       return "goal_nudge";
     case "commitment_nudge":
       return "member_commitment";

@@ -210,7 +210,7 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
   const E = await import("./eventSurfacingSweep.js");
   const { sweepHold } = await import("../harness/proactive.js");
   const { goalTexts } = await import("./goalJourney.js");
-  const { goalHash, edgeSearchText } = await import("./goalEdges.js");
+  const { goalHash, edgeSearchText, goalStates } = await import("./goalEdges.js");
   const picker = await E.pickerDecides(userId).catch(() => false);
   const done = searchedEarlierToday(earlier);
   const items: ItemResult[] = [];
@@ -259,11 +259,16 @@ async function sweepMember(row: any, userId: string, now: Date, base: { day: str
   const goalNote = goals.length && !plan ? `they have ${goals.length} goal(s) but no goal plan from the last ${GOAL_PLAN_MAX_AGE_DAYS} days yet (the hourly goal sweep plans them), so no goal was searched` : null;
   const planned = plan ? goalItemsFromPlan(plan.proposal, (e) => edgeSearchText([e])) : [];
   const goalHold = planned.some((g) => g.search) ? await sweepHold(userId, "goal", now).catch(() => ["their send gates couldn't be read"]) : [];
+  // A goal set aside since the plan was made (the goal recheck's idle, services/goalRecheck.ts, or done) isn't searched off that plan.
+  const states = planned.some((g) => g.search) ? await goalStates(userId).catch(() => null) : new Map();
   for (const g of planned) {
     const b = { kind: "goal" as const, id: goalHash(g.goal), text: g.goal.slice(0, 160) };
     const prior = done.get(`goal:${b.id}`);
     if (prior) { items.push(prior); continue; }
     if (!g.search) { items.push({ ...b, status: "skipped", why: g.why ?? "nothing to search" }); continue; }
+    if (!states) { items.push({ ...b, status: "skipped", why: "its state couldn't be read" }); continue; }
+    const st = states.get(b.id);
+    if (st && st.state !== "active") { items.push({ ...b, status: "skipped", why: `set aside since its plan (${st.state}: ${st.reason.slice(0, 120)})` }); continue; }
     if (goalHold.length) { items.push({ ...b, status: "skipped", why: `held: ${goalHold.join(", ")}` }); continue; }
     await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search, fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
   }

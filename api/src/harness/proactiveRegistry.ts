@@ -634,6 +634,16 @@ export const proactiveRegistry: ProactiveRegistry = {
         const { goalCheckinState, GOAL_DONE_SKIP } = await import("../services/goalJourney.js");
         if (goalCheckinState(known.goals, String(c.payload.text ?? "")) === "done") return skip(GOAL_DONE_SKIP);
       }
+      // The goal recheck (services/goalRecheck.ts): a goal gone idle for no answer is treated as done (the check-in is marked done
+      // with it); one whose recheck is out waits for the answer.
+      {
+        const { goalHash, goalStates } = await import("../services/goalEdges.js");
+        const { GOAL_DONE_SKIP } = await import("../services/goalJourney.js");
+        const R = await import("../services/goalRecheck.js");
+        const st = (await goalStates(c.userId).catch(() => new Map()) as Map<string, import("../services/goalEdges.js").GoalStateRow>).get(goalHash(String(c.payload.text ?? "")));
+        if (st && R.isRecheckIdle(st)) return skip(GOAL_DONE_SKIP);
+        if (st?.state === "active" && R.recheckAskOpen(st.recheckAskedAt)) return skip("the goal recheck already asked about it");
+      }
       const text = await draftProactive({
         functionId: "goalJourney.checkin.draft",
         firstName: person.firstName,
@@ -642,9 +652,13 @@ export const proactiveRegistry: ProactiveRegistry = {
       });
       return text ? { messages: [text], text, rules: { maxSentences: 2, maxChars: 200 } } : skip("model chose SKIP");
     },
-    async onSent(c) {
+    async onSent(c, _p, messages) {
       const { markGoalCheckedIn } = await import("../services/goalJourney.js");
       await markGoalCheckedIn(c.userId, c.payload.goalId);
+      // The seasonal check-in is the goal recheck's question too (services/goalRecheck.ts) when the judge reads it as asking whether
+      // they still want it: one covers both.
+      const { goalHash } = await import("../services/goalEdges.js");
+      await import("../services/goalRecheck.js").then((R) => R.noteRecheckSent(c.userId, goalHash(String(c.payload.text ?? "")), String(c.payload.text ?? ""), messages.join("\n"), "goal_checkin")).catch(() => {});
       await writeMemory(c.userId, "check_in", `Asked, as a seasonal check-in, whether this still holds: ${c.payload.text}`);
     },
     // Dropped because the goal is done: marked on the entry so the monthly cron stops re-queuing (and re-dropping) it.
@@ -667,6 +681,31 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
     async onSent(c) {
       await writeMemory(c.userId, "check_in", `Acknowledged a closed goal: ${c.payload.text}`);
+    },
+  },
+
+  // The goal recheck's one text (services/goalRecheck.ts, Royce 2026-10-13): a searched goal with nothing from them in two weeks, and
+  // no exchange to raise it in. One light question naming it; asked counts only once a text that raised it went out.
+  goal_recheck: {
+    async draft(c, person) {
+      const R = await import("../services/goalRecheck.js");
+      const still = await R.recheckTextStillDue(c.userId, String(c.payload.goalHash), { queuedAt: c.payload.queuedAt ?? null, lastSignalAt: c.payload.lastSignalAt ?? null });
+      if (!still.ok) return skip(still.why);
+      const text = await draftProactive({
+        functionId: "goalRecheck.text.draft",
+        firstName: person.firstName,
+        facts: { the_goal_in_their_words: still.goal.slice(0, 200) },
+        task: "Ask one short, light question with the word still in it: do they still want things for this, or has it run its course? Name it in their own plain words, and make it easy to say it's over. One sentence. Never an offer to keep looking or watching, no exclamation point, no date, nothing about how long it has been, no advice.",
+      });
+      if (!text) return skip("model chose SKIP");
+      // A Haiku read of the draft (judgeRecheckAsked): it goes only if it asks whether they still want this goal, never an offer.
+      const read = await R.judgeRecheckAsked(still.goal, text);
+      if (!read.asked) return skip(`the draft didn't ask whether they still want it (${read.reason})`);
+      return { messages: [text], text, rules: { maxSentences: 2, maxChars: 200, forbidden: [{ pattern: /!/, reason: "exclamation point" }] } };
+    },
+    async onSent(c) {
+      const R = await import("../services/goalRecheck.js");
+      await R.markRecheckAsked(c.userId, String(c.payload.goalHash), String(c.payload.goal ?? ""), "text");
     },
   },
 

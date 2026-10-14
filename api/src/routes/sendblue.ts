@@ -1722,6 +1722,8 @@ export function sendblueRouter(io: Server): Router {
           // are handed over as an unspoken hint with the rule, never as a fact to recite; only active ones are where they're headed.
           const said = heldClaimsFrom(turn?.knowledge);
           const lens = goalLens(turn?.knowledge, turn?.profile?.intent);
+          // A goal their text names shows life: its recheck clock moves, and an idle one comes back (services/goalRecheck.ts).
+          import("../services/goalRecheck.js").then((R) => R.noteTextSignals(user.id, content)).catch((err: any) => console.error("goal recheck: noting their text failed (non-fatal):", err?.message ?? err));
           const [notes, loops, timeline] = await Promise.all([
             loadBrief(user.id).then(describeNotes).catch(() => null),
             // Every open loop and where it stands (services/openLoops.ts).

@@ -1048,6 +1048,8 @@ export function loopTools(
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was changed." };
         const changed = await G.setGoalState(ctx.userId, match, state, why, state === "active" ? "member" : "co").catch(() => false);
         if (!changed) return { ok: false, error: "The goal couldn't be marked just now; nothing changed. Don't tell them it was." };
+        // A goal action is a signal: its recheck clock moves, and a recheck it answers is cleared (services/goalRecheck.ts).
+        await import("../services/goalRecheck.js").then((R) => R.noteGoalAction(ctx.userId, [match])).catch(() => {});
         ctx.facts?.add("did_this_turn", `Marked their goal "${match.slice(0, 100)}" ${state}${why ? ` (${why.slice(0, 80)})` : ""}.`);
         return { ok: true, note: state === "active" ? "It's active again: the daily search uses it." : "It stays on file and stops generating searches. Don't announce the bookkeeping; just answer them." };
       },

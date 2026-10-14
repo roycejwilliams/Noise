@@ -88,7 +88,8 @@ export type TurnContext = {
   docOffer?: DocOfferContext | null;
   // Documents Co delivered them, newest version each, outstanding first (services/deliveryReceipts.ts receiptLines).
   deliveries?: string[];
-  // Goals Co set aside from context that they haven't heard about yet (services/goalEdges.ts untoldSetAsides).
+  // Goals Co set aside from context that they haven't heard about yet (services/goalEdges.ts untoldSetAsides), then the goal
+  // recheck's (services/goalRecheck.ts recheckForTurn, marked by recheck).
   goalSetAsides?: import("./goalEdges.js").GoalStateRow[];
   // Findable interests on file and the steering so far (services/coldStart.ts): while there are fewer than two, a reply may ask one
   // easy question that lets them name something Co could find (harness/replyGrounding.ts addColdStartSteer).
@@ -431,6 +432,9 @@ export async function assembleContext(
   const coldStartP = knowledge ? import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null) : Promise.resolve(null);
   const doorP = import("./theDoor.js").then((d) => d.loadDoor(userId)).catch(() => null);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
+  // The goal recheck (services/goalRecheck.ts): a quiet goal's one question, after the set-asides on the same hint, and any already
+  // asked, so the reply reads their answer. This message is read through the turn's fence; no fence, no recheck.
+  const goalRechecks = await Promise.all([import("./goalRecheck.js"), fenceP.catch(() => null)]).then(([R, fence]) => R.recheckForTurn(userId, message, fence)).catch(() => []);
   const coldStart = await coldStartP;
   const door = await doorP;
   // Asks and goals read raw go through keep like everything else here (another member's details stripped, fails closed).
@@ -442,7 +446,7 @@ export async function assembleContext(
   const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: (rawSearching.hidden ?? 0) + rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length + withheldWork };
   const rawAhead = await aheadP;
   const ahead = rawAhead ? await import("./whatsAhead.js").then((W) => W.aheadLine(rawAhead, searching, zone, keep)).catch(() => undefined) : undefined;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

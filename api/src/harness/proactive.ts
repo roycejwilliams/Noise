@@ -133,6 +133,8 @@ export type ProactiveType =
   | "goal_checkin"
   // A goal closed at their word: a companion moment that acknowledges the arc, not a status flip.
   | "goal_closed"
+  // The goal recheck's one text (services/goalRecheck.ts, 2026-10-13): a searched goal quiet for two weeks, not raised in a reply.
+  | "goal_recheck"
   // Member-state nudges (services/memberStateNudges.ts, 2026-10-08): Co acting when something it carries for them changes. An intro
   // they haven't brought up, a deadline on something they said yes to, a goal gone quiet, something they said they'd do coming due.
   | "intro_nudge"
@@ -205,6 +207,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   // Seasonal: one in eight weeks at most (also enforced where it is queued); the closing moment is a reply to what they said.
   goal_checkin: { priority: 9, typeGapDays: 56 },
   goal_closed: { priority: 86 },
+  // Once per quiet stretch per goal (recheck_asked_at); one recheck text every few days at most, so goals due together never pile up.
+  goal_recheck: { priority: 10, typeGapDays: 3 },
   // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
   // One deadline heads-up a day at most (final review of #108).
   deadline_nudge: { priority: 75, typeGapDays: 1 },
@@ -308,6 +312,7 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "calendar_follow",
   "goal_nudge",
   "commitment_nudge",
+  "goal_recheck",
 ]);
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
@@ -678,9 +683,10 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (kind && !(kind === "find" && isAnswering(c)) && state.suppressedKinds?.includes(kind)) {
     checks.push({ name: "kind_restraint", pass: false, reason: `they let the last ${RESTRAINT.ignoredToSuppress} ${kind} texts pass with no reply or reaction; Co stopped sending these until they answer one` });
   }
-  // One goal surface a season, across the seasonal check-in and the goal nudge (services/goalJourney.ts GOAL_CHECKIN).
+  // One goal surface a season, across the seasonal check-in and the goal nudge (services/goalJourney.ts GOAL_CHECKIN). A goal recheck
+  // text (services/goalRecheck.ts) counts as one too, so the three never land close together.
   if (c.type === "goal_checkin" || c.type === "goal_nudge") {
-    const lastGoal = state.sends.filter((s) => (s.type === "goal_checkin" || s.type === "goal_nudge") && s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+    const lastGoal = state.sends.filter((s) => (s.type === "goal_checkin" || s.type === "goal_nudge" || s.type === "goal_recheck") && s.sentAt <= state.now).sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
     checks.push({
       name: "goal_season",
       pass: !lastGoal || state.now.getTime() - lastGoal.sentAt.getTime() >= GOAL_SEASON_DAYS * DAY,

@@ -454,11 +454,16 @@ export async function gatherReplyFacts(
   if (opts.turn) for (const hint of sentDetailHints(opts.turn)) addHint(rf, hint);
   // A goal Co set aside from context (its date passed, or newer words replaced it) is told, never silent (Royce, 2026-10-08): the
   // oldest one, as a hint the reply may take when it fits. Never in a hard moment, never as a list or an announcement.
-  const aside = opts.turn?.goalSetAsides?.[0];
+  // The goal recheck (services/goalRecheck.ts, 2026-10-13) rides the same hint: a searched goal with nothing from them in two weeks is
+  // asked about once ("ask"); one already asked is only read, so their answer lands ("asked").
+  const asides = opts.turn?.goalSetAsides ?? [];
+  const aside = asides.find((a) => a.recheck !== "asked");
   if (aside) {
     rf.goalSetAside = aside;
-    addHint(rf, `Co stopped looking for things for their goal "${aside.goal.slice(0, 140)}" (${aside.reason}). If it fits naturally in this reply and they aren't in a hard moment, ask in your own words whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement.`);
+    if (aside.recheck === "ask") addHint(rf, `Their goal "${aside.goal.slice(0, 140)}" has had nothing new from them in a while. If it fits naturally in this reply and they aren't in a hard moment, ask once, in your own words and naming it plainly, whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement, never an offer to keep looking, and never say how long it's been.`);
+    else addHint(rf, `Co stopped looking for things for their goal "${aside.goal.slice(0, 140)}" (${aside.reason}). If it fits naturally in this reply and they aren't in a hard moment, ask in your own words whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement.`);
   }
+  for (const a of asides.filter((x) => x.recheck === "asked")) addHint(rf, `You asked them whether they still want things for their goal "${a.goal.slice(0, 140)}". If this message answers that, markGoal active for a yes or done if it's over. Don't ask it again.`);
   // Cold start (services/coldStart.ts): fewer than two findable interests on file, so a reply may ask one easy question that lets them
   // name something Co could find. New members and existing ones alike, only in a natural exchange, never as outreach.
   if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
