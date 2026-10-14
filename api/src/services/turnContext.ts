@@ -91,6 +91,11 @@ export type TurnContext = {
   // Goals Co set aside from context that they haven't heard about yet (services/goalEdges.ts untoldSetAsides), then the goal
   // recheck's (services/goalRecheck.ts recheckForTurn, marked by recheck).
   goalSetAsides?: import("./goalEdges.js").GoalStateRow[];
+  // A find ask marked retire-due (services/askRetire.ts retireForTurn): the one to ask about, when no goal question is offered this
+  // turn, and any already asked, so the reply reads their answer.
+  retire?: { ask: import("./askRetire.js").RetireRow | null; asked: import("./askRetire.js").RetireRow[] };
+  // The one stopped-looking note owed (services/askRetire.ts), carried by code in this turn's reply. None while they're struggling.
+  stopNote?: import("./askRetire.js").StopNote | null;
   // Findable interests on file and the steering so far (services/coldStart.ts): while there are fewer than two, a reply may ask one
   // easy question that lets them name something Co could find (harness/replyGrounding.ts addColdStartSteer).
   coldStart?: import("./coldStart.js").ColdStartView | null;
@@ -431,10 +436,20 @@ export async function assembleContext(
   // No member knowledge (it failed closed): no cold-start steer either, since it would read their asks unstripped (re-review of #125).
   const coldStartP = knowledge ? import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null) : Promise.resolve(null);
   const doorP = import("./theDoor.js").then((d) => d.loadDoor(userId)).catch(() => null);
+  // The stopped-looking notes owed (services/askRetire.ts), read alongside the goal reads.
+  const stopNotesP = emotional?.needsCare ? Promise.resolve([] as import("./askRetire.js").StopNote[]) : import("./askRetire.js").then((A) => A.pendingStopNotes(userId)).catch(() => [] as import("./askRetire.js").StopNote[]);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   // The goal recheck (services/goalRecheck.ts): a quiet goal's one question, after the set-asides on the same hint, and any already
   // asked, so the reply reads their answer. This message is read through the turn's fence; no fence, no recheck.
   const goalRechecks = await Promise.all([import("./goalRecheck.js"), fenceP.catch(() => null)]).then(([R, fence]) => R.recheckForTurn(userId, message, fence)).catch(() => []);
+  // Ask retirement (services/askRetire.ts): a goal question offered this turn goes first; the ask waits. Their words go through keep().
+  const goalQuestion = goalSetAsides.length > 0 || goalRechecks.some((r) => r.recheck === "ask");
+  const retireRaw = await Promise.all([import("./askRetire.js"), fenceP.catch(() => null)]).then(([A, fence]) => A.retireForTurn(userId, message, fence, { goalQuestion })).catch(() => null);
+  const keepAsk = <T extends { text: string }>(r: T | null): T | null => { const t = r ? keep(r.text) : null; return r && t ? { ...r, text: t } : null; };
+  const retire = retireRaw ? { ask: keepAsk(retireRaw.ask), asked: retireRaw.asked.map(keepAsk).filter((r): r is NonNullable<typeof r> => !!r) } : undefined;
+  // A note carries their own words, so it goes out only if keep() leaves it whole; the first that does (a stripped one never blocks
+  // a newer one). None while they're struggling.
+  const stopNote = await Promise.all([import("./askRetire.js"), stopNotesP]).then(([A, notes]) => A.firstSurviving(notes, keep)).catch(() => null);
   const coldStart = await coldStartP;
   const door = await doorP;
   // Asks and goals read raw go through keep like everything else here (another member's details stripped, fails closed).
@@ -446,7 +461,7 @@ export async function assembleContext(
   const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: (rawSearching.hidden ?? 0) + rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length + withheldWork };
   const rawAhead = await aheadP;
   const ahead = rawAhead ? await import("./whatsAhead.js").then((W) => W.aheadLine(rawAhead, searching, zone, keep)).catch(() => undefined) : undefined;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

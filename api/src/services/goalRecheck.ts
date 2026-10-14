@@ -60,7 +60,18 @@ export function mentionsGoal(text: string, goal: string): boolean {
 // only code filter: a text with no question mark at all is never a question, so it costs no call.
 export type RecheckJudge = (prompt: string) => Promise<string>;
 export const RECHECK_JUDGE = { timeoutMs: 8000, maxOutputTokens: 1500 } as const;
-export function recheckJudgePrompt(goal: string, sent: string): string {
+// kind "ask": the same read for a find ask's retirement question (services/askRetire.ts): whether they still want Co looking for it.
+export function recheckJudgePrompt(goal: string, sent: string, kind: "goal" | "ask" = "goal"): string {
+  if (kind === "ask") return `A member of a private club asked Co to look for this: "${goal.slice(0, 300)}".
+
+Co just sent them this text:
+"""
+${sent.slice(0, 1500)}
+"""
+
+Did this text ask them whether they still want Co looking for it (so they can say yes or let it go)? It does NOT count when the question is an offer (to send, book or find something specific), when it asks about a different topic or plan, or when the thing is only mentioned in passing.
+
+Answer only with JSON: {"asked": true or false, "reason": "a few words"}`;
   return `A member of a private club told Co this goal: "${goal.slice(0, 300)}".
 
 Co just sent them this text:
@@ -87,10 +98,10 @@ export const haikuRecheckJudge: RecheckJudge = async (prompt) => {
   const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: RECHECK_JUDGE.maxOutputTokens, experimental_telemetry: { isEnabled: true, functionId: "goal.recheckAsked" }, prompt, abortSignal: AbortSignal.timeout(RECHECK_JUDGE.timeoutMs) });
   return text;
 };
-export async function judgeRecheckAsked(goal: string, sent: string, judge: RecheckJudge = haikuRecheckJudge): Promise<{ asked: boolean; reason: string }> {
+export async function judgeRecheckAsked(goal: string, sent: string, judge: RecheckJudge = haikuRecheckJudge, kind: "goal" | "ask" = "goal"): Promise<{ asked: boolean; reason: string }> {
   if (!/\?/.test(String(sent ?? ""))) return { asked: false, reason: "no question in it" };
   try {
-    return readRecheckJudge(await judge(recheckJudgePrompt(goal, sent)));
+    return readRecheckJudge(await judge(recheckJudgePrompt(goal, sent, kind)));
   } catch (err: any) {
     return { asked: false, reason: `the read failed: ${String(err?.message ?? err).slice(0, 80)}` };
   }
@@ -465,7 +476,7 @@ export const realRecheckDeps: RecheckDeps = {
   },
   held: async (userId) => (await import("../harness/proactive.js")).sweepHold(userId, "goal"),
   lastAsk: async (userId) => {
-    const { rows } = await pool.query(`SELECT max(created_at) AS at FROM harness_decisions WHERE user_id = $1 AND decision = 'goal.recheck_asked' AND action <> 'answered' AND created_at > NOW() - INTERVAL '3 days'`, [userId]);
+    const { rows } = await pool.query(`SELECT max(created_at) AS at FROM harness_decisions WHERE user_id = $1 AND decision IN ('goal.recheck_asked', 'ask.retire_asked') AND action <> 'answered' AND created_at > NOW() - INTERVAL '3 days'`, [userId]);
     return rows[0]?.at ? new Date(rows[0].at) : null;
   },
   pendingText: async (userId) => (await pool.query(`SELECT payload->>'goalHash' AS h FROM proactive_candidates WHERE user_id = $1 AND type = 'goal_recheck' AND status = 'pending'`, [userId])).rows.map((r: any) => String(r.h)),
@@ -483,10 +494,19 @@ export const realRecheckDeps: RecheckDeps = {
        WHERE user_id = $1 AND goal_hash = $2 AND state = 'stale' AND source = 'context' AND reason = $4`,
       [userId, goalHash(goal), at, RECHECK_IDLE_REASON],
     );
+    // The asks that idled with it come back with it (askRetire.ts).
+    if (rowCount) await import("./askRetire.js").then((A) => A.reviveAsksWithGoal(userId, goalHash(goal))).catch(() => 0);
     return !!rowCount;
   },
   // Already asked, so told: an idle goal is never raised again as a set-aside.
-  idle: (userId, goal) => setGoalState(userId, goal, "stale", RECHECK_IDLE_REASON, "context", { told: true }),
+  // Not silent (Royce, 2026-10-13: "no silent expiries"): told_at stays NULL until the one stopped-looking note goes out with a reply
+  // or a paced text (services/askRetire.ts stopNotes); untoldSetAsides leaves it out, so it is never asked about as a set-aside.
+  // Its one line is written now, in Co's voice, and stored for the reply or the paced text that carries it (askRetire.ts).
+  idle: async (userId, goal) => {
+    const ok = await setGoalState(userId, goal, "stale", RECHECK_IDLE_REASON, "context", { told: false });
+    if (ok) await import("./askRetire.js").then((A) => A.storeGoalNote(userId, goal)).catch((err: any) => console.error("goal recheck: writing the stopped-looking line failed (the fallback is used):", err?.message ?? err));
+    return ok;
+  },
   queueText: async (userId, step, lastSignalAt) => {
     const { enqueueCandidate } = await import("../harness/proactive.js");
     const { localDay, memberZone } = await import("./memberTime.js");

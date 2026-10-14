@@ -7,7 +7,8 @@
 //      people); a work plan or Co task gets only that edge ("SF AI and founder gatherings around November"), and a goal with no
 //      findable edge is passed, with the reason logged.
 //   3. Co's own tasks are caught in code; the model judges the rest and writes the edges; code drops any edge that restates a goal.
-//      Find requests already saved from a work or Co-task goal stop being searched (ask_checkins kind 'help').
+//      Find requests already saved from a work or Co-task goal are marked retire-due, and retire through the same ask-once flow as a
+//      quiet goal, after the goal's own recheck (services/askRetire.ts, Royce 2026-10-13): never a silent kind change.
 //   4. Lifecycle: every goal is active, done or stale (goal_states; no row = active). Each run re-reads the current goals and derives
 //      the searches from scratch, never cached. A goal goes stale when its date or window passes, or when their newer words supersede
 //      it (a profile correction, or a newer goal on file that replaces it); it's done when they or Co close it. Stale and done goals
@@ -200,8 +201,13 @@ export type GoalDeps = {
   corrections: (userId: string) => Promise<Correction[]>;
   retired: (goal: string, c: Correction[], lastSaid?: Date | string | null) => Correction | null;
   // intent: a lookout is never retired from a goal (lane moves, 2026-10-13); only their own words or a confirmed move change its lane.
-  findAsks: (userId: string) => Promise<{ id: number; text: string; intent?: string | null }[]>;
-  helpAsk: (userId: string, id: number, intent?: string | null) => Promise<void>;
+  // id: ask_checkins.id, a UUID (2026-10-13: it was read with Number(), NaN, so no retirement ever landed).
+  findAsks: (userId: string) => Promise<{ id: string | number; text: string; intent?: string | null }[]>;
+  // Marks the ask retire-due, tied to the goals it restates (services/askRetire.ts flagRetire); it retires through the ask-once flow,
+  // never here.
+  helpAsk: (userId: string, id: string | number, intent?: string | null, goals?: string[]) => Promise<void>;
+  // After a whole read: retire-due marks the plan no longer makes, on asks not yet asked, are cleared (re-evaluated every plan).
+  keepRetireFlags?: (userId: string, ids: string[]) => Promise<void>;
   // failed: the read didn't come back whole (logged as a skip, never as a success).
   log: (d: { userId: string; action: string; proposal: Record<string, unknown>; reason?: string | null; failed?: boolean }) => Promise<void>;
 };
@@ -246,15 +252,20 @@ export async function planGoalSweep(userId: string, goals: string[], o: { city: 
   // Find requests saved from a goal that isn't findable (or from a goal set aside) stop being searched.
   // Only on an answer that was read, or Co's own task in code: a model timeout never switches off a real find request (review of #107).
   const notFindable = [...derived.filter((e) => e.kind !== "findable" && e.explicit).map((e) => e.goal), ...setAside.map((s) => s.goal)];
+  // retiredAsks counts the asks marked retire-due this run (they retire later, through services/askRetire.ts).
   let retiredAsks = 0;
+  const flagged: string[] = [];
   if (notFindable.length) {
     for (const a of await deps.findAsks(userId).catch(() => [])) {
       if (a.intent === "lookout") continue;
-      if (!(isCoTaskGoal(a.text) || notFindable.some((g) => restates(a.text, g) || restates(g, a.text)))) continue;
-      await deps.helpAsk(userId, a.id, a.intent ?? null).catch(() => {});
+      const tied = notFindable.filter((g) => restates(a.text, g) || restates(g, a.text));
+      if (!(isCoTaskGoal(a.text) || tied.length)) continue;
+      await deps.helpAsk(userId, a.id, a.intent ?? null, tied).catch(() => {});
+      flagged.push(String(a.id));
       retiredAsks++;
     }
   }
+  if (read === "full") await deps.keepRetireFlags?.(userId, flagged).catch(() => {});
   const searchText = edgeSearchText(active, { enjoys: o.enjoys, specifics: o.specifics });
   // A read that didn't come back whole logs as a failure, whatever it still searches (Royce, 2026-10-09: "no silent success"). A
   // cut-off read still searches the goals it did read; a failed one searches only what they enjoy, if anything.
@@ -314,8 +325,10 @@ async function writeGoalState(userId: string, goal: string, state: GoalState, re
 }
 
 // The set-asides they haven't heard about yet, for the reply's hint.
+// A goal idled by the recheck (services/goalRecheck.ts) was already asked about: it gets the one stopped-looking note instead
+// (services/askRetire.ts), never this question.
 export async function untoldSetAsides(userId: string): Promise<GoalStateRow[]> {
-  const { rows } = await pool.query(`SELECT * FROM goal_states WHERE user_id = $1 AND state <> 'active' AND source = 'context' AND told_at IS NULL ORDER BY changed_at`, [userId]);
+  const { rows } = await pool.query(`SELECT * FROM goal_states WHERE user_id = $1 AND state <> 'active' AND source = 'context' AND told_at IS NULL AND reason IS DISTINCT FROM $2 ORDER BY changed_at`, [userId, "no answer to the recheck"]);
   return rows.map(fromStateRow);
 }
 
@@ -364,12 +377,16 @@ export const realGoalDeps: GoalDeps = {
   corrections: async (userId) => (await (await import("./memberKnowledge.js")).realKnowledgeDeps.corrections(userId, { limit: 40, days: null })) as Correction[],
   // The same check that retires a corrected thread in the call context (services/callContext.ts).
   retired: (goal, c, lastSaid) => retiredBy(goal, c as any, lastSaid ?? undefined) as Correction | null,
-  findAsks: async (userId) => (await pool.query(`SELECT id, ask_text, intent FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find' AND intent IS DISTINCT FROM 'lookout'`, [userId])).rows.map((r: any) => ({ id: Number(r.id), text: String(r.ask_text ?? ""), intent: r.intent ?? null })),
-  // The one kind write (laneMoves.ts setAskKind): only while it's still a find ask that isn't a lookout.
-  helpAsk: async (userId, id, intent) => {
-    const { setAskKind } = await import("./laneMoves.js");
-    // Never throws into the sweep: a write that can't land (an id that isn't a row's) changes nothing.
-    await setAskKind(pool, { id, userId, read: { kind: "find", intent: intent ?? null }, kind: "help" }).catch(() => false);
+  findAsks: async (userId) => (await pool.query(`SELECT id, ask_text, intent FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND kind = 'find' AND intent IS DISTINCT FROM 'lookout'`, [userId])).rows.map((r: any) => ({ id: String(r.id), text: String(r.ask_text ?? ""), intent: r.intent ?? null })),
+  // Retire-due, never an immediate kind change: the ask is asked about once, after its goal's recheck, and only then set to help
+  // through laneMoves.ts setAskKind (services/askRetire.ts).
+  helpAsk: async (userId, id, intent, goals) => {
+    const { flagRetire } = await import("./askRetire.js");
+    await flagRetire(userId, String(id), intent ?? null, goals ?? []);
+  },
+  keepRetireFlags: async (userId, ids) => {
+    const { keepRetireFlags } = await import("./askRetire.js");
+    await keepRetireFlags(userId, ids);
   },
   log: async (d) => {
     const { recordDecision } = await import("../harness/core.js");

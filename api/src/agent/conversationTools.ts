@@ -71,6 +71,8 @@ export type ConversationToolContext = {
   turnStartedAt?: number;
   // A confirmed lane move's line an earlier try at this reply never carried (conversationReply.ts retry): this reply carries it.
   laneNotesOwed?: string[];
+  // The one stopped-looking line owed (services/askRetire.ts): carried in a reply that goes anyway, never forcing one.
+  stopNotesOwed?: string[];
   userId: string;
   phoneNumber: string;
   resolvedContent: string;
@@ -150,10 +152,14 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], closedTaskGoals: [] as string[] };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[] };
   // What went out carries these lane lines: they're said now, and never again this turn.
   const markLaneNotesSent = (went: string) => {
     const said = (n: string) => went.toLowerCase().replace(/\s+/g, " ").includes(n.toLowerCase());
+    // The stopped-looking line too (services/askRetire.ts): said now, never again.
+    const stops = state.stopNotes.filter(said);
+    state.stopNotesSent.push(...stops);
+    state.stopNotes = state.stopNotes.filter((n) => !said(n));
     const out = state.laneNotes.filter(said);
     if (!out.length) return;
     state.laneNotesSent.push(...out);
@@ -248,6 +254,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // A confirmed lane move's line rides in this reply, exactly once, after the check (laneMoves.ts carryLaneNotes, Royce 2026-10-13):
         // never a text of its own, never repeated in a second reply this turn.
         if (state.laneNotes.length || state.laneNotesSent.length) message = carryLaneNotes(message, state.laneNotes, state.laneNotesSent).text;
+        // The stopped-looking line rides in the first reply that goes, once (services/askRetire.ts); never when they may not be safe.
+        if ((state.stopNotes.length || state.stopNotesSent.length) && !ctx.safetyConcern && !state.safetyFlagged) message = carryLaneNotes(message, state.stopNotes, state.stopNotesSent).text;
         if (state.replyCount > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
         // Texted in beats: each paragraph its own message (services/beats.ts).
         // A voice note stays one clip.

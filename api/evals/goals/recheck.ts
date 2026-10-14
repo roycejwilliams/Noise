@@ -87,8 +87,8 @@ const one = (r: any, o: any = {}) => decide([r], o)[0];
   const reg = src("harness/proactiveRegistry.ts");
   const block = reg.slice(reg.indexOf("  goal_recheck: {"), reg.indexOf("  // Member-state nudges"));
   const hint = src("harness/replyGrounding.ts");
-  const hintLines = (hint.match(/addHint\(rf, `(?:Their goal|You asked them)[^`]*`\)/g) ?? []).join("\n");
-  check("the member-facing asks: no em dash, no exclamation point, never an offer to keep looking, no role noun", block.length > 200 && !/[—–]/.test(block + hintLines) && /forbidden: \[\{ pattern: \/!\/, reason: "exclamation point" \}\]/.test(block) && /Never an offer to keep looking/.test(block) && hintLines.split("\n").length === 2 && !/\b(assistant|matchmaker|concierge|companion)\b/i.test(block + hintLines), hintLines);
+  const hintLines = (hint.match(/addHint\(rf, `(?:Their goal|You asked them|You've been looking)[^`]*`\)/g) ?? []).join("\n");
+  check("the member-facing asks: no em dash, no exclamation point, never an offer to keep looking, no role noun", block.length > 200 && !/[—–]/.test(block + hintLines) && /forbidden: \[\{ pattern: \/!\/, reason: "exclamation point" \}\]/.test(block) && /Never an offer to keep looking/.test(block) && hintLines.split("\n").length === 4 && !/\b(assistant|matchmaker|concierge|companion)\b/i.test(block + hintLines), hintLines);
 }
 
 // ---- 3. idle after 7 days unanswered; never asked twice; the sweeps stop searching it
@@ -98,7 +98,7 @@ const one = (r: any, o: any = {}) => decide([r], o)[0];
   check("asked 7 days ago, nothing: idle", idle.action === "idle", idle);
   const after = row(RUN, { state: "stale", reason: R.RECHECK_IDLE_REASON, changedAt: ago(10), lastSignalAt: ago(30), recheckAskedAt: ago(17) });
   check("an idle goal is never asked again, however long it stays quiet", R.isRecheckIdle(after) && one(after).action === "none" && one({ ...after, lastSignalAt: ago(90) }, { lastExchangeAt: null }).action === "none");
-  check("idle is stale from context with the reason, told already (never raised again as a set-aside)", /setGoalState\(userId, goal, "stale", RECHECK_IDLE_REASON, "context", \{ told: true \}\)/.test(src("services/goalRecheck.ts")) && /COALESCE\(CASE WHEN \$7::boolean THEN NOW\(\) END, CASE WHEN \$6 = 'context' AND \$4 <> 'active' THEN NULL ELSE NOW\(\) END\)/.test(src("services/goalEdges.ts")) && /told_at IS NULL ORDER BY changed_at/.test(src("services/goalEdges.ts")));
+  check("idle is stale from context with the reason, its note owed (told_at NULL), and never raised again as a set-aside question", /setGoalState\(userId, goal, "stale", RECHECK_IDLE_REASON, "context", \{ told: false \}\)/.test(src("services/goalRecheck.ts")) && /told_at IS NULL AND reason IS DISTINCT FROM \$2 ORDER BY changed_at`, \[userId, "no answer to the recheck"\]/.test(src("services/goalEdges.ts")) && /COALESCE\(CASE WHEN \$7::boolean THEN NOW\(\) END, CASE WHEN \$6 = 'context' AND \$4 <> 'active' THEN NULL ELSE NOW\(\) END\)/.test(src("services/goalEdges.ts")));
   // The goal sweep plans active goals only, so an idle goal is never read or searched.
   const prompts: string[] = [];
   const states = new Map([[G.goalHash(RUN), { goalHash: G.goalHash(RUN), goal: RUN, state: "stale" as const, reason: R.RECHECK_IDLE_REASON, source: "context" as const, changedAt: ago(1), toldAt: ago(1), hints: 0 }]]);
@@ -297,7 +297,7 @@ check("the goal nudge carries its goal's hash, and sending it counts as the rech
   check("...the reply path reads the logged ask too", turnB.length === 0);
   const turnFail = await R.recheckForTurn("u1", "Morning", fence, NOW, { rows: async () => [stateRow(POT, { lastSignalAt: ago(16) })], reactions: async () => [], plans: async () => searching(POT), lastAsk: async () => { throw new Error("down"); } });
   check("...and a last-ask read that fails holds the ask (fails closed)", turnFail.length === 0);
-  check("the logged ask is read from goal.recheck_asked, never an answer, in the run and the nudge's season", /decision = 'goal\.recheck_asked' AND action <> 'answered'/.test(src("services/goalRecheck.ts")) && /decision = 'goal\.recheck_asked' AND action <> 'answered'/.test(src("services/memberStateNudges.ts")) && /lastGoalSurfaceAt: \[surface\.rows\[0\]\?\.at, rechecked\.rows\[0\]\?\.at\]/.test(src("services/memberStateNudges.ts")));
+  check("the logged ask is read from goal.recheck_asked (and ask.retire_asked), never an answer, in the run and the nudge's season", /decision IN \('goal\.recheck_asked', 'ask\.retire_asked'\) AND action <> 'answered'/.test(src("services/goalRecheck.ts")) && /decision = 'goal\.recheck_asked' AND action <> 'answered'/.test(src("services/memberStateNudges.ts")) && /lastGoalSurfaceAt: \[surface\.rows\[0\]\?\.at, rechecked\.rows\[0\]\?\.at\]/.test(src("services/memberStateNudges.ts")));
   // 3. A goal whose reply attempts are used up never blocks the next.
   const exhaustedA = row(POT, { lastSignalAt: ago(16), hints: 2 });
   const freshB = row(BOOK, { lastSignalAt: ago(15) });

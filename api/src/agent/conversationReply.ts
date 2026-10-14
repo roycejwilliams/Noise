@@ -296,6 +296,7 @@ export async function runConversationReplyAgent(
     },
     turnStartedAt: turnStart,
     laneNotesOwed: input.laneNotesOwed ?? [],
+    stopNotesOwed: input.facts.stopNote ? [input.facts.stopNote.line] : [],
     isTeam,
     userId: input.userId,
     phoneNumber: input.phoneNumber,
@@ -741,6 +742,17 @@ ${TOOL_TURN_RULES(input.isVoice)}
   if (aside && state.sent && !opts.dryRun && opts.record !== false) {
     // Not awaited: the recheck's Haiku read runs after the send, off the reply's path.
     void import("../services/goalEdges.js").then((g) => g.noteGoalHints(input.userId, [aside], state.sentMessages.join("\n"), { turnStartedAt: input.turnStartedAt ?? null })).catch((err: any) => console.error("conversationReply: noting the goal hint failed (non-fatal):", err?.message ?? err));
+  }
+
+  // Ask retirement (services/askRetire.ts): the question counts as asked only when the Haiku read says the sent reply asked it (else a
+  // hint is used); not awaited, off the reply's path. The stopped-looking line a sent reply carried is told, never again.
+  const retireAsk = input.facts.retireAsk;
+  if (retireAsk && state.sent && !opts.dryRun && opts.record !== false) {
+    void import("../services/askRetire.js").then((A) => A.noteRetireReply(input.userId, retireAsk, state.sentMessages.join("\n"))).catch((err: any) => console.error("conversationReply: noting the ask question failed (non-fatal):", err?.message ?? err));
+  }
+  const stopNote = input.facts.stopNote;
+  if (stopNote && state.stopNotesSent.length && !opts.dryRun && opts.record !== false) {
+    await import("../services/askRetire.js").then((A) => A.markNotesTold(input.userId, [stopNote], "reply")).catch((err: any) => console.error("conversationReply: marking the stopped-looking line told failed (non-fatal):", err?.message ?? err));
   }
 
   // A member with fewer than two findable interests on file: what this reply did with the steering question (services/coldStart.ts),

@@ -116,7 +116,8 @@ export type Fact = { id: string; kind: FactKind; text: string };
 // coldStart: set for a member with fewer than two findable interests on file (services/coldStart.ts): whether this reply was offered
 // a steering question, and why or why not; recorded after the reply goes out (agent/conversationReply.ts).
 // door: a new member's first read (services/theDoor.ts): whether this reply was offered the moment, and why or why not.
-export type ReplyFacts = { facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string> };
+// retireAsk: the find ask this reply may ask about (services/askRetire.ts); stopNote: the one stopped-looking line code carries in it.
+export type ReplyFacts = { retireAsk?: import("../services/askRetire.js").RetireRow | null; stopNote?: import("../services/askRetire.js").StopNote | null; facts: Fact[]; instructions: string[]; privateNames?: string[]; discretionDone?: boolean; artifactOffer?: { kind: OfferKind; topic: string } | null; goalSetAside?: GoalStateRow | null; coldStart?: ColdStartFacts | null; door?: DoorFacts | null; admitted?: Set<string> };
 export type ColdStartFacts = { offered: boolean; why: string; seeds: SeedCount; instruction: string | null };
 export type DoorFacts = { offered: boolean; why: string; instruction: string | null };
 
@@ -464,6 +465,19 @@ export async function gatherReplyFacts(
     else addHint(rf, `Co stopped looking for things for their goal "${aside.goal.slice(0, 140)}" (${aside.reason}). If it fits naturally in this reply and they aren't in a hard moment, ask in your own words whether they still want things for it; if they say yes, markGoal active, if it's over, markGoal done. Never as a list or an announcement.`);
   }
   for (const a of asides.filter((x) => x.recheck === "asked")) addHint(rf, `You asked them whether they still want things for their goal "${a.goal.slice(0, 140)}". If this message answers that, markGoal active for a yes or done if it's over. Don't ask it again.`);
+  // Ask retirement (services/askRetire.ts, 2026-10-13): one question a turn, and a goal's comes first, so the ask's only when no goal
+  // question was handed over. Code reads their answer (a yes keeps it, a no stops it); the reply just takes it in.
+  const retireAsk = aside ? null : opts.turn?.retire?.ask ?? null;
+  if (retireAsk) {
+    rf.retireAsk = retireAsk;
+    addHint(rf, `You've been looking for "${retireAsk.text.slice(0, 140)}" for them, and it reads more like a plan of theirs than something to find. If it fits naturally in this reply and they aren't in a hard moment, ask once, in your own words and naming it plainly, whether they still want you looking for it. Never as a list or an announcement, never an offer, and never say how long it's been.`);
+  }
+  for (const a of opts.turn?.retire?.asked ?? []) addHint(rf, `You asked them whether they still want you looking for "${a.text.slice(0, 140)}". If this message answers that, take the answer in naturally; don't ask it again.`);
+  // The one stopped-looking line (services/askRetire.ts): code adds it to the reply word for word; don't say it again yourself.
+  if (opts.turn?.stopNote) {
+    rf.stopNote = opts.turn.stopNote;
+    addHint(rf, `Code adds this line to your reply, once: "${opts.turn.stopNote.line}." Don't repeat it or contradict it.`);
+  }
   // Cold start (services/coldStart.ts): fewer than two findable interests on file, so a reply may ask one easy question that lets them
   // name something Co could find. New members and existing ones alike, only in a natural exchange, never as outreach.
   if (opts.turn?.coldStart) addColdStartSteer(rf, opts.turn.coldStart, { emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });

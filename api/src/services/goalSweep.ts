@@ -148,8 +148,10 @@ const realDeps: GoalSweepDeps = {
     const { noteColdStartSweep } = await import("./coldStart.js");
     await noteColdStartSweep({ userId: row.user_id, sweep: "goal", searched: null, found: false, why, tried: [], turnedAway: passed.map((p) => `${p.goal.slice(0, 100)}: ${p.why.slice(0, 80)}`) });
   },
+  // The goal recheck, then the asks marked retire-due (services/askRetire.ts): the recheck acts first, the asks see its decisions.
   recheck: async (row) => {
-    await (await import("./goalRecheck.js")).runGoalRecheck(row.user_id, goalSweepGoals(row) ?? []);
+    const steps = await (await import("./goalRecheck.js")).runGoalRecheck(row.user_id, goalSweepGoals(row) ?? []);
+    await (await import("./askRetire.js")).runAskRetire(row.user_id, steps);
   },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   held: async (userId) => (await import("../harness/proactive.js")).sweepHold(userId, "goal"),
