@@ -175,7 +175,10 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   const zone = await memberZone(userId);
   const { today, weekday } = dayOf(now, zone);
   // While they're quiet (tapered), the picker doesn't run: nothing is aged, rejected or sent; only a find whose date passed leaves.
-  if (!opts.dryRun && (await holdWhileQuiet(userId, today, now))) return { day: today, signature: "", skipped: true, judgments: [], pool: [] };
+  // Their silence couldn't be read: the run picks and sends as usual, but nothing is deleted (protect: no prune, no exit, no aging).
+  const quietRun = opts.dryRun ? "run" : await holdWhileQuiet(userId, today, now);
+  if (quietRun === "held") return { day: today, signature: "", skipped: true, judgments: [], pool: [] };
+  const protect = quietRun === "protect";
   // Once a day, unless they told Co what kind of room they want since today's run: that re-runs it (Royce, 2026-10-09).
   const done = await q(
     `SELECT 1 FROM harness_decisions d WHERE d.decision = 'sweep.select.shadow' AND d.user_id = $1 AND d.proposal->>'day' = $2 AND d.action IS DISTINCT FROM 'error'
@@ -198,13 +201,13 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   // (Royce, 2026-10-12: 4 of 7 picks on Oct 9 were for asks already closed). A reminder is exempt. A queued one is dropped at
   // dispatch (harness/proactive.ts). The member's ask state is the source. Cleared before the prune, so it pays no page reads.
   const closed = await closedAskRefs(userId, now, { query: async (sql, args) => ({ rows: await q(sql, args) }) });
-  if (!opts.dryRun) {
+  if (!opts.dryRun && !protect) {
     const { dead } = splitDeadBacklog(await q(`SELECT ask_id, items FROM event_backlogs WHERE user_id = $1`, [userId]), closed);
     for (const d of dead) await realPruneDeps.merge(userId, d.askId, { remove: new Set(d.keys), replace: new Map() }).catch((err: any) => console.error("picker: clearing a closed ask's backlog failed (non-fatal):", err?.message ?? err));
   }
   // The working set (services/workingSet.ts): past and undated backlog items exit, with their facts, before the pool is built, so
   // the picker never re-judges them.
-  if (!opts.dryRun) await import("./workingSet.js").then((W) => W.pruneBacklogs(userId, today, realPruneDeps)).catch((err: any) => console.error("picker: backlog prune failed (non-fatal):", err?.message ?? err));
+  if (!opts.dryRun && !protect) await import("./workingSet.js").then((W) => W.pruneBacklogs(userId, today, realPruneDeps)).catch((err: any) => console.error("picker: backlog prune failed (non-fatal):", err?.message ?? err));
   // Asks win contested slots, and goals must not starve for it (Royce, 2026-10-09): logged for review, once a day, nothing held.
   if (!opts.dryRun) await noteGoalStarvation(q, userId, now, today).catch((err: any) => console.error("picker: goal starvation check failed (non-fatal):", err?.message ?? err));
 
@@ -278,7 +281,7 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
   // runs it again (Royce, 2026-10-12: it swallowed its errors and still marked the day done). The retry is idempotent: a pick a
   // partial apply already queued merges into its own row (one per thing), and one already sent is out of the pool.
   const applied = newApplyReport(r.judgments);
-  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today, r.set ?? null, applied, contextIds(ctx));
+  if (!opts.dryRun) await applyPicks(userId, r.judgments, backlogs, today, r.set ?? null, applied, contextIds(ctx), { protect });
   const applyError = opts.dryRun ? null : applyFailed(applied);
   if (applyError) {
     await recordDecision({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "error", reason: applyError, proposal: { day: today, signature, model: r.model, usage: r.usage, poolSize: ctx.pool.length, judgments: r.judgments, applied } });
@@ -313,17 +316,24 @@ export async function runSweepShadow(userId: string, now = new Date(), opts: { d
 // reject exit, no send (Royce, 2026-10-14: "The taper only slows searching. It never deletes goals, plans, or finds. Anything found while
 // tapered is held and surfaces on resume"). The one exception: a find whose date or deadline has passed can't surface, so it leaves,
 // its fact saying "passed while quiet". Each held run is logged. Returns true when the run was held. deps: injectable.
-export type QuietDeps = { tapered: (userId: string, now: Date) => Promise<boolean>; prunePast: (userId: string, today: string) => Promise<{ exited: number }>; record: typeof recordDecision };
+// "protect": their silence couldn't be read. The run still picks and sends (an engaged member's morning is never lost to a failed read),
+// but nothing irreversible happens (no prune, no exit, no aging), and it's logged as what it is, never as tapered (review of the taper).
+export type QuietDeps = { silence: (userId: string, now: Date) => Promise<"quiet" | "engaged" | "unknown">; prunePast: (userId: string, today: string) => Promise<{ exited: number }>; record: typeof recordDecision };
 export const realQuietDeps: QuietDeps = {
-  tapered: async (userId, now) => (await import("./dailySweep.js")).memberTapered(userId, now),
+  silence: async (userId, now) => (await import("./dailySweep.js")).memberSilence(userId, now),
   prunePast: async (userId, today) => (await import("./workingSet.js")).pruneBacklogs(userId, today, realPruneDeps, { quiet: true }),
   record: recordDecision,
 };
-export async function holdWhileQuiet(userId: string, today: string, now: Date, deps: QuietDeps = realQuietDeps): Promise<boolean> {
-  if (!(await deps.tapered(userId, now))) return false;
+export async function holdWhileQuiet(userId: string, today: string, now: Date, deps: QuietDeps = realQuietDeps): Promise<"held" | "protect" | "run"> {
+  const silence = await deps.silence(userId, now).catch(() => "unknown" as const);
+  if (silence === "engaged") return "run";
+  if (silence === "unknown") {
+    await deps.record({ layer: 5, decision: "picker.silence_unread", userId, outcome: "skip", action: "protect", reason: "their last message couldn't be read: picking and sending as usual, deleting nothing this run", proposal: { day: today } }).catch(() => {});
+    return "protect";
+  }
   const pruned = await deps.prunePast(userId, today).catch((err: any) => { console.error("picker: pruning passed finds while quiet failed (non-fatal):", err?.message ?? err); return { exited: 0 }; });
   await deps.record({ layer: 5, decision: "sweep.select.shadow", userId, outcome: "skip", action: "tapered_hold", reason: `tapered: they've been quiet over a week; finds are held for when they write${pruned.exited ? `; ${pruned.exited} passed while quiet` : ""}`, proposal: { day: today, passedWhileQuiet: pruned.exited } }).catch(() => {});
-  return true;
+  return "held";
 }
 
 // A claim check that couldn't run is an alarm, not a shrug (Royce, 2026-10-14): one row per failed run, with the member, the finds it
@@ -404,12 +414,14 @@ export function applyFailed(a: ApplyReport): string | null {
 }
 
 // ids: the run's record ids (sweepSelect.ts contextIds), so only real ids are stripped from what a member may read.
-export async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null, report: ApplyReport, ids?: ReadonlySet<string>): Promise<void> {
+// protect: their silence couldn't be read (holdWhileQuiet): picks queue and send as usual; nothing leaves the backlog (no reject or
+// aged-out exit); a rejected queued row is only kept from sending.
+export async function applyPicks(userId: string, judgments: Judgment[], backlogs: any[], today: string, set: string | null, report: ApplyReport, ids?: ReadonlySet<string>, o: { protect?: boolean } = {}): Promise<void> {
   let plan: ReturnType<typeof planPicks> | null = null;
   try {
     if (!pickerLive() || !(await pickerUserIds()).includes(userId)) return;
     report.live = true;
-    plan = await applyPicksInner(userId, judgments, backlogs, set, report, ids);
+    plan = await applyPicksInner(userId, judgments, backlogs, set, report, ids, o);
   } catch (err: any) {
     report.error = String(err?.message ?? err).slice(0, 200);
     console.error("picker: applying the picks failed:", report.error);
@@ -476,7 +488,7 @@ export async function fillTiers(judgments: Judgment[], report: ApplyReport, tryQ
   }
 }
 
-async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: any[], set: string | null, report: ApplyReport, ids?: ReadonlySet<string>): Promise<ReturnType<typeof planPicks>> {
+async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: any[], set: string | null, report: ApplyReport, ids?: ReadonlySet<string>, o: { protect?: boolean } = {}): Promise<ReturnType<typeof planPicks>> {
   const { queuePickedOffer, onEventOfferDropped } = await import("./eventSurfacingSweep.js");
   const backlog: Waiting[] = backlogs.flatMap((b: any) =>
     (Array.isArray(b.items) ? b.items : []).map((it: any) => ({ askId: String(b.ask_id), askText: String(it?.askText ?? ""), fromProfile: b.ask_id === "profile", match: it?.match, reminder: !!it?.reminder, again: !!it?.again })),
@@ -506,14 +518,15 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
     await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1 AND status = 'pending'`, [d.id, d.why.slice(0, 300)]);
     // Out of every ask's backlog that holds the same thing, not only the one that queued it (re-review of #116).
     const k = waiting.find((w) => w.id === d.id)?.key;
+    if (o.protect) continue;
     for (const b of backlog.filter((x) => k && shadowKey(String(x.match?.name ?? ""), dateOf(x.match)) === k)) await onEventOfferDropped(userId, { askId: b.askId, match: b.match } as any).catch(() => null);
   }
   // Held: the row goes (it would send), the thing stays in the backlog for the picker to judge again.
   for (const d of plan.unqueue) await pool.query(`DELETE FROM proactive_candidates WHERE id = $1 AND status = 'pending'`, [d.id]);
   // Every find the picker rejected, queued or not, leaves every backlog for good with its fact (services/workingSet.ts): before, only
   // queued rows came out, so the rest were judged again every morning.
-  const uniq = rejectedFindsOf(judgments, backlog, ids);
-  await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
+  const uniq = o.protect ? [] : rejectedFindsOf(judgments, backlog, ids);
+  if (uniq.length) await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, uniq, realPruneDeps)).catch((err: any) => console.error("picker: exiting rejected finds failed (non-fatal):", err?.message ?? err));
   // The finds the pick chose together, by the key each is queued under: the set line rides only with a bundle of exactly these.
   const setKeys = () => plan.queue.map((x) => offerTargetKeyOf({ match: x.match, reminder: x.reminder, again: x.again }));
   const { offerTargetKey: offerTargetKeyOf } = await import("./eventSurfacingSweep.js");
@@ -547,7 +560,7 @@ async function applyPicksInner(userId: string, judgments: Judgment[], backlogs: 
     return queuePickedOffer(userId, { askId: from.askId, askText: from.askText, fromProfile: from.fromProfile, match: from.match, reminder: from.reminder, again: from.again, why, lastDay: null, pick: { whyMember: why, whyNow: "", set: null, tierPick: true } }).catch((err: any) => `error: ${String(err?.message ?? err).slice(0, 200)}`);
   });
   // After the picks (and any tier fallback) are applied: fit-only holds on their last morning age out and leave with their fact.
-  const aged = ageOutFitOnly(judgments);
+  const aged = o.protect ? [] : ageOutFitOnly(judgments);
   if (aged.length) await import("./workingSet.js").then((W) => W.exitRejectedFinds(userId, rejectedFindsOf(aged, backlog, ids), realPruneDeps)).catch((err: any) => console.error("picker: exiting aged-out finds failed (non-fatal):", err?.message ?? err));
   return plan;
 }

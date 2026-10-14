@@ -106,7 +106,8 @@ export type GoalSweepDeps = {
   recheck?: (row: any) => Promise<void>;
   // Tapered (services/dailySweep.ts memberTapered): their own silence past a week. Their goals are held: no recheck (which idles a goal
   // nobody answered), no lifecycle, no ask retiring, no search (Royce, 2026-10-14: the taper "never deletes goals, plans, or finds").
-  quiet?: (userId: string) => Promise<boolean>;
+  // "unknown" (the read failed) holds too, said as what it is, never as tapered.
+  quiet?: (userId: string) => Promise<"quiet" | "engaged" | "unknown">;
 };
 // What a plan reads for a member, shared by the hourly plan and the 9am floor's build (services/dailySweep.ts): the member record
 // (Phase A4: their goals with state, the kind of room they want, what they ruled out, what their asks already search, who they are)
@@ -169,7 +170,7 @@ const realDeps: GoalSweepDeps = {
   },
   mark: async (userId) => { await pool.query(`INSERT INTO profile_surfacing_state (user_id, last_attempted_at) VALUES ($1, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_attempted_at = NOW()`, [userId]); },
   held: async (userId) => (await import("../harness/proactive.js")).sweepHold(userId, "goal"),
-  quiet: async (userId) => (await import("./dailySweep.js")).memberTapered(userId),
+  quiet: async (userId) => (await import("./dailySweep.js")).memberSilence(userId),
   skipped: async (row, why, detail) => {
     const { recordDecision } = await import("../harness/core.js");
     await recordDecision({ layer: 7, decision: "goal_sweep.skip", userId: row.user_id, outcome: "skip", action: why, proposal: { detail } });
@@ -202,9 +203,10 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
       if (!goalSweepRuns(row, sig, last).run) return;
     }
     // Quiet: their goals are held as they are, said, never silent. A read that fails holds too (holding loses nothing).
-    if (deps.quiet && (await deps.quiet(row.user_id).catch(() => true))) {
+    const silence = deps.quiet ? await deps.quiet(row.user_id).catch(() => "unknown" as const) : "engaged";
+    if (silence !== "engaged") {
       await deps.mark(row.user_id);
-      await deps.skipped?.(row, "tapered", ["they've been quiet over a week: their goals are held as they are (no recheck, no plan changes, no search) until they write"]).catch(() => {});
+      await deps.skipped?.(row, silence === "quiet" ? "tapered" : "silence_unread", [silence === "quiet" ? "they've been quiet over a week: their goals are held as they are (no recheck, no plan changes, no search) until they write" : "their last message couldn't be read: their goals are held this run (nothing idled or retired on a failed read)"]).catch(() => {});
       return;
     }
     await deps.recheck?.(row).catch((err: any) => console.error(`Goal recheck failed for ${row.user_id}:`, err?.message ?? err));

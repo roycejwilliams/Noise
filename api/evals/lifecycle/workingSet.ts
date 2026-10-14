@@ -125,7 +125,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const ess = src("services/eventSurfacingSweep.ts");
   check("an exited find found again by a sweep stays out (never re-queued)", /exitedFindKeys\(userId, items\.map\(\(i\) => exitKey\(i\.match\)\)\)/.test(ess) && /if \(exited\.has\(exitKey\(it\.match\)\)\) continue;/.test(ess) && /exitedFindKeys\(userId, \[exitKey\(item\.match\)\]\)/.test(ess));
   // The rejects are picked by rejectedFindsOf (pure, sweepShadow.ts); a reject the guard held is a hold there, so it never exits.
-  check("every picker reject runs the exit, not only queued rows", /export function rejectedFindsOf[\s\S]{0,400}\.filter\(\(j\) => j\.verdict === "reject"\)/.test(src("services/sweepShadow.ts")) && /const uniq = rejectedFindsOf\(judgments, backlog, ids\);\s*await import\("\.\/workingSet\.js"\)\.then\(\(W\) => W\.exitRejectedFinds\(userId, uniq, realPruneDeps\)\)/.test(src("services/sweepShadow.ts")));
+  check("every picker reject runs the exit, not only queued rows", /export function rejectedFindsOf[\s\S]{0,400}\.filter\(\(j\) => j\.verdict === "reject"\)/.test(src("services/sweepShadow.ts")) && /const uniq = o\.protect \? \[\] : rejectedFindsOf\(judgments, backlog, ids\);\s*if \(uniq\.length\) await import\("\.\/workingSet\.js"\)\.then\(\(W\) => W\.exitRejectedFinds\(userId, uniq, realPruneDeps\)\)/.test(src("services/sweepShadow.ts")));
 }
 
 // ---------------------------------------------------------------- lifecycle (c): only live items count
@@ -137,7 +137,8 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   const now = new Date("2026-10-09T15:00:00Z");
   check("an ask that came back empty 3 times backs off to every 3 days", !W.askSearchDue({ empty_runs: 3, last_attempted_at: new Date("2026-10-08T15:00:00Z") }, now) && W.askSearchDue({ empty_runs: 3, last_attempted_at: new Date("2026-10-06T14:00:00Z") }, now) && W.askSearchDue({ empty_runs: 2, last_attempted_at: new Date("2026-10-09T08:00:00Z") }, now));
   check("after 6 empty runs it exits as searched, nothing found", W.askExhausted({ empty_runs: 6 }) && !W.askExhausted({ empty_runs: 5 }) && /closedReason: "nothing_found", reason: `searched \$\{t\.empty_runs\} times, nothing found`/.test(src("jobs/index.ts")));
-  check("each run counts its empty runs (a find resets them)", /UPDATE ask_checkins SET empty_runs = CASE WHEN \$2 THEN 0 ELSE empty_runs \+ 1 END/.test(src("services/eventSurfacingSweep.ts")));
+  // Counted through nextEmptyRuns since the taper fix (2026-10-14): frozen while the member is quiet, fresh after (evals/goals/taperHolds.ts).
+  check("each run counts its empty runs (a find resets them)", W.nextEmptyRuns({ prev: 2, found: false, quiet: false, heldBefore: false }).emptyRuns === 3 && W.nextEmptyRuns({ prev: 2, found: true, quiet: false, heldBefore: false }).emptyRuns === 0 && /UPDATE ask_checkins SET empty_runs = \$2/.test(src("services/eventSurfacingSweep.ts")));
   // Person asks and action requests.
   check("a person to meet goes to intros, never the search", /Answer "person" if it's asking for one particular kind of person/.test(src("services/askKind.ts")) && /if \(row\.kind === "person"\) \{[\s\S]{0,400}attemptNetworkSurfacing/.test(src("jobs/index.ts")));
   check("an action request (email, call, book) is help, never a find ask", /Answer "help" too when it asks Co to take an action for them \(email, call, text, book/.test(src("services/askKind.ts")));
@@ -220,7 +221,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   // 5. A failed search isn't an empty run.
   const ess = src("services/eventSurfacingSweep.ts");
   const sf = src("services/sweepFind.ts");
-  check("#5 empty runs count only when a search really ran", /&& trace\.searched\) \{\s*await pool\.query\(`UPDATE ask_checkins SET empty_runs/.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3);
+  check("#5 empty runs count only when a search really ran", /&& trace\.searched\) \{\s*const quiet = [\s\S]{0,600}UPDATE ask_checkins SET empty_runs/.test(ess) && (sf.match(/searched = true/g) ?? []).length === 3);
   // 6. Person asks are in the people graph and Mo's gaps.
   check("#6 person asks count in peopleGraph and Mo's network gaps", /kind IN \('find', 'person'\)/.test(src("services/peopleGraph.ts")) && (src("mo/team.ts").match(/kind IN \('find', 'person'\)/g) ?? []).length === 2);
   // 7. A goal change that didn't happen is never reported.

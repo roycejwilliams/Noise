@@ -265,14 +265,20 @@ export function quietTapered(o: { now: Date; zone: string | null; lastInboundAt:
   const quietDays = Math.floor(DateTime.fromJSDate(o.now).setZone(z).startOf("day").diff(DateTime.fromJSDate(o.lastInboundAt).setZone(z).startOf("day"), "days").days);
   return quietDays > SEARCH_TAPER.dailyUpToDays;
 }
-// Tapered now, read from their record. A read that fails counts as tapered: holding loses nothing, an exit can't be undone.
-export async function memberTapered(userId: string, now = new Date()): Promise<boolean> {
+// Their silence now, read from their record: "quiet" (tapered), "engaged", or "unknown" when the read failed. Callers that would delete
+// something treat unknown as quiet (holding loses nothing, an exit can't be undone); nothing ever logs unknown as tapered.
+export type Silence = "quiet" | "engaged" | "unknown";
+export async function memberSilence(userId: string, now = new Date()): Promise<Silence> {
   try {
     const [{ lastInboundAt }, zone] = await Promise.all([import("../harness/proactive.js"), memberZone(userId).catch(() => null)]);
-    return quietTapered({ now, zone, lastInboundAt: await lastInboundAt(userId) });
+    return quietTapered({ now, zone, lastInboundAt: await lastInboundAt(userId) }) ? "quiet" : "engaged";
   } catch {
-    return true;
+    return "unknown";
   }
+}
+// For the deletions: quiet, or a read that failed. Never used to decide a send.
+export async function memberTapered(userId: string, now = new Date()): Promise<boolean> {
+  return (await memberSilence(userId, now)) !== "engaged";
 }
 // Pure: whether today's floor is done. A quiet day's record (tapered, or a search whose finds were held) no longer counts once they've
 // written since it: the next hourly tick runs today's floor in full (instant resume, the same day).
