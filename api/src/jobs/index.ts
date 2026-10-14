@@ -540,7 +540,18 @@ export function registerJobs(io: Server) {
           const gone = await W.exitGoneMembersAsks();
           if (gone) console.log(`Working set: closed ${gone} ask(s) of members who are gone`);
           const { rows: tired } = await pool.query(`SELECT id, ask_id, user_id, ask_text, empty_runs FROM ask_checkins WHERE resolved_at IS NULL AND kind = 'find' AND empty_runs >= $1 AND intent IS DISTINCT FROM 'lookout'`, [W.ASK_BACKOFF.exitAfter]);
-          for (const t of tired) await W.exitAsk({ userId: t.user_id, askRowId: String(t.id), askId: String(t.ask_id), text: String(t.ask_text ?? ""), state: "expired", closedReason: "nothing_found", reason: `searched ${t.empty_runs} times, nothing found`, scope: "this ask; saying it again opens a new search" });
+          const { memberSilence } = await import("../services/dailySweep.js");
+          for (const t of tired) {
+            // Never while the member is quiet, or when their silence can't be read (Royce, 2026-10-14: the taper "never deletes"): held,
+            // and said once a day.
+            const silence = await memberSilence(String(t.user_id)).catch(() => "unknown" as const);
+            if (!W.askExitDue(t, silence)) {
+              const [said] = (await pool.query(`SELECT 1 FROM harness_decisions WHERE decision = 'ask.empty_exit_held' AND user_id = $1 AND proposal->>'askId' = $2 AND created_at > NOW() - INTERVAL '1 day' LIMIT 1`, [t.user_id, String(t.id)])).rows;
+              if (!said) await recordDecision({ layer: 5, decision: "ask.empty_exit_held", userId: t.user_id, outcome: "skip", action: silence === "quiet" ? "tapered" : "silence_unread", reason: silence === "quiet" ? `searched ${t.empty_runs} times with nothing found, but they're quiet: held, not closed, until they write` : `searched ${t.empty_runs} times with nothing found; their silence couldn't be read, so it isn't closed`, proposal: { askId: String(t.id) } }).catch(() => {});
+              continue;
+            }
+            await W.exitAsk({ userId: t.user_id, askRowId: String(t.id), askId: String(t.ask_id), text: String(t.ask_text ?? ""), state: "expired", closedReason: "nothing_found", reason: `searched ${t.empty_runs} times, nothing found`, scope: "this ask; saying it again opens a new search" });
+          }
         })
         .catch((err: any) => console.error("Working set: exits failed (non-fatal):", err?.message ?? err));
       await syncClosedAsks().catch((err: any) => console.error("Ask sync failed (non-fatal):", err?.message ?? err));

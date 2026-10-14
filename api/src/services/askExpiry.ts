@@ -43,20 +43,21 @@ export async function expireStaleAsks(): Promise<{ backfilled: number; expired: 
   );
   const { writeExitFact } = await import("./workingSet.js");
   let expired = 0;
-  const { memberTapered } = await import("./dailySweep.js");
+  const { memberSilence } = await import("./dailySweep.js");
   for (const r of due) {
     // A tapered member (their own silence past a week): an ask with no time frame of its own doesn't run out on its 30 days while
     // they're quiet; it's pushed a day and said, once a day (Royce, 2026-10-14: the taper "never deletes goals, plans, or finds"). One
     // whose named time passed does expire, said as "passed while quiet".
-    const quiet = await memberTapered(r.user_id).catch(() => true);
+    const silence = await memberSilence(r.user_id).catch(() => "unknown" as const);
+    const quiet = silence !== "engaged";
     const named = !!resolveAskWindow(String(r.ask_text ?? ""), DateTime.fromJSDate(new Date(r.created_at ?? r.expires_at))).window;
     if (quiet && !named) {
       await pool.query(`UPDATE ask_checkins SET expires_at = NOW() + INTERVAL '1 day' WHERE id = $1 AND resolved_at IS NULL`, [r.id]);
       const { recordDecision } = await import("../harness/core.js");
-      await recordDecision({ layer: 5, decision: "ask.expiry_held", userId: r.user_id, outcome: "skip", action: "tapered", reason: "they've been quiet over a week: this ask with no time frame of its own is held, not expired, until they write", proposal: { askId: r.id } }).catch(() => {});
+      await recordDecision({ layer: 5, decision: "ask.expiry_held", userId: r.user_id, outcome: "skip", action: silence === "quiet" ? "tapered" : "silence_unread", reason: silence === "quiet" ? "they've been quiet over a week: this ask with no time frame of its own is held, not expired, until they write" : "their last message couldn't be read: this ask is held, not expired, on a failed read", proposal: { askId: r.id } }).catch(() => {});
       continue;
     }
-    const ok = await writeExitFact({ userId: r.user_id, kind: "ask", itemKey: `ask:${r.id}`, label: String(r.ask_text ?? ""), state: "expired", reason: `the time it was for passed (${new Date(r.expires_at).toISOString().slice(0, 10)})${quiet ? " while quiet" : ""}`, scope: "this ask only; saying it again opens a new one" });
+    const ok = await writeExitFact({ userId: r.user_id, kind: "ask", itemKey: `ask:${r.id}`, label: String(r.ask_text ?? ""), state: "expired", reason: `the time it was for passed (${new Date(r.expires_at).toISOString().slice(0, 10)})${silence === "quiet" ? " while quiet" : ""}`, scope: "this ask only; saying it again opens a new one" });
     if (!ok) continue;
     const { rowCount } = await pool.query(
       `UPDATE ask_checkins SET resolved_at = NOW(), expired_at = NOW(), closed_reason = COALESCE(closed_reason, 'expired') WHERE id = $1 AND resolved_at IS NULL`,

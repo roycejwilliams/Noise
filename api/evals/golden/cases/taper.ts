@@ -15,7 +15,7 @@ const NOW = () => new Date();
 const daysAgo = (n: number) => new Date(NOW().getTime() - n * 86_400_000);
 // The picker's held run, with the real silence check and stubbed store writes.
 const quietDeps = (lastInboundAt: Date | null, log: string[]) => ({
-  tapered: async (_u: string, now: Date) => quietTapered({ now, zone: Z, lastInboundAt }),
+  silence: async (_u: string, now: Date) => (quietTapered({ now, zone: Z, lastInboundAt }) ? ("quiet" as const) : ("engaged" as const)),
   prunePast: async () => { log.push("prunePast"); return { exited: 0 }; },
   record: (async (d: any) => { log.push(`${d.action}`); }) as any,
 });
@@ -39,8 +39,8 @@ const silentTapered: GoldenCase = {
     if (offDay.search || offDay.everyDays !== 3) misses.push(`searched a day after the last search (${offDay.why})`);
     if (!onDay.search) misses.push(`not searched on its third day (${onDay.why})`);
     if (!/^tapered: quiet 9 days, next search \d{4}-\d{2}-\d{2}$/.test(offDay.why)) misses.push(`the tapered day isn't said as such: ${offDay.why}`);
-    if (!held || log.join() !== "prunePast,tapered_hold") misses.push(`the picker wasn't held while quiet (${log.join()})`);
-    return result(misses, `off day: ${offDay.why}; search day: ${onDay.why}; picker: ${held ? "held" : "ran"} (${log.join(" > ")})`);
+    if (held !== "held" || log.join() !== "prunePast,tapered_hold") misses.push(`the picker wasn't held while quiet (${log.join()})`);
+    return result(misses, `off day: ${offDay.why}; search day: ${onDay.why}; picker: ${held} (${log.join(" > ")})`);
   },
 };
 
@@ -62,8 +62,8 @@ const replyResumes: GoldenCase = {
     const misses: string[] = [];
     if (done) misses.push("today's tapered record still counts as done after they wrote");
     if (!cadence.search || cadence.everyDays !== 1) misses.push(`not full cadence after the reply (${cadence.why})`);
-    if (held) misses.push("the picker is still held after they wrote");
-    return result(misses, `today's floor ${done ? "done" : "runs again now"}; cadence ${cadence.everyDays === 1 ? "daily" : `every ${cadence.everyDays}`} (${cadence.why}); picker ${held ? "held" : "runs"}`);
+    if (held !== "run") misses.push("the picker is still held after they wrote");
+    return result(misses, `today's floor ${done ? "done" : "runs again now"}; cadence ${cadence.everyDays === 1 ? "daily" : `every ${cadence.everyDays}`} (${cadence.why}); picker ${held}`);
   },
 };
 
@@ -142,12 +142,12 @@ const engagedUnchanged: GoldenCase = {
     const sends = r.judgments.filter((j) => j.verdict === "send");
     const tiers = sends.map((j) => tierOf(c.pool.find((p) => p.id === j.id)!));
     const misses: string[] = [];
-    if (held || log.length) misses.push(`an engaged member's picker was held or touched (${log.join()})`);
+    if (held !== "run" || log.length) misses.push(`an engaged member's picker was held or touched (${log.join()})`);
     if (!cadence.search || cadence.everyDays !== 1) misses.push(`an engaged member isn't searched daily (${cadence.why})`);
     if (r.error) misses.push(`picker error: ${r.error}`);
     if (new Set(tiers).size !== tiers.length) misses.push("two sends from one tier");
     for (const t of [1, 2, 3] as const) if (!tiers.includes(t) && !r.judgments.some((j) => tierOf(c.pool.find((p) => p.id === j.id)!) === t && j.verdict === "reject")) misses.push(`tier ${t} sent nothing without a verified reason`);
-    return result(misses, `${r.judgments.map((j) => `${j.name.slice(0, 28)} ${j.verdict}/${j.reason}`).join("; ")}; picker ${held ? "held" : "ran"}; cadence ${cadence.why}`);
+    return result(misses, `${r.judgments.map((j) => `${j.name.slice(0, 28)} ${j.verdict}/${j.reason}`).join("; ")}; picker ${held}; cadence ${cadence.why}`);
   },
 };
 

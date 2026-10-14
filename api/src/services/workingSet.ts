@@ -142,6 +142,20 @@ export function askSearchDue(r: { empty_runs?: number | null; last_attempted_at?
 export function askExhausted(r: { empty_runs?: number | null }): boolean {
   return Number(r.empty_runs ?? 0) >= ASK_BACKOFF.exitAfter;
 }
+// Pure: an ask's empty-run count after one hourly search (Royce, 2026-10-14: the taper "never deletes"). While the member is quiet (or
+// their silence couldn't be read) an empty run isn't counted: the count is frozen (its backoff keeps it searching less often, as before)
+// and marked held. The first empty run after they're engaged again starts counting fresh. A find resets it as always. An engaged member
+// who never went quiet counts exactly as before.
+export function nextEmptyRuns(o: { prev: number; found: boolean; quiet: boolean; heldBefore: boolean }): { emptyRuns: number; held: boolean } {
+  if (o.found) return { emptyRuns: 0, held: false };
+  if (o.quiet) return { emptyRuns: o.prev, held: true };
+  if (o.heldBefore) return { emptyRuns: 1, held: false };
+  return { emptyRuns: o.prev + 1, held: false };
+}
+// Pure: does this ask exit as "searched, nothing found" now? Never while its member is quiet or their silence can't be read.
+export function askExitDue(r: { empty_runs?: number | null }, silence: "quiet" | "engaged" | "unknown"): boolean {
+  return silence === "engaged" && askExhausted(r);
+}
 
 // One ask out of the working set: the fact, then the close (askKind.ts closeAsk, the one way an ask closes, in both places it lives).
 export async function exitAsk(o: { userId: string; askRowId: string; askId: string; text: string; state: ExitState; reason: string; scope?: string; closedReason: string }, deps: ExitDeps = realExitDeps): Promise<boolean> {
@@ -452,7 +466,9 @@ export async function pruneAllWorkingSets(deps: PruneDeps, now = new Date()): Pr
     const zone = await deps.zone(r.user_id).catch(() => null);
     const z = zone ?? "America/Los_Angeles";
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: z, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
-    pruned += (await pruneBacklogs(r.user_id, today, deps)).exited;
+    // A quiet member (or one whose silence can't be read) keeps everything but what has passed (Royce, 2026-10-14).
+    const quiet = await import("./dailySweep.js").then((D) => D.memberTapered(String(r.user_id), now)).catch(() => true);
+    pruned += (await pruneBacklogs(r.user_id, today, deps, { quiet })).exited;
   }
   return { goneAsks, goneItems, pruned };
 }

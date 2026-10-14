@@ -24,7 +24,7 @@ const src = (p: string) => readFileSync(new URL(`../../${p}`, import.meta.url), 
 const jobs = src("src/jobs/index.ts");
 check("only asks a search can find are searched", /WHERE ac\.resolved_at IS NULL AND ac\.kind IN \('find', 'person'\)\s+AND u\.archived_at IS NULL/.test(jobs));
 check("what they brought up in the last few days is searched first", /ORDER BY \(COALESCE\(ac\.last_mentioned_at, ac\.created_at\) > NOW\(\) - INTERVAL '3 days'\) DESC,\s*ac\.last_attempted_at ASC NULLS FIRST/.test(jobs));
-check("asks are classified and profiles synced before each sweep", /await classifyOpenAsks\(\)[\s\S]{0,2000}await syncClosedAsks\(\)/.test(jobs));
+check("asks are classified and profiles synced before each sweep", /await classifyOpenAsks\(\)[\s\S]{0,4000}await syncClosedAsks\(\)/.test(jobs));
 const pe = src("src/services/profileExtraction.ts");
 check("a new ask is classified and marked mentioned", /INSERT INTO ask_checkins \(user_id, ask_id, ask_text, expires_at, kind, kind_checked_at, last_mentioned_at\)/.test(pe) && /classifyAsk\(ask\.text\)/.test(pe));
 check("restating an ask marks it mentioned again", /expires_at = COALESCE\(\$4::timestamptz, expires_at\), last_mentioned_at = NOW\(\)/.test(pe));

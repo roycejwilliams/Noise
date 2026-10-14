@@ -683,8 +683,16 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
   // Empty runs in a row (the backoff, services/workingSet.ts askSearchDue): a real ask only.
   // Only a search that really ran counts (review of #133: a throw or a used-up web budget counted as "nothing found").
   // The 9am daily sweep doesn't count (services/dailySweep.ts): it leaves the ask lifecycle as the hourly sweep runs it (Royce, 2026-10-13).
+  // While they're quiet the count is frozen and the ask marked held; the first empty run once they're engaged again counts fresh
+  // (services/workingSet.ts nextEmptyRuns).
   if (!candidate.allSources && /^[0-9a-f-]{36}$/i.test(candidate.askId) && trace.searched) {
-    await pool.query(`UPDATE ask_checkins SET empty_runs = CASE WHEN $2 THEN 0 ELSE empty_runs + 1 END WHERE id::text = $1`, [candidate.askId, trace.found.length > 0]).catch(() => {});
+    const quiet = await import("./dailySweep.js").then((D) => D.memberTapered(candidate.userId)).catch(() => true);
+    const [cur] = (await pool.query(`SELECT empty_runs, quiet_held_at FROM ask_checkins WHERE id::text = $1`, [candidate.askId]).catch(() => ({ rows: [] as any[] }))).rows;
+    if (cur) {
+      const { nextEmptyRuns } = await import("./workingSet.js");
+      const n = nextEmptyRuns({ prev: Number(cur.empty_runs ?? 0), found: trace.found.length > 0, quiet, heldBefore: !!cur.quiet_held_at });
+      await pool.query(`UPDATE ask_checkins SET empty_runs = $2, quiet_held_at = CASE WHEN $3 THEN COALESCE(quiet_held_at, NOW()) ELSE NULL END WHERE id::text = $1`, [candidate.askId, n.emptyRuns, n.held]).catch(() => {});
+    }
   }
   // A reminder replaces an older queued pitch for the same event.
   const merged = [
@@ -991,8 +999,9 @@ export async function onEventOfferDropped(userId: string, payload: EventOfferPay
   }
   // A queued find whose send window ended while they're quiet (tapered) goes back to the backlog, not out: it surfaces when they write
   // (Royce, 2026-10-14: the taper "never deletes ... finds"). One whose date passed can't surface; the picker's quiet prune says so.
-  if (status === "expired" && !isPastEvent(payload.match, await memberZone(userId)) && (await import("./dailySweep.js").then((D) => D.memberTapered(userId)).catch(() => true))) {
-    await recordDecision({ layer: 5, decision: "sweep.held_quiet", userId, outcome: "skip", action: "expired_offer_kept", reason: "its send window ended while they're quiet: back in the backlog for when they write", proposal: { name: payload.match?.name ?? null, candidateId } }).catch(() => {});
+  const silence = status === "expired" && !isPastEvent(payload.match, await memberZone(userId)) ? await import("./dailySweep.js").then((D) => D.memberSilence(userId)).catch(() => "unknown" as const) : "engaged";
+  if (silence !== "engaged") {
+    await recordDecision({ layer: 5, decision: "sweep.held_quiet", userId, outcome: "skip", action: "expired_offer_kept", reason: silence === "quiet" ? "its send window ended while they're quiet: back in the backlog for when they write" : "its send window ended and their silence couldn't be read: kept in the backlog (nothing is removed on a failed read)", proposal: { name: payload.match?.name ?? null, candidateId, silence } }).catch(() => {});
     return;
   }
   await removeFromBacklog(userId, payload.askId, payload.match);

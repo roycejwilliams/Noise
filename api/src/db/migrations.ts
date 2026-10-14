@@ -821,6 +821,10 @@ export async function runMigrations(): Promise<void> {
     // version of the kind prompt read the ask.
     .then(() => pool.query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS empty_runs INT NOT NULL DEFAULT 0, ADD COLUMN IF NOT EXISTS kind_version INT NOT NULL DEFAULT 1`))
     .catch((err: Error) => console.error("ask_checkins lifecycle columns migration failed:", err));
+  // An ask whose empty runs weren't counted while its member was quiet (services/workingSet.ts nextEmptyRuns, 2026-10-14).
+  await pool
+    .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS quiet_held_at TIMESTAMPTZ`)
+    .catch((err: Error) => console.error("ask_checkins.quiet_held_at migration failed:", err));
   await pool
     .query(`ALTER TABLE ask_checkins ADD COLUMN IF NOT EXISTS expired_at TIMESTAMPTZ`)
     .catch((err: Error) => console.error("ask_checkins.expired_at migration failed:", err));

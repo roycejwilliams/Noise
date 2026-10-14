@@ -147,7 +147,7 @@ const sends = (js: Judgment[]) => js.filter((j) => j.verdict === "send").map((j)
     await SH.fillTiers(js, report, async () => "queued");
     const aged = ageOutFitOnly(js);
     check("A fails to queue, B is on its 5th morning: B still goes as its tier's fallback (aging runs after the apply); C ages out", js.find((j) => j.id === "C2")!.verdict === "send" && aged.map((j) => j.id).join() === "C3", js.map((j) => `${j.id}:${j.verdict}/${j.reason}/${j.fitOnlyMornings}`));
-    check("pin: aging runs after the picks and the tier fallback are applied", (() => { const f = src("services/sweepShadow.ts").replace(/\s+/g, ""); return f.indexOf("awaitfillTiers(judgments,report") > 0 && f.indexOf("constaged=ageOutFitOnly(judgments)") > f.indexOf("awaitfillTiers(judgments,report"); })());
+    check("pin: aging runs after the picks and the tier fallback are applied", (() => { const f = src("services/sweepShadow.ts").replace(/\s+/g, ""); return f.indexOf("awaitfillTiers(judgments,report") > 0 && f.indexOf("constaged=o.protect?[]:ageOutFitOnly(judgments)") > f.indexOf("awaitfillTiers(judgments,report"); })());
   }
   // A pool over 40: what the last run never judged comes first, so nothing sits past the cut forever.
   const raw = Array.from({ length: 45 }, (_, i) => ({ name: `Find ${i + 1}`, date: null, tier: 3, askId: null, fromProfile: true, reminder: false, details: null }));

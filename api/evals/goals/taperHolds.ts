@@ -53,22 +53,25 @@ const NOW = at("2026-10-30");
 // ---------------------------------------------------------------- the picker holds while quiet: no aging tick, no exit, no send
 {
   const calls: string[] = [];
-  const deps = (tapered: boolean): SH.QuietDeps => ({
-    tapered: async () => tapered,
+  const deps = (silence: "quiet" | "engaged" | "unknown"): SH.QuietDeps => ({
+    silence: async () => silence,
     prunePast: async () => { calls.push("prunePast"); return { exited: 1 }; },
     record: (async (d: any) => { calls.push(`record:${d.action}:${d.reason}`); }) as any,
   });
-  const held = await SH.holdWhileQuiet("u", "2026-10-30", NOW, deps(true));
-  check("tapered: the run is held; only passed finds are pruned; it's logged with how many passed while quiet", held && calls[0] === "prunePast" && /^record:tapered_hold:tapered: .*1 passed while quiet$/.test(calls[1]), calls);
+  const held = await SH.holdWhileQuiet("u", "2026-10-30", NOW, deps("quiet"));
+  check("tapered: the run is held; only passed finds are pruned; it's logged with how many passed while quiet", held === "held" && calls[0] === "prunePast" && /^record:tapered_hold:tapered: .*1 passed while quiet$/.test(calls[1]), calls);
   calls.length = 0;
-  check("engaged: nothing is held, nothing is called (the picker runs exactly as before)", !(await SH.holdWhileQuiet("u", "2026-10-30", NOW, deps(false))) && calls.length === 0);
+  check("engaged: nothing is held, nothing is called (the picker runs exactly as before)", (await SH.holdWhileQuiet("u", "2026-10-30", NOW, deps("engaged"))) === "run" && calls.length === 0);
+  calls.length = 0;
+  const unread = await SH.holdWhileQuiet("u", "2026-10-30", NOW, deps("unknown"));
+  check("a failed silence read: the run still picks and sends (protect), nothing is pruned, and it's never logged as tapered", unread === "protect" && !calls.includes("prunePast") && calls.length === 1 && /^record:protect:their last message couldn't be read/.test(calls[0]) && !/tapered/.test(calls[0]), calls);
   const rs = flat(SH.runSweepShadow);
   // Compared without whitespace or the parentheses a build may drop.
   const rsP = rs.replace(/[()]/g, "");
-  const guard = "if!opts.dryRun&&awaitholdWhileQuietuserId,today,nowreturn";
+  const guard = 'constquietRun=opts.dryRun?"run":awaitholdWhileQuietuserId,today,now;ifquietRun==="held"return';
   check("pin: every picker run (morning, hourly, urgent, retry) is held while quiet before any exit, aging or pick", rsP.includes(guard) && rsP.indexOf(guard) < rsP.indexOf("closedAskRefs") && rsP.indexOf(guard) < rsP.indexOf("pruneBacklogs") && rsP.indexOf(guard) < rsP.indexOf("selectForMember") && rsP.indexOf(guard) < rsP.indexOf("applyPicks"));
-  check("pin: the real quiet check is the member's own silence, and its prune is the past-only one", /memberTapered\(userId, now\)/.test(src("services/sweepShadow.ts")) && /pruneBacklogs\(userId, today, realPruneDeps, \{ quiet: true \}\)/.test(src("services/sweepShadow.ts")));
-  check("a read of their silence that fails counts as tapered (holding loses nothing; an exit can't be undone)", /return quietTapered\(\{ now, zone, lastInboundAt: await lastInboundAt\(userId\) \}\);\s*\} catch \{\s*return true;/.test(src("services/dailySweep.ts")));
+  check("pin: the real quiet check is the member's own silence, and its prune is the past-only one", /memberSilence\(userId, now\)/.test(src("services/sweepShadow.ts")) && /pruneBacklogs\(userId, today, realPruneDeps, \{ quiet: true \}\)/.test(src("services/sweepShadow.ts")));
+  check("a read of their silence that fails is 'unknown': the deletions treat it as quiet, nothing logs it as tapered", /\? "quiet" : "engaged";\s*\} catch \{\s*return "unknown";/.test(src("services/dailySweep.ts")) && /return \(await memberSilence\(userId, now\)\) !== "engaged";/.test(src("services/dailySweep.ts")));
 }
 
 // ---------------------------------------------------------------- while quiet only a passed find leaves, and it says so
@@ -127,7 +130,7 @@ const NOW = at("2026-10-30");
 
 // ---------------------------------------------------------------- the hourly goal sweep holds a quiet member's goals
 {
-  const run = async (quiet: boolean | undefined) => {
+  const run = async (quiet: "quiet" | "engaged" | "unknown" | undefined) => {
     const calls: string[] = [];
     const row = { user_id: "u", goals: ["meet founders"], intent: [], last_attempted_at: null, cooldown_cleared: true };
     await GS.runGoalSweep(async (items: any[], _n: number, fn: any) => { for (const i of items) await fn(i); }, {
@@ -142,18 +145,60 @@ const NOW = at("2026-10-30");
     });
     return calls.join(",");
   };
-  check("quiet: no recheck (which idles an unanswered goal), no plan, no search; said", (await run(true)) === "mark,skipped:tapered");
-  check("engaged: exactly as before (recheck, plan, search)", (await run(false)) === "recheck,mark,plan,surface" && (await run(undefined)) === "recheck,mark,plan,surface");
-  check("pin: the real goal sweep reads the same silence", /quiet: async \(userId\) => \(await import\("\.\/dailySweep\.js"\)\)\.memberTapered\(userId\)/.test(src("services/goalSweep.ts")));
+  check("quiet: no recheck (which idles an unanswered goal), no plan, no search; said", (await run("quiet")) === "mark,skipped:tapered");
+  check("a failed silence read holds the goals this run too, said as what it is (never 'tapered')", (await run("unknown")) === "mark,skipped:silence_unread");
+  check("engaged: exactly as before (recheck, plan, search)", (await run("engaged")) === "recheck,mark,plan,surface" && (await run(undefined)) === "recheck,mark,plan,surface");
+  check("pin: the real goal sweep reads the same silence", /quiet: async \(userId\) => \(await import\("\.\/dailySweep\.js"\)\)\.memberSilence\(userId\)/.test(src("services/goalSweep.ts")));
 }
 
 // ---------------------------------------------------------------- the other exit paths
 {
   const ax = src("services/askExpiry.ts");
   check("ask expiry: while quiet an ask with no time frame of its own isn't expired on its 30 days (pushed a day, said once a day)", /if \(quiet && !named\) \{[\s\S]{0,200}expires_at = NOW\(\) \+ INTERVAL '1 day'[\s\S]{0,300}decision: "ask\.expiry_held"/.test(ax));
-  check("ask expiry: one whose named time passed expires, said 'while quiet'", /the time it was for passed \(\$\{new Date\(r\.expires_at\)\.toISOString\(\)\.slice\(0, 10\)\}\)\$\{quiet \? " while quiet" : ""\}/.test(ax));
+  check("ask expiry: one whose named time passed expires, said 'while quiet' (only when they really are quiet)", /the time it was for passed \(\$\{new Date\(r\.expires_at\)\.toISOString\(\)\.slice\(0, 10\)\}\)\$\{silence === "quiet" \? " while quiet" : ""\}/.test(ax) && /action: silence === "quiet" \? "tapered" : "silence_unread"/.test(ax));
   const es = src("services/eventSurfacingSweep.ts");
-  check("a queued find whose send window ended while quiet goes back to the backlog (unless its date passed), said", /if \(status === "expired" && !isPastEvent\(payload\.match, await memberZone\(userId\)\) && \(await import\("\.\/dailySweep\.js"\)\.then\(\(D\) => D\.memberTapered\(userId\)\)/.test(es) && /action: "expired_offer_kept"/.test(es));
+  check("a queued find whose send window ended while quiet goes back to the backlog (unless its date passed), said", /const silence = status === "expired" && !isPastEvent\(payload\.match, await memberZone\(userId\)\) \? await import\("\.\/dailySweep\.js"\)\.then\(\(D\) => D\.memberSilence\(userId\)\)/.test(es) && /if \(silence !== "engaged"\) \{/.test(es) && /action: "expired_offer_kept"/.test(es));
+}
+
+// ---------------------------------------------------------------- the 7:30 daily prune keeps a quiet member's finds
+{
+  // An undated opening found on a tapered search day: the daily prune runs at 7:30 every morning while they're quiet.
+  const facts: any[] = [];
+  let classified = 0;
+  const store = new Map<string, any[]>([["profile", [{ askText: "x", match: { tier: 3, kind: "opportunity", name: "Rolling Founder Residency", url: "https://x/r" } }, { askText: "x", match: { tier: 2, kind: "public_event", form: "event", name: "Past Mixer", url: "https://x/p", event_date: "2026-10-01" } }]]]);
+  const deps: any = { backlogs: async () => [...store.entries()].map(([ask_id, items]) => ({ ask_id, items })), merge: async (_u: string, a: string, ch: any) => { store.set(a, W.applyChange(store.get(a) ?? [], ch, deps.key)); }, classify: async (m: any) => { classified++; return { match: m, result: "undated" }; }, zone: async () => Z, key: (m: any) => F.exitKey(m), writeFact: async (e: any) => { facts.push(e); } };
+  for (const d of ["2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"]) await W.pruneBacklogs("u", d, deps, { quiet: true });
+  const left = store.get("profile")!.map((i: any) => i.match.name);
+  check("a quiet member's undated opening survives a week of 7:30 passes (only the past mixer leaves, 'passed while quiet')", left.join() === "Rolling Founder Residency" && facts.length === 1 && /passed while quiet/.test(facts[0].reason) && classified === 0, { left, facts });
+  const pool = SH.buildShadowPool(store.get("profile")!.map((i: any) => ({ name: i.match.name, date: null, tier: 3, askId: null, fromProfile: true, reminder: false, details: null })), "2026-10-31", new Map(), new Set());
+  check("and it's in the pool on the resume morning", pool.some((p) => p.name === "Rolling Founder Residency"));
+  check("pin: the 7:30 prune passes each member's silence (quiet, or a failed read, keeps all but what passed)", /const quiet = await import\("\.\/dailySweep\.js"\)\.then\(\(D\) => D\.memberTapered\(String\(r\.user_id\), now\)\)\.catch\(\(\) => true\);\s*pruned \+= \(await pruneBacklogs\(r\.user_id, today, deps, \{ quiet \}\)\)\.exited;/.test(src("services/workingSet.ts")));
+}
+
+// ---------------------------------------------------------------- the hourly ask sweep's empty-run exit never takes a quiet member's ask
+{
+  let n = { emptyRuns: 5, held: false };
+  for (let i = 0; i < 40; i++) n = W.nextEmptyRuns({ prev: n.emptyRuns, found: false, quiet: true, heldBefore: n.held || i > 0 });
+  check("a quiet member's ask survives any number of empty runs: the count is frozen and the ask held", n.emptyRuns === 5 && n.held && !W.askExitDue({ empty_runs: 6 }, "quiet") && !W.askExitDue({ empty_runs: 99 }, "unknown"));
+  const resumed = W.nextEmptyRuns({ prev: 5, found: false, quiet: false, heldBefore: true });
+  check("after they write, counting starts fresh (the first empty run counts 1, not 6)", resumed.emptyRuns === 1 && !resumed.held && !W.askExitDue({ empty_runs: resumed.emptyRuns }, "engaged"));
+  let e = { emptyRuns: 0, held: false };
+  const seen: number[] = [];
+  for (let i = 0; i < 6; i++) { e = W.nextEmptyRuns({ prev: e.emptyRuns, found: false, quiet: false, heldBefore: false }); seen.push(e.emptyRuns); }
+  check("engaged: unchanged (counts 1..6 and exits at 6; a find resets it)", seen.join() === "1,2,3,4,5,6" && W.askExitDue({ empty_runs: 6 }, "engaged") && W.nextEmptyRuns({ prev: 4, found: true, quiet: false, heldBefore: false }).emptyRuns === 0);
+  const es = src("services/eventSurfacingSweep.ts").replace(/\s+/g, "");
+  check("pin: the hourly search counts through nextEmptyRuns with the member's silence, and marks held asks", es.includes("nextEmptyRuns({prev:Number(cur.empty_runs??0),found:trace.found.length>0,quiet,heldBefore:!!cur.quiet_held_at})") && es.includes("quiet_held_at=CASEWHEN$3THENCOALESCE(quiet_held_at,NOW())ELSENULLEND"));
+  const jobs = src("jobs/index.ts").replace(/\s+/g, "");
+  check("pin: the empty-run exit asks askExitDue with the member's silence, and logs a held ask once a day", jobs.includes("if(!W.askExitDue(t,silence)){") && jobs.includes("decision:\"ask.empty_exit_held\"") && jobs.indexOf("if(!W.askExitDue(t,silence)){") < jobs.indexOf("awaitW.exitAsk({userId:t.user_id"));
+  check("the held-ask column is migrated", /ADD COLUMN IF NOT EXISTS quiet_held_at TIMESTAMPTZ/.test(src("db/migrations.ts")));
+}
+
+// ---------------------------------------------------------------- a failed silence read never costs an engaged member's morning
+{
+  const rs = src("services/sweepShadow.ts").replace(/\s+/g, "");
+  check("pin: on a failed read the run goes on (picks and sends), with the dead-backlog clear and the prune skipped", rs.includes('constprotect=quietRun==="protect";') && rs.includes("if(!opts.dryRun&&!protect){const{dead}=splitDeadBacklog(") && rs.includes('if(!opts.dryRun&&!protect)awaitimport("./workingSet.js").then((W)=>W.pruneBacklogs(userId,today,realPruneDeps))'));
+  const ap = src("services/sweepShadow.ts").replace(/\s+/g, "");
+  check("pin: and its apply queues the picks but exits nothing (no reject exit, no aged-out exit; a rejected queued row is only kept from sending)", ap.includes("applyPicks(userId,r.judgments,backlogs,today,r.set??null,applied,contextIds(ctx),{protect})") && ap.includes("if(o.protect)continue;") && ap.includes("constuniq=o.protect?[]:rejectedFindsOf(") && ap.includes("constaged=o.protect?[]:ageOutFitOnly(judgments);"));
 }
 
 // ---------------------------------------------------------------- surfacing on resume: held finds compete, never dumped
