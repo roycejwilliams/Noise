@@ -113,3 +113,26 @@ async function loadOwnWork() {
 loadOwnWork().catch(() => {
   if (ownStatus) ownStatus.textContent = "Couldn't load the list.";
 });
+
+// When members engage (team only, measure only): nothing reads this to time a send.
+type RhythmRow = { name: string; zone: string; started: number; byHour: number[]; byWeekday: number[]; peakHours: string | null; peakDay: string | null; proactive: number; replied: number; medianReplyMin: number | null };
+const rhythmStatus = document.getElementById("rhythm-status") as HTMLElement | null;
+const rhythmTable = document.getElementById("rhythm") as HTMLTableElement | null;
+const mins = (m: number | null) => (m === null ? "" : m < 90 ? `${m} min` : `${Math.round(m / 60)} h`);
+async function loadRhythm() {
+  if (!rhythmStatus || !rhythmTable) return;
+  const res = await fetch("/api/sweeps/rhythm?days=28", { credentials: "same-origin" });
+  if (!res.ok) {
+    rhythmStatus.textContent = res.status === 404 ? "Not available." : "Couldn't load the rhythm view.";
+    return;
+  }
+  const { rows } = (await res.json()) as { rows: RhythmRow[] };
+  rhythmStatus.textContent = rows.length ? `${rows.length} member(s) with texts in the last 28 days` : "No texts in the last 28 days.";
+  if (!rows.length) return;
+  let html = `<thead><tr><th>Member</th><th>Opened</th><th>Busiest hours</th><th>Busiest day</th><th>Co texted first</th><th>Texted back</th><th>Median wait</th><th>Zone</th></tr></thead><tbody>`;
+  for (const r of rows) html += `<tr><td>${esc(r.name)}</td><td class="num">${r.started}</td><td>${esc(r.peakHours ?? "too few to say")}</td><td>${esc(r.peakDay ?? "")}</td><td class="num">${r.proactive}</td><td class="num">${r.replied}</td><td class="num">${esc(mins(r.medianReplyMin))}</td><td class="detail">${esc(r.zone)}</td></tr>`;
+  rhythmTable.innerHTML = html + "</tbody>";
+}
+loadRhythm().catch(() => {
+  if (rhythmStatus) rhythmStatus.textContent = "Couldn't load the rhythm view.";
+});

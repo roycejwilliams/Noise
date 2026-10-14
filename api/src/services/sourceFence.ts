@@ -8,7 +8,7 @@
 //      never theirs-to-Co (services/teamLines.ts); dropped in SQL and again in code, so lines handed in from elsewhere are fenced too
 //   2. other members: another member's name or details are stripped (services/memberSafeMemories.ts memberSafeLine). When the names
 //      can't be read, every line is withheld (fails closed)
-// What each reader may touch is declared in SOURCES. The modules that use it (searchCoverage, whatsAhead, lessonCheck) read member
+// What each reader may touch is declared in SOURCES. The modules that use it (searchCoverage, whatsAhead, lessonCheck, memberWorld) read member
 // data only through here; layer 1 (evals/guards/rules.ts, section 5) fails any of them that queries a table itself.
 import pool from "../db/db.js";
 import { notToTeammate, withoutTeammateLines } from "./teamLines.js";
@@ -23,6 +23,8 @@ export const SOURCES = {
   scheduled: "a: Co's open tasks and check-ins for them (co_tasks)",
   queuedFinds: "a: finds queued to them (proactive_candidates, a count only)",
   lessonOriginals: "a: the lessons Co already checked for them (lesson.check, the guessed lesson only)",
+  exchange: "a: their recent texts with Co, both sides, as sent (text_exchange, never to or from a teammate); the member-world read (services/memberWorld.ts)",
+  activity: "a: when they were last active on any channel (their texts, voice memos, calls, texts to a teammate): timestamps only, never what was said",
 } as const;
 // The two other paths the 10-13 fixes added read no member data at all, so they have nothing to fence:
 //   - offer detection (harness/replyGrounding.ts offersAlready): reads only the reply Co is about to send
@@ -71,7 +73,7 @@ const OWN_WORDING_CUTS = new Set([
   "claim_work_status", "claim_future_promise", "claim_capability", "claim_prediction",
   "no_followup_promise", "no_result_promise", "no_internal_narration", "no_capability_denial", "no_prediction",
   "no_repeat_question", "no_duplicate_ask", "no_repeat", "no_link_offer_without_link", "no_emotion_label", "local_hours", "time_on_file",
-  "no_invite_sent_claim", "no_call_placed_claim", "no_handover_claim", "no_group_chat_claim",
+  "no_invite_sent_claim", "no_call_placed_claim", "no_handover_claim", "no_group_chat_claim", "no_thread_report",
 ]);
 export const DRAFT_WITHHELD = "(draft withheld: it carried another member's details)";
 export function fenceReplyLog(f: Pick<Fence, "strip">, logs: ReplyLog[]): ReplyLog[] {
@@ -102,6 +104,21 @@ export function redactCuts(draft: string, failed: FailedCheck[]): string | null 
     out = out.split(quote).join(LINE_WITHHELD);
   }
   return out;
+}
+
+// Pure: their recent exchange with Co, both sides, fenced. Lines to or from a teammate go first (in SQL and here), then other members'
+// details; a line the strip blanks is dropped, never sent on as a hole. Only Co's own texts (a reply, a hold text) and theirs count.
+export type ExchangeLine = { at: Date; from: "member" | "co"; text: string };
+export function fenceExchange(f: Pick<Fence, "strip">, rows: { at: Date; content: string }[]): ExchangeLine[] {
+  return rows.flatMap((r) => {
+    const c = String(r.content ?? "");
+    const own = withoutTeammateLines(c).trim();
+    if (!own || own !== c.trim()) return [];
+    const m = own.match(/^(User said|User sent a voice memo|Co replied|Co is looking):\s*([\s\S]*)$/);
+    if (!m || !m[2].trim()) return [];
+    const kept = f.strip(m[2].trim());
+    return kept ? [{ at: r.at, from: m[1].startsWith("User") ? ("member" as const) : ("co" as const), text: kept }] : [];
+  });
 }
 
 // ---------------------------------------------------------------- the readers (the only member-data SQL these paths run)
@@ -149,6 +166,25 @@ export async function readScheduled(f: Fence, now: Date, limit: number): Promise
 export async function readQueuedFindCount(f: Fence): Promise<number> {
   const { rows } = await pool.query(`SELECT count(*)::int AS n FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND type = 'event_offer'`, [f.userId]);
   return Number(rows[0]?.n ?? 0);
+}
+
+// Their recent exchange with Co, oldest first, fenced (fenceExchange).
+export async function readExchange(f: Fence, hours: number, limit: number): Promise<ExchangeLine[]> {
+  const { rows } = await pool.query(
+    `SELECT created_at, content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND ${notToTeammate()} AND created_at > NOW() - ($2 || ' hours')::interval ORDER BY created_at DESC LIMIT ${Math.max(1, Math.floor(limit))}`,
+    [f.userId, String(hours)],
+  );
+  return fenceExchange(f, rows.reverse().map((r: any) => ({ at: new Date(r.created_at), content: String(r.content ?? "") })));
+}
+
+// When they were active lately on any channel, newest first: timestamps only. Their texts to a teammate count here (they were around),
+// which is why this read returns no content at all; nothing they said reaches anyone through it.
+export async function readActivityTimes(f: Fence, hours: number): Promise<Date[]> {
+  const { rows } = await pool.query(
+    `SELECT created_at FROM co_memories WHERE user_id = $1 AND created_at > NOW() - ($2 || ' hours')::interval AND ((memory_type = 'text_exchange' AND (content LIKE 'User said:%' OR content LIKE 'User sent a voice memo:%' OR content LIKE '[Call]%')) OR memory_type = 'call_transcript') ORDER BY created_at DESC LIMIT 300`,
+    [f.userId, String(hours)],
+  );
+  return rows.map((r: any) => new Date(r.created_at));
 }
 
 export async function readLessonOriginals(f: Fence, days: number): Promise<string[]> {

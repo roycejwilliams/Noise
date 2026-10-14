@@ -47,6 +47,8 @@ export type SentItem = {
   read?: LinkRead | null;
   // When its details were last read from its page (services/sendCheck.ts stamps it at send); null: as old as the find.
   checkedAt?: string | null;
+  // Its date or deadline as on file (an opportunity's deadline, an event's date or start), so nothing past it is raised as waiting.
+  endsOn?: string | null;
 };
 
 export type TurnContext = {
@@ -118,6 +120,9 @@ export type TurnContext = {
   knowledge?: MemberKnowledge | null;
   // The member-level rules read with it (memberRules): discretion, grounding, member safety, delivery shape, restraint, quiet hours.
   rules?: MemberRules | null;
+  // Their world in one read (services/memberWorld.ts, the stand-in for discoveryStatus): what waits on them, what's running, what's
+  // next, their live thread and their clock, fenced. A check-in reads it (Royce, 2026-10-14).
+  world?: import("./memberWorld.js").MemberWorld | null;
 };
 
 // The sections of member knowledge a text reply reads. The path reads the rest itself: the thread (raw, with its hold lines and the
@@ -182,7 +187,7 @@ const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace
 // (search results and offers Co sent first), the offers' saved payloads for
 // details, and older recommendation_offered rows.
 export async function loadSentItems(userId: string, days = 45): Promise<SentItem[]> {
-  const [revealed, offers, recs] = await Promise.all([
+  const [revealed, offers, recs, dated] = await Promise.all([
     pool
       .query(
         `SELECT item_key, item_name, kind, url, sent_at, reaction FROM revealed_offers
@@ -208,13 +213,25 @@ export async function loadSentItems(userId: string, days = 45): Promise<SentItem
       )
       .then((r) => r.rows)
       .catch(() => [] as any[]),
+    // Co's own record of what it sent, with the dates it carried (services/coFacts.ts recordSentItems): the date of a find shown in a
+    // reply, which revealed_offers doesn't keep.
+    pool
+      .query(
+        `SELECT object_label AS name, meta->>'when' AS when, meta->>'when_end' AS when_end FROM co_facts
+         WHERE owner_user_id = $1 AND subject = 'co' AND relation = 'sent' AND happened_at > NOW() - make_interval(days => $2)
+         ORDER BY happened_at DESC LIMIT 60`,
+        [userId, days],
+      )
+      .then((r) => r.rows)
+      .catch(() => [] as any[]),
   ]);
-  return mergeSent(revealed, offers, recs);
+  return mergeSent(revealed, offers, recs, dated);
 }
 
 // Pure: the three sources as one list, one entry per thing, revealed_offers'
 // key first (the router's), details and post text filled in from the offers.
-export function mergeSent(revealed: any[], offers: any[], recs: any[]): SentItem[] {
+// dated: Co's sent-record rows (name, when, when_end): they only fill a date in on something already listed, never add an item.
+export function mergeSent(revealed: any[], offers: any[], recs: any[], dated: any[] = []): SentItem[] {
   const byName = new Map<string, SentItem>();
   const add = (item: SentItem) => {
     const k = norm(item.name);
@@ -227,6 +244,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[]): SentItem
       had.checkedAt ??= item.checkedAt ?? null;
       had.postText ??= item.postText;
       had.reaction ??= item.reaction;
+      had.endsOn ??= item.endsOn ?? null;
     }
   };
   for (const r of revealed) {
@@ -246,6 +264,7 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[]): SentItem
       details: m.details ?? null,
       postText: m.opportunity?.postText ?? m.evidence ?? null,
       checkedAt: m.checkedAt ?? null,
+      endsOn: endsOnOf(m),
     });
   }
   for (const r of recs) {
@@ -254,9 +273,19 @@ export function mergeSent(revealed: any[], offers: any[], recs: any[]): SentItem
       x = JSON.parse(r.content);
     } catch {}
     if (!x?.name) continue;
-    add({ key: x.event_api_id ? `event:${x.event_api_id}` : nameKey(x.name), name: x.name, kind: x.event_api_id ? "event" : "opportunity", url: x.url ?? null, sentAt: new Date(r.created_at), reaction: null, details: null, postText: null });
+    add({ key: x.event_api_id ? `event:${x.event_api_id}` : nameKey(x.name), name: x.name, kind: x.event_api_id ? "event" : "opportunity", url: x.url ?? null, sentAt: new Date(r.created_at), reaction: null, details: null, postText: null, endsOn: endsOnOf(x) });
+  }
+  for (const r of dated) {
+    const had = r?.name ? byName.get(norm(String(r.name))) : undefined;
+    if (had && !had.endsOn) had.endsOn = r.when_end || r.when || null;
   }
   return [...byName.values()].sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+}
+
+// Pure: the last day a find is still ahead, as on file: an opening's deadline, else the end or the date of the event (the same fields
+// services/findForm.ts eventDateOf / eventEndOf read: event_date, details.startAt, statedDates). null: no date on file.
+export function endsOnOf(m: any): string | null {
+  return m?.deadline ?? m?.statedDates?.end ?? m?.details?.endAt ?? m?.event_date ?? m?.details?.startAt ?? m?.statedDates?.start ?? null;
 }
 
 // Details for the few most recent sends: saved, else their Luma page, else a
@@ -359,6 +388,11 @@ export async function assembleContext(
   const fenceP = Promise.all([import("./sourceFence.js"), import("./memberSafeMemories.js").then((m) => m.memberSafeLine(userId)).catch(() => null)]).then(([F, line]) => F.fenceFrom(userId, line));
   const searchingP = Promise.all([import("./searchCoverage.js"), fenceP]).then(([C, fence]) => C.searchCoverage(userId, fence).catch(() => C.UNREADABLE));
   const aheadP = Promise.all([import("./whatsAhead.js"), fenceP]).then(([W, fence]) => W.loadAhead(userId, new Date(), fence)).catch(() => null);
+  // Their recent exchange with Co, for what waits on them (services/memberWorld.ts): one fenced read, started now beside the others. A
+  // failed fence reads nothing (the world then says some of it isn't shown, never that nothing waits).
+  const exchangeP = Promise.all([import("./memberWorld.js"), fenceP]).then(([M, fence]) => (fence.failed ? null : M.readRecentExchange(fence))).catch(() => null);
+  // When they were active on any channel (timestamps only), so a question they answered by call or to a teammate never "waits".
+  const activityP = Promise.all([import("./memberWorld.js"), fenceP]).then(([M, fence]) => (fence.failed ? null : M.readRecentActivity(fence))).catch(() => null);
   const [profile, snapshot, sent, knowledge, threads, offersThisWeek, emotional, inlineTarget, ledger] = await Promise.all([
     pool.query(`SELECT * FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     getPersonSnapshot(userId).catch(() => null),
@@ -427,7 +461,8 @@ export async function assembleContext(
   // A message that may be about something Co is already doing: a candidate the reply decides on (services/statusCheck.ts), from the
   // tasks already read, through their fence (the number and goal only when it can't be read).
   const statusCheck = await import("./statusCheck.js").then((S) => S.statusCheckFor(message, S.openWorkFrom(rawTasks), zone, safe)).catch(() => null);
-  const goals = await import("./goalOwnership.js").then(async (G) => G.goalFactLines(await G.openGoals(userId), rawTasks, zone)).catch(() => [] as { kind: "known" | "scheduled"; text: string }[]);
+  const rawGoals = await import("./goalOwnership.js").then((G) => G.openGoals(userId)).catch(() => null);
+  const goals = await import("./goalOwnership.js").then((G) => G.goalFactLines(rawGoals ?? [], rawTasks, zone)).catch(() => [] as { kind: "known" | "scheduled"; text: string }[]);
   const rawBriefs = await briefsOnce().catch(() => [] as BriefView[]);
   const windows = new Map(rawTasks.filter((t) => t.status === "open" && t.window && !t.window.closedAt).map((t) => [`task #${t.id}`, { words: t.window!.words, deadline: t.window!.deadline, zone: t.window!.zone ?? null }]));
   const carrying = carryFromKnowledge(knowledge?.carrying ?? [], zone, windows).flatMap((c) => { const label = keep(c.label); return label ? [{ ...c, label }] : []; });
@@ -467,7 +502,34 @@ export async function assembleContext(
   const searching = { ...rawSearching, asks: keptAsks, goals: keptGoals, hidden: (rawSearching.hidden ?? 0) + rawSearching.asks.length + rawSearching.goals.length - keptAsks.length - keptGoals.length + withheldWork };
   const rawAhead = await aheadP;
   const ahead = rawAhead ? await import("./whatsAhead.js").then((W) => W.aheadLine(rawAhead, searching, zone, keep)).catch(() => undefined) : undefined;
-  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, statusCheck, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead };
+  // Their world (services/memberWorld.ts), from the reads above plus the exchange: no model call, nothing read twice. Lines go through
+  // keep; with the fence failed every line is withheld and counted.
+  const [exchange, activity] = await Promise.all([exchangeP, activityP]);
+  const docOfferAt = docOffer?.pending ? docOffer.history?.find((h) => h.source === "offered" && h.status === "offered" && h.topic === docOffer.pending!.topic)?.at ?? null : null;
+  const world = await import("./memberWorld.js")
+    .then((M) =>
+      M.buildMemberWorld({
+        now: new Date(),
+        zone,
+        keep: (x) => keep(x),
+        tasks: keepAll(tasks),
+        briefs: keepAll(briefs),
+        searching,
+        ahead: rawAhead,
+        offeredGoals: (rawGoals ?? []).filter((g) => g.status === "offered").map((g) => ({ title: g.title, offeredAt: g.offeredAt, momentOn: g.moment?.date ?? null })),
+        docOffer: docOffer?.pending ? { topic: docOffer.pending.topic, at: docOfferAt ? docOfferAt.toISOString() : null } : null,
+        threads: safeThreads,
+        exchange,
+        sent: sent.map((x) => ({ name: x.name, sentAt: x.sentAt, endsOn: x.endsOn ?? null, reaction: x.reaction })),
+        activity,
+        // From member knowledge (services/memberKnowledge.ts restraint): unread knowledge leaves the hold unknown, so nothing waits.
+        safetyHold: knowledge?.restraint ? knowledge.restraint.safetyHold : null,
+        letPass: knowledge?.restraint?.suppressedKinds ?? [],
+        unreadable: !safe || rawGoals === null,
+      }),
+    )
+    .catch(() => null);
+  return { userId, message, profile, snapshot, sent, asks, threads: safeThreads, offersThisWeek, emotional, lessons: keepAll(lessons), inlineTarget, ledger: { ...ledger, lines: keepAll(ledger.lines), named: keepAll(ledger.named) }, capabilities: capabilitySheet(), google, kit, story, advice, tasks: keepAll(tasks), briefs: keepAll(briefs), goals: goals.flatMap((g) => { const text = keep(g.text); return text ? [{ ...g, text }] : []; }), todayEvent, docOffer, deliveries, carrying, recentDocs, drift, goalSetAsides: [...goalSetAsides, ...goalRechecks].flatMap((r) => { const g = keep(r.goal); return g ? [{ ...r, goal: g }] : []; }), retire, stopNote, statusCheck, coldStart, door, knowledge, rules: knowledge ? memberRules(knowledge) : null, searching, ahead, world };
 }
 
 // Pure: the newest version of each delivered artifact, newest first.

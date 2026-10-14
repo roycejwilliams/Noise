@@ -1,0 +1,88 @@
+{
+  "hash": "1f697fb0120cbead",
+  "case": "checkin-waiting-on-them",
+  "recorded_at": "2026-10-14T17:10:22.361Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Co sent a member of a private club. The situation: It's 2pm. Yesterday at 5:30pm Co sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Co's daily search is also looking for a rooftop ve...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Co sent a member of a private club.\n\nThe situation: It's 2pm. Yesterday at 5:30pm Co sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Co's daily search is also looking for a rooftop venue. The member texted \"Just checking in\".\n\nCo's text:\n\"\"\"Good to hear from you. Still waiting to hear what you think on the Harbor Light fellowship, whenever funding timing's on your mind.\"\"\"\n\nDoes the text give presence AND bring up the Harbor Light Fellowship (the open question waiting on them) as the one item, as something they can pick up, without a status report? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Still waiting to hear what you think on the Harbor Light fellowship\\\" — presence plus the one open item, no rooftop venue mentioned, no status report.\"}",
+      "usage": {
+        "input_tokens": 335,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 70,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg2Vy8aaLdjzaRTfv88tX",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Still waiting to hear what you think on the Harbor Light fellowship\\\" — presence plus the one open item, no rooftop venue mentioned, no status report.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 335,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 70,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

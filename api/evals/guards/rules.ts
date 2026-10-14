@@ -71,6 +71,8 @@ const ACTIVITY_ONLY: Record<string, string> = {
   "harness/memberReflection.ts": "counts replies in the week for the reflection",
   "services/membershipLapse.ts": "last activity, for the lapse notices",
   "harness/callGate.ts": "recency of any activity, for call timing",
+  // Its content reads are held to notToTeammate by section 5; readActivityTimes returns timestamps only, any channel.
+  "services/sourceFence.ts": "readActivityTimes: when they were active, timestamps only (the member-world read)",
 };
 let unguarded: string[] = [];
 for (const f of files) {
@@ -128,14 +130,15 @@ check("the newest link wins when several came before", L.mergeEarlierLink("[sent
 // ------------------------------------------------------------------ 5. one source fence
 // The readers the 10-13 fixes added read member data only through services/sourceFence.ts, and every read there is one member's own.
 {
-  const fenced = ["services/searchCoverage.ts", "services/whatsAhead.ts", "services/lessonCheck.ts"];
+  const fenced = ["services/searchCoverage.ts", "services/whatsAhead.ts", "services/lessonCheck.ts", "services/memberWorld.ts"];
   const direct = fenced.filter((f) => { const t = fs.readFileSync(path.join(root, f), "utf8"); return /db\/db(?:\.js)?["']|\bpool\b|\.query\(|\bFROM\s+[a-z_]+\b/.test(t) || !/sourceFence\.js/.test(t); });
   check("the 10-13 readers touch member data only through the source fence", direct.length === 0, direct.join(", "));
   const fenceSrc = fs.readFileSync(path.join(root, "services/sourceFence.ts"), "utf8");
   const sqls = [...fenceSrc.matchAll(/pool\.query\(\s*`([^`]+)`/g)].map((m) => m[1]);
   const allQueries = (fenceSrc.match(/\bpool\.query\(/g) ?? []).length;
   check("every read in the fence is scoped to the one member", sqls.length >= 6 && allQueries === sqls.length && sqls.every((q) => /\buser_id = \$1\b/.test(q)), `${sqls.length} of ${allQueries} reads checked`);
-  check("the fence's read of their texts skips talk with a teammate", sqls.filter((q) => /text_exchange/.test(q)).every((q) => /notToTeammate\(/.test(q)));
+  // A read that returns timestamps only (when they were active, any channel) carries no words, so it may count a teammate text.
+  check("the fence's read of their texts skips talk with a teammate (a timestamps-only read carries no words)", sqls.filter((q) => /text_exchange/.test(q)).every((q) => /notToTeammate\(/.test(q) || /^SELECT created_at FROM co_memories WHERE/.test(q.trim())));
 }
 {
   const LC = await import("../../src/services/lessonCheck.js");

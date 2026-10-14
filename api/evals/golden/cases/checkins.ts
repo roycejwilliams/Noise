@@ -1,0 +1,273 @@
+// Golden check-in cases (Royce, 2026-10-14: "Fix how Co handles check-ins and casual openers"). One real reply turn each, the way
+// evals/golden/cases/reply.ts runs one: the turn read, the reply agent with its tools, the fact check, no database, nothing sent. The
+// member's world is built by the real builder (services/memberWorld.ts buildMemberWorld) from fixture state and put on the reply's
+// facts by the real wiring (harness/replyGrounding.ts addMemberWorld, which gatherReplyFacts calls), so a change to either is tested
+// here. Every case pins its own clock (never the real one): the daytime cases run at 2:00pm Tuesday Pacific, the late-night case at
+// 12:04am. Invented members only (Jordan, Noor, Ellis). Mechanical facts are regexes; tone (soft register, one breath, no re-greeting)
+// is one short judge (GRADER_HEADERS).
+import "../../lib/requireMeter.js";
+import { DateTime } from "luxon";
+import type { GoldenCase, GoldenResult } from "../types.js";
+import { result } from "../types.js";
+
+const ZONE = "America/Los_Angeles";
+const DAY = new Date("2026-10-13T21:00:00Z"); // Tue Oct 13, 2:00pm Pacific (the replay harness's pinned clock)
+const LATE = new Date("2026-10-14T07:04:48Z"); // Wed Oct 14, 12:04am Pacific (the 10-14 failure)
+const member = (firstName: string) => ({ userId: "00000000-0000-0000-0000-000000000000", phoneNumber: "+10000000000", firstName });
+
+type Kind = "known" | "did_before" | "scheduled" | "ongoing" | "unknown";
+type Line = { at: Date; from: "member" | "co"; text: string };
+type Scene = {
+  firstName: string;
+  now: Date;
+  exchange: Line[];
+  searching?: { asks: string[]; goals: string[]; held: string[] };
+  sent?: { name: string; sentAt: Date; endsOn?: string | null }[];
+  threads?: { text: string; line: string }[];
+  facts?: [Kind, string][];
+  message: string;
+};
+type Reply = { text: string; tools: string[]; checked: string[]; world: string };
+
+const NONE = { asks: [] as string[], goals: [] as string[], held: [] as string[] };
+const SEQUIN = { asks: [] as string[], goals: ["a rooftop venue for the Sequin AI launch party"], held: [] as string[] };
+const FELLOWSHIP = "Harbor Light Fellowship";
+// Yesterday afternoon's thread, then Co's 5:30pm send ending on a question, never answered (the 10-13 shape).
+const SENT_AT = new Date("2026-10-13T00:30:40Z");
+const THREAD_BEFORE: Line[] = [
+  { at: new Date("2026-10-12T23:04:00Z"), from: "member", text: "Which of those dinners is better for me?" },
+  { at: new Date("2026-10-12T23:04:38Z"), from: "co", text: "The Thursday one. Small tables, no pitching." },
+  { at: new Date("2026-10-12T23:05:56Z"), from: "member", text: "Gotcha" },
+];
+const FELLOWSHIP_SEND: Line[] = [
+  { at: new Date("2026-10-13T00:30:37Z"), from: "co", text: "https://harborlight.example/fellowship" },
+  { at: new Date("2026-10-13T00:30:37Z"), from: "co", text: "Harbor Light Fellowship just opened applications for its second cohort. It's an 8-week program for full-time founders with $75K on incorporation, a fit while you're weighing funding." },
+  { at: new Date("2026-10-13T00:30:37Z"), from: "co", text: "Worth a look before you decide on funding timing?" },
+];
+const FELLOWSHIP_FACTS: [Kind, string][] = [
+  ["did_before", `Co sent them "${FELLOWSHIP}" (https://harborlight.example/fellowship) on Mon Oct 12 at 5:30pm, with: "Harbor Light Fellowship just opened applications for its second cohort. It's an 8-week program for full-time founders with $75K on incorporation." They haven't reacted to it.`],
+  ["known", `Details on file for "${FELLOWSHIP}", which Co sent them: an 8-week fellowship for full-time founders; $75K on incorporation; applications are open for its second cohort; application deadline Dec 15, 2026. Not on file: how many are accepted.`],
+];
+
+// One real reply turn, as production builds it: profile line, today and the timeline in their zone at the case's clock, the
+// running-work line, the member's world, the case's facts, the read's notes.
+async function reply(s: Scene): Promise<Reply> {
+  const { runConversationReplyAgent } = await import("../../../src/agent/conversationReply.js");
+  const G = await import("../../../src/harness/replyGrounding.js");
+  const R = await import("../../../src/services/readTurn.js");
+  const M = await import("../../../src/services/memberWorld.js");
+  const T = await import("../../../src/services/timeline.js");
+  const searching = s.searching ?? NONE;
+  const facts = G.baseReplyFacts();
+  G.addFact(facts, "known", "They live in San Francisco.");
+  G.addFact(facts, "known", G.todayFact(ZONE, s.now));
+  G.addFact(facts, "known", T.renderTimeline(DateTime.fromJSDate(s.now).setZone(ZONE), []));
+  for (const f of G.ongoingFactsFor(searching.asks.map((text) => ({ text, kind: "find" as const })))) G.addFact(facts, f.kind, f.text);
+  G.addFact(facts, "known", G.runningWorkLine([], [], searching));
+  for (const [kind, text] of s.facts ?? []) G.addFact(facts, kind as any, text);
+  const world = M.buildMemberWorld({ now: s.now, zone: ZONE, keep: (x) => x, tasks: [], briefs: [], searching, ahead: null, offeredGoals: [], docOffer: null, threads: s.threads ?? [], exchange: s.exchange, sent: s.sent ?? [], activity: s.exchange.filter((l) => l.from === "member").map((l) => l.at), safetyHold: false, letPass: [] });
+  G.addMemberWorld(facts, world);
+  const recent = s.exchange
+    .filter((l) => s.now.getTime() - l.at.getTime() < 3 * 86_400_000)
+    .map((l) => `${l.from === "member" ? "User said" : "Co replied"}: ${l.text}`)
+    .join("\n");
+  const read: any = await R.readTurn({ message: s.message, recentConversation: recent, openItems: [] }, null, null).catch(() => null);
+  if (read?.aboutCo) G.addInstruction(facts, R.ABOUT_CO_INSTRUCTION);
+  const note = R.feedbackInstruction(read?.feedback ?? []);
+  if (note) G.addInstruction(facts, note);
+  const r: any = await runConversationReplyAgent(
+    { ackSent: null, ...member(s.firstName), resolvedContent: s.message, isVoice: false, imageForVision: null, hasPendingOffer: false, recentOfferBurstActive: false, callAction: "none", isThinProfileFirstMessage: false, isFirstContact: false, missingTopic: null, missingTopicDescription: null, facts, toneContext: "", seekingModeContext: "", styleHint: "", recentConversation: recent, recentMemories: "", contextSummary: "", personaPrompt: null, sendCoReply: async () => true },
+    { dryRun: true, record: false, stubSearch: true },
+  ).catch((e: any) => ({ replyText: `ERROR ${e?.message}`, toolsCalled: [], grounding: [] }));
+  const checked = (r.grounding ?? []).filter((g: any) => g.outcome && g.outcome !== "as_drafted" && g.outcome !== "unchecked").map((g: any) => `${g.outcome}: ${(g.checks ?? []).filter((x: any) => !x.pass || x.name === "world_line").map((x: any) => x.reason ?? x.name).join(" | ").slice(0, 200)}`);
+  return { text: String(r.replyText ?? ""), tools: r.toolsCalled ?? [], checked, world: M.memberWorldFact(world) };
+}
+
+// One yes/no question about the reply, quoted. A failed or unparsed judge is a miss, never a pass.
+async function judge(text: string, context: string, question: string): Promise<{ yes: boolean; reason: string }> {
+  const { generateText } = await import("ai");
+  const { anthropic } = await import("@ai-sdk/anthropic");
+  const { MODELS, GRADER_HEADERS } = await import("../../../src/models.js");
+  const { parseModelJson } = await import("../../../src/services/modelJson.js");
+  try {
+    const { text: out } = await generateText({
+      model: anthropic(MODELS.haiku),
+      headers: GRADER_HEADERS,
+      maxOutputTokens: 300,
+      prompt: `You grade one text a companion called Co sent a member of a private club.\n\nThe situation: ${context}\n\nCo's text:\n"""${text}"""\n\n${question}\n\nReturn ONLY JSON: {"answer": "yes" | "no", "reason": "one short line quoting the words that decide it"}`,
+    });
+    const j = parseModelJson<{ answer?: string; reason?: string }>(out);
+    return { yes: /^yes$/i.test(String(j.answer ?? "")), reason: String(j.reason ?? "") };
+  } catch (e: any) {
+    return { yes: false, reason: `judge failed: ${e?.message ?? e}` };
+  }
+}
+
+const observed = (r: Reply) => `${r.text}${r.tools.length ? `  [tools ${r.tools.join(",")}]` : ""}${r.checked.length ? `  [fact check ${r.checked.join(" || ")}]` : ""}`;
+const done = (misses: string[], r: Reply): GoldenResult => result(misses, observed(r));
+
+// Co's machinery said aloud, a list, or a voice slip: never in a check-in reply.
+function voiceMisses(text: string): string[] {
+  const m: string[] = [];
+  if (!text.trim() || /^ERROR /.test(text)) m.push(`no reply (${text.slice(0, 80)})`);
+  if (/\bon my end\b|\bmy (systems?|pipeline|backend|queue)\b|\bnothing new\b/i.test(text)) m.push("narrates Co's own machinery");
+  if (/^\s*(?:[-*•]|\d+[.)])\s/m.test(text)) m.push("a list");
+  if (/[—–]/.test(text)) m.push("an em or en dash");
+  if (/!/.test(text)) m.push("an exclamation point");
+  if (/\b(your|an?) (assistant|concierge)\b|copatible/i.test(text)) m.push("a role noun or the old brand");
+  return m;
+}
+const ONE_BREATH = "Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things?";
+
+export const CASES: GoldenCase[] = [
+  {
+    n: 26,
+    id: "checkin-work-running",
+    title: "\"Just checking in\" at 2pm with a search running: presence plus the one line naming it",
+    status: { live: true },
+    from: "Royce, 2026-10-14, golden case (1): a check-in with work running gets the one-liner naming it",
+    run: async () => {
+      const r = await reply({ firstName: "Jordan", now: DAY, exchange: THREAD_BEFORE, searching: SEQUIN, message: "Just checking in" });
+      const misses = voiceMisses(r.text);
+      if (!/rooftop|Sequin|launch/i.test(r.text)) misses.push("doesn't name the rooftop search for the Sequin launch");
+      const j = await judge(r.text, `It's 2pm. Co's daily search is looking for ${SEQUIN.goals[0]} for the member; nothing else is pending. The member texted "Just checking in".`, `Does the text give presence (a warm hello back) AND mention the rooftop venue search for the Sequin AI launch party as the one thing from their world? ${ONE_BREATH} Answer yes only if both hold.`);
+      if (!j.yes) misses.push(`judge: ${j.reason}`);
+      return done(misses, r);
+    },
+  },
+  {
+    n: 27,
+    id: "checkin-waiting-on-them",
+    title: "\"Just checking in\" at 2pm with a fellowship question of Co's unanswered: names that, ahead of the running search",
+    status: { live: true },
+    from: "Royce, 2026-10-14, golden case (2), the 10-14 failure in daylight: Founder Fellows sent at 5:30pm ending on a question he never answered",
+    run: async () => {
+      const r = await reply({ firstName: "Noor", now: DAY, exchange: [...THREAD_BEFORE, ...FELLOWSHIP_SEND], sent: [{ name: FELLOWSHIP, sentAt: SENT_AT, endsOn: "2026-12-15" }], searching: SEQUIN, facts: FELLOWSHIP_FACTS, message: "Just checking in" });
+      const misses = voiceMisses(r.text);
+      if (!/Harbor Light|fellowship/i.test(r.text)) misses.push("doesn't name the fellowship waiting on them");
+      if (/rooftop|Sequin/i.test(r.text)) misses.push("brings up the running search too (one item: what waits on them leads)");
+      const j = await judge(r.text, `It's 2pm. Yesterday at 5:30pm Co sent the member the ${FELLOWSHIP} and asked "Worth a look before you decide on funding timing?"; they never answered. Co's daily search is also looking for a rooftop venue. The member texted "Just checking in".`, `Does the text give presence AND bring up the ${FELLOWSHIP} (the open question waiting on them) as the one item, as something they can pick up, without a status report? ${ONE_BREATH} Answer yes only if all of that holds.`);
+      if (!j.yes) misses.push(`judge: ${j.reason}`);
+      return done(misses, r);
+    },
+  },
+  {
+    n: 28,
+    id: "checkin-nothing",
+    title: "\"Hey co, just checking in\" with nothing running and nothing waiting: presence and an open question only",
+    status: { live: true },
+    from: "Royce, 2026-10-14, golden case (3): \"the warmth isn't the bug, skipping the check is\"; genuinely nothing gets presence only",
+    run: async () => {
+      const r = await reply({ firstName: "Ellis", now: DAY, exchange: THREAD_BEFORE, searching: NONE, message: "Hey co, just checking in" });
+      const misses = voiceMisses(r.text);
+      if (/\b(search|searching|looking (for|into)|working on|task|running|on file)\b/i.test(r.text)) misses.push("talks about work or searches with nothing running");
+      if (!r.text.includes("?")) misses.push("no open question");
+      const j = await judge(r.text, "Nothing is running for the member and nothing from Co is waiting on them. They texted \"Hey co, just checking in\".", "Is the text warm presence plus an open question inviting them to share what's on their mind, WITHOUT any status about searches, tasks or what Co is doing, and without inventing anything about their plans? Answer yes only if all of that holds.");
+      if (!j.yes) misses.push(`judge: ${j.reason}`);
+      return done(misses, r);
+    },
+  },
+  {
+    n: 29,
+    id: "checkin-late-night",
+    title: "\"Just checking in\" at 12:04am with the fellowship question waiting: the soft, open register first",
+    status: { live: true },
+    from: "Royce, 2026-10-14, golden case (4), the real failure: 12:04am \"Hey co\" / \"Just checking in\" got \"Good to hear from you.\"",
+    run: async () => {
+      const exchange: Line[] = [
+        ...THREAD_BEFORE.map((l) => ({ ...l, at: new Date(l.at.getTime() + 86_400_000) })),
+        ...FELLOWSHIP_SEND.map((l) => ({ ...l, at: new Date(l.at.getTime() + 86_400_000) })),
+        { at: new Date("2026-10-14T07:04:20Z"), from: "member", text: "Hey co" },
+        { at: new Date("2026-10-14T07:04:32Z"), from: "co", text: "Hey Noor. What's up?" },
+      ];
+      const r = await reply({ firstName: "Noor", now: LATE, exchange, sent: [{ name: FELLOWSHIP, sentAt: new Date(SENT_AT.getTime() + 86_400_000), endsOn: "2026-12-15" }], searching: SEQUIN, facts: FELLOWSHIP_FACTS.map(([k, t]) => [k, t.replace("Mon Oct 12", "Tue Oct 13")] as [Kind, string]), message: "Just checking in" });
+      const misses = voiceMisses(r.text);
+      if (!r.text.trim() || /^good to hear from you\.?$/i.test(r.text.trim())) misses.push("dead air: presence alone with their world waiting");
+      const j = await judge(r.text, `It's 12:04am for the member. They texted "Hey co", Co said "Hey Noor. What's up?", and now they texted "Just checking in". At 5:30pm Co had sent them the ${FELLOWSHIP} with a question they never answered.`, "Does the text open soft and open for the hour: noticing it's late or asking gently if everything's ok or what's keeping them up, before anything else, with any mention of the fellowship or other business kept light and secondary (or left out), and no status report? Answer yes only if the soft, open line comes first.");
+      if (!j.yes) misses.push(`judge: ${j.reason}`);
+      return done(misses, r);
+    },
+  },
+  {
+    n: 30,
+    id: "checkin-live-thread",
+    title: "\"Just checking in\" with a live thread (waiting on a venue): the reply connects to it",
+    status: { live: true },
+    from: "Royce, 2026-10-14, golden case (5): \"Good to hear from you - still nothing back from that venue\" beats a generic status line",
+    run: async () => {
+      const thread = "Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner";
+      const exchange: Line[] = [
+        { at: new Date("2026-10-12T19:10:00Z"), from: "member", text: "Emailed the Hayes Valley place about the 14th. Fingers crossed they get back to me." },
+        { at: new Date("2026-10-12T19:10:40Z"), from: "co", text: "Good call reaching out early. Tell me what they say." },
+        { at: new Date("2026-10-12T19:12:00Z"), from: "member", text: "Will do" },
+      ];
+      const r = await reply({ firstName: "Ellis", now: DAY, exchange, searching: NONE, threads: [{ text: thread, line: `${thread} (said Mon Oct 12)` }], message: "Just checking in" });
+      const misses = voiceMisses(r.text);
+      if (!/venue|Hayes|dinner|14th|Nov(ember)? 14/i.test(r.text)) misses.push("doesn't connect to the venue thread");
+      // Only the member knows whether the venue answered: Co asks, it never reports it.
+      if (!r.text.includes("?")) misses.push("states where the venue stands instead of asking");
+      const j = await judge(r.text, `Yesterday the MEMBER emailed a Hayes Valley venue about their Nov 14 dinner and said they were waiting to hear back; Co has no way to know whether the venue has answered them since. Nothing else is running or pending. They texted "Just checking in".`, `Does the text give presence AND pick up the venue thread by ASKING the member whether they've heard back (not stating it as fact), naturally, the way a friend who remembered would? ${ONE_BREATH} Answer yes only if all of that holds.`);
+      if (!j.yes) misses.push(`judge: ${j.reason}`);
+      return done(misses, r);
+    },
+  },
+  {
+    n: 31,
+    id: "checkin-tell-me-more",
+    title: "\"Tell me more\" after a check-in named the fellowship: expands it, no re-greeting",
+    status: { live: true },
+    from: "Royce, 2026-10-14, golden case (6): a follow-up \"tell me more\" expands without re-greeting",
+    run: async () => {
+      const exchange: Line[] = [
+        ...THREAD_BEFORE,
+        ...FELLOWSHIP_SEND,
+        { at: new Date("2026-10-13T20:58:00Z"), from: "member", text: "Just checking in" },
+        { at: new Date("2026-10-13T20:58:15Z"), from: "co", text: "Good to hear from you. Harbor Light Fellowship is there whenever you want it." },
+      ];
+      const r = await reply({ firstName: "Noor", now: DAY, exchange, sent: [{ name: FELLOWSHIP, sentAt: SENT_AT, endsOn: "2026-12-15" }], searching: SEQUIN, facts: FELLOWSHIP_FACTS, message: "Tell me more" });
+      const misses = voiceMisses(r.text);
+      if (/^\s*(hey|hi|hello|good to hear|good to see|nice to hear)\b/i.test(r.text)) misses.push("greets again");
+      if (!/8-week|8 week|eight-week|\$75K|75K|Dec(ember)? 15|second cohort|full-time founders/i.test(r.text)) misses.push("doesn't expand with the fellowship's details on file");
+      if (/rooftop|Sequin/i.test(r.text)) misses.push("switches to another item");
+      const j = await judge(r.text, `Co's last text was "Good to hear from you. ${FELLOWSHIP} is there whenever you want it." The member replied "Tell me more". On file: an 8-week fellowship for full-time founders, $75K on incorporation, second cohort open, deadline Dec 15.`, `Does the text expand on the ${FELLOWSHIP} with what's on file, picking up straight from the last message WITHOUT greeting them again or restarting the conversation? Answer yes only if both hold.`);
+      if (!j.yes) misses.push(`judge: ${j.reason}`);
+      return done(misses, r);
+    },
+  },
+  {
+    n: 32,
+    id: "checkin-thread-echo",
+    title: "\"Hayes Valley just confirmed!\": Co saying their own news back (\"Great that Hayes Valley confirmed\") is kept, never cut as a status report",
+    status: { live: true },
+    from: "Third review of the check-in PR, 2026-10-14: the thread guard must keep an echo of what the member told Co",
+    run: async () => {
+      const thread = "Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner";
+      const message = "Hayes Valley just confirmed!";
+      const exchange: Line[] = [
+        { at: new Date("2026-10-12T19:10:00Z"), from: "member", text: "Emailed the Hayes Valley place about the 14th. Fingers crossed they get back to me." },
+        { at: new Date("2026-10-12T19:10:40Z"), from: "co", text: "Good call reaching out early. Tell me what they say." },
+        { at: new Date("2026-10-13T20:59:30Z"), from: "member", text: message },
+      ];
+      const threads = [{ text: thread, line: `${thread} (said Mon Oct 12)` }];
+      // The read itself, on Co's own sentence: a yes here would cut it.
+      const G = await import("../../../src/harness/replyGrounding.js");
+      const M = await import("../../../src/services/memberWorld.js");
+      const world = M.buildMemberWorld({ now: DAY, zone: ZONE, keep: (x) => x, tasks: [], briefs: [], searching: NONE, ahead: null, offeredGoals: [], docOffer: null, threads, exchange, sent: [], activity: exchange.filter((l) => l.from === "member").map((l) => l.at), safetyHold: false, letPass: [] });
+      const rf = G.createReplyFacts();
+      G.addMemberWorld(rf, world);
+      const echo = "Great that Hayes Valley confirmed.";
+      await G.judgeThreadReports(echo, rf, { message });
+      const misses: string[] = [];
+      const read = rf.thread?.reads[0];
+      if (!read) misses.push("the echo never reached the thread read");
+      else if (read.reports === null) misses.push("the thread read failed");
+      if (G.codeChecks(echo, rf, { message, recentConversation: "" }).some((c) => c.name === "no_thread_report")) misses.push(`"${echo}" was cut as a status report`);
+      // And the reply turn: whatever Co writes back to their news, no line of it is cut as a thread report.
+      const r = await reply({ firstName: "Ellis", now: DAY, exchange: exchange.slice(0, 2), searching: NONE, threads, message });
+      misses.push(...voiceMisses(r.text));
+      if (r.checked.some((c) => /thread_report/.test(c))) misses.push("the reply had a line cut as a thread report");
+      if (!/Hayes|venue|dinner|confirm|14/i.test(r.text)) misses.push("doesn't respond to their news");
+      return result(misses, `${observed(r)}  [read of "${echo}": ${read ? JSON.stringify(read.reports) : "none"}]`);
+    },
+  },
+];
