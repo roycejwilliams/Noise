@@ -40,7 +40,6 @@ const BLURB = "Cue is making introductions at {event}. Say you're coming: {link}
   check("blurb: its own link fails (only {link})", !!P.blurbProblem("Text Cue {link} or https://evil.example"));
   check("blurb: an sms: link of its own fails", !!P.blurbProblem("{link} sms:+15550100"));
   check("blurb: 'matchmaker' fails (brand voice)", /matchmaker/.test(P.blurbProblem("Cue, our matchmaker: {link}") ?? ""));
-  check("blurb: 'concierge' fails", !!P.blurbProblem("Cue, the concierge: {link}"));
   check("blurb: 'Noise's AI' fails", !!P.blurbProblem("Noise's AI will help: {link}"));
   check("blurb: over the length fails", !!P.blurbProblem(`${"x".repeat(P.PARTNER.maxBlurb)} {link}`));
 }
@@ -239,7 +238,7 @@ const BLURB = "Cue is making introductions at {event}. Say you're coming: {link}
   check("tables: no person's data in the partner config", block.length > 0 && !/user_id|phone|first_name/.test(block));
   check("route: /r/:code on the API server", /app\.get\("\/r\/:code", servePartnerPage\)/.test(src("src/server.ts")));
   const ct = readFileSync(new URL("../../../co-test/src/server.ts", import.meta.url), "utf8");
-  check("route: /r/:code on co-test too, behind its rate limit", /app\.get\("\/r\/:code", servePartnerPage\)/.test(ct) && /app\.use\(\["\/i", "\/r",/.test(ct));
+  check("route: /r/:code on co-test too, behind its rate limit", /app\.get\("\/r\/:code", servePartnerPage\)/.test(ct) && ct.indexOf('app.use("/r", limiter)') > 0 && ct.indexOf('app.use("/r", limiter)') < ct.indexOf('app.get("/r/:code"'));
   const svc = src("src/services/partners.ts");
   check("partners: sends nothing (no Sendblue, no email)", !/sendblue|resend|sendExempt|enqueueCandidate/i.test(svc.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n")));
   check("partners: nothing reopens a dead night (no UPDATE clears closed_at)", !/closed_at = NULL/.test(svc));

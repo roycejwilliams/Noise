@@ -100,7 +100,9 @@ async function main() {
   // (100 per 15 minutes per address), and starting a sign-in to 10. The signed-in dashboard polls every few seconds and is behind
   // its login, and webhooks (Sendblue, Twilio, ElevenLabs, Luma, Resend) and the media Twilio and Sendblue fetch (/audio,
   // /plan-file, /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
-  app.use(["/i", "/r", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
+  app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
+  // A partner night's RSVP link and door QR (api/src/routes/partnerPage.ts): a public page, limited the same way.
+  app.use("/r", limiter);
   app.use("/api/login/start", authLimiter);
   app.use("/api/login/confirm", authLimiter);
 

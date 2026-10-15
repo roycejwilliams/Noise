@@ -83,10 +83,9 @@ const SLUG = /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/;
 const ZONED = /(?:Z|[+-]\d{2}:?\d{2})$/;
 // The blurb's only placeholders. {link} is required: a blurb with no way in is no blurb.
 const PLACEHOLDERS = new Set(["link", "event", "partner"]);
-// The agent is only ever "Cue" to people (brand voice): never a matchmaker, a concierge, or someone's AI.
+// The agent is only ever "Cue" to people (brand voice): never a matchmaker, or someone's AI.
 const OFF_BRAND: { pattern: RegExp; why: string }[] = [
   { pattern: /\bmatch-?mak/i, why: 'calls Cue a "matchmaker"' },
-  { pattern: /\bconcierge\b/i, why: 'calls Cue a "concierge"' },
   { pattern: /\b(Noise|CoPatible|Co)'s AI\b|\bAI behind\b/i, why: "describes Cue as a company's AI" },
 ];
 
