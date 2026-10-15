@@ -95,9 +95,7 @@ const dateOf = (m: any): string | null => (m?.event_date ? String(m.event_date).
 export function describeMatch(m: any): string | null {
   const d = m?.details && typeof m.details === "object" ? m.details : null;
   const parts: string[] = [];
-  // Searched where its want is, not their home city (services/wantPlace.ts): the picker reads it as the right place, not a far one.
-  const si = m?.searchedIn;
-  if (si && si.source !== "home" && typeof si.place === "string" && si.place) parts.push(`searched in ${si.place}, where this want of theirs is`);
+
   if (d) {
     if (d.soldOut) parts.push("SOLD OUT");
     if (typeof d.spotsRemaining === "number") parts.push(`${d.spotsRemaining} spots left`);
@@ -118,6 +116,10 @@ export function describeMatch(m: any): string | null {
   if (typeof m?.category === "string" && m.category.trim()) parts.push(m.category);
   if (!d?.city && typeof m?.city === "string") parts.push(m.city);
   if (m?.url) parts.push(`(${String(m.url).replace(/^https?:\/\//, "").split("/")[0]})`);
+  // Searched where its want is, not their home city (services/wantPlace.ts): the picker reads it as the right place, not a far one.
+  // Last, so it never pushes sold-out, spots or the time past the cut.
+  const si = m?.searchedIn;
+  if (si && si.source !== "home" && typeof si.place === "string" && si.place) parts.push(`searched in ${si.place}, where this want of theirs is`);
   return parts.length ? parts.join("; ").replace(/\s+/g, " ").slice(0, 500) : null;
 }
 
