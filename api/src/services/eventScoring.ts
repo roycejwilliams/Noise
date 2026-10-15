@@ -378,15 +378,11 @@ async function maybeSendMatchNudge(
   top: RankedCandidate,
   candidate: ScorableGuest,
   eventTiming: { start_at: string; end_at: string | null } | null,
-  opts: { dryRun?: boolean; honestLowConfidence?: boolean; requireTiming?: boolean },
+  opts: { dryRun?: boolean; requireTiming?: boolean },
 ): Promise<boolean> {
-  // honestLowConfidence (Royce, 2026-09-22, "no one should feel left out"):
-  // services/eventUnmatchedFollowUp.ts's end-of-event pass, scoped to people
-  // who never cleared this bar with anyone. Reuses every consent/claim/send
-  // check below unchanged — only the score gate and the drafted message
-  // differ, and the message is honest about not being a confident match
-  // (unmatchedPairPrompt), never the real matchNudgePrompt's framing.
-  if (top.score < MATCH_NUDGE_MIN_SCORE && !opts.honestLowConfidence) return false;
+  // Never below the bar (Royce, 2026-10-14: "Sparse rooms: never lower the bar, never force a match. Members get silence"). The
+  // end-of-event pass that once bypassed this gate for a "low-key hello" is gone (services/eventUnmatchedFollowUp.ts).
+  if (top.score < MATCH_NUDGE_MIN_SCORE) return false;
   // Privacy (2026-09-14): top.reason comes from the candidate's private
   // profile + memories. Without a shareable reason there's nothing we can
   // honestly tell this person, so no nudge.
@@ -432,7 +428,7 @@ async function maybeSendMatchNudge(
   const passValueGate = async (): Promise<boolean> => {
     // Not ok: blocked (stored, logged) or a failed read (logged, tried again next pass). Either way the caller's loop moves
     // on to this person's next candidate.
-    const v = await RM.valueGate(eventId, eventName, person.user_id, candidate.user_id, opts.honestLowConfidence ? "eventScoring.unmatchedPair" : "eventScoring.matchNudge", { allow });
+    const v = await RM.valueGate(eventId, eventName, person.user_id, candidate.user_id, "eventScoring.matchNudge", { allow });
     if (!v.ok) return false;
     // This person's own line; empty only when the candidate shared nothing, and then there's no nudge (nothing true to say).
     valueLine = v.lineFor(person.user_id);
@@ -441,8 +437,8 @@ async function maybeSendMatchNudge(
   const draftFn = async (feedback: string | null) => {
     const { text } = await generateText({
       model: anthropic(NAMING_DRAFT_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: opts.honestLowConfidence ? "eventScoring.unmatchedPair.draft" : "eventScoring.matchNudge.draft" },
-      prompt: (opts.honestLowConfidence ? unmatchedPairPrompt : matchNudgePrompt)({
+      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
+      prompt: matchNudgePrompt({
         recipientFirstName: person.first_name,
         otherFirstName: candidate.first_name,
         eventName,
@@ -527,12 +523,7 @@ async function maybeSendMatchNudge(
     await writeMemory(
       person.user_id,
       "event_guest_match_nudge",
-      opts.honestLowConfidence
-        ? // Only this person's own state: this memory is read back into
-          // their future replies, so it must not carry anything about the
-          // other person's night (2026-09-22).
-          `Suggested ${person.first_name} say hi to ${candidate.first_name} at "${eventName}" as a low-key hello, since nothing stood out as a strong match for ${person.first_name}: ${valueLine || top.shareReason}`
-        : `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${valueLine || top.shareReason}`,
+      `Nudged ${person.first_name} that ${candidate.first_name} is also going to "${eventName}" and worth meeting: ${valueLine || top.shareReason}`,
     );
     // Royce, 2026-09-08 sweep — the descriptive log above is a summary, not
     // the actual text sent, so recentConversation (routes/sendblue.ts, which
@@ -755,12 +746,9 @@ export async function scoreMatchedGroup(
   eventName: string,
   matched: ScorableGuest[],
   eventTiming: { start_at: string; end_at: string | null } | null,
-  // honestLowConfidence just passes through to maybeSendMatchNudge below —
-  // scoreMatchedGroup itself doesn't change; services/eventUnmatchedFollowUp.ts
-  // calls this with a pool already scoped to people nobody's matched yet.
   // requireTiming: a Co (Luma) event always has a start and end. When they couldn't be read (a Luma blip), no nudge goes
   // out this pass and none is queued anonymously in its place: the next pass sends it live.
-  opts: { dryRun?: boolean; honestLowConfidence?: boolean; requireTiming?: boolean } = {},
+  opts: { dryRun?: boolean; requireTiming?: boolean } = {},
 ): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
   if (matched.length < 2) {
     console.log(`eventScoring: ${eventId} has ${matched.length} matched Cue user(s) — nothing to rank yet`);
@@ -894,7 +882,7 @@ export async function scoreMatchedGroup(
       // says no), the next strong one is tried, up to five. Only while a live send is actually possible right now; otherwise
       // the top one alone goes through the usual path (and its window/queue rules).
       const live = !!eventTiming && checkEventWindow(eventTiming, new Date()).pass && (await inRoomSendAllowed(person.user_id, eventId));
-      const tries = live ? ranked.filter((r) => r.score >= MATCH_NUDGE_MIN_SCORE || opts.honestLowConfidence).slice(0, 5) : [top];
+      const tries = live ? ranked.filter((r) => r.score >= MATCH_NUDGE_MIN_SCORE).slice(0, 5) : [top];
       for (const r of tries) {
         const cand = others.find((o) => o.user_id === r.candidate_id);
         if (!cand || (live && !r.shareReason)) continue;
@@ -1034,13 +1022,3 @@ Draft a short, warm text (1-2 sentences, no em dashes, normal sentence capitaliz
 // matchNudgePrompt's confident "worth meeting" framing — that framing is
 // earned by the real score threshold it's built around, and this pool never
 // cleared it. Exported so evals/intro can check the honesty framing directly.
-export function unmatchedPairPrompt(p: { recipientFirstName: string; otherFirstName: string; eventName: string; shareReason: string; feedback: string | null; event?: IntroEvent | null }): string {
-  // Nothing about the other person's own night goes in here (2026-09-22):
-  // an earlier version told the model the other person "also didn't come up
-  // as a strong match for anyone," and a draft could repeat that — telling
-  // one member something about another member who isn't in this
-  // conversation. Only the recipient's own situation and the share reason.
-  return `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${p.recipientFirstName} near the end of "${p.eventName}." ${eventPromptLine(p.event, p.eventName)} Nothing came up as a strong match for them tonight. ${p.otherFirstName} is also there. What they might have in common: ${p.shareReason}
-
-Draft a short, low-key text (1-2 sentences, no em dashes, normal sentence capitalization) letting ${p.recipientFirstName} know about ${p.otherFirstName}. This is NOT a confident "you two should meet" recommendation — don't use that framing, don't oversell it, and don't call it a match. Something more like it might be worth a quick hello, genuinely low-pressure. Say nothing at all about ${p.otherFirstName}'s night, matches, or situation beyond the reason above, and never say ${p.otherFirstName} wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
-}

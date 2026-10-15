@@ -317,6 +317,71 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
 }
 
 check("across the nights: intros come through direct asks that reached the other person", cards.reduce((n, c) => n + c.introsViaAsk, 0) > 0, cards.map((c) => c.introsViaAsk));
+// ---------------------------------------------------------------- sparse rooms (Royce, 2026-10-14: "never lower the bar, never force a
+// match. Members get silence; the shortfall goes to the host read as what the room is thin on")
+const PR = await import("../../src/services/partnerReadout.js");
+async function sparseNight(label: string, trueCount: number, seed: number) {
+  reset();
+  const r = rng(seed);
+  const members: Member[] = [];
+  const truePairs: [string, string][] = [];
+  const seekers: string[] = [];
+  let i = 0;
+  // Eight people looking for an investor, nobody offering one: the room is thin on investors.
+  for (let k = 0; k < 8; k++) {
+    const m = addMember({ first_name: `${NAMES[k % NAMES.length]} ${label}`, intent: [ask(uniq("an angel investor for a pre-seed consumer app", i++))] });
+    members.push(m);
+    seekers.push(m.id);
+  }
+  // A few others whose asks nobody in the room answers either.
+  for (let k = 0; k < 4; k++) members.push(addMember({ first_name: `${NAMES[(k + 8) % NAMES.length]} ${label}`, intent: [ask(uniq(DOMAINS[k].near, i++))] }));
+  // And trueCount real pairs that clear the bar.
+  for (let k = 0; k < trueCount; k++) {
+    const d = DOMAINS[(k + 4) % DOMAINS.length];
+    const a = addMember({ first_name: `${NAMES[(k + 12) % NAMES.length]} ${label}`, intent: [ask(uniq(d.seek, i++))] });
+    const b = addMember({ first_name: `${NAMES[(k + 16) % NAMES.length]} ${label}`, intent: [ask(uniq(d.offer, i++), "offering")] });
+    members.push(a, b);
+    truePairs.push([a.id, b.id]);
+  }
+  const high = new Set(truePairs.flatMap(([a, b]) => [`${a}|${b}`, `${b}|${a}`]));
+  const byAsk = new Map<string, string>();
+  for (const m of members) for (const it of (m.intent as any[]) ?? []) byAsk.set(String(it.text), m.id);
+  W.scorer = (askText, cand) => {
+    const asker = [...byAsk.entries()].find(([t]) => askText.includes(t))?.[1];
+    // Everything but a planted pair scores under the bar, some of it just under.
+    return { score: asker && high.has(`${asker}|${cand.id}`) ? 82 + Math.floor(r() * 10) : 30 + Math.floor(r() * 29), share: true };
+  };
+  const ev = `evt-sparse-${label}`;
+  addEvent({ api_id: ev, name: "Noise Supper" }, members.map((m) => ({ m })));
+  W.scoringDebounce.clear();
+  await S.scoreGuestListForEvent(ev);
+  await new Promise((res) => setTimeout(res, 20));
+  const nudged = W.nudges.filter((n) => n.event_id === ev && n.candidate_id);
+  const truePair = (x: string, y: string) => truePairs.some(([a, b]) => (a === x && b === y) || (a === y && b === x));
+  // The host signal: the readout's themes, by the planted categories (the readout's own classifier is a model call).
+  const theme = (id: string): any => (seekers.includes(id) ? "Investors or funding" : "Something else");
+  const sought: Record<string, number> = {};
+  const offered: Record<string, number> = {};
+  for (const m of members) {
+    const it = (m.intent as any[])[0];
+    const t = truePairs.some(([a, b]) => a === m.id || b === m.id) ? "Community or friends" : theme(m.id);
+    if (it.type === "offering") offered[t] = (offered[t] ?? 0) + 1;
+    else sought[t] = (sought[t] ?? 0) + 1;
+  }
+  const d = PR.describe({ eventName: "Noise Supper", registered: members.length, arrived: members.length, walkins: 0, briefs: 0, nudged: nudged.length, interested: 0, intros: 0, debriefReplies: 0, metSomeone: 0, conversationsTold: 0, followThroughMembers: 0, themes: sought as any, askCount: Object.values(sought).reduce((x, y) => x + y, 0), offerThemes: offered as any });
+  const thinLines = d.lines.filter((l) => l.startsWith("The room was thin on"));
+  return { nudged, truePair, thinLines, sent: W.sent.length };
+}
+{
+  const z = await sparseNight("z", 0, 51);
+  console.log(`sparse room, no good pairs: ${z.nudged.length} nudges, host signal: ${z.thinLines.join(" ") || "(none)"}`);
+  check("sparse: a room with zero good pairs sends zero member nudges (silence, never a forced match)", z.nudged.length === 0 && z.sent === 0, { nudged: z.nudged.length, sent: z.sent });
+  check("sparse: ... and gives the host exactly one signal of what the room was thin on", z.thinLines.length === 1 && /investors or funding/.test(z.thinLines[0]), z.thinLines);
+  check("sparse: the host signal names no member", PR.describe({ eventName: "x", registered: 12, arrived: 12, walkins: 0, briefs: 0, nudged: 0, interested: 0, intros: 0, debriefReplies: 0, metSomeone: 0, conversationsTold: 0, followThroughMembers: 0, themes: { "Investors or funding": 8, "Something else": 4 }, askCount: 12, offerThemes: {} }).lines.every((l) => !/ z\b|Jordan|Noor/.test(l)));
+  const sp = await sparseNight("s", 2, 53);
+  console.log(`sparse room, two good pairs: ${sp.nudged.length} nudges, all above the bar: ${sp.nudged.every((n) => sp.truePair(n.person_id, n.candidate_id))}`);
+  check("sparse: a sparse room proposes only the pairs above the bar", sp.nudged.length > 0 && sp.nudged.every((n) => sp.truePair(n.person_id, n.candidate_id)), sp.nudged.map((n) => n.score));
+}
 
 const { total, failed } = results;
 console.log(`room simulation: ${total - failed}/${total} passed`);

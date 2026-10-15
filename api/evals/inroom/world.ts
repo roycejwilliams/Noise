@@ -75,6 +75,8 @@ export const W = {
   scorer: null as null | ((ask: string, cand: Member) => { score: number; share: boolean; mutual?: boolean }),
   // Consent read verdict (the model half of introConsent): default no violation.
   consentViolation: (_msg: string) => false,
+  // The end-of-night close drafter (null: a warm default naming them).
+  closeDraft: null as null | ((name: string) => string),
   llmCalls: [] as { kind: string; prompt: string }[],
 };
 
@@ -92,6 +94,7 @@ export function reset(): void {
   W.roomClosures.clear();
   W.scorer = null;
   W.consentViolation = () => false;
+  W.closeDraft = null;
 }
 
 let seq = 0;
@@ -536,6 +539,13 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R([]);
   }
 
+  // The end-of-night close's evidence that someone came (services/eventUnmatchedFollowUp.ts cameTonight).
+  if (has("SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2 AND arrived_at IS NOT NULL")) return R(W.presence.get(`${p[0]}|${p[1]}`)?.arrived_at ? [{ x: 1 }] : []);
+  if (has("SELECT 1 FROM event_walkin_checkins WHERE event_api_id = $1 AND person_id = $2")) return R(W.walkins.some((w) => w.event_api_id === p[0] && w.person_id === p[1]) ? [{ x: 1 }] : []);
+  if (has("FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%'") && has("AND created_at >= $2 LIMIT 1")) {
+    return R(W.memoriesWritten.filter((m) => m.user_id === p[0] && m.memory_type === "text_exchange" && String(m.content).startsWith("User said:") && +new Date(m.created_at ?? Date.now()) >= +new Date(p[1])).slice(0, 1));
+  }
+
   // Anything else is a query the fake world doesn't know: recorded (the room simulation fails on any), nothing returned.
   W.unknownSql.add(sql.slice(0, 120));
   return R([]);
@@ -629,6 +639,11 @@ function fakeAnthropic(init: any): Response {
   if (u) {
     W.llmCalls.push({ kind: "unmatchedPairDraft", prompt });
     return anthropicText(`Might be worth a quick hello to ${u[1]} before you head out.`);
+  }
+  if (prompt.includes("Write the goodbye a good host gives at the door")) {
+    W.llmCalls.push({ kind: "closeDraft", prompt });
+    const name = prompt.match(/You're texting ([^ ]+) near the end/)?.[1] ?? "there";
+    return anthropicText(W.closeDraft ? W.closeDraft(name) : `Really glad you came tonight, ${name}.`);
   }
   if (prompt.includes("nothing stood out as a strong pull tonight")) {
     W.llmCalls.push({ kind: "soloAck", prompt });
