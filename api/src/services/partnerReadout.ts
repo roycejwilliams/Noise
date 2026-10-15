@@ -15,7 +15,9 @@ import pool from "../db/db.js";
 import { escapeHtml, quietEmail } from "./emailDesign.js";
 
 // minRoom: a readout for fewer members than this would let the host work out who is behind any number.
-export const READOUT = { smallCell: 3, minForThemes: 8, minRoom: 6, minPeopleForConversations: 3 };
+// minOfferCoverage: "thin on" is a claim that nobody there offered something, so it needs Cue to know what most of the room can
+// offer; below this share of members with a known offer it says nothing (silence over false signal, Royce 2026-10-14).
+export const READOUT = { smallCell: 3, minForThemes: 8, minRoom: 6, minPeopleForConversations: 3, minOfferCoverage: 0.8 };
 
 export const THEMES = ["Investors or funding", "Hiring or talent", "Cofounders or partners", "Customers or clients", "Advice or mentors", "Community or friends", "Venues or events", "Something else"] as const;
 export type Theme = (typeof THEMES)[number];
@@ -55,8 +57,16 @@ export function foldThemes(counts: Partial<Record<Theme, number>>): { theme: The
 // when at least READOUT.smallCell members looked for it and nobody in the room offered it. Categories only, never a member, never a
 // count small enough to point at someone; "Something else" is never named. The member is the customer and the host is the channel:
 // this is room-level signal, nothing more.
+// It is only said when Cue knows what most of the room can offer (offerBacked below). On 2026-10-14 dev held 101 stated "looking
+// for" asks against 2 stated offers: read from stated offers alone, nearly every category anyone asked for would have read as thin,
+// investors standing in the room or not. Royce: "when Cue can't back a claim, it says nothing. Silence over false signal."
 export function thinOn(sought: Partial<Record<Theme, number>>, offered: Partial<Record<Theme, number>>): Theme[] {
   return THEMES.filter((t) => t !== "Something else" && (sought[t] ?? 0) >= READOUT.smallCell && (offered[t] ?? 0) === 0);
+}
+
+// Whether "nobody offered it" is backed: Cue knows at least one thing each of most of the room can offer.
+export function offerBacked(offerKnown: number, offerPool: number): boolean {
+  return offerPool > 0 && offerKnown / offerPool >= READOUT.minOfferCoverage;
 }
 
 export type Stats = {
@@ -74,8 +84,11 @@ export type Stats = {
   followThroughMembers: number;
   themes: Partial<Record<Theme, number>>;
   askCount: number;
-  // What members offered, by the same fixed categories: read only to find what the room was thin on.
+  // What members can offer, by the same fixed categories (people per category): read only to find what the room was thin on.
+  // offerKnown of offerPool members have at least one known offer (a stated offer, or one Cue's people graph holds for them).
   offerThemes?: Partial<Record<Theme, number>>;
+  offerKnown?: number;
+  offerPool?: number;
 };
 
 export function describe(s: Stats): { headline: string; lines: string[]; note: string } {
@@ -91,7 +104,7 @@ export function describe(s: Stats): { headline: string; lines: string[]; note: s
   const themes = s.askCount >= READOUT.minForThemes ? foldThemes(s.themes) : [];
   if (themes.length) lines.push(`What the room was looking for, by category: ${themes.map((t) => `${t.theme.toLowerCase()} (${t.n})`).join(", ")}.`);
   else lines.push(`Too few members shared what they were looking for to show a pattern without pointing at anyone.`);
-  const thin = s.askCount >= READOUT.minForThemes ? thinOn(s.themes, s.offerThemes ?? {}) : [];
+  const thin = s.askCount >= READOUT.minForThemes && offerBacked(s.offerKnown ?? 0, s.offerPool ?? 0) ? thinOn(s.themes, s.offerThemes ?? {}) : [];
   if (thin.length) lines.push(`The room was thin on: ${thin.map((t) => t.toLowerCase()).join(", ")}. Several members looked for it and nobody there offered it.`);
   return { headline: `How ${s.eventName} went`, lines, note };
 }
@@ -114,10 +127,12 @@ async function count(sql: string, params: unknown[]): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-export async function classifyAsks(asks: string[], classify: (ask: string) => Promise<Theme>): Promise<Partial<Record<Theme, number>>> {
+export type Side = "seeks" | "offers";
+
+export async function classifyAsks(asks: string[], classify: (ask: string, side?: Side) => Promise<Theme>, side: Side = "seeks"): Promise<Partial<Record<Theme, number>>> {
   const out: Partial<Record<Theme, number>> = {};
   for (const a of asks) {
-    const t = await classify(a).catch(() => "Something else" as Theme);
+    const t = await classify(a, side).catch(() => "Something else" as Theme);
     const theme: Theme = (THEMES as readonly string[]).includes(t) ? t : "Something else";
     out[theme] = (out[theme] ?? 0) + 1;
   }
@@ -125,20 +140,20 @@ export async function classifyAsks(asks: string[], classify: (ask: string) => Pr
 }
 
 // One ask, one fixed label. The model sees the ask and returns a label from the list; nothing it says is kept.
-export async function themeOfAsk(ask: string): Promise<Theme> {
+export async function themeOfAsk(ask: string, side: Side = "seeks"): Promise<Theme> {
   const { generateText } = await import("ai");
   const { anthropic } = await import("@ai-sdk/anthropic");
   const { MODELS } = await import("../models.js");
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
     experimental_telemetry: { isEnabled: true, functionId: "agent.partnerReadout.theme", recordInputs: false, recordOutputs: false },
-    prompt: `Label what this person is looking for with exactly one of: ${THEMES.join(" | ")}.\n\n"${ask.slice(0, 400)}"\n\nReturn ONLY the label.`,
+    prompt: `Label what this person ${side === "offers" ? "can offer others" : "is looking for"} with exactly one of: ${THEMES.join(" | ")}.\n\n"${ask.slice(0, 400)}"\n\nReturn ONLY the label.`,
   });
   const t = text.trim().replace(/^["']|["'.]+$/g, "");
   return ((THEMES as readonly string[]).includes(t) ? t : "Something else") as Theme;
 }
 
-export async function gatherStats(eventId: string, eventName: string, classify: (ask: string) => Promise<Theme> = themeOfAsk, membersOf?: (eventId: string) => Promise<{ user_id: string }[]>): Promise<Stats> {
+export async function gatherStats(eventId: string, eventName: string, classify: (ask: string, side?: Side) => Promise<Theme> = themeOfAsk, membersOf?: (eventId: string) => Promise<{ user_id: string }[]>): Promise<Stats> {
   const { eventMembers } = await import("./eventPresence.js");
   const members = await (membersOf ?? eventMembers)(eventId);
   const ids = members.map((m) => m.user_id);
@@ -157,18 +172,33 @@ export async function gatherStats(eventId: string, eventName: string, classify: 
   ]);
   // What the room was looking for: each attendee's own ask, read only to put it in a fixed category.
   let asks: string[] = [];
-  const offers: string[] = [];
+  // What each attendee can offer: their stated offer and the offers Cue's people graph holds for them (co_facts 'offers',
+  // services/peopleGraph.ts), read only to put each in a fixed category.
+  const offersBy = new Map<string, string[]>();
   if (ids.length) {
-    const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [ids]);
+    const [{ rows }, graph] = await Promise.all([
+      pool.query(`SELECT user_id, intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [ids]),
+      pool.query(`SELECT owner_user_id, object_label FROM co_facts WHERE owner_user_id = ANY($1::uuid[]) AND relation = 'offers' AND retired_at IS NULL`, [ids]),
+    ]);
+    const addOffer = (id: string, text: string) => offersBy.set(id, [...(offersBy.get(id) ?? []), text].slice(0, 3));
     for (const r of rows) {
       const intent = Array.isArray(r.intent) ? r.intent : [];
       const open = intent.filter((i: any) => isOpenAsk(i) && i?.type === "seeking"); // an ask, never a goal
       if (open.length) asks.push(String(open[open.length - 1].text));
       const offering = intent.filter((i: any) => isOpenAsk(i) && i?.type === "offering");
-      if (offering.length) offers.push(String(offering[offering.length - 1].text));
+      if (offering.length && r.user_id) addOffer(String(r.user_id), String(offering[offering.length - 1].text));
     }
+    for (const g of graph.rows) if (g.owner_user_id && g.object_label) addOffer(String(g.owner_user_id), String(g.object_label));
   }
   const themes = asks.length >= READOUT.minForThemes ? await classifyAsks(asks, classify) : {};
-  const offerThemes = asks.length >= READOUT.minForThemes && offers.length ? await classifyAsks(offers, classify) : {};
-  return { eventName, registered: members.length, arrived, walkins, briefs, nudged, interested, intros, debriefReplies, metSomeone, conversationsTold, followThroughMembers, themes, askCount: asks.length, offerThemes };
+  // People per offered category (one person offering two investor things counts once). Only labelled when the line could be said.
+  const offerKnown = offersBy.size;
+  const offerThemes: Partial<Record<Theme, number>> = {};
+  if (asks.length >= READOUT.minForThemes && offerBacked(offerKnown, ids.length)) {
+    for (const texts of offersBy.values()) {
+      const mine = new Set(Object.keys(await classifyAsks(texts, classify, "offers")) as Theme[]);
+      for (const t of mine) offerThemes[t] = (offerThemes[t] ?? 0) + 1;
+    }
+  }
+  return { eventName, registered: members.length, arrived, walkins, briefs, nudged, interested, intros, debriefReplies, metSomeone, conversationsTold, followThroughMembers, themes, askCount: asks.length, offerThemes, offerKnown, offerPool: ids.length };
 }

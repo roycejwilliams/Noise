@@ -420,6 +420,28 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   check("close: sent once (a second pass sends nothing)", closes(a).length === 1 && closes(n).length === 1 && closes(m).length === 1);
 }
 {
+  // Past the in-room limit (Royce, 2026-10-14: "A cap that leaves the most engaged people in the room without a goodbye is
+  // inverted - one line, once, always"): someone who already had the most in-room texts still gets the close, and the close never
+  // uses up a slot for a later in-room text.
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
+  const end = new Date(Date.now() + 45 * 60_000).toISOString();
+  addEvent({ api_id: "evt-cap", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }]);
+  const P = await import("../../src/harness/proactive.js");
+  for (let k = 0; k < P.MAX_IN_ROOM_SENDS_PER_EVENT; k++) W.proactiveSends.push({ user_id: a.id, type: "in_room", target_key: `in_room:additive:evt-cap:${k}`, message: "earlier" });
+  check("close: the in-room limit is reached before the close", !(await P.inRoomSendAllowed(a.id, "evt-cap")));
+  W.presence.set(`evt-cap|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  W.unmatchedFollowups.push({ user_id: a.id, event_api_id: "evt-cap", event_name: "Co Night", send_at: Date.now() - 60_000, sent_at: null });
+  const before = sentTo(a).length;
+  await U.processDueUnmatchedFollowUps();
+  await settle();
+  check("close: someone past the in-room text limit still gets the close", sentTo(a).slice(before).length === 1 && /glad you came/i.test(sentTo(a).slice(before)[0]?.content ?? ""), sentTo(a).slice(before));
+  W.proactiveSends.splice(0, W.proactiveSends.length, { user_id: a.id, type: "in_room", target_key: "in_room:match:evt-cap", message: "m" }, { user_id: a.id, type: "in_room", target_key: "in_room:close:evt-cap", message: "c" }, { user_id: a.id, type: "in_room", target_key: "in_room:additive:evt-cap:1", message: "x" });
+  check("close: the close never counts toward the in-room limit", await P.inRoomSendAllowed(a.id, "evt-cap"));
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8");
+  check("close: the kill switches still hold it (pause and matching stop)", /inRoomSendAllowed\(person\.user_id, eventId, \{ close: true \}\)/.test(src));
+}
+{
   // A draft that slips into matching talk never goes out as written: the plain close does.
   check("close: match talk in a draft is replaced by the plain close", U.closeText("So glad you came. Sorry nobody was right for you tonight.") === U.CLOSE_FALLBACK && U.closeText("Glad you came, hope you met some good people") === U.CLOSE_FALLBACK && U.closeText("Really glad you came tonight.") === "Really glad you came tonight." && U.closeText("") === U.CLOSE_FALLBACK);
 }

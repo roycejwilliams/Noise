@@ -127,8 +127,9 @@ Write the goodbye a good host gives at the door: one short, warm line (no em das
     },
   );
   const message = closeText(draft);
-  if (!(await inRoomSendAllowed(person.user_id, eventId))) {
-    console.log(`eventUnmatchedFollowUp: close held for ${person.user_id} (in-room text limit for this event reached)`);
+  // Past the in-room text limit: one line, once, always. Only the pause and the matching kill switch hold it.
+  if (!(await inRoomSendAllowed(person.user_id, eventId, { close: true }))) {
+    console.log(`eventUnmatchedFollowUp: close held for ${person.user_id} (texts paused or matching stopped)`);
     return false;
   }
   try {
