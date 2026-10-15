@@ -132,6 +132,7 @@
     "evals/inroom/noShows.ts",
     "evals/roomsim/night.ts",
     "evals/bounce/wants.ts",
+    "evals/bounce/calendar.ts",
     "evals/browserPilot/rules.ts",
     "evals/docs/researchBrief.ts",
     "evals/research/quality.ts",

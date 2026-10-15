@@ -619,6 +619,18 @@ export const ABILITIES: Ability[] = [
   // services/googleData.ts, 2026-09-28). Off until the Google client exists,
   // and what Co says it can do follows that.
   {
+    id: "calendar",
+    get can() {
+      return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
+        ? "If they connect their calendar (Co texts a one-time link; free/busy only), Co sees when they're busy or free and nothing else: never what an event is, where, or with whom. It's never shared with anyone, including other members, and Co never changes their calendar. It's the only way Co holds a time for them; a free time they tell Co is only ever suggested against. They can disconnect any time."
+        : "Co can't connect to their calendar yet.";
+    },
+    tool: "calendarConnection",
+    onCall: true,
+    limits: { perTurn: 1, perDay: 3 },
+    use: "connect: when they want Co to plan around their real calendar, or say yes when you offer it; sends a one-time link as its own text. Never instead of the full Google connection, and never to read anything but busy and free. disconnect: when they ask to disconnect their calendar. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
+  },
+  {
     id: "google",
     get can() {
       return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY

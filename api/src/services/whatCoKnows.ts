@@ -83,7 +83,7 @@ import * as designPure from "./designSystem.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free" | "grant";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -163,6 +163,8 @@ export type RawKnown = {
   places?: { key: string; want: string; place: string | null; source?: string | null; until?: string | null }[];
   // When they said they're free (services/wantWhen.ts): stated gaps, proposed against, never held.
   freeTimes?: { id: string; text: string; quote: string }[];
+  // Their calendar grant (services/calendarGrant.ts): free/busy only; removing it disconnects.
+  calendar?: { since: string } | null;
   // Their design system (member_design_signals), the way decks and pages read it: per context with signals of its own, the look
   // and the fonts in plain words; and each confirmed reference read Co took the look from.
   design?: { context: "professional" | "personal"; look: string | null; fonts: string | null }[];
@@ -262,6 +264,7 @@ export function knownItems(r: RawKnown): KnownItem[] {
   // A row made only by a window ("unread") has no place read yet: nothing true to say about where.
   for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}` : `where I look for "${x.want.slice(0, 120)}": near home${p?.city ? ` (${p.city})` : ""}`);
   // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
+  if (r.calendar) add("grant:calendar", "grant", "where", `your calendar, connected ${r.calendar.since}: I see only when you're busy or free, never what, where or with whom, and it's never shared`, null, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   return out;
 }
@@ -571,6 +574,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     asks: asks.map((a) => ({ id: String(a.ask_id), text: String(a.ask_text ?? "") })).filter((a) => a.text.trim()),
     places: await livePlaces(places, p),
     freeTimes: freeRows,
+    calendar: await import("./calendarGrant.js").then((C) => C.calendarConnected(userId, db as any)).catch(() => null),
     files,
     ...designKnown(signals),
   };
@@ -829,6 +833,12 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       if (!r.rowCount) throw new NotApplied();
       return { ref: item.ref, source: "window", was, now: null };
     }
+    case "grant": {
+      // Their calendar grant: disconnected (revoked with Google, deleted).
+      const { disconnectCalendar } = await import("./calendarGrant.js");
+      if (!(await disconnectCalendar(userId))) throw new NotApplied();
+      return { ref: item.ref, source: "grant", was, now: null };
+    }
     case "free": {
       // A free time they stated: removed (it's never proposed against again).
       const r = await db.query(`UPDATE member_free_times SET removed_at = NOW(), quote = '' WHERE user_id = $1 AND id = $2 AND removed_at IS NULL`, [userId, a]);
@@ -857,6 +867,7 @@ export function fieldFor(ref: string): string {
   if (kind === "place") return "where Co looks for one of their wants";
   if (kind === "window") return "how long one of their wants is for";
   if (kind === "free") return "when they said they're free";
+  if (kind === "grant") return "their calendar connection";
   return { claim: "what they told Co", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Co took from something of theirs", ask: "what Co looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
 }
 

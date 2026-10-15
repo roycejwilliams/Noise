@@ -113,7 +113,7 @@ export async function createConnectLink(userId: string): Promise<string | null> 
 // Opens Google's consent screen for a live, unused state.
 export async function consentUrlFor(state: string): Promise<string | null> {
   const { rows } = await pool.query(
-    `SELECT code_verifier_enc FROM google_oauth_states WHERE state = $1 AND used_at IS NULL AND expires_at > NOW()`,
+    `SELECT code_verifier_enc FROM google_oauth_states WHERE state = $1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW()`,
     [state],
   );
   if (!rows[0]) return null;
@@ -144,7 +144,7 @@ export async function exchangeCode(code: string, verifier: string, fetchImpl: ty
 // spent whatever happens next.
 export async function finishConnect(state: string, code: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean; userId: string | null; why?: string }> {
   const { rows } = await pool.query(
-    `UPDATE google_oauth_states SET used_at = NOW() WHERE state = $1 AND used_at IS NULL AND expires_at > NOW() RETURNING user_id, code_verifier_enc`,
+    `UPDATE google_oauth_states SET used_at = NOW() WHERE state = $1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW() RETURNING user_id, code_verifier_enc`,
     [state],
   );
   const row = rows[0];
@@ -212,7 +212,7 @@ export async function accessTokenFor(userId: string, fetchImpl: typeof fetch = f
   return t.access_token;
 }
 
-async function revokeToken(token: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+export async function revokeToken(token: string, fetchImpl: typeof fetch = fetch): Promise<void> {
   await fetchImpl(REVOKE_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
