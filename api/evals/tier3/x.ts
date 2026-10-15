@@ -76,7 +76,7 @@ const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta
   const sf = src("services/sweepFind.ts");
   check("the sweep's X tool uses the guidance text and 20 posts", /description: SWEEP_X_TOOL/.test(sf) && /searchRecentPosts\(q, X_SEARCH_RESULTS\)/.test(sf));
   check("a post's own link can be kept, as a web page found through X", /source: "web", via: "x", url: l/.test(sf));
-  check("the sweep logs its X search and what it kept from X", /did\.push\(`x: \$\{q\}`\)/.test(sf) && /xKept: gated\.filter/.test(sf) && /xPosts/.test(sf));
+  check("the sweep logs its X search and what it kept from X", /did\.push\(`x: \$\{q\}\$\{checked\.loosenedFrom/.test(sf) && /xKept: gated\.filter/.test(sf) && /xPosts/.test(sf));
   const lt = src("agent/loopTools.ts");
   check("replies read 20 posts too, with links expanded", /searchRecentPosts\(q, X_SEARCH_RESULTS\)/.test(lt) && /links: p\.links\.length/.test(lt));
 }

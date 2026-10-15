@@ -176,7 +176,15 @@ const realDeps: GoalSweepDeps = {
     await recordDecision({ layer: 7, decision: "goal_sweep.skip", userId: row.user_id, outcome: "skip", action: why, proposal: { detail } });
   },
   surface: async (row, context) => {
-    await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
+    // One search for all their goals: it looks where they all are when every one has the same place on file (services/wantPlace.ts),
+    // else in their home city. Only stored places are read here; each goal's own place is read by the morning sweep.
+    const goals = goalSweepGoals(row) ?? [];
+    const { goalHash } = await import("./goalEdges.js");
+    const W = await import("./wantPlace.js");
+    const keys = goals.map((g) => W.wantKeyForGoal(goalHash(g)));
+    const places = await W.placesOf(row.user_id, keys).catch(() => []);
+    const shared = W.sharedPlace(keys, places);
+    await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: shared ?? row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
     // The picker right after (sweepShadow.ts runPickerAfterSweep, Royce 2026-10-13), unless another sweep is on this member right now
     // (services/dailySweep.ts claimMember): that sweep runs the picker when it finishes.
     const D = await import("./dailySweep.js");

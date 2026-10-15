@@ -161,6 +161,14 @@ export const realFloorPlanDeps = async (): Promise<FloorPlanDeps> => {
 };
 // quiet: a tapered search day. No plan is written: their last plan is searched as it is (however old, whatever changed), and with none,
 // the search list is read for this search only, never logged as their plan (Royce, 2026-10-14: no goal or plan changes while tapered).
+// When a goal was recorded, for where it is (services/wantPlace.ts): its intent entry's created_at, else unknown (a goal from the older
+// profile list, read from its own words only).
+export function goalRecordedAt(intent: unknown, goal: string): Date | null {
+  const e = (Array.isArray(intent) ? intent : []).find((x: any) => x?.kind === "goal" && typeof x?.text === "string" && x.text.trim().toLowerCase() === goal.trim().toLowerCase());
+  const at = e?.created_at ?? e?.createdAt;
+  return at ? new Date(at) : null;
+}
+
 export async function floorGoalPlan(row: any, now: Date, deps?: FloorPlanDeps, o: { quiet?: boolean } = {}): Promise<FloorGoalPlan> {
   const d = deps ?? (await realFloorPlanDeps());
   const GE = await import("./goalEdges.js");
@@ -418,7 +426,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
 
   // ---- asks: every open one; find asks in all three places
   const { rows: asks } = await pool.query(
-    `SELECT ac.id, ac.ask_text, ac.kind, ac.split_read
+    `SELECT ac.id, ac.ask_text, ac.kind, ac.split_read, ac.created_at
        FROM ask_checkins ac WHERE ac.user_id = $1 AND ac.resolved_at IS NULL ORDER BY COALESCE(ac.last_mentioned_at, ac.created_at) DESC`,
     [userId],
   );
@@ -449,7 +457,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
       }
     }
     const searchB = askText === String(a.ask_text ?? "") ? b : { ...b, searchedPart: askText.slice(0, 160) };
-    await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true });
+    await search(searchB, { askId: String(a.id), userId, firstName: row.first_name, phoneNumber: row.phone_number, askText, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `ask:${a.id}`, text: String(a.ask_text ?? ""), createdAt: a.created_at ? new Date(a.created_at) : null } });
   }
 
   // ---- goals: each one their current plan holds, on its own, in all three places (floorGoalPlan: reused while their goals are the
@@ -480,7 +488,7 @@ export async function sweepMember(row: any, userId: string, now: Date, base: { d
     const decide = floorGoalDecision(g, { states, statesError, gateError, hold: goalHold, goalId: b.id });
     if (decide) { items.push({ ...b, ...decide }); continue; }
     // cooldownCleared is only logged by the search; the floor never reads the goal cooldown, so it's always clear here.
-    await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search ?? "", fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true });
+    await search(b, { askId: E.PROFILE_ASK_ID, userId, firstName: row.first_name, phoneNumber: row.phone_number, askText: g.search ?? "", fromProfile: true, city: row.city ?? null, goals: goals.length ? goals : null, activityPreferences: row.activity_preferences ?? null, cooldownCleared: true, want: { key: `goal:${b.id}`, text: g.goal, createdAt: goalRecordedAt(row.intent, g.goal) } });
   }
 
   const { action, totals } = dailySummary(items);

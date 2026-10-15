@@ -41,7 +41,26 @@ export type SurfacingCandidate = {
   allSources?: boolean;
   // What this search did, handed to the daily sweep for its summary (the return value stays as the hourly sweep reads it).
   onReport?: (r: SurfacingReport) => void;
+  // The want this search is for, when it isn't the ask row itself (a goal off their plan): its place is the want's (wantPlace.ts).
+  // createdAt: when the want was recorded (null: before PLACE_SINCE, or unknown), which decides whether what they told Co counts.
+  want?: { key: string; text: string; createdAt: Date | null };
 };
+
+// Where this search looks (services/wantPlace.ts, Royce 2026-10-15): the want's own place, else their home city. The want is the one
+// the candidate names, else the ask row it searches for; a profile search with no want named has no place of its own.
+export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps?: import("./wantPlace.js").PlaceDeps): Promise<{ city: string | null; searchedIn: SearchedIn }> {
+  const W = await import("./wantPlace.js");
+  let want = candidate.want ?? null;
+  if (!want && candidate.askId && candidate.askId !== PROFILE_ASK_ID) {
+    const { rows } = await pool.query(`SELECT created_at FROM ask_checkins WHERE id::text = $1`, [candidate.askId]).catch(() => ({ rows: [] as any[] }));
+    want = { key: W.wantKeyForAsk(candidate.askId), text: candidate.askText, createdAt: rows[0]?.created_at ? new Date(rows[0].created_at) : null };
+  }
+  if (!want) return { city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" } };
+  const wp = await W.placeFor(candidate.userId, want, deps ?? W.realPlaceDeps).catch(() => null);
+  return wp?.place ? { city: wp.place, searchedIn: { key: want.key, place: wp.place, source: wp.source } } : { city: candidate.city, searchedIn: { key: want.key, place: candidate.city, source: "home" } };
+}
+// Where a find was searched, kept on the find (its match) so the send can say so once (wantPlace.ts noteDue).
+export type SearchedIn = { key: string | null; place: string | null; source: import("./wantPlace.js").PlaceSource | "home" };
 
 // How long an unanswered tease stays "open" before Co treats it as
 // abandoned. Referenced by sendblue.ts's pending-offer lookup too — a reply
@@ -387,14 +406,16 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
   // Co finds and judges in its own loop, reading their record (services/sweepFind.ts, Phase A1): what they've said they want and ruled
   // out, how they've been, what was already sent. Feelings shape how Co says it, never whether they hear about something (2026-09-18);
   // frustration with what Co has found sends the real thing instead of a tease (attemptEventSurfacing, revealNow).
+  // Where this want is (Royce, 2026-10-15): the search looks there, the home city only when the want has no place of its own.
+  const where = await searchPlace(candidate).catch(() => ({ city: candidate.city, searchedIn: { key: null, place: candidate.city, source: "home" as const } }));
   const result = await sweepFind(
-    { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: candidate.city },
+    { userId: candidate.userId, firstName: candidate.firstName, askText: candidate.askText, fromProfile: candidate.fromProfile ?? false, city: where.city, homeCity: candidate.city },
     { timezone, allSources: candidate.allSources },
   ).catch((err: any) => {
     console.error("attemptEventSurfacing: sweepFind failed (non-fatal):", err?.message ?? err);
     return { matches: [] as TierMatch[], did: [] as string[], searched: false, frustratedWithCo: false, sources: { events: false, web: false, x: false, failures: [`the search failed (${String(err?.message ?? err).slice(0, 120)})`] } as SweepSources };
   });
-  const matches: TierMatch[] = result?.matches ?? [];
+  const matches: TierMatch[] = (result?.matches ?? []).map((m) => ({ ...m, searchedIn: where.searchedIn }) as TierMatch);
   // Tier order as the mention priority (Tier 1 first by default) — same
   // "route people into Co's own events first" reasoning the old
   // decideBestMatch had, just spread across separate texts over time

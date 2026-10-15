@@ -2992,6 +2992,25 @@ export async function runMigrations(): Promise<void> {
     .query(`ALTER TABLE event_match_offers DROP CONSTRAINT IF EXISTS event_match_offers_status_check`)
     .then(() => pool.query(`ALTER TABLE event_match_offers ADD CONSTRAINT event_match_offers_status_check CHECK (status IN ('queued', 'open', 'answered', 'expired'))`))
     .catch((err: Error) => console.error("event_match_offers expired status failed:", err));
+  // Where each want is (services/wantPlace.ts, Royce 2026-10-15: "the place lives on the want, not the member"). One row per want
+  // (an open ask, or a goal Co searches for), read once; place NULL means none (the home city stands in). noted_at: the one line saying
+  // where their finds come from went out (or they set the place themselves).
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS want_places (
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        want_key TEXT NOT NULL,
+        want_text TEXT NOT NULL,
+        place TEXT,
+        source TEXT NOT NULL CHECK (source IN ('their_words', 'told', 'corrected', 'none', 'removed')),
+        quote TEXT,
+        noted_at TIMESTAMPTZ,
+        read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, want_key)
+      )`,
+    )
+    .catch((err: Error) => console.error("want_places table failed:", err));
   // Restraint counts from the first kind-tagged send (services/kindRestraint.ts loadKindHistory): this keeps that lookup an index read.
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)

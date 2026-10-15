@@ -55,7 +55,9 @@ import type { PoolClient } from "pg";
 // checkedAt (Phase B, 2026-10-10): when its own page was last read (services/sendCheck.ts recheckFind). Details without it are as
 // old as the find, and are never said as current (services/asOf.ts). pageNow: a web find's page text at that read, kept apart from the
 // post or evidence it was found from.
-type MatchExtras = { details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
+// searchedIn: where the search that found it looked (services/wantPlace.ts via eventSurfacingSweep.ts searchPlace): the want's own
+// place, or the home city; read by the send to say once where their finds come from.
+type MatchExtras = { searchedIn?: import("./eventSurfacingSweep.js").SearchedIn; details?: EventDetails; opportunity?: OpportunityDetails; whyItFits?: string; fits?: boolean; rightKind?: boolean; outsideTimeFrame?: boolean; outsidePlace?: boolean; audience?: string; checkedAt?: string; pageNow?: string };
 export type TierMatch =
   | ({ tier: 1; kind: "co_event"; event_api_id: string; event_date: string; name: string; url?: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)
   | ({ tier: 2; kind: "public_event"; event_api_id: string; event_date: string; name: string; url: string; reason: string; city?: string | null; online?: boolean } & MatchExtras)

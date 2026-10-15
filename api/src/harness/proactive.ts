@@ -2379,6 +2379,27 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     }
   }
 
+  // Where their finds come from, said once (services/wantPlace.ts, Royce 2026-10-15): the first find searched in a place they didn't name
+  // in the want itself carries one line, right before the closing question. It's marked said only once it was delivered.
+  let placeNote: { key: string; line: string } | null = null;
+  if (composed && !opts.dryRun) {
+    const W = await import("../services/wantPlace.js");
+    for (const it of composed.perItem) {
+      const s = (it.candidate.payload as { match?: { searchedIn?: { key: string | null; place: string | null; source: string } } }).match?.searchedIn;
+      if (!s?.key || s.source !== "told") continue;
+      const row = await W.realPlaceDeps.row(userId, s.key).catch(() => null);
+      const line = W.noteDue(row);
+      if (line) {
+        placeNote = { key: s.key, line };
+        break;
+      }
+    }
+    if (placeNote) {
+      const at = composed.messages.length - (composed.closing ? 1 : 0);
+      composed = { ...composed, messages: [...composed.messages.slice(0, at), placeNote.line, ...composed.messages.slice(at)], text: `${composed.text}\n${placeNote.line}`, notes: [...composed.notes, "where their finds come from, said once"] };
+    }
+  }
+
   let draft: DraftResult;
   try {
     draft = composed ? { messages: composed.messages, text: composed.text, rules: {} } : await drafting(c.type, () => registry[c.type].draft(c, person));
@@ -2546,6 +2567,9 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
   // Co's record of what it did (services/coFacts.ts).
   if (result.delivered.length) await recordProactiveText(userId, c.type, result.delivered.join(" "), c.id);
+  if (placeNote && result.delivered.includes(placeNote.line)) {
+    await import("../services/wantPlace.js").then((W) => W.markNoted(userId, placeNote!.key)).catch((err: any) => console.error("proactive: marking where their finds come from as said failed (non-fatal):", err?.message ?? err));
+  }
   // The stopped-looking line, told once it was delivered (services/askRetire.ts).
   if (rideNote) {
     const A = await import("../services/askRetire.js");
