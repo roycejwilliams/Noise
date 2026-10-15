@@ -110,6 +110,8 @@ export type ProactiveType =
   | "event_match_nudge"
   // A page or deck they've been using is about to expire; one word keeps it (services/coPages/expiry.ts, 2026-10-11).
   | "artifact_expiry"
+  // One solved plan for a want with a window, in a real gap (services/bounce.ts, the bounce, 2026-10-15): proposed once.
+  | "bounce_proposal"
   // Before a Co event they're going to (services/preArrival.ts, 2026-09-30).
   | "pre_arrival"
   // The member brief, the day before a Co event, and the one question at RSVP that lets it name them (services/eventBrief.ts, 2026-10-05).
@@ -181,6 +183,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   companion: { priority: 10, typeGapDays: 4 },
   // Once per artifact per lifetime (its own target key), before the date it names.
   artifact_expiry: { priority: 30 },
+  // Once per want, ever (bounce_proposals), and only while its find and gap hold.
+  bounce_proposal: { priority: 85 },
   // Time-bound: hours before the event, once per event (its own target key).
   pre_arrival: { priority: 95 },
   // Once per event each, timed to the day before and to the RSVP.

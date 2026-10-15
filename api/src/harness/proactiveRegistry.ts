@@ -240,6 +240,30 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // One solved plan for a want with a window, in a real gap (services/bounce.ts, the bounce, 2026-10-15). Read again before it
+  // goes: the find (gone, sold out or past never pings) and the gap (busy now, or their stated time removed: silence).
+  bounce_proposal: {
+    async draft(c, person) {
+      const p = c.payload;
+      const B = await import("../services/bounce.js");
+      const { checkBeforeSend } = await import("../services/sendCheck.js");
+      const found = await checkBeforeSend({ id: c.id, userId: c.userId, payload: p }, p.zone ?? null);
+      if ("skip" in found) return { ...skip(`the find: ${found.skip}`), ...(found.exited ? { exited: true } : {}) } as DraftResult;
+      if ("defer" in found) return found;
+      if (!(await B.gapStillHolds(c.userId, p.gap, p.times, p.zone).catch(() => false))) return skip("the gap no longer holds");
+      const { facts, task } = B.proposalBrief({ want: p.want, match: p.match, gap: p.gap, times: p.times, zone: p.zone });
+      const text = await draftProactive({ functionId: "bounce.proposal.draft", firstName: person.firstName, facts, task, maxSentences: 2 });
+      if (!text) return skip("model chose SKIP");
+      return { messages: [text], text, rules: { maxSentences: 2, maxChars: 300, mustIncludeAny: nameTokens(String(p.match?.name ?? "")) } };
+    },
+    async onSent(c, _person, messages) {
+      await pool.query(`UPDATE bounce_proposals SET status = 'proposed', sent_at = NOW(), message = $2 WHERE id = $1 AND status = 'queued'`, [c.payload.proposalId, messages.join(" ").slice(0, 600)]);
+    },
+    async onDropped(c, _status, reason) {
+      await pool.query(`UPDATE bounce_proposals SET status = 'dropped', answer_words = $2 WHERE id = $1 AND status = 'queued'`, [c.payload.proposalId, String(reason ?? "").slice(0, 300)]).catch(() => {});
+    },
+  },
+
   network_tease: {
     async draft(c, person) {
       const candidate = c.payload.candidate;

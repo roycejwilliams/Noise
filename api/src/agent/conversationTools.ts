@@ -1249,6 +1249,24 @@ export function createConversationTools(ctx: ConversationToolContext) {
       },
     }),
 
+    // Their answer to Cue's one plan (services/bounce.ts, the bounce: "record the yes, execution is the next pass"): yes or no is
+    // recorded; nothing is booked, held or sent anywhere.
+    answerProposal: tool({
+      description: toolUse("answerProposal"),
+      inputSchema: z.object({ answer: z.enum(["yes", "no"]), theirWords: z.string().describe("Their exact words answering it.") }),
+      execute: async ({ answer, theirWords }) => {
+        const quote = theirQuote(ctx.resolvedContent, recentOf(ctx), theirWords);
+        if (!quote) return { ok: false, error: "Their answer has to be in their own words this turn. Ask if they want it." };
+        if (ctx.dryRun) return { ok: true, note: "(dry run) nothing recorded." };
+        const B = await import("../services/bounce.js");
+        const r = await B.answerLatest(ctx.userId, answer === "yes", quote);
+        if (!r) return { ok: false, error: "There's no plan of yours waiting on an answer." };
+        await recordDecision({ layer: 3, decision: "bounce.answer", userId: ctx.userId, outcome: "act", action: answer === "yes" ? "accepted" : "declined", proposal: { id: r.id, find: r.find, day: r.day, quote } });
+        ctx.facts?.add("did_this_turn", answer === "yes" ? `They said yes to ${r.find} on ${r.day} at ${r.from}. It's noted; nothing is booked or held yet, so don't say it is.` : `They passed on ${r.find}. Noted; no apology, no other options now.`);
+        return { ok: true, note: answer === "yes" ? "Noted their yes. Say it's noted in a few words; don't claim anything is booked or held." : "Noted. Acknowledge lightly." };
+      },
+    }),
+
     // When they said they're free (services/wantWhen.ts, the bounce, Royce 2026-10-15): a stated gap, in their words. Proposed against,
     // never held (only a calendar gap holds). Nothing inferred: a quiet afternoon is something to ask about, never a gap.
     noteFreeTime: tool({

@@ -1014,6 +1014,12 @@ export function registerJobs(io: Server) {
   }, { timezone: "America/Los_Angeles" });
 
 
+  // The bounce's trigger (services/bounce.ts): one plan for a want with a window, in a real gap, every 15 minutes; it goes through the
+  // proactive harness like everything Cue starts.
+  cron.schedule("7,22,37,52 * * * *", () => {
+    import("../services/bounce.js").then((B) => B.runBounceTriggers()).catch((err: any) => console.error("bounce trigger cron error:", err?.message ?? err));
+  });
+
   // No membership lapse (Royce, 2026-10-14: "Going quiet earns less contact, never ejection." The member's job is nothing):
   // the 2026-09-22 job that warned members Cue knew little about and then archived them is gone. Quiet members stay members.
 
