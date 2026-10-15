@@ -4,9 +4,10 @@
 // A Co event's room is eventScoring.inRoomPool: Luma guests and walk-ins who are members, joined through co_profiles, so a
 // non-member never reaches the scorer. A partner night has no Luma list and most of its room are guests, so its room is read
 // here instead:
-//   - members who checked in at the door (event_walkin_checkins, the walk-in path P2 gives a member who texts the night's
-//     code) and whom Co has seen arrive, not left, not "not going": the same walk-in rule as inRoomPool;
-//   - guests (services/partnerGuests.ts) who arrived, aren't resolved, and said what they do or who they hope to meet. A
+//   - members who checked in with the night's code (event_walkin_checkins, the walk-in path P2 gives a member) and arrived,
+//     not left, not "not going": the same walk-in rule as inRoomPool. Arriving is the night's door-only code in the check-in
+//     window (partnerGuests.arrivesBy, Royce's ruling on #213); they're matched on their own member profile;
+//   - guests (services/partnerGuests.ts) who arrived (the door code), aren't resolved, and said what they do or who they hope to meet. A
 //     guest's profile is only their own intake words, scoped to the night: what they do as an offering, who they hope to meet
 //     as a seeking ask. They gave those words to be matched tonight, so both count as shareable for this night's matching.
 //
