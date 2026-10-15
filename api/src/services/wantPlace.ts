@@ -1,0 +1,176 @@
+// Where each want is (Royce, 2026-10-15: "stop treating location as one field on the member with an engine of precedence rules...
+// the place lives on the want, not the member"). A want (an open ask, or a goal Co searches for) carries its own place in plain words,
+// learned once. Every search for that want (Luma, the web, X) looks there; the member's home city is only the fallback for a want with
+// no place. The 10-15 morning that started it: Royce splits his time between Sacramento and SF, his goals were about SF, and the Luma
+// search only ever looked in his profile city, so every Luma query came back with the same three Sacramento family events.
+//
+// Where a place comes from, and nothing else:
+//   - the want's own words ("founder dinners in SF"): source "their_words";
+//   - for a want recorded after PLACE_SINCE, also what they told Co about where that kind of thing happens for them ("I go to SF for
+//     all tech stuff"): source "told", always with their exact words as the quote;
+//   - their correction ("actually Oakland", through whatCoKnows): source "corrected".
+// A want that existed before PLACE_SINCE is read from its own text only (Royce: "reading place from existing wants never guesses... A
+// wrong guessed place is worse than a missing one"). The model only proposes; code keeps a place only when its quote is copied from
+// the want or from their own line, and the place is in that quote. Anything else is no place, and the home city stands in.
+//
+// The first find from a place they didn't name in the want itself (source "told") carries one line saying so (PLACE_NOTE), once per
+// want (noted_at). The place shows in what Co knows (whatCoKnows.ts, ref place:<want key>), where it can be corrected or removed.
+import pool from "../db/db.js";
+import { recordDecision } from "../harness/core.js";
+
+// Wants recorded before this read their place from their own text only (the retrofit). Set to the day this shipped.
+export const PLACE_SINCE = new Date("2026-10-16T00:00:00Z");
+export const PLACE_LIMITS = { placeChars: 40, placeWords: 4, toldLines: 40, toldDays: 180 } as const;
+
+export type PlaceSource = "their_words" | "told" | "corrected" | "none" | "removed";
+export type WantPlace = { key: string; place: string | null; source: PlaceSource; quote: string | null; notedAt: Date | null };
+export type Want = { key: string; text: string; createdAt: Date | null };
+
+export const wantKeyForAsk = (askRowId: string) => `ask:${askRowId}`;
+export const wantKeyForGoal = (goalHash: string) => `goal:${goalHash}`;
+
+// The line the first find from a place they didn't name carries (COPY: Royce approves the exact words in the PR).
+export const PLACE_NOTE = (place: string) => `These come from ${place} unless you tell me otherwise.`;
+
+const squash = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ").trim();
+
+// Pure: the place a read proposed, kept only when it's backed. quote must be copied from one of the sources (the want's own text, or one
+// of their own lines), and the place must be in that quote as words. A place too long to be a place is no place.
+export function backedPlace(place: unknown, quote: unknown, sources: string[]): { place: string; quote: string } | null {
+  const p = String(place ?? "").trim().replace(/[.,;:!?]+$/, "");
+  const q = String(quote ?? "").trim();
+  if (!p || !q) return null;
+  if (p.length > PLACE_LIMITS.placeChars || p.split(/\s+/).length > PLACE_LIMITS.placeWords) return null;
+  if (!sources.some((s) => squash(s).includes(squash(q)))) return null;
+  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const m = new RegExp(`(^|[^A-Za-z0-9])(${esc})(?=$|[^A-Za-z0-9])`, "i").exec(q);
+  if (!m) return null;
+  // Part of a longer name ("South Park Commons", "Berkeley Rep") isn't the place: a wrong place is worse than none (Royce, 2026-10-15).
+  if (/^\s+[A-Z]/.test(q.slice(m.index + m[0].length))) return null;
+  return { place: p, quote: q };
+}
+
+// Pure: whether this want may take a place from what they told Co (recorded after PLACE_SINCE), or only from its own words.
+export function mayUseTold(w: Want): boolean {
+  return !!w.createdAt && w.createdAt.getTime() >= PLACE_SINCE.getTime();
+}
+
+export function placePrompt(w: Want, told: string[]): string {
+  return `A member asked Co to look out for something. Say where it's for, only if their words say so.
+
+What they want: "${w.text.slice(0, 300)}"
+${told.length ? `\nTheir own words about where things happen for them (newest first):\n${told.map((t) => `- "${t.slice(0, 240)}"`).join("\n")}\n` : ""}
+Return the place this want is for, as a city or area in their words ("SF", "Oakland", "New York"), and a quote copied exactly from the want${told.length ? " or from one of their lines" : ""} that says it. A line about where they go for this kind of thing counts ("I go to SF for all tech stuff" for a tech meetup); a line about something else doesn't. Online, remote or anywhere is no place. If nothing they wrote says where, the answer is none: never infer it from who they are, from a company or a program's location, or from anything else.
+
+Reply with JSON only: {"place": "SF", "quote": "..."} or {"place": null}`;
+}
+
+export type PlaceDeps = {
+  row: (userId: string, key: string) => Promise<WantPlace | null>;
+  told: (userId: string) => Promise<string[]>;
+  model: (prompt: string) => Promise<string>;
+  save: (userId: string, w: Want, p: WantPlace) => Promise<void>;
+  log: typeof recordDecision;
+};
+
+// The place of one want: the stored one, or read now (once) and stored. A read that fails is not stored (read again next time) and
+// gives no place for this search.
+export async function placeFor(userId: string, w: Want, deps: PlaceDeps = realPlaceDeps): Promise<WantPlace> {
+  const have = await deps.row(userId, w.key).catch(() => null);
+  if (have) return have;
+  const told = mayUseTold(w) ? await deps.told(userId).catch(() => [] as string[]) : [];
+  let raw: string;
+  try {
+    raw = await deps.model(placePrompt(w, told));
+  } catch (err: any) {
+    console.error("wantPlace: the read failed (non-fatal, no place for this search):", err?.message ?? err);
+    return { key: w.key, place: null, source: "none", quote: null, notedAt: null };
+  }
+  let parsed: { place?: unknown; quote?: unknown } = {};
+  try {
+    parsed = JSON.parse((raw.match(/\{[\s\S]*\}/) ?? ["{}"])[0]);
+  } catch {
+    parsed = {};
+  }
+  const fromWant = backedPlace(parsed.place, parsed.quote, [w.text]);
+  const fromTold = !fromWant && told.length ? backedPlace(parsed.place, parsed.quote, told) : null;
+  const got = fromWant ?? fromTold;
+  const p: WantPlace = got ? { key: w.key, place: got.place, source: fromWant ? "their_words" : "told", quote: got.quote, notedAt: null } : { key: w.key, place: null, source: "none", quote: null, notedAt: null };
+  await deps.save(userId, w, p).catch((err: any) => console.error("wantPlace: storing the place failed (non-fatal):", err?.message ?? err));
+  await deps
+    .log({ layer: 3, decision: "want.place", userId, outcome: got ? "act" : "skip", action: got ? p.source : parsed.place ? "unbacked" : "none", proposal: { key: w.key, want: w.text.slice(0, 160), place: p.place, quote: p.quote, proposed: parsed.place ?? null, retro: !mayUseTold(w) } })
+    .catch(() => {});
+  return p;
+}
+
+// What the first find from a place they didn't name carries, once: their place for this want, when it came from what they told Co
+// (not the want's own words, not a correction they made) and wasn't said yet.
+export function noteDue(p: Pick<WantPlace, "place" | "source" | "notedAt"> | null | undefined): string | null {
+  return p && p.place && p.source === "told" && !p.notedAt ? PLACE_NOTE(p.place) : null;
+}
+
+export async function markNoted(userId: string, key: string): Promise<void> {
+  await pool.query(`UPDATE want_places SET noted_at = NOW(), updated_at = NOW() WHERE user_id = $1 AND want_key = $2 AND noted_at IS NULL`, [userId, key]);
+}
+
+// Their correction (whatCoKnows.ts): the place they said, or none (the home city stands in, and it's never read again).
+export async function setPlace(db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> }, userId: string, key: string, place: string | null, theirWords: string) {
+  return db.query(
+    `UPDATE want_places SET place = $3, source = $4, quote = $5, noted_at = COALESCE(noted_at, NOW()), updated_at = NOW() WHERE user_id = $1 AND want_key = $2`,
+    [userId, key, place, place ? "corrected" : "removed", theirWords.slice(0, 300)],
+  );
+}
+
+// The stored places of the wants they have open (for what Co knows).
+export async function placesOf(userId: string, keys: string[], db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<{ key: string; want: string; place: string | null; source: PlaceSource }[]> {
+  if (!keys.length) return [];
+  const { rows } = await db.query(`SELECT want_key, want_text, place, source FROM want_places WHERE user_id = $1 AND want_key = ANY($2::text[])`, [userId, keys]);
+  return rows.map((r: any) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null, source: String(r.source) as PlaceSource }));
+}
+
+// Pure: the one place every one of these wants has on file, or null (one without a place, or two places, means the home city).
+export function sharedPlace(keys: string[], places: { key: string; place: string | null }[]): string | null {
+  if (!keys.length) return null;
+  const by = new Map(places.map((p) => [p.key, p.place]));
+  const all = keys.map((k) => by.get(k) ?? null);
+  if (all.some((p) => !p)) return null;
+  const distinct = new Set(all.map((p) => p!.trim().toLowerCase()));
+  return distinct.size === 1 ? all[0] : null;
+}
+
+export const realPlaceDeps: PlaceDeps = {
+  row: async (userId, key) => {
+    const { rows } = await pool.query(`SELECT want_key, place, source, quote, noted_at FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
+    return rows[0] ? { key, place: rows[0].place ?? null, source: String(rows[0].source) as PlaceSource, quote: rows[0].quote ?? null, notedAt: rows[0].noted_at ? new Date(rows[0].noted_at) : null } : null;
+  },
+  // Their own lines that say where they are or go (a place word next to a capitalized name), newest first, never a line to a teammate.
+  told: async (userId) => {
+    const { notToTeammate } = await import("./teamLines.js");
+    const { rows } = await pool.query(
+      `SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}
+         AND created_at > NOW() - make_interval(days => $2)
+         AND content ~* '\\m(in|to|from|based|live|living|lives|split|go|going|head|heading|travel|move|moving|around)\\M'
+       ORDER BY created_at DESC LIMIT 200`,
+      [userId, PLACE_LIMITS.toldDays],
+    );
+    return rows
+      .map((r: any) => String(r.content).replace(/^User said:\s*/, ""))
+      .filter((t) => /\s[A-Z][a-zA-Z]+/.test(t))
+      .slice(0, PLACE_LIMITS.toldLines);
+  },
+  model: async (prompt) => {
+    const { generateText } = await import("ai");
+    const { anthropic } = await import("@ai-sdk/anthropic");
+    const { MODELS } = await import("../models.js");
+    const r = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 200, abortSignal: AbortSignal.timeout(20_000), experimental_telemetry: { isEnabled: true, functionId: "wantPlace.read", recordInputs: false, recordOutputs: false }, prompt });
+    return r.text;
+  },
+  save: async (userId, w, p) => {
+    await pool.query(
+      `INSERT INTO want_places (user_id, want_key, want_text, place, source, quote) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id, want_key) DO NOTHING`,
+      [userId, w.key, w.text.slice(0, 300), p.place, p.source, p.quote],
+    );
+  },
+  log: recordDecision,
+};

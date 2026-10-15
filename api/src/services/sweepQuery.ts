@@ -147,12 +147,29 @@ export function queryProblems(q: string, o: { terms: string[]; source: QuerySour
 }
 
 // What the sweep is told about writing queries.
-export const SWEEP_QUERY_RULES = `How to write searches: each query names the thing being found, never them. No names (theirs, their company, partners or people), nothing like "for someone building a startup"; who they are is for judging what comes back. Aim for recall: a few words, narrowed only by what really filters (city, dates, category); more than four words besides city and dates is too tight. Write for the source: X like what people post ("AI founders SF tonight", an event name, a hashtag); the web like the title of a page that lists the thing ("SF tech events November 2026", "pre-seed founder programs applications open"). Never send the same words to both. A query that breaks this comes back with what to fix and costs nothing.`;
+export const SWEEP_QUERY_RULES = `How to write searches: each query names the thing being found, never them. No names (theirs, their company, partners or people), nothing like "for someone building a startup"; who they are is for judging what comes back. Aim for recall: a few words, narrowed only by what really filters (city, dates, category); more than four words besides city and dates is too tight. Write for the source: X like what people post ("AI founders SF tonight", an event name, a hashtag); the web like the title of a page that lists the thing ("SF tech events November 2026", "pre-seed founder programs applications open"). Never send the same words to both. A query that's only too long runs loosened to its first four words besides city and dates, so put what filters most first; anything else that breaks this comes back with what to fix and costs nothing.`;
+
+// Pure: a query too tight for its source, loosened (Royce, 2026-10-15: "a query over 4 key words gets auto-loosened and retried once,
+// not refused"): the first QUERY_LIMITS.contentWords key words in the order Co wrote them, with everything that isn't a key word
+// (the city, dates, operators) kept. An OR group or a term searched as one ("open calls") counts as one word, as in contentWords.
+export function loosenQuery(q: string, max: number = QUERY_LIMITS.contentWords): string {
+  const marked = q.replace(PHRASES, (m) => m.replace(/\s+/g, "\u0001"));
+  const segs = marked.match(/\([^)]*\)|"[^"]*"|\S+/g) ?? [];
+  let n = 0;
+  const kept = segs.filter((seg) => {
+    if (!contentWords(seg.replace(/\u0001/g, " ")).length) return true;
+    n++;
+    return n <= max;
+  });
+  return kept.join(" ").replace(/\u0001/g, " ").replace(/\s+/g, " ").trim();
+}
+const TOO_TIGHT = /^it's too tight \(/;
 
 // ---------- the sweep's query ledger: every query checked, run or refused, and logged beside what became of its results
 
 export type LedgerSource = QuerySource;
-export type QueryLog = { source: LedgerSource; query: string; results: number; kept: number; passed: number; refused?: string[] };
+// loosenedFrom: the query as Co wrote it, when it was too tight and ran loosened (loosenQuery), so a lost find is never invisible.
+export type QueryLog = { source: LedgerSource; query: string; results: number; kept: number; passed: number; refused?: string[]; loosenedFrom?: string };
 export type Looked = { source: LedgerSource; url: string; query?: string };
 
 export class QueryLedger {
@@ -170,11 +187,24 @@ export class QueryLedger {
     if (bad.length) this.queries.push({ source, query: query.slice(0, 200), results: 0, kept: 0, passed: 0, refused: bad });
     return bad;
   }
+  // A query whose only problem is that it's too tight runs loosened, once (loosenQuery), and is logged with what Co wrote. Anything
+  // else wrong with it is refused as before (check).
+  checkOrLoosen(source: LedgerSource, query: string): { query: string; bad: string[]; loosenedFrom?: string } {
+    const other = source === "x" ? this.asked("web") : source === "web" ? this.asked("x") : [];
+    const problems = (q: string) => queryProblems(q, { terms: this.terms, source, otherSourceQueries: other, theirWords: this.theirWords, avoid: this.avoid });
+    const bad = problems(query);
+    if (bad.length === 1 && TOO_TIGHT.test(bad[0])) {
+      const loose = loosenQuery(query);
+      if (loose && loose !== query && !problems(loose).length) return { query: loose, bad: [], loosenedFrom: query.slice(0, 200) };
+    }
+    if (bad.length) this.queries.push({ source, query: query.slice(0, 200), results: 0, kept: 0, passed: 0, refused: bad });
+    return { query, bad };
+  }
   refusal(query: string, bad: string[]): string {
     return `Not searched: "${query.slice(0, 120)}" ${bad.join("; ")}. Rewrite it and search again; it cost nothing.`;
   }
-  ran(source: LedgerSource, query: string, results: number): void {
-    this.queries.push({ source, query: query.slice(0, 200), results, kept: 0, passed: 0 });
+  ran(source: LedgerSource, query: string, results: number, loosenedFrom?: string): void {
+    this.queries.push({ source, query: query.slice(0, 200), results, kept: 0, passed: 0, ...(loosenedFrom ? { loosenedFrom } : {}) });
   }
   // After the sweep: each query's kept and passed counts, and each keep with the query that found it.
   finish(looked: Looked[], keptUrls: Set<string>, keptItems: { name: string; url: string }[], viaPost: Map<string, string> = new Map()) {

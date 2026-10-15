@@ -122,7 +122,8 @@ export function xFailedNote(f: ReturnType<typeof xFailure>): string {
 export const SWEEP_X_TOOL =
   "Recent X posts (the last 7 days), for what's announced there first: programs and cohorts taking applications, open calls, fellowships, residencies, grants, founder or builder gatherings, investors or people looking for what they want. One search a sweep. Write it the way such posts are written, broad: two or three OR-grouped sets of synonyms in parentheses, e.g. (accelerator OR cohort OR fellowship) (applications open OR now accepting OR apply by). No niche words, no city, no year, no venue or vendor names. Each post comes with its own links expanded; when a post points to the program's own page, keep that link rather than the post.";
 
-export type SweepCandidate = { userId: string; firstName: string; askText: string; fromProfile?: boolean; city: string | null };
+// city: where this want is (services/wantPlace.ts), or their home city when it has no place of its own; homeCity: where they live.
+export type SweepCandidate = { userId: string; firstName: string; askText: string; fromProfile?: boolean; city: string | null; homeCity?: string | null };
 
 // What the sweep reads about them: the member record (services/memberKnowledge.ts), the same one the picker, dispatch, tasks and
 // replies read (Phase A1, 2026-10-10: the sweep ran on a snapshot paragraph, a regex guess at the room they want from their feelings,
@@ -182,7 +183,7 @@ export function sweepPrompt(c: SweepCandidate, o: { today: string; record: Sweep
   return `You're Co, finding things worth texting ${c.firstName} about over the next couple of weeks. Nothing is sent now: what you keep goes into a queue, and Co texts at most one a day, so keep only what genuinely fits.
 
 ${c.fromProfile ? "They haven't asked for something specific; this is what they've shared they want" : "What they asked Co to keep an eye out for"}: "${c.askText}"
-Where they are: ${c.city ?? "unknown"}. Today: ${o.today}.
+${c.homeCity !== undefined && c.city && c.homeCity && c.city.toLowerCase() !== c.homeCity.toLowerCase() ? `Where this is for: ${c.city} (they live in ${c.homeCity}; for this, look in ${c.city}).` : `Where they are: ${c.city ?? "unknown"}.`} Today: ${o.today}.
 
 What Co knows about them (their record):
 ${r.person || "(little known yet)"}
@@ -202,7 +203,24 @@ Judge each result yourself against what they asked and who they are; results are
 // back: that's an outage, not an empty run (services/workingSet.ts empty runs; review and re-review of #133).
 // What a sweep reports about the places it looked (the daily sweep's summary): which were searched, and why any wasn't.
 export type SweepSources = { events: boolean; web: boolean; x: boolean; failures: string[] };
-export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; knowledge?: (userId: string) => Promise<MemberKnowledge>; allSources?: boolean } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean; frustratedWithCo: boolean; sources?: SweepSources }> {
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+// Pure: a find's date as Co read it, kept only when its own text shows that day: the month (its name, its first three letters, or as a
+// number) next to the day, and not before today. Anything else is no date.
+export function shownDate(date: string | undefined | null, text: string, today: string | null): string | null {
+  const m = String(date ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const [, , mm, dd] = m;
+  const month = Number(mm), day = Number(dd);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (today && `${m[1]}-${mm}-${dd}` < today) return null;
+  const t = text.toLowerCase();
+  const name = MONTHS[month - 1];
+  const named = new RegExp(`\\b(${name}|${name.slice(0, 3)})\\.?\\s+${day}(st|nd|rd|th)?\\b|\\b${day}(st|nd|rd|th)?\\s+(of\\s+)?(${name}|${name.slice(0, 3)})\\b`);
+  const numeric = new RegExp(`\\b0?${month}/0?${day}\\b|\\b${m[1]}-${mm}-${dd}\\b`);
+  return named.test(t) || numeric.test(t) ? `${m[1]}-${mm}-${dd}` : null;
+}
+
+export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; knowledge?: (userId: string) => Promise<MemberKnowledge>; allSources?: boolean; today?: string } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean; frustratedWithCo: boolean; sources?: SweepSources }> {
   const did: string[] = [];
   // The record, read once. A record that can't be read (a failed name read fails closed) means no sweep: the avoid list and taste
   // couldn't be applied, so nothing is searched, and it isn't an empty run.
@@ -281,10 +299,16 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       execute: async ({ queries: asks }) => {
         called.add("web");
         const refusals: string[] = [];
-        const good = asks.filter((q) => {
-          const bad = ledger.check("web", q);
-          if (bad.length) refusals.push(ledger.refusal(q, bad));
-          return !bad.length;
+        // A query that's only too tight runs loosened, once, and the loosening is logged (sweepQuery.ts checkOrLoosen).
+        const loosenedFrom = new Map<string, string>();
+        const good = asks.flatMap((q) => {
+          const r = ledger.checkOrLoosen("web", q);
+          if (r.bad.length) {
+            refusals.push(ledger.refusal(q, r.bad));
+            return [];
+          }
+          if (r.loosenedFrom) loosenedFrom.set(r.query, r.loosenedFrom);
+          return [r.query];
         });
         if (!good.length) {
           sourceFailures.push(`web: queries refused (${refusals.join(" ").slice(0, 160)})`);
@@ -293,7 +317,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         const run = good.slice(0, SWEEP_BUDGET.webQueries - webQueries);
         if (!run.length) return { ok: false, error: "No web searches left." };
         webQueries += run.length;
-        did.push(...run.map((q) => `web: ${q}`));
+        did.push(...run.map((q) => `web: ${q}${loosenedFrom.has(q) ? ` (loosened from: ${loosenedFrom.get(q)})` : ""}`));
         const { taskWebSearch } = await import("./taskWeb.js");
         const all = await Promise.all(run.map((q) => taskWebSearch(c.userId, q, { city: c.city, zone: opts.timezone ?? null, source: "sweep", ...(opts.allSources ? { recentHours: RECENT_HOURS } : {}) }).catch(() => null)));
         // Every search failed outright: an outage, not an empty run (re-review of #133). taskWebSearch catches its own failures and says
@@ -305,7 +329,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         }
         const { checkVerified } = await import("./factCheck.js");
         const kept = (await checkVerified(all.flatMap((r) => r?.kept ?? []), { where: "sweep.web_search", userId: c.userId }).catch(() => ({ kept: all.flatMap((r) => r?.kept ?? []) }))).kept;
-        run.forEach((q, i) => ledger.ran("web", q, all[i]?.kept?.length ?? 0));
+        run.forEach((q, i) => ledger.ran("web", q, all[i]?.kept?.length ?? 0, loosenedFrom.get(q)));
         const queryOf = new Map<string, string>();
         run.forEach((q, i) => { for (const k of all[i]?.kept ?? []) if (!queryOf.has(k.url)) queryOf.set(k.url, q); });
         for (const k of kept) {
@@ -328,12 +352,13 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
       execute: async ({ query }) => {
         called.add("x");
         if (xSearches >= SWEEP_BUDGET.xSearches) return { ok: false, error: "No X searches left." };
-        const q = query.trim().slice(0, 200);
-        const bad = ledger.check("x", q);
-        if (bad.length) {
-          sourceFailures.push(`x: query refused (${ledger.refusal(q, bad).slice(0, 160)})`);
-          return { ok: false, error: ledger.refusal(q, bad) };
+        const asked = query.trim().slice(0, 200);
+        const checked = ledger.checkOrLoosen("x", asked);
+        if (checked.bad.length) {
+          sourceFailures.push(`x: query refused (${ledger.refusal(asked, checked.bad).slice(0, 160)})`);
+          return { ok: false, error: ledger.refusal(asked, checked.bad) };
         }
+        const q = checked.query;
         xSearches++;
         const budget = await reserveXSearch(c.userId, "sweep", q);
         if (!budget.ok) {
@@ -341,7 +366,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
           sourceFailures.push(`x: unavailable (${budget.reason ?? "budget"})`);
           return { ok: false, error: `X search unavailable (${budget.reason ?? "budget"}).` };
         }
-        did.push(`x: ${q}`);
+        did.push(`x: ${q}${checked.loosenedFrom ? ` (loosened from: ${checked.loosenedFrom})` : ""}`);
         const { searchRecentPosts, X_SEARCH_RESULTS } = await import("./xSearch.js");
         let posts: Awaited<ReturnType<typeof searchRecentPosts>>;
         try {
@@ -356,7 +381,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
           return { ok: false, error: xFailedNote(xError) };
         }
         xPosts += posts.length;
-        ledger.ran("x", q, posts.length);
+        ledger.ran("x", q, posts.length, checked.loosenedFrom);
         searched = true;
         for (const p of posts) {
           lookedAt.push({ source: "x", name: `${p.author ? `@${p.author}: ` : ""}${p.text.slice(0, 60)}`, url: p.url, query: q });
@@ -397,8 +422,9 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         why: z.string(),
         taste: z.enum(["matches", "neutral", "clashes"]).optional().describe("Against the kind of room they've told Co they want, when they have: matches, neutral or clashes."),
         audience: z.string().optional().describe("Only if the thing is aimed at a particular group (women, men, moms, a community): who, in a few words. Leave out when it is open to everyone."),
+        date: z.string().optional().describe("The day it happens (YYYY-MM-DD), only when the result or its page shows that day. Leave out when it doesn't say."),
       }),
-      execute: async ({ link, name, why, taste, audience }) => {
+      execute: async ({ link, name, why, taste, audience, date }) => {
         const m = found.get(link);
         if (!m) return { ok: false, error: "That link isn't one of your results." };
         if (kept.length >= SWEEP_BUDGET.keep) return { ok: false, error: "That's enough for this sweep." };
@@ -408,7 +434,10 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
           passReasons.set(link, "clashes with the kind of room they've said they want");
           return { ok: false, error: "That clashes with the kind of room they've said they want, so it isn't kept." };
         }
-        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), whyItFits: why.trim(), fits: true, rightKind: true, ...(fit ? { taste: fit } : {}), ...(audience && audience.trim() ? { audience: audience.trim().slice(0, 60) } : {}) } as TierMatch);
+        // Its date, kept with it when its own text shows that day (shownDate), so a find that waits for its tier's slot stays while it's
+        // fresh instead of closing as "its page didn't say when" (Royce, 2026-10-15).
+        const day = m.tier === 3 && !(m as any).statedDates?.start ? shownDate(date, `${m.name} ${m.reason ?? ""} ${(m as any).evidence ?? ""}`, opts.today ?? localDay(new Date(), opts.timezone ?? null)) : null;
+        kept.push({ ...m, ...(name && m.tier === 3 ? { name } : {}), ...(day ? { statedDates: { start: day } } : {}), whyItFits: why.trim(), fits: true, rightKind: true, ...(fit ? { taste: fit } : {}), ...(audience && audience.trim() ? { audience: audience.trim().slice(0, 60) } : {}) } as TierMatch);
         return { ok: true };
       },
     }),

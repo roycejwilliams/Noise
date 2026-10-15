@@ -558,6 +558,21 @@ export function memberWhyOf(j: Pick<Judgment, "verdict" | "why" | "forThem" | "r
 // unless the picker sent it itself), carrying the picker's why, or its forThem line for one it didn't send. Every other find in a tier:
 // a held-back one keeps its reject (it exits as before); a send or a fit-only reject waits in the backlog (reason "tier_taken": its tier
 // went this morning), so fit ranks a morning and never removes a find.
+export const PERISHABLE_DAYS = 3;
+// Pure: whether the runner-up should take the leader's slot. Close means the same kind (both answers or both finds), the same standing
+// (both cleared the bar, or both didn't), the same taste, and ranks next to each other: fit says they're about even. Then the one that
+// ends within PERISHABLE_DAYS, and before the other (or the other has no date), goes; the leader is still there tomorrow.
+export function perishableFirst(leader: Judgment, next: Judgment, dateOf: (j: Judgment) => string | null, today: string): boolean {
+  if (leader.kind !== next.kind || VERDICT_CLASS(leader) !== VERDICT_CLASS(next) || (leader.taste ?? null) !== (next.taste ?? null)) return false;
+  if (leader.rank != null && next.rank != null && Math.abs(leader.rank - next.rank) > 1) return false;
+  const nd = dateOf(next);
+  if (!nd || nd < today) return false;
+  const days = (Date.parse(`${nd}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000;
+  if (days > PERISHABLE_DAYS) return false;
+  const ld = dateOf(leader);
+  return !ld || nd < ld;
+}
+
 export function tierPicks(c: SelectContext, judgments: Judgment[]): Judgment[] {
   const order = new Map(c.pool.map((p, i) => [p.id, i]));
   const byId = new Map(c.pool.map((p) => [p.id, p]));
@@ -568,6 +583,9 @@ export function tierPicks(c: SelectContext, judgments: Judgment[]): Judgment[] {
       // A candidate the picker gave no verdict was never looked at: it waits (it has no why to send with).
       .filter((j) => byId.has(j.id) && tierOf(byId.get(j.id)!) === t && j.verdict !== "no_verdict" && !heldBackFor(j))
       .sort((a, b) => Number(b.kind === "answer") - Number(a.kind === "answer") || (a.rank ?? Infinity) - (b.rank ?? Infinity) || VERDICT_CLASS(a) - VERDICT_CLASS(b) || (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    // When it's close, the one that won't keep goes first (Royce, 2026-10-15: "fit decides... when it's close, the perishable find
+    // wins"): the runner-up takes the slot when it's as good (perishableFirst) and ends within PERISHABLE_DAYS, before the leader does.
+    if (inTier.length > 1 && perishableFirst(inTier[0], inTier[1], (j) => j.lastDay ?? byId.get(j.id)?.date ?? null, c.today)) [inTier[0], inTier[1]] = [inTier[1], inTier[0]];
     if (inTier.length) {
       chosen.set(t, inTier[0]);
       // The rest of the tier, in order: tried the same morning if the chosen one can't be queued (sweepShadow.ts fillTiers).
