@@ -437,8 +437,17 @@ export const ABILITIES: Ability[] = [
     id: "save_ask",
     can: "Co can save something they want found that its search can find (people doing something, events, a community, a posted program or opportunity) so its daily search keeps looking and texts them when something real fits. Finding sponsors, investors or funding themselves, and advice, are kept on file but not searched; events where investors or sponsors show up can be saved and searched. It can't dig up a missing detail about something already sent.",
     tool: "saveAsk",
+    onCall: true,
     limits: { perTurn: 2, perDay: 10 },
-    use: "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. Use when they ask for something and nothing fits right now, or for a vaguer interest (a scene they'd like to be in, something they'd enjoy). Explicit watch language right now (\"let me know when...\", \"keep an eye out for X\", or a yes to your offer to watch) is a look-out instead: startTask with lookout: true, not saveAsk. Also when they tell you, in passing or answering you, about a scene they'd like to be in, a kind of event, people they'd want to meet or something they're exploring that Co could find for them: save it in their words so the search starts from it, and just carry on the conversation.",
+    use: "Save something they want Co to look for (people, events, a community, an opportunity) so Co's daily search keeps looking and can text them when something real fits. When they're stressed or venting, on a call or by text, hear them first: answer what they feel before anything practical, and save the want after, never in the same breath. When they say where it's for or how long (\"I'm in Chicago til Friday\"), pass place and until with their exact words; never guess either. Use when they ask for something and nothing fits right now, or for a vaguer interest (a scene they'd like to be in, something they'd enjoy). Explicit watch language right now (\"let me know when...\", \"keep an eye out for X\", or a yes to your offer to watch) is a look-out instead: startTask with lookout: true, not saveAsk. Also when they tell you, in passing or answering you, about a scene they'd like to be in, a kind of event, people they'd want to meet or something they're exploring that Co could find for them: save it in their words so the search starts from it, and just carry on the conversation.",
+  },
+  {
+    id: "free_time",
+    can: "Co remembers when they've said they're free (a day and times, in their words) and can suggest one thing for that time. It never books or holds it.",
+    onCall: true,
+    tool: "noteFreeTime",
+    limits: { perTurn: 2, perDay: 6 },
+    use: "When they state a specific time they're free (\"Tuesday 4 to 5:30 is my dead spot\", \"I'm free Thursday 2 to 4\"), note it with their exact words. Only what they said: never a gap you work out from a quiet day or their habits; you may ask instead (\"free afternoon coming up?\"). Hear them first if they're venting; note it after. Then say it back in a few words.",
   },
   {
     id: "room_taste",

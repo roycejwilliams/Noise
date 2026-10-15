@@ -2820,6 +2820,28 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("want_places table failed:", err));
+  // When a want is for (services/wantWhen.ts, the bounce, Royce 2026-10-15: "I'm in Chicago til Friday" sets the place AND the window),
+  // and when they said they're free (stated gaps: proposed against, never held; a calendar gap is the only one that holds).
+  await pool
+    .query(`ALTER TABLE want_places ADD COLUMN IF NOT EXISTS window_start DATE, ADD COLUMN IF NOT EXISTS window_end DATE, ADD COLUMN IF NOT EXISTS window_quote TEXT`)
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS member_free_times (
+          id BIGSERIAL PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          weekday TEXT CHECK (weekday IN ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')),
+          on_date DATE,
+          start_time TIME NOT NULL,
+          end_time TIME NOT NULL,
+          quote TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          removed_at TIMESTAMPTZ,
+          CHECK ((weekday IS NULL) <> (on_date IS NULL))
+        )`,
+      ),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS member_free_times_user ON member_free_times (user_id) WHERE removed_at IS NULL`))
+    .catch((err: Error) => console.error("want windows / member_free_times failed:", err));
   // When a behavior first existed in this environment (Royce, 2026-10-15: "the new path should apply to wants created after the
   // behavior exists. A calendar cutoff invents a difference that isn't real"): written once, by the first deploy that has it.
   await pool

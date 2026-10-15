@@ -120,6 +120,45 @@ export type ConversationToolContext = {
 };
 
 // The exchange a yes answers: the caller's, else Co's last line alone.
+// Pure: their words, when the quote is copied from what they said: this message, or on a call this turn and the call's last turns (their
+// lines only, never Co's). Anything else is null: a place, a window or a free time is never kept on Co's paraphrase.
+export function theirQuote(message: string, recent: string | null | undefined, quote: string | null | undefined): string | null {
+  const q = String(quote ?? "").trim();
+  if (q.length < 3) return null;
+  const norm = (t: string) => t.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ");
+  const theirs = [message, ...String(recent ?? "").split("\n").filter((l) => !/^\s*Co:/i.test(l))].filter(Boolean);
+  return theirs.some((t) => norm(t).includes(norm(q))) ? q : null;
+}
+
+// Where and until when a want is for, from their own words (services/wantWhen.ts, the bounce; Royce 2026-10-15). Kept only when their
+// words this turn (or the call's last turns) say it; the want's own place otherwise comes from its words (wantPlace.ts), and with none,
+// Cue looks near home and says so out loud, or asks (Royce's design pass: "defaults to home and says so out loud... if Cue doesn't know,
+// it asks instead of guessing").
+export async function wantWhereFromWords(ctx: Pick<ConversationToolContext, "userId" | "resolvedContent" | "recentExchange" | "lastCoMessage">, text: string, w: { place?: string; until?: string; theirWords?: string }): Promise<{ fact: string; note: string } | null> {
+  // The ask row the save just wrote (or updated): theirs, open, with this text.
+  const [{ rows: row }, { rows: prof }] = await Promise.all([
+    pool.query(`SELECT id FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL AND ask_text = $2 ORDER BY COALESCE(last_mentioned_at, created_at) DESC LIMIT 1`, [ctx.userId, text]),
+    pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [ctx.userId]),
+  ]);
+  if (!row[0]) return null;
+  const home: string | null = prof[0]?.city ?? null;
+  const W = await import("../services/wantPlace.js");
+  const WW = await import("../services/wantWhen.js");
+  const { localDay } = await import("../services/memberTime.js");
+  const today = localDay(new Date(), await memberZone(ctx.userId).catch(() => null));
+  const quoted = theirQuote(ctx.resolvedContent, recentOf(ctx), w.theirWords);
+  const place = quoted && w.place ? W.backedPlace(w.place, quoted, [quoted])?.place ?? null : null;
+  const until = quoted && w.until ? WW.windowBacked(w.until, quoted, today) : null;
+  const key = W.wantKeyForAsk(String(row[0].id));
+  if (place || until) await WW.saveWantWhere(pool, ctx.userId, key, text, { place, placeQuote: place ? quoted : null, windowStart: until ? today : null, windowEnd: until, windowQuote: until ? quoted : null });
+  const notes: string[] = [];
+  if (place) notes.push(`It's for ${place}.`);
+  if (until) notes.push(`It's for ${WW.describeWindow(null, until)}.`);
+  if ((w.place && !place) || (w.until && !until)) notes.push("What you passed for where or when wasn't in their own words, so it isn't kept; ask if it matters.");
+  if (!place && !(await W.realPlaceDeps.row(ctx.userId, key).catch(() => null))?.place) notes.push(`No place on it: Co looks near their home${home ? ` (${home})` : ""}. Say that in a line, or ask where if it's not clear.`);
+  return { fact: `Co's daily search is now looking for: "${text}"${place ? ` in ${place}` : ""}${until ? `, ${WW.describeWindow(null, until)}` : ""}. If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`, note: notes.join(" ") };
+}
+
 const recentOf = (ctx: Pick<ConversationToolContext, "recentExchange" | "lastCoMessage">): string | null => ctx.recentExchange ?? (ctx.lastCoMessage ? `Co: ${ctx.lastCoMessage}` : null);
 
 // Whether this turn needs words, not a reaction: the brain's decision when there is one (its tapback rule), else the turn's flags.
@@ -1174,8 +1213,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({
         what: z.string().describe("What they're looking for, in one plain sentence, in their words."),
         differentFrom: z.number().optional().describe("Only after this tool said it looks like an open task: that task's number, when this is something different."),
+        place: z.string().optional().describe("Only when they said where it's for (\"I'm in Chicago\", \"in SF\"): that place, in their words. Never guessed."),
+        until: z.string().optional().describe("Only when they said how long it's for (\"til Friday\", \"through the 17th\"): the last day, YYYY-MM-DD."),
+        theirWords: z.string().optional().describe("With place or until: their exact words that say it, copied from what they said."),
       }),
-      execute: async ({ what, differentFrom }) => {
+      execute: async ({ what, differentFrom, place, until, theirWords }) => {
         // Something that may be an open task of Co's (services/statusCheck.ts, Royce 2026-10-13): said once, Co decides.
         const c = await statusCandidate(what, differentFrom, "saveAsk");
         if (c) return { ok: false, error: c.hold };
@@ -1188,9 +1230,45 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: false, error: "couldn't save that as something to look for" };
           }
           await recordDecision({ layer: 3, decision: "reply.saveAsk", userId: ctx.userId, outcome: "act", action: saved.deduped ? "updated_ask" : "saved_ask", proposal: { what, saved: saved.ask.text } });
+          // Where and until when, in the same breath (services/wantWhen.ts, the bounce): kept only when their own words say it.
+          const where = await wantWhereFromWords(ctx, saved.ask.text, { place, until, theirWords }).catch(() => null);
+          if (where) {
+            ctx.facts?.add("ongoing", where.fact);
+            return { ok: true, note: `Saved. ${where.note} You can say you'll keep looking and text them if something real fits. Don't promise a time.` };
+          }
         }
         ctx.facts?.add("ongoing", `Co's daily search is now looking for: "${what}". If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`);
         return { ok: true, note: "Saved. You can say you'll keep looking and text them if something real fits. Don't promise a time." };
+      },
+    }),
+
+    // When they said they're free (services/wantWhen.ts, the bounce, Royce 2026-10-15): a stated gap, in their words. Proposed against,
+    // never held (only a calendar gap holds). Nothing inferred: a quiet afternoon is something to ask about, never a gap.
+    noteFreeTime: tool({
+      description: toolUse("noteFreeTime"),
+      inputSchema: z.object({
+        weekday: z.enum(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]).optional().describe("A free time that repeats every week: its day."),
+        date: z.string().optional().describe("A one-time free time: its date, YYYY-MM-DD."),
+        from: z.string().describe("When it starts, 24h HH:MM (\"16:00\")."),
+        to: z.string().describe("When it ends, 24h HH:MM (\"17:30\")."),
+        theirWords: z.string().describe("Their exact words that say it, copied from what they said."),
+      }),
+      execute: async ({ weekday, date, from, to, theirWords }) => {
+        const WW = await import("../services/wantWhen.js");
+        const { localDay } = await import("../services/memberTime.js");
+        const today = localDay(new Date(), await memberZone(ctx.userId).catch(() => null));
+        const quote = theirQuote(ctx.resolvedContent, recentOf(ctx), theirWords);
+        const f = quote ? WW.freeTimeBacked({ weekday: weekday ?? null, date: date ?? null, from, to }, quote, today) : null;
+        if (!f) {
+          notDone("No free time was noted: what they said doesn't give a day and both times in their own words.");
+          return { ok: false, error: "Not kept: a free time needs its day and both times in their own words. Don't guess one; you can ask." };
+        }
+        if (!ctx.dryRun) {
+          await WW.saveFreeTime(pool, ctx.userId, f, quote!);
+          await recordDecision({ layer: 3, decision: "reply.noteFreeTime", userId: ctx.userId, outcome: "act", action: "stated", proposal: { ...f, quote } });
+        }
+        ctx.facts?.add("ongoing", `They said they're free ${WW.describeFreeTime(f)}. Co may suggest one thing for then; it never books or holds it.`);
+        return { ok: true, note: `Kept: free ${WW.describeFreeTime(f)}. Say it back in a few words.` };
       },
     }),
 
