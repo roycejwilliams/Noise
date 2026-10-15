@@ -245,9 +245,15 @@ check("no line when the want said where, when they corrected it, or when it's th
   check("a promise Co made on a call isn't a want of theirs: no place is read or stored for it", promise.city === "Sacramento" && promise.searchedIn.key === null);
   check("a date that names another year is no date ('Oct 17, 2025')", SF.shownDate("2026-10-17", "Oct 17, 2025 at the pier", "2026-10-15") === null && SF.shownDate("2026-10-17", "Oct 17, 2026 at the pier", "2026-10-15") === "2026-10-17");
   check("'Sept 30' reads as September 30", SF.shownDate("2026-09-30", "Sept 30, demo night", "2026-09-01") === "2026-09-30");
-  check("loosening keeps an exclusion and the city it's searched in", Q.loosenQuery("AI founder dinners networking pitch Seattle -crypto", 4, ["Seattle"]) === "AI founder dinners networking Seattle -crypto", Q.loosenQuery("AI founder dinners networking pitch Seattle -crypto", 4, ["Seattle"]));
+  check("loosening keeps an exclusion and the city it's searched in, inside the limit", Q.loosenQuery("AI founder dinners networking pitch Seattle -crypto", 4, ["Seattle"]) === "AI founder Seattle -crypto", Q.loosenQuery("AI founder dinners networking pitch Seattle -crypto", 4, ["Seattle"]));
+  const sac = new Q.QueryLedger([]).checkOrLoosen("web", "AI founder dinners networking Sacramento", ["Sacramento"]);
+  check("a too-tight query naming their own city runs loosened (not refused)", sac.bad.length === 0 && /Sacramento/.test(sac.query) && !!sac.loosenedFrom, sac);
+  const ex = new Q.QueryLedger([]).checkOrLoosen("web", "AI founder dinner pitch night -crypto");
+  check("a too-tight query with an exclusion runs loosened, exclusion kept (not refused)", ex.bad.length === 0 && /-crypto/.test(ex.query), ex);
+  check("SF and San Francisco are the same place (no note, no second search for their own city)", W.samePlace("SF", "San Francisco") && W.samePlace("NYC", "New York, NY") && W.noteDue({ place: "SF", source: "told", notedAt: null }, "San Francisco") === null);
+  check("'outside of SF' is no place", W.backedPlace("SF", "outside of SF", ["anything outside of SF"]) === null);
   const SH = await import("../../src/services/sweepShadow.js");
-  check("the picker is told a find was searched where its want is (not their far-off home)", /searched in SF, where this want of theirs is/.test(SH.describeMatch({ name: "x", searchedIn: { key: "goal:a", place: "SF", source: "their_words" } }) ?? "") && !/searched in/.test(SH.describeMatch({ name: "x", searchedIn: { key: null, place: "Sacramento", source: "home" } }) ?? ""));
+  check("the picker is told a find was searched where its want is, after its own facts (not their far-off home)", /SOLD OUT.*searched in SF, where this want of theirs is/.test(SH.describeMatch({ name: "x", details: { soldOut: true }, searchedIn: { key: "goal:a", place: "SF", source: "their_words" } }) ?? "") && !/searched in/.test(SH.describeMatch({ name: "x", searchedIn: { key: null, place: "Sacramento", source: "home" } }) ?? ""));
   check("the note sits right after its own find's caption", /const i = after \? composed\.messages\.lastIndexOf\(after\) : -1;/.test(src("harness/proactive.ts")) && /W\.noteDue\(row, person\.city \?\? null\)/.test(src("harness/proactive.ts")));
   check("what they told Co is read without Co's own notes on their line", /replace\(\/\\s\*\\\[\[\^\\\]\]\*\\\]\/g, ""\)/.test(src("services/wantPlace.ts")));
 }

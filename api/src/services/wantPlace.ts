@@ -51,7 +51,7 @@ export function backedPlace(place: unknown, quote: unknown, sources: string[]): 
   const next = q.slice(m.index + m[0].length).match(/^\s+([A-Z][\w'&.-]*)/)?.[1];
   if (next && !KIND_WORDS.has(next.toLowerCase())) return null;
   // Said as where it isn't ("anywhere but SF", "not in SF", "outside SF"): no place.
-  if (/\b(not|but|outside|except|other than|away from|besides|instead of|leaving|left)\s+(in\s+|to\s+|from\s+)?$/i.test(q.slice(0, m.index + m[1].length))) return null;
+  if (/\b(not|but|outside|except|other than|away from|besides|instead of|leaving|left)\s+(in\s+|to\s+|from\s+|of\s+)?$/i.test(q.slice(0, m.index + m[1].length))) return null;
   return { place: p, quote: q };
 }
 
@@ -115,8 +115,12 @@ export async function placeFor(userId: string, w: Want, deps: PlaceDeps = realPl
 // What the first find from a place they didn't name carries, once: their place for this want, when it came from what they told Co
 // (not the want's own words, not a correction they made) and wasn't said yet.
 // Their home city by any spelling ("Sacramento" and "Sacramento, CA") is home.
+const ALIASES: Record<string, string> = { sf: "san francisco", "san fran": "san francisco", nyc: "new york", "new york city": "new york", ny: "new york", la: "los angeles", dc: "washington", "washington dc": "washington", philly: "philadelphia", atl: "atlanta", chi: "chicago", sac: "sacramento" };
 export const samePlace = (a: string | null | undefined, b: string | null | undefined) => {
-  const k = (x: string | null | undefined) => String(x ?? "").split(",")[0].trim().toLowerCase();
+  const k = (x: string | null | undefined) => {
+    const c = String(x ?? "").split(",")[0].trim().toLowerCase().replace(/\./g, "");
+    return ALIASES[c] ?? c;
+  };
   return !!k(a) && k(a) === k(b);
 };
 export function noteDue(p: Pick<WantPlace, "place" | "source" | "notedAt"> | null | undefined, home?: string | null): string | null {

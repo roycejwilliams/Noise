@@ -157,12 +157,15 @@ export function loosenQuery(q: string, max: number = QUERY_LIMITS.contentWords, 
   const segs = marked.match(/\([^)]*\)|"[^"]*"|\S+/g) ?? [];
   // Never loosened away: an exclusion ("-crypto") and the words of where it's searched (their want's place or city).
   const kept_ = new Set(keep.flatMap((k) => k.toLowerCase().split(/[\s,]+/)).filter(Boolean));
+  const forced = (seg: string) => /^-\S/.test(seg) || kept_.has(seg.toLowerCase().replace(/[,.;:]+$/, ""));
+  const counts = (seg: string) => contentWords(seg.replace(/\u0001/g, " ")).length > 0;
+  // What's always kept still counts toward the limit (queryProblems counts it): the rest share what's left, at least one.
+  const budget = Math.max(1, max - segs.filter((seg) => forced(seg) && counts(seg)).length);
   let n = 0;
   const kept = segs.filter((seg) => {
-    if (/^-\S/.test(seg) || kept_.has(seg.toLowerCase().replace(/[,.;:]+$/, ""))) return true;
-    if (!contentWords(seg.replace(/\u0001/g, " ")).length) return true;
+    if (forced(seg) || !counts(seg)) return true;
     n++;
-    return n <= max;
+    return n <= budget;
   });
   return kept.join(" ").replace(/\u0001/g, " ").replace(/\s+/g, " ").trim();
 }
