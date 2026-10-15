@@ -995,6 +995,13 @@ export function registerJobs(io: Server) {
     });
   }
 
+  // The two numbers, logged once a day so the series exists from day one (harness/northStar.ts, Royce 2026-10-14). Team-only.
+  cron.schedule("15 6 * * *", () => {
+    import("../harness/northStar.js")
+      .then((m) => m.recordNorthStar())
+      .catch((err: any) => console.error("north star snapshot cron error:", err?.message ?? err));
+  }, { timezone: "America/Los_Angeles" });
+
   // Weekly reflection per member (2026-09-22, harness/memberReflection.ts):
   // Sunday evening Pacific, so a queued check-in can go out Monday.
   cron.schedule("0 18 * * 0", () => {

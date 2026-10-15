@@ -256,14 +256,15 @@ export function renderWeeklyReview(moments: ReviewMoment[], readings: SignalRead
 
 export async function runWeeklyReview(): Promise<void> {
   try {
-    const [moments, readings, metrics] = await Promise.all([
+    const [moments, readings, metrics, north] = await Promise.all([
       gatherWeekMoments(),
       readSignals(),
       // The business numbers ride along weekly (2026-09-22); a failure here
       // never blocks the review itself.
       computeMetrics(30).catch((err: any) => (console.error("weekly review: metrics failed (non-fatal):", err?.message ?? err), null)),
+      import("./northStar.js").then((m) => m.computeNorthStar(30)).catch((err: any) => (console.error("weekly review: north star failed (non-fatal):", err?.message ?? err), null)),
     ]);
-    await sendTeamEmail(`Co weekly review: ${moments.length} moments`, renderWeeklyReview(moments, readings) + (metrics ? `\n${renderMetricsHtml(metrics)}` : ""));
+    await sendTeamEmail(`Co weekly review: ${moments.length} moments`, renderWeeklyReview(moments, readings) + (north ? `\n${(await import("./northStar.js")).renderNorthStarHtml(north)}` : "") + (metrics ? `\n${renderMetricsHtml(metrics)}` : ""));
   } catch (err: any) {
     console.error("weekly review failed (non-fatal):", err?.message ?? err);
   }
