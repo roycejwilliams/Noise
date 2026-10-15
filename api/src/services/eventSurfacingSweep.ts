@@ -42,7 +42,7 @@ export type SurfacingCandidate = {
   // What this search did, handed to the daily sweep for its summary (the return value stays as the hourly sweep reads it).
   onReport?: (r: SurfacingReport) => void;
   // The want this search is for, when it isn't the ask row itself (a goal off their plan): its place is the want's (wantPlace.ts).
-  // createdAt: when the want was recorded (null: before PLACE_SINCE, or unknown), which decides whether what they told Co counts.
+  // createdAt: when the want was recorded (null: unknown, so it reads its own words only), which decides whether what they told Co counts.
   want?: { key: string; text: string; createdAt: Date | null };
 };
 
