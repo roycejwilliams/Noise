@@ -64,7 +64,7 @@ check("the wrong key can't read it", wrongKeyThrew);
 check("tokens are only ever stored encrypted", !/INSERT INTO google_connections[\s\S]{0,400}tokens\.(access|refresh)_token[,)]/.test(auth) && /encryptToken\(tokens\.access_token\)/.test(auth) && /encryptToken\(verifier\)/.test(auth));
 
 // ------------------------------------------------ one-time state, owner scoping, disconnect
-check("a connect link is single use and expires", /UPDATE google_oauth_states SET used_at = NOW\(\) WHERE state = \$1 AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && /WHERE state = \$1 AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && A.LINK_TTL_MS === 15 * 60 * 1000);
+check("a connect link is single use and expires (and the combined grant never serves a calendar-only link)", /UPDATE google_oauth_states SET used_at = NOW\(\) WHERE state = \$1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && /WHERE state = \$1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && A.LINK_TTL_MS === 15 * 60 * 1000);
 check("the state is random and long", /randomBytes\(24\)\.toString\("base64url"\)/.test(auth));
 const userQueries = (auth + data).match(/(FROM|INTO|UPDATE|DELETE FROM) google_(connections|snapshots)[\s\S]{0,300}?\[/g) ?? [];
 check("every token and snapshot query is for one member", userQueries.length >= 6 && userQueries.every((q) => /user_id = \$1|VALUES \(\$1/.test(q)));
@@ -121,7 +121,7 @@ for (const [k, v] of [["GOOGLE_CLIENT_ID", saved.id], ["GOOGLE_CLIENT_SECRET", s
   else process.env[k] = v;
 }
 const route = src("routes/google.ts");
-check("the pages never show anyone's data and are mounted at /google", !/busy|waiting|snapshot|SELECT/.test(route.replace(/Co can now see when you're busy[^"]*/, "")) && /app\.use\("\/google", createGoogleRouter\(\)\)/.test(src("server.ts")));
+check("the pages never show anyone's data and are mounted at /google", !/busy|waiting|snapshot|SELECT/.test(route.replace(/Co can now see when you're busy[^"]*/, "").replace(/export const CALENDAR_GRANT_COPY = \{[\s\S]*?\} as const;/, "")) && /app\.use\("\/google", createGoogleRouter\(\)\)/.test(src("server.ts")));
 check("an expired or reused link says so and asks for a new one", /if \(!url\) return res\.status\(410\)/.test(route));
 
 console.log(`google rules: ${total - failed}/${total} passed`);

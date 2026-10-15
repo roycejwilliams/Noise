@@ -2400,6 +2400,24 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("google_oauth_states table init failed:", err));
+  // The calendar grant (services/calendarGrant.ts, the bounce, Royce 2026-10-15: free/busy only, its own grant, never the combined one):
+  // its own one-time links and its own token, with a one-tap disconnect (only the hash of its token is kept).
+  await pool
+    .query(`ALTER TABLE google_oauth_states ADD COLUMN IF NOT EXISTS grant_kind TEXT NOT NULL DEFAULT 'google'`)
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS calendar_grants (
+          user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          refresh_token_enc TEXT,
+          access_token_enc TEXT,
+          access_expires_at TIMESTAMPTZ,
+          scope TEXT NOT NULL,
+          revoke_hash TEXT NOT NULL,
+          connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .catch((err: Error) => console.error("calendar grant tables failed:", err));
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS google_snapshots (
