@@ -50,6 +50,15 @@ export function foldThemes(counts: Partial<Record<Theme, number>>): { theme: The
   return rows;
 }
 
+// What the room was thin on (Royce, 2026-10-14: "Sparse rooms: never lower the bar, never force a match. Members get silence; the
+// shortfall goes to the host read as what the room is thin on ('thin on investors', 'nobody offering design')"). A category is thin
+// when at least READOUT.smallCell members looked for it and nobody in the room offered it. Categories only, never a member, never a
+// count small enough to point at someone; "Something else" is never named. The member is the customer and the host is the channel:
+// this is room-level signal, nothing more.
+export function thinOn(sought: Partial<Record<Theme, number>>, offered: Partial<Record<Theme, number>>): Theme[] {
+  return THEMES.filter((t) => t !== "Something else" && (sought[t] ?? 0) >= READOUT.smallCell && (offered[t] ?? 0) === 0);
+}
+
 export type Stats = {
   eventName: string;
   registered: number;
@@ -65,6 +74,8 @@ export type Stats = {
   followThroughMembers: number;
   themes: Partial<Record<Theme, number>>;
   askCount: number;
+  // What members offered, by the same fixed categories: read only to find what the room was thin on.
+  offerThemes?: Partial<Record<Theme, number>>;
 };
 
 export function describe(s: Stats): { headline: string; lines: string[]; note: string } {
@@ -80,6 +91,8 @@ export function describe(s: Stats): { headline: string; lines: string[]; note: s
   const themes = s.askCount >= READOUT.minForThemes ? foldThemes(s.themes) : [];
   if (themes.length) lines.push(`What the room was looking for, by category: ${themes.map((t) => `${t.theme.toLowerCase()} (${t.n})`).join(", ")}.`);
   else lines.push(`Too few members shared what they were looking for to show a pattern without pointing at anyone.`);
+  const thin = s.askCount >= READOUT.minForThemes ? thinOn(s.themes, s.offerThemes ?? {}) : [];
+  if (thin.length) lines.push(`The room was thin on: ${thin.map((t) => t.toLowerCase()).join(", ")}. Several members looked for it and nobody there offered it.`);
   return { headline: `How ${s.eventName} went`, lines, note };
 }
 
@@ -144,14 +157,18 @@ export async function gatherStats(eventId: string, eventName: string, classify: 
   ]);
   // What the room was looking for: each attendee's own ask, read only to put it in a fixed category.
   let asks: string[] = [];
+  const offers: string[] = [];
   if (ids.length) {
     const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = ANY($1::uuid[])`, [ids]);
     for (const r of rows) {
       const intent = Array.isArray(r.intent) ? r.intent : [];
       const open = intent.filter((i: any) => isOpenAsk(i) && i?.type === "seeking"); // an ask, never a goal
       if (open.length) asks.push(String(open[open.length - 1].text));
+      const offering = intent.filter((i: any) => isOpenAsk(i) && i?.type === "offering");
+      if (offering.length) offers.push(String(offering[offering.length - 1].text));
     }
   }
   const themes = asks.length >= READOUT.minForThemes ? await classifyAsks(asks, classify) : {};
-  return { eventName, registered: members.length, arrived, walkins, briefs, nudged, interested, intros, debriefReplies, metSomeone, conversationsTold, followThroughMembers, themes, askCount: asks.length };
+  const offerThemes = asks.length >= READOUT.minForThemes && offers.length ? await classifyAsks(offers, classify) : {};
+  return { eventName, registered: members.length, arrived, walkins, briefs, nudged, interested, intros, debriefReplies, metSomeone, conversationsTold, followThroughMembers, themes, askCount: asks.length, offerThemes };
 }

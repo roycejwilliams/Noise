@@ -8,25 +8,21 @@ import { writeMemory } from "./memory.js";
 import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { draftWithConsent, eventPromptLine } from "../harness/introConsent.js";
 import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
-import { wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
+import type { ScorableGuest } from "./eventScoring.js";
 import { withTraceUser } from "./llmTraceText.js";
+import { notToTeammate } from "./teamLines.js";
 
-// "No one should feel left out" (Royce, 2026-09-22). Two things, both
-// scoped to people the real scoring pass (eventScoring.ts's
-// MATCH_NUDGE_MIN_SCORE) never matched by the time an event is winding
-// down:
-//   1. If two or more are in that boat, give them a shot at each other —
-//      scoreMatchedGroup again, restricted to just this pool, with the
-//      score gate bypassed and an honestly-framed message (see
-//      eventScoring.ts's unmatchedPairPrompt) — never presented as a real
-//      recommendation, because it didn't clear the bar that framing is
-//      earned by.
-//   2. Whoever's left (alone in the pool, or no shareable reason even
-//      there) gets a plain, honest "nothing stood out tonight" instead of
-//      silence — silence at an event they came to is exactly the
-//      isolate-a-member failure mode Co has already learned to avoid for
-//      proactive sends generally.
-//
+// The end-of-night close (Royce, 2026-10-14). "Everyone gets the same end-of-night close, and it says nothing about matching. A real
+// host finds the person before they leave and says 'glad you came' - they don't add 'sorry nobody was right for you.' Same warmth for
+// everyone, no scoreboard for anyone. Your 9/22 principle survives; the wording is what dies. Below-bar pairing stays dead either way."
+// And: "Sparse rooms: never lower the bar, never force a match. Members get silence; the shortfall goes to the host read."
+//   - Every guest in the room near the end gets the same short, warm close, matched or not. It never mentions matches, introductions,
+//     who they met or how the night went for them.
+//   - "Glad you came" is a fact, so it only goes to someone with evidence they came: arrived (event_presence.arrived_at), checked in
+//     at the door, or texted during the event. A registered no-show gets nothing.
+//   - The below-the-bar pairing ("worth a quick hello") and the "nothing stood out" text are gone. What the room was thin on goes to
+//     the host readout instead (services/partnerReadout.ts thinOn), as a category, never a member.
+// (The file keeps its name and tables: event_unmatched_followups schedules the close, event_unmatched_notices records it once.)
 // Scheduled the same way as eventCheckinFollowUp.ts's end-of-night
 // check-in — one row per matched guest, idempotent on
 // UNIQUE(event_api_id, user_id). Due UNMATCHED_SEND_BEFORE_END_MINUTES
@@ -79,49 +75,73 @@ async function markNoticed(eventId: string, personId: string, pairedWithId: stri
     .catch((err: any) => console.error("markNoticed: insert failed (non-fatal):", err?.message ?? err));
 }
 
-async function sendSoloAcknowledgment(eventId: string, eventName: string, person: ScorableGuest, opts: { dryRun?: boolean }): Promise<void> {
+// What a close may never talk about: matching, introductions, who they met, how the night went for them.
+export const MATCH_TALK = /\b(match(es|ed)?|intro(duc\w*)?|connect(ed|ion)?s?|met\b|meet(ing)?\b|nobody|no one|stood out|strong pull|right for you|worth (knowing|meeting)|people you)\b/i;
+export const CLOSE_FALLBACK = "Glad you came tonight.";
+// Pure: the close that goes out: the draft if it says nothing about matching and has words in it, else the plain fallback.
+export function closeText(draft: string | null): string {
+  const t = (draft ?? "").trim();
+  return t && !MATCH_TALK.test(t) ? t : CLOSE_FALLBACK;
+}
+
+// Evidence they came: arrived, checked in at the door, or texted Co during the event. Read fresh; a failed read is no evidence.
+export async function cameTonight(eventId: string, userId: string, startAt: string | null): Promise<boolean> {
+  const [presence, walkin, texted] = await Promise.all([
+    pool.query(`SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2 AND arrived_at IS NOT NULL`, [eventId, userId]).then((r) => r.rows.length > 0).catch(() => false),
+    pool.query(`SELECT 1 FROM event_walkin_checkins WHERE event_api_id = $1 AND person_id = $2`, [eventId, userId]).then((r) => r.rows.length > 0).catch(() => false),
+    startAt
+      ? pool
+          .query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at >= $2 LIMIT 1`, [userId, startAt])
+          .then((r) => r.rows.length > 0)
+          .catch(() => false)
+      : Promise.resolve(false),
+  ]);
+  return presence || walkin || texted;
+}
+
+async function sendClose(eventId: string, eventName: string, person: ScorableGuest, opts: { dryRun?: boolean }): Promise<boolean> {
   if (opts.dryRun) {
-    console.log(`[eventUnmatchedFollowUp dryRun] would send solo acknowledgment to ${person.user_id} at ${eventId}`);
-    return;
+    console.log(`[eventUnmatchedFollowUp dryRun] would send the end-of-night close to ${person.user_id} at ${eventId}`);
+    return false;
   }
   // The event as it really is (harness/introConsent.ts checkInventedSpecifics): the only source of a day or time in the text.
   const info = await (await import("./roomMatching.js")).eventTiming(eventId).catch(() => null);
   const introEvent = { name: eventName, start_at: info?.start_at ?? null, end_at: info?.end_at ?? null, timezone: info?.timezone ?? null, venue: info?.venue ?? null };
-  const message = await draftWithConsent(
+  const draft = await draftWithConsent(
     {
-      decision: "eventUnmatchedFollowUp.soloAck",
+      decision: "eventUnmatchedFollowUp.close",
       recipientId: person.user_id,
-      preChecks: [{ name: "not_already_noticed", pass: true }],
+      preChecks: [{ name: "not_already_closed", pass: true }],
       facts: { otherFirstName: "", otherOptedIn: false, recipientOptedIn: false, recipientFirstName: person.first_name },
       event: introEvent,
     },
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(MODELS.haiku),
-        experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.soloAck.draft" },
-        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} near the end of "${eventName}." ${eventPromptLine(introEvent, eventName)} Nothing came up as a strong match for them tonight — no one specific worth introducing them to.
+        experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.close.draft" },
+        prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} near the end of "${eventName}." ${eventPromptLine(introEvent, eventName)} Every guest gets this same close tonight.
 
-Draft a short, honest, warm text (1-2 sentences, no em dashes, normal sentence capitalization) telling them plainly that nothing stood out as a strong pull tonight. Don't apologize, don't over-explain, don't invent a reason or promise anything specific — just honest and warm, still glad they came. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
+Write the goodbye a good host gives at the door: one short, warm line (no em dashes, normal sentence capitalization), glad they came. Say nothing about matches, introductions, who they met or how the night went for them, and ask nothing. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
       return cleanCoMessage(text.trim());
     },
   );
-  if (!message) return;
+  const message = closeText(draft);
   if (!(await inRoomSendAllowed(person.user_id, eventId))) {
-    console.log(`eventUnmatchedFollowUp: solo acknowledgment throttled for ${person.user_id} (in-room text limit for this event reached)`);
-    return;
+    console.log(`eventUnmatchedFollowUp: close held for ${person.user_id} (in-room text limit for this event reached)`);
+    return false;
   }
   try {
     await sendblue.messages.send({ number: person.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
   } catch (err: any) {
-    console.error(`eventUnmatchedFollowUp: solo acknowledgment send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
-    return;
+    console.error(`eventUnmatchedFollowUp: close send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+    return false;
   }
-  await recordInRoomSend(person.user_id, `in_room:unmatched:${eventId}`, message);
-  await writeMemory(person.user_id, "event_guest_match_nudge", `Told ${person.first_name} plainly that nothing stood out as a strong match at "${eventName}".`);
+  await recordInRoomSend(person.user_id, `in_room:close:${eventId}`, message);
   await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
-    console.error("eventUnmatchedFollowUp: solo acknowledgment text_exchange log failed (non-fatal):", err?.message ?? err),
+    console.error("eventUnmatchedFollowUp: close text_exchange log failed (non-fatal):", err?.message ?? err),
   );
+  return true;
 }
 
 // Cron entry point (jobs/index.ts, */15 * * * *, same lightweight-polling
@@ -158,38 +178,11 @@ async function processOneEvent(eventId: string, eventName: string): Promise<void
   const room = await RM.inRoomNow(eventId, { timing: eventTiming }).catch(() => ({ people: [] as ScorableGuest[] }));
   const matched = room.people.filter((p) => dueUserIds.has(p.user_id));
 
-  const stillUnmatched: ScorableGuest[] = [];
+  // Everyone in the room gets the same close, matched or not, once; "glad you came" only with evidence they came.
   for (const person of matched) {
-    if (!(await wasAlreadyNudgedForMatch(eventId, person.user_id)) && !(await wasAlreadyNoticed(eventId, person.user_id))) {
-      stillUnmatched.push(person);
-    }
-  }
-
-  // Give the leftovers a shot at each other first — reuses scoreMatchedGroup
-  // as-is (per-person top pick, ask solicitation for anyone with no stated
-  // ask yet, storeRanking), just scoped to this smaller pool and with the
-  // score gate bypassed (eventScoring.ts's honestLowConfidence).
-  if (stillUnmatched.length >= 2) {
-    await scoreMatchedGroup(eventId, eventName, stillUnmatched, eventTiming, { honestLowConfidence: true });
-  }
-
-  // Whoever scoreMatchedGroup didn't pair off (alone in the pool, no
-  // shareable reason, or still waiting on their first stated ask) gets the
-  // plain acknowledgment instead of silence.
-  for (const person of stillUnmatched) {
-    const nudgeRow = await pool
-      .query(`SELECT candidate_id FROM event_guest_match_nudges WHERE event_id = $1 AND person_id = $2`, [eventId, person.user_id])
-      .then((r) => r.rows[0]?.candidate_id ?? null)
-      .catch(() => null);
-    if (nudgeRow) {
-      // Paired off by scoreMatchedGroup above — the real reply-handling
-      // record is event_guest_match_nudges (reused as-is), this row is
-      // purely for the solo-ack gate, so it's fine either way.
-      await markNoticed(eventId, person.user_id, nudgeRow);
-      continue;
-    }
-    await withTraceUser(person.user_id, () => sendSoloAcknowledgment(eventId, eventName, person, {})); // under their own trace-text mark
-    await markNoticed(eventId, person.user_id, null);
+    if (await wasAlreadyNoticed(eventId, person.user_id)) continue;
+    if (!(await cameTonight(eventId, person.user_id, details?.start_at ?? null))) continue;
+    if (await withTraceUser(person.user_id, () => sendClose(eventId, eventName, person, {}))) await markNoticed(eventId, person.user_id, null); // under their own trace-text mark
   }
 
   await pool.query(`UPDATE event_unmatched_followups SET sent_at = NOW() WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [

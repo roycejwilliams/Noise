@@ -387,22 +387,41 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   check("one-sided: no intro email without both yeses", !W.memoriesWritten.some((m) => m.memory_type === "event_intro_email_sent"));
 }
 
-// ============================================================ 10. end-of-night unmatched pass
+// ============================================================ 10. the end-of-night close (Royce, 2026-10-14)
+// "Everyone gets the same end-of-night close, and it says nothing about matching ... Below-bar pairing stays dead either way."
 {
   reset();
   const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
   const b = addMember({ first_name: "Ellis", intent: [ask("people to sail with on weekends", "offering")] });
+  const n = addMember({ first_name: "Noor", intent: [ask("a seed investor for a climate hardware startup")] });
+  const m = addMember({ first_name: "Remy", intent: [ask("backing climate hardware founders at seed", "offering")] });
   const end = new Date(Date.now() + 45 * 60_000).toISOString(); // send_at = end - 50m is already due; the in-room window (end - 30m) is still open
-  addEvent({ api_id: "evt-un", name: "Cue Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }, { m: b }]);
-  scores({ "sailing crew": { Ellis: 40 }, "sail with": { Jordan: 35 } }); // both below 60
+  addEvent({ api_id: "evt-un", name: "Cue Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }, { m: b }, { m: n }, { m: m }]);
+  scores({ "sailing crew": { Ellis: 40 }, "sail with": { Jordan: 35 }, "seed investor": { Remy: 88 }, "backing climate": { Noor: 85 } });
   await freshPass("evt-un");
-  check("unmatched: below-bar pair gets no real nudge", W.nudges.length === 0);
-  check("unmatched: both scheduled for the end-of-night pass", W.unmatchedFollowups.length === 2);
+  check("close: a below-bar pair gets no nudge", !nudgeOf("evt-un", a) && !nudgeOf("evt-un", b));
+  check("close: a real match still gets its nudge", !!nudgeOf("evt-un", n));
+  check("close: everyone in the room is scheduled for the close", W.unmatchedFollowups.length === 4);
+  // Jordan and Noor arrived; Remy texted during the event; Ellis registered and never showed.
+  W.presence.set(`evt-un|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  W.presence.set(`evt-un|${n.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  W.memoriesWritten.push({ user_id: m.id, memory_type: "text_exchange", content: "User said: here now", created_at: new Date() });
+  const before = new Map([a, b, n, m].map((x) => [x.id, sentTo(x).length]));
   await U.processDueUnmatchedFollowUps();
   await settle();
-  const pairTexts = W.llmCalls.filter((c) => c.kind === "unmatchedPairDraft").length;
-  finding("unmatched: the 'give the leftovers a shot at each other' pass can NEVER send: it runs at end-30m, exactly when checkEventWindow starts refusing", pairTexts === 0 && W.nudges.length === 0, { pairDrafts: pairTexts });
-  finding("unmatched: so both get the solo 'nothing stood out tonight' text instead, though they share an interest", W.llmCalls.filter((c) => c.kind === "soloAck").length === 2 && sentTo(a).length === 1 && sentTo(b).length === 1);
+  const closes = (x: Member) => sentTo(x).slice(before.get(x.id));
+  check("close: no below-bar pairing is ever drafted", !W.llmCalls.some((c) => c.kind === "unmatchedPairDraft"));
+  check("close: no 'nothing stood out' text is ever drafted", !W.llmCalls.some((c) => c.kind === "soloAck"));
+  check("close: everyone who came gets exactly one close, matched or not", closes(a).length === 1 && closes(n).length === 1 && closes(m).length === 1, { a: closes(a), n: closes(n), m: closes(m) });
+  check("close: a registered no-show gets nothing (no 'glad you came' without evidence they came)", closes(b).length === 0);
+  check("close: the same close for everyone, and it says nothing about matching", [a, n, m].every((x) => /glad you came/i.test(closes(x)[0]?.content ?? "") && !U.MATCH_TALK.test(closes(x)[0]?.content ?? "")), [a, n, m].map((x) => closes(x)[0]?.content));
+  await U.processDueUnmatchedFollowUps();
+  await settle();
+  check("close: sent once (a second pass sends nothing)", closes(a).length === 1 && closes(n).length === 1 && closes(m).length === 1);
+}
+{
+  // A draft that slips into matching talk never goes out as written: the plain close does.
+  check("close: match talk in a draft is replaced by the plain close", U.closeText("So glad you came. Sorry nobody was right for you tonight.") === U.CLOSE_FALLBACK && U.closeText("Glad you came, hope you met some good people") === U.CLOSE_FALLBACK && U.closeText("Really glad you came tonight.") === "Really glad you came tonight." && U.closeText("") === U.CLOSE_FALLBACK);
 }
 
 // ============================================================ 11. PROACTIVE_PAUSED

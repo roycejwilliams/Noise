@@ -4,33 +4,22 @@
 // recommended. No API calls, no database: npx tsx evals/event/rules.ts
 import "dotenv/config";
 import { readFileSync } from "fs";
-import { unmatchedPairPrompt, matchNudgePrompt } from "../../src/services/eventScoring.js";
+import { matchNudgePrompt } from "../../src/services/eventScoring.js";
 
 const cases: [boolean, string][] = [];
 const c = (ok: boolean, label: string) => cases.push([ok, label]);
 
 // ---------------------------------------------------------------------------
-// The paired-leftovers message must never read as a confident match — that
-// framing is earned by MATCH_NUDGE_MIN_SCORE, which this pool never cleared.
+// Never below the bar (Royce, 2026-10-14: "Sparse rooms: never lower the bar, never force a match. Members get silence"; "Below-bar
+// pairing stays dead either way"). The low-confidence pairing path is gone, not just unused.
 {
-  const pairPrompt = unmatchedPairPrompt({ recipientFirstName: "Jordan", otherFirstName: "Ellis", eventName: "Cache Me Outside", shareReason: "both building in climate tech", feedback: null });
-  c(/NOT a confident/i.test(pairPrompt), "the pair prompt explicitly rules out confident-match framing");
-  c(/don't (call it a match|oversell)/i.test(pairPrompt), "the pair prompt tells the model not to oversell it");
-  c(!/worth them meeting/i.test(pairPrompt), "the pair prompt never uses matchNudgePrompt's confident phrase");
   const realPrompt = matchNudgePrompt({ recipientFirstName: "Jordan", otherFirstName: "Ellis", eventName: "Cache Me Outside", shareReason: "both building in climate tech", feedback: null });
-  c(/worth them meeting/i.test(realPrompt) && !/NOT a confident/i.test(realPrompt), "a real match nudge is unchanged, still confident");
-  c(pairPrompt !== realPrompt, "the two prompts are genuinely different, not aliases of each other");
-}
-
-// ---------------------------------------------------------------------------
-// The score gate bypass is scoped to the new pass only — a normal live
-// scoring pass (no honestLowConfidence) must still require the real
-// threshold, so this never quietly loosens what counts as a real match.
-{
+  c(/worth them meeting/i.test(realPrompt), "a real match nudge is unchanged, still confident");
   const es = readFileSync(new URL("../../src/services/eventScoring.ts", import.meta.url), "utf8");
-  c(/if \(top\.score < MATCH_NUDGE_MIN_SCORE && !opts\.honestLowConfidence\) return false;/.test(es), "the score gate only bypasses when honestLowConfidence is explicitly set");
-  c(/opts\.honestLowConfidence \? unmatchedPairPrompt : matchNudgePrompt/.test(es), "the draft picks the honest prompt only for the honestLowConfidence path");
-  c(/export function unmatchedPairPrompt/.test(es), "unmatchedPairPrompt is exported for evals");
+  c(/if \(top\.score < MATCH_NUDGE_MIN_SCORE\) return false;/.test(es), "the score gate has no bypass: nothing under the bar is ever proposed");
+  c(!/honestLowConfidence|unmatchedPairPrompt/.test(es), "the below-bar pairing path and its prompt are gone");
+  const uf = readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8");
+  c(!/scoreMatchedGroup|soloAck|nothing stood out/.test(uf.replace(/\/\/.*$/gm, "")), "the end-of-night pass never pairs leftovers and never sends a 'nothing stood out' text");
 }
 
 // ---------------------------------------------------------------------------
@@ -47,11 +36,11 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   c(!/CHECKIN_FOLLOWUP_DELAY_HOURS/.test(followUp), "this isn't the +3h debrief cadence — it's meant to still read as during the event");
 }
 
-// A person already matched, or already told once, is never processed again.
+// Everyone who came gets the close once, matched or not; "glad you came" needs evidence they came.
 {
   const followUp = readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8");
-  c(/wasAlreadyNudgedForMatch\(eventId, person\.user_id\)\) && !\(await wasAlreadyNoticed/.test(followUp), "the unmatched pool excludes anyone already nudged or already noticed");
-  c(/stillUnmatched\.length >= 2/.test(followUp), "pairing only runs the group scoring pass with two or more people to pair");
+  c(/if \(await wasAlreadyNoticed\(eventId, person\.user_id\)\) continue;/.test(followUp), "the close goes once per person per event");
+  c(/if \(!\(await cameTonight\(eventId, person\.user_id/.test(followUp), "the close needs evidence they came (arrived, checked in, or texted during the event)");
 }
 
 // ---------------------------------------------------------------------------
@@ -92,13 +81,10 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   c((introTool.match(/Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list/g) ?? []).length === 2, "found and not-found get the same neutral answer, so neither reveals membership");
   c(/don't say whether you know anyone by that first name, how many, or whether they were there/.test(introTool), "asking for the last name never reveals whether, or how many, people have that name");
 
-  const pairPrompt = unmatchedPairPrompt({ recipientFirstName: "Jordan", otherFirstName: "Ellis", eventName: "Cache Me Outside", shareReason: "both building in climate tech", feedback: null });
-  c(!/didn't come up as a strong match for anyone|also didn't/i.test(pairPrompt), "the pair prompt never tells the model the other person had no match");
-  c(/Say nothing at all about Ellis's night, matches, or situation/.test(pairPrompt), "the pair prompt forbids describing the other person's night");
 
   const es = readFileSync(new URL("../../src/services/eventScoring.ts", import.meta.url), "utf8");
   c(!/neither had a strong match/.test(es), "the pairing memory (read back into the member's own replies) carries nothing about the other person's night");
-  c(/if \(!\(await gateShareReason\(person\.user_id, candidate\.user_id, top\.shareReason/.test(es), "every nudge, pairing included, still passes the share-reason privacy gate");
+  c(/if \(!\(await gateShareReason\(person\.user_id, candidate\.user_id, top\.shareReason/.test(es), "every nudge still passes the share-reason privacy gate");
 
   const sr = readFileSync(new URL("../../src/services/searchRules.ts", import.meta.url), "utf8");
   c(/return \[\s*k\.userId \?\? "anon",/.test(sr), "the search cache is keyed per member, so one member's cached trace never reaches another");
