@@ -2384,18 +2384,22 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   let placeNote: { key: string; line: string } | null = null;
   if (composed && !opts.dryRun) {
     const W = await import("../services/wantPlace.js");
+    let after: string | null = null;
     for (const it of composed.perItem) {
       const s = (it.candidate.payload as { match?: { searchedIn?: { key: string | null; place: string | null; source: string } } }).match?.searchedIn;
       if (!s?.key || s.source !== "told") continue;
       const row = await W.realPlaceDeps.row(userId, s.key).catch(() => null);
-      const line = W.noteDue(row);
+      const line = W.noteDue(row, person.city ?? null);
       if (line) {
         placeNote = { key: s.key, line };
+        after = it.messages[it.messages.length - 1] ?? null;
         break;
       }
     }
     if (placeNote) {
-      const at = composed.messages.length - (composed.closing ? 1 : 0);
+      // Right after its own find's caption, so it's about that find; before the closing question when the caption can't be found.
+      const i = after ? composed.messages.lastIndexOf(after) : -1;
+      const at = i >= 0 ? i + 1 : composed.messages.length - (composed.closing ? 1 : 0);
       composed = { ...composed, messages: [...composed.messages.slice(0, at), placeNote.line, ...composed.messages.slice(at)], text: `${composed.text}\n${placeNote.line}`, notes: [...composed.notes, "where their finds come from, said once"] };
     }
   }

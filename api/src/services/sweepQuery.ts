@@ -152,11 +152,14 @@ export const SWEEP_QUERY_RULES = `How to write searches: each query names the th
 // Pure: a query too tight for its source, loosened (Royce, 2026-10-15: "a query over 4 key words gets auto-loosened and retried once,
 // not refused"): the first QUERY_LIMITS.contentWords key words in the order Co wrote them, with everything that isn't a key word
 // (the city, dates, operators) kept. An OR group or a term searched as one ("open calls") counts as one word, as in contentWords.
-export function loosenQuery(q: string, max: number = QUERY_LIMITS.contentWords): string {
+export function loosenQuery(q: string, max: number = QUERY_LIMITS.contentWords, keep: string[] = []): string {
   const marked = q.replace(PHRASES, (m) => m.replace(/\s+/g, "\u0001"));
   const segs = marked.match(/\([^)]*\)|"[^"]*"|\S+/g) ?? [];
+  // Never loosened away: an exclusion ("-crypto") and the words of where it's searched (their want's place or city).
+  const kept_ = new Set(keep.flatMap((k) => k.toLowerCase().split(/[\s,]+/)).filter(Boolean));
   let n = 0;
   const kept = segs.filter((seg) => {
+    if (/^-\S/.test(seg) || kept_.has(seg.toLowerCase().replace(/[,.;:]+$/, ""))) return true;
     if (!contentWords(seg.replace(/\u0001/g, " ")).length) return true;
     n++;
     return n <= max;
@@ -189,12 +192,12 @@ export class QueryLedger {
   }
   // A query whose only problem is that it's too tight runs loosened, once (loosenQuery), and is logged with what Co wrote. Anything
   // else wrong with it is refused as before (check).
-  checkOrLoosen(source: LedgerSource, query: string): { query: string; bad: string[]; loosenedFrom?: string } {
+  checkOrLoosen(source: LedgerSource, query: string, keep: string[] = []): { query: string; bad: string[]; loosenedFrom?: string } {
     const other = source === "x" ? this.asked("web") : source === "web" ? this.asked("x") : [];
     const problems = (q: string) => queryProblems(q, { terms: this.terms, source, otherSourceQueries: other, theirWords: this.theirWords, avoid: this.avoid });
     const bad = problems(query);
     if (bad.length === 1 && TOO_TIGHT.test(bad[0])) {
-      const loose = loosenQuery(query);
+      const loose = loosenQuery(query, QUERY_LIMITS.contentWords, keep);
       if (loose && loose !== query && !problems(loose).length) return { query: loose, bad: [], loosenedFrom: query.slice(0, 200) };
     }
     if (bad.length) this.queries.push({ source, query: query.slice(0, 200), results: 0, kept: 0, passed: 0, refused: bad });

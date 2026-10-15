@@ -110,8 +110,8 @@ const terms = Q.memberTerms({ firstName: "Royce", goals: GOALS });
   check("each keep names the query (and source) that found it, through a post too", keptBy.map((k) => `${k.name}<-${k.source}:${k.query}`).join(" | ") === "AI Founder Night<-web:SF AI founder events November | Builders Supper<-events:AI founder gatherings | Demo Night<-x:AI founders SF tonight", keptBy);
   check("each pass names its query (passedOver carries it)", SF.passedOver([{ source: "web", name: "B", url: "https://b.example", query: "SF AI founder events November" }], new Set(), new Map())[0].query === "SF AI founder events November");
   const sf = src("services/sweepFind.ts");
-  check("the sweep runs every query through the ledger (events, web, X; web and X loosened when only too tight) and logs it on sweep.find", /ledger\.check\("events", what\)/.test(sf) && /ledger\.checkOrLoosen\("web", q\)/.test(sf) && /ledger\.checkOrLoosen\("x", asked\)/.test(sf) && /passedOver: passed, queries, keptBy/.test(sf));
-  check("a refused X query doesn't spend the X search", sf.indexOf('ledger.check("x", q)') < sf.indexOf("xSearches++;"));
+  check("the sweep runs every query through the ledger (events, web, X; web and X loosened when only too tight) and logs it on sweep.find", /ledger\.check\("events", what\)/.test(sf) && /ledger\.checkOrLoosen\("web", q, \[c\.city/.test(sf) && /ledger\.checkOrLoosen\("x", asked\)/.test(sf) && /passedOver: passed, queries, keptBy/.test(sf));
+  check("a refused X query doesn't spend the X search", sf.indexOf('ledger.checkOrLoosen("x", asked)') >= 0 && sf.indexOf('ledger.checkOrLoosen("x", asked)') < sf.indexOf("xSearches++;"));
 }
 
 console.log(`sweep queries: ${total - failed}/${total} passed`);
