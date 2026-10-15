@@ -22,7 +22,7 @@ const check = (label: string, ok: boolean) => {
 const src = (p: string) => readFileSync(new URL(`../../${p}`, import.meta.url), "utf8");
 
 const STATS = { kind: "partner" as const, eventName: "Demo Night", partnerName: "House of AI", room: 23, arrived: 17, intakeDone: 12, pairs: 2, intros: 0, themes: { "Investors or funding": 6, "Hiring or talent": 4, "Cofounders or partners": 1 } as any, askCount: 11 };
-const APPROVED = { host_headline: "{event}, the room", host_room: "{room} came, {arrived} arrived.", host_pairs: "Pairs: {pairs}.", host_intros: "Intros: {intros}.", host_themes: "Looking for: {themes}.", host_no_themes: "Too few to show a pattern.", host_too_small: "Too small to read out.", host_note: "Room-level only." };
+const APPROVED = { host_headline: "{event}, the room", host_room: "{room} came, {arrived} arrived.", host_intros: "Intros: {intros}.", host_themes: "Looking for: {themes}.", host_no_themes: "Too few to show a pattern.", host_too_small: "Too small to read out.", host_note: "Room-level only." };
 const saved = { ...C.PARTNER_COPY };
 const setCopy = (o: Record<string, string> | null) => Object.assign(C.PARTNER_COPY as any, o ?? saved);
 
@@ -35,14 +35,16 @@ const setCopy = (o: Record<string, string> | null) => Object.assign(C.PARTNER_CO
     const d = H.describeNight(STATS)!;
     check("headline from the copy", d.headline === "Demo Night, the room");
     check("headcounts rounded (never a number the host could subtract from a list)", d.lines[0] === "about 25 came, about 15 arrived.");
-    check("a count under 3 is 'a few'", d.lines.includes("Pairs: a few."));
+    check("pairs nobody was asked about yet are not shown as connections (until P4)", !d.lines.some((l) => /pair/i.test(l)));
+    const two = H.describeNight({ ...STATS, intros: 2 })!;
+    check("a count under 3 is 'a few'", two.lines.includes("Intros: a few."));
     check("a zero line isn't shown", !d.lines.some((l) => l.startsWith("Intros")));
     check("categories under 3 people fold, nothing per person", d.lines.includes("Looking for: investors or funding (6), hiring or talent (4)."));
     const few = H.describeNight({ ...STATS, askCount: 5 })!;
     check("too few asks: no pattern shown", few.lines.includes("Too few to show a pattern."));
     const small = H.describeNight({ ...STATS, room: 4 })!;
     check("a room under the minimum: that one line only", small.lines.length === 1 && small.lines[0] === "Too small to read out.");
-    setCopy({ ...APPROVED, host_pairs: C.PENDING });
+    setCopy({ ...APPROVED, host_room: C.PENDING });
     check("one line it needs still pending: no readout", H.describeNight(STATS) === null);
     setCopy(APPROVED);
     check("shown: a partner readout reads its own frozen lines; a Co readout is described as before", S.shownOf({ ...STATS, shown: d } as any).headline === "Demo Night, the room" && /members were registered/.test(S.shownOf({ eventName: "X", registered: 30, arrived: 20, walkins: 0, briefs: 0, nudged: 0, interested: 0, intros: 0, debriefReplies: 0, metSomeone: 0, conversationsTold: 0, followThroughMembers: 0, themes: {}, askCount: 0 }).lines[0]));
@@ -162,7 +164,7 @@ try {
   check("close: a failed snapshot never holds the forgetting", /snapshotNight\(r\.api_id\)\.catch\(/.test(close));
   const svc = src("src/services/partnerNightReadout.ts").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
   check("never sends to a host: drafts only (no email or text path)", !/sendReadout|resend|sendblue|deps\.email/i.test(svc));
-  check("the readout's floors are the readout's (cell, approx, foldThemes, READOUT)", /approx\(s\.room\)/.test(svc) && /cell\(s\.pairs\)/.test(svc) && /foldThemes\(s\.themes\)/.test(svc) && /s\.room < READOUT\.minRoom/.test(svc));
+  check("the readout's floors are the readout's (cell, approx, foldThemes, READOUT)", /approx\(s\.room\)/.test(svc) && /cell\(s\.intros\)/.test(svc) && /foldThemes\(s\.themes\)/.test(svc) && /s\.room < READOUT\.minRoom/.test(svc));
   check("the leak check runs before anything is stored", svc.indexOf("readoutLeak(text") > 0 && svc.indexOf("readoutLeak(text") < svc.indexOf("INSERT INTO partner_readouts"));
   const send = src("src/services/partnerReadoutSend.ts");
   check("the host's link and email read the frozen lines (shownOf)", /\.\.\.shownOf\(r\.stats\)/.test(send) && /shownOf\(r\.stats\)\.headline/.test(send));

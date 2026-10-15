@@ -73,8 +73,6 @@ export const PARTNER_COPY = {
   // The room: everyone who texted or checked in, and who arrived at the door. {room} and {arrived} are rounded headcounts
   // ("fewer than 10", "about 25").
   host_room: PENDING,
-  // Pairs Cue judged worth an intro. {pairs} is a count or "a few". Only when there were any.
-  host_pairs: PENDING,
   // Intros both people said yes to. {intros} is a count or "a few". Only when there were any.
   host_intros: PENDING,
   // What the room was looking for, by fixed category. {themes} is a list like "investors or funding (6), hiring or talent (4)".
@@ -88,14 +86,14 @@ export const PARTNER_COPY = {
 } as const satisfies Record<string, string>;
 
 export type CopyKey = keyof typeof PARTNER_COPY;
-export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next" | "link" | "room" | "arrived" | "pairs" | "intros" | "themes", string>>;
+export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next" | "link" | "room" | "arrived" | "intros" | "themes", string>>;
 
 // The line, filled in; null while it's pending, or when it names a placeholder the caller didn't fill. table is for the checks.
 export function copyFor(key: CopyKey, vars: CopyVars = {}, table: Record<CopyKey, string> = PARTNER_COPY): string | null {
   const line = table[key];
   if (!line || line.includes(PENDING)) return null;
   let missing = false;
-  const out = line.replace(/\{(agent|event|partner|code|next|link|room|arrived|pairs|intros|themes)\}/g, (_m, k: keyof CopyVars) => {
+  const out = line.replace(/\{(agent|event|partner|code|next|link|room|arrived|intros|themes)\}/g, (_m, k: keyof CopyVars) => {
     const v = vars[k]?.trim();
     if (!v) missing = true;
     return v ?? "";

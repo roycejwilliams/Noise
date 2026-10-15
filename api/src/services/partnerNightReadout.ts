@@ -28,7 +28,8 @@ export type NightStats = {
   room: number;
   arrived: number;
   intakeDone: number;
-  // Pairs Co judged worth an intro (the value gate's strong verdict), and intros both people said yes to.
+  // Pairs Co judged worth an intro (the value gate's strong verdict; for the team, not shown to the host until P4 asks them),
+  // and intros both people said yes to.
   pairs: number;
   intros: number;
   themes: Partial<Record<Theme, number>>;
@@ -50,7 +51,8 @@ export function describeNight(s: NightStats): { headline: string; lines: string[
   }
   const lines: (string | null)[] = [];
   lines.push(copyFor("host_room", { ...v, room: approx(s.room), arrived: approx(s.arrived) }));
-  if (s.pairs) lines.push(copyFor("host_pairs", { ...v, pairs: cell(s.pairs) }));
+  // Pairs Co found but nobody was asked about yet are not connections: until the intros track (P4) asks them, the host
+  // reads only intros both people said yes to (silence over false signal). The count stays in the snapshot for the team.
   if (s.intros) lines.push(copyFor("host_intros", { ...v, intros: cell(s.intros) }));
   const themes = s.askCount >= READOUT.minForThemes ? foldThemes(s.themes) : [];
   lines.push(themes.length ? copyFor("host_themes", { ...v, themes: themes.map((t) => `${t.theme.toLowerCase()} (${t.n})`).join(", ") }) : copyFor("host_no_themes", v));
