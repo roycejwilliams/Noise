@@ -4,6 +4,24 @@
 //   npx tsx evals/inroom/collisions.ts
 import { W, reset, addMember, addEvent, ask, check, results, latency, memberTurn, type Member } from "./world.js";
 
+// The clock is pinned to 18:00 UTC today, as in flow.ts: a member with no time zone may only be texted 16:00-24:00 UTC, so an
+// unpinned run late at night holds every direct ask for the morning and the cases test nothing.
+{
+  const RealDate = Date;
+  const pinned = new RealDate();
+  pinned.setUTCHours(18, 0, 0, 0);
+  const offset = pinned.getTime() - RealDate.now();
+  class PinnedDate extends RealDate {
+    constructor(...a: any[]) {
+      super(...((a.length ? a : [RealDate.now() + offset]) as [any]));
+    }
+    static now() {
+      return RealDate.now() + offset;
+    }
+  }
+  (globalThis as any).Date = PinnedDate;
+}
+
 const S = await import("../../src/services/eventScoring.js");
 const H = await import("../../src/services/eventGuestMatchHandoff.js");
 const O = await import("../../src/services/inRoomOffers.js");
