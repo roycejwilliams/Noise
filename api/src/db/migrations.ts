@@ -2880,10 +2880,11 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`ALTER TABLE network_introductions ADD COLUMN IF NOT EXISTS email_claimed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS email_outcome TEXT`)
     .catch((err: Error) => console.error("network_introductions email claim column failed:", err));
-  // An in-room question still open when the room closes expires instead of binding a "yes" days later.
+  // An in-room question still open when the room closes expires instead of binding a "yes" days later. 'sending': a direct ask
+  // holding the member's one question slot while it is drafted and sent (services/inRoomOffers.ts claimAskSlot).
   await pool
     .query(`ALTER TABLE event_match_offers DROP CONSTRAINT IF EXISTS event_match_offers_status_check`)
-    .then(() => pool.query(`ALTER TABLE event_match_offers ADD CONSTRAINT event_match_offers_status_check CHECK (status IN ('queued', 'open', 'answered', 'expired'))`))
+    .then(() => pool.query(`ALTER TABLE event_match_offers ADD CONSTRAINT event_match_offers_status_check CHECK (status IN ('queued', 'sending', 'open', 'answered', 'expired'))`))
     .catch((err: Error) => console.error("event_match_offers expired status failed:", err));
   // Where each want is (services/wantPlace.ts, Royce 2026-10-15: "the place lives on the want, not the member"). One row per want
   // (an open ask, or a goal Co searches for), read once; place NULL means none (the home city stands in). noted_at: the one line saying

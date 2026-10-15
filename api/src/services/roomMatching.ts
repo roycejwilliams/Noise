@@ -790,7 +790,7 @@ export async function runRoomCloses(now = new Date()): Promise<CloseResult[]> {
     const eventId = String(r.event_id);
     // Who was in the room at its end, for the follow-up (read before the room is marked closed).
     const roster = await (await import("./eventScoring.js")).inRoomPool(eventId).catch(() => [] as ScorableGuest[]);
-    const offers = await pool.query(`UPDATE event_match_offers SET status = 'expired', answered_at = NULL WHERE event_id = $1 AND status IN ('open', 'queued') RETURNING person_id`, [eventId]);
+    const offers = await pool.query(`UPDATE event_match_offers SET status = 'expired', answered_at = NULL WHERE event_id = $1 AND status IN ('open', 'queued', 'sending') RETURNING person_id`, [eventId]);
     // Asks held for someone's morning: brought due now, so the deferred runner drops them as "event over" and tells the
     // asker only that it didn't go out.
     const held = await pool.query(

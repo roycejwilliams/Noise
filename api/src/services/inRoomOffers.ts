@@ -7,6 +7,9 @@
 //
 // A reply binds to the member's most recent OPEN offer. A member is never asked a second yes-or-no about another person
 // while one is still open: a direct ask for them waits ('queued') until they answer, so "yes" can only mean one person.
+// A direct ask takes that one slot ('sending') before it is drafted, under a lock (claimAskSlot), and opens it once it reaches
+// them: the slot used to be taken only after the send, so asks drafted at the same moment all went (room simulation, 2026-10-14:
+// three yeses to one person at once sent all three asks back to back, and their next "yes" bound to whichever was newest).
 import pool from "../db/db.js";
 
 export type OfferKind = "nudge" | "direct_ask" | "additive";
@@ -18,12 +21,16 @@ export type Offer = {
   candidate_id: string | null;
   candidate_ids: string[];
   asker_id: string | null;
-  status: "queued" | "open" | "answered";
+  status: "queued" | "sending" | "open" | "answered" | "expired";
   opened_at: Date | null;
   event_name: string | null;
 };
 
 const REPLY_EXPIRY_DAYS = 7;
+// A slot taken for a send that never confirmed (the server died while drafting) stops holding the slot after this long.
+export const SLOT_CLAIM_MINUTES = 10;
+// The one slot: an open question, or a direct ask on its way.
+const SLOT_TAKEN = `((status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval))`;
 const keyOf = (kind: OfferKind, candidateId: string | null) => (kind === "additive" ? "additive" : String(candidateId));
 
 export async function openOffer(o: { eventId: string; eventName?: string | null; personId: string; kind: OfferKind; candidateId?: string | null; candidateIds?: string[]; askerId?: string | null }): Promise<void> {
@@ -45,12 +52,51 @@ export async function queueOffer(o: { eventId: string; eventName?: string | null
   );
 }
 
+// Their one slot is taken: an open question, or a direct ask on its way to them.
 export async function hasOpenOffer(personId: string): Promise<boolean> {
-  const { rows } = await pool.query(
-    `SELECT 1 FROM event_match_offers WHERE person_id = $1 AND status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval LIMIT 1`,
-    [personId, REPLY_EXPIRY_DAYS],
-  );
+  const { rows } = await pool.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [personId, REPLY_EXPIRY_DAYS, SLOT_CLAIM_MINUTES]);
   return rows.length > 0;
+}
+
+// Take their one slot for a direct ask, or queue the ask when it's taken. One at a time per person (a transaction lock on them),
+// so of several asks drafted at once exactly one is claimed and the rest wait their turn (sendNextQueued).
+export async function claimAskSlot(o: { eventId: string; eventName?: string | null; personId: string; candidateId: string; askerId: string }): Promise<"claimed" | "queued"> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`offer-slot:${o.personId}`]);
+    const { rows } = await client.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [o.personId, REPLY_EXPIRY_DAYS, SLOT_CLAIM_MINUTES]);
+    if (rows.length) {
+      await client.query(
+        `INSERT INTO event_match_offers (event_id, person_id, candidate_key, kind, candidate_id, asker_id, event_name, status)
+         VALUES ($1, $2, $3, 'direct_ask', $4, $5, $6, 'queued')
+         ON CONFLICT (event_id, person_id, candidate_key) DO NOTHING`,
+        [o.eventId, o.personId, o.candidateId, o.candidateId, o.askerId, o.eventName ?? null],
+      );
+      await client.query("COMMIT");
+      return "queued";
+    }
+    // A queued ask being sent now takes the slot in place.
+    await client.query(
+      `INSERT INTO event_match_offers (event_id, person_id, candidate_key, kind, candidate_id, asker_id, event_name, status, opened_at)
+       VALUES ($1, $2, $3, 'direct_ask', $4, $5, $6, 'sending', NOW())
+       ON CONFLICT (event_id, person_id, candidate_key) DO UPDATE SET status = 'sending', opened_at = NOW() WHERE event_match_offers.status IN ('queued', 'sending')`,
+      [o.eventId, o.personId, o.candidateId, o.candidateId, o.askerId, o.eventName ?? null],
+    );
+    await client.query("COMMIT");
+    return "claimed";
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// The ask isn't going now (blocked, moved on, held for their morning or the pause, or failed): the slot is free again.
+// Once it reaches them, afterDirectAskSent opens it instead (openOffer).
+export async function releaseAskSlot(eventId: string, personId: string, candidateId: string): Promise<void> {
+  await pool.query(`DELETE FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'sending'`, [eventId, personId, candidateId]);
 }
 
 // The offer a reply answers: their most recent open one.
@@ -88,7 +134,8 @@ export async function nextQueued(personId: string): Promise<Offer | null> {
   return (rows[0] as Offer) ?? null;
 }
 
-// Co already asked (or they already answered) this member about this person at this event. A queued ask doesn't count.
+// Co already asked (or they already answered) this member about this person at this event, or that ask is on its way. A queued
+// ask doesn't count.
 export async function offeredAbout(eventId: string, personId: string, candidateId: string): Promise<boolean> {
   const { rows } = await pool.query(`SELECT 1 FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status <> 'queued'`, [eventId, personId, candidateId]);
   return rows.length > 0;
