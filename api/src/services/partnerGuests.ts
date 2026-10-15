@@ -1,11 +1,12 @@
 // Guests at a partner night (Royce, 2026-10-14, the partner-room spec steps 1, 2, 7 and 8). A guest is someone who isn't a
-// member and texted Cue a live night's code (services/partners.ts) from the RSVP link or the door QR.
+// member and texted Cue a live night's RSVP code (services/partners.ts) or its door-only code (services/doorCodes.ts).
 //
 //   1. The guest texts first. That one text is their consent and starts their intake: it makes their guest row for that night.
-//      Cue never texts a non-member first: everything here is a reply to a text they just sent.
-//      Arrival (being in the room, which is what matching reads) is arrivesBy below. The code text alone never counts: the RSVP
-//      link and the door QR carry the same code, so texting it proves nothing about being there (the 10-07 rule for walk-ins,
-//      and the open question in #213). "I'm here" in the check-in window, after checking in, does.
+//      The scan alone is not consent; the text they send from their own phone is. Cue never texts a non-member first:
+//      everything here is a reply to a text they just sent.
+//      Arrival (being in the room, which is what matching reads) is arrivesBy below (Royce's ruling on #213): the night's
+//      door-only code, inside the check-in window, is arriving, so a guest at the door is matchable once intake is done, with
+//      no RSVP. The RSVP code, a check-in phrase or "I'm here" never are: anyone can type those from home.
 //   2. Light intake over a few texts: who they are, what they do, who they're hoping to meet. Each question is asked at most
 //      once, and one they already answered in passing is skipped (a short model read proposes what their text says; code keeps
 //      only words they used). What they say lives in partner_guests, scoped to that night: it never enters co_profiles, the
@@ -22,15 +23,20 @@
 // Every word a guest reads is Royce's copy (services/partnerCopy.ts). A line still pending sends nothing, and a question that
 // wasn't sent isn't counted as asked, so the intake picks up where it is once the copy lands.
 //
-// A member who texts a live night's code is not a guest: they get the walk-in path members already have (routes/sendblue.ts),
-// checked in at the door during the check-in window.
+// A member is never a guest (a November blocker, Royce 2026-10-14). Recognized by their phone number: the users row it finds is
+// a member when their invite was verified and the row isn't archived (memberAtDoor). A member who texts a night's code gets
+// the walk-in path members already have (routes/sendblue.ts), and the door code marks them arrived, so they're in the room
+// under their own member profile. No guest intake, no guest row, no cutoff, no forgetting, no invitation: none of this file's
+// guest flow touches them. A member still finishing their own intake (name and email) is checked in the same way and carries
+// on with it; matching needs their profile, so they're matched once they have one.
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { recordDecision, type GateCheck } from "../harness/core.js";
 import { effectiveEnd } from "../harness/introConsent.js";
-import { AGENT, entryState, entryUrl, nextOpenNight, resolveEntryCode, type Partner, type PartnerEvent } from "./partners.js";
+import { AGENT, entryState, entryUrl, nextOpenNight, partnerEvent, resolveEntryCode, type Partner, type PartnerEvent } from "./partners.js";
+import { eventForDoorCode } from "./doorCodes.js";
 import { copyFor, type CopyKey, type CopyVars } from "./partnerCopy.js";
 import { looksAutomated } from "./gateGuard.js";
 
@@ -109,13 +115,19 @@ export function grounded(value: string, theirText: string): boolean {
   return w.length > 0 && w.every((x) => x.length < 3 || have.has(x));
 }
 
-// How someone arrives at a partner night (members who checked in with the code, and guests alike). Pending Royce's ruling on
-// #213 (how a door-QR walk-in arrives), this is option B: checking in plus a later "I'm here" in the check-in window. The code
-// text alone, from wherever it was sent, never puts anyone in the room. If #213 lands on A (a door-only token whose scan counts
-// as arriving), the door QR gets its own token and "door_scan" returns true here; nothing else changes.
-export type ArrivalSignal = "code_text" | "im_here" | "door_scan";
+// How someone arrives at an event, members and guests alike (Royce's ruling on #213): only the event's door-only code, and only
+// while the event is live (the check-in window). The RSVP code, the check-in phrase and "I'm here" are check-ins at most:
+// they can be typed from anywhere.
+export type ArrivalSignal = "rsvp_code" | "phrase" | "im_here" | "door_code";
 export function arrivesBy(signal: ArrivalSignal, inCheckinWindow: boolean): boolean {
-  return inCheckinWindow && signal === "im_here";
+  return inCheckinWindow && signal === "door_code";
+}
+
+// Pure: is the users row a phone number found a member at the door? Their invite was verified and the row isn't archived.
+// (Archiving moves a member's number off their row, services/accountArchive.ts, so an archived member texting in lands on a
+// fresh row and is a newcomer.) Intake finished or not, a member is never a guest.
+export function memberAtDoor(u: { invite_verified?: boolean | null; archived_at?: Date | string | null }): boolean {
+  return u.invite_verified === true && !u.archived_at;
 }
 
 export type IntakeProposal = Partial<Record<Field, string | null>>;
@@ -195,20 +207,15 @@ export type GuestDeps = {
   log: (content: string) => Promise<void>;
   isCheckinOpen?: (e: { start_at: string; end_at?: string | null; timezone?: string | null }, now: Date) => boolean;
   isImHere?: (text: string) => boolean;
+  markArrived?: (eventId: string, userId: string) => Promise<boolean>;
   inviteCodeIn?: (text: string) => Promise<boolean>;
-  memberNight?: typeof memberPartnerNight;
+  // The partner night a door-only code points to (services/doorCodes.ts).
+  resolveDoor?: (text: string) => Promise<{ event: PartnerEvent; partner: Partner } | null>;
 };
 
-// The partner night a member checked in at with its code (their walk-in row) whose check-in window is open now: where their
-// "I'm here" lands. Null when none or more than one.
-async function memberPartnerNight(userId: string, now: Date, checkinOpen: (e: { start_at: string; end_at?: string | null; timezone?: string | null }, now: Date) => boolean): Promise<string | null> {
-  const { rows } = await pool.query(
-    `SELECT e.api_id, e.start_at, e.end_at, e.timezone FROM event_walkin_checkins w JOIN partner_events e ON e.api_id = w.event_api_id
-     WHERE w.person_id = $1 AND e.closed_at IS NULL`,
-    [userId],
-  );
-  const open = rows.filter((r: any) => checkinOpen({ start_at: new Date(r.start_at).toISOString(), end_at: r.end_at ? new Date(r.end_at).toISOString() : null, timezone: r.timezone }, now));
-  return open.length === 1 ? String(open[0].api_id) : null;
+async function partnerNightForDoorCode(text: string): Promise<{ event: PartnerEvent; partner: Partner } | null> {
+  const hit = await eventForDoorCode(text);
+  return hit ? partnerEvent(hit.eventId) : null;
 }
 
 async function unusedInviteCodeIn(text: string): Promise<boolean> {
@@ -219,27 +226,26 @@ async function unusedInviteCodeIn(text: string): Promise<boolean> {
 }
 
 export type GuestOutcome =
-  | { handled: false; memberCheckin?: { eventApiId: string; eventName: string }; memberArrived?: { eventApiId: string } }
+  | { handled: false; memberCheckin?: { eventApiId: string; eventName: string; arrived: boolean } }
   | { handled: true; action: string };
 
 // One inbound text from someone who might be a partner guest. Not handled means the normal flow takes it (the invite gate for a
 // non-member who isn't a guest; the member's normal reply, with the walk-in check-in when it's a member at the door).
-export async function handlePartnerText(user: { id: string; invite_verified: boolean }, text: string | null, deps: GuestDeps): Promise<GuestOutcome> {
+export async function handlePartnerText(user: { id: string; invite_verified: boolean; archived_at?: Date | string | null }, text: string | null, deps: GuestDeps): Promise<GuestOutcome> {
   const now = deps.now ?? new Date();
   const resolve = deps.resolve ?? resolveEntryCode;
   const checkinOpen = deps.isCheckinOpen ?? (await import("./eventWalkinCheckin.js")).isCheckinOpen;
-  const found = text ? await resolve(text).catch(() => null) : null;
+  // The night: its door-only code (an arrival, in the window) or its RSVP code (a check-in at most).
+  const byDoor = text ? await (deps.resolveDoor ?? partnerNightForDoorCode)(text).catch(() => null) : null;
+  const found = byDoor ?? (text ? await resolve(text).catch(() => null) : null);
+  const signal: ArrivalSignal = byDoor ? "door_code" : "rsvp_code";
 
   const imHere = deps.isImHere ?? (await import("./eventPresence.js")).isImHere;
-  // A member: never a guest. A live night's code in the check-in window is their walk-in check-in (not their arrival); a
-  // later "I'm here" at a partner night they checked in at is (arrivesBy). Co events' own arrival is untouched.
-  if (user.invite_verified) {
+  // A member: never a guest. A live night's code in the check-in window is their walk-in check-in; its door code is also
+  // their arrival. Everything else about them is their normal conversation.
+  if (memberAtDoor(user)) {
     if (found && entryState(found.partner, found.event, now) === "open" && checkinOpen(found.event, now)) {
-      return { handled: false, memberCheckin: { eventApiId: found.event.api_id, eventName: found.event.name } };
-    }
-    if (!found && text && imHere(text)) {
-      const night = await (deps.memberNight ?? memberPartnerNight)(user.id, now, checkinOpen);
-      if (night && arrivesBy("im_here", true)) return { handled: false, memberArrived: { eventApiId: night } };
+      return { handled: false, memberCheckin: { eventApiId: found.event.api_id, eventName: found.event.name, arrived: arrivesBy(signal, true) } };
     }
     return { handled: false };
   }
@@ -267,8 +273,8 @@ export async function handlePartnerText(user: { id: string; invite_verified: boo
     const vars = { event: found.event.name, partner: found.partner.name };
     if (state === "open") {
       if (text) await deps.log(`User said: ${text}`);
-      // The code text is their consent and check-in, never their arrival by itself (arrivesBy).
-      const arrives = arrivesBy("code_text", checkinOpen(found.event, now));
+      // Their text is their consent; the door code in the window is also their arrival (arrivesBy).
+      const arrives = arrivesBy(signal, checkinOpen(found.event, now));
       const { rows: up } = await pool.query(
         `INSERT INTO partner_guests (event_api_id, user_id, entered_at, arrived_at) VALUES ($1, $2, $3, $4)
          ON CONFLICT (event_api_id, user_id) DO UPDATE SET arrived_at = COALESCE(partner_guests.arrived_at, EXCLUDED.arrived_at)
@@ -279,6 +285,13 @@ export async function handlePartnerText(user: { id: string; invite_verified: boo
       const g = up[0] as (GuestRow & { fresh: boolean }) | undefined;
       if (!g) return { handled: true, action: "guest_resolved" };
       await record(user.id, g.fresh ? "entered" : "reentered", "act", undefined, { eventId: found.event.api_id, arrives });
+      // Arrival in the shared presence record too (eventPresence.markArrived, the "door" source), like a member's.
+      if (arrives) await (deps.markArrived ?? (async (e: string, u: string) => (await import("./eventPresence.js")).markArrived(e, u, "door")))(found.event.api_id, user.id).catch(() => false);
+      // At the door after finishing intake from the RSVP link: one line, nothing asked again.
+      if (!g.fresh && g.intake_done_at && arrives && g.arrived_at && new Date(g.arrived_at).getTime() === now.getTime()) {
+        await say("guest_arrived", vars, "arrived");
+        return { handled: true, action: "guest_arrived" };
+      }
       // The code again (the door QR after the RSVP link): nothing new to ask once intake is done.
       return { handled: true, action: await continueIntake(g, found.event, found.partner, null, deps, say) };
     }
@@ -305,18 +318,8 @@ export async function handlePartnerText(user: { id: string; invite_verified: boo
     return { handled: true, action: "after_cutoff" };
   }
   if (text) await deps.log(`User said: ${text}`);
-  // "I'm here" on the night, after checking in, is their arrival (arrivesBy). It's never read as an intake answer.
-  if (text && imHere(text)) {
-    if (!live.arrived_at && arrivesBy("im_here", checkinOpen(live.event, now))) {
-      await pool.query(`UPDATE partner_guests SET arrived_at = $2 WHERE id = $1 AND arrived_at IS NULL`, [live.id, now]);
-      await record(user.id, "arrived", "act", undefined, { eventId: live.event_api_id });
-      if (live.intake_done_at) {
-        await say("guest_arrived", { event: live.event.name, partner: live.partner.name }, "arrived");
-        return { handled: true, action: "guest_arrived" };
-      }
-    }
-    return { handled: true, action: await continueIntake(live, live.event, live.partner, null, deps, say) };
-  }
+  // "I'm here" is never an arrival (only the door code is) and never read as an intake answer.
+  if (text && imHere(text)) return { handled: true, action: await continueIntake(live, live.event, live.partner, null, deps, say) };
   return { handled: true, action: await continueIntake(live, live.event, live.partner, text, deps, say) };
 }
 
@@ -366,6 +369,25 @@ async function continueIntake(
     await pool.query(`UPDATE partner_guests SET intake_done_at = NOW() WHERE id = $1 AND intake_done_at IS NULL`, [row.id]);
   }
   return "intake_done";
+}
+
+// ---------------------------------------------------------------- the door at our own events
+
+// One of our own events' door-only code (#213), member or not: the event it points to while its check-in window is open, so the
+// route records the check-in and the arrival. Null outside the window (it's no arrival then) or for a partner night (handled
+// above). The phrase without the code stays a check-in only (eventWalkinCheckin.detectCheckinPhrase, unchanged).
+export async function ourEventDoorArrival(
+  text: string,
+  now = new Date(),
+  deps: { resolveDoor?: typeof eventForDoorCode; events?: () => Promise<{ api_id: string; name: string; start_at: string; end_at: string | null; timezone?: string | null }[]>; checkinOpen?: (e: { start_at: string; end_at?: string | null; timezone?: string | null }, now: Date) => boolean } = {},
+): Promise<{ eventApiId: string; eventName: string } | null> {
+  const hit = await (deps.resolveDoor ?? eventForDoorCode)(text);
+  if (!hit || hit.eventId.startsWith("partner-")) return null;
+  const events = await (deps.events ?? (await import("./eventPresence.js")).presenceEvents)();
+  const e = events.find((x) => x.api_id === hit.eventId);
+  if (!e) return null;
+  const open = deps.checkinOpen ?? (await import("./eventWalkinCheckin.js")).isCheckinOpen;
+  return arrivesBy("door_code", open(e, now)) ? { eventApiId: e.api_id, eventName: e.name } : null;
 }
 
 // ---------------------------------------------------------------- the cutoff

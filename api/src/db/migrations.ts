@@ -2969,6 +2969,11 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("event_door_codes init failed:", err));
+  // A door-code arrival is its own source (eventPresence.markArrived "door").
+  await pool
+    .query(`ALTER TABLE event_presence DROP CONSTRAINT IF EXISTS event_presence_arrived_via_check`)
+    .then(() => pool.query(`ALTER TABLE event_presence ADD CONSTRAINT event_presence_arrived_via_check CHECK (arrived_via IN ('location', 'text', 'door'))`))
+    .catch((err: Error) => console.error("event_presence arrived_via door init failed:", err));
   // A partner night's guests (services/partnerGuests.ts): who texted that night's code, what they said in intake (their own
   // words, wiped when the night closes unless they joined), and how they resolved. Scoped to the night; never read into a
   // member's profile or conversation.

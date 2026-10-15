@@ -155,7 +155,8 @@ export async function getPresence(eventId: string, userId: string) {
 }
 
 // Marks them arrived once. True only the first time.
-export async function markArrived(eventId: string, userId: string, via: "location" | "text"): Promise<boolean> {
+// via "door": the event's door-only code, texted in its check-in window (services/doorCodes.ts, Royce's ruling on #213).
+export async function markArrived(eventId: string, userId: string, via: "location" | "text" | "door"): Promise<boolean> {
   const { rows } = await pool.query(
     `INSERT INTO event_presence (event_api_id, user_id, arrived_at, arrived_via) VALUES ($1, $2, NOW(), $3)
      ON CONFLICT (event_api_id, user_id) DO UPDATE SET arrived_at = NOW(), arrived_via = $3

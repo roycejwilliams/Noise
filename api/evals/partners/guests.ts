@@ -31,7 +31,8 @@ const t = (iso: string) => new Date(iso);
 
 // ---------------------------------------------------------------- rules (pure)
 {
-  check("arrival (#213, option B until ruled): the code text never arrives, \"I'm here\" in the window does", !G.arrivesBy("code_text", true) && !G.arrivesBy("door_scan", true) && G.arrivesBy("im_here", true) && !G.arrivesBy("im_here", false));
+  check("arrival (#213 ruling): only the door code, only in the check-in window", G.arrivesBy("door_code", true) && !G.arrivesBy("door_code", false) && !G.arrivesBy("rsvp_code", true) && !G.arrivesBy("phrase", true) && !G.arrivesBy("im_here", true));
+  check("member at the door: invite verified and not archived, intake finished or not", G.memberAtDoor({ invite_verified: true }) && G.memberAtDoor({ invite_verified: true, archived_at: null }) && !G.memberAtDoor({ invite_verified: true, archived_at: new Date() }) && !G.memberAtDoor({ invite_verified: false }));
   check("close: the night's end plus the room-close buffer", G.nightClosesAt(NIGHT).toISOString() === "2026-11-07T06:15:00.000Z");
   check("close: closed early by hand wins", G.nightClosesAt({ ...NIGHT, closed_at: t("2026-11-07T04:00:00Z") }).toISOString() === "2026-11-07T04:00:00.000Z");
   check("close: no end on file -> the evening's end (effectiveEnd), plus the buffer", G.nightClosesAt({ ...NIGHT, end_at: null }).getTime() > t("2026-11-07T06:15:00Z").getTime());
@@ -115,11 +116,14 @@ const fake = async (q: string, p: any[] = []) => {
   return { rows: [], rowCount: 0 };
 };
 
+const arrivals: string[] = [];
 function harness(o: { found?: any; copy?: Record<string, string>; read?: any } = {}) {
   const sent: string[] = [];
   const logged: string[] = [];
   const deps = {
-    resolve: async (text: string) => (/K7Q2MX/i.test(text) ? (o.found ?? { event: NIGHT, partner: PARTNER }) : null),
+    resolve: async (text: string) => (/\bK7Q2MX\b/i.test(text) ? (o.found ?? { event: NIGHT, partner: PARTNER }) : null),
+    resolveDoor: async (text: string) => (/\bK7Q2MXA\b/i.test(text) ? (o.found ?? { event: NIGHT, partner: PARTNER }) : null),
+    markArrived: async (e: string, u: string) => (arrivals.push(`${e}:${u}`), true),
     rows: async (userId: string) => guests.filter((g) => g.user_id === userId).map((g) => ({ ...g, event: NIGHT, partner: PARTNER })),
     read: o.read ?? (async () => ({})),
     send: async (line: string) => {
@@ -156,12 +160,21 @@ try {
   // Members are never guests.
   {
     const h = harness();
+    const door = await G.handlePartnerText(member, "Hi Cue, at the door (K7Q2MXA)", { ...h.deps, now: during });
+    check("member at the door: the door code checks them in AND arrives them, as a member (no guest row, no intake)", door.handled === false && (door as any).memberCheckin?.eventApiId === "partner-aa" && (door as any).memberCheckin?.arrived === true && guests.length === 0 && h.sent.length === 0);
     const at = await G.handlePartnerText(member, "Hi Cue (K7Q2MX)", { ...h.deps, now: during });
-    check("member: a live code at the door -> the walk-in check-in, not a guest", at.handled === false && (at as any).memberCheckin?.eventApiId === "partner-aa" && guests.length === 0);
-    const here = await G.handlePartnerText(member, "I'm here", { ...h.deps, now: during, memberNight: async () => "partner-aa" });
-    check("member: a later \"I'm here\" at a night they checked in at is their arrival", here.handled === false && (here as any).memberArrived?.eventApiId === "partner-aa");
-    const noNight = await G.handlePartnerText(member, "I'm here", { ...h.deps, now: during, memberNight: async () => null });
-    check("member: \"I'm here\" with no partner check-in is left to the normal flow", noNight.handled === false && !(noNight as any).memberArrived);
+    check("member: the RSVP code on the night checks them in, not an arrival", at.handled === false && (at as any).memberCheckin?.arrived === false && guests.length === 0);
+    const here = await G.handlePartnerText(member, "I'm here", { ...h.deps, now: during });
+    check("member: \"I'm here\" is never an arrival (typed from anywhere)", here.handled === false && !(here as any).memberCheckin);
+    const midIntake = await G.handlePartnerText({ id: "u-new-member", invite_verified: true }, "Hi Cue, at the door (K7Q2MXA)", { ...h.deps, now: during });
+    check("member mid-intake: checked in and arrived as a member, never a guest", (midIntake as any).memberCheckin?.arrived === true && guests.length === 0);
+    guests.push({ id: "old", event_api_id: "partner-old", user_id: "u-joined", entered_at: before, arrived_at: before, who: null, work: null, hoping: null, asked_who_at: null, asked_work_at: null, asked_hoping_at: null, intake_done_at: null, resolved_at: before, resolution: "joined" });
+    const joined = await G.handlePartnerText({ id: "u-joined", invite_verified: true }, "hey, back again (K7Q2MXA)", { ...h.deps, now: during });
+    check("a guest from an earlier night who joined: a member now (no after-cutoff line, no guest flow)", joined.handled === false && (joined as any).memberCheckin?.arrived === true && h.sent.length === 0);
+    guests = [];
+    const archived = await G.handlePartnerText({ id: "u-archived", invite_verified: true, archived_at: before }, "Hi Cue (K7Q2MXA)", { ...h.deps, now: during });
+    check("an archived row is not a member at the door (treated as a newcomer)", archived.handled === true && guests.length === 1 && guests[0].user_id === "u-archived");
+    guests = [];
     const early = await G.handlePartnerText(member, "Hi Cue (K7Q2MX)", { ...h.deps, now: before });
     check("member: the RSVP link days before -> just their normal reply", early.handled === false && !(early as any).memberCheckin);
     const plain = await G.handlePartnerText(member, "what's on this week", { ...h.deps, now: during });
@@ -197,13 +210,14 @@ try {
     await G.handlePartnerText(guest, "investors who get hardware", { ...h.deps, now: before });
     check("intake: the last answer, then done once", g.hoping === "investors who get hardware" && h.sent[2] === "done Demo Night" && g.intake_done_at instanceof Date);
     check("intake: never asked twice", h.sent.filter((s) => s.startsWith("Q ")).length === 2);
-    // The door on the night: the code again is not arrival (#213: the code alone proves nothing), and nothing is asked again.
+    // The night: the RSVP code again is not arrival, "I'm here" is not arrival, and nothing is asked again.
     linesRecent = 1;
     await G.handlePartnerText(guest, "Hi Cue, it's for Demo Night (K7Q2MX)", { ...h.deps, now: during });
-    check("door: the code text on the night is not arrival, and nothing is asked again", g.arrived_at === null && h.sent.length === 3);
-    linesRecent = 0;
     await G.handlePartnerText(guest, "I'm here", { ...h.deps, now: during });
-    check("door: \"I'm here\" in the window after checking in is arrival, with one line", g.arrived_at?.getTime() === during.getTime() && h.sent[3] === "arrived" && h.sent.length === 4);
+    check("night: the RSVP code or \"I'm here\" is not arrival, and nothing is asked again", g.arrived_at === null && h.sent.length === 3);
+    linesRecent = 0;
+    await G.handlePartnerText(guest, "Hi Cue, at the door (K7Q2MXA)", { ...h.deps, now: during });
+    check("door: the door code in the window is arrival (and in the shared presence record), with one line", g.arrived_at?.getTime() === during.getTime() && arrivals.includes("partner-aa:u-guest") && h.sent[3] === "arrived" && h.sent.length === 4);
     // Texts during the night after intake: the during-night line, at most every few hours.
     await G.handlePartnerText(guest, "where's the bar", { ...h.deps, now: during });
     linesRecent = 1;
@@ -223,20 +237,23 @@ try {
     check("after the cutoff: at most once a day", h.sent.length === 6);
     linesRecent = 0;
   }
-  // "I'm here" on the night is arrival.
+  // A walk-in guest who never RSVP'd: the door code is consent, arrival and the start of intake in one text.
   {
     guests = [];
+    arrivals.length = 0;
     const h = harness();
-    await G.handlePartnerText(guest, "Hi Cue (K7Q2MX)", { ...h.deps, now: before });
-    await G.handlePartnerText(guest, "Jordan", { ...h.deps, now: before });
+    await G.handlePartnerText(guest, "Hi Cue, at the door (K7Q2MXA)", { ...h.deps, now: during });
+    check("walk-in guest: one door-code text enters and arrives them, no RSVP needed", guests.length === 1 && guests[0].arrived_at?.getTime() === during.getTime() && arrivals.length === 1);
+    await G.handlePartnerText(guest, "Jordan", { ...h.deps, now: during });
     await G.handlePartnerText(guest, "I'm here", { ...h.deps, now: during });
-    check("arrival: \"I'm here\" during the check-in window", guests[0].arrived_at?.getTime() === during.getTime());
     check("arrival: \"I'm here\" is never read as an intake answer", guests[0].work === null);
     guests = [];
+    arrivals.length = 0;
     await G.handlePartnerText(guest, "Hi Cue (K7Q2MX)", { ...h.deps, now: during });
-    check("arrival: the code text alone in the window does not put a guest in the room (#213)", guests[0].arrived_at === null);
-    await G.handlePartnerText(guest, "I'm here", { ...h.deps, now: before });
-    check("arrival: \"I'm here\" outside the check-in window is not arrival", guests[0].arrived_at === null);
+    check("arrival: the RSVP code alone, even in the window, does not put a guest in the room (#213)", guests[0].arrived_at === null && arrivals.length === 0);
+    guests = [];
+    await G.handlePartnerText(guest, "Hi Cue (K7Q2MXA)", { ...h.deps, now: before });
+    check("arrival: the door code outside the check-in window is consent but not arrival", guests.length === 1 && guests[0].arrived_at === null && arrivals.length === 0);
     const up = sql.filter((c) => /INSERT INTO partner_guests/.test(c.q)).pop();
     check("arrival: a later scan never moves the first arrival", !!up && /arrived_at = COALESCE\(partner_guests\.arrived_at, EXCLUDED\.arrived_at\)/.test(up.q));
   }
@@ -278,6 +295,17 @@ try {
     void P;
   }
   setCopy(false);
+
+  // Our own events' door code.
+  {
+    const ev = { api_id: "evt-1", name: "Supper", start_at: "2026-11-07T02:00:00Z", end_at: "2026-11-07T06:00:00Z", timezone: null };
+    const d = (eventId: string | null) => ({ resolveDoor: async () => (eventId ? { eventId, code: "K7Q2MXA" } : null), events: async () => [ev, { ...ev, api_id: "partner-aa" }] });
+    check("our door: in the window -> check-in and arrival at that event", (await G.ourEventDoorArrival("(K7Q2MXA)", during, d("evt-1")))?.eventApiId === "evt-1");
+    check("our door: outside the window -> nothing (no arrival)", (await G.ourEventDoorArrival("(K7Q2MXA)", before, d("evt-1"))) === null);
+    check("our door: a partner night's code is the partner path's", (await G.ourEventDoorArrival("(K7Q2MXA)", during, d("partner-aa"))) === null);
+    check("our door: an event we don't list -> nothing", (await G.ourEventDoorArrival("(K7Q2MXA)", during, d("evt-gone"))) === null);
+    check("our door: no code -> nothing", (await G.ourEventDoorArrival("I'm at a Co event", during, d(null))) === null);
+  }
 
   // The cutoff, as every send path reads it.
   {
@@ -380,8 +408,11 @@ try {
   const route = src("src/routes/sendblue.ts");
   const at = route.indexOf("await handlePartnerText(");
   check("route: guests are handled before the invite gate (no code asked of a guest)", at > 0 && at < route.indexOf("if (!user.invite_verified) {\n          // Even on the very first-ever message") && at > route.indexOf("isOptOutKeyword(content)"));
-  check("route: a member's code is the walk-in check-in, never arrival", /recordCheckin\(partner\.memberCheckin\.eventApiId, user\.id\)[\s\S]{0,200}walkinCheckinEventName = partner\.memberCheckin\.eventName;\n\s*\}/.test(route) && !/markArrived\(partner\.memberCheckin/.test(route));
-  check("route: a member's \"I'm here\" at their partner night marks arrival", /markArrived\(partner\.memberArrived\.eventApiId, user\.id, "text"\)/.test(route));
+  check("route: a member's code is the walk-in check-in; the door code is also their arrival (door source)", /recordCheckin\(partner\.memberCheckin\.eventApiId, user\.id\)[\s\S]{0,300}if \(partner\.memberCheckin\.arrived\) await [\s\S]{0,80}markArrived\(partner\.memberCheckin\.eventApiId, user\.id, "door"\)/.test(route));
+  check("route: members are recognized by their row (memberAtDoor reads invite and archive)", /handlePartnerText\(\{ id: user\.id, invite_verified: !!user\.invite_verified, archived_at: user\.archived_at \?\? null \}/.test(route));
+  check("route: our own events' door code is a check-in and an arrival, and re-scores the room", /ourEventDoorArrival\(content\)[\s\S]{0,300}recordCheckin\(door\.eventApiId, user\.id\)[\s\S]{0,300}markArrived\(door\.eventApiId, user\.id, "door"\)[\s\S]{0,300}scoreGuestListForEvent\(door\.eventApiId/.test(route));
+  check("route: the check-in phrase without the code stays a check-in only (detectCheckinPhrase path unchanged)", /if \(checkin\) \{\s*await recordCheckin\(checkin\.eventApiId, user\.id\)[\s\S]{0,200}walkinCheckinEventName = checkin\.eventName;\s*\}/.test(route));
+  check("presence: a door arrival is its own source", /via: "location" \| "text" \| "door"/.test(src("src/services/eventPresence.ts")) && /CHECK \(arrived_via IN \('location', 'text', 'door'\)\)/.test(src("src/db/migrations.ts")));
   const pro = src("src/harness/proactive.ts");
   check("cutoff: every proactive send path reads it (daily pick, exempt sends, in-room)", (pro.match(/proactiveCutoff\(/g) ?? []).length === 3 && /checks\.push\(await \(await import\("\.\.\/services\/partnerGuests\.js"\)\)\.proactiveCutoff\(person\.userId, now, client\)\)/.test(pro) && /blocked_guest_cutoff/.test(pro) && /proactiveCutoff\(userId\)\)\.pass\) return false;/.test(pro));
   check("close: runs with the room-close job", /runPartnerNightCloses\(\)/.test(src("src/jobs/index.ts")));
