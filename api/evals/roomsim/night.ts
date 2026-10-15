@@ -44,6 +44,7 @@ const uniq = (text: string, i: number) => `${text} (ref ${i})`;
 
 const S = await import("../../src/services/eventScoring.js");
 const H = await import("../../src/services/eventGuestMatchHandoff.js");
+const WK = await import("../../src/services/eventWalkinCheckin.js");
 
 // ---------------------------------------------------------------- deterministic randomness
 function rng(seed: number): () => number {
@@ -179,6 +180,13 @@ type Card = {
   textsMax: number;
   leftWithNothing: number;
   unknownSql: number;
+  nudgedBeforeArrival: number;
+  noShowsTexted: number;
+  noShowsProposed: number;
+  textedAfterStop: number;
+  stoppers: number;
+  walkIns: number;
+  walkInsProposed: number;
 };
 
 async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }): Promise<Card> {
@@ -202,18 +210,16 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   const lr = rng(seed * 13 + 5);
   latency.next = () => Math.floor(lr() * 7);
   const reply = (who: Member, other: Member, answer: "interested" | "not_interested") => memberTurn(who.id, () => H.handleMatchNudgeReply(evId, evName, answer as any, asMNC(who), asMNC(other)));
-  // Arrivals in four waves; each wave re-scores the room (the debounce is cleared, as a fresh pass after a new arrival) while the
-  // replies to the last wave's nudges are still landing.
-  const order = [...p.members].sort(() => r() - 0.5);
-  const waves = [0.4, 0.7, 0.9, 1].map((f) => order.slice(0, Math.ceil(order.length * f)));
+  const stoppedAt = new Map<string, number>(); // member id -> W.sent length when they texted stop
   const answerOpen = (): Promise<void>[] => {
-    // Everyone with an open nudge answers: yes, no, or silence.
+    // Everyone with an open nudge answers: yes, no, or silence. Someone who texted stop never answers again.
     const open = W.nudges.filter((n) => n.event_id === evId && n.candidate_id && !answered.has(`${n.person_id}|${n.candidate_id}`));
     const replies: Promise<void>[] = [];
     for (const n of open) {
       answered.add(`${n.person_id}|${n.candidate_id}`);
       const a = byId.get(n.person_id)!;
       const b = byId.get(n.candidate_id)!;
+      if (stoppedAt.has(a.id)) continue;
       const roll = r();
       if (roll < rates.yes) {
         // Some yeses arrive twice at once (a double tap, a resend): the pair record, not luck, has to keep it one ask.
@@ -226,6 +232,7 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
             if (!askedDirectly(a, b) || answered.has(`${b.id}|${a.id}`)) return;
             const isTrue = p.truePairs.some(([x, y]) => (x === a.id && y === b.id) || (x === b.id && y === a.id));
             const yesB = r() < (isTrue ? rates.yes : 0.25);
+            if (stoppedAt.has(b.id)) return; // they texted stop: they answer nothing more
             answered.add(`${b.id}|${a.id}`);
             if (yesB) viaAsk.add([a.id, b.id].sort().join("|"));
             await reply(b, a, yesB ? "interested" : "not_interested");
@@ -238,10 +245,43 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
     return replies;
   };
   let inFlight: Promise<void>[] = [];
-  for (const wave of waves) {
-    addEvent({ api_id: evId, name: evName }, wave.map((m) => ({ m })));
+  // How the night really runs (sim gaps B2, B3, B9). Everyone on the RSVP list is registered from the start. Most share their
+  // location when the night begins and arrive in four waves (nudges wait for them: eventPresence.ts arrivalWaitCheck); some never
+  // share (they count as in the room); a few share and never come. A few walk in without an RSVP (the door QR) after the first
+  // wave. A few text "stop" partway through: nothing reaches them after that. Each wave's scoring pass runs while the replies to
+  // the last wave's nudges are still landing.
+  const shuffled = [...p.members].sort(() => r() - 0.5);
+  const cut = (f: number) => Math.round(shuffled.length * f);
+  const walkIns = shuffled.slice(0, cut(0.05));
+  const noShows = shuffled.slice(cut(0.05), cut(0.12));
+  const nonSharers = shuffled.slice(cut(0.12), cut(0.45));
+  const sharers = shuffled.slice(cut(0.45));
+  const stoppers = sharers.filter((m) => !p.optedOut.has(m.id) && !p.noAsk.has(m.id)).slice(0, Math.max(1, cut(0.04)));
+  const stopWave = new Map(stoppers.map((m, k) => [m.id, 1 + (k % 3)]));
+  addEvent({ api_id: evId, name: evName }, p.members.filter((m) => !walkIns.includes(m)).map((m) => ({ m })));
+  for (const m of [...sharers, ...noShows]) W.presence.set(`${evId}|${m.id}`, { sharing_seen_at: new Date(), arrived_at: null });
+  const arrived = new Set<string>();
+  let nudgedBeforeArrival = 0;
+  const waveShare = [0.4, 0.7, 0.9, 1];
+  for (let w = 0; w < waveShare.length; w++) {
+    for (const m of sharers.slice(0, Math.ceil(sharers.length * waveShare[w]))) {
+      if (arrived.has(m.id)) continue;
+      arrived.add(m.id);
+      W.presence.set(`${evId}|${m.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+    }
+    if (w === 1) for (const m of walkIns) await WK.recordCheckin(evId, m.id);
+    for (const m of stoppers) {
+      if (stopWave.get(m.id) === w && !stoppedAt.has(m.id)) {
+        // "stop" (routes/sendblue.ts): opted out at once; the members store is the users row the code reads at send time.
+        W.members.get(m.id)!.sms_opted_out = true;
+        stoppedAt.set(m.id, W.sent.length);
+      }
+    }
+    const waiting = new Set([...sharers, ...noShows].filter((m) => !arrived.has(m.id)).map((m) => m.id));
+    const nudgesBefore = W.nudges.length;
     W.scoringDebounce.clear();
     await Promise.all([S.scoreGuestListForEvent(evId), ...inFlight]);
+    nudgedBeforeArrival += W.nudges.slice(nudgesBefore).filter((n) => n.event_id === evId && waiting.has(n.person_id) && !n.pending).length;
     await new Promise((res) => setTimeout(res, 20));
     inFlight = answerOpen();
   }
@@ -299,8 +339,15 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
     privateProposed: p.truePairs.filter(([a, b]) => p.privateAskText.has(b) && nudgePairs.has(pairKey(a, b))).length,
     optedOutTexted: p.members.filter((m) => p.optedOut.has(m.id) && textsOf(m).length > 0).length,
     textsMax: Math.max(0, ...p.members.map((m) => textsOf(m).length)),
-    leftWithNothing: askers.filter((m) => textsOf(m).length === 0).length,
+    leftWithNothing: askers.filter((m) => !noShows.includes(m) && !stoppedAt.has(m.id) && textsOf(m).length === 0).length,
     unknownSql: W.unknownSql.size,
+    nudgedBeforeArrival,
+    noShowsTexted: noShows.filter((m) => textsOf(m).length > 0).length,
+    noShowsProposed: noShows.filter((m) => W.nudges.some((n) => n.event_id === evId && n.candidate_id === m.id && !n.pending)).length,
+    textedAfterStop: [...stoppedAt.entries()].filter(([id, at]) => W.sent.slice(at).some((x) => x.to === byId.get(id)!.phone_number)).length,
+    stoppers: stoppedAt.size,
+    walkIns: walkIns.length,
+    walkInsProposed: walkIns.filter((m) => W.nudges.some((n) => n.event_id === evId && n.candidate_id && (n.person_id === m.id || n.candidate_id === m.id))).length,
   };
 }
 
@@ -315,7 +362,16 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
       `near misses proposed ${c.nearProposed}, hard traps proposed ${c.trapsProposed} (introduced ${c.trapsIntroduced}), most texts to one member ${c.textsMax}, ` +
       `askers left with nothing ${c.leftWithNothing}, ${Date.now() - t0}ms`,
   );
+  console.log(`  the night: ${c.walkIns} walk-in(s), ${c.walkInsProposed} of them in a proposed pair; ${c.stoppers} texted stop partway through`);
   // Must hold today.
+  check(`room ${size}: nobody sharing their location is nudged before they arrive`, c.nudgedBeforeArrival === 0, c);
+  check(`room ${size}: a no-show (shared location, never came) is never nudged themselves`, c.nudgedBeforeArrival === 0, c);
+  // Open questions for Royce (2026-10-14), counted until ruled, never failing: a no-show who shares their location is still
+  // proposed to others as "also going" (only the asker side waits for arrival), and a walk-in who only scans the door QR is never
+  // in the room (inRoomPool counts walk-ins only once arrived, and their "I'm here" text only works for people on the RSVP list).
+  console.log(`  open (needs Royce): ${c.noShowsProposed} no-show(s) proposed to someone mid-night, ${c.noShowsTexted} texted; ${c.walkIns - c.walkInsProposed} of ${c.walkIns} QR-only walk-in(s) never matched`);
+  check(`room ${size}: nothing reaches someone after they text stop`, c.stoppers > 0 && c.textedAfterStop === 0, c);
+
   check(`room ${size}: nobody opted out of texts is texted`, c.optedOutTexted === 0, c);
   check(`room ${size}: no private (not shareable) ask is quoted to anyone else`, c.privateQuoted === 0, c);
   console.log(`  private asks: ${c.privateProposed} true pair(s) whose offering side keeps their ask private were proposed`);
