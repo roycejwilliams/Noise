@@ -2418,6 +2418,28 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("calendar grant tables failed:", err));
+  // The trigger's proposals (services/bounce.ts): one per want, ever; queued, then proposed when it went, then their answer.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS bounce_proposals (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        want_key TEXT NOT NULL,
+        find_name TEXT NOT NULL,
+        find_day DATE NOT NULL,
+        gap_source TEXT NOT NULL CHECK (gap_source IN ('calendar', 'stated')),
+        gap_from TIME NOT NULL,
+        gap_to TIME NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'proposed', 'accepted', 'declined', 'dropped')),
+        message TEXT,
+        sent_at TIMESTAMPTZ,
+        answered_at TIMESTAMPTZ,
+        answer_words TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (user_id, want_key)
+      )`,
+    )
+    .catch((err: Error) => console.error("bounce_proposals failed:", err));
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS google_snapshots (
