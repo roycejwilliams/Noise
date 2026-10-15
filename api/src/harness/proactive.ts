@@ -2102,13 +2102,16 @@ export const MAX_IN_ROOM_SENDS_PER_EVENT = 3;
 // Every in-room text Co starts (the match nudge, the additive offer, the end-of-night texts) asks here right before it
 // sends, so the pause (services/proactivePause.ts) holds them like every other send path: nothing goes out, the claim is
 // released, and a later pass sends it once the pause lifts.
-export async function inRoomSendAllowed(userId: string, eventId: string): Promise<boolean> {
+// The end-of-night close is the one in-room text the limit never holds and never counts (Royce, 2026-10-14: "A cap that leaves
+// the most engaged people in the room without a goodbye is inverted - one line, once, always"). The kill switches still hold it.
+export async function inRoomSendAllowed(userId: string, eventId: string, opts: { close?: boolean } = {}): Promise<boolean> {
   if (proactivePaused()) return false;
   // The matching kill switch, global or this event (services/roomMatching.ts), read fresh.
   if (await (await import("../services/roomMatching.js")).matchingPause(eventId)) return false;
+  if (opts.close) return true;
   // Counted per event, exactly: a prefix match let three texts at evt-1234 use up the limit at evt-12.
   const { rows } = await pool.query(`SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'`, [userId]);
-  return rows.filter((r: any) => inRoomKeyEvent(String(r.target_key)) === eventId).length < MAX_IN_ROOM_SENDS_PER_EVENT;
+  return rows.filter((r: any) => inRoomKeyEvent(String(r.target_key)) === eventId && !String(r.target_key).startsWith("in_room:close:")).length < MAX_IN_ROOM_SENDS_PER_EVENT;
 }
 
 // The event an in-room send was for, from its key: in_room:<kind>:<eventId>, and the additive offer adds :<timestamp>.

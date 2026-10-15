@@ -25,6 +25,13 @@ const homog = R.foldThemes({ "Investors or funding": 8 });
 check("a room where everyone wants the same thing shows no pattern (it would tell the host each person's category)", homog.length === 0 && R.foldThemes({ "Investors or funding": 9, "Hiring or talent": 0 }).length === 0 && R.foldThemes({ "Investors or funding": 8, "Hiring or talent": 1 }).length === 0 && R.foldThemes({ "Investors or funding": 6, "Hiring or talent": 4 }).length === 2);
 const few = R.describe({ ...base, askCount: 7, themes: { "Investors or funding": 4, "Hiring or talent": 3 } });
 check("with too few asks no pattern is shown at all", few.lines.some((l) => /Too few members shared/.test(l)) && !few.lines.some((l) => /looking for, by category/.test(l)));
+// What the room was thin on: only when Cue knows what most of the room can offer (Royce, 2026-10-14: "when Cue can't back a claim,
+// it says nothing. Silence over false signal").
+const thin = { ...base, themes: { "Investors or funding": 6, "Hiring or talent": 4, "Something else": 6 }, offerThemes: { "Hiring or talent": 5 } };
+const thinLine = (x: any) => R.describe(x).lines.find((l) => /thin on/.test(l));
+check("thin on: named when most of the room has a known offer and nobody offered it", /thin on: investors or funding\./.test(thinLine({ ...thin, offerKnown: 15, offerPool: 18 }) ?? ""));
+check("thin on: silent when Cue doesn't know what most of the room can offer (101 asks vs 2 offers on dev, 2026-10-14)", !thinLine({ ...thin, offerKnown: 2, offerPool: 18 }) && !thinLine({ ...thin, offerKnown: 14, offerPool: 18 }) && !thinLine({ ...thin }) && !thinLine({ ...thin, offerKnown: 0, offerPool: 0 }));
+check("thin on: never 'something else', never a category fewer than 3 looked for, never one somebody offered", R.thinOn({ "Something else": 9, "Venues or events": 2, "Hiring or talent": 5 }, { "Hiring or talent": 1 }).length === 0);
 const text = R.renderText(base);
 check("nothing in it names or quotes anyone", !/@|https?:\/\/|\b\d{3}[ .-]\d{3}[ .-]\d{4}\b|Maya|Jordan|Priya/.test(text) && !/Maya|Jordan|Priya/.test(R.renderHtml(base)));
 check("it says it is aggregate and what is hidden", /carries nothing any member told Cue/.test(text) && /nothing about who talked to whom/.test(text) && /carries nothing any member told Cue/.test(R.renderHtml(base)));
@@ -46,10 +53,24 @@ try {
   const stats = await R.gatherStats("ev9", "Founders Night", async (ask) => { labels.push(ask); return /invest|angel|VC/i.test(ask) ? "Investors or funding" : /designer|engineer|lawyer/i.test(ask) ? "Hiring or talent" : "Something else"; }, async () => ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].map((user_id) => ({ user_id })));
   check("each attendee's ask is read only to give it a fixed label, and only the counts are kept", stats.askCount === 9 && stats.themes["Investors or funding"] === 4 && stats.themes["Hiring or talent"] === 4 && !JSON.stringify(stats).match(/robotics|Acme|designer|engineer|angels|lawyer/));
   const arrivedFirst = arrivedParams;
+  {
+    // A room where Cue knows what nearly everyone can offer: each offer labelled on the offer side, one count per person.
+    const prev = (pool as any).query;
+    const sides: string[] = [];
+    (pool as any).query = async (q: string, p: any[]) => {
+      if (/FROM co_facts/.test(q)) return { rows: (p[0] as string[]).flatMap((id) => [{ owner_user_id: id, object_label: "design work" }, { owner_user_id: id, object_label: "design reviews" }]) };
+      return prev(q, p);
+    };
+    const backed = await R.gatherStats("ev9", "Founders Night", async (t, side) => { sides.push(side ?? "seeks"); return /design/.test(t) ? "Hiring or talent" : /invest|angel|VC/i.test(t) ? "Investors or funding" : "Something else"; }, async () => ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"].map((user_id) => ({ user_id })));
+    (pool as any).query = prev;
+    check("offers: what Cue knows each attendee can offer is labelled on the offer side, one count per person", backed.offerKnown === 10 && backed.offerPool === 10 && backed.offerThemes?.["Hiring or talent"] === 10 && sides.includes("offers"));
+    check("offers: the room is then thin on investors (asked for, nobody offered), and no offer text leaves the data step", /thin on: investors or funding/.test(R.renderText(backed)) && !JSON.stringify(backed).includes("design"));
+  }
   const smallStats = await R.gatherStats("ev9", "Founders Night", async () => "Investors or funding", async () => [{ user_id: "a" }]);
   check("with fewer than eight asks the data step does not even label them", smallStats.askCount === 1 && Object.keys(smallStats.themes).length === 0);
   check("arrivals are counted only among the members of this event", Array.isArray((arrivedFirst as any)?.[1]) && (arrivedFirst as any)[1].length === 10 && /user_id = ANY\(\$2::uuid\[\]\)/.test(sqls.find((q) => /FROM event_presence WHERE event_api_id/.test(q)) ?? ""));
-  check("every database read is a count or the attendee's own open ask", sqls.every((q) => /COUNT\(|SUM\(|SELECT intent FROM co_profiles/.test(q)));
+  check("every database read is a count, the attendee's own open ask, or what Cue knows they can offer", sqls.every((q) => /COUNT\(|SUM\(|SELECT user_id, intent FROM co_profiles|SELECT owner_user_id, object_label FROM co_facts WHERE owner_user_id = ANY\(\$1::uuid\[\]\) AND relation = 'offers' AND retired_at IS NULL/.test(q)));
+  check("offers are not labelled when the room's offers are too thin to back the line", stats.offerKnown === 0 && Object.keys(stats.offerThemes ?? {}).length === 0 && !labels.some((l) => /offer/.test(l)));
 } finally {
   (pool as any).query = real;
 }
