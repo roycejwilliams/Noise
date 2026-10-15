@@ -2918,6 +2918,45 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)
     .catch((err: Error) => console.error("proactive_sends_kinded index init failed:", err));
+  // Partners as configuration (services/partners.ts): who the partner is, their RSVP blurb (and who signed it off) and where
+  // their host read goes; and each of their nights with its own entry code (live once intake opens, dead for good once the
+  // night is over). No member or guest data in either table.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS partners (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        rsvp_blurb TEXT NOT NULL,
+        host_name TEXT,
+        host_email TEXT,
+        rsvp_blurb_approved_by TEXT,
+        rsvp_blurb_approved_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ended_at TIMESTAMPTZ
+      )`,
+    )
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS partner_events (
+          api_id TEXT PRIMARY KEY CHECK (api_id LIKE 'partner-%'),
+          partner_id UUID NOT NULL REFERENCES partners(id),
+          name TEXT NOT NULL,
+          start_at TIMESTAMPTZ NOT NULL,
+          end_at TIMESTAMPTZ,
+          timezone TEXT,
+          venue TEXT,
+          address TEXT,
+          code TEXT NOT NULL UNIQUE,
+          intake_opened_at TIMESTAMPTZ,
+          closed_at TIMESTAMPTZ,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS partner_events_partner ON partner_events (partner_id, start_at)`))
+    .catch((err: Error) => console.error("partners / partner_events init failed:", err));
   await concurrencyMigrations();
 }
 

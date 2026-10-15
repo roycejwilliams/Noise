@@ -25,6 +25,7 @@ import { createCoRouter } from "../../api/src/routes/co.js";
 import { createCallLlmRouter } from "../../api/src/routes/callLlm.js";
 import { reportUnfinishedTurns, sendblueRouter } from "../../api/src/routes/sendblue.js";
 import { serveInvitePage } from "../../api/src/routes/invitePage.js";
+import { servePartnerPage } from "../../api/src/routes/partnerPage.js";
 import { createLumaRouter } from "../../api/src/routes/luma.js";
 import { createEmailOptOutRouter } from "../../api/src/routes/emailOptOut.js";
 import { createGoogleRouter } from "../../api/src/routes/google.js";
@@ -99,7 +100,7 @@ async function main() {
   // (100 per 15 minutes per address), and starting a sign-in to 10. The signed-in dashboard polls every few seconds and is behind
   // its login, and webhooks (Sendblue, Twilio, ElevenLabs, Luma, Resend) and the media Twilio and Sendblue fetch (/audio,
   // /plan-file, /co.vcf) are signed or unguessable and arrive in bursts from a few provider addresses: none of those are limited.
-  app.use(["/i", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
+  app.use(["/i", "/r", "/readout", "/google", "/mo/unsubscribe", "/d"], limiter);
   app.use("/api/login/start", authLimiter);
   app.use("/api/login/confirm", authLimiter);
 
@@ -121,6 +122,9 @@ async function main() {
   // A member's invite link: mirrors production's identical route in
   // api/src/server.ts (api/src/routes/invitePage.ts).
   app.get("/i/:code", serveInvitePage);
+  // A partner night's RSVP link and door QR: mirrors production's identical route in api/src/server.ts
+  // (api/src/routes/partnerPage.ts).
+  app.get("/r/:code", servePartnerPage);
 
   // Serves generated voice-note audio (ElevenLabs) — mirrors
   // production's identical route in api/src/server.ts. Needed here since

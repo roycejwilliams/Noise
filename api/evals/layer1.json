@@ -27,6 +27,7 @@
     "evals/member/knowledge.ts",
     "evals/member/doneGoalCorrections.ts",
     "evals/presence/rules.ts",
+    "evals/partners/config.ts",
     "evals/outsideEvents/rules.ts",
     "evals/texting/rules.ts",
     "evals/shutdown/rules.ts",

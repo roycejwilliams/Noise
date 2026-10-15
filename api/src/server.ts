@@ -24,6 +24,7 @@ import { createAuthRouter } from "./routes/auth.js";
 import { createCallLlmRouter } from "./routes/callLlm.js";
 import { createCoRouter } from "./routes/co.js";
 import { serveInvitePage } from "./routes/invitePage.js";
+import { servePartnerPage } from "./routes/partnerPage.js";
 import { createLumaRouter } from "./routes/luma.js";
 import { createNotificationsRouter } from "./routes/notifications.js";
 import { createReferralsRouter } from "./routes/referrals.js";
@@ -114,6 +115,10 @@ app.get("/co.vcf", (_req, res) => {
 // A member's invite link (routes/invitePage.ts): opens a text to Co with the
 // code and a greeting filled in. Public, like /co.vcf.
 app.get("/i/:code", serveInvitePage);
+
+// A partner night's RSVP link and door QR (routes/partnerPage.ts): opens a text to Cue with that night's code filled in while
+// the code is live; a graceful line once the night is over. Public, like /i/:code.
+app.get("/r/:code", servePartnerPage);
 
 // Serve ElevenLabs-generated voice note audio files for Sendblue media messages
 // Files are stored in memory with a 10-minute TTL — long enough for Sendblue to fetch
