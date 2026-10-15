@@ -8,9 +8,11 @@ import { computeMetrics, metricLines } from "../harness/metrics.js";
 const args = process.argv.slice(2);
 const i = args.indexOf("--days");
 const days = i === -1 ? 30 : Math.max(1, Number(args[i + 1]) || 30);
-computeMetrics(days)
-  .then((m) => {
-    console.log(`Co numbers, last ${days} days\n`);
+Promise.all([computeMetrics(days), import("../harness/northStar.js").then((n) => n.computeNorthStar(days).then((v) => n.northStarLines(v)))])
+  .then(([m, north]) => {
+    console.log(`The two numbers, last ${days} days\n`);
+    for (const line of north) console.log(`- ${line}`);
+    console.log(`\nCo numbers, last ${days} days\n`);
     for (const line of metricLines(m)) console.log(`- ${line}`);
     process.exit(0);
   })
