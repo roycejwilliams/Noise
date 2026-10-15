@@ -1,5 +1,5 @@
 // Model-free checks for open threads, commitment follow-ups, the one-item
-// companion check-in, the weekly reflection, and the membership lapse
+// companion check-in, the weekly reflection, and that there is no membership lapse
 // (Royce, 2026-09-22). No model, no DB.
 //
 //   npx tsx evals/threads/rules.ts
@@ -13,7 +13,6 @@ import {
   type OwnLine,
 } from "../../src/harness/memberThreads.js";
 import { gateReflection, type WeekFacts } from "../../src/harness/memberReflection.js";
-import { nextLapseStep, lapseText, LAPSE } from "../../src/services/membershipLapse.js";
 import { TYPE_POLICY } from "../../src/harness/proactive.js";
 import { PROACTIVE_PURPOSE } from "../../src/harness/proactivePurpose.js";
 
@@ -141,32 +140,15 @@ const lines: OwnLine[] = [
   check("reflection logs its reasoning as proactive.reflection", (r.match(/decision: "proactive\.reflection"/g) ?? []).length >= 2);
 }
 
-// ------------------------------------------- membership lapse
+// ------------------------------------------- no membership lapse (Royce, 2026-10-14: "Going quiet earns less contact, never ejection")
 {
-  const d = (s: string) => new Date(s);
-  const close = d("2026-10-21T16:30:00Z");
-  const now = d("2026-09-23T16:30:00Z");
-  const step = (sent: (string | null)[], at: string) => nextLapseStep(sent.map((s) => (s ? d(s) : null)), d(at), close);
-  check("clock starts with notice 1", JSON.stringify(step([null, null, null, null], now.toISOString())) === JSON.stringify({ enqueue: { step: 1, final: false } }));
-  check("next notice waits a week after the last one actually went out", step(["2026-09-23T17:00:00Z", null, null, null], "2026-09-29T17:00:00Z") === null);
-  check("then notice 2", JSON.stringify(step(["2026-09-23T17:00:00Z", null, null, null], "2026-09-30T17:00:00Z")) === JSON.stringify({ enqueue: { step: 2, final: false } }));
-  check("the 4th is the final notice", JSON.stringify(step(["2026-09-23T17:00:00Z", "2026-09-30T17:00:00Z", "2026-10-07T17:00:00Z", null], "2026-10-14T17:00:00Z")) === JSON.stringify({ enqueue: { step: 4, final: true } }));
-  check("never archived before the final notice went out", step(["2026-09-23T17:00:00Z", "2026-09-30T17:00:00Z", "2026-10-07T17:00:00Z", null], "2026-12-01T17:00:00Z")?.hasOwnProperty("archive") !== true);
-  check("never archived within a week of the final notice", step(["2026-09-23T17:00:00Z", "2026-09-30T17:00:00Z", "2026-10-07T17:00:00Z", "2026-10-18T17:00:00Z"], "2026-10-22T17:00:00Z") === null);
-  check("archived a week after the final notice", JSON.stringify(step(["2026-09-23T17:00:00Z", "2026-09-30T17:00:00Z", "2026-10-07T17:00:00Z", "2026-10-18T17:00:00Z"], "2026-10-25T17:00:00Z")) === JSON.stringify({ archive: true }));
-  check("three weekly notices then a final one", LAPSE.nudges === 3 && LAPSE.stepGapDays === 7);
-  const t1 = lapseText("Jordan", "Wednesday, October 21", false);
-  const t4 = lapseText("Jordan", "Wednesday, October 21", true);
-  check("every notice names the close date", t1.includes("Wednesday, October 21") && t4.includes("Wednesday, October 21"));
-  check("notices have no em dash or exclamation", ![t1, t4].some((t) => /[—–!]/.test(t)));
-  const m = src("services/membershipLapse.ts");
-  check("team accounts never start the clock", /u\.lapse_exempt = false/.test(m) && /OR u\.lapse_exempt OR/.test(m));
-  check("a reply of theirs stops the clock", /> u\.lapse_started_at, false\)/.test(m));
-  check("closing archives (never deletes)", m.includes("archiveAccount(u.id)") && !/DELETE FROM users/i.test(m));
-  check("notices go through the proactive harness (hours and caps apply)", m.includes('type: "membership_lapse"') && !/sendblue/.test(m));
-  check("lapse notices are ops, weekly", PROACTIVE_PURPOSE.membership_lapse === "ops" && TYPE_POLICY.membership_lapse.typeGapDays === 6);
+  const { existsSync } = await import("fs");
+  check("there is no membership lapse job: quiet members stay members", !existsSync(new URL("../../src/services/membershipLapse.ts", import.meta.url)) && !/membershipLapse|runMembershipLapse/.test(src("jobs/index.ts")));
+  check("no lapse notice can be queued or drafted", !("membership_lapse" in TYPE_POLICY) && !("membership_lapse" in PROACTIVE_PURPOSE) && !/membership_lapse/.test(src("harness/proactiveRegistry.ts")));
+  const jobs = src("jobs/index.ts");
+  check("nothing on a schedule archives a member (archiving is a deliberate act, never a clock)", !/archiveAccount/.test(jobs));
   const mig = src("db/migrations.ts");
-  check("archive columns are in the shared migrations (production has them too)", /ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ/.test(mig) && /ADD COLUMN IF NOT EXISTS lapse_exempt BOOLEAN/.test(mig));
+  check("anyone already on the clock is taken off it, and their pending notices never go", /SET lapse_started_at = NULL, lapse_close_at = NULL/.test(mig) && /type = 'membership_lapse' AND status = 'pending'/.test(mig));
 }
 
 // ------------------------------------------- leak check: one member's threads never reach another

@@ -69,7 +69,6 @@ check("a companion text the member never answered still blocks the next one (unc
 const ACTIVITY_ONLY: Record<string, string> = {
   "mo/learn.ts": "counts replies from people Mo brought in",
   "harness/memberReflection.ts": "counts replies in the week for the reflection",
-  "services/membershipLapse.ts": "last activity, for the lapse notices",
   "harness/callGate.ts": "recency of any activity, for call timing",
   // Its content reads are held to notToTeammate by section 5; readActivityTimes returns timestamps only, any channel.
   "services/sourceFence.ts": "readActivityTimes: when they were active, timestamps only (the member-world read)",
