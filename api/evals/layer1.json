@@ -131,6 +131,7 @@
     "evals/discovery/placeOnTheWant.ts",
     "evals/inroom/noShows.ts",
     "evals/roomsim/night.ts",
+    "evals/bounce/wants.ts",
     "evals/browserPilot/rules.ts",
     "evals/docs/researchBrief.ts",
     "evals/research/quality.ts",

@@ -83,7 +83,7 @@ import * as designPure from "./designSystem.js";
 
 // ---------------------------------------------------------------- types
 
-export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place";
+export type KnownSource = "profile" | "goal" | "claim" | "snapshot" | "thread" | "kit" | "taste" | "inspo" | "design" | "designfont" | "designref" | "ask" | "avoid" | "file" | "place" | "window" | "free";
 export type KnownGroup = "where" | "work" | "after" | "said" | "mind" | "likes" | "files";
 export const GROUP_TITLES: Record<KnownGroup, string> = {
   where: "Where you are",
@@ -160,7 +160,9 @@ export type RawKnown = {
   asks: { id: string; text: string }[];
   files: { n: number; sentOn: string }[];
   // Where Co looks for each of their wants (services/wantPlace.ts): the want's own place, or none (their home city stands in).
-  places?: { key: string; want: string; place: string | null }[];
+  places?: { key: string; want: string; place: string | null; until?: string | null }[];
+  // When they said they're free (services/wantWhen.ts): stated gaps, proposed against, never held.
+  freeTimes?: { id: string; text: string; quote: string }[];
   // Their design system (member_design_signals), the way decks and pages read it: per context with signals of its own, the look
   // and the fonts in plain words; and each confirmed reference read Co took the look from.
   design?: { context: "professional" | "personal"; look: string | null; fonts: string | null }[];
@@ -255,6 +257,9 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const a of r.asks) add(`ask:${a.id}`, "ask", "after", `looking out for: ${a.text}`);
   // Where Co looks for each want (Royce, 2026-10-15: "the place shows in what Cue knows, editable and removable").
   for (const x of r.places ?? []) add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}` : `where I look for "${x.want.slice(0, 120)}": near home${p?.city ? ` (${p.city})` : ""}`);
+  // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
+  for (const x of r.places ?? []) if (x.until) add(`window:${x.key}`, "window", "where", `"${x.want.slice(0, 120)}" is for until ${x.until}`, null, false);
+  for (const f of r.freeTimes ?? []) add(`free:${f.id}`, "free", "where", `free: ${f.text}`, f.quote, false);
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   return out;
 }
@@ -530,10 +535,14 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     // Where Co looks for each want they have open: an open ask's row, or a goal's (kept only if it's still one of their goals, below).
     // A removed place is shown as "near home" (still correctable: "actually SF" lands on it). Goal rows are read wide and filtered to
     // goals still theirs before the 20 shown (livePlaces), so a dropped goal's row never crowds a live one out.
-    q(`SELECT want_key, want_text, place FROM want_places WHERE user_id = $1
+    q(`SELECT want_key, want_text, place, window_end FROM want_places WHERE user_id = $1
          AND (want_key LIKE 'goal:%' OR want_key IN (SELECT 'ask:' || id::text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL))
        ORDER BY updated_at DESC LIMIT 200`, [userId]).catch(() => [] as any[]),
   ]);
+  const freeRows = await import("./wantWhen.js").then(async (WW) => {
+    const { localDay } = await import("./memberTime.js");
+    return (await WW.freeTimesOf(userId, localDay(new Date(), zone ?? null), db as any)).map((f) => ({ id: f.id, text: WW.describeFreeTime(f), quote: f.quote }));
+  }).catch(() => [] as { id: string; text: string; quote: string }[]);
   const F = await import("./factLabels.js");
   const { wordsZone } = await import("./memberTime.js");
   const R = await import("./roomTaste.js");
@@ -559,6 +568,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     }),
     asks: asks.map((a) => ({ id: String(a.ask_id), text: String(a.ask_text ?? "") })).filter((a) => a.text.trim()),
     places: await livePlaces(places, p),
+    freeTimes: freeRows,
     files,
     ...designKnown(signals),
   };
@@ -571,7 +581,7 @@ export async function livePlaces(rows: any[], p: any): Promise<NonNullable<RawKn
   const { goalHash } = await import("./goalEdges.js");
   // Their goals as the sweeps read them (goalEdges.ts liveGoals): the profile list, active goal entries, and their long-term direction.
   const goals = new Set([...(Array.isArray(p?.goals) ? p.goals : []), ...(Array.isArray(p?.intent) ? p.intent.filter((e: any) => e?.kind === "goal" && e?.status === "active").map((e: any) => e.text) : []), p?.long_term_direction].filter((g): g is string => typeof g === "string" && !!g.trim()).map((g) => `goal:${goalHash(g)}`));
-  return rows.filter((r) => !String(r.want_key).startsWith("goal:") || goals.has(String(r.want_key))).slice(0, 20).map((r) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null }));
+  return rows.filter((r) => !String(r.want_key).startsWith("goal:") || goals.has(String(r.want_key))).slice(0, 20).map((r) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null, until: r.window_end ? (r.window_end instanceof Date ? r.window_end.toISOString().slice(0, 10) : String(r.window_end).slice(0, 10)) : null }));
 }
 
 // What the member is shown: every item, stripped of other members' details. Throws when the names to strip can't be read (fails
@@ -803,6 +813,19 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
       const was = (raw.places ?? []).find((x) => x.key === key)?.place ?? "near home";
       return { ref: item.ref, source: "place", was, now: v ? v.trim().slice(0, 40) : null };
     }
+    case "window": {
+      // The window a want was for: taken off (the want stays, with no window).
+      const key = item.ref.slice("window:".length);
+      const r = await db.query(`UPDATE want_places SET window_start = NULL, window_end = NULL, window_quote = NULL, updated_at = NOW() WHERE user_id = $1 AND want_key = $2 AND window_end IS NOT NULL`, [userId, key]);
+      if (!r.rowCount) throw new NotApplied();
+      return { ref: item.ref, source: "window", was, now: null };
+    }
+    case "free": {
+      // A free time they stated: removed (it's never proposed against again).
+      const r = await db.query(`UPDATE member_free_times SET removed_at = NOW() WHERE user_id = $1 AND id = $2 AND removed_at IS NULL`, [userId, a]);
+      if (!r.rowCount) throw new NotApplied();
+      return { ref: item.ref, source: "free", was, now: null };
+    }
     case "avoid": {
       const list = raw.profile?.avoid ?? [];
       const old = list.find((x) => hashOf(x) === a);
@@ -823,6 +846,8 @@ export function fieldFor(ref: string): string {
   if (kind === "snapshot") return a === "place" ? "where they are" : a === "work" ? "their work" : a === "wantsNow" ? "what they want now" : a === "weighingOn" ? "what's weighing on them" : "what matters to them in people";
   if (kind === "kit") return `their ${a === "linkedin" ? "LinkedIn" : a}`;
   if (kind === "place") return "where Co looks for one of their wants";
+  if (kind === "window") return "how long one of their wants is for";
+  if (kind === "free") return "when they said they're free";
   return { claim: "what they told Co", thread: "what's going on for them", taste: "their taste", inspo: "what their decks and pages take their look from", design: "the look of their decks and pages", designfont: "the fonts in their decks and pages", designref: "a look Co took from something of theirs", ask: "what Co looks out for", avoid: "what they don't want suggested" }[kind] ?? kind;
 }
 
