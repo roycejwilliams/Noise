@@ -34,7 +34,7 @@ import { looksAutomated } from "./gateGuard.js";
 
 export const GUESTS = {
   maxAnswer: 280,
-  maxName: 60,
+  maxWho: 120,
   // How often a guest can get the same kind of line that isn't an answer to a question.
   duringNightEveryHours: 3,
   lateEveryHours: 24,
@@ -48,7 +48,7 @@ export type GuestRow = {
   user_id: string;
   entered_at: Date;
   arrived_at: Date | null;
-  name: string | null;
+  who: string | null;
   work: string | null;
   hoping: string | null;
   asked_who_at: Date | null;
@@ -59,13 +59,14 @@ export type GuestRow = {
   resolution: "forgotten" | "joined" | null;
 };
 
-export type Field = "name" | "work" | "hoping";
+// who: who they are, in their own words (often just their name).
+export type Field = "who" | "work" | "hoping";
 const ASK: Record<Field, { at: "asked_who_at" | "asked_work_at" | "asked_hoping_at"; copy: CopyKey }> = {
-  name: { at: "asked_who_at", copy: "guest_ask_who" },
+  who: { at: "asked_who_at", copy: "guest_ask_who" },
   work: { at: "asked_work_at", copy: "guest_ask_work" },
   hoping: { at: "asked_hoping_at", copy: "guest_ask_hoping" },
 };
-const ORDER: Field[] = ["name", "work", "hoping"];
+const ORDER: Field[] = ["who", "work", "hoping"];
 
 // ---------------------------------------------------------------- rules (pure)
 
@@ -118,9 +119,9 @@ export function applyAnswer(g: Pick<GuestRow, Field | "asked_who_at" | "asked_wo
   for (const f of ORDER) {
     if (g[f]) continue;
     const v = proposal[f];
-    if (typeof v === "string" && v.trim() && grounded(v, text)) out[f] = clean(v, f === "name" ? GUESTS.maxName : GUESTS.maxAnswer);
+    if (typeof v === "string" && v.trim() && grounded(v, text)) out[f] = clean(v, f === "who" ? GUESTS.maxWho : GUESTS.maxAnswer);
   }
-  if (open && !out[open] && text.trim()) out[open] = clean(text, open === "name" ? GUESTS.maxName : GUESTS.maxAnswer);
+  if (open && !out[open] && text.trim()) out[open] = clean(text, open === "who" ? GUESTS.maxWho : GUESTS.maxAnswer);
   return out;
 }
 
@@ -131,11 +132,11 @@ export async function readGuestText(text: string, open: Field | null): Promise<I
   const { text: raw } = await generateText({
     model: anthropic(MODELS.haiku),
     experimental_telemetry: { isEnabled: true, functionId: "partnerGuests.intakeRead", recordInputs: false, recordOutputs: false },
-    prompt: `A guest at an event texted this${open ? ` in answer to "${open === "name" ? "who are you" : open === "work" ? "what do you do" : "who are you hoping to meet tonight"}"` : ""}:\n"${text.slice(0, 600)}"\n\nReturn JSON only: {"name": their first name or null, "work": what they do or null, "hoping": who they're hoping to meet or null}. Use only their own words, copied exactly. null for anything they didn't say.`,
+    prompt: `A guest at an event texted this${open ? ` in answer to "${open === "who" ? "who are you" : open === "work" ? "what do you do" : "who are you hoping to meet tonight"}"` : ""}:\n"${text.slice(0, 600)}"\n\nReturn JSON only: {"who": who they are (their name, or how they describe themselves) or null, "work": what they do or null, "hoping": who they're hoping to meet or null}. Use only their own words, copied exactly. null for anything they didn't say.`,
   });
   try {
     const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
-    return { name: typeof j.name === "string" ? j.name : null, work: typeof j.work === "string" ? j.work : null, hoping: typeof j.hoping === "string" ? j.hoping : null };
+    return { who: typeof j.who === "string" ? j.who : null, work: typeof j.work === "string" ? j.work : null, hoping: typeof j.hoping === "string" ? j.hoping : null };
   } catch {
     return {};
   }
@@ -143,7 +144,7 @@ export async function readGuestText(text: string, open: Field | null): Promise<I
 
 // ---------------------------------------------------------------- data
 
-const GUEST_COLS = `id, event_api_id, user_id, entered_at, arrived_at, name, work, hoping, asked_who_at, asked_work_at, asked_hoping_at, intake_done_at, resolved_at, resolution`;
+const GUEST_COLS = `id, event_api_id, user_id, entered_at, arrived_at, who, work, hoping, asked_who_at, asked_work_at, asked_hoping_at, intake_done_at, resolved_at, resolution`;
 
 export async function guestRows(userId: string): Promise<(GuestRow & { event: PartnerEvent; partner: Partner })[]> {
   const { rows } = await pool.query(`SELECT ${GUEST_COLS} FROM partner_guests WHERE user_id = $1 ORDER BY entered_at DESC`, [userId]);
@@ -183,7 +184,15 @@ export type GuestDeps = {
   log: (content: string) => Promise<void>;
   isCheckinOpen?: (e: { start_at: string; end_at?: string | null; timezone?: string | null }, now: Date) => boolean;
   isImHere?: (text: string) => boolean;
+  inviteCodeIn?: (text: string) => Promise<boolean>;
 };
+
+async function unusedInviteCodeIn(text: string): Promise<boolean> {
+  const candidates = (await import("./inviteCodes.js")).inviteCodeCandidates(text);
+  if (!candidates.length) return false;
+  const { rows } = await pool.query(`SELECT 1 FROM invite_codes WHERE code = ANY($1::text[]) AND used_by IS NULL LIMIT 1`, [candidates]);
+  return rows.length > 0;
+}
 
 export type GuestOutcome =
   | { handled: false; memberCheckin?: { eventApiId: string; eventName: string } }
@@ -207,6 +216,9 @@ export async function handlePartnerText(user: { id: string; invite_verified: boo
 
   // Never answer an automated sender (the invite gate's own rule, services/gateGuard.ts).
   if (text && looksAutomated(text)) return { handled: false };
+  // A real, unused invite code goes to the invite gate, so a guest can join the club any time, the night included. Only a code
+  // that exists: an ordinary eight-letter word ("hardware") is an answer, not a code.
+  if (!found && text && (await (deps.inviteCodeIn ?? unusedInviteCodeIn)(text))) return { handled: false };
 
   const rows = await (deps.rows ?? guestRows)(user.id);
   const say = async (key: CopyKey, vars: CopyVars, action: string): Promise<boolean> => {
@@ -238,7 +250,7 @@ export async function handlePartnerText(user: { id: string; invite_verified: boo
       await record(user.id, g.fresh ? "entered" : "reentered", "act", undefined, { eventId: found.event.api_id, atDoor });
       // Back at the door after RSVP intake: one line, then nothing to ask.
       if (!g.fresh && g.intake_done_at) {
-        if (atDoor) await say("guest_arrived", { ...vars, name: g.name ?? undefined }, "arrived");
+        if (atDoor) await say("guest_arrived", vars, "arrived");
         return { handled: true, action: "guest_arrived" };
       }
       return { handled: true, action: await continueIntake(g, found.event, found.partner, null, deps, say) };
@@ -271,7 +283,7 @@ export async function handlePartnerText(user: { id: string; invite_verified: boo
   if (text && !live.arrived_at && checkinOpen(live.event, now) && imHere(text)) {
     await pool.query(`UPDATE partner_guests SET arrived_at = $2 WHERE id = $1 AND arrived_at IS NULL`, [live.id, now]);
     if (live.intake_done_at) {
-      await say("guest_arrived", { event: live.event.name, partner: live.partner.name, name: live.name ?? undefined }, "arrived");
+      await say("guest_arrived", { event: live.event.name, partner: live.partner.name }, "arrived");
       return { handled: true, action: "guest_arrived" };
     }
   }
@@ -298,15 +310,15 @@ async function continueIntake(
     if (keys.length) {
       // Only ever fills a field still empty, so a second text can't overwrite what they already said.
       const { rows } = await pool.query(
-        `UPDATE partner_guests SET name = COALESCE(name, $2), work = COALESCE(work, $3), hoping = COALESCE(hoping, $4) WHERE id = $1 AND resolved_at IS NULL RETURNING ${GUEST_COLS}`,
-        [g.id, fill.name ?? null, fill.work ?? null, fill.hoping ?? null],
+        `UPDATE partner_guests SET who = COALESCE(who, $2), work = COALESCE(work, $3), hoping = COALESCE(hoping, $4) WHERE id = $1 AND resolved_at IS NULL RETURNING ${GUEST_COLS}`,
+        [g.id, fill.who ?? null, fill.work ?? null, fill.hoping ?? null],
       );
       if (rows[0]) row = rows[0];
     }
   }
   if (row.intake_done_at) {
     if ((await linesSince(row.user_id, "during_night", GUESTS.duringNightEveryHours)) > 0) return "during_night_quiet";
-    await say("guest_during_night", { ...vars, name: row.name ?? undefined }, "during_night");
+    await say("guest_during_night", vars, "during_night");
     return "during_night";
   }
   // Still waiting on their answer to the last question (they sent a photo, say): nothing new is asked over it.
@@ -314,13 +326,13 @@ async function continueIntake(
   const next = nextQuestion(row);
   if (next) {
     // Counted as asked only once it went out: a question whose copy is pending is asked when the copy lands.
-    if (await say(ASK[next].copy, { ...vars, name: row.name ?? undefined }, `ask_${next}`)) {
+    if (await say(ASK[next].copy, vars, `ask_${next}`)) {
       await pool.query(`UPDATE partner_guests SET ${ASK[next].at} = NOW() WHERE id = $1 AND ${ASK[next].at} IS NULL`, [row.id]);
     }
     return `ask_${next}`;
   }
   // Everything asked once and answered: done, said once.
-  if (await say("guest_intake_done", { ...vars, name: row.name ?? undefined }, "intake_done")) {
+  if (await say("guest_intake_done", vars, "intake_done")) {
     await pool.query(`UPDATE partner_guests SET intake_done_at = NOW() WHERE id = $1 AND intake_done_at IS NULL`, [row.id]);
   }
   return "intake_done";
@@ -400,7 +412,7 @@ export async function resolveGuests(eventId: string, now = new Date()): Promise<
     try {
       await client.query("BEGIN");
       const done = await client.query(
-        `UPDATE partner_guests SET resolved_at = $2, resolution = 'forgotten', name = NULL, work = NULL, hoping = NULL WHERE id = $1 AND resolved_at IS NULL RETURNING id`,
+        `UPDATE partner_guests SET resolved_at = $2, resolution = 'forgotten', who = NULL, work = NULL, hoping = NULL WHERE id = $1 AND resolved_at IS NULL RETURNING id`,
         [r.id, now],
       );
       if (done.rows.length) {

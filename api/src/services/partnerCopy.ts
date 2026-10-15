@@ -6,8 +6,7 @@
 // The PR that adds a line lists it under "Copy" with where and when it's seen.
 //
 // Placeholders a line may use, filled by code: {agent} (the name guests text), {event} (the night's name), {partner} (the
-// partner's name), {code} (the night's entry code), {next} (the partner's next live night), {link} (that next night's page),
-// {name} (the name the guest gave, in their own words). A line that names one the caller can't fill is not shown either.
+// partner's name), {code} (the night's entry code), {next} (the partner's next live night), {link} (that next night's page). A line that names one the caller can't fill is not shown either.
 export const PENDING = "PENDING_ROYCE_COPY";
 
 export const PARTNER_COPY = {
@@ -44,11 +43,11 @@ export const PARTNER_COPY = {
   guest_ask_who: PENDING,
   // What they do. Seen: after they answer the question before, unless they already said.
   guest_ask_work: PENDING,
-  // Who they're hoping to meet. Seen: after the question before, unless they already said. May use {name}.
+  // Who they're hoping to meet. Seen: after the question before, unless they already said.
   guest_ask_hoping: PENDING,
-  // Intake finished: what happens now. Seen: once, after the last answer. May use {name}, {event}.
+  // Intake finished: what happens now. Seen: once, after the last answer. May use {event}.
   guest_intake_done: PENDING,
-  // A guest who did intake from the RSVP link scans the door QR on the night. Seen: once, at that scan. May use {name}.
+  // A guest who did intake from the RSVP link scans the door QR (or texts "I'm here") on the night. Seen: once, at arrival.
   guest_arrived: PENDING,
   // A guest texts during the night after intake is done (Cue doesn't work for guests beyond the night's intros). Seen: at most
   // once every 3 hours.
@@ -66,14 +65,14 @@ export const PARTNER_COPY = {
 } as const satisfies Record<string, string>;
 
 export type CopyKey = keyof typeof PARTNER_COPY;
-export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next" | "link" | "name", string>>;
+export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next" | "link", string>>;
 
 // The line, filled in; null while it's pending, or when it names a placeholder the caller didn't fill. table is for the checks.
 export function copyFor(key: CopyKey, vars: CopyVars = {}, table: Record<CopyKey, string> = PARTNER_COPY): string | null {
   const line = table[key];
   if (!line || line.includes(PENDING)) return null;
   let missing = false;
-  const out = line.replace(/\{(agent|event|partner|code|next|link|name)\}/g, (_m, k: keyof CopyVars) => {
+  const out = line.replace(/\{(agent|event|partner|code|next|link)\}/g, (_m, k: keyof CopyVars) => {
     const v = vars[k]?.trim();
     if (!v) missing = true;
     return v ?? "";

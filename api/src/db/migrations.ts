@@ -2980,7 +2980,7 @@ export async function runMigrations(): Promise<void> {
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         entered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         arrived_at TIMESTAMPTZ,
-        name TEXT,
+        who TEXT,
         work TEXT,
         hoping TEXT,
         asked_who_at TIMESTAMPTZ,
