@@ -31,6 +31,8 @@ export const wantKeyForGoal = (goalHash: string) => `goal:${goalHash}`;
 // The line the first find from a place they didn't name carries (COPY: Royce approves the exact words in the PR).
 export const PLACE_NOTE = (place: string) => `These come from ${place} unless you tell me otherwise.`;
 
+// Words for a kind of thing that can follow a place without making it part of a name ("SF Tech Week", "NYC AI founders").
+const KIND_WORDS = new Set(["ai", "tech", "founder", "founders", "startup", "startups", "builder", "builders", "week", "events", "event", "meetup", "meetups", "dinner", "dinners", "community", "communities", "crypto", "web3", "design", "product", "vc", "vcs", "investor", "investors", "climate", "fintech", "health", "art", "arts", "music", "food", "run", "running", "networking", "social", "women", "creators", "creator"]);
 const squash = (s: string) => s.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ").trim();
 
 // Pure: the place a read proposed, kept only when it's backed. quote must be copied from one of the sources (the want's own text, or one
@@ -45,7 +47,11 @@ export function backedPlace(place: unknown, quote: unknown, sources: string[]): 
   const m = new RegExp(`(^|[^A-Za-z0-9])(${esc})(?=$|[^A-Za-z0-9])`, "i").exec(q);
   if (!m) return null;
   // Part of a longer name ("South Park Commons", "Berkeley Rep") isn't the place: a wrong place is worse than none (Royce, 2026-10-15).
-  if (/^\s+[A-Z]/.test(q.slice(m.index + m[0].length))) return null;
+  // A kind of thing after it is still the place ("SF Tech Week", "SF AI founder events"): only a word that isn't one makes it a name.
+  const next = q.slice(m.index + m[0].length).match(/^\s+([A-Z][\w'&.-]*)/)?.[1];
+  if (next && !KIND_WORDS.has(next.toLowerCase())) return null;
+  // Said as where it isn't ("anywhere but SF", "not in SF", "outside SF"): no place.
+  if (/\b(not|but|outside|except|other than|away from|besides|instead of|leaving|left)\s+(in\s+|to\s+|from\s+)?$/i.test(q.slice(0, m.index + m[1].length))) return null;
   return { place: p, quote: q };
 }
 
@@ -108,8 +114,13 @@ export async function placeFor(userId: string, w: Want, deps: PlaceDeps = realPl
 
 // What the first find from a place they didn't name carries, once: their place for this want, when it came from what they told Co
 // (not the want's own words, not a correction they made) and wasn't said yet.
-export function noteDue(p: Pick<WantPlace, "place" | "source" | "notedAt"> | null | undefined): string | null {
-  return p && p.place && p.source === "told" && !p.notedAt ? PLACE_NOTE(p.place) : null;
+// Their home city by any spelling ("Sacramento" and "Sacramento, CA") is home.
+export const samePlace = (a: string | null | undefined, b: string | null | undefined) => {
+  const k = (x: string | null | undefined) => String(x ?? "").split(",")[0].trim().toLowerCase();
+  return !!k(a) && k(a) === k(b);
+};
+export function noteDue(p: Pick<WantPlace, "place" | "source" | "notedAt"> | null | undefined, home?: string | null): string | null {
+  return p && p.place && p.source === "told" && !p.notedAt && !samePlace(p.place, home) ? PLACE_NOTE(p.place) : null;
 }
 
 export async function markNoted(userId: string, key: string): Promise<void> {
@@ -135,11 +146,10 @@ export async function placesOf(userId: string, keys: string[], db: { query: (sql
 // on its own, there). No place, or the home city by name, is home.
 export function splitByPlace<T>(items: { key: string; item: T }[], places: { key: string; place: string | null }[], home: string | null): { home: { key: string; item: T }[]; own: { key: string; item: T; place: string }[] } {
   const by = new Map(places.map((p) => [p.key, p.place]));
-  const h = (home ?? "").trim().toLowerCase();
   const out = { home: [] as { key: string; item: T }[], own: [] as { key: string; item: T; place: string }[] };
   for (const it of items) {
     const p = by.get(it.key) ?? null;
-    if (p && p.trim().toLowerCase() !== h) out.own.push({ ...it, place: p });
+    if (p && !samePlace(p, home)) out.own.push({ ...it, place: p });
     else out.home.push(it);
   }
   return out;
@@ -167,8 +177,9 @@ export const realPlaceDeps: PlaceDeps = {
        ORDER BY created_at DESC LIMIT 200`,
       [userId, PLACE_LIMITS.toldDays],
     );
+    // Only their words: the notes Co adds to their line (what a photo shows, a link it read) are cut first.
     return rows
-      .map((r: any) => String(r.content).replace(/^User said:\s*/, ""))
+      .map((r: any) => String(r.content).replace(/^User said:\s*/, "").replace(/\s*\[[^\]]*\]/g, "").trim())
       .filter((t) => /\s[A-Z][a-zA-Z]+/.test(t))
       .slice(0, PLACE_LIMITS.toldLines);
   },

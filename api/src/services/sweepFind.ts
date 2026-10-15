@@ -214,8 +214,11 @@ export function shownDate(date: string | undefined | null, text: string, today: 
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
   if (today && `${m[1]}-${mm}-${dd}` < today) return null;
   const t = text.toLowerCase();
+  // A year it names next to the day has to be this one ("Oct 17, 2025" isn't 2026-10-17).
+  if (new RegExp(`\\b\\d{1,2}(st|nd|rd|th)?,?\\s+(?!${m[1]}\\b)(19|20)\\d{2}\\b`).test(t) && !new RegExp(`\\b${m[1]}\\b`).test(t)) return null;
   const name = MONTHS[month - 1];
-  const named = new RegExp(`\\b(${name}|${name.slice(0, 3)})\\.?\\s+${day}(st|nd|rd|th)?\\b|\\b${day}(st|nd|rd|th)?\\s+(of\\s+)?(${name}|${name.slice(0, 3)})\\b`);
+  const abbr = name === "september" ? "sept?" : name.slice(0, 3);
+  const named = new RegExp(`\\b(${name}|${abbr})\\.?\\s+${day}(st|nd|rd|th)?\\b|\\b${day}(st|nd|rd|th)?\\s+(of\\s+)?(${name}|${abbr})\\b`);
   const numeric = new RegExp(`\\b0?${month}/0?${day}\\b|\\b${m[1]}-${mm}-${dd}\\b`);
   return named.test(t) || numeric.test(t) ? `${m[1]}-${mm}-${dd}` : null;
 }
@@ -302,7 +305,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
         // A query that's only too tight runs loosened, once, and the loosening is logged (sweepQuery.ts checkOrLoosen).
         const loosenedFrom = new Map<string, string>();
         const good = asks.flatMap((q) => {
-          const r = ledger.checkOrLoosen("web", q);
+          const r = ledger.checkOrLoosen("web", q, [c.city ?? ""]);
           if (r.bad.length) {
             refusals.push(ledger.refusal(q, r.bad));
             return [];

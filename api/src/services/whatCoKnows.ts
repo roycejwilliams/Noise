@@ -528,9 +528,11 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     // Their design system's signals, as decks and pages read them (designSystem.ts loadSignals: the same owner key and limit).
     q(`SELECT id, context, source, vals, quote, ref, confirmed, created_at, font_notes FROM member_design_signals WHERE owner_user_id = $1 ORDER BY created_at DESC LIMIT 80`, [userId]),
     // Where Co looks for each want they have open: an open ask's row, or a goal's (kept only if it's still one of their goals, below).
-    q(`SELECT want_key, want_text, place FROM want_places WHERE user_id = $1 AND source <> 'removed'
+    // A removed place is shown as "near home" (still correctable: "actually SF" lands on it). Goal rows are read wide and filtered to
+    // goals still theirs before the 20 shown (livePlaces), so a dropped goal's row never crowds a live one out.
+    q(`SELECT want_key, want_text, place FROM want_places WHERE user_id = $1
          AND (want_key LIKE 'goal:%' OR want_key IN (SELECT 'ask:' || id::text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL))
-       ORDER BY updated_at DESC LIMIT 20`, [userId]).catch(() => [] as any[]),
+       ORDER BY updated_at DESC LIMIT 200`, [userId]).catch(() => [] as any[]),
   ]);
   const F = await import("./factLabels.js");
   const { wordsZone } = await import("./memberTime.js");
@@ -564,11 +566,12 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
 
 // The places of goals still theirs (a goal's place row outlives a goal they dropped; it's left out), and of their open asks (the read
 // already keeps only those).
-async function livePlaces(rows: any[], p: any): Promise<NonNullable<RawKnown["places"]>> {
+export async function livePlaces(rows: any[], p: any): Promise<NonNullable<RawKnown["places"]>> {
   if (!rows.length) return [];
   const { goalHash } = await import("./goalEdges.js");
-  const goals = new Set([...(Array.isArray(p?.goals) ? p.goals : []), ...(Array.isArray(p?.intent) ? p.intent.filter((e: any) => e?.kind === "goal" && e?.status === "active").map((e: any) => e.text) : [])].filter((g): g is string => typeof g === "string").map((g) => `goal:${goalHash(g)}`));
-  return rows.filter((r) => !String(r.want_key).startsWith("goal:") || goals.has(String(r.want_key))).map((r) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null }));
+  // Their goals as the sweeps read them (goalEdges.ts liveGoals): the profile list, active goal entries, and their long-term direction.
+  const goals = new Set([...(Array.isArray(p?.goals) ? p.goals : []), ...(Array.isArray(p?.intent) ? p.intent.filter((e: any) => e?.kind === "goal" && e?.status === "active").map((e: any) => e.text) : []), p?.long_term_direction].filter((g): g is string => typeof g === "string" && !!g.trim()).map((g) => `goal:${goalHash(g)}`));
+  return rows.filter((r) => !String(r.want_key).startsWith("goal:") || goals.has(String(r.want_key))).slice(0, 20).map((r) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null }));
 }
 
 // What the member is shown: every item, stripped of other members' details. Throws when the names to strip can't be read (fails

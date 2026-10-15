@@ -160,7 +160,7 @@ check("the line goes for a place they didn't name in the want, once", W.noteDue(
 check("no line when the want said where, when they corrected it, or when it's their home city", W.noteDue({ place: "SF", source: "their_words", notedAt: null }) === null && W.noteDue({ place: "Oakland", source: "corrected", notedAt: null }) === null && W.noteDue({ place: null, source: "none", notedAt: null }) === null);
 {
   const pr = src("harness/proactive.ts");
-  check("the line rides the bundle right before its closing question, and is marked said only once delivered", /const at = composed\.messages\.length - \(composed\.closing \? 1 : 0\);/.test(pr) && /placeNote && result\.delivered\.includes\(placeNote\.line\)/.test(pr) && /W\.markNoted\(userId, placeNote!\.key\)/.test(pr));
+  check("the line rides the bundle beside its find (before the closing question if its caption can't be found), and is marked said only once delivered", /const at = i >= 0 \? i \+ 1 : composed\.messages\.length - \(composed\.closing \? 1 : 0\);/.test(pr) && /placeNote && result\.delivered\.includes\(placeNote\.line\)/.test(pr) && /W\.markNoted\(userId, placeNote!\.key\)/.test(pr));
 }
 
 // ---------------------------------------------------------------- 5. visible, correctable, removable
@@ -221,6 +221,35 @@ check("no line when the want said where, when they corrected it, or when it's th
   check("a date its text doesn't show is no date (never trusted from the model alone)", SF.shownDate("2026-10-18", t, "2026-10-15") === null && SF.shownDate("2026-11-17", t, "2026-10-15") === null);
   check("a past date, or a malformed one, is no date", SF.shownDate("2026-10-17", t, "2026-10-20") === null && SF.shownDate("Oct 17", t, "2026-10-15") === null);
   check("wiring: keep stores it as the find's stated date, only for a web or X find without one", /m\.tier === 3 && !\(m as any\)\.statedDates\?\.start \? shownDate\(/.test(src("services/sweepFind.ts")));
+}
+
+// ---------------------------------------------------------------- 9. the independent review's fixes (2026-10-15)
+{
+  check("a kind of thing after the place keeps it ('SF Tech Week', 'SF AI founder events')", W.backedPlace("SF", "SF Tech Week", ["going to SF Tech Week"])?.place === "SF" && W.backedPlace("SF", "SF AI founder events", ["SF AI founder events in November"])?.place === "SF");
+  check("... a name still isn't a place ('South Park Commons', 'Berkeley Rep')", W.backedPlace("South Park", "South Park Commons", ["South Park Commons"]) === null && W.backedPlace("Berkeley", "Berkeley Rep", ["a play at Berkeley Rep"]) === null);
+  check("a place said as where it isn't is no place ('anywhere but SF', 'not in SF', 'outside SF')", W.backedPlace("SF", "anywhere but SF", ["dinners anywhere but SF"]) === null && W.backedPlace("SF", "not in SF", ["meetups, not in SF"]) === null && W.backedPlace("SF", "outside SF", ["something outside SF"]) === null);
+  check("no note when the place they told Co is their home city, by any spelling", W.noteDue({ place: "Sacramento", source: "told", notedAt: null }, "Sacramento, CA") === null && W.samePlace("Sacramento", "sacramento, ca") && !W.samePlace("SF", "Sacramento"));
+  const split = W.splitByPlace([{ key: "g", item: 1 }], [{ key: "g", place: "Sacramento" }], "Sacramento, CA");
+  check("a goal placed in their home city (any spelling) rides the shared search, not a second one", split.own.length === 0 && split.home.length === 1);
+  const K = await import("../../src/services/whatCoKnows.js");
+  const { goalHash } = await import("../../src/services/goalEdges.js");
+  const dir = "Build a founder community in NYC";
+  const live = await K.livePlaces([{ want_key: `goal:${goalHash(dir)}`, want_text: dir, place: "NYC" }, { want_key: `goal:${goalHash("an old dropped goal")}`, want_text: "an old dropped goal", place: "LA" }], { goals: [], intent: [], long_term_direction: dir });
+  check("a long-term direction's place is shown (it's searched as a goal), a dropped goal's isn't", live.length === 1 && live[0].place === "NYC", live);
+  const many = await K.livePlaces([...Array.from({ length: 30 }, (_, i) => ({ want_key: `goal:${goalHash(`dropped ${i}`)}`, want_text: `dropped ${i}`, place: "LA" })), { want_key: `goal:${goalHash(dir)}`, want_text: dir, place: "NYC" }], { goals: [], intent: [], long_term_direction: dir });
+  check("dropped goals' rows never crowd a live one out (filtered before the limit)", many.length === 1 && many[0].place === "NYC");
+  const wk = src("services/whatCoKnows.ts");
+  check("a removed place is still shown (as near home) so 'actually SF' can land on it", !/source <> 'removed'/.test(wk) && /near home/.test(wk));
+  const E = await import("../../src/services/eventSurfacingSweep.js");
+  const promise = await E.searchPlace({ askId: "promise:send-the-plan", userId: "u", askText: "send the plan", city: "Sacramento" }, deps({ reply: '{"place":"SF","quote":"x"}' }).d);
+  check("a promise Co made on a call isn't a want of theirs: no place is read or stored for it", promise.city === "Sacramento" && promise.searchedIn.key === null);
+  check("a date that names another year is no date ('Oct 17, 2025')", SF.shownDate("2026-10-17", "Oct 17, 2025 at the pier", "2026-10-15") === null && SF.shownDate("2026-10-17", "Oct 17, 2026 at the pier", "2026-10-15") === "2026-10-17");
+  check("'Sept 30' reads as September 30", SF.shownDate("2026-09-30", "Sept 30, demo night", "2026-09-01") === "2026-09-30");
+  check("loosening keeps an exclusion and the city it's searched in", Q.loosenQuery("AI founder dinners networking pitch Seattle -crypto", 4, ["Seattle"]) === "AI founder dinners networking Seattle -crypto", Q.loosenQuery("AI founder dinners networking pitch Seattle -crypto", 4, ["Seattle"]));
+  const SH = await import("../../src/services/sweepShadow.js");
+  check("the picker is told a find was searched where its want is (not their far-off home)", /searched in SF, where this want of theirs is/.test(SH.describeMatch({ name: "x", searchedIn: { key: "goal:a", place: "SF", source: "their_words" } }) ?? "") && !/searched in/.test(SH.describeMatch({ name: "x", searchedIn: { key: null, place: "Sacramento", source: "home" } }) ?? ""));
+  check("the note sits right after its own find's caption", /const i = after \? composed\.messages\.lastIndexOf\(after\) : -1;/.test(src("harness/proactive.ts")) && /W\.noteDue\(row, person\.city \?\? null\)/.test(src("harness/proactive.ts")));
+  check("what they told Co is read without Co's own notes on their line", /replace\(\/\\s\*\\\[\[\^\\\]\]\*\\\]\/g, ""\)/.test(src("services/wantPlace.ts")));
 }
 
 console.log(`place on the want: ${total - failed}/${total} passed`);

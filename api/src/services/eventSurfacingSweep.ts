@@ -51,7 +51,8 @@ export type SurfacingCandidate = {
 export async function searchPlace(candidate: Pick<SurfacingCandidate, "askId" | "userId" | "askText" | "city" | "want">, deps?: import("./wantPlace.js").PlaceDeps): Promise<{ city: string | null; searchedIn: SearchedIn }> {
   const W = await import("./wantPlace.js");
   let want = candidate.want ?? null;
-  if (!want && candidate.askId && candidate.askId !== PROFILE_ASK_ID) {
+  // A promise Co made on a call (askId "promise:...") is Co's own words, not a want of theirs: it searches their home city.
+  if (!want && candidate.askId && candidate.askId !== PROFILE_ASK_ID && !candidate.askId.startsWith("promise:")) {
     const { rows } = await pool.query(`SELECT created_at FROM ask_checkins WHERE id::text = $1`, [candidate.askId]).catch(() => ({ rows: [] as any[] }));
     want = { key: W.wantKeyForAsk(candidate.askId), text: candidate.askText, createdAt: rows[0]?.created_at ? new Date(rows[0].created_at) : null };
   }
