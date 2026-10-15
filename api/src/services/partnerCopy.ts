@@ -6,8 +6,8 @@
 // The PR that adds a line lists it under "Copy" with where and when it's seen.
 //
 // Placeholders a line may use, filled by code: {agent} (the name guests text), {event} (the night's name), {partner} (the
-// partner's name), {code} (the night's entry code), {next} (the partner's next live night). A line that names one the caller
-// can't fill is not shown either.
+// partner's name), {code} (the night's entry code), {next} (the partner's next live night), {link} (that next night's page),
+// {name} (the name the guest gave, in their own words). A line that names one the caller can't fill is not shown either.
 export const PENDING = "PENDING_ROYCE_COPY";
 
 export const PARTNER_COPY = {
@@ -37,17 +37,43 @@ export const PARTNER_COPY = {
   page_over: PENDING,
   // A link whose code doesn't exist. Seen: a mistyped or made-up /r/ link.
   page_invalid: PENDING,
+
+  // ---- texts to a guest (services/partnerGuests.ts). Only ever a reply to a text the guest just sent: Cue never texts a guest
+  // first. Each question is asked at most once, and only while the night's code is live or the night is on.
+  // The first question, right after their first text (the one that carried the code). Seen: the guest's first reply from Cue.
+  guest_ask_who: PENDING,
+  // What they do. Seen: after they answer the question before, unless they already said.
+  guest_ask_work: PENDING,
+  // Who they're hoping to meet. Seen: after the question before, unless they already said. May use {name}.
+  guest_ask_hoping: PENDING,
+  // Intake finished: what happens now. Seen: once, after the last answer. May use {name}, {event}.
+  guest_intake_done: PENDING,
+  // A guest who did intake from the RSVP link scans the door QR on the night. Seen: once, at that scan. May use {name}.
+  guest_arrived: PENDING,
+  // A guest texts during the night after intake is done (Cue doesn't work for guests beyond the night's intros). Seen: at most
+  // once every 3 hours.
+  guest_during_night: PENDING,
+  // A code for a night whose intake isn't open yet. Seen: at most once a day.
+  guest_not_open: PENDING,
+  // A late scan by text: a code for a night that's over (Royce: "that event's over, here's the door to the club or the
+  // partner's next event"). With {next} and {link} when the partner has a next live night. Seen: at most once a day.
+  guest_late_next: PENDING,
+  // The same, with no next live night. Seen: at most once a day.
+  guest_late: PENDING,
+  // After the cutoff: a former guest texts. Warm, and Cue doesn't work for them (Royce: "that was the event version. The full
+  // thing is the club, and the door's here"). Seen: at most once a day.
+  guest_after_cutoff: PENDING,
 } as const satisfies Record<string, string>;
 
 export type CopyKey = keyof typeof PARTNER_COPY;
-export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next", string>>;
+export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next" | "link" | "name", string>>;
 
 // The line, filled in; null while it's pending, or when it names a placeholder the caller didn't fill. table is for the checks.
 export function copyFor(key: CopyKey, vars: CopyVars = {}, table: Record<CopyKey, string> = PARTNER_COPY): string | null {
   const line = table[key];
   if (!line || line.includes(PENDING)) return null;
   let missing = false;
-  const out = line.replace(/\{(agent|event|partner|code|next)\}/g, (_m, k: keyof CopyVars) => {
+  const out = line.replace(/\{(agent|event|partner|code|next|link|name)\}/g, (_m, k: keyof CopyVars) => {
     const v = vars[k]?.trim();
     if (!v) missing = true;
     return v ?? "";

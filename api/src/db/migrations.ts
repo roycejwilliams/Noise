@@ -2969,6 +2969,32 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("event_door_codes init failed:", err));
+  // A partner night's guests (services/partnerGuests.ts): who texted that night's code, what they said in intake (their own
+  // words, wiped when the night closes unless they joined), and how they resolved. Scoped to the night; never read into a
+  // member's profile or conversation.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS partner_guests (
+        id BIGSERIAL PRIMARY KEY,
+        event_api_id TEXT NOT NULL REFERENCES partner_events(api_id),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        entered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        arrived_at TIMESTAMPTZ,
+        name TEXT,
+        work TEXT,
+        hoping TEXT,
+        asked_who_at TIMESTAMPTZ,
+        asked_work_at TIMESTAMPTZ,
+        asked_hoping_at TIMESTAMPTZ,
+        intake_done_at TIMESTAMPTZ,
+        resolved_at TIMESTAMPTZ,
+        resolution TEXT CHECK (resolution IN ('forgotten', 'joined')),
+        UNIQUE (event_api_id, user_id)
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS partner_guests_user ON partner_guests (user_id)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS partner_guests_open ON partner_guests (event_api_id) WHERE resolved_at IS NULL`))
+    .catch((err: Error) => console.error("partner_guests init failed:", err));
   await concurrencyMigrations();
 }
 

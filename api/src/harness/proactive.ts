@@ -1692,6 +1692,8 @@ async function sendWithLedger(
       const sentToday = await findsSentToday(person.userId, person.timezone, now, client).catch(() => DAILY_FIND_CAP);
       checks.push({ name: "daily_find_cap", pass: sentToday + discovery <= DAILY_FIND_CAP, reason: `${sentToday} discovery find(s) went today; this send has ${discovery}; the day's cap is ${DAILY_FIND_CAP}` });
     }
+    // A partner guest after the cutoff is never texted first (services/partnerGuests.ts), read inside the lock.
+    checks.push(await (await import("../services/partnerGuests.js")).proactiveCutoff(person.userId, now, client));
     const g = gate(checks);
     if (!g.ok) {
       await client.query("ROLLBACK");
@@ -1836,6 +1838,13 @@ export async function sendExempt(opts: {
       await record("skip", "blocked_opted_out", "opted out");
       return { sent: false, reason: "opted out" };
     }
+    // A partner guest after the cutoff: no proactive contact, ever (services/partnerGuests.ts).
+    const cutoff = await (await import("../services/partnerGuests.js")).proactiveCutoff(opts.userId, opts.now ?? new Date(), client);
+    if (!cutoff.pass) {
+      await client.query("ROLLBACK");
+      await record("skip", "blocked_guest_cutoff", cutoff.reason);
+      return { sent: false, reason: cutoff.reason ?? "a partner guest after the cutoff" };
+    }
     if (opts.coInitiated) {
       const now = opts.now ?? new Date();
       const { failed, sends } = await coInitiatedHold(client, { userId: opts.userId, timezone: opts.timezone ?? null, now, kind: opts.coInitiated.kind });
@@ -1965,6 +1974,8 @@ export async function inRoomSendAllowed(userId: string, eventId: string): Promis
   if (proactivePaused()) return false;
   // The matching kill switch, global or this event (services/roomMatching.ts), read fresh.
   if (await (await import("../services/roomMatching.js")).matchingPause(eventId)) return false;
+  // A partner guest after the cutoff is never texted first (services/partnerGuests.ts).
+  if (!(await (await import("../services/partnerGuests.js")).proactiveCutoff(userId)).pass) return false;
   // Counted per event, exactly: a prefix match let three texts at evt-1234 use up the limit at evt-12.
   const { rows } = await pool.query(`SELECT target_key FROM proactive_sends WHERE user_id = $1 AND type = 'in_room' AND target_key LIKE 'in_room:%'`, [userId]);
   return rows.filter((r: any) => inRoomKeyEvent(String(r.target_key)) === eventId).length < MAX_IN_ROOM_SENDS_PER_EVENT;

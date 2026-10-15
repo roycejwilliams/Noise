@@ -53,6 +53,7 @@ import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import { coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
 import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
+import { handlePartnerText } from "../services/partnerGuests.js";
 import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
@@ -803,6 +804,25 @@ export function sendblueRouter(io: Server): Router {
           }
           // A member saying they've arrived is Co's call now
           // (conversationTools.ts markArrived, 2026-09-25).
+        }
+
+        // Partner rooms (services/partnerGuests.ts): a live partner night's code, or a guest's texts while their night is on, or
+        // a former guest after the cutoff. Before the invite gate, because a guest isn't asked for a code: the night's code
+        // was their way in. A member with a live night's code at the door gets the walk-in check-in members already have.
+        if (hasText || !user.invite_verified) {
+          const partner = await handlePartnerText({ id: user.id, invite_verified: !!user.invite_verified }, hasText ? content : null, {
+            send: (line) => sendAndLog(user.id, number, line),
+            log: (line) => logTextExchange(user.id, line),
+          }).catch((err: any) => {
+            console.error("sendblue: partner guest text failed (non-fatal, normal flow):", err?.message ?? err);
+            return { handled: false as const };
+          });
+          if (partner.handled) return res.status(200).send({ received: true, action: `partner_${partner.action}` });
+          if ("memberCheckin" in partner && partner.memberCheckin && !walkinCheckinEventName) {
+            await recordCheckin(partner.memberCheckin.eventApiId, user.id).catch((err: any) => console.error("sendblue: partner recordCheckin failed (non-fatal):", err?.message ?? err));
+            await (await import("../services/eventPresence.js")).markArrived(partner.memberCheckin.eventApiId, user.id, "text").catch(() => false);
+            walkinCheckinEventName = partner.memberCheckin.eventName;
+          }
         }
 
         // Step 1.1 — Invite code gate for a brand-new contact. Co is
