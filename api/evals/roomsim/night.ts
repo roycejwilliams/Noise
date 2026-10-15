@@ -26,17 +26,22 @@ import { W, reset, addMember, addEvent, ask, check, finding, results, latency, m
 const uniq = (text: string, i: number) => `${text} (ref ${i})`;
 
 // The clock is pinned to 18:00 UTC (as evals/inroom/flow.ts): members with no zone may be texted 16:00-24:00 UTC.
+// advance(ms) moves the pinned clock forward (the end of the night runs later than the arrivals).
+const clock = { offset: 0 };
+const advance = (ms: number) => {
+  clock.offset += ms;
+};
 {
   const RealDate = Date;
   const pinned = new RealDate();
   pinned.setUTCHours(18, 0, 0, 0);
-  const offset = pinned.getTime() - RealDate.now();
+  clock.offset = pinned.getTime() - RealDate.now();
   class PinnedDate extends RealDate {
     constructor(...a: any[]) {
-      super(...((a.length ? a : [RealDate.now() + offset]) as [any]));
+      super(...((a.length ? a : [RealDate.now() + clock.offset]) as [any]));
     }
     static now() {
-      return RealDate.now() + offset;
+      return RealDate.now() + clock.offset;
     }
   }
   (globalThis as any).Date = PinnedDate;
@@ -45,6 +50,8 @@ const uniq = (text: string, i: number) => `${text} (ref ${i})`;
 const S = await import("../../src/services/eventScoring.js");
 const H = await import("../../src/services/eventGuestMatchHandoff.js");
 const WK = await import("../../src/services/eventWalkinCheckin.js");
+const U = await import("../../src/services/eventUnmatchedFollowUp.js");
+const RM = await import("../../src/services/roomMatching.js");
 
 // ---------------------------------------------------------------- deterministic randomness
 function rng(seed: number): () => number {
@@ -187,6 +194,19 @@ type Card = {
   stoppers: number;
   walkIns: number;
   walkInsProposed: number;
+  closeSent: number;
+  closeOwed: number;
+  closeDuplicates: number;
+  closeToStopped: number;
+  closeToNoShow: number;
+  closeMatchTalk: number;
+  roomClosed: boolean;
+  openAfterClose: number;
+  pairsWaitingAfterClose: number;
+  lateTexts: number;
+  lateIntros: number;
+  debriefsScheduled: number;
+  expiredAtClose: number;
 };
 
 async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }): Promise<Card> {
@@ -209,8 +229,29 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   // lock per phone); different members' replies, and the next arrival wave's scoring pass, all run at once.
   const lr = rng(seed * 13 + 5);
   latency.next = () => Math.floor(lr() * 7);
-  const reply = (who: Member, other: Member, answer: "interested" | "not_interested") => memberTurn(who.id, () => H.handleMatchNudgeReply(evId, evName, answer as any, asMNC(who), asMNC(other)));
+  // A reply is a text, handled the way the text route handles it (routes/sendblue.ts): their words are logged first (also the
+  // end-of-night close's evidence they came), then the open question it answers is looked up (eventGuestMatchHandoff.ts
+  // findPendingMatchNudge: their most recent open one; nothing once it expired or the room closed), and the yes or no goes to
+  // that question, whoever it's about. No open question: it's just a text, and nothing in matching moves. The additive offer's
+  // answer goes to its own handler. (Sim gap B1, the part that decides what a reply binds to; the reading of the words is the
+  // classifier's, stubbed here as a clean yes or no.)
+  let unbound = 0;
+  const reply = (who: Member, _meant: Member, answer: "interested" | "not_interested") =>
+    memberTurn(who.id, async () => {
+      W.memoriesWritten.push({ user_id: who.id, memory_type: "text_exchange", content: `User said: ${answer === "interested" ? "yes" : "no thanks"}`, created_at: new Date() });
+      const pending = await H.findPendingMatchNudge(who.id);
+      if (!pending) {
+        unbound++;
+        return;
+      }
+      if (pending.kind === "additive") {
+        await H.handleAdditiveReply(pending.event_id, pending.event_name, answer as any, asMNC(who), pending.candidate_ids ?? []);
+        return;
+      }
+      await H.handleMatchNudgeReply(pending.event_id, pending.event_name, answer as any, asMNC(who), { user_id: pending.candidate_id, first_name: pending.candidate_first_name, phone_number: pending.candidate_phone, email: pending.candidate_email });
+    });
   const stoppedAt = new Map<string, number>(); // member id -> W.sent length when they texted stop
+  const silentAsks: [Member, Member][] = []; // [asked, asker]: a direct ask nobody answered tonight
   const answerOpen = (): Promise<void>[] => {
     // Everyone with an open nudge answers: yes, no, or silence. Someone who texted stop never answers again.
     const open = W.nudges.filter((n) => n.event_id === evId && n.candidate_id && !answered.has(`${n.person_id}|${n.candidate_id}`));
@@ -224,16 +265,22 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
       if (roll < rates.yes) {
         // Some yeses arrive twice at once (a double tap, a resend): the pair record, not luck, has to keep it one ask.
         const twice = r() < 0.3;
-        const yes = () => H.handleMatchNudgeReply(evId, evName, "interested", asMNC(a), asMNC(b));
+        const yes = () => reply(a, b, "interested"); // routed like the text route (findPendingMatchNudge)
         replies.push(
           Promise.all(twice ? [yes(), yes()] : [yes()]).then(async () => {
             await new Promise((res) => setTimeout(res, 5));
-            // The other side answers only a direct ask that reached them: a true pair says yes at the same rate, anyone else mostly no.
+            // The other side answers only a direct ask that reached them: a true pair says yes at the same rate, anyone else mostly no,
+            // and one in five never answers (it's still open when the room closes).
             if (!askedDirectly(a, b) || answered.has(`${b.id}|${a.id}`)) return;
             const isTrue = p.truePairs.some(([x, y]) => (x === a.id && y === b.id) || (x === b.id && y === a.id));
             const yesB = r() < (isTrue ? rates.yes : 0.25);
+            const silent = r() < 0.2;
             if (stoppedAt.has(b.id)) return; // they texted stop: they answer nothing more
             answered.add(`${b.id}|${a.id}`);
+            if (silent) {
+              silentAsks.push([b, a]);
+              return;
+            }
             if (yesB) viaAsk.add([a.id, b.id].sort().join("|"));
             await reply(b, a, yesB ? "interested" : "not_interested");
           }),
@@ -289,7 +336,39 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   // The last answers can open new direct asks: answer those too, until the room is quiet.
   for (let k = 0; k < 3; k++) await Promise.all(answerOpen());
   await new Promise((res) => setTimeout(res, 20));
+
+  // ---------------------------------------------------------------- the end of the night (sim gaps A6, B5)
+  // The event ends 2h after the first wave (addEvent's default). 35 minutes before the end the close is due (it goes 50 minutes
+  // before the end, inside the in-room window): everyone in the room with evidence they came gets the same goodbye. Then the
+  // clock passes the end and the room closes: every open question expires, pairs still waiting expire, the next-morning debrief is
+  // scheduled. After that, late replies and a fresh scoring pass reach nobody.
+  const ev = W.events.get(evId)!;
+  const endAt = new Date(ev.end_at!).getTime();
+  advance(endAt - 35 * 60_000 - Date.now());
+  const roomAtClose = new Set((await RM.inRoomNow(evId)).people.map((g) => g.user_id));
+  const beforeClose = W.sent.length;
+  await U.processDueUnmatchedFollowUps();
+  await new Promise((res) => setTimeout(res, 20));
+  const closeTexts = W.sent.slice(beforeClose);
+  advance(endAt + 20 * 60_000 - Date.now());
+  await RM.scheduleRoomClose(evId, evName, { start_at: ev.start_at, end_at: ev.end_at, timezone: null });
+  const closed = await RM.runRoomCloses(new Date());
+  let openAtClose = 0;
+  const afterClose = W.sent.length;
+  const introsBeforeLate = W.memoriesWritten.filter((m) => m.memory_type === "event_intro_email_sent").length;
+  // Late: everyone still holding an unanswered question says yes now, and a scoring pass runs.
+  const stillOpen = W.nudges.filter((n) => n.event_id === evId && n.candidate_id && !answered.has(`${n.person_id}|${n.candidate_id}`) && !stoppedAt.has(n.person_id));
+  openAtClose = W.offers.filter((o) => o.event_id === evId && o.status === "expired").length;
+  await Promise.all([
+    ...stillOpen.map((n) => reply(byId.get(n.person_id)!, byId.get(n.candidate_id)!, "interested")),
+    ...silentAsks.filter(([b]) => !stoppedAt.has(b.id)).map(([b, a]) => reply(b, a, "interested")),
+  ]);
+  W.scoringDebounce.clear();
+  await S.scoreGuestListForEvent(evId);
+  await new Promise((res) => setTimeout(res, 20));
   latency.next = null;
+  const lateTexts = W.sent.slice(afterClose);
+  const lateIntros = W.memoriesWritten.filter((m) => m.memory_type === "event_intro_email_sent").length - introsBeforeLate;
 
   // ---------------------------------------------------------------- the scorecard
   const pairKey = (a: string, b: string) => [a, b].sort().join("|");
@@ -348,28 +427,58 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
     stoppers: stoppedAt.size,
     walkIns: walkIns.length,
     walkInsProposed: walkIns.filter((m) => W.nudges.some((n) => n.event_id === evId && n.candidate_id && (n.person_id === m.id || n.candidate_id === m.id))).length,
+    ...(() => {
+      // Who should get the goodbye: in the room at close time, with evidence they came (arrived, or texted Cue tonight), and
+      // still reachable. One each, never to a no-show or someone who said stop.
+      const evidence = (m: Member) => Boolean(W.presence.get(`${evId}|${m.id}`)?.arrived_at) || W.memoriesWritten.some((x) => x.user_id === m.id && /^User said:/.test(String(x.content)));
+      const owed = p.members.filter((m) => roomAtClose.has(m.id) && evidence(m) && !stoppedAt.has(m.id) && !m.sms_opted_out);
+      const closesTo = (m: Member) => closeTexts.filter((x) => x.to === m.phone_number).length;
+      return {
+        closeSent: closeTexts.length,
+        closeOwed: owed.filter((m) => closesTo(m) !== 1).length,
+        closeDuplicates: p.members.filter((m) => closesTo(m) > 1).length,
+        closeToStopped: stoppers.filter((m) => closesTo(m) > 0).length,
+        closeToNoShow: noShows.filter((m) => closesTo(m) > 0).length,
+        closeMatchTalk: closeTexts.filter((x) => U.MATCH_TALK.test(x.content)).length,
+      };
+    })(),
+    roomClosed: closed.some((c) => c.eventId === evId),
+    openAfterClose: W.offers.filter((o) => o.event_id === evId && ["open", "queued", "sending"].includes(o.status)).length,
+    pairsWaitingAfterClose: W.pairs.filter((x) => x.event_id === evId && ["suggested", "asked"].includes(x.state)).length,
+    lateTexts: lateTexts.length,
+    lateIntros,
+    debriefsScheduled: W.checkinFollowups.filter((x) => x.event_api_id === evId).length,
+    expiredAtClose: openAtClose,
   };
 }
 
 // ---------------------------------------------------------------- run the nights
 const cards: Card[] = [];
 for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
-  const t0 = Date.now();
+  const t0 = performance.now();
   const c = await night(size, seed);
   cards.push(c);
   console.log(
     `room ${String(size).padStart(3)}: nudges ${c.nudges}, intros ${c.intros}, true pairs proposed ${c.trueProposed}/${c.trueTotal}, introduced ${c.trueFound}/${c.trueTotal}, ` +
       `near misses proposed ${c.nearProposed}, hard traps proposed ${c.trapsProposed} (introduced ${c.trapsIntroduced}), most texts to one member ${c.textsMax}, ` +
-      `askers left with nothing ${c.leftWithNothing}, ${Date.now() - t0}ms`,
+      `askers left with nothing ${c.leftWithNothing}, ${Math.round(performance.now() - t0)}ms`,
   );
   console.log(`  the night: ${c.walkIns} walk-in(s), ${c.walkInsProposed} of them in a proposed pair; ${c.stoppers} texted stop partway through`);
+  console.log(`  end of night: ${c.closeSent} goodbye(s), room closed ${c.roomClosed} (${c.expiredAtClose} unanswered question(s) expired), ${c.debriefsScheduled} debrief(s) scheduled; after close: ${c.lateTexts} text(s), ${c.lateIntros} intro(s) from late yeses`);
   // Must hold today.
+  check(`room ${size}: everyone in the room who came gets exactly one goodbye`, c.closeSent > 0 && c.closeOwed === 0 && c.closeDuplicates === 0, c);
+  check(`room ${size}: no goodbye to anyone who said stop`, c.closeToStopped === 0, c);
+  check(`room ${size}: the goodbye says nothing about matching`, c.closeMatchTalk === 0, c);
+  check(`room ${size}: the room closes, and nothing is left open (questions, waiting pairs)`, c.roomClosed && c.expiredAtClose > 0 && c.openAfterClose === 0 && c.pairsWaitingAfterClose === 0, c);
+  check(`room ${size}: after the room closes, late yeses and a fresh scoring pass reach nobody (no texts, no intros)`, c.lateTexts === 0 && c.lateIntros === 0, c);
+  check(`room ${size}: the next-morning debrief is scheduled for the room`, c.debriefsScheduled > 0, c);
   check(`room ${size}: nobody sharing their location is nudged before they arrive`, c.nudgedBeforeArrival === 0, c);
   // A no-show (shared their location, never came) is never texted (a direct ask or the goodbye) and never proposed to anyone: #215
   // holds them out of matching until they arrive, and a text is no evidence they came (Royce, 2026-10-14 and 2026-10-19). The old
   // check repeated the arrival check above, so it couldn't fail on its own (review of #213).
   check(`room ${size}: a no-show is never texted (no direct ask, no goodbye)`, c.noShowsTexted === 0, c);
   check(`room ${size}: a no-show is never proposed to someone mid-night`, c.noShowsProposed === 0, c);
+  check(`room ${size}: a no-show never gets the goodbye (only arrival or a check-in is evidence they came)`, c.closeToNoShow === 0, c);
   // A walk-in who only scans the door QR is never in the room (inRoomPool counts walk-ins only once arrived). Ruled 10-14: the door
   // code counts as arriving (P2, #212). This sim's walk-ins still check in the old way (no door code), so they're counted, not checked.
   console.log(`  counted: ${c.walkIns - c.walkInsProposed} of ${c.walkIns} QR-only walk-in(s) (no door code) never matched`);
@@ -383,7 +492,6 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
   check(`room ${size}: no pair is introduced twice`, c.duplicateIntros === 0, c);
   check(`room ${size}: nobody gets the same direct ask twice (replies answered all at once)`, c.duplicateAsks === 0, c);
   check(`room ${size}: a near miss scored under the bar is never proposed`, c.nearProposed === 0, c);
-  check(`room ${size}: some true pairs are introduced`, c.trueFound > 0, c);
   // Per room only where the room is big enough to be steady (room 25 has one or two of these, and unrelated changes move it).
   if (size >= 60) check(`room ${size}: some intros come through a direct ask that reached the other person (not only two nudges crossing)`, c.introsViaAsk > 0, c);
   check(`room ${size}: every query the night runs is one the fake world knows (nothing silently unanswered)`, c.unknownSql === 0, { unknown: [...W.unknownSql].slice(0, 5) });
@@ -393,6 +501,10 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
 }
 
 check("across the nights: intros come through direct asks that reached the other person", cards.reduce((n, c) => n + c.introsViaAsk, 0) > 0, cards.map((c) => c.introsViaAsk));
+// With real timing the replies land in a different order each run, so one small room can end with no introduction by chance.
+// Across the three nights, some true pairs always are.
+check("across the nights, some true pairs are introduced", cards.reduce((n, c) => n + c.trueFound, 0) > 0, cards.map((c) => c.trueFound));
+
 // ---------------------------------------------------------------- sparse rooms (Royce, 2026-10-14: "never lower the bar, never force a
 // match. Members get silence; the shortfall goes to the host read as what the room is thin on")
 const PR = await import("../../src/services/partnerReadout.js");
