@@ -6,10 +6,11 @@
 //
 // Where a place comes from, and nothing else:
 //   - the want's own words ("founder dinners in SF"): source "their_words";
-//   - for a want recorded after PLACE_SINCE, also what they told Co about where that kind of thing happens for them ("I go to SF for
-//     all tech stuff"): source "told", always with their exact words as the quote;
+//   - for a want recorded after this behavior existed (feature_epochs 'want_places', written by the deploy that brought it), also
+//     what they told Co about where that kind of thing happens for them ("I go to SF for all tech stuff"): source "told", always with
+//     their exact words as the quote;
 //   - their correction ("actually Oakland", through whatCoKnows): source "corrected".
-// A want that existed before PLACE_SINCE is read from its own text only (Royce: "reading place from existing wants never guesses... A
+// A want that existed before then is read from its own text only (Royce: "reading place from existing wants never guesses... A
 // wrong guessed place is worse than a missing one"). The model only proposes; code keeps a place only when its quote is copied from
 // the want or from their own line, and the place is in that quote. Anything else is no place, and the home city stands in.
 //
@@ -18,8 +19,6 @@
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 
-// Wants recorded before this read their place from their own text only (the retrofit). Set to the day this shipped.
-export const PLACE_SINCE = new Date("2026-10-16T00:00:00Z");
 export const PLACE_LIMITS = { placeChars: 40, placeWords: 4, toldLines: 40, toldDays: 180 } as const;
 
 export type PlaceSource = "their_words" | "told" | "corrected" | "none" | "removed";
@@ -50,9 +49,10 @@ export function backedPlace(place: unknown, quote: unknown, sources: string[]): 
   return { place: p, quote: q };
 }
 
-// Pure: whether this want may take a place from what they told Co (recorded after PLACE_SINCE), or only from its own words.
-export function mayUseTold(w: Want): boolean {
-  return !!w.createdAt && w.createdAt.getTime() >= PLACE_SINCE.getTime();
+// Pure: whether this want may take a place from what they told Co (recorded after the behavior existed here), or only from its own
+// words. No known start, or no known recording time: its own words only (the retrofit never guesses).
+export function mayUseTold(w: Want, since: Date | null): boolean {
+  return !!since && !!w.createdAt && w.createdAt.getTime() >= since.getTime();
 }
 
 export function placePrompt(w: Want, told: string[]): string {
@@ -66,6 +66,8 @@ Reply with JSON only: {"place": "SF", "quote": "..."} or {"place": null}`;
 }
 
 export type PlaceDeps = {
+  // When this behavior first existed here (feature_epochs), or null when it can't be read.
+  since: () => Promise<Date | null>;
   row: (userId: string, key: string) => Promise<WantPlace | null>;
   told: (userId: string) => Promise<string[]>;
   model: (prompt: string) => Promise<string>;
@@ -78,7 +80,8 @@ export type PlaceDeps = {
 export async function placeFor(userId: string, w: Want, deps: PlaceDeps = realPlaceDeps): Promise<WantPlace> {
   const have = await deps.row(userId, w.key).catch(() => null);
   if (have) return have;
-  const told = mayUseTold(w) ? await deps.told(userId).catch(() => [] as string[]) : [];
+  const since = await deps.since().catch(() => null);
+  const told = mayUseTold(w, since) ? await deps.told(userId).catch(() => [] as string[]) : [];
   let raw: string;
   try {
     raw = await deps.model(placePrompt(w, told));
@@ -98,7 +101,7 @@ export async function placeFor(userId: string, w: Want, deps: PlaceDeps = realPl
   const p: WantPlace = got ? { key: w.key, place: got.place, source: fromWant ? "their_words" : "told", quote: got.quote, notedAt: null } : { key: w.key, place: null, source: "none", quote: null, notedAt: null };
   await deps.save(userId, w, p).catch((err: any) => console.error("wantPlace: storing the place failed (non-fatal):", err?.message ?? err));
   await deps
-    .log({ layer: 3, decision: "want.place", userId, outcome: got ? "act" : "skip", action: got ? p.source : parsed.place ? "unbacked" : "none", proposal: { key: w.key, want: w.text.slice(0, 160), place: p.place, quote: p.quote, proposed: parsed.place ?? null, retro: !mayUseTold(w) } })
+    .log({ layer: 3, decision: "want.place", userId, outcome: got ? "act" : "skip", action: got ? p.source : parsed.place ? "unbacked" : "none", proposal: { key: w.key, want: w.text.slice(0, 160), place: p.place, quote: p.quote, proposed: parsed.place ?? null, retro: !mayUseTold(w, since) } })
     .catch(() => {});
   return p;
 }
@@ -128,17 +131,28 @@ export async function placesOf(userId: string, keys: string[], db: { query: (sql
   return rows.map((r: any) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null, source: String(r.source) as PlaceSource }));
 }
 
-// Pure: the one place every one of these wants has on file, or null (one without a place, or two places, means the home city).
-export function sharedPlace(keys: string[], places: { key: string; place: string | null }[]): string | null {
-  if (!keys.length) return null;
+// Pure: which of these wants search their home city together, and which have a place of their own that isn't home (each searched
+// on its own, there). No place, or the home city by name, is home.
+export function splitByPlace<T>(items: { key: string; item: T }[], places: { key: string; place: string | null }[], home: string | null): { home: { key: string; item: T }[]; own: { key: string; item: T; place: string }[] } {
   const by = new Map(places.map((p) => [p.key, p.place]));
-  const all = keys.map((k) => by.get(k) ?? null);
-  if (all.some((p) => !p)) return null;
-  const distinct = new Set(all.map((p) => p!.trim().toLowerCase()));
-  return distinct.size === 1 ? all[0] : null;
+  const h = (home ?? "").trim().toLowerCase();
+  const out = { home: [] as { key: string; item: T }[], own: [] as { key: string; item: T; place: string }[] };
+  for (const it of items) {
+    const p = by.get(it.key) ?? null;
+    if (p && p.trim().toLowerCase() !== h) out.own.push({ ...it, place: p });
+    else out.home.push(it);
+  }
+  return out;
 }
 
+let sinceCache: Date | null = null;
 export const realPlaceDeps: PlaceDeps = {
+  since: async () => {
+    if (sinceCache) return sinceCache;
+    const { rows } = await pool.query(`SELECT since FROM feature_epochs WHERE name = 'want_places'`);
+    sinceCache = rows[0]?.since ? new Date(rows[0].since) : null;
+    return sinceCache;
+  },
   row: async (userId, key) => {
     const { rows } = await pool.query(`SELECT want_key, place, source, quote, noted_at FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
     return rows[0] ? { key, place: rows[0].place ?? null, source: String(rows[0].source) as PlaceSource, quote: rows[0].quote ?? null, notedAt: rows[0].noted_at ? new Date(rows[0].noted_at) : null } : null;

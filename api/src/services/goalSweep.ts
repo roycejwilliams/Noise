@@ -89,10 +89,12 @@ export function goalSweepRuns(row: { last_attempted_at: Date | string | null; jo
 export type GoalSweepDeps = {
   rows: () => Promise<any[]>;
   mark: (userId: string) => Promise<void>;
-  surface: (row: any, context: string) => Promise<void>;
+  // active/extras: the plan's goals with their findable edges, and what it adds (enjoys, specifics), so a goal whose place isn't home
+  // can be searched on its own (services/wantPlace.ts).
+  surface: (row: any, context: string, plan?: { active?: import("./goalEdges.js").GoalEdge[]; extras?: { enjoys?: string[] | null; specifics?: string[] | null } }) => Promise<void>;
   // This run's reading of their goals (services/goalEdges.ts planGoalSweep): never cached, never a goal's own words.
   // seedSig rides along into the plan's log, so the next run can tell whether anything changed.
-  plan: (row: any, seedSig?: string) => Promise<{ searchText: string | null; passed?: { goal: string; why: string }[] }>;
+  plan: (row: any, seedSig?: string) => Promise<{ searchText: string | null; passed?: { goal: string; why: string }[]; active?: import("./goalEdges.js").GoalEdge[]; extras?: { enjoys?: string[] | null; specifics?: string[] | null } }>;
   // The seed signature the member's last plan logged (cold start's early rerun). Optional: without it, only the 20-hour budget applies.
   lastSeedSig?: (userId: string) => Promise<string | null>;
   // A new member's sweep that came back with nothing to search (services/coldStart.ts): a flagged miss. Optional; nothing is sent.
@@ -152,7 +154,8 @@ const realDeps: GoalSweepDeps = {
     const { goals, ...o } = await planInputs(row);
     // Their latest plan: when it was read from these same goals inside the backstop, its reading is used again (no model call).
     const stored = await latestPlan(row.user_id);
-    return planGoalSweep(row.user_id, goals, { ...o, now: new Date(), seedSig, stored: stored ? { goalsSig: stored.proposal?.goalsSig ?? null, builtAt: stored.proposal?.builtAt ?? null, derived: stored.proposal?.derived ?? null, at: stored.created_at } : null }, realGoalDeps);
+    const extras = { enjoys: (o as any).enjoys ?? null, specifics: (o as any).specifics ?? null };
+    return { extras, ...(await planGoalSweep(row.user_id, goals, { ...o, now: new Date(), seedSig, stored: stored ? { goalsSig: stored.proposal?.goalsSig ?? null, builtAt: stored.proposal?.builtAt ?? null, derived: stored.proposal?.derived ?? null, at: stored.created_at } : null }, realGoalDeps)) };
   },
   lastSeedSig: async (userId) => {
     // The hourly plans only: a 9am floor build carries no seed signature (dailySweep.ts floorGoalPlan), so it never reads as "seeds changed".
@@ -175,16 +178,23 @@ const realDeps: GoalSweepDeps = {
     const { recordDecision } = await import("../harness/core.js");
     await recordDecision({ layer: 7, decision: "goal_sweep.skip", userId: row.user_id, outcome: "skip", action: why, proposal: { detail } });
   },
-  surface: async (row, context) => {
-    // One search for all their goals: it looks where they all are when every one has the same place on file (services/wantPlace.ts),
-    // else in their home city. Only stored places are read here; each goal's own place is read by the morning sweep.
-    const goals = goalSweepGoals(row) ?? [];
-    const { goalHash } = await import("./goalEdges.js");
+  surface: async (row, context, plan) => {
+    // Where each goal is (services/wantPlace.ts; Royce, 2026-10-15: "hourly searches per-goal only for goals whose place differs from
+    // home, everything else rides the shared search"): a goal with its own place on file, not their home city, is searched on its
+    // own, there; the rest go together in their home city. Only stored places are read here (the morning sweep reads each goal's).
+    const { goalHash, edgeSearchText } = await import("./goalEdges.js");
     const W = await import("./wantPlace.js");
-    const keys = goals.map((g) => W.wantKeyForGoal(goalHash(g)));
-    const places = await W.placesOf(row.user_id, keys).catch(() => []);
-    const shared = W.sharedPlace(keys, places);
-    await attemptEventSurfacing({ askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, askText: context, fromProfile: true, city: shared ?? row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared });
+    const active = plan?.active ?? [];
+    const places = active.length ? await W.placesOf(row.user_id, active.map((e) => W.wantKeyForGoal(goalHash(e.goal)))).catch(() => []) : [];
+    const { home, own } = W.splitByPlace(active.map((e) => ({ key: W.wantKeyForGoal(goalHash(e.goal)), item: e })), places, row.city ?? null);
+    const base = { askId: PROFILE_ASK_ID, userId: row.user_id, firstName: row.first_name, phoneNumber: row.phone_number, fromProfile: true, city: row.city ?? null, goals: goalSweepGoals(row), activityPreferences: row.activity_preferences ?? null, cooldownCleared: row.cooldown_cleared };
+    // Nothing placed elsewhere: the one search, as it was.
+    const sharedText = own.length ? edgeSearchText(home.map((h) => h.item), plan?.extras ?? {}) : context;
+    if (sharedText) await attemptEventSurfacing({ ...base, askText: sharedText });
+    for (const o of own) {
+      const text = edgeSearchText([o.item]);
+      if (text) await attemptEventSurfacing({ ...base, askText: text, want: { key: o.key, text: o.item.goal, createdAt: null } });
+    }
     // The picker right after (sweepShadow.ts runPickerAfterSweep, Royce 2026-10-13), unless another sweep is on this member right now
     // (services/dailySweep.ts claimMember): that sweep runs the picker when it finishes.
     const D = await import("./dailySweep.js");
@@ -240,13 +250,13 @@ export async function runGoalSweep(run: <T>(items: T[], limit: number, fn: (i: T
     try {
       // What to look for is each active goal's findable edge (services/goalEdges.ts), read fresh this run; a member whose goals
       // have no findable side is passed, and the plan logs why.
-      const { searchText, passed } = await deps.plan(row, sig);
+      const { searchText, passed, active, extras } = await deps.plan(row, sig);
       if (!searchText) {
         // A new member with nothing findable to search is a cold-start miss, never a silent pass (services/coldStart.ts).
         if (deps.coldStartMiss && isNewMember(row.joined_at ?? null)) await deps.coldStartMiss(row, passed?.length ? "none of their goals has a findable side" : "nothing to search from their goals", passed ?? []).catch(() => {});
         return;
       }
-      await deps.surface(row, searchText);
+      await deps.surface(row, searchText, { active, extras });
     } catch (err: any) {
       console.error(`Goal sweep failed for ${row.user_id}:`, err?.message ?? err);
     }

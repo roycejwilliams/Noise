@@ -34,7 +34,14 @@ check("a place that isn't in its quote is no place", W.backedPlace("Oakland", "f
 check("part of a longer name is no place ('South Park' in South Park Commons)", W.backedPlace("South Park", "get into South Park Commons", ["get into South Park Commons"]) === null);
 check("a whole name that is the place still counts at the end of the quote", W.backedPlace("San Francisco", "communities in San Francisco", ["get outreach help for founder communities in San Francisco"])?.place === "San Francisco");
 check("something too long to be a place is no place", W.backedPlace("the whole bay area and peninsula and south bay", "x", ["x"]) === null);
-check("a want from before the place shipped reads its own words only; one after may use what they told Co", !W.mayUseTold({ key: "k", text: "t", createdAt: null }) && !W.mayUseTold({ key: "k", text: "t", createdAt: new Date("2026-10-01") }) && W.mayUseTold({ key: "k", text: "t", createdAt: new Date(W.PLACE_SINCE.getTime() + 1) }));
+// Royce, 2026-10-15: "the new path should apply to wants created after the behavior exists" (feature_epochs, written by the deploy).
+const SINCE = new Date("2026-10-20T18:00:00Z");
+check("a want from before the behavior existed reads its own words only; one after may use what they told Co", !W.mayUseTold({ key: "k", text: "t", createdAt: null }, SINCE) && !W.mayUseTold({ key: "k", text: "t", createdAt: new Date("2026-10-20T17:59:00Z") }, SINCE) && W.mayUseTold({ key: "k", text: "t", createdAt: new Date("2026-10-20T18:01:00Z") }, SINCE));
+check("when the start can't be read, every want reads its own words only (never a guess)", !W.mayUseTold({ key: "k", text: "t", createdAt: new Date("2030-01-01") }, null));
+{
+  const mig = src("db/migrations.ts");
+  check("the start is recorded once, by the first deploy that has the behavior, not a calendar date", /CREATE TABLE IF NOT EXISTS feature_epochs/.test(mig) && /INSERT INTO feature_epochs \(name\) VALUES \('want_places'\) ON CONFLICT \(name\) DO NOTHING/.test(mig) && !/PLACE_SINCE/.test(src("services/wantPlace.ts")));
+}
 
 // ---------------------------------------------------------------- 2. placeFor: once, never a guess
 type Saved = { key: string; place: string | null; source: string };
@@ -43,6 +50,7 @@ function deps(o: { stored?: W.WantPlace | null; told?: string[]; reply?: string;
   const asked: string[] = [];
   let toldRead = 0;
   const d: W.PlaceDeps = {
+    since: async () => SINCE,
     row: async () => o.stored ?? null,
     told: async () => {
       toldRead++;
@@ -60,7 +68,7 @@ function deps(o: { stored?: W.WantPlace | null; told?: string[]; reply?: string;
   };
   return { d, saved, asked, toldRead: () => toldRead };
 }
-const NEW = new Date(W.PLACE_SINCE.getTime() + 86_400_000);
+const NEW = new Date(SINCE.getTime() + 86_400_000);
 {
   const t = deps({ reply: '{"place": "SF", "quote": "founder dinners in SF"}' });
   const p = await W.placeFor("u", { key: "goal:a", text: "Small founder dinners in SF", createdAt: null }, t.d);
@@ -139,7 +147,12 @@ const NEW = new Date(W.PLACE_SINCE.getTime() + 86_400_000);
   check("wiring: every find carries where it was searched", /searchedIn: where\.searchedIn/.test(ess));
   const ds = src("services/dailySweep.ts");
   check("wiring: the morning sweep names each ask and each goal as its own want", /want: \{ key: `ask:\$\{a\.id\}`/.test(ds) && /want: \{ key: `goal:\$\{b\.id\}`, text: g\.goal/.test(ds));
-  check("the one search for all their goals uses a place only when every goal has that same place", W.sharedPlace(["a", "b"], [{ key: "a", place: "SF" }, { key: "b", place: "sf" }]) === "SF" && W.sharedPlace(["a", "b"], [{ key: "a", place: "SF" }, { key: "b", place: null }]) === null && W.sharedPlace(["a", "b"], [{ key: "a", place: "SF" }, { key: "b", place: "Oakland" }]) === null && W.sharedPlace(["a"], []) === null);
+  // Hourly (Royce, 2026-10-15): "per-goal only for goals whose place differs from home, everything else rides the shared search".
+  const split = W.splitByPlace([{ key: "g1", item: "tech meetups" }, { key: "g2", item: "run club" }, { key: "g3", item: "pottery" }, { key: "g4", item: "board games" }], [{ key: "g1", place: "SF" }, { key: "g2", place: null }, { key: "g3", place: "sacramento" }], "Sacramento");
+  check("hourly: a goal placed somewhere other than home is searched on its own, there", split.own.length === 1 && split.own[0].key === "g1" && split.own[0].place === "SF");
+  check("hourly: goals with no place, placed at home by name, or never read ride the one shared search", split.home.map((h) => h.key).join(",") === "g2,g3,g4");
+  const gs = src("services/goalSweep.ts");
+  check("wiring: the hourly sweep searches each non-home goal as its own want and the rest together (the shared search as before when none is elsewhere)", /W\.splitByPlace\(/.test(gs) && /want: \{ key: o\.key, text: o\.item\.goal/.test(gs) && /own\.length \? edgeSearchText\(home\.map/.test(gs) && /await deps\.surface\(row, searchText, \{ active, extras \}\)/.test(gs));
 }
 
 // ---------------------------------------------------------------- 4. the line, once

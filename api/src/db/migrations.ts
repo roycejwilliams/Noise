@@ -3011,6 +3011,12 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("want_places table failed:", err));
+  // When a behavior first existed in this environment (Royce, 2026-10-15: "the new path should apply to wants created after the
+  // behavior exists. A calendar cutoff invents a difference that isn't real"): written once, by the first deploy that has it.
+  await pool
+    .query(`CREATE TABLE IF NOT EXISTS feature_epochs (name TEXT PRIMARY KEY, since TIMESTAMPTZ NOT NULL DEFAULT NOW())`)
+    .then(() => pool.query(`INSERT INTO feature_epochs (name) VALUES ('want_places') ON CONFLICT (name) DO NOTHING`))
+    .catch((err: Error) => console.error("feature_epochs failed:", err));
   // Restraint counts from the first kind-tagged send (services/kindRestraint.ts loadKindHistory): this keeps that lookup an index read.
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)
