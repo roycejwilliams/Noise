@@ -847,6 +847,9 @@ export function registerJobs(io: Server) {
       const { runReadoutDrafts } = await import("../services/partnerReadoutSend.js");
       const n = await runReadoutDrafts();
       if (n) console.log(`partnerReadout: drafted ${n} readout(s)`);
+      // Partner nights' host reads, from the counts taken at their close (services/partnerNightReadout.ts). Drafts only.
+      const p = await (await import("../services/partnerNightReadout.js")).runNightReadoutDrafts();
+      if (p) console.log(`partnerNightReadout: drafted ${p} host read(s)`);
     } catch (error: any) {
       console.error("Partner readout cron error:", error?.message ?? error);
     }

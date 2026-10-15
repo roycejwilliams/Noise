@@ -65,6 +65,13 @@ export function nextAllowed(r: { status: string; host_email: string | null; link
 
 export type ReadoutRow = { id: string; event_id: string; event_name: string; stats: Stats; text: string; html: string; status: string; created_at: Date; approved_at: Date | null; approved_by: string | null; host_email: string | null; link_expires_at: Date | null; sent_at: Date | null };
 
+// What the host reads, from the frozen row: a partner night's readout froze its own lines with it (services/partnerNightReadout.ts,
+// worded for guests and members together); every other readout is described from its counts, as before.
+export function shownOf(stats: Stats | (Record<string, unknown> & { kind?: string; shown?: { headline: string; lines: string[]; note: string } })): { headline: string; lines: string[]; note: string } {
+  const s = stats as any;
+  return s?.kind === "partner" && s.shown ? s.shown : describe(stats as Stats);
+}
+
 export async function readoutFor(eventId: string): Promise<ReadoutRow | null> {
   const { rows } = await pool.query(`SELECT * FROM partner_readouts WHERE event_id = $1`, [eventId]);
   return rows[0] ?? null;
@@ -160,7 +167,7 @@ export async function sendReadout(eventId: string, deps: SendDeps = realSendDeps
   // Claimed first, so two runs can't send it twice.
   const claim = await pool.query(`UPDATE partner_readouts SET status = 'sent', sent_at = NOW() WHERE id = $1 AND status = 'approved' RETURNING id`, [r.id]);
   if (!claim.rows.length) return { ok: false, why: "it was sent by another run" };
-  const sent = await deps.email(r.host_email!, describe(r.stats).headline, r.html, r.text).catch((err: any) => {
+  const sent = await deps.email(r.host_email!, shownOf(r.stats).headline, r.html, r.text).catch((err: any) => {
     console.error("partnerReadout: email failed:", err?.message ?? err);
     return false;
   });
@@ -182,5 +189,5 @@ export async function readoutByToken(token: string, now = new Date()): Promise<{
   const { rows } = await pool.query(`SELECT * FROM partner_readouts WHERE link_token_hash = $1`, [hash(token)]);
   const r = rows[0] as ReadoutRow | undefined;
   if (!r || !nextAllowed(r, now).link) return null;
-  return { html: r.html, ...describe(r.stats) };
+  return { html: r.html, ...shownOf(r.stats) };
 }

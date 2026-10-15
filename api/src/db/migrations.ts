@@ -3005,6 +3005,11 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`CREATE TABLE IF NOT EXISTS partner_match_passes (event_api_id TEXT PRIMARY KEY REFERENCES partner_events(api_id), signature TEXT NOT NULL, ran_at TIMESTAMPTZ NOT NULL, seen JSONB NOT NULL DEFAULT '{}')`)
     .catch((err: Error) => console.error("partner_match_passes init failed:", err));
+  // A partner night's host-read numbers, taken at its close before guests are forgotten (services/partnerNightReadout.ts).
+  // Counts and fixed-category counts only: no words, no ids of people.
+  await pool
+    .query(`CREATE TABLE IF NOT EXISTS partner_night_stats (event_api_id TEXT PRIMARY KEY REFERENCES partner_events(api_id), stats JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`)
+    .catch((err: Error) => console.error("partner_night_stats init failed:", err));
   await concurrencyMigrations();
 }
 

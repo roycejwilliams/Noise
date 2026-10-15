@@ -20,6 +20,9 @@ import { ensureDoorCode, rotateDoorCode } from "../services/doorCodes.js";
 //   npx tsx src/scripts/partners.ts close <eventId>                       the night is called off: the code dies for good
 //   npx tsx src/scripts/partners.ts show <slug>                           config, each night's state, RSVP link, blurb, and door QR file
 //   npx tsx src/scripts/partners.ts door <eventId>                        any event's door-only code and door QR (ours or a partner's)
+//   npx tsx src/scripts/partners.ts readout <eventId>                     the night's host read: the stored draft, or a draft now
+//   npx tsx src/scripts/partners.ts readout-approve <eventId> --by <name> [--host <email>]   the team's yes; the partner's host
+//                                                                          address is the default; prints the host's link
 //   npx tsx src/scripts/partners.ts rotate-door <eventId>                 a leaked QR photo: a new door code, the old one stops now
 const flag = (args: string[], name: string) => {
   const i = args.indexOf(`--${name}`);
@@ -106,6 +109,16 @@ async function main() {
     console.log((await P.closePartnerEvent(a)) ? "Closed: the code is dead for good." : "Nothing to close.");
   } else if (cmd === "show" && a) {
     await show(a);
+  } else if (cmd === "readout" && a) {
+    const R = await import("../services/partnerNightReadout.js");
+    const { readoutFor } = await import("../services/partnerReadoutSend.js");
+    const have = await readoutFor(a);
+    if (have) console.log(`${have.text}\n\nstatus: ${have.status}`);
+    else console.log(await R.draftNightReadout(a));
+  } else if (cmd === "readout-approve" && a) {
+    const R = await import("../services/partnerNightReadout.js");
+    const r = await R.approveNightReadout(a, flag(rest, "by") ?? "", flag(rest, "host"));
+    console.log(r.ok ? `Approved. The host's read-only link (shown once, good for 30 days):\n${r.link}\nNothing has been emailed. To email it: npx tsx src/scripts/partnerReadout.ts send ${a}` : `Not approved: ${r.why}.`);
   } else if (cmd === "door" && a) {
     const code = await ensureDoorCode(a);
     await printDoor(a, code);

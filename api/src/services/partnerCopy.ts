@@ -63,17 +63,39 @@ export const PARTNER_COPY = {
   // After the cutoff: a former guest texts. Warm, and Cue doesn't work for them (Royce: "that was the event version. The full
   // thing is the club, and the door's here"). Seen: at most once a day.
   guest_after_cutoff: PENDING,
+
+  // ---- the host read for a partner night (services/partnerNightReadout.ts). Read by the partner's host, only after a person on
+  // the team approves it (a link, and one email if the team sends it). Room-level counts only; the numbers that fill these are
+  // already floored (under 3 is "a few", headcounts rounded, small categories folded). Until every line it needs is approved,
+  // no readout is drafted.
+  // The readout's title. May use {event}, {partner}.
+  host_headline: PENDING,
+  // The room: everyone who texted or checked in, and who arrived at the door. {room} and {arrived} are rounded headcounts
+  // ("fewer than 10", "about 25").
+  host_room: PENDING,
+  // Pairs Cue judged worth an intro. {pairs} is a count or "a few". Only when there were any.
+  host_pairs: PENDING,
+  // Intros both people said yes to. {intros} is a count or "a few". Only when there were any.
+  host_intros: PENDING,
+  // What the room was looking for, by fixed category. {themes} is a list like "investors or funding (6), hiring or talent (4)".
+  host_themes: PENDING,
+  // The same, when too few shared anything to show a pattern without pointing at anyone.
+  host_no_themes: PENDING,
+  // A room too small to read out at all (under the readout's minimum). The readout is this line alone.
+  host_too_small: PENDING,
+  // The note under it: what the readout never carries.
+  host_note: PENDING,
 } as const satisfies Record<string, string>;
 
 export type CopyKey = keyof typeof PARTNER_COPY;
-export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next" | "link", string>>;
+export type CopyVars = Partial<Record<"agent" | "event" | "partner" | "code" | "next" | "link" | "room" | "arrived" | "pairs" | "intros" | "themes", string>>;
 
 // The line, filled in; null while it's pending, or when it names a placeholder the caller didn't fill. table is for the checks.
 export function copyFor(key: CopyKey, vars: CopyVars = {}, table: Record<CopyKey, string> = PARTNER_COPY): string | null {
   const line = table[key];
   if (!line || line.includes(PENDING)) return null;
   let missing = false;
-  const out = line.replace(/\{(agent|event|partner|code|next|link)\}/g, (_m, k: keyof CopyVars) => {
+  const out = line.replace(/\{(agent|event|partner|code|next|link|room|arrived|pairs|intros|themes)\}/g, (_m, k: keyof CopyVars) => {
     const v = vars[k]?.trim();
     if (!v) missing = true;
     return v ?? "";

@@ -438,6 +438,9 @@ export async function runPartnerNightCloses(now = new Date()): Promise<{ eventId
     const e = { start_at: new Date(r.start_at).toISOString(), end_at: r.end_at ? new Date(r.end_at).toISOString() : null, timezone: r.timezone ?? null, closed_at: r.closed_at ? new Date(r.closed_at) : null };
     if (now.getTime() < nightClosesAt(e).getTime()) continue;
     await closePartnerEvent(r.api_id);
+    // The host read's numbers, taken now: guests are forgotten next (services/partnerNightReadout.ts). Counts only, best effort:
+    // a failed snapshot never holds the forgetting.
+    await (await import("./partnerNightReadout.js")).snapshotNight(r.api_id).catch((err: any) => console.error("partnerGuests: host-read snapshot failed (non-fatal):", err?.message ?? err));
     // Pairs still waiting expire with the room, as at a Co event (roomMatching.runRoomCloses).
     await pool.query(`UPDATE co_pairs SET state = 'expired', expired_at = $2, updated_at = NOW() WHERE event_id = $1 AND state IN ('suggested', 'asked')`, [r.api_id, now]);
     out.push({ eventId: r.api_id, ...(await resolveGuests(r.api_id, now)) });
