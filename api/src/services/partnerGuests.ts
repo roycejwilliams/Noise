@@ -438,6 +438,8 @@ export async function runPartnerNightCloses(now = new Date()): Promise<{ eventId
     const e = { start_at: new Date(r.start_at).toISOString(), end_at: r.end_at ? new Date(r.end_at).toISOString() : null, timezone: r.timezone ?? null, closed_at: r.closed_at ? new Date(r.closed_at) : null };
     if (now.getTime() < nightClosesAt(e).getTime()) continue;
     await closePartnerEvent(r.api_id);
+    // Pairs still waiting expire with the room, as at a Co event (roomMatching.runRoomCloses).
+    await pool.query(`UPDATE co_pairs SET state = 'expired', expired_at = $2, updated_at = NOW() WHERE event_id = $1 AND state IN ('suggested', 'asked')`, [r.api_id, now]);
     out.push({ eventId: r.api_id, ...(await resolveGuests(r.api_id, now)) });
   }
   return out;
@@ -467,6 +469,9 @@ export async function resolveGuests(eventId: string, now = new Date()): Promise<
         `UPDATE partner_guests SET resolved_at = $2, resolution = 'forgotten', who = NULL, work = NULL, hoping = NULL WHERE id = $1 AND resolved_at IS NULL RETURNING id`,
         [r.id, now],
       );
+      // The value lines written about their pairs that night rest on their words (services/partnerMatching.ts): wiped too. The
+      // pair's state stays (a decline still stands), with no words on it.
+      await client.query(`UPDATE co_pairs SET value_line_a = NULL, value_line_b = NULL, value_why = NULL, updated_at = NOW() WHERE event_id = $1 AND (a_id = $2 OR b_id = $2)`, [eventId, r.user_id]);
       if (done.rows.length) {
         const others = await client.query(`SELECT 1 FROM partner_guests WHERE user_id = $1 AND resolved_at IS NULL LIMIT 1`, [r.user_id]);
         if (!others.rows.length) {

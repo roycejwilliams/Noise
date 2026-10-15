@@ -799,7 +799,9 @@ export function registerJobs(io: Server) {
       for (const r of await RM.runRoomCloses()) console.log(`roomMatching: closed ${r.eventId}: ${r.expiredOffers} offer(s) and ${r.expiredPairs} pair(s) expired, ${r.droppedAsks} held ask(s) dropped, ${r.checkins} check-in(s) scheduled`);
       const held = await RM.retryHeldIntros();
       if (held) console.log(`roomMatching: sent ${held} held intro email(s)`);
-      // Partner nights close with their room: the code dies for good and each guest resolves (services/partnerGuests.ts).
+      // Partner nights: a matching pass for each open room that changed (services/partnerMatching.ts; it writes pairs and sends
+      // nothing), then the ones due close with their room: the code dies for good and each guest resolves (services/partnerGuests.ts).
+      for (const r of await (await import("../services/partnerMatching.js")).runPartnerMatchPasses()) if (r.ran) console.log(`partnerMatching: ${r.eventId}: ${r.room} in the room (${r.guests} guests), ${r.suggested} pair(s) suggested, ${r.blocked} blocked by the value gate, ${r.belowBar} below the bar`);
       for (const r of await (await import("../services/partnerGuests.js")).runPartnerNightCloses()) console.log(`partnerGuests: closed ${r.eventId}: ${r.forgotten} guest(s) forgotten, ${r.joined} joined`);
     } catch (error: any) {
       console.error("Room close cron error:", error?.message ?? error);
