@@ -1,5 +1,6 @@
-// The page a partner night's code opens (services/partners.ts): the link on the partner's RSVP page and what the door QR
-// encodes. While the code is live it hands the guest straight to Messages with their first text to Cue filled in, so the guest
+// The page a partner night's code opens (services/partners.ts): the link on the partner's RSVP page (the RSVP code) and what
+// the door QR encodes (the night's door-only code, services/doorCodes.ts). The door page fills in the door code, which is
+// what makes the text an arrival (#213), so it offers a text only during the check-in window. While the code is live it hands the guest straight to Messages with their first text to Cue filled in, so the guest
 // sends the first text, which is all Sendblue allows and all Cue ever does with a non-member: it never texts first. Once the
 // night is over the code is dead for good, and a late scan gets one graceful line: the partner's next live night if there is
 // one, else the door to the club.
@@ -8,7 +9,8 @@
 // words and, on the live page, no button, so nobody can text in on terms they haven't been told.
 // Served by both api/src/server.ts and co-test's server, like /i/:code. Nothing here reads or shows anything about a person.
 import type { Request, Response } from "express";
-import { AGENT, entryState, entryText, entryUrl, isEntryCode, nextOpenNight, resolveEntryCode } from "../services/partners.js";
+import { AGENT, doorEntryText, entryState, entryText, entryUrl, isEntryCode, nextOpenNight, partnerEvent, resolveEntryCode } from "../services/partners.js";
+import { eventForDoorCode, isDoorCode } from "../services/doorCodes.js";
 import { copyFor } from "../services/partnerCopy.js";
 import { smsInviteHref } from "../services/invites.js";
 
@@ -52,19 +54,29 @@ ${line ? `<meta property="og:description" content="${esc(line)}">` : ""}
 export type PageView = { status: number; title: string | null; line: string | null; button: { href: string; label: string } | null };
 export async function partnerPageView(
   rawCode: string,
-  o: { phone: string; now?: Date; resolve?: typeof resolveEntryCode; next?: typeof nextOpenNight },
+  o: { phone: string; now?: Date; resolve?: typeof resolveEntryCode; resolveDoor?: (code: string) => Promise<Awaited<ReturnType<typeof partnerEvent>>>; next?: typeof nextOpenNight; checkinOpen?: (e: { start_at: string; end_at?: string | null; timezone?: string | null }, now: Date) => boolean },
 ): Promise<PageView> {
   const now = o.now ?? new Date();
   const code = rawCode.trim().toUpperCase();
   if (!o.phone) return { status: 500, title: null, line: null, button: null };
-  const found = isEntryCode(code) ? await (o.resolve ?? resolveEntryCode)(code).catch(() => null) : null;
+  const door = isDoorCode(code);
+  const resolveDoor = o.resolveDoor ?? (async (c: string) => {
+    const hit = await eventForDoorCode(c);
+    return hit ? partnerEvent(hit.eventId) : null;
+  });
+  const found = isEntryCode(code) ? await (o.resolve ?? resolveEntryCode)(code).catch(() => null) : door ? await resolveDoor(code).catch(() => null) : null;
   if (!found) return { status: 404, title: null, line: copyFor("page_invalid", { agent: AGENT }), button: null };
-  const vars = { agent: AGENT, event: found.event.name, partner: found.partner.name, code: found.event.code };
+  const vars = { agent: AGENT, event: found.event.name, partner: found.partner.name, code };
   const state = entryState(found.partner, found.event, now);
+  // The door page opens a text only while the door is: inside the check-in window (the door code is an arrival).
+  const checkinOpen = o.checkinOpen ?? (await import("../services/eventWalkinCheckin.js")).isCheckinOpen;
+  if (state === "open" && door && !checkinOpen(found.event, now)) {
+    return { status: 200, title: found.event.name, line: copyFor("page_not_open", vars), button: null };
+  }
   if (state === "open") {
     // The button exists only with both its terms and its text approved: no one texts in without being told what it means.
     const terms = copyFor("page_open_terms", vars);
-    const text = entryText(found.event.name, found.event.code);
+    const text = door ? doorEntryText(found.event.name, code) : entryText(found.event.name, found.event.code);
     const label = copyFor("page_open_button", vars);
     return { status: 200, title: found.event.name, line: terms, button: terms && text && label ? { href: smsInviteHref(o.phone, text), label } : null };
   }

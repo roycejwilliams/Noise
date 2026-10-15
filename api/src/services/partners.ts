@@ -12,10 +12,11 @@
 //                    read-only guest list, so the RSVP link and the door QR are the way in, 2026-10-14).
 //
 // One night, one code (Royce, 2026-10-14):
-//   1. created     the event is added; Cue makes its code and its door QR. Every event gets its own; nothing is reused.
-//   2. open        the partner opens intake (the team runs `open`): the code goes live on the RSVP page link and the printed
-//                  QR at the door. Both open the same page (/r/<code>, routes/partnerPage.ts), which fills in the guest's first
-//                  text to Cue with the code in it. Sendblue only lets Cue answer a number that texted first, and Cue never
+//   1. created     the event is added; Cue makes its RSVP code and its door-only code (services/doorCodes.ts, Royce's ruling
+//                  on #213) and the door QR. Every event gets its own; nothing is reused.
+//   2. open        the partner opens intake (the team runs `open`): the RSVP code goes live on the RSVP page link, and the
+//                  door code on the printed QR at the door (during the check-in window only). Each opens the page
+//                  (/r/<code>, routes/partnerPage.ts), which fills in the guest's first text to Cue with that code in it. Sendblue only lets Cue answer a number that texted first, and Cue never
 //                  cold-texts a non-member: the guest always starts.
 //   3. over        the night has passed (the end every in-room reader uses, introConsent.effectiveEnd) or the room was closed
 //                  (closed_at). The code is dead forever: nothing reopens it, and event times can't be edited after the
@@ -182,6 +183,11 @@ export function entryText(eventName: string, code: string): string | null {
   return copyFor("entry_text", { agent: AGENT, event: clean(eventName).slice(0, PARTNER.maxEventName), code });
 }
 
+// The door QR's text: the same, with the night's door-only code (services/doorCodes.ts), which is what makes it an arrival.
+export function doorEntryText(eventName: string, doorCode: string): string | null {
+  return copyFor("door_entry_text", { agent: AGENT, event: clean(eventName).slice(0, PARTNER.maxEventName), code: doorCode });
+}
+
 // The page a code opens: the RSVP link and what the door QR encodes. Null without a public base URL: no link is better than a
 // broken one.
 export function entryUrl(code: string, baseUrl = process.env.API_URL): string | null {
@@ -306,7 +312,12 @@ export async function addPartnerEvent(slug: string, input: PartnerEventInput, ra
        ON CONFLICT (code) DO NOTHING RETURNING ${EVENT_COLS}`,
       [`partner-${randomBytes(8).toString("hex")}`, partner.id, v.name, v.start_at, v.end_at, v.timezone, v.venue, v.address, newEntryCode(rand)],
     );
-    if (rows[0]) return { ok: true, event: asEvent(rows[0]) };
+    if (rows[0]) {
+      // Its door-only code too (#213). If this fails the night still exists, and `show` makes it.
+      const { ensureDoorCode } = await import("./doorCodes.js");
+      await ensureDoorCode(rows[0].api_id).catch((err: any) => console.error("partners: door code not made yet (show makes it):", err?.message ?? err));
+      return { ok: true, event: asEvent(rows[0]) };
+    }
   }
   return { ok: false, why: "couldn't make a code that isn't taken; try again" };
 }

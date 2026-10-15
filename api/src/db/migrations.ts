@@ -2957,6 +2957,18 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS partner_events_partner ON partner_events (partner_id, start_at)`))
     .catch((err: Error) => console.error("partners / partner_events init failed:", err));
+  // Door codes (services/doorCodes.ts, Royce's ruling on #213): one door-only code per event, ours (a Luma id) or a partner's.
+  // A rotation replaces the code; the old one stops at once.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS event_door_codes (
+        event_api_id TEXT PRIMARY KEY,
+        code TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        rotated_at TIMESTAMPTZ
+      )`,
+    )
+    .catch((err: Error) => console.error("event_door_codes init failed:", err));
   await concurrencyMigrations();
 }
 

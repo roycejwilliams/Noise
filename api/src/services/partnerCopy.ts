@@ -11,9 +11,15 @@
 export const PENDING = "PENDING_ROYCE_COPY";
 
 export const PARTNER_COPY = {
-  // The guest's first text to Cue, filled in by the page (they can edit it before sending). Must carry {code}.
-  // Seen: in Messages, when the guest taps the button on a live page (RSVP link before the night, door QR on it).
+  // The guest's first text to Cue from the RSVP link, filled in by the page (they can edit it before sending). Must carry
+  // {code} (the night's RSVP code). Seen: in Messages, when they tap the button on the live RSVP page.
   entry_text: PENDING,
+  // The first text from the door QR at a partner night, filled in by the page. Must carry {code} (the night's door-only
+  // code: sending it is arriving, #213). Seen: in Messages, when they tap the button on the door page during the night.
+  door_entry_text: PENDING,
+  // The door QR's pre-filled text at one of our own (Luma) events. Must carry {code}. Seen: in Messages, when someone scans the
+  // door QR at a Noise event.
+  co_door_text: PENDING,
   // The live page: what texting Cue means, said before they send it (that one text is their consent, intake and arrival).
   // Seen: the RSVP link or the door QR, while the night's code is live.
   page_open_terms: PENDING,
@@ -47,8 +53,8 @@ export function copyFor(key: CopyKey, vars: CopyVars = {}, table: Record<CopyKey
     return v ?? "";
   });
   if (missing || /\{[a-z]+\}/.test(out)) return null;
-  // The entry text is how Cue knows the night: without the code it's no entry text.
-  if (key === "entry_text" && vars.code && !out.includes(vars.code)) return null;
+  // An entry or door text is how Cue knows the night (and, at the door, that they're there): without its code it's nothing.
+  if ((key === "entry_text" || key === "door_entry_text" || key === "co_door_text") && (!vars.code || !out.includes(vars.code))) return null;
   return out;
 }
 
