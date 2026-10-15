@@ -818,10 +818,13 @@ export function sendblueRouter(io: Server): Router {
             return { handled: false as const };
           });
           if (partner.handled) return res.status(200).send({ received: true, action: `partner_${partner.action}` });
+          // The code checks a member in; arriving is a later "I'm here" (partnerGuests.arrivesBy, pending #213).
           if ("memberCheckin" in partner && partner.memberCheckin && !walkinCheckinEventName) {
             await recordCheckin(partner.memberCheckin.eventApiId, user.id).catch((err: any) => console.error("sendblue: partner recordCheckin failed (non-fatal):", err?.message ?? err));
-            await (await import("../services/eventPresence.js")).markArrived(partner.memberCheckin.eventApiId, user.id, "text").catch(() => false);
             walkinCheckinEventName = partner.memberCheckin.eventName;
+          }
+          if ("memberArrived" in partner && partner.memberArrived) {
+            await (await import("../services/eventPresence.js")).markArrived(partner.memberArrived.eventApiId, user.id, "text").catch(() => false);
           }
         }
 

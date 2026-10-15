@@ -31,6 +31,7 @@ const t = (iso: string) => new Date(iso);
 
 // ---------------------------------------------------------------- rules (pure)
 {
+  check("arrival (#213, option B until ruled): the code text never arrives, \"I'm here\" in the window does", !G.arrivesBy("code_text", true) && !G.arrivesBy("door_scan", true) && G.arrivesBy("im_here", true) && !G.arrivesBy("im_here", false));
   check("close: the night's end plus the room-close buffer", G.nightClosesAt(NIGHT).toISOString() === "2026-11-07T06:15:00.000Z");
   check("close: closed early by hand wins", G.nightClosesAt({ ...NIGHT, closed_at: t("2026-11-07T04:00:00Z") }).toISOString() === "2026-11-07T04:00:00.000Z");
   check("close: no end on file -> the evening's end (effectiveEnd), plus the buffer", G.nightClosesAt({ ...NIGHT, end_at: null }).getTime() > t("2026-11-07T06:15:00Z").getTime());
@@ -157,6 +158,10 @@ try {
     const h = harness();
     const at = await G.handlePartnerText(member, "Hi Cue (K7Q2MX)", { ...h.deps, now: during });
     check("member: a live code at the door -> the walk-in check-in, not a guest", at.handled === false && (at as any).memberCheckin?.eventApiId === "partner-aa" && guests.length === 0);
+    const here = await G.handlePartnerText(member, "I'm here", { ...h.deps, now: during, memberNight: async () => "partner-aa" });
+    check("member: a later \"I'm here\" at a night they checked in at is their arrival", here.handled === false && (here as any).memberArrived?.eventApiId === "partner-aa");
+    const noNight = await G.handlePartnerText(member, "I'm here", { ...h.deps, now: during, memberNight: async () => null });
+    check("member: \"I'm here\" with no partner check-in is left to the normal flow", noNight.handled === false && !(noNight as any).memberArrived);
     const early = await G.handlePartnerText(member, "Hi Cue (K7Q2MX)", { ...h.deps, now: before });
     check("member: the RSVP link days before -> just their normal reply", early.handled === false && !(early as any).memberCheckin);
     const plain = await G.handlePartnerText(member, "what's on this week", { ...h.deps, now: during });
@@ -192,11 +197,14 @@ try {
     await G.handlePartnerText(guest, "investors who get hardware", { ...h.deps, now: before });
     check("intake: the last answer, then done once", g.hoping === "investors who get hardware" && h.sent[2] === "done Demo Night" && g.intake_done_at instanceof Date);
     check("intake: never asked twice", h.sent.filter((s) => s.startsWith("Q ")).length === 2);
-    // The door on the night: arrival, one line, nothing asked.
+    // The door on the night: the code again is not arrival (#213: the code alone proves nothing), and nothing is asked again.
+    linesRecent = 1;
     await G.handlePartnerText(guest, "Hi Cue, it's for Demo Night (K7Q2MX)", { ...h.deps, now: during });
-    check("door: an RSVP guest scanning in arrives, gets one line, is asked nothing", g.arrived_at?.getTime() === during.getTime() && h.sent[3] === "arrived" && h.sent.length === 4);
-    // Texts during the night after intake: the during-night line, at most every few hours.
+    check("door: the code text on the night is not arrival, and nothing is asked again", g.arrived_at === null && h.sent.length === 3);
     linesRecent = 0;
+    await G.handlePartnerText(guest, "I'm here", { ...h.deps, now: during });
+    check("door: \"I'm here\" in the window after checking in is arrival, with one line", g.arrived_at?.getTime() === during.getTime() && h.sent[3] === "arrived" && h.sent.length === 4);
+    // Texts during the night after intake: the during-night line, at most every few hours.
     await G.handlePartnerText(guest, "where's the bar", { ...h.deps, now: during });
     linesRecent = 1;
     await G.handlePartnerText(guest, "hello?", { ...h.deps, now: during });
@@ -223,6 +231,12 @@ try {
     await G.handlePartnerText(guest, "Jordan", { ...h.deps, now: before });
     await G.handlePartnerText(guest, "I'm here", { ...h.deps, now: during });
     check("arrival: \"I'm here\" during the check-in window", guests[0].arrived_at?.getTime() === during.getTime());
+    check("arrival: \"I'm here\" is never read as an intake answer", guests[0].work === null);
+    guests = [];
+    await G.handlePartnerText(guest, "Hi Cue (K7Q2MX)", { ...h.deps, now: during });
+    check("arrival: the code text alone in the window does not put a guest in the room (#213)", guests[0].arrived_at === null);
+    await G.handlePartnerText(guest, "I'm here", { ...h.deps, now: before });
+    check("arrival: \"I'm here\" outside the check-in window is not arrival", guests[0].arrived_at === null);
     const up = sql.filter((c) => /INSERT INTO partner_guests/.test(c.q)).pop();
     check("arrival: a later scan never moves the first arrival", !!up && /arrived_at = COALESCE\(partner_guests\.arrived_at, EXCLUDED\.arrived_at\)/.test(up.q));
   }
@@ -366,7 +380,8 @@ try {
   const route = src("src/routes/sendblue.ts");
   const at = route.indexOf("await handlePartnerText(");
   check("route: guests are handled before the invite gate (no code asked of a guest)", at > 0 && at < route.indexOf("if (!user.invite_verified) {\n          // Even on the very first-ever message") && at > route.indexOf("isOptOutKeyword(content)"));
-  check("route: a member at the door gets the walk-in check-in and arrival", /partner\.memberCheckin\.eventApiId, user\.id\)[\s\S]{0,300}markArrived\(partner\.memberCheckin\.eventApiId, user\.id, "text"\)[\s\S]{0,120}walkinCheckinEventName = partner\.memberCheckin\.eventName/.test(route));
+  check("route: a member's code is the walk-in check-in, never arrival", /recordCheckin\(partner\.memberCheckin\.eventApiId, user\.id\)[\s\S]{0,200}walkinCheckinEventName = partner\.memberCheckin\.eventName;\n\s*\}/.test(route) && !/markArrived\(partner\.memberCheckin/.test(route));
+  check("route: a member's \"I'm here\" at their partner night marks arrival", /markArrived\(partner\.memberArrived\.eventApiId, user\.id, "text"\)/.test(route));
   const pro = src("src/harness/proactive.ts");
   check("cutoff: every proactive send path reads it (daily pick, exempt sends, in-room)", (pro.match(/proactiveCutoff\(/g) ?? []).length === 3 && /checks\.push\(await \(await import\("\.\.\/services\/partnerGuests\.js"\)\)\.proactiveCutoff\(person\.userId, now, client\)\)/.test(pro) && /blocked_guest_cutoff/.test(pro) && /proactiveCutoff\(userId\)\)\.pass\) return false;/.test(pro));
   check("close: runs with the room-close job", /runPartnerNightCloses\(\)/.test(src("src/jobs/index.ts")));
