@@ -1659,8 +1659,7 @@ export async function runMigrations(): Promise<void> {
   // only in co-test's own migrations, while shared queries (the companion and
   // recap crons, metrics) filter on users.archived_at, which would have failed
   // in production. Idempotent, so running it on co-test too is harmless.
-  // lapse_*: the membership lapse clock (services/membershipLapse.ts);
-  // lapse_exempt marks team accounts it never starts for.
+  // lapse_*: the old membership lapse clock (removed 2026-10-14; the columns stay, unused).
   await pool
     .query(
       `ALTER TABLE users ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ,
@@ -1671,6 +1670,12 @@ export async function runMigrations(): Promise<void> {
          ADD COLUMN IF NOT EXISTS lapse_close_at TIMESTAMPTZ`,
     )
     .catch((err: Error) => console.error("users archive/lapse columns migration failed:", err));
+  // No membership lapse (Royce, 2026-10-14: "Going quiet earns less contact, never ejection"): the job is gone, so anyone on its
+  // clock comes off it and a notice still waiting never goes. The lapse_* columns stay, unused (nothing reads them).
+  await pool
+    .query(`UPDATE users SET lapse_started_at = NULL, lapse_close_at = NULL WHERE lapse_started_at IS NOT NULL`)
+    .then(() => pool.query(`UPDATE proactive_candidates SET status = 'skipped', updated_at = NOW() WHERE type = 'membership_lapse' AND status = 'pending'`))
+    .catch((err: Error) => console.error("membership lapse wind-down failed:", err));
 
   // Open threads (2026-09-22) — see src/harness/memberThreads.ts. What each
   // member is in the middle of, in their words; opened and closed only with a

@@ -19,7 +19,6 @@ import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, typ
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
 import { markMatchNudgeSent, type EventMatchNudgePayload } from "../services/eventScoring.js";
-import { lapseCloseDate, lapseText } from "../services/membershipLapse.js";
 import { memberZone } from "../services/memberTime.js";
 import { prepareReveal } from "../services/networkIntroNudge.js";
 import { draftStateNudge, onStateNudgeDropped, onStateNudgeSent } from "../services/memberStateNudges.js";
@@ -927,29 +926,6 @@ export const proactiveRegistry: ProactiveRegistry = {
 
   // Human-written bullets go out verbatim; only the intro/closing lines are
   // model-drafted, and those are what the output checks run on.
-  // Fixed wording, not a draft: it names the date their membership closes,
-  // which has to be exactly right (services/membershipLapse.ts).
-  membership_lapse: {
-    async draft(c, person) {
-      const final = Boolean(c.payload.final);
-      const zone = await memberZone(c.userId);
-      const close = await lapseCloseDate(c.userId, final, zone);
-      if (!close) return skip("the lapse clock stopped");
-      const message = lapseText(person.firstName, close.label, final);
-      return { messages: [message], text: message, rules: { maxChars: 260, maxSentences: 3, allowGreeting: true, mustIncludeAny: [close.label] } };
-    },
-    async onSent(c, _p, messages) {
-      if (c.payload.final) {
-        // The date the final notice named is the date that holds.
-        await pool.query(
-          `UPDATE users SET lapse_close_at = GREATEST(lapse_close_at, NOW() + INTERVAL '7 days') WHERE id = $1 AND lapse_started_at IS NOT NULL`,
-          [c.userId],
-        );
-      }
-      await writeMemory(c.userId, "check_in", `Membership notice: ${messages.join(" ")}`);
-    },
-  },
-
   // Fixed wording, not a draft: it names the date a page or deck expires, which has to be exactly right (services/coPages/expiry.ts).
   // Re-read at send time: kept, renewed, taken down or already past since it was queued means nothing goes.
   artifact_expiry: {

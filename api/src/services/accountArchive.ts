@@ -10,9 +10,8 @@
 //   - sign-in sessions are cleared.
 // Nothing is deleted.
 //
-// Shared (moved from co-test/, 2026-09-22) because the membership lapse job
-// (services/membershipLapse.ts) runs in every environment. co-test's tester
-// reset still uses it through a re-export.
+// Shared (moved from co-test/, 2026-09-22) for the membership lapse job, which is gone (2026-10-14: quiet members are never
+// archived on a clock). co-test's tester reset still uses it through a re-export.
 import pool from "../db/db.js";
 
 export async function archiveAccount(userId: string): Promise<{ archived: boolean }> {

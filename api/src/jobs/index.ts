@@ -38,7 +38,6 @@ import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGap
 import { recordDecision } from "../harness/core.js";
 import { missedCallText } from "../harness/callGate.js";
 import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
-import { runMembershipLapse } from "../services/membershipLapse.js";
 import { extensionJobs } from "../services/extensions.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
@@ -1027,11 +1026,8 @@ export function registerJobs(io: Server) {
     })
     .catch((err: any) => console.error("extension jobs failed to register:", err?.message ?? err));
 
-  // Members Co knows nothing about (2026-09-22, services/membershipLapse.ts):
-  // once a day; each step still waits for the proactive harness to send it.
-  cron.schedule("30 9 * * *", () => {
-    runMembershipLapse().catch((err: any) => console.error("membership lapse cron error:", err?.message ?? err));
-  }, { timezone: "America/Los_Angeles" });
+  // No membership lapse (Royce, 2026-10-14: "Going quiet earns less contact, never ejection." The member's job is nothing):
+  // the 2026-09-22 job that warned members Cue knew little about and then archived them is gone. Quiet members stay members.
 
   // Co's own events: send announcements that were waiting for the person's
   // daytime hours (services/coEventAnnouncement.ts).

@@ -740,37 +740,6 @@
       }
     },
     {
-      "id": "s27",
-      "about": "membership lapse (2026-09-22): weekly notices to a member who never replies still go out a week apart, and a companion check-in the same day goes first",
-      "timezone": "America/Los_Angeles",
-      "start": "2026-09-23T15:45:00Z",
-      "end": "2026-10-02T06:00:00Z",
-      "arrivals": [
-        {
-          "at": "2026-09-23T16:30:00Z",
-          "type": "membership_lapse",
-          "target": "lapse:2026-09-23:1",
-          "expiresInHours": 144
-        },
-        {
-          "at": "2026-09-23T16:30:00Z",
-          "type": "companion",
-          "target": "companion:r9",
-          "expiresInHours": 72
-        },
-        {
-          "at": "2026-09-30T16:30:00Z",
-          "type": "membership_lapse",
-          "target": "lapse:2026-09-23:2",
-          "expiresInHours": 144
-        }
-      ],
-      "expect": {
-        "sends": 3,
-        "firstType": "companion"
-      }
-    },
-    {
       "id": "s28",
       "about": "replies vs. broadcasts (2026-10-02): four profile offers use the room lane's week (each answered). Two offers for an ask they made still go after that, 3h apart; a reminder and a 30-day resurface wait at the cap like any discovery",
       "timezone": "America/Los_Angeles",

@@ -108,9 +108,6 @@ export type ProactiveType =
   // normal daily pick instead of bypassing it: local hours, the daily/weekly
   // caps, and opt-out all apply.
   | "event_match_nudge"
-  // Co doesn't know them yet and their membership will close unless they
-  // reply (services/membershipLapse.ts, 2026-09-22).
-  | "membership_lapse"
   // A page or deck they've been using is about to expire; one word keeps it (services/coPages/expiry.ts, 2026-10-11).
   | "artifact_expiry"
   // Before a Co event they're going to (services/preArrival.ts, 2026-09-30).
@@ -187,8 +184,6 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   // Every ~4 days at most, not 14 (2026-09-28, Royce: two weeks apart is an
   // acquaintance, not a companion). Still skipped when there's nothing real.
   companion: { priority: 10, typeGapDays: 4 },
-  // Weekly by design; the gap stops two in one week if one was delayed.
-  membership_lapse: { priority: 25, typeGapDays: 6 },
   // Once per artifact per lifetime (its own target key), before the date it names.
   artifact_expiry: { priority: 30 },
   // Time-bound: hours before the event, once per event (its own target key).
@@ -897,7 +892,7 @@ export function codePick(eligible: Candidate[]): Candidate | null {
 const FIND_TYPES = new Set(["event_offer", "event_match_nudge", "deadline_nudge"]);
 // Real candidates that can't wait for tomorrow either: a post-call text (they just hung up), what goes before an event (the note, the
 // brief, the brief's name ask, a guest's ask before it), and a lapse notice. A find never jumps these (review of #132).
-const CANT_WAIT = new Set(["post_call", "pre_arrival", "event_brief", "brief_name_ask", "room_share_ask", "ask_solicitation", "membership_lapse", "artifact_expiry"]);
+const CANT_WAIT = new Set(["post_call", "pre_arrival", "event_brief", "brief_name_ask", "room_share_ask", "ask_solicitation", "artifact_expiry"]);
 
 // Pure: when a find's useful life ends: its own expiry, or the end of the last day the picker gave it, whichever is first.
 export function findEndsAt(c: Pick<Candidate, "expiresAt" | "payload">, zone: string | null): Date | null {

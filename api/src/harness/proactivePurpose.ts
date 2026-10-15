@@ -50,7 +50,6 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   task_window: "companion",
   in_room: "offer",
   product_update: "ops",
-  membership_lapse: "ops",
   artifact_expiry: "ops",
   event_change: "ops",
   call_reminder: "ops",

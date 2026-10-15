@@ -55,7 +55,7 @@ check("a matching open task is woken, no words needed", same.handOff && same.tas
 check("a task id that isn't theirs isn't trusted", !decidePayloadFirst(read({ sameAsTask: 99, theirWords: null }), draft, theirs, [{ id: 7 }]).handOff);
 
 // Kinds that must stay questions or already are the payload.
-check("event offers, network teases, in-room nudges, lapse notices and companion check-ins are exempt", ["event_offer", "network_tease", "event_match_nudge", "membership_lapse", "companion"].every((k) => PAYLOAD_FIRST_EXEMPT.has(k)));
+check("event offers, network teases, in-room nudges and companion check-ins are exempt", ["event_offer", "network_tease", "event_match_nudge", "companion"].every((k) => PAYLOAD_FIRST_EXEMPT.has(k)));
 check("check-ins, follow-ups, debrief and post-call texts are checked", ["ask_checkin", "window_followup", "debrief", "post_call", "calendar_follow", "ask_solicitation", "pre_arrival", "product_update"].every((k) => !PAYLOAD_FIRST_EXEMPT.has(k)));
 
 // Wiring: the step runs after the draft passes its checks and before anything is sent.

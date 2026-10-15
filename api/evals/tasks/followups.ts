@@ -10,7 +10,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
 const t = (type: string, targetKey = "x") => ({ type, targetKey }) as any;
 
 check("the four follow-ups are Co's to time", F.handedToCo(t("window_followup")) && F.handedToCo(t("ask_checkin")) && F.handedToCo(t("debrief")) && F.handedToCo(t("companion", "companion:advice:3")));
-check("operations, check-ins, story texts and offers stay on their schedules", !F.handedToCo(t("call_reminder")) && !F.handedToCo(t("event_change")) && !F.handedToCo(t("membership_lapse")) && !F.handedToCo(t("companion", "companion:thread:9")) && !F.handedToCo(t("companion", "companion:milestone:x")) && !F.handedToCo(t("event_offer")) && !F.handedToCo(t("post_call")));
+check("operations, check-ins, story texts and offers stay on their schedules", !F.handedToCo(t("call_reminder")) && !F.handedToCo(t("event_change")) && !F.handedToCo(t("companion", "companion:thread:9")) && !F.handedToCo(t("companion", "companion:milestone:x")) && !F.handedToCo(t("event_offer")) && !F.handedToCo(t("post_call")));
 const now = new Date("2026-09-30T18:00:00Z");
 check("a new follow-up is created, a repeat updates the open one", F.followUpAction(null, now) === "create" && F.followUpAction({ status: "open", closedAt: null }, now) === "update");
 check("once Co decided (sent or let go), the old timers don't reopen it for 14 days", F.followUpAction({ status: "dropped", closedAt: new Date(now.getTime() - 3 * 86_400_000) }, now) === "ignore" && F.followUpAction({ status: "done", closedAt: new Date(now.getTime() - 20 * 86_400_000) }, now) === "create");
