@@ -358,6 +358,8 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     const rows = W.nudges
       .filter((n) => n.person_id === p[0] && !String(n.event_id).startsWith("network:") && now() - n.sent_at < Number(p[1]) * 86_400_000)
       .filter((n) => !W.optIns.some((o) => o.event_id === n.event_id && o.person_id === n.person_id && o.candidate_id === n.candidate_id))
+      // A closed room's nudges are never answered (the real query's NOT EXISTS on event_room_closures).
+      .filter((n) => !has("event_room_closures") || !W.roomClosures.get(n.event_id)?.closed_at)
       .sort((a, b) => b.sent_at - a.sent_at)
       .slice(0, 1)
       .map((n) => {
@@ -599,18 +601,40 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R(m ? [{ goals: m.goals ?? [], life_chapters: [], intent: m.intent ?? [] }] : []);
   }
   if (has("FROM matching_pauses")) return R([]);
+  // The end of the night (services/roomMatching.ts scheduleRoomClose / runRoomCloses).
   if (has("INSERT INTO event_room_closures")) {
-    W.roomClosures.set(p[0], { event_id: p[0], closed_at: null });
+    const prev = W.roomClosures.get(p[0]);
+    if (!prev || !prev.closed_at) W.roomClosures.set(p[0], { ...(prev ?? {}), event_id: p[0], event_name: p[1], ends_at: new Date(p[2]), due_at: new Date(p[3]), closed_at: null, claimed_at: prev?.claimed_at ?? null });
     return R([]);
   }
+  if (has("UPDATE event_room_closures SET claimed_at = $1")) {
+    const at = new Date(p[0]).getTime();
+    const due = [...W.roomClosures.values()].filter((r) => !r.closed_at && r.due_at && +r.due_at <= at && (!r.claimed_at || at - +r.claimed_at > 10 * 60_000)).slice(0, 10);
+    for (const r of due) r.claimed_at = new Date(at);
+    return R(due.map((r) => ({ event_id: r.event_id, event_name: r.event_name, ends_at: r.ends_at })));
+  }
+  if (has("UPDATE event_room_closures SET closed_at = $2")) {
+    const r = W.roomClosures.get(p[0]);
+    if (r) Object.assign(r, { closed_at: new Date(p[1]), expired_offers: p[2], expired_pairs: p[3] });
+    return R([]);
+  }
+  if (has("UPDATE event_match_offers SET status = 'expired'")) {
+    // The statuses the query names (status IN (...)), read from the SQL itself.
+    const live = (sql.match(/status IN \(([^)]*)\)/)?.[1] ?? "").split(",").map((x) => x.trim().replace(/'/g, ""));
+    const hit = W.offers.filter((o) => o.event_id === p[0] && live.includes(o.status));
+    for (const o of hit) Object.assign(o, { status: "expired", answered_at: null });
+    return R(hit.map((o) => ({ person_id: o.person_id })));
+  }
+  if (has("UPDATE deferred_sends SET due_at = $2 WHERE status = 'queued' AND after_kind = 'event_direct_ask'")) return R([]);
   if (has("FROM event_room_closures")) return R([...W.roomClosures.values()].filter((r) => r.event_id === p[0] && r.closed_at));
   if (has("INSERT INTO member_connections") || has("INSERT INTO co_facts") || has("UPDATE co_facts SET retired_at") || has("UPDATE proactive_user_state SET hold_until = NULL")) return R([]);
   // A direct ask held for their hours or the pause (deferredSends.ts hasQueuedWithPrefix): W.deferredAsks holds whose are waiting.
   if (has("SELECT 1 FROM deferred_sends WHERE user_id = $1 AND starts_with(target_key, $2) AND status IN ('queued', 'sending') LIMIT 1")) return R((W as any).deferredAsks?.has(`${p[0]}|${p[1]}`) ? [{ x: 1 }] : []);
   if (has("FROM deferred_sends") || has("FROM person_snapshots") || has("FROM co_facts") || has("FROM ask_checkins")) return R([]);
   if (has("INSERT INTO event_checkin_followups")) {
+    if (W.checkinFollowups.some((r) => r.event_api_id === p[1] && r.user_id === p[0])) return R([]);
     W.checkinFollowups.push({ user_id: p[0], event_api_id: p[1], event_name: p[2], send_at: p[3], created_at: new Date() });
-    return R([]);
+    return R(has("RETURNING id") ? [{ id: W.checkinFollowups.length }] : []);
   }
 
   // The end-of-night close's evidence that someone came (services/eventUnmatchedFollowUp.ts cameTonight).
