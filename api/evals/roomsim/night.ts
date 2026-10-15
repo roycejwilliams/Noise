@@ -19,7 +19,7 @@
 // check()    = must hold today (a FAIL is a regression).
 // baseline() = a number the strict double opt-in work must move (Royce's order: no name before both say yes, the why lives in the
 //              connection, one decline store, the quality gate everywhere). Printed, never failing, until that work lands.
-import { W, reset, addMember, addEvent, ask, check, results, type Member } from "../inroom/world.js";
+import { W, reset, addMember, addEvent, ask, check, finding, results, latency, memberTurn, lockStats, type Member } from "../inroom/world.js";
 
 // Every ask in the room is unique (a short reference on the end), so the stub scorer always knows exactly who is asking and a
 // private ask can never be mistaken for someone else's identical public one.
@@ -196,15 +196,18 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   // A direct ask from a to b, as b's phone got it (the stub drafter: "<a> from <event> would like an intro").
   const askedDirectly = (a: Member, b: Member) => W.sent.some((s) => s.to === b.phone_number && new RegExp(`^${esc(a.first_name)} from .* would like an intro`).test(s.content));
 
-  // Arrivals in four waves; each wave re-scores the room (the debounce is cleared, as a fresh pass after a new arrival).
+  // Real timing (sim gap A1): every query waits 0-6 seeded milliseconds, so a read and the write after it can interleave with
+  // another reply's, the way two Postgres round trips can. Each member's own replies run one at a time (routes/sendblue.ts holds a
+  // lock per phone); different members' replies, and the next arrival wave's scoring pass, all run at once.
+  const lr = rng(seed * 13 + 5);
+  latency.next = () => Math.floor(lr() * 7);
+  const reply = (who: Member, other: Member, answer: "interested" | "not_interested") => memberTurn(who.id, () => H.handleMatchNudgeReply(evId, evName, answer as any, asMNC(who), asMNC(other)));
+  // Arrivals in four waves; each wave re-scores the room (the debounce is cleared, as a fresh pass after a new arrival) while the
+  // replies to the last wave's nudges are still landing.
   const order = [...p.members].sort(() => r() - 0.5);
   const waves = [0.4, 0.7, 0.9, 1].map((f) => order.slice(0, Math.ceil(order.length * f)));
-  for (const wave of waves) {
-    addEvent({ api_id: evId, name: evName }, wave.map((m) => ({ m })));
-    W.scoringDebounce.clear();
-    await S.scoreGuestListForEvent(evId);
-    await new Promise((res) => setTimeout(res, 20));
-    // Everyone with an open nudge answers at once: yes, no, or silence.
+  const answerOpen = (): Promise<void>[] => {
+    // Everyone with an open nudge answers: yes, no, or silence.
     const open = W.nudges.filter((n) => n.event_id === evId && n.candidate_id && !answered.has(`${n.person_id}|${n.candidate_id}`));
     const replies: Promise<void>[] = [];
     for (const n of open) {
@@ -225,16 +228,28 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
             const yesB = r() < (isTrue ? rates.yes : 0.25);
             answered.add(`${b.id}|${a.id}`);
             if (yesB) viaAsk.add([a.id, b.id].sort().join("|"));
-            await H.handleMatchNudgeReply(evId, evName, yesB ? "interested" : "not_interested", asMNC(b), asMNC(a));
+            await reply(b, a, yesB ? "interested" : "not_interested");
           }),
         );
       } else if (roll < rates.yes + rates.no) {
-        replies.push(H.handleMatchNudgeReply(evId, evName, "not_interested", asMNC(a), asMNC(b)));
+        replies.push(reply(a, b, "not_interested"));
       }
     }
-    await Promise.all(replies);
+    return replies;
+  };
+  let inFlight: Promise<void>[] = [];
+  for (const wave of waves) {
+    addEvent({ api_id: evId, name: evName }, wave.map((m) => ({ m })));
+    W.scoringDebounce.clear();
+    await Promise.all([S.scoreGuestListForEvent(evId), ...inFlight]);
     await new Promise((res) => setTimeout(res, 20));
+    inFlight = answerOpen();
   }
+  await Promise.all(inFlight);
+  // The last answers can open new direct asks: answer those too, until the room is quiet.
+  for (let k = 0; k < 3; k++) await Promise.all(answerOpen());
+  await new Promise((res) => setTimeout(res, 20));
+  latency.next = null;
 
   // ---------------------------------------------------------------- the scorecard
   const pairKey = (a: string, b: string) => [a, b].sort().join("|");

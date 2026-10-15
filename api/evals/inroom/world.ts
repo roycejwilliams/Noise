@@ -232,6 +232,25 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     else W.offers.push({ event_id, person_id, candidate_key, kind, candidate_id, candidate_ids: candidate_ids ?? [], asker_id, event_name, status: "open", opened_at, created_at: new Date() });
     return R([]);
   }
+  // The one question slot (claimAskSlot): a direct ask on its way holds it ('sending'); a queued ask being sent takes it in place.
+  if (has("INSERT INTO event_match_offers") && has("'sending', NOW()")) {
+    const [event_id, person_id, candidate_key, candidate_id, asker_id, event_name] = p;
+    const row = W.offers.find((o) => o.event_id === event_id && o.person_id === person_id && o.candidate_key === candidate_key);
+    const opened_at = new Date(Date.now() + W.offers.length);
+    if (!row) W.offers.push({ event_id, person_id, candidate_key, kind: "direct_ask", candidate_id, candidate_ids: [], asker_id, event_name, status: "sending", opened_at, created_at: new Date() });
+    else if (row.status === "queued" || row.status === "sending") Object.assign(row, { status: "sending", opened_at });
+    return R([]);
+  }
+  if (has("DELETE FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'sending'")) {
+    const i = W.offers.findIndex((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2] && o.status === "sending");
+    if (i >= 0) W.offers.splice(i, 1);
+    return R([]);
+  }
+  if (has("SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ((status = 'open'")) {
+    const days = Number(p[1]) * 86_400_000;
+    const mins = Number(p[2]) * 60_000;
+    return R(W.offers.filter((o) => o.person_id === p[0] && ((o.status === "open" && now() - +o.opened_at < days) || (o.status === "sending" && now() - +o.opened_at < mins))).slice(0, 1).map(() => ({ "?column?": 1 })));
+  }
   if (has("INSERT INTO event_match_offers") && has("'queued'")) {
     const [event_id, person_id, candidate_key, candidate_id, asker_id, event_name] = p;
     if (!W.offers.some((o) => o.event_id === event_id && o.person_id === person_id && o.candidate_key === candidate_key)) W.offers.push({ event_id, person_id, candidate_key, kind: "direct_ask", candidate_id, candidate_ids: [], asker_id, event_name, status: "queued", opened_at: null, created_at: new Date(Date.now() + W.offers.length) });
@@ -702,10 +721,65 @@ globalThis.fetch = (async (input: any, init?: any) => {
 }) as typeof fetch;
 void realFetch;
 
+// ------------------------------------------------------------------ timing and locks (sim gap A1, Royce 2026-10-14)
+// In Postgres a read and the write that follows it are separate round trips, so two replies landing together can interleave
+// between them. With W.latency set, every query waits a few (seeded) milliseconds first, so the fake world interleaves the same
+// way. Locks are then real: a transaction's pg_advisory_xact_lock and SELECT ... FOR UPDATE hold until its COMMIT, ROLLBACK or
+// release, and memberTurn() holds a member's replies one at a time the way routes/sendblue.ts's per-member lock does. One statement
+// still runs whole, as one Postgres statement does. Off (no wait) unless a test sets W.latency.
+export const latency = { next: null as null | (() => number) };
+const held = new Map<string, Promise<void>>();
+async function acquire(key: string): Promise<() => void> {
+  while (held.has(key)) await held.get(key);
+  let free!: () => void;
+  held.set(key, new Promise<void>((r) => (free = r)));
+  return () => {
+    held.delete(key);
+    free();
+  };
+}
+export async function memberTurn<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const release = await acquire(`member:${userId}`);
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+const wait = () => (latency.next ? new Promise<void>((r) => setTimeout(r, latency.next!())) : Promise.resolve());
+export const lockStats = { waits: 0 };
+
 // ------------------------------------------------------------------ wire it up
 const { default: pool } = await import("../../src/db/db.js");
-(pool as any).query = async (sql: string, params?: any[]) => handle(sql, params ?? []);
-(pool as any).connect = async () => ({ query: async (sql: string, params?: any[]) => handle(sql, params ?? []), release: () => {} });
+(pool as any).query = async (sql: string, params?: any[]) => {
+  await wait();
+  return handle(sql, params ?? []);
+};
+(pool as any).connect = async () => {
+  const mine: (() => void)[] = [];
+  const freeAll = () => {
+    while (mine.length) mine.pop()!();
+  };
+  return {
+    query: async (sql: string, params?: any[]) => {
+      await wait();
+      const flat = sql.replace(/\s+/g, " ").trim();
+      if (/pg_advisory_xact_lock/.test(flat)) {
+        const key = `xact:${params?.[0]}`;
+        if (held.has(key)) lockStats.waits++;
+        mine.push(await acquire(key));
+      } else if (/ FOR UPDATE/.test(flat)) {
+        const key = `row:${flat.split(" WHERE ")[0]}|${JSON.stringify(params ?? [])}`;
+        if (held.has(key)) lockStats.waits++;
+        mine.push(await acquire(key));
+      }
+      const out = handle(sql, params ?? []);
+      if (/^(COMMIT|ROLLBACK)/.test(flat)) freeAll();
+      return out;
+    },
+    release: freeAll,
+  };
+};
 
 const { default: sendblue } = await import("../../src/services/sendblue.js");
 (sendblue as any).messages.send = async (body: any) => {

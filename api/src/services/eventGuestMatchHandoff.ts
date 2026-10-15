@@ -209,12 +209,16 @@ async function maybeAskCandidateDirectly(
   // counts here too: the same one is already asked, and any other is their open question.
   const D = await import("./deferredSends.js");
   if (await D.isQueued(candidate.user_id, directAskKey(eventId, candidate.user_id, asker.user_id))) return;
-  // One yes-or-no about a person at a time: while they have another question open, this one waits and goes out once
-  // they've answered (sendNextQueued), so their "yes" can only ever mean one person.
-  if ((await O.hasOpenOffer(candidate.user_id)) || (await D.hasQueuedWithPrefix(candidate.user_id, "direct_ask:"))) {
+  // One yes-or-no about a person at a time: while they have another question open (or another ask is on its way to them),
+  // this one waits and goes out once they've answered (sendNextQueued), so their "yes" can only ever mean one person. The slot
+  // is taken here, before drafting, so asks drafted at the same moment can't all go (inRoomOffers.ts claimAskSlot).
+  if (await D.hasQueuedWithPrefix(candidate.user_id, "direct_ask:")) {
     await O.queueOffer({ eventId, eventName, personId: candidate.user_id, candidateId: asker.user_id, askerId: asker.user_id });
     return;
   }
+  if ((await O.claimAskSlot({ eventId, eventName, personId: candidate.user_id, candidateId: asker.user_id, askerId: asker.user_id })) === "queued") return;
+  let delivered = false;
+  try {
 
   // The message tells the candidate the asker wants an intro, so that has
   // to be on record first.
@@ -291,6 +295,15 @@ async function maybeAskCandidateDirectly(
   const result = await sendExemptWhenAllowed(send);
   if (!result.sent && !result.queued) {
     console.error(`maybeAskCandidateDirectly: send failed for ${candidate.user_id} (non-fatal):`, result.reason);
+  }
+  delivered = result.sent;
+  } finally {
+    // Sent: afterDirectAskSent has opened the slot as their question. Anything else (blocked, moved on, held, failed): free it,
+    // and the next ask waiting on them goes now (it would otherwise wait for an answer to a question they never got).
+    if (!delivered) {
+      await O.releaseAskSlot(eventId, candidate.user_id, asker.user_id).catch((err: any) => console.error("maybeAskCandidateDirectly: releasing the slot failed (non-fatal):", err?.message ?? err));
+      await sendNextQueued(candidate.user_id).catch((err: any) => console.error("maybeAskCandidateDirectly: the next queued ask failed (non-fatal):", err?.message ?? err));
+    }
   }
 }
 
