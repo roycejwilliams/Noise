@@ -63,9 +63,9 @@ pool.query = async (q: string, p: any[] = []) => {
   sql.push(q);
   if (/FROM partner_events e JOIN partners p/.test(q)) return { rows: night ? [night] : [] };
   if (/FROM matching_pauses/.test(q)) return { rows: paused ? [{ scope: "all", reason: "" }] : [] };
-  if (/SELECT signature, ran_at FROM partner_match_passes/.test(q)) return { rows: lastPass ? [lastPass] : [] };
+  if (/SELECT signature, ran_at, seen FROM partner_match_passes/.test(q)) return { rows: lastPass ? [lastPass] : [] };
   if (/INSERT INTO partner_match_passes/.test(q)) {
-    lastPass = { signature: p[1], ran_at: p[2] };
+    lastPass = { signature: p[1], ran_at: p[2], seen: JSON.parse(p[3]) };
     return { rows: [] };
   }
   if (/SELECT \* FROM co_pairs WHERE a_id = \$1 AND b_id = \$2/.test(q)) return { rows: pairs.filter((r) => r.a_id === p[0] && r.b_id === p[1]) };
@@ -112,6 +112,13 @@ try {
 
   r = await M.runPartnerMatchPass("partner-aa", deps({ now: new Date(during.getTime() + 20 * 60_000) }));
   check("pass: an unchanged room isn't scored again", !r.ran && /hasn't changed/.test(r.why));
+  // Someone new arrives: only they are scored against the room, and the room only against them.
+  const SAM = { user_id: "g-sam", who: "Sam", work: "seed investor in robotics", hoping: "robotics founders" };
+  const calls: { who: string; others: string[] }[] = [];
+  r = await M.runPartnerMatchPass("partner-aa", deps({ now: new Date(during.getTime() + 40 * 60_000), room: async () => ({ members: [member], guests: [NOOR, ELLIS, SAM] }), score: async (person: any, others: any[]) => (calls.push({ who: person.user_id, others: others.map((o: any) => o.user_id) }), []) }));
+  check("pass: a newcomer is scored against the whole room", r.ran && calls.find((c) => c.who === "g-sam")?.others.length === 3);
+  check("changed: someone whose answer changed is scored again; nobody else", [...M.changedPeople([M.guestScorable(NOOR), M.guestScorable({ ...ELLIS, hoping: "climate founders" })], { [NOOR.user_id]: M.personSignature(M.guestScorable(NOOR)), [ELLIS.user_id]: M.personSignature(M.guestScorable(ELLIS)) })].join() === "g-ellis");
+  check("pass: everyone else is scored against the newcomer only (a pass costs what changed)", calls.filter((c) => c.who !== "g-sam").every((c) => c.others.join() === "g-sam") && calls.length === 4);
 
   // Weak, a decline, the bar.
   pairs = [];

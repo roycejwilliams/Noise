@@ -62,12 +62,20 @@ export function guestValueSide(g: GuestWords): ValueSide {
   return { userId: g.user_id, firstName: PARTNER_MATCH.noName, ownAsks, goals: [], pastOutcomes: [], shared: ownAsks.map((a) => a.text), privateAsks: [], privateTexts: g.who?.trim() ? [g.who.trim()] : [] };
 }
 
-// What the room is, for "has it changed since the last pass": who's in it and what each said, hashed.
+// One person as the matcher sees them, hashed: who they are and what they shared. A changed hash is someone new to score.
+export function personSignature(p: ScorableGuest): string {
+  return createHash("sha256").update(`${p.user_id}:${JSON.stringify(Array.isArray(p.intent) ? (p.intent as any[]).map((i) => [i?.type, i?.text, i?.shareable, i?.status]) : [])}`).digest("hex").slice(0, 32);
+}
+
+// What the room is, for "has it changed since the last pass": everyone in it and what each said, hashed.
 export function roomSignature(room: ScorableGuest[]): string {
-  const parts = room
-    .map((p) => `${p.user_id}:${JSON.stringify(Array.isArray(p.intent) ? (p.intent as any[]).map((i) => [i?.type, i?.text, i?.shareable, i?.status]) : [])}`)
-    .sort();
-  return createHash("sha256").update(parts.join("\n")).digest("hex");
+  return createHash("sha256").update(room.map(personSignature).sort().join("\n")).digest("hex");
+}
+
+// Who needs scoring this pass: anyone new or changed since the last one. Each pass scores the changed people against the whole
+// room and everyone else against the changed people only, so a pass costs what changed, not the whole room again.
+export function changedPeople(room: ScorableGuest[], seen: Record<string, string> | null | undefined): Set<string> {
+  return new Set(room.filter((p) => seen?.[p.user_id] !== personSignature(p)).map((p) => p.user_id));
 }
 
 // Whether a pass is due: the room is open (not before, not its last half hour, not over), and it changed since the last pass,
@@ -154,14 +162,15 @@ export async function runPartnerMatchPass(eventId: string, deps: PassDeps = {}):
   out.room = room.length;
   out.guests = guests.length;
   const signature = roomSignature(room);
-  const { rows: lastRows } = await pool.query(`SELECT signature, ran_at FROM partner_match_passes WHERE event_api_id = $1`, [eventId]);
+  const { rows: lastRows } = await pool.query(`SELECT signature, ran_at, seen FROM partner_match_passes WHERE event_api_id = $1`, [eventId]);
   const due = passDue({ phase, signature, last: lastRows[0] ?? null, now });
   if (!due.due) return { ...out, why: due.why };
   if (room.length < 2) return { ...out, why: "fewer than two people to match" };
+  const changed = changedPeople(room, lastRows[0]?.seen ?? null);
   await pool.query(
-    `INSERT INTO partner_match_passes (event_api_id, signature, ran_at) VALUES ($1, $2, $3)
-     ON CONFLICT (event_api_id) DO UPDATE SET signature = EXCLUDED.signature, ran_at = EXCLUDED.ran_at`,
-    [eventId, signature, now],
+    `INSERT INTO partner_match_passes (event_api_id, signature, ran_at, seen) VALUES ($1, $2, $3, $4::jsonb)
+     ON CONFLICT (event_api_id) DO UPDATE SET signature = EXCLUDED.signature, ran_at = EXCLUDED.ran_at, seen = EXCLUDED.seen`,
+    [eventId, signature, now, JSON.stringify(Object.fromEntries(room.map((p) => [p.user_id, personSignature(p)])))],
   );
   out.ran = true;
   out.why = due.why;
@@ -179,7 +188,8 @@ export async function runPartnerMatchPass(eventId: string, deps: PassDeps = {}):
   };
   const judged = new Set<string>();
   for (const person of room) {
-    const others = room.filter((o) => o.user_id !== person.user_id);
+    const others = room.filter((o) => o.user_id !== person.user_id && (changed.has(person.user_id) || changed.has(o.user_id)));
+    if (!others.length) continue;
     const scored = await (deps.score ?? realScore)(person, others).catch(() => []);
     for (const s of scored) {
       const other = s.candidate.user_id;

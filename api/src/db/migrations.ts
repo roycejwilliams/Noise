@@ -3001,9 +3001,9 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS partner_guests_open ON partner_guests (event_api_id) WHERE resolved_at IS NULL`))
     .catch((err: Error) => console.error("partner_guests init failed:", err));
   // The last matching pass at each partner night (services/partnerMatching.ts): a hash of who was in the room and what each
-  // said, so a pass runs only when the room changed. No words, no ids beyond the event.
+  // said, so a pass runs only when the room changed and scores only who changed. Hashes only: no words.
   await pool
-    .query(`CREATE TABLE IF NOT EXISTS partner_match_passes (event_api_id TEXT PRIMARY KEY REFERENCES partner_events(api_id), signature TEXT NOT NULL, ran_at TIMESTAMPTZ NOT NULL)`)
+    .query(`CREATE TABLE IF NOT EXISTS partner_match_passes (event_api_id TEXT PRIMARY KEY REFERENCES partner_events(api_id), signature TEXT NOT NULL, ran_at TIMESTAMPTZ NOT NULL, seen JSONB NOT NULL DEFAULT '{}')`)
     .catch((err: Error) => console.error("partner_match_passes init failed:", err));
   await concurrencyMigrations();
 }
