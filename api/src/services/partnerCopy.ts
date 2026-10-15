@@ -47,7 +47,8 @@ export const PARTNER_COPY = {
   guest_ask_hoping: PENDING,
   // Intake finished: what happens now. Seen: once, after the last answer. May use {event}.
   guest_intake_done: PENDING,
-  // A guest who did intake from the RSVP link scans the door QR (or texts "I'm here") on the night. Seen: once, at arrival.
+  // A guest who finished intake arrives on the night ("I'm here" in the check-in window; see partnerGuests.arrivesBy and #213).
+  // Seen: once, at arrival.
   guest_arrived: PENDING,
   // A guest texts during the night after intake is done (Cue doesn't work for guests beyond the night's intros). Seen: at most
   // once every 3 hours.
