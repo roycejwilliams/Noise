@@ -268,7 +268,9 @@ export async function searchWebForOpportunity(
   city: string | null,
   profile: string | null | undefined,
   todayStr: string,
-  opts: { source?: "sweep" | "request" } = {},
+  // failed: told when the search itself failed (Exa down or timed out, the model call threw), so a caller's record says the search
+  // failed rather than that nothing exists (review of #225). Null is returned either way.
+  opts: { source?: "sweep" | "request"; failed?: (why: string) => void } = {},
 ): Promise<WebOpportunityResult> {
   const sweep = opts.source === "sweep";
   const prompt = `Someone wants: "${askText}"${city ? ` (based in ${city})` : ""}
@@ -292,6 +294,10 @@ Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the
     if (exaConfigured()) {
       // Exa finds the pages; the model judges fit and shape from them alone (services/exaSearch.ts).
       const found = await exaSearch(`${askText}${city ? ` in or near ${city}` : ""}`, { purpose: sweep ? "opportunity_sweep" : "opportunity_request", timeoutMs: sweep ? 25_000 : 8_000 });
+      if (found.error) {
+        opts.failed?.(found.error);
+        return null;
+      }
       if (!found.pages.length) return null;
       pages = found.pages;
       raw = (
@@ -320,8 +326,10 @@ Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the
     }
     const parsed = parseModelJson<{ found?: boolean; name?: string; url?: string; category?: string; reason?: string; deadline?: string | null; date?: string | null }>(raw);
     if (!parsed?.found || typeof parsed.name !== "string" || typeof parsed.url !== "string") return null;
-    // Through Exa, the url has to be one of the pages it found (a made-up or remembered url is nothing).
-    if (pages && !onePage(parsed.url, pages as any)) return null;
+    // Through Exa, the url has to be one of the pages it found (a made-up or remembered url is nothing), and the page's own url
+    // (without tracking tags, services/exaSearch.ts pagesFrom) is the one kept.
+    const pickedUrl = pages ? onePage(parsed.url, pages as any) : parsed.url;
+    if (!pickedUrl) return null;
     const reason = typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "Found via a real web search.";
     const deadline = typeof parsed.deadline === "string" ? parsed.deadline : null;
     // An event's own date (2026-09-22), carried as statedDates so the gate
@@ -344,14 +352,14 @@ Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the
     });
     const grounded = (m: TierMatch & { tier: 3 }) =>
       checkGrounding(m, { searchCity: null, distanceMiles: null, alreadyOffered: false, now: new Date(), evidence: m.evidence ?? null }).pass;
-    const found = build(parsed.url, await readPageText(parsed.url));
+    const found = build(pickedUrl, await readPageText(pickedUrl));
     // A blog about the program is a worse link to hand someone than the
     // program's own page (2026-09-18: YC went out as a zyner.io blog post).
     // Prefer the official page; keep what was found when it can't be had.
     let official: (TierMatch & { tier: 3 }) | null = null;
-    if (!looksOfficial(parsed.url, parsed.name)) {
+    if (!looksOfficial(pickedUrl, parsed.name)) {
       const officialUrl = await findOfficialPage(parsed.name, sweep ? 30_000 : 12_000);
-      if (officialUrl && officialUrl !== parsed.url && looksOfficial(officialUrl, parsed.name)) {
+      if (officialUrl && officialUrl !== pickedUrl && looksOfficial(officialUrl, parsed.name)) {
         official = build(officialUrl, await readPageText(officialUrl));
       }
     }
@@ -375,6 +383,7 @@ Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the
     return found;
   } catch (err: any) {
     console.error("webOpportunitySearch: searchWebForOpportunity failed (non-fatal):", err?.message ?? err);
+    opts.failed?.(err?.name === "TimeoutError" || err?.name === "AbortError" ? "it timed out" : "it threw an error");
     return null;
   }
 }

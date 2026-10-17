@@ -83,12 +83,37 @@ export function scrubQuery(q: string): string {
     .trim();
 }
 
-// Pure: Exa's results as pages (https only, one per url, a title and the text it read).
+// A query param that only tracks who clicked from where (an ad, a newsletter, a share): never part of what the page is. Anything
+// else (an event id, a date, a listing number) stays.
+const TRACKING_PARAM = /^(utm_[a-z0-9_]*|gclid|gbraid|wbraid|dclid|fbclid|msclkid|yclid|twclid|ttclid|igshid|mc_cid|mc_eid|_hsenc|_hsmi|mkt_tok|ref|ref_src)$/i;
+
+// Pure: a found link without its tracking tags (review of #225: Exa's links can carry utm_*, gclid, fbclid and the like, and Cue
+// shouldn't send them to a member). Every other param is kept exactly as written, in order; a link with none to strip comes back
+// as it was.
+export function withoutTracking(url: string): string {
+  const m = url.match(/^([^?#]*)\?([^#]*)(#.*)?$/);
+  if (!m) return url;
+  const kept = m[2].split("&").filter((part) => {
+    if (!part) return false;
+    const key = part.split("=")[0];
+    try {
+      return !TRACKING_PARAM.test(decodeURIComponent(key.replace(/\+/g, " ")));
+    } catch {
+      return true;
+    }
+  });
+  const query = kept.join("&");
+  if (query === m[2]) return url;
+  return `${m[1]}${query ? `?${query}` : ""}${m[3] ?? ""}`;
+}
+
+// Pure: Exa's results as pages (https only, one per url, a title and the text it read). Each url loses its tracking tags here, once,
+// so every pick, check, find and link after it carries the clean one.
 export function pagesFrom(j: any): ExaPage[] {
   const seen = new Set<string>();
   const out: ExaPage[] = [];
   for (const r of Array.isArray(j?.results) ? j.results : []) {
-    const url = typeof r?.url === "string" ? r.url.trim() : "";
+    const url = typeof r?.url === "string" ? withoutTracking(r.url.trim()) : "";
     if (!/^https:\/\//.test(url) || seen.has(url)) continue;
     seen.add(url);
     out.push({ url, title: String(r?.title ?? "").trim().slice(0, 200), published: typeof r?.publishedDate === "string" ? r.publishedDate.slice(0, 10) : null, text: String(r?.text ?? "").trim() });
@@ -119,7 +144,7 @@ export function onePage(url: unknown, pages: ExaPage[]): string | null {
   const key = (u: string) => {
     try {
       const x = new URL(u.trim());
-      for (const k of [...x.searchParams.keys()]) if (/^(utm_|fbclid|gclid|ref$|source$)/i.test(k)) x.searchParams.delete(k);
+      for (const k of [...x.searchParams.keys()]) if (TRACKING_PARAM.test(k) || /^source$/i.test(k)) x.searchParams.delete(k);
       return `${x.hostname.replace(/^www\./, "").toLowerCase()}${x.pathname.replace(/\/+$/, "")}${x.searchParams.toString() ? `?${x.searchParams}` : ""}`;
     } catch {
       return null;

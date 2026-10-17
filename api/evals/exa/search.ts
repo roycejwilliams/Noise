@@ -140,7 +140,7 @@ try {
   const ne = src("services/namedEventLookup.ts");
   check("the named-event lookup: Exa with a key, the url must be a found page, the old search without", /if \(exaConfigured\(\)\)/.test(ne) && /if \(pages && !onePage\(found\.url, pages\)\)/.test(ne) && /webSearch_20250305/.test(ne));
   const tw = src("services/taskWeb.ts");
-  check("every page check after the search is unchanged (pickPage, verifyResult, withVerifiedFacts run on Exa's picks too)", /raws = parseRawResults\(text, opts\.max \?\? 3\)\.filter\(\(r\) => onePage\(r\.url, found\.pages\)\);/.test(tw) && /const pages = await Promise\.all\(raws\.map\(\(raw\) => pickPage\(/.test(tw) && /withVerifiedFacts\(kept/.test(tw));
+  check("every page check after the search is unchanged (pickPage, verifyResult, withVerifiedFacts run on Exa's picks too)", /raws = parseRawResults\(text, opts\.max \?\? 3\)\.flatMap\(\(r\) => \{\s*const url = onePage\(r\.url, found\.pages\);\s*return url \? \[\{ \.\.\.r, url \}\] : \[\];/.test(tw) && /const pages = await Promise\.all\(raws\.map\(\(raw\) => pickPage\(/.test(tw) && /withVerifiedFacts\(kept/.test(tw));
 } finally {
   globalThis.fetch = realFetch;
   delete process.env.EXA_API_KEY;
