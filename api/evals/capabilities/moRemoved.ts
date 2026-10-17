@@ -138,9 +138,21 @@ const { createHmac } = await import("node:crypto");
 const id = "11111111-2222-3333-4444-555555555555";
 const sig = createHmac("sha256", "s").update(`mo-unsub:${id}`).digest("hex").slice(0, 32);
 check("a real opt-out link is accepted", O.optOutTokenMatches(id, sig, { MO_UNSUBSCRIBE_SECRET: "s" } as any));
+{
+  const qs: { sql: string; args: unknown[] }[] = [];
+  const db = { query: async (sql: string, args: unknown[] = []) => (qs.push({ sql, args }), /FROM mo_prospects/.test(sql) ? { rows: [{ x_user_id: "42", email: " Jordan@Example.com ", linkedin_url: null }] } : { rows: [] }) };
+  const keys = await O.recordOptOut(id, db);
+  check("an opt-out puts the person on the suppression list the agent checked before every send", JSON.stringify(keys) === JSON.stringify(["x:42", "email:jordan@example.com"]) && qs.filter((q) => /INSERT INTO mo_suppression \(key, reason\) VALUES \(\$1, 'unsubscribed'\)/.test(q.sql)).map((q) => q.args[0]).join() === "x:42,email:jordan@example.com", qs);
+  const gone = { query: async () => { throw new Error('relation "mo_prospects" does not exist'); } };
+  const opt = fs.readFileSync(path.join(api, "src/routes/emailOptOut.ts"), "utf8");
+  check("... and with those tables gone, it still answers", (await O.recordOptOut(id, gone).catch(() => null))?.length === 0);
+  check("the decision log holds the prospect id only, never their email, X id or LinkedIn (Royce, 2026-10-16)", /proposal: \{ prospectId: p, suppressed: keys\.length \}/.test(opt) && !/proposal: \{[^}]*\bkeys\b(?!\.length)/.test(opt));
+}
 check("a forged or malformed one is not", !O.optOutTokenMatches(id, "0".repeat(32), { MO_UNSUBSCRIBE_SECRET: "s" } as any) && !O.optOutTokenMatches("x", sig, { MO_UNSUBSCRIBE_SECRET: "s" } as any) && !O.optOutTokenMatches(id, sig, {} as any));
 const optSrc = fs.readFileSync(path.join(api, "src/routes/emailOptOut.ts"), "utf8");
-check("the opt-out writes only the decision log, never an outreach table", !/pool\.query|mo_\w+/.test(optSrc.replace(/mo-unsub/g, "")));
+// It adds to the suppression list (so a restore by revert still honors it) and reads the prospect's keys; nothing else is written.
+const optWrites = [...optSrc.matchAll(/\b(INSERT INTO|UPDATE|DELETE FROM)\s+(\w+)/g)].map((m) => `${m[1]} ${m[2]}`);
+check("the opt-out writes only the suppression list and the decision log, never another outreach table", JSON.stringify(optWrites) === JSON.stringify(["INSERT INTO mo_suppression"]) && /recordDecision\(/.test(optSrc), optWrites);
 
 console.log(`mo removed: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
