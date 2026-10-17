@@ -1748,6 +1748,9 @@ export type GroundingResult = {
   final: string;
   // cut: the unsupported sentences were deleted and the rest went out as drafted.
   outcome: "as_drafted" | "cut" | "redrafted" | "stripped" | "unchecked";
+  // Stripped all the way to the honest "not sure" line (its own words, or the fixed fallback): the member got no help this turn
+  // (harness/failureCount.ts counts it). Never set for a cut that still answered, the invite, dead-air or nothing-running lines.
+  notSure?: boolean;
   checks: GateCheck[];
   // Total grounding time for this message (checks + any redraft).
   latencyMs: number;
@@ -2130,7 +2133,7 @@ export async function groundReply(
         // Code acts only on Co's own answer: the lead when the redraft said check-in; otherwise at most what the cut sentence named.
         const world = silent && after === "cut" ? deadAirLine({ checkin, world: rf.world, draft, cut }) : null;
         const out = world ? [cut.trim(), world].filter(Boolean).join(" ") : workCut ? await withNothingRunningLine(after === "cut" ? cut : "", effectiveFailed1, rf) : final;
-        result = { final: out, outcome: "stripped", checks: world ? [...first.checks, { name: "world_line", pass: true, reason: `dead air after the cut (check-in: ${checkin === null ? "unread" : checkin}); said from their world: "${world}"` }] : first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
+        result = { final: out, outcome: "stripped", notSure: !world && !workCut && after === "honest", checks: world ? [...first.checks, { name: "world_line", pass: true, reason: `dead air after the cut (check-in: ${checkin === null ? "unread" : checkin}); said from their world: "${world}"` }] : first.checks, latencyMs: Date.now() - started, firstCheckMs, stages };
       }
     }
   }
@@ -2149,6 +2152,7 @@ export async function groundReply(
         ...result,
         final: d.final,
         outcome: "stripped",
+        notSure: false,
         checks: [...result.checks, { name: "discretion", pass: false, reason: `the reply to a privacy block ${d.problems.join("; ")}; an approved line was used` }],
       };
     }
@@ -2194,7 +2198,9 @@ export async function groundReply(
       userId: opts.userId ?? null,
       outcome: "act",
       action: result.outcome,
-      proposal: { draft, final: result.final },
+      // alreadyAnswered: something that answered them had gone out this turn, so an empty final is the deliberate end (nothing more
+      // to add), not a member left without an answer (harness/failureCount.ts; Royce, 2026-10-17).
+      proposal: { draft, final: result.final, notSure: result.notSure === true, alreadyAnswered: (src.answeredThisTurn ?? src.sentThisTurn ?? []).some((m) => m.trim().length > 0) },
       checks: result.checks,
       confidence: result.outcome === "unchecked" ? "low" : null,
       reason: result.checks.filter((c) => !c.pass).map((c) => c.reason ?? c.name).join("; ") || null,

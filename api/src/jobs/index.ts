@@ -1002,6 +1002,19 @@ export function registerJobs(io: Server) {
       .catch((err: any) => console.error("north star snapshot cron error:", err?.message ?? err));
   }, { timezone: "America/Los_Angeles" });
 
+  // The daily failure count (harness/failureCount.ts, Royce 2026-10-17): yesterday's numbers logged each morning (no message), and one
+  // text to Royce the first time a member or the team got a failure on a member-facing day, between 8am and 9pm Pacific. Team-only.
+  cron.schedule("5 8 * * *", () => {
+    import("../harness/failureCount.js")
+      .then((m) => m.recordDailyFailures())
+      .catch((err: any) => console.error("failure count cron error:", err?.message ?? err));
+  }, { timezone: "America/Los_Angeles" });
+  cron.schedule("*/15 * * * *", () => {
+    import("../harness/failureCount.js")
+      .then((m) => m.checkFailureAlert())
+      .catch((err: any) => console.error("failure alert cron error:", err?.message ?? err));
+  });
+
   // Weekly reflection per member (2026-09-22, harness/memberReflection.ts):
   // Sunday evening Pacific, so a queued check-in can go out Monday.
   cron.schedule("0 18 * * 0", () => {

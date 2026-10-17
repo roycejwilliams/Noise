@@ -136,3 +136,29 @@ async function loadRhythm() {
 loadRhythm().catch(() => {
   if (rhythmStatus) rhythmStatus.textContent = "Couldn't load the rhythm view.";
 });
+
+// Cue's failures per day (team only): members, the team and test members apart (api/src/harness/failureCount.ts).
+type Trio = { member: number; team: number; test: number };
+type FailureRow = { day: string; fallbacks: Trio; cuts: Trio; redrafted: Trio; noHelp: Trio; membersHit: number; memberTexts: number };
+const failuresStatus = document.getElementById("failures-status") as HTMLElement | null;
+const failuresTable = document.getElementById("failures") as HTMLTableElement | null;
+const trio = (t: Trio) => `${t.member} / ${t.team} / ${t.test}`;
+async function loadFailures() {
+  if (!failuresStatus || !failuresTable) return;
+  const res = await fetch("/api/sweeps/failures?days=14", { credentials: "same-origin" });
+  if (!res.ok) {
+    failuresStatus.textContent = res.status === 404 ? "Not available." : "Couldn't load the failures view.";
+    return;
+  }
+  const { rows } = (await res.json()) as { rows: FailureRow[] };
+  failuresStatus.textContent = "Each cell is members / team / test members. The last 14 days, newest first.";
+  let html = `<thead><tr><th>Day</th><th>Members hit</th><th>Fallback lines</th><th>No reply at all</th><th>Couldn't help</th><th>Redrafted fine</th><th>Member texts</th></tr></thead><tbody>`;
+  for (const r of rows) {
+    const bad = r.memberTexts > 0 && r.membersHit > 0;
+    html += `<tr><td>${esc(r.day)}</td><td class="num">${bad ? `<span class="pill pill-bad">${r.membersHit}</span>` : r.membersHit}</td><td class="num">${trio(r.fallbacks)}</td><td class="num">${trio(r.cuts)}</td><td class="num">${trio(r.noHelp)}</td><td class="num">${trio(r.redrafted)}</td><td class="num">${r.memberTexts}</td></tr>`;
+  }
+  failuresTable.innerHTML = html + "</tbody>";
+}
+loadFailures().catch(() => {
+  if (failuresStatus) failuresStatus.textContent = "Couldn't load the failures view.";
+});

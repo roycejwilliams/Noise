@@ -60,4 +60,16 @@ router.get("/rhythm", requireTesterLoginApi, requireTeam, async (req, res) => {
     res.status(500).json({ success: false, error: "The rhythm view couldn't be read." });
   }
 });
+// Cue's failures per day (api/src/harness/failureCount.ts): members, the team and test members apart. The alert text carries members'
+// numbers only; the team's and test members' are here (Royce, 2026-10-17). Team only, read-only.
+router.get("/failures", requireTesterLoginApi, requireTeam, async (req, res) => {
+  try {
+    const days = Math.min(30, Math.max(1, Number(req.query.days ?? 14) || 14));
+    const { failureDays } = await import("../../../api/src/harness/failureCount.js");
+    res.json({ success: true, rows: (await failureDays(days)).map((d) => ({ day: d.day, fallbacks: { member: d.fallbacks.member, team: d.fallbacks.team, test: d.fallbacks.test }, cuts: d.cuts, redrafted: d.redrafted, noHelp: { member: d.noHelp.member, team: d.noHelp.team, test: d.noHelp.test }, membersHit: d.membersHit, memberTexts: d.memberTexts })) });
+  } catch (err: any) {
+    console.error("failures view failed:", err?.message ?? err);
+    res.status(500).json({ success: false, error: "The failures view couldn't be read." });
+  }
+});
 export default router;

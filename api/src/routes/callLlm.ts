@@ -140,6 +140,10 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
         if (userId) recordDecision({ layer: 8, decision: "call.offer_unsourced", userId, outcome: "skip", action: "dropped_sentence", proposal: { sentence: s.slice(0, 240) }, reason: why }).catch(() => {});
       },
       onFirstText: (t) => { timing = t; },
+      // The turn ended on the last-resort line: a member who didn't get help (harness/failureCount.ts counts it).
+      onLastResort: (line) => {
+        if (userId) recordDecision({ layer: 8, decision: "call.last_resort", userId, outcome: "skip", action: "last_resort_line", proposal: { line } }).catch(() => {});
+      },
       // The brain's judgment of this turn (brain/index.ts judgeCallTurn), logged as brain.call without waiting.
       onDecision: (d) => { if (userId) import("../brain/index.js").then((B) => B.logCallTurn(userId, d)).catch(() => {}); },
     };
