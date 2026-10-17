@@ -8,6 +8,7 @@ import { localDate, searchZone } from "./eventOrder.js";
 import { fetchLumaEventDetails, renderEventDetails as renderEventDetailsLines, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
 import { withinRadius } from "./geocoding.js";
 import { gateMatches, START_LEAD_MINUTES, type GatedOut } from "../harness/matchGate.js";
+import { eventStartProblem } from "./eventStart.js";
 import pool from "../db/db.js";
 import type { PoolClient } from "pg";
 
@@ -241,17 +242,27 @@ export async function eventCandidates(
   }) as TierMatch;
   const raw: TierMatch[] = [...ours.slice(0, 2).map((e) => asMatch(e, 1)), ...ranking.ranked.map((e: any) => asMatch(e, 2))];
   const turnedAway: GatedOut[] = [];
-  // A reply never offers what already started, or what starts too soon to get to (START_LEAD_MINUTES; Royce, 2026-10-17: the Angel
-  // Island run was offered at 10:18, 48 minutes after it started, inside "this weekend").
-  const gated = await gateMatches(raw, { userId: opts.userId ?? null, searchCity: city, checkRepeat: true, gatedOut: turnedAway, askedUntil: window ? window.end.toISODate() : null, lookaheadDays: null, zone, leadMinutes: START_LEAD_MINUTES });
-  const candidates = await Promise.all(
+  // A reply never offers what already started, or what starts too soon to get to (Royce, 2026-10-17: the Angel Island run was offered at
+  // 10:18, 48 minutes after it started, inside "this weekend"). Judged once each event's own page is read: the feed has no end time and
+  // no online flag, so a festival under way (offerable until it ends) and an online event (15 minutes, not 60) are only known from the
+  // page (review of #229). The gate below checks the day; the start is checked after it, by the one rule (services/eventStart.ts).
+  const gated = await gateMatches(raw.map((m) => ({ ...m, startAt: undefined }) as TierMatch), { userId: opts.userId ?? null, searchCity: city, checkRepeat: true, gatedOut: turnedAway, askedUntil: window ? window.end.toISODate() : null, lookaheadDays: null, zone });
+  const feedStart = new Map(raw.map((m) => [("url" in m && m.url) || m.name, m.startAt ?? null]));
+  const read = await Promise.all(
     gated.map(async (m) => {
       const details = "url" in m && m.url ? ((await fetchLumaEventDetails(m.url).catch(() => null)) ?? undefined) : undefined;
-      const withDetails = { ...m, details } as TierMatch;
+      const startAt = details?.startAt ?? feedStart.get(("url" in m && m.url) || m.name) ?? null;
+      const late = eventStartProblem({ startAt, endAt: details?.endAt ?? null, online: !!(m.online || details?.online) }, new Date(), START_LEAD_MINUTES, details?.timezone ?? zone);
+      if (late) {
+        turnedAway.push({ name: m.name, tier: m.tier, reasons: [late], url: ("url" in m && m.url) || null, date: m.tier === 3 ? null : (m.event_date ?? null) });
+        return null;
+      }
+      const withDetails = { ...m, ...(startAt ? { startAt } : {}), details } as TierMatch;
       const e = m as { name: string; event_date?: string; city?: string | null };
       const lines = details ? renderEventDetailsLines(m.name, details) : [eventLine(e.name, e.event_date ?? null, e.city ?? null)];
       return { match: withDetails, lines };
     }),
   );
+  const candidates = read.filter((c): c is EventCandidate => c !== null);
   return { candidates, turnedAway, window: window?.label ?? null, feedSize: feed.length, inWindow: theirs.length + ours.length, outOfRange: null };
 }

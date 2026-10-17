@@ -27,7 +27,7 @@ import type { TierMatch } from "./tieredRecommendation.js";
 import type { EventDetails } from "./eventDetails.js";
 import { datesOnPage, dayIn, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
-import { START_LEAD_MINUTES, matchStartProblem } from "./eventStart.js";
+import { START_LEAD_MINUTES, eventStartProblem, matchStartProblem } from "./eventStart.js";
 
 // A read this recent counts as now: the plan/email tool's own window for a Luma page (agent/loopTools.ts emailPlan).
 export const RECHECK_FRESH_MS = 30 * 60 * 1000;
@@ -187,7 +187,8 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     if (over && new Date(over).getTime() <= now.getTime()) return { ok: false, exit: true, state: "expired", why: `it was already ${d.endAt ? "over" : "under way"} (${over}) when Cue read its page` };
     // Its start as the page has it now: started, or too soon to get there (START_LEAD_MINUTES; Royce, 2026-10-17, the Angel Island run).
     // Certain, so an exit. An event that runs a day or more is judged by its end above (services/eventStart.ts).
-    const late = matchStartProblem({ ...match, startAt: undefined, details: d } as TierMatch, now, START_LEAD_MINUTES, d.timezone ?? zone);
+    // From the page itself, whatever tier found it: a web or X find whose page is a Luma event has a real start too (review of #229).
+    const late = eventStartProblem({ startAt: d.startAt, endAt: d.endAt, online: d.online }, now, START_LEAD_MINUTES, d.timezone ?? zone);
     if (late) return { ok: false, exit: true, state: "expired", why: `${late}, when Cue read its page` };
     const old = match.details ?? null;
     const changed: string[] = [];
