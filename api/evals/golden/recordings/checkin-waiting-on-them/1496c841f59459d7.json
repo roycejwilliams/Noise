@@ -1,0 +1,95 @@
+{
+  "hash": "1496c841f59459d7",
+  "case": "checkin-waiting-on-them",
+  "recorded_at": "2026-10-17T17:08:03.104Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 6144,
+    "system": "",
+    "messages": 1,
+    "last": "user: Does this text message actually offer that CO will call THEM — Co proposing to place an outbound call to the person, not just telling them how they can call Co themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 6144,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Does this text message actually offer that CO will call THEM — Co proposing to place an outbound call to the person, not just telling them how they can call Co themselves — in any wording, even indirectly (e.g. \"I'm here if you want to talk this through\")? Not just related to talking or listening in general — specifically Co offering to call them.\n\nMessage: \"Hey. Harbor Light fellowship's still sitting there if funding timing's on your mind.\"\n\nReturn ONLY \"yes\" or \"no\".",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "no",
+      "usage": {
+        "input_tokens": 162,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 73,
+        "output_tokens_details": {
+          "thinking_tokens": 70
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg8BDfD2KuRhN64TC1UhQ",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQS3gUKEAgSGAI4AUIIdGhpbmtpbmcSDGr2zToXIOUHaK0g7hoM+jcLBnmaa3Yde/JfIjBmTpM1pW4n0Apw0SHhXwrtzaeyXCnyWPGdb9EBWnmUMbkxIV+qgBsgbsGFIqIe6hAq+wT+F6iAxBRAQCr8u6tHxA1gWCjScUEFaFoPSIj1qhj4xoWp314qQU09F6NZWdLYup3UZsKPkBHlZ1ozE2Nv8Fr70I9WTuZxXkcr/XBvSgCW3Iu89gvdUzw/vkbnQAJcGOd8qAQqmB7vnFbNKVbPxi6v2WUnkojDnEbs3d/K4VLFgNjK5toKRg6D5nvMa7F2kHjRsTNJw5guzgRp0e4kD+/QxbwlceUPviWv+7CENciYexRQlJ1Cxx5OiaaCch6pGNXS/bOY2+K7dgP3S/vw6qVXPWKDeBWrPB9RyJ8vU0qvSysJzL3zNRfMqEpA7JD68GTx/k+Cm7oXHlRf6KIVmYTsVrOOEwgxM7fGLJ/NAoX0+VdoshVfBdioaDAgpw4jVuD5wWEWcqjYMUyX3EFoVxwpZ2hq+gdAb9m58uPPfUGcvcev2nbuwuvTT6NbDkrjOcMNlQmh9K+O4lt9h9cKKkg2g7Rsk5jZRipxyvYoVQqPXRKttJdvTfjHXTfpiZ1zdqaF6pTxUgxlgHxCD+u4uDrK00g1+R99CwK7gpcKrGebif7gddIGQFf6zvqOz1J88aIAUuNlgZcCAuAa17szlMbLnCwTeL0ra0LqAsbg9dD8ngT9lOXb0O5GaDU2Ft+JmdMGP8WQicHtOhfQLHtk8aNT7ZV7yICXmwVv7FAiuyl8TAPX47wA6p9AaJ5IMpXv23HnYXBUYsaxhD73llnK3XS/xJGNzpgi0D8VG/VFjT0Ec6C6vJQgRSB02jGqe0GDOD+W7i/55b+PKMoACDfiW/imFlJ11UwHxT2ImUxi3sNQyuXC3WZjY8Z8jntwLS8/e+M+xmHl1bLLNWoGVxgB"
+          },
+          {
+            "type": "text",
+            "text": "no"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 162,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 73,
+          "output_tokens_details": {
+            "thinking_tokens": 70
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "hash": "58824dee09427f59",
   "case": "planned-before-first-run",
-  "recorded_at": "2026-10-14T15:57:07.076Z",
+  "recorded_at": "2026-10-17T07:17:57.191Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They're asking whether the saved watch/search is actually active, a question about how Co works\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"mode\": \"feedback\", \"topic\": \"checking whether the bar-watch request is actually active\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": true, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "{\"reason\": \"They're asking whether Co's saved bar-search task is actually active, not requesting a new search.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"asked_for\": [], \"in_progress\": [], \"sent_recently\": [], \"mode\": \"asking\", \"topic\": \"whether the cocktail bar search is actually running\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": true, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"looking_for\"], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 4391,
         "cache_creation_input_tokens": 0,
@@ -47,27 +47,28 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 343,
+        "output_tokens": 392,
         "output_tokens_details": {
-          "thinking_tokens": 55
+          "thinking_tokens": 78
         },
         "service_tier": "standard",
-        "inference_geo": "global"
+        "inference_geo": "global",
+        "speed": "standard"
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cg2QNyGCtfxtS7P4rexiZ",
+        "id": "msg_011Cg7QDUaopnEyYUWcJJyrv",
         "type": "message",
         "role": "assistant",
         "content": [
           {
             "type": "thinking",
             "thinking": "",
-            "signature": "EtkECsQCCBIYAipAULO7NxAB1AVqFmlSR0XMMZUfSVHK+2NVQdMcQvX5wIgrmJvlLat/8g+VsvrqPepRid0c+FcvD/w0+fpFNhCHOzIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB0My+1gbCAToIBBAAGgwC2ooDTzcFrDoEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCCMoM+UVonyUziTgSGu16BZKJreofoO6VWeoxCmQJv2SIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzHgvc4nTBuTGNQpvkaDDZ4AjBm+FB6H0rRSSIw1AurOxdQU2kbPXM9J0CbI/Y7SCANrnrAh/LLNltDmCDzgteQYRMXya0dd5Csu3WUKsEBylnvtSm2UUFRQEEBnbdgB98+dn9QUUekOh5Scp24Y+rYYIK9bhiZoDUCrF6dAcpBE4ElNzDMmg+XESlzhMh9cat8/LSKo9ZrptOjFsiMik5bIqWz7H8acy6HyrrK8h6NvJJKyA9Q4iK+YN0B9bIQ64UmxuhSzMQkZZgSf60qgPhi2XzlcKTtYy2Vt0Ga33oX3QaoHrKMnCL0RAd5MX0Z+DCNrXN4XFudUF/p5yUzdf/M/M1uXzeVGonHZH51/gkspRgB"
+            "signature": "EqQFCsQCCBIYAipA0yJh2rotM6WpamoHajnGCI1UH7zDScvEZhf0JfM+MXokoBERhXW8QUevt/6/fU8NlV+9j5xFxeWv1z/oO9R/EDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBosLM1gbCAToIBBAAGgwC2ooDTzcFrDoEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiCCMoM+UVonyUziTgSGu16BZKJreofoO6VWeoxCmQJv2SIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgx/XHygTBz8zy+wsz4aDOu9tEswkO2kqLmZKiIwbUz7pzireW51zxLejy24lYYxp28atfhe0GyYccq/eklTY2+SKKalCfCOQ30cibOrKowCbLgvLk+UtQEj7iO+36Qh1AHxyxxex0ou4ZhLrwhtF6WIWDZoUdsudBGnzKkit1rypk62kQuqKpfdUahcG4K40hgFJmNQ5yBPkN66YUdVPE7gUnAsZkkNkWx0G/RVlZVq1INSOox8I41i2s2+AipBKMje39sDZmKhiPC9TFsnhanGaq2p8GdQk+VfWTIoWyJoryidIC1ZOoYZlJDbZqLxTLVmgJpO0DTej5pPJ3MaDINkqd1G2CzR++vE75U3Gb3ldgNjLk6+G9rJ6yvebcVdh2/5BDAnexPROtZZPkrrHCyQ3sQKvnpBw0u7UrnbQ8trkYgrlYxz+OqVaXfnqERpUiroIAOhk0SSel8S8hgB"
           },
           {
             "type": "text",
-            "text": "{\"reason\": \"They're asking whether the saved watch/search is actually active, a question about how Co works\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"medium\", \"mode\": \"feedback\", \"topic\": \"checking whether the bar-watch request is actually active\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": true, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "{\"reason\": \"They're asking whether Co's saved bar-search task is actually active, not requesting a new search.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"asked_for\": [], \"in_progress\": [], \"sent_recently\": [], \"mode\": \"asking\", \"topic\": \"whether the cocktail bar search is actually running\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": true, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"looking_for\"], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -82,12 +83,13 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 343,
+          "output_tokens": 392,
           "output_tokens_details": {
-            "thinking_tokens": 55
+            "thinking_tokens": 78
           },
           "service_tier": "standard",
-          "inference_geo": "global"
+          "inference_geo": "global",
+          "speed": "standard"
         },
         "diagnostics": null
       }

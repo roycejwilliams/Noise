@@ -1,0 +1,95 @@
+{
+  "hash": "e5594c4478c4977f",
+  "case": "checkin-waiting-on-them",
+  "recorded_at": "2026-10-17T17:08:09.356Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Co sent a member of a private club. The situation: It's 2pm. Yesterday at 5:30pm Co sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Co's daily search is also looking for a rooftop ve...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Co sent a member of a private club.\n\nThe situation: It's 2pm. Yesterday at 5:30pm Co sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Co's daily search is also looking for a rooftop venue. The member texted \"Just checking in\".\n\nCo's text:\n\"\"\"Hey. Harbor Light fellowship's still sitting there if funding timing's on your mind.\"\"\"\n\nDoes the text give presence AND bring up the Harbor Light Fellowship as the one item, as something there for them to pick up if they want, WITHOUT implying they owe Co an answer or that Co is waiting on them (no \"still waiting to hear what you think\", no \"get back to me\"), and without a status report? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. Harbor Light fellowship's still sitting there if funding timing's on your mind.\\\" is presence plus one item, with no 'waiting' or 'get back to me' language.\"}",
+      "usage": {
+        "input_tokens": 365,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 538,
+        "output_tokens_details": {
+          "thinking_tokens": 459
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg8BDiKYwbMpNAGtgPdnK",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Hey. Harbor Light fellowship's still sitting there if funding timing's on your mind.\\\" is presence plus one item, with no 'waiting' or 'get back to me' language.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 365,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 538,
+          "output_tokens_details": {
+            "thinking_tokens": 459
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 {
   "hash": "5845695865a20d31",
   "case": "checkin-tell-me-more",
-  "recorded_at": "2026-10-14T17:19:39.075Z",
+  "recorded_at": "2026-10-17T17:08:40.118Z",
   "golden_now": "2026-10-13T21:00:00.000Z",
   "model": "claude-sonnet-5",
   "request": {
@@ -38,7 +38,7 @@
       "status": 200,
       "content_type": "application/json",
       "model": "claude-sonnet-5",
-      "text": "{\"reason\": \"They want more detail about Harbor Light Fellowship that Co just mentioned\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"Harbor Light Fellowship details\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": \"Harbor Light Fellowship link/info\", \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "text": "{\"reason\": \"They're asking Co to elaborate on the Harbor Light Fellowship Co just mentioned\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"Harbor Light Fellowship details\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": \"Harbor Light Fellowship link\", \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}",
       "usage": {
         "input_tokens": 4514,
         "cache_creation_input_tokens": 0,
@@ -47,22 +47,28 @@
           "ephemeral_5m_input_tokens": 0,
           "ephemeral_1h_input_tokens": 0
         },
-        "output_tokens": 296,
+        "output_tokens": 353,
         "output_tokens_details": {
-          "thinking_tokens": 0
+          "thinking_tokens": 54
         },
         "service_tier": "standard",
-        "inference_geo": "global"
+        "inference_geo": "global",
+        "speed": "standard"
       },
       "body": {
         "model": "claude-sonnet-5",
-        "id": "msg_011Cg2Wg5DopZat5XNXSEfFo",
+        "id": "msg_011Cg8BGBcB3M2oRS16acZYF",
         "type": "message",
         "role": "assistant",
         "content": [
           {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "ErYECsQCCBIYAipAXgvETb6V+o03P+2eGh/BGXxDW6MdQpzsXHTrPGqjtgcyqZuhO92UOCtsVNo9W9Qb2PSVGyQa41F+atxWpjN8pTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBltfO1gbCAToIBBAAGgwC2ooDTzcFbrgEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiD7Sp9uHuLXo273g1DZH3gaxLRIjEDBJabuJsb9lPgejiIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyIf10/dhb0oumtnf4aDF6gHHjO0PZGUEEZFSIwSp+7cjqReN3xA1hCoLOrWI+yHK7ISMy6zNx56jfGSoU1u2CEShifxHq1gs6sui+HKp4B4VURDdsoMtWj+DvYocumpoIZgQI1D5Qs/sdqCRdKTzBKcvmqhA6RRPshFT2icAkb4Apv5c80YeQerQtlKZ4qVsouyiyHhBxs/Q+p2GyOt2k5TUHZ2SBRWc9Vgu1Vbz7WKrCij3UEvG1py+b2exKu0UfzrGxRe5a6618QSRWwAOLjAZET/ZQBpiLeR1xhvqnyntfPL6yZiXuQT9IKem8YAQ=="
+          },
+          {
             "type": "text",
-            "text": "{\"reason\": \"They want more detail about Harbor Light Fellowship that Co just mentioned\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"Harbor Light Fellowship details\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": \"Harbor Light Fellowship link/info\", \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
+            "text": "{\"reason\": \"They're asking Co to elaborate on the Harbor Light Fellowship Co just mentioned\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": false, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"Harbor Light Fellowship details\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"solving\", \"feedback\": [], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": \"Harbor Light Fellowship link\", \"covered_now\": [], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"location_availability\", \"boundaries_preferences\", \"long_term_direction\"]}"
           }
         ],
         "container": null,
@@ -77,12 +83,13 @@
             "ephemeral_5m_input_tokens": 0,
             "ephemeral_1h_input_tokens": 0
           },
-          "output_tokens": 296,
+          "output_tokens": 353,
           "output_tokens_details": {
-            "thinking_tokens": 0
+            "thinking_tokens": 54
           },
           "service_tier": "standard",
-          "inference_geo": "global"
+          "inference_geo": "global",
+          "speed": "standard"
         },
         "diagnostics": null
       }
