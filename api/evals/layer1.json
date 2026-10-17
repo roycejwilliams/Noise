@@ -55,6 +55,7 @@
     "evals/event/rules.ts",
     "evals/vision/rules.ts",
     "evals/calls/rules.ts",
+    "evals/calls/inboundMembers.ts",
     "evals/calls/elevenlabs.ts",
     "evals/calls/opening.ts",
     "evals/calls/coreShared.ts",

@@ -34,6 +34,7 @@ import {
   hasRealUserTurn,
   hadContactSince,
   inboundCallerVerified,
+  inboundCallMember,
   stripVoicemailGreetingLines,
 } from "../harness/callGate.js";
 import { MODELS } from "../models.js";
@@ -323,10 +324,12 @@ router.post(
       const from = req.body.From as string | undefined;
       const callSid = req.body.CallSid as string | undefined;
       const stirVerstat = (req.body.StirVerstat as string | undefined) ?? null;
-      const result = from
-        ? await pool.query(`SELECT id FROM users WHERE phone_number = $1`, [from])
-        : null;
-      const userId: string | null = result?.rows[0]?.id ?? null;
+      // Only a member reaches the call agent (harness/callGate.ts inboundCallMember): a guest or applicant with a users row doesn't.
+      const caller = await inboundCallMember(from);
+      const userId: string | null = caller.userId;
+      if (!userId && caller.why !== "no account" && caller.why !== "no caller number") {
+        await recordDecision({ layer: 1, decision: "call.inbound", userId: null, outcome: "skip", action: "not_a_member", reason: caller.why }).catch(() => {});
+      }
       const allowUnverified = process.env.ALLOW_UNVERIFIED_INBOUND_CALLERS === "true";
       const verified = inboundCallerVerified(stirVerstat, allowUnverified);
 
