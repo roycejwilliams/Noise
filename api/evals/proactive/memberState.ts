@@ -148,9 +148,12 @@ const cand = (type: any, over: Partial<import("../../src/harness/proactive.js").
   const now = pt("2026-10-06T11:00:00");
   const g1 = { id: "g1", text: "Raise a pre-seed round for the climate startup", confirmedAt: new Date(now.getTime() - 30 * DAY), state: "active" as const, coTask: false };
   const g2 = { id: "g2", text: "Find a design partner for the brand refresh", confirmedAt: new Date(now.getTime() - 25 * DAY), state: "active" as const, coTask: false };
-  const one = N.planNudges(base(now, { goals: [g1, g2] }), []);
-  check("goal: at most one gentle surface, the one quiet longest", one.queue.length === 1 && one.queue[0].type === "goal_nudge" && one.queue[0].entryKey === "goal:g1");
-  check("goal: the draft facts are their goal in their words only", Object.keys(one.queue[0].facts).join(",") === "the_goal_in_their_words");
+  // Parked since 2026-10-17 (services/proactivePause.ts PARKED_TYPES): the detector is kept and checked here; planNudges never queues
+  // it (evals/proactive/goalNudgeParked.ts).
+  const one = N.detectGoalNudge(base(now, { goals: [g1, g2] }));
+  check("goal: at most one gentle surface, the one quiet longest", one.length === 1 && one[0].type === "goal_nudge" && one[0].entryKey === "goal:g1");
+  check("goal: the draft facts are their goal in their words only", Object.keys(one[0].facts).join(",") === "the_goal_in_their_words");
+  check("goal: parked, so the hourly pass holds it instead of queuing it", N.planNudges(base(now, { goals: [g1, g2] }), []).queue.length === 0);
   check("goal: never for a done goal", N.detectGoalNudge(base(now, { goals: [{ ...g1, state: "done" }] })).length === 0);
   check("goal: never for a stale (set-aside) goal", N.detectGoalNudge(base(now, { goals: [{ ...g1, state: "stale" }] })).length === 0);
   check("goal: never for a goal that is Cue's own task", N.detectGoalNudge(base(now, { goals: [{ ...g1, coTask: true }] })).length === 0);
