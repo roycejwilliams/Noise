@@ -84,7 +84,8 @@ export type ConversationToolContext = {
   sendCoReply: SendCoReply;
   // Layer 3 grounding gate (harness/replyGrounding.ts): runs on each drafted
   // message before it's sent or logged, and returns what actually goes out.
-  gate?: (draft: string, sentThisTurn: string[], answeredThisTurn?: string[], findsWaiting?: boolean) => Promise<string>;
+  // findsWaiting is read when the check decides, not before it runs: the check can outlast the redraft window.
+  gate?: (draft: string, sentThisTurn: string[], answeredThisTurn?: string[], findsWaiting?: () => boolean) => Promise<string>;
   // Tests only: the loop's searches and page reads return a placeholder
   // instead of spending on the web (agent/loopTools.ts).
   stubSearch?: boolean;
@@ -354,8 +355,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
         // the fallback line went out).
         if (/^\s*\([^)]*\)\s*$/.test(draft) && !answeredSent().length) return stillOwed(), { ok: false, error: "Not sent: that's a note to yourself, and nothing has answered them yet (a holding line isn't an answer). Write the reply to them and call sendReply again." };
         // Finds waiting and a redraft still possible: a reply the check cuts to almost nothing comes back empty, for the redraft below.
+        // The window is read again when the check decides (review of #228): the check's own redrafts can outlast it, and an empty
+        // reply then asks for a redraft that can't happen, so the member got the fallback line. Past it, the check's honest line goes.
         const findsWaiting = !!turnLoop && !state.findsNudged && finds.some((f) => !turnLoop!.shared.includes(f.url));
-        let message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent(), findsWaiting) : draft, ctx.resolvedContent);
+        const findsWaitingNow = () => findsWaiting && (ctx.redraftLeft?.() ?? true);
+        let message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent(), findsWaitingNow) : draft, ctx.resolvedContent);
         // An owed answer the check emptied never went: not "already answered", it's said again plainly.
         if (!message.trim() && owed) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         // The fact check left nothing to add after what already went out this turn.

@@ -801,8 +801,9 @@ export type GroundingSources = {
   answeredThisTurn?: string[];
   // This turn's search found things that haven't gone out, and the reply can still redraft (agent/conversationTools.ts sendReply):
   // a reply cut to almost nothing is left empty, so the redraft goes through those finds, never the honest "not sure" line (review
-  // of the finds batch, 2026-10-17: with only the holding line sent, that line went out while finds waited).
-  findsWaiting?: boolean;
+  // of the finds batch, 2026-10-17: with only the holding line sent, that line went out while finds waited). Read when the strip
+  // decides (afterStrip), since the check's own redrafts can outlast the window (review of #228).
+  findsWaiting?: boolean | (() => boolean);
 };
 
 const norm = (s: string) =>
@@ -1762,10 +1763,11 @@ const MINIMAL_FALLBACK = "Honestly, I'm not sure on that one.";
 
 // The honest "I don't have that" in Co's own words, stating nothing else.
 // What replaces a reply stripped down to almost nothing.
-export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTurn: string[]; findsWaiting?: boolean }): "invite" | "cut" | "nothing" | "honest" {
+export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTurn: string[]; findsWaiting?: boolean | (() => boolean) }): "invite" | "cut" | "nothing" | "honest" {
   if (o.inviteCut) return "invite";
   if (o.enough) return "cut";
-  if (o.findsWaiting) return "nothing";
+  // Read now, after the check's own redrafts: past the redraft window an empty reply could only end on the fallback line.
+  if (typeof o.findsWaiting === "function" ? o.findsWaiting() : o.findsWaiting) return "nothing";
   return o.sentThisTurn.some((m) => m.trim()) ? "nothing" : "honest";
 }
 
