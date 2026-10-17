@@ -23,6 +23,7 @@ import pool from "../db/db.js";
 import type { PoolClient } from "pg";
 import { xSearchBudget } from "./searchRules.js";
 import { parseModelJson } from "./modelJson.js";
+import { exaConfigured, exaSearch, fromPagesPrompt, onePage } from "./exaSearch.js";
 import { MODELS } from "../models.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { checkGrounding } from "../harness/matchGate.js";
@@ -226,10 +227,16 @@ Return ONLY valid JSON: {"reason": "...", "deadline": "YYYY-MM-DD" or null}`,
 // from a blog or listicle. Null when it can't find one.
 // place: for a place rather than a program (a venue found on a guide), where it is and which of its pages to find
 // ("private events or private dining page").
-export async function findOfficialPage(name: string, timeout: number, place?: { near: string | null; page: string }): Promise<string | null> {
+export async function findOfficialPage(name: string, timeout: number, place?: { near: string | null; page: string }, userId: string | null = null): Promise<string | null> {
   const want = place
     ? `Find the official website page for "${name}"${place.near ? ` in ${place.near}` : ""} (the place's own site, ideally its ${place.page}, not a guide, list, review, booking site or directory about it).`
     : `Find the official website page for "${name}" (the program's or organization's own site, ideally its apply or program page, not a blog, news story, or directory about it).`;
+  // Through Exa: no model at all. The first result that is the thing's own site (looksOfficial) is its page.
+  if (exaConfigured()) {
+    const q = place ? `${name}${place.near ? ` ${place.near}` : ""} official site ${place.page}` : `${name} official site`;
+    const found = await exaSearch(q, { purpose: "official_page", userId, pages: 6, text: false, timeoutMs: Math.min(timeout, 10_000) });
+    return found.pages.map((p) => p.url).find((u) => looksOfficial(u, name)) ?? null;
+  }
   try {
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),
@@ -264,17 +271,7 @@ export async function searchWebForOpportunity(
   opts: { source?: "sweep" | "request" } = {},
 ): Promise<WebOpportunityResult> {
   const sweep = opts.source === "sweep";
-  try {
-    const { text: raw } = await generateText({
-      model: anthropic(WEB_SEARCH_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.searchWebForOpportunity" },
-      // webSearch_20250305, not _20260209: the newer version never returned
-      // (every call hung until the timeout, 2026-09-18); this one answers in
-      // seconds.
-      tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: sweep ? 3 : 2 }) },
-      stopWhen: stepCountIs(sweep ? 4 : 3),
-      timeout: sweep ? 90_000 : 20_000,
-      prompt: `Someone wants: "${askText}"${city ? ` (based in ${city})` : ""}
+  const prompt = `Someone wants: "${askText}"${city ? ` (based in ${city})` : ""}
 ${profile ? `\nWho they are right now (for their stage and situation; their ask decides the topic):\n${profile}\n` : ""}
 Today's date: ${todayStr}
 
@@ -288,10 +285,43 @@ Reject anything whose own page shows it's closed, expired, or from a past cycle 
 
 If you find a real, current, well-matched fit: give its category (a short word or two: "accelerator", "fellowship", "investor", "grant", "sponsorship", "credit_program", "city_program", "event", "other"), and write "reason" the way you'd tell a friend over text: one short, casual sentence with the one concrete detail that proves it's real (a dollar amount, deadline, or eligibility line). That detail, the name, and any deadline must be stated on the exact page you return as "url", not on another page or a search snippet: that page's text is checked, and anything it doesn't say gets the whole result thrown out. Return the program's or fund's own official page, not a blog or listicle about it, whenever the official page states those details.
 
-Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the real page URL you actually read", "category": "...", "reason": "...", "deadline": "YYYY-MM-DD" or null, "date": "YYYY-MM-DD" or null} or {"found": false}`,
-    });
+Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the real page URL you actually read", "category": "...", "reason": "...", "deadline": "YYYY-MM-DD" or null, "date": "YYYY-MM-DD" or null} or {"found": false}`;
+  try {
+    let raw: string;
+    let pages: { url: string }[] | null = null;
+    if (exaConfigured()) {
+      // Exa finds the pages; the model judges fit and shape from them alone (services/exaSearch.ts).
+      const found = await exaSearch(`${askText}${city ? ` in or near ${city}` : ""}`, { purpose: sweep ? "opportunity_sweep" : "opportunity_request", timeoutMs: sweep ? 25_000 : 8_000 });
+      if (!found.pages.length) return null;
+      pages = found.pages;
+      raw = (
+        await generateText({
+          model: anthropic(WEB_SEARCH_MODEL),
+          experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.pick" },
+          // A reply's whole search has 20 seconds, Exa's part included.
+          timeout: sweep ? 90_000 : 12_000,
+          prompt: fromPagesPrompt(prompt, found.pages),
+        })
+      ).text;
+    } else {
+      raw = (
+        await generateText({
+          model: anthropic(WEB_SEARCH_MODEL),
+          experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.searchWebForOpportunity" },
+          // webSearch_20250305, not _20260209: the newer version never returned
+          // (every call hung until the timeout, 2026-09-18); this one answers in
+          // seconds.
+          tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: sweep ? 3 : 2 }) },
+          stopWhen: stepCountIs(sweep ? 4 : 3),
+          timeout: sweep ? 90_000 : 20_000,
+          prompt,
+        })
+      ).text;
+    }
     const parsed = parseModelJson<{ found?: boolean; name?: string; url?: string; category?: string; reason?: string; deadline?: string | null; date?: string | null }>(raw);
     if (!parsed?.found || typeof parsed.name !== "string" || typeof parsed.url !== "string") return null;
+    // Through Exa, the url has to be one of the pages it found (a made-up or remembered url is nothing).
+    if (pages && !onePage(parsed.url, pages as any)) return null;
     const reason = typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "Found via a real web search.";
     const deadline = typeof parsed.deadline === "string" ? parsed.deadline : null;
     // An event's own date (2026-09-22), carried as statedDates so the gate
