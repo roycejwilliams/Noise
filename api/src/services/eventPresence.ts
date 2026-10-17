@@ -130,13 +130,14 @@ export function arrivalAskText(event: { name: string; start_at: string; timezone
 
 // In-room nudge gate: someone sharing their location is waiting to be told
 // on arrival, so their nudge holds until they arrive (or the wait runs out).
+// Someone who stopped sharing isn't waiting: Cue can't see them arrive, so their nudge goes like anyone's (review of #215).
 export function arrivalWaitCheck(
-  presence: { sharing_seen_at: Date | null; arrived_at: Date | null } | null,
+  presence: { sharing_seen_at: Date | null; arrived_at: Date | null; location_stopped_at?: Date | null } | null,
   startAt: string,
   now: Date,
 ): GateCheck {
   const name = "arrived_or_not_waiting";
-  if (!presence?.sharing_seen_at || presence.arrived_at) return { name, pass: true };
+  if (!presence?.sharing_seen_at || presence.arrived_at || presence.location_stopped_at) return { name, pass: true };
   if (now.getTime() >= new Date(startAt).getTime() + ARRIVAL_WAIT_AFTER_START_MS) {
     return { name, pass: true, reason: "shared their location but hasn't arrived an hour in; nudging anyway" };
   }
@@ -147,9 +148,10 @@ export function arrivalWaitCheck(
 
 export async function getPresence(eventId: string, userId: string) {
   const { rows } = await pool
-    .query(`SELECT sharing_seen_at, arrived_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2`, [eventId, userId])
+    .query(`SELECT sharing_seen_at, arrived_at, location_stopped_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2`, [eventId, userId])
     .catch(() => ({ rows: [] as any[] }));
-  return rows[0] ? { sharing_seen_at: rows[0].sharing_seen_at ? new Date(rows[0].sharing_seen_at) : null, arrived_at: rows[0].arrived_at ? new Date(rows[0].arrived_at) : null } : null;
+  const at = (v: unknown) => (v ? new Date(v as string) : null);
+  return rows[0] ? { sharing_seen_at: at(rows[0].sharing_seen_at), arrived_at: at(rows[0].arrived_at), location_stopped_at: at(rows[0].location_stopped_at) } : null;
 }
 
 // Marks them arrived once. True only the first time.

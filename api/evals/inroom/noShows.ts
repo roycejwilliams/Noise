@@ -41,6 +41,27 @@ const nudge = (ev: string, personId: string) => W.nudges.find((n) => n.event_id 
   check("a no-show is never proposed, however late in the night", !nudge("ev2", ada.id) && !nudge("ev2", remy.id));
 }
 
+{
+  reset();
+  const ellis = addMember({ first_name: "Ellis", intent: [ask("a seed investor for climate hardware")] });
+  const sarah = addMember({ first_name: "Sarah", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  W.scorer = () => ({ score: 88, share: true });
+  addEvent({ api_id: "ev3", name: "Noise Supper" }, [{ m: ellis }, { m: sarah }]);
+  // Sarah shared, then stopped before Cue saw her arrive: Cue can't see where she is, so she counts as in the room, like anyone
+  // registered who doesn't share (review of #215).
+  W.presence.set(`ev3|${sarah.id}`, { sharing_seen_at: new Date(Date.now() - 20 * 60_000), location_stopped_at: new Date(), arrived_at: null });
+  const roster = await S.inRoomPool("ev3");
+  check("a guest who stopped sharing before arriving is back in the room, not held all night", roster.some((g) => g.user_id === sarah.id));
+  await pass("ev3");
+  check("... and is matched like anyone", nudge("ev3", ellis.id)?.candidate_id === sarah.id);
+  check("... and is told about her match right away, not held waiting for an arrival Cue can't see", nudge("ev3", sarah.id)?.candidate_id === ellis.id, W.nudges);
+}
+{
+  const P = await import("../../src/services/eventPresence.js");
+  const start = new Date().toISOString();
+  check("the arrival wait: sharing and not arrived waits; stopped sharing doesn't", !P.arrivalWaitCheck({ sharing_seen_at: new Date(), arrived_at: null }, start, new Date()).pass && P.arrivalWaitCheck({ sharing_seen_at: new Date(), arrived_at: null, location_stopped_at: new Date() }, start, new Date()).pass);
+}
+
 const { total, failed } = results;
 console.log(`no-shows held out: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
