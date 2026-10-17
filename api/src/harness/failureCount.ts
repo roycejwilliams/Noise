@@ -17,7 +17,7 @@
 // Who: members (harness/northStar.ts MEMBER, not the team), the team (users.mo_approver), and test or archived members, each apart.
 // A member-facing day: a member wrote to Cue that day (the team doesn't make one). Days are Pacific.
 // To Royce only, by text, and only when there's something to say (Royce: "No daily email. Alert text only when the count is above
-// zero."): the first time on a member-facing day that a member or the team got a failure, once a day, between 8am and 9pm Pacific
+// zero."): the first time on a member-facing day that a member (never the team or a test member) hit a failure, once a day, between 8am and 9pm Pacific
 // ("The alert respects 8am to 9pm"); a failure late at night is told at 8am. Each day's numbers are also logged (metrics.failures,
 // no message) so the redrafted-fine number is kept even on days nothing alerts.
 import { DateTime } from "luxon";
@@ -221,7 +221,7 @@ export async function recordDailyFailures(now = new Date()): Promise<void> {
   await recordDecision({ layer: 3, decision: "metrics.failures", userId: null, outcome: "act", action: "daily", proposal: await countFailures(day) });
 }
 
-// Through the day: the first time a member or the team got a failure on a member-facing day, once, by text, inside 8am to 9pm
+// Through the day: the first time a member (never the team or a test member) hit a failure on a member-facing day, once, by text, inside 8am to 9pm
 // Pacific. Yesterday too, until its alert went: a failure just before midnight is told at 8am.
 export async function checkFailureAlert(now = new Date()): Promise<void> {
   if (!canAlert() || !alertHours(now)) return;
