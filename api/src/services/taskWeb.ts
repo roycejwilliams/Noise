@@ -18,6 +18,7 @@ import { checkGrounding, checkTiming, placesClaimed } from "../harness/matchGate
 import type { TierMatch } from "./tieredRecommendation.js";
 import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
+import { exaConfigured, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
 
 export type RawDetail = { label: string; value: string };
 export type RawResult = { name: string; url: string; details: RawDetail[]; date?: string | null; deadline?: string | null };
@@ -265,19 +266,42 @@ export async function taskWebSearch(
     if (!budget.ok) return { kept: [], dropped: [], droppedDetails: [], note: `No web search right now: ${budget.reason}.` };
   }
   let raws: RawResult[] = [];
-  try {
-    const { text } = await generateText({
-      model: anthropic(MODELS.sonnet),
-      providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "taskWeb.search", metadata: { userId } },
-      tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: Math.min(4, Math.max(1, opts.searches ?? 2)) }) },
-      stopWhen: stepCountIs(opts.searches && opts.searches > 2 ? 5 : 3),
-      timeout: opts.background ? 120_000 : 60_000,
-      prompt: `Find on the real web: ${what}${opts.city ? ` (they're in ${opts.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.${opts.recentHours ? ` Favor what was first posted, announced or opened in the last ${opts.recentHours} hours (new listings, newly announced dates, applications that just opened); something older only if it's still ahead and nothing new fits.` : ""}${opts.sites?.length ? ` Good places to look: ${opts.sites.join(", ")} (and the thing's own site).` : ""}${opts.sites?.some(cantCheck) ? ` Listings on ${opts.sites.filter(cantCheck).join(", ")} can't be opened to check, so for anything found there give the place's OWN website and its real name (a listing that hides the name, like "Modern loft in SoMa", can't be used).` : ""}
+  const prompt = `Find on the real web: ${what}${opts.city ? ` (they're in ${opts.city})` : ""}. Today: ${new Date().toISOString().slice(0, 10)}.${opts.recentHours ? ` Favor what was first posted, announced or opened in the last ${opts.recentHours} hours (new listings, newly announced dates, applications that just opened); something older only if it's still ahead and nothing new fits.` : ""}${opts.sites?.length ? ` Good places to look: ${opts.sites.join(", ")} (and the thing's own site).` : ""}${opts.sites?.some(cantCheck) ? ` Listings on ${opts.sites.filter(cantCheck).join(", ")} can't be opened to check, so for anything found there give the place's OWN website and its real name (a listing that hides the name, like "Modern loft in SoMa", can't be used).` : ""}
 Up to ${Math.min(6, Math.max(1, opts.max ?? 3))} real, specific options, each from a page you actually read, ideally the thing's own site. For each, the details that matter (capacity, price, dates, address or neighborhood, deadline), each copied from that page as it's written there.
-Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read", "details": [{"label": "capacity", "value": "..."}], "date": "YYYY-MM-DD or null (when it happens, if it's an event)", "deadline": "YYYY-MM-DD or null"}]}. {"items": []} if nothing real.`,
-    });
-    raws = parseRawResults(text, opts.max ?? 3);
+Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read", "details": [{"label": "capacity", "value": "..."}], "date": "YYYY-MM-DD or null (when it happens, if it's an event)", "deadline": "YYYY-MM-DD or null"}]}. {"items": []} if nothing real.`;
+  try {
+    if (exaConfigured()) {
+      // Exa finds the pages; the model picks from them alone (services/exaSearch.ts). Any url it gives must be one of them.
+      // The sites and the recent window the prompt names reach Exa as searches of their own (review: the picker only saw general
+      // pages, so "good places to look" and "favor the last N hours" did nothing). More searches asked for: more pages.
+      const q = `${what}${opts.city ? ` in or near ${opts.city}` : ""}`;
+      const found = await exaSearches(
+        [{ query: q }, ...(opts.sites?.length ? [{ query: q, includeDomains: opts.sites }] : []), ...(opts.recentHours ? [{ query: q, sinceHours: opts.recentHours }] : [])],
+        { purpose: "task", userId, pages: (opts.searches ?? 2) >= 3 ? 12 : 8, timeoutMs: opts.background ? 30_000 : 12_000 },
+      );
+      if (found.error) return { kept: [], dropped: [], droppedDetails: [], note: `Web search failed: ${found.error}.` };
+      if (!found.pages.length) return { kept: [], dropped: [], droppedDetails: [], note: "Nothing came back that proved itself on its page." };
+      const { text } = await generateText({
+        model: anthropic(MODELS.sonnet),
+        providerOptions: { anthropic: { effort: "low" } },
+        experimental_telemetry: { isEnabled: true, functionId: "taskWeb.pick", metadata: { userId } },
+        timeout: opts.background ? 120_000 : 60_000,
+        // A listing site that can't be opened to check: its real name is enough here, its own site is found and read after (pickPage).
+        prompt: fromPagesPrompt(prompt.replace("so for anything found there give the place's OWN website and its real name", "so for anything found there give its real name exactly as the listing shows it (its own site is found and read after)"), found.pages),
+      });
+      raws = parseRawResults(text, opts.max ?? 3).filter((r) => onePage(r.url, found.pages));
+    } else {
+      const { text } = await generateText({
+        model: anthropic(MODELS.sonnet),
+        providerOptions: { anthropic: { effort: "low" } },
+        experimental_telemetry: { isEnabled: true, functionId: "taskWeb.search", metadata: { userId } },
+        tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: Math.min(4, Math.max(1, opts.searches ?? 2)) }) },
+        stopWhen: stepCountIs(opts.searches && opts.searches > 2 ? 5 : 3),
+        timeout: opts.background ? 120_000 : 60_000,
+        prompt,
+      });
+      raws = parseRawResults(text, opts.max ?? 3);
+    }
   } catch (err: any) {
     return { kept: [], dropped: [], droppedDetails: [], note: `Web search failed: ${err?.message ?? "error"}.` };
   }
@@ -299,7 +323,7 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
     }
     return readPageText(u);
   };
-  const lookup = (n: string) => findOfficialPage(n, opts.background ? 40_000 : 20_000, opts.ownPage ? { near: opts.city ?? null, page: opts.ownPage } : undefined);
+  const lookup = (n: string) => findOfficialPage(n, opts.background ? 40_000 : 20_000, opts.ownPage ? { near: opts.city ?? null, page: opts.ownPage } : undefined, userId);
   const pages = await Promise.all(raws.map((raw) => pickPage(raw, { read, official: lookup }).catch(() => ({ url: raw.url, text: null, official: false, swapped: false }))));
   const swappedFrom = new Map(pages.map((p, i) => [p.url, p.swapped ? raws[i].url : null]));
   for (const [i, raw] of raws.entries()) {
