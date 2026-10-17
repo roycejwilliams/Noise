@@ -21,8 +21,9 @@ import { recordDecision } from "../harness/core.js";
 
 export const PLACE_LIMITS = { placeChars: 40, placeWords: 4, toldLines: 40, toldDays: 180 } as const;
 
-export type PlaceSource = "their_words" | "told" | "corrected" | "none" | "removed";
-export type WantPlace = { key: string; place: string | null; source: PlaceSource; quote: string | null; notedAt: Date | null };
+// "unread": a row the want's window made before its place was read (wantWhen.ts saveWantWhere); placeFor reads it then, as if no row.
+export type PlaceSource = "their_words" | "told" | "corrected" | "none" | "removed" | "unread";
+export type WantPlace = { key: string; place: string | null; source: PlaceSource; quote: string | null; notedAt: Date | null; windowEnd?: string | null };
 export type Want = { key: string; text: string; createdAt: Date | null };
 
 export const wantKeyForAsk = (askRowId: string) => `ask:${askRowId}`;
@@ -79,13 +80,25 @@ export type PlaceDeps = {
   model: (prompt: string) => Promise<string>;
   save: (userId: string, w: Want, p: WantPlace) => Promise<void>;
   log: typeof recordDecision;
+  // The member's own day (their zone), and ending a want's window once that day is past it (wantWhen.ts endWindow).
+  today?: (userId: string) => Promise<string>;
+  endWindow?: (userId: string, key: string) => Promise<void>;
 };
 
 // The place of one want: the stored one, or read now (once) and stored. A read that fails is not stored (read again next time) and
 // gives no place for this search.
 export async function placeFor(userId: string, w: Want, deps: PlaceDeps = realPlaceDeps): Promise<WantPlace> {
-  const have = await deps.row(userId, w.key).catch(() => null);
-  if (have) return have;
+  let have = await deps.row(userId, w.key).catch(() => null);
+  // Their window is over (their day is past its last day): it ends now, and a place it came with ends with it (Royce, 2026-10-16).
+  // A day that can't be read leaves the window as it is.
+  if (have?.windowEnd && deps.today && deps.endWindow) {
+    const today = await deps.today(userId).catch(() => null);
+    if (today && have.windowEnd < today) {
+      await deps.endWindow(userId, w.key).catch((err: any) => console.error("wantPlace: ending the window failed (non-fatal):", err?.message ?? err));
+      have = await deps.row(userId, w.key).catch(() => null);
+    }
+  }
+  if (have && have.source !== "unread") return have;
   const since = await deps.since().catch(() => null);
   const told = mayUseTold(w, since) ? await deps.told(userId).catch(() => [] as string[]) : [];
   let raw: string;
@@ -168,8 +181,17 @@ export const realPlaceDeps: PlaceDeps = {
     return sinceCache;
   },
   row: async (userId, key) => {
-    const { rows } = await pool.query(`SELECT want_key, place, source, quote, noted_at FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
-    return rows[0] ? { key, place: rows[0].place ?? null, source: String(rows[0].source) as PlaceSource, quote: rows[0].quote ?? null, notedAt: rows[0].noted_at ? new Date(rows[0].noted_at) : null } : null;
+    const { rows } = await pool.query(`SELECT want_key, place, source, quote, noted_at, window_end FROM want_places WHERE user_id = $1 AND want_key = $2`, [userId, key]);
+    const end = rows[0]?.window_end ? (rows[0].window_end instanceof Date ? rows[0].window_end.toISOString().slice(0, 10) : String(rows[0].window_end).slice(0, 10)) : null;
+    return rows[0] ? { key, place: rows[0].place ?? null, source: String(rows[0].source) as PlaceSource, quote: rows[0].quote ?? null, notedAt: rows[0].noted_at ? new Date(rows[0].noted_at) : null, windowEnd: end } : null;
+  },
+  today: async (userId) => {
+    const { memberZone, localDay } = await import("./memberTime.js");
+    return localDay(new Date(), await memberZone(userId));
+  },
+  endWindow: async (userId, key) => {
+    const { endWindow } = await import("./wantWhen.js");
+    await endWindow(pool, userId, key);
   },
   // Their own lines that say where they are or go (a place word next to a capitalized name), newest first, never a line to a teammate.
   told: async (userId) => {
@@ -197,7 +219,8 @@ export const realPlaceDeps: PlaceDeps = {
   save: async (userId, w, p) => {
     await pool.query(
       `INSERT INTO want_places (user_id, want_key, want_text, place, source, quote) VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (user_id, want_key) DO NOTHING`,
+       ON CONFLICT (user_id, want_key) DO UPDATE SET place = EXCLUDED.place, source = EXCLUDED.source, quote = EXCLUDED.quote, read_at = NOW(), updated_at = NOW()
+         WHERE want_places.source = 'unread'`,
       [userId, w.key, w.text.slice(0, 300), p.place, p.source, p.quote],
     );
   },

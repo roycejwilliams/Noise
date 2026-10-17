@@ -2824,6 +2824,9 @@ export async function runMigrations(): Promise<void> {
   // and when they said they're free (stated gaps: proposed against, never held; a calendar gap is the only one that holds).
   await pool
     .query(`ALTER TABLE want_places ADD COLUMN IF NOT EXISTS window_start DATE, ADD COLUMN IF NOT EXISTS window_end DATE, ADD COLUMN IF NOT EXISTS window_quote TEXT`)
+    // A window can be saved before the want's place is read ("unread": wantPlace.ts placeFor still reads it).
+    .then(() => pool.query(`ALTER TABLE want_places DROP CONSTRAINT IF EXISTS want_places_source_check`))
+    .then(() => pool.query(`ALTER TABLE want_places ADD CONSTRAINT want_places_source_check CHECK (source IN ('their_words', 'told', 'corrected', 'none', 'removed', 'unread'))`))
     .then(() =>
       pool.query(
         `CREATE TABLE IF NOT EXISTS member_free_times (

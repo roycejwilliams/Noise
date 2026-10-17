@@ -160,7 +160,7 @@ export type RawKnown = {
   asks: { id: string; text: string }[];
   files: { n: number; sentOn: string }[];
   // Where Co looks for each of their wants (services/wantPlace.ts): the want's own place, or none (their home city stands in).
-  places?: { key: string; want: string; place: string | null; until?: string | null }[];
+  places?: { key: string; want: string; place: string | null; source?: string | null; until?: string | null }[];
   // When they said they're free (services/wantWhen.ts): stated gaps, proposed against, never held.
   freeTimes?: { id: string; text: string; quote: string }[];
   // Their design system (member_design_signals), the way decks and pages read it: per context with signals of its own, the look
@@ -256,10 +256,12 @@ export function knownItems(r: RawKnown): KnownItem[] {
   for (const x of r.designRefs ?? []) add(`designref:${x.id}`, "designref", "likes", `a look I took from ${x.ref}, for your decks and pages`, null, false);
   for (const a of r.asks) add(`ask:${a.id}`, "ask", "after", `looking out for: ${a.text}`);
   // Where Co looks for each want (Royce, 2026-10-15: "the place shows in what Cue knows, editable and removable").
-  for (const x of r.places ?? []) add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}` : `where I look for "${x.want.slice(0, 120)}": near home${p?.city ? ` (${p.city})` : ""}`);
-  // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
+  // Windows and stated free times first: the group shows 8, and these are few and time-bound (review of #220).
   for (const x of r.places ?? []) if (x.until) add(`window:${x.key}`, "window", "where", `"${x.want.slice(0, 120)}" is for until ${x.until}`, null, false);
   for (const f of r.freeTimes ?? []) add(`free:${f.id}`, "free", "where", `free: ${f.text}`, f.quote, false);
+  // A row made only by a window ("unread") has no place read yet: nothing true to say about where.
+  for (const x of r.places ?? []) if (x.source !== "unread") add(`place:${x.key}`, "place", "where", x.place ? `where I look for "${x.want.slice(0, 120)}": ${x.place}` : `where I look for "${x.want.slice(0, 120)}": near home${p?.city ? ` (${p.city})` : ""}`);
+  // The window a want is for (the bounce): removable; a new one is said again and saved with the want.
   for (const f of r.files) add(`file:${f.n}`, "file", "files", `file ${f.n}, sent ${f.sentOn}`, null, false);
   return out;
 }
@@ -535,7 +537,7 @@ export async function readKnown(userId: string, db: { query: (sql: string, args?
     // Where Co looks for each want they have open: an open ask's row, or a goal's (kept only if it's still one of their goals, below).
     // A removed place is shown as "near home" (still correctable: "actually SF" lands on it). Goal rows are read wide and filtered to
     // goals still theirs before the 20 shown (livePlaces), so a dropped goal's row never crowds a live one out.
-    q(`SELECT want_key, want_text, place, window_end FROM want_places WHERE user_id = $1
+    q(`SELECT want_key, want_text, place, source, window_end FROM want_places WHERE user_id = $1
          AND (want_key LIKE 'goal:%' OR want_key IN (SELECT 'ask:' || id::text FROM ask_checkins WHERE user_id = $1 AND resolved_at IS NULL))
        ORDER BY updated_at DESC LIMIT 200`, [userId]).catch(() => [] as any[]),
   ]);
@@ -581,7 +583,14 @@ export async function livePlaces(rows: any[], p: any): Promise<NonNullable<RawKn
   const { goalHash } = await import("./goalEdges.js");
   // Their goals as the sweeps read them (goalEdges.ts liveGoals): the profile list, active goal entries, and their long-term direction.
   const goals = new Set([...(Array.isArray(p?.goals) ? p.goals : []), ...(Array.isArray(p?.intent) ? p.intent.filter((e: any) => e?.kind === "goal" && e?.status === "active").map((e: any) => e.text) : []), p?.long_term_direction].filter((g): g is string => typeof g === "string" && !!g.trim()).map((g) => `goal:${goalHash(g)}`));
-  return rows.filter((r) => !String(r.want_key).startsWith("goal:") || goals.has(String(r.want_key))).slice(0, 20).map((r) => ({ key: String(r.want_key), want: String(r.want_text ?? ""), place: r.place ?? null, until: r.window_end ? (r.window_end instanceof Date ? r.window_end.toISOString().slice(0, 10) : String(r.window_end).slice(0, 10)) : null }));
+  return rows.filter((r) => !String(r.want_key).startsWith("goal:") || goals.has(String(r.want_key))).slice(0, 20).map((r) => {
+    // A window that has ended is gone from what Cue knows, and so is a place it came with in their words (Royce, 2026-10-16; the
+    // hourly job and the next search delete them, wantWhen.ts endWindow); a day's slack covers every time zone. The want stays.
+    const until = r.window_end ? (r.window_end instanceof Date ? r.window_end.toISOString().slice(0, 10) : String(r.window_end).slice(0, 10)) : null;
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const ended = !!until && until < yesterday;
+    return { key: String(r.want_key), want: String(r.want_text ?? ""), place: ended && (r.source === "their_words" || r.source === "told") ? null : (r.place ?? null), source: r.source ? String(r.source) : null, until: ended ? null : until };
+  });
 }
 
 // What the member is shown: every item, stripped of other members' details. Throws when the names to strip can't be read (fails
@@ -822,7 +831,7 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     }
     case "free": {
       // A free time they stated: removed (it's never proposed against again).
-      const r = await db.query(`UPDATE member_free_times SET removed_at = NOW() WHERE user_id = $1 AND id = $2 AND removed_at IS NULL`, [userId, a]);
+      const r = await db.query(`UPDATE member_free_times SET removed_at = NOW(), quote = '' WHERE user_id = $1 AND id = $2 AND removed_at IS NULL`, [userId, a]);
       if (!r.rowCount) throw new NotApplied();
       return { ref: item.ref, source: "free", was, now: null };
     }

@@ -126,7 +126,10 @@ export function theirQuote(message: string, recent: string | null | undefined, q
   const q = String(quote ?? "").trim();
   if (q.length < 3) return null;
   const norm = (t: string) => t.toLowerCase().replace(/[’']/g, "'").replace(/\s+/g, " ");
-  const theirs = [message, ...String(recent ?? "").split("\n").filter((l) => !/^\s*Co:/i.test(l))].filter(Boolean);
+  // The exchange may start mid-line ("…<tail>", exchangeText trims long ones): that fragment could be Co's, so it never counts.
+  const lines = String(recent ?? "").split("\n");
+  if (/^\s*…/.test(lines[0] ?? "")) lines.shift();
+  const theirs = [message, ...lines.filter((l) => !/^\s*Co:/i.test(l))].filter(Boolean);
   return theirs.some((t) => norm(t).includes(norm(q))) ? q : null;
 }
 
@@ -155,8 +158,12 @@ export async function wantWhereFromWords(ctx: Pick<ConversationToolContext, "use
   if (place) notes.push(`It's for ${place}.`);
   if (until) notes.push(`It's for ${WW.describeWindow(null, until)}.`);
   if ((w.place && !place) || (w.until && !until)) notes.push("What you passed for where or when wasn't in their own words, so it isn't kept; ask if it matters.");
-  if (!place && !(await W.realPlaceDeps.row(ctx.userId, key).catch(() => null))?.place) notes.push(`No place on it: Co looks near their home${home ? ` (${home})` : ""}. Say that in a line, or ask where if it's not clear.`);
-  return { fact: `Co's daily search is now looking for: "${text}"${place ? ` in ${place}` : ""}${until ? `, ${WW.describeWindow(null, until)}` : ""}. If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`, note: notes.join(" ") };
+  // No place passed: the want's own words are read now, the way the sweep would (one small read), so "near home" is only said when true.
+  const read = place ? null : await W.placeFor(ctx.userId, { key, text, createdAt: new Date() }).catch(() => null);
+  const where = place ?? read?.place ?? null;
+  if (!place && read?.place) notes.push(`It's for ${read.place}, from ${read.source === "their_words" ? "their words" : "what they've told you about where they go for this"}.`);
+  if (!where) notes.push(`No place on it: Co looks near their home${home ? ` (${home})` : ""}. Say that in a line, or ask where if it's not clear.`);
+  return { fact: `Co's daily search is now looking for: "${text}"${where ? ` in ${where}` : ""}${until ? `, ${WW.describeWindow(null, until)}` : ""}. If something real fits, Co may text them (at most one text a day). Co can't promise it will find anything, or when.`, note: notes.join(" ") };
 }
 
 const recentOf = (ctx: Pick<ConversationToolContext, "recentExchange" | "lastCoMessage">): string | null => ctx.recentExchange ?? (ctx.lastCoMessage ? `Co: ${ctx.lastCoMessage}` : null);
