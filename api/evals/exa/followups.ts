@@ -1,6 +1,6 @@
-// Exa follow-ups from the review of #225 (services/exaSearch.ts): (1) a found link loses its tracking tags once, where Exa's pages
-// come in, so no pick, find or link Cue sends carries them; (2) a failed search (Exa down or timed out) is said as a failed search
-// by every caller, never as "nothing exists". Zero tokens: Exa, the model and the database are stubbed, nothing leaves the machine.
+// Exa follow-ups from the review of #225 (services/exaSearch.ts): (1) a found link loses its ad tracking tags once, where Exa's
+// pages come in, so no pick, find or link Cue sends carries them (ref= stays); (2) a search that didn't run (Exa down or timed out,
+// or blocked by the web search budget) is said as one by every caller, never as "nothing exists". Zero tokens: Exa, the model and the database are stubbed, nothing leaves the machine.
 //   npx tsx evals/exa/followups.ts
 process.env.DATABASE_URL = "postgres://ci:ci@127.0.0.1:1/ci";
 process.env.DOTENV_CONFIG_PATH = "/dev/null";
@@ -45,7 +45,13 @@ let rowsFor: (sql: string) => any[] = () => [];
 const realQuery = (pool as any).query;
 const realConnect = (pool as any).connect;
 (pool as any).query = async (sql: string) => ({ rows: rowsFor(sql), rowCount: 0 });
-(pool as any).connect = async () => ({ query: async (sql: string) => ({ rows: /COUNT\(\*\)::int AS today/.test(sql) ? [{ today: 0 }] : [] }), release: () => {} });
+// budget: the day's count each budget check sees, in order (a big count blocks that search); empty means room for every one.
+let budget: number[] = [];
+(pool as any).connect = async () => {
+  const today = budget.length ? budget.shift()! : 0;
+  return { query: async (sql: string) => ({ rows: /COUNT\(\*\)::int AS today/.test(sql) ? [{ today }] : [] }), release: () => {} };
+};
+const FULL = 1_000_000;
 
 const DOWN = () => ({ status: 500, body: { error: "down" } });
 const TAGGED = "https://joulesaccelerator.org/apply?cohort=2026&utm_source=newsletter&utm_medium=email&gclid=abc123";
@@ -57,7 +63,12 @@ try {
 
   // ================================================================ 1. tracking tags
   const w = X.withoutTracking;
-  check("tracking tags come off a found link (utm_*, gclid, fbclid, mc_cid, ref)", w("https://a.com/e?utm_source=x&utm_campaign=y&gclid=1&fbclid=2&mc_cid=3&mc_eid=4&ref=producthunt&msclkid=5") === "https://a.com/e", w("https://a.com/e?utm_source=x&gclid=1"));
+  check("ad and email tracking tags come off a found link (utm_*, gclid, fbclid, mc_cid, msclkid, _hsenc, mkt_tok)", w("https://a.com/e?utm_source=x&utm_campaign=y&gclid=1&fbclid=2&mc_cid=3&mc_eid=4&msclkid=5&_hsenc=6&mkt_tok=7") === "https://a.com/e", w("https://a.com/e?utm_source=x&gclid=1"));
+  // Royce, 2026-10-17: "Leave ref= alone, so a referral code or a GitHub branch survives."
+  check("ref= stays: a GitHub branch or tag", w("https://github.com/x/y/blob/main/README.md?ref=v2.0") === "https://github.com/x/y/blob/main/README.md?ref=v2.0", w("https://github.com/x/y/blob/main/README.md?ref=v2.0"));
+  check("ref= stays: a referral code, while the utm tag beside it goes", w("https://posh.vip/e/party?ref=jordan123&utm_source=ig") === "https://posh.vip/e/party?ref=jordan123", w("https://posh.vip/e/party?ref=jordan123&utm_source=ig"));
+  const refPages = X.pagesFrom({ results: [{ url: "https://posh.vip/e/party?ref=jordan123&utm_source=ig", title: "Party", text: "x" }] });
+  check("... and a pick that dropped the ref still matches its page, whose own link (ref kept) comes back", refPages[0]?.url === "https://posh.vip/e/party?ref=jordan123" && X.onePage("https://posh.vip/e/party", refPages) === "https://posh.vip/e/party?ref=jordan123");
   check("... and every param that matters stays, as written and in order (an event id, a date)", w("https://www.eventbrite.com/e/founder-dinner?aff=ebdssbdestsearch&utm_source=x&eid=123&date=2026-11-02") === "https://www.eventbrite.com/e/founder-dinner?aff=ebdssbdestsearch&eid=123&date=2026-11-02" && w("https://lu.ma/event/evt-AbC?tk=9a%20b&utm_medium=social") === "https://lu.ma/event/evt-AbC?tk=9a%20b");
   check("... the fragment stays, and a link with nothing to strip comes back exactly as it was", w("https://a.com/p?id=7&utm_source=x#tickets") === "https://a.com/p?id=7#tickets" && w("https://a.com/p?id=7&q=a+b#x") === "https://a.com/p?id=7&q=a+b#x" && w("https://a.com/p") === "https://a.com/p" && w("not a url") === "not a url");
   check("... a param that only starts like a tag stays (refund, reference, source_id)", w("https://a.com/p?refund=1&reference=AB12&source_id=4") === "https://a.com/p?refund=1&reference=AB12&source_id=4");
@@ -90,18 +101,39 @@ try {
   const notDone: string[] = [];
   const facts: { kind: string; text: string }[] = [];
   const ctx: any = { userId: "u1", phoneNumber: "+15550100001", firstName: "Jordan", resolvedContent: "any climate hardware accelerators?", turn: { message: "" }, dryRun: true, facts: { add: (kind: string, text: string) => facts.push({ kind, text }) }, sendCoReply: async () => true };
-  const tools: any = LT.loopTools(ctx, { sent: false, sentMessages: [] }, LT.newLoopState(), (wh: string) => notDone.push(wh));
+  // A fresh turn for each case (a turn has its own few web searches).
+  const make = (): any => LT.loopTools(ctx, { sent: false, sentMessages: [] }, LT.newLoopState(), (wh: string) => notDone.push(wh));
+  let tools = make();
   const down = await tools.webSearch.execute({ queries: ["climate hardware accelerators", "hardware accelerator applications"] }, { toolCallId: "t", messages: [] });
   check("the reply's search, Exa down: the tool says the search failed and never ran, not that nothing turned up", down?.ok === false && /failed/.test(down?.error ?? "") && /Never say nothing turned up/.test(down?.error ?? ""), down);
-  check("... it's recorded as not done, and no receipt says it searched and nothing held up", notDone.some((n) => /web search failed/i.test(n)) && !facts.some((f) => f.kind === "did_this_turn" && /Searched the web/.test(f.text)), { notDone, facts });
+  check("... it's recorded as not done, and no receipt says it searched and nothing held up", notDone.some((n) => /web search didn't run/i.test(n)) && !facts.some((f) => f.kind === "did_this_turn" && /Searched the web/.test(f.text)), { notDone, facts });
   // One search failed, one ran: the one that ran counts; the failed one is named as failed, never as empty.
   notDone.length = 0;
   facts.length = 0;
   exa = (q) => (/applications/.test(q) ? DOWN() : { status: 200, body: { results: [] } });
+  tools = make();
   const half = await tools.webSearch.execute({ queries: ["climate hardware accelerators", "hardware accelerator applications"] }, { toolCallId: "t2", messages: [] });
   const rec = facts.find((f) => f.kind === "did_this_turn" && /Searched the web/.test(f.text))?.text ?? "";
   check("one of two searches failed: the receipt names only the one that ran as searched, and the other as failed", half?.ok === true && /"climate hardware accelerators"\): 0 held up/.test(rec) && /"hardware accelerator applications" failed and never ran/.test(rec), rec);
-  check("... and the tool's note says some searches failed (not the same as nothing there)", /1 of 2 searches failed/.test(half?.note ?? "") && !/^Web search failed/.test(half?.note ?? ""), half?.note);
+  check("... and the tool's note says some searches didn't run (not the same as nothing there)", /1 of 2 searches didn't run/.test(half?.note ?? "") && !/^Web search failed/.test(half?.note ?? ""), half?.note);
+  // A search the budget blocked never ran either (re-review of #235: one blocked + one Exa-failed came back ok:true with
+  // 'Searched the web just now ("budgetq accelerators"): 0 held up on their own pages.').
+  notDone.length = 0;
+  facts.length = 0;
+  budget = [FULL, 0];
+  exa = DOWN;
+  tools = make();
+  const mixed = await tools.webSearch.execute({ queries: ["budgetq accelerators", "exa down accelerators"] }, { toolCallId: "t3", messages: [] });
+  check("one search blocked by the budget, one failed: nothing ran, so the tool says the search failed, never 'searched, nothing held up'", mixed?.ok === false && /never ran/.test(mixed?.error ?? "") && !facts.some((f) => f.kind === "did_this_turn" && /Searched the web/.test(f.text)) && notDone.some((n) => /didn't run/.test(n)), { mixed, facts, notDone });
+  notDone.length = 0;
+  facts.length = 0;
+  budget = [FULL, 0];
+  exa = () => ({ status: 200, body: { results: [] } });
+  tools = make();
+  const blockedOne = await tools.webSearch.execute({ queries: ["budgetq accelerators", "climate accelerators"] }, { toolCallId: "t4", messages: [] });
+  const rec2 = facts.find((f) => f.kind === "did_this_turn" && /Searched the web/.test(f.text))?.text ?? "";
+  check("one search blocked by the budget, one ran: the receipt names only the one that ran as searched, the blocked one as never run", blockedOne?.ok === true && /\("climate accelerators"\): 0 held up/.test(rec2) && !/Searched the web just now \([^)]*budgetq/.test(rec2) && /"budgetq accelerators" never ran/.test(rec2), rec2);
+  budget = [];
 
   // The opportunity search: null either way, but the caller is told when it failed.
   exa = DOWN;
@@ -132,9 +164,21 @@ try {
   exa = () => ({ status: 200, body: { results: [] } });
   const none = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then((f) => f, (e) => e);
   check("... an empty search is no venues, not a failure", Array.isArray(none) && none.length === 0, String(none));
+  // Every pass blocked by the web search budget: the search never ran, the same as a failure.
+  budget = [FULL, FULL, FULL];
+  const blockedFind = await RB.findVenueOptions("u1", "private dining room for 12 in San Francisco", ask, null).then(() => null, (e) => e);
+  check("the venue find, the budget blocked every pass: it throws SearchFailed, never returns 'no venues'", blockedFind instanceof RB.SearchFailed && /^No web search right now/.test(blockedFind.message), String(blockedFind));
+  budget = [];
+  check("a find that didn't run is tried again at the next two wakes, and only the third run tells them", RB.BRIEF_SEARCH_RETRIES === 2 && RB.briefSearchNext(1) === "retry" && RB.briefSearchNext(2) === "retry" && RB.briefSearchNext(3) === "tell" && RB.briefSearchNext(4) === "tell");
   const rb = src("services/researchBrief.ts");
   const run = rb.slice(rb.indexOf("export async function runResearchBriefTask"));
-  check("the brief, its find failed: they're told it couldn't search (and the task closes saying why), before any 'couldn't verify any venues' line", /find\.failed = err instanceof SearchFailed/.test(run) && /if \(find\.failed\) \{\s*await tellThenClose\(SEARCH_FAILED_LINE, "dropped", `the search failed: \$\{find\.failed\}`\);\s*return;/.test(run) && run.indexOf("tellThenClose(SEARCH_FAILED_LINE") < run.indexOf("couldn't verify any venues"));
+  // The retry branch's body: from `if (briefSearchNext(task.wakes) === "retry") {` to its closing brace.
+  const rStart = run.indexOf('if (briefSearchNext(task.wakes) === "retry") {');
+  const rEnd = rStart < 0 ? -1 : run.indexOf("\n      }\n", rStart);
+  const retryBody = rStart < 0 || rEnd < 0 ? null : run.slice(rStart + 'if (briefSearchNext(task.wakes) === "retry") {'.length, rEnd);
+  const afterRetry = rEnd < 0 ? "" : run.slice(rEnd + "\n      }\n".length);
+  check("the brief, its find didn't run: a retry leaves the task open for its next wake (nothing sent, nothing closed); after the retries they're told it couldn't search, before any 'couldn't verify any venues' line", /find\.failed = err instanceof SearchFailed/.test(run) && retryBody !== null && !/tellThenClose|closeTask|sendExempt|hold/.test(retryBody) && /\breturn;\s*$/.test(retryBody) && /^\s*await tellThenClose\(SEARCH_FAILED_LINE, "dropped",/.test(afterRetry) && run.indexOf("tellThenClose(SEARCH_FAILED_LINE") < run.indexOf("couldn't verify any venues"), retryBody);
+  check("the retry is the claim's own lease to the next wake (no new machinery)", /UPDATE co_tasks SET next_check_at = NOW\(\) \+ INTERVAL '45 minutes', wakes = wakes \+ 1/.test(src("services/coTasks.ts")));
   check("... and that line says the search didn't go through, never that nothing exists", /didn't go through/.test(RB.SEARCH_FAILED_LINE) && !/nothing|no venues|couldn't find/i.test(RB.SEARCH_FAILED_LINE), RB.SEARCH_FAILED_LINE);
 } finally {
   globalThis.fetch = realFetch;
