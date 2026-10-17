@@ -181,6 +181,7 @@
     "evals/tasks/awayReplay.ts",
     "evals/calls/memory.ts",
     "evals/brain/binding.ts",
-    "evals/checkins/rules.ts"
+    "evals/checkins/rules.ts",
+    "evals/reply/usesItsFinds.ts"
   ]
 }

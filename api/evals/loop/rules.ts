@@ -19,7 +19,7 @@ const src = (f: string) => fs.readFileSync(new URL(`../../src/${f}`, import.meta
 
 // Replies find things only through the loop (2026-10-01: the old path is gone).
 const ct = src("agent/conversationTools.ts");
-check("the loop's tools are always there, and searchNow is gone", /Object\.assign\(tools, loopTools\(ctx, state, newLoopState\(ctx\.turnStartedAt\), notDone\)\);/.test(ct) && !/searchNow: tool\(/.test(ct));
+check("the loop's tools are always there, and searchNow is gone", /turnLoop = newLoopState\(ctx\.turnStartedAt\);\s*Object\.assign\(tools, loopTools\(ctx, state, turnLoop, notDone\)\);/.test(ct) && !/searchNow: tool\(/.test(ct));
 check("no switch left behind", !/CO_LOOP|loopOn|loopMode/.test(src("agent/loop.ts") + src("routes/sendblue.ts") + ct));
 check("the capability sheet describes the loop's tools", C.capabilitySheet().some((l) => /look up events itself/.test(l)) && !C.capabilitySheet().some((l) => /search right now for events/.test(l)));
 
@@ -52,7 +52,8 @@ check("web queries run in parallel and the budget counts queries, not calls", /q
 check("each search checks its results' pages at the same time", /const pages = await Promise\.all\(raws\.map\(\(raw\) => pickPage/.test(src("services/taskWeb.ts")));
 check("tools stop at the time budget and say to answer with what's there", /Out of time for this turn: share what you have and answer them/.test(lt) && L.LOOP_BUDGET.seconds === 75);
 check("the reply's step limit is the loop's budget", /stepCountIs\(LOOP_BUDGET\.steps\)/.test(src("agent/conversationReply.ts")));
-check("the first search can send a short 'on it' text, once", /if \(!line\?\.trim\(\) \|\| loop\.holdSent \|\| state\.sent\) return;/.test(lt));
+// (Royce, 2026-10-17: never a stock line like "on it"; evals/reply/usesItsFinds.ts tests it.)
+check("the first search can send a short holding line of its own, once, never a stock one", /if \(!line\?\.trim\(\) \|\| loop\.holdSent \|\| state\.sent \|\| stockLine\(line, theirWords\(\)\)\) return;/.test(lt));
 const sb = src("routes/sendblue.ts");
 check("the reply gets the guide when they want something found, and the working notes", /if \(decision\.wantsRecommendation && hasText\) addInstruction\(replyFacts, LOOP_GUIDE\);/.test(sb) && /loadBrief\(user\.id\)\.then\(describeNotes\)/.test(sb) && /if \(timeline\) addFact\(replyFacts, "known", timeline\.fact\)/.test(sb) && /if \(notes\) addFact\(replyFacts, "ongoing", notes\)/.test(sb));
 

@@ -153,7 +153,7 @@ check("finding 4: Cue is told to carry the caption in its reply", out.ok && (out
   check("a replay logs their message once and skips the checks it already passed", /const logTextExchange = replay \? \(userId: string, content: string\) => logTextExchangeOnce/.test(sb) && /if \(!replay\) markRead/.test(sb) && /if \(!replay && lockKey && !bodyForStamp\.is_outbound/.test(sb));
   check("unfinished turns and lost retries are swept every 2 minutes, claimed once", /cron\.schedule\("\*\/2 \* \* \* \*"[\s\S]{0,200}reportUnfinishedTurns\(\)/.test(fs.readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8")) && /SET finished_at = NOW\(\) WHERE handle = \$1 AND finished_at IS NULL RETURNING handle/.test(sb) && /retry_due_at < NOW\(\) - INTERVAL '3 minutes'/.test(sb));
   const cr = fs.readFileSync(new URL("../../src/agent/conversationReply.ts", import.meta.url), "utf8");
-  check("the reply's deadline and tool budget run from when their text arrived", /const replyDeadline = turnStart \+/.test(cr) && /turnStartedAt: turnStart/.test(cr) && /newLoopState\(ctx\.turnStartedAt\)/.test(fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8")) && /turnStartedAt,\n\s*resumeLater/.test(sb));
+  check("the reply's deadline and tool budget run from when their text arrived", /const replyDeadlineAt = \(\) => turnStart \+/.test(cr) && /const replyDeadline = replyDeadlineAt\(\)/.test(cr) && /turnStartedAt: turnStart/.test(cr) && /newLoopState\(ctx\.turnStartedAt\)/.test(fs.readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8")) && /turnStartedAt,\n\s*resumeLater/.test(sb));
 }
 
 console.log(fails ? `\n${fails} failed` : "\nall probes passed");
