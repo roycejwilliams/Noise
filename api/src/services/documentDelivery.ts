@@ -2,12 +2,12 @@
 // (renderPdf is the plan's own headless-Chrome path; the file is held for ten minutes for Sendblue to fetch, services/planFile.ts).
 //
 // Phase 2 (2026-10-08): "google_docs" puts the same document in their own Drive as an editable Google Doc and texts the link
-// (services/googleDocs.ts). It needs their Google connected with Docs allowed; without that it fails plainly and the PDF still goes.
+// (services/googleDocs.ts). It needs their Docs grant (services/cueGrants.ts, Drive files only, on Cue's published project since
+// 2026-10-15; before that, the combined Google grant); without it, it fails plainly and the PDF still goes.
 //
 // Scope (Royce, 2026-10-07): the Google Doc is for shared working artifacts around events and partnerships (a venue brief, a
 // partnership plan, a readout), not member goal-tracking or general productivity docs. Who: whoever has connected Google with Docs
-// allowed. While Co's Google project is in Testing mode, Google itself lets only its listed test users connect, so that is the two test
-// users without any setting here. GOOGLE_DOCS_TEST_USERS (user ids, at most two) is optional: set, it narrows Docs to those members,
+// allowed. GOOGLE_DOCS_TEST_USERS (user ids, at most two) is optional: set, it narrows Docs to those members,
 // and it is the lock to set before the Google project ever leaves Testing mode. Every other kind gets the PDF.
 import type { Receipt, ReceiptStore } from "./deliveryReceipts.js";
 import pool from "../db/db.js";
@@ -27,7 +27,7 @@ export const GOOGLE_DOC_ASK = /\bgoogle\s*docs?\b|\bgoogle\s*drive\b|\bgdocs?\b|
 // Doc. shareByLink stays on DeliverTo for a later, explicit yes (a logged answer to "want anyone with the link to edit it?").
 // via text_fallback: the PDF couldn't be made or sent, so the content went as text in the thread, and the PDF is to follow
 // (pdfPending, with the failure in error, retried from the receipt: services/deliveryReceipts.ts).
-export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; shared?: boolean; updatedInPlace?: boolean; newDocBecause?: string; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
+export type DeliverResult = { ok: true; via: DocTarget | "text_fallback"; filename: string; link?: string; driveFileId?: string; driveGrant?: "docs"; shared?: boolean; updatedInPlace?: boolean; newDocBecause?: string; pdfPending?: boolean; error?: string } | { ok: false; why: string; notConnected?: boolean; notAllowed?: boolean };
 
 // The kinds that may become a shared Google Doc, and the optional narrowing list of members (at most two user ids).
 export const SHARED_DOC_KINDS: readonly DocKind[] = ["venue_brief", "partnership_plan", "readout"];
@@ -38,6 +38,14 @@ export function docsTestPair(env: NodeJS.ProcessEnv = process.env): string[] {
 export function docsMemberAllowed(userId: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const pair = docsTestPair(env);
   return pair.length === 0 || pair.includes(userId);
+}
+// The Docs grant's moment (Royce, 2026-10-15): "the consent screen appears the first time a member actually makes a doc, never
+// before." True once a document that could be a Google Doc (a shared working artifact) has been made for them and Docs is open to
+// them; until then no Docs link goes, whatever is said.
+export async function docsMomentReached(userId: string, db: { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> } = pool, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  if (!docsMemberAllowed(userId, env)) return false;
+  const { rows } = await db.query(`SELECT 1 FROM document_deliveries WHERE user_id = $1 AND kind = ANY($2::text[]) LIMIT 1`, [userId, [...SHARED_DOC_KINDS]]);
+  return rows.length > 0;
 }
 export function googleDocAllowed(userId: string, kind: DocKind | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
   return docsMemberAllowed(userId, env) && SHARED_DOC_KINDS.includes(kind ?? "other");
@@ -57,7 +65,7 @@ export type DeliverDeps = {
   cache: (pdf: Buffer, name?: string) => string;
   send: (m: { number: string; content: string; media_url?: string; from_number: string }) => Promise<unknown>;
   from: string;
-  // Their Google access token when they connected with Docs allowed, else null (services/googleAuth.ts).
+  // Their Docs grant's access token (services/cueGrants.ts), else null.
   googleToken?: (userId: string) => Promise<string | null>;
   uploadDoc?: (token: string, name: string, html: string) => Promise<import("./googleDocs.js").DocsUpload>;
   shareDoc?: (token: string, fileId: string) => Promise<import("./googleDocs.js").DocsShare>;
@@ -73,7 +81,8 @@ export type DeliverDeps = {
 // noFallback: a retry of a PDF that already went as text (deliveryReceipts) must not send the text again.
 // inPlace: a new version of a Google Doc Co already made for them (its Drive file and link, from the receipt): written into that same
 // Doc, so the link stays the same and only the change line goes (Royce, 2026-10-11 rule 3).
-export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean; inPlace?: { fileId: string; link: string; writtenAt: Date } };
+// grant: which grant made it ("docs", or null for the old combined Google grant, which Cue's Docs grant can't see or write).
+export type DeliverTo = { userId: string; firstName: string; phone: string; zone?: string | null; now?: Date; line?: string; noFallback?: boolean; shareByLink?: boolean; inPlace?: { fileId: string; link: string; writtenAt: Date; grant?: "docs" | null } };
 
 // Design QA for a document (services/designQa.ts), bounded to 10 seconds: the printed pages are rendered and measured; a heading left
 // at the foot of a page is moved to start the next one, and the pages are measured once more. The findings wait here for the delivery
@@ -110,14 +119,14 @@ async function docQa(html: string, doc: Doc, userId: string): Promise<string | n
 
 const realDeps = async (): Promise<DeliverDeps> => {
   const sendblue = (await import("./sendblue.js")).default;
-  const g = await import("./googleAuth.js");
+  const g = await import("./cueGrants.js");
   const d = await import("./googleDocs.js");
   return {
     render: renderPdf,
     cache: cachePlanFile,
     send: (m) => sendblue.messages.send(m as any),
     from: process.env.SENDBLUE_PHONE_NUMBER!,
-    googleToken: async (userId) => (g.googleConfigured() && g.canCreateDocs((await g.isConnected(userId)).scopes) ? g.accessTokenFor(userId).catch(() => null) : null),
+    googleToken: async (userId) => (g.docsConfigured() ? g.docsToken(userId).catch(() => null) : null),
     uploadDoc: (token, name, html) => d.uploadGoogleDoc(token, name, html),
     shareDoc: (token, fileId) => d.shareWithLink(token, fileId),
     updateDoc: (token, fileId, html) => d.updateGoogleDoc(token, fileId, html),
@@ -176,21 +185,25 @@ async function pdfByText(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
 async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<DeliverResult> {
   if (!googleDocAllowed(to.userId, doc.kind)) return { ok: false, why: "a Google Doc is only for a venue brief, partnership plan or readout (and, when GOOGLE_DOCS_TEST_USERS is set, only for those members)", notAllowed: true };
   const token = deps.googleToken ? await deps.googleToken(to.userId).catch(() => null) : null;
-  if (!token || !deps.uploadDoc) return { ok: false, why: "their Google isn't connected with Docs allowed", notConnected: true };
+  if (!token || !deps.uploadDoc) return { ok: false, why: "they haven't connected Google Docs", notConnected: true };
   const day = dayFor(to);
   const name = docFilename(doc.title, day.toISODate()!).replace(/\.pdf$/, "");
   const { docsHtml } = await import("./googleDocs.js");
   const html = docsHtml(doc, { firstName: to.firstName, date: day.toFormat("LLLL d, yyyy") });
   // A new version of a Doc Co made: the same Doc, the same link, and only the change line (the link they have still opens it).
   let newDocBecause: string | undefined;
+  // A Doc the old combined Google grant made (the Co Club project): Cue's Docs grant can't see it (drive.file is per project), so it's
+  // left as it is and this version goes in a new Doc, saying so (never "it isn't in your Drive anymore", which wouldn't be true).
+  const oldGrant = !!to.inPlace && to.inPlace.grant !== "docs";
+  if (oldGrant) newDocBecause = "I couldn't check the earlier Doc, so this is a new one.";
   // Someone changed the Doc after Co last wrote it (they, or whoever they shared it with): Co never writes over their edits. The new
   // version goes in a new Doc and the text says why (review of #143).
   const EDIT_SLACK_MS = 2 * 60_000;
-  const meta = to.inPlace && deps.updateDoc && deps.docMeta ? await deps.docMeta(token, to.inPlace.fileId).catch(() => null) : null;
+  const meta = to.inPlace && !oldGrant && deps.updateDoc && deps.docMeta ? await deps.docMeta(token, to.inPlace.fileId).catch(() => null) : null;
   const editedSince = meta && "modifiedAt" in meta && to.inPlace ? meta.modifiedAt.getTime() > to.inPlace.writtenAt.getTime() + EDIT_SLACK_MS : false;
-  if (to.inPlace && editedSince) newDocBecause = "The earlier Doc has edits since I made it, so I left it as it is and put this version in a new one.";
-  if (to.inPlace && meta && "gone" in meta) newDocBecause = "The earlier Doc isn't in your Drive anymore, so this is a new one.";
-  if (to.inPlace && deps.updateDoc && deps.docMeta && !meta) newDocBecause = "I couldn't check the earlier Doc, so this is a new one.";
+  if (to.inPlace && !oldGrant && editedSince) newDocBecause = "The earlier Doc has edits since I made it, so I left it as it is and put this version in a new one.";
+  if (to.inPlace && !oldGrant && meta && "gone" in meta) newDocBecause = "The earlier Doc isn't in your Drive anymore, so this is a new one.";
+  if (to.inPlace && !oldGrant && deps.updateDoc && deps.docMeta && !meta) newDocBecause = "I couldn't check the earlier Doc, so this is a new one.";
   if (to.inPlace && deps.updateDoc && !newDocBecause) {
     const upd = await deps.updateDoc(token, to.inPlace.fileId, html).catch(() => ({ ok: false as const, why: "Google didn't answer in time" }));
     if (upd.ok) {
@@ -199,7 +212,7 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
       } catch {
         return { ok: false, why: "the Google Doc was updated in their Drive, but the line saying so didn't send by text" };
       }
-      return { ok: true, via: "google_docs", filename: name, link: to.inPlace.link, driveFileId: upd.id, updatedInPlace: true };
+      return { ok: true, via: "google_docs", filename: name, link: to.inPlace.link, driveFileId: upd.id, driveGrant: "docs", updatedInPlace: true };
     }
     // Their grant or our setup: the same failure a new Doc would hit, said plainly. Gone (deleted, moved out of reach) or anything
     // else: a new Doc, and the text says why the link changed (never a silent swap, rule 6).
@@ -215,7 +228,7 @@ async function googleDoc(doc: Doc, to: DeliverTo, deps: DeliverDeps): Promise<De
   } catch {
     return { ok: false, why: "the Google Doc was made in their Drive, but the link didn't send by text" };
   }
-  return { ok: true, via: "google_docs", filename: name, link: up.link, driveFileId: up.id, shared: share.ok, newDocBecause };
+  return { ok: true, via: "google_docs", filename: name, link: up.link, driveFileId: up.id, driveGrant: "docs", shared: share.ok, newDocBecause };
 }
 
 export const DELIVERERS: Record<DocTarget, (doc: Doc, to: DeliverTo, deps: DeliverDeps) => Promise<DeliverResult>> = { pdf_text: pdfByText, google_docs: googleDoc };
@@ -290,7 +303,7 @@ export async function deliverAndRecord(
   const line = again ? to.line : version > 1 ? (changedNote ? R.changeLine(doc.title, changedNote, doc.kind) : `Here's the updated ${deliveredThing(doc.title, doc.kind)}.`) : to.line;
   // A new version of a Google Doc Co made goes into that same Doc (its file id kept on the receipt since #141).
   const priorDoc = !again && version > 1 ? await store.googleDocFor(to.userId, docKey).catch(() => null) : null;
-  const inPlace = priorDoc ? { fileId: priorDoc.driveFileId!, link: priorDoc.link!, writtenAt: priorDoc.deliveredAt } : undefined;
+  const inPlace = priorDoc ? { fileId: priorDoc.driveFileId!, link: priorDoc.link!, writtenAt: priorDoc.deliveredAt, grant: priorDoc.driveGrant ?? null } : undefined;
   // They asked for it as a Google Doc the first time: the new version goes to that Doc (they needn't say "Google" again to change it).
   const r0 = await deliverToTargets(sendDoc, { ...to, line, inPlace }, { saveTo: inPlace ? "google_doc" : o.saveTo, askedForGoogle: o.askedForGoogle || !!inPlace }, deps.deliver);
   // Design metrics (services/designSystem.ts): a document is keyed by its delivery key, so its first version is "made" and every
@@ -310,7 +323,7 @@ export async function deliverAndRecord(
   for (const ok of r.sentOk) {
     const rec = await store.insert({
         userId: to.userId, docKey, version: sendVersion, title: sendDoc.title, kind: sendDoc.kind ?? null, doc: sendDoc, contentHash: R.contentHash(sendDoc),
-        channel: ok.via, status: ok.pdfPending ? "pdf_pending" : "delivered", line: line ?? sendDoc.title, link: ok.link ?? null, driveFileId: ok.driveFileId ?? null,
+        channel: ok.via, status: ok.pdfPending ? "pdf_pending" : "delivered", line: line ?? sendDoc.title, link: ok.link ?? null, driveFileId: ok.driveFileId ?? null, driveGrant: ok.driveGrant ?? null,
         taskId: o.taskId ?? null, source: o.source, changeNote: again ? again.changeNote : version > 1 ? (changedNote || "updated") : null,
         error: ok.error ?? null, nextRetryAt: ok.pdfPending ? new Date(now.getTime() + PDF_RETRY.firstAfterMs) : null, deliveredAt: now,
       }).catch((err: any) => {

@@ -48,6 +48,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   product_update: "ops",
   artifact_expiry: "ops",
   bounce_proposal: "offer",
+  bounce_watch: "companion",
+  bounce_calendar_offer: "offer",
   event_change: "ops",
   call_reminder: "ops",
   missed_call: "ops",

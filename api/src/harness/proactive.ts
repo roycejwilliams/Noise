@@ -112,6 +112,8 @@ export type ProactiveType =
   | "artifact_expiry"
   // One solved plan for a want with a window, in a real gap (services/bounce.ts, the bounce, 2026-10-15): proposed once.
   | "bounce_proposal"
+  | "bounce_watch"
+  | "bounce_calendar_offer"
   // Before a Co event they're going to (services/preArrival.ts, 2026-09-30).
   | "pre_arrival"
   // The member brief, the day before a Co event, and the one question at RSVP that lets it name them (services/eventBrief.ts, 2026-10-05).
@@ -185,6 +187,10 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   artifact_expiry: { priority: 30 },
   // Once per want, ever (bounce_proposals), and only while its find and gap hold.
   bounce_proposal: { priority: 85 },
+  // A plan they asked Cue to keep an eye on changed: once per plan (its own target key), before it starts.
+  bounce_watch: { priority: 90 },
+  // The one calendar offer, ever (calendar_offers).
+  bounce_calendar_offer: { priority: 40 },
   // Time-bound: hours before the event, once per event (its own target key).
   pre_arrival: { priority: 95 },
   // Once per event each, timed to the day before and to the RSVP.

@@ -547,7 +547,9 @@ export function newestDocs(receipts: Receipt[], n: number): NonNullable<TurnCont
 
 async function loadGoogleFacts(userId: string, zone: string | null): Promise<string[]> {
   const { isConnected } = await import("./googleAuth.js");
-  if (!(await isConnected(userId)).connected) return [];
+  const { calendarConnected } = await import("./cueGrants.js");
+  // Busy times come from their calendar grant, waiting emails from the Gmail tester flow: either connection, only their own.
+  if (!(await isConnected(userId)).connected && !(await calendarConnected(userId).catch(() => null))) return [];
   const { googleFactsFor } = await import("./googleData.js");
   return googleFactsFor(userId, zone);
 }

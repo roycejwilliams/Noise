@@ -25,9 +25,9 @@ const auth = src("services/googleAuth.ts");
 const data = src("services/googleData.ts");
 
 // ------------------------------------------------ scopes: read-only, minimal
-check("only three scopes: calendar free/busy, Gmail metadata, and drive.file (files Co creates, 2026-10-08)", JSON.stringify(A.GOOGLE_SCOPES) === JSON.stringify(["https://www.googleapis.com/auth/calendar.freebusy", "https://www.googleapis.com/auth/gmail.metadata", "https://www.googleapis.com/auth/drive.file"]));
+check("one scope: Gmail metadata, the tester flow (the calendar and Docs are their own grants, services/cueGrants.ts, 2026-10-15)", JSON.stringify(A.GOOGLE_SCOPES) === JSON.stringify(["https://www.googleapis.com/auth/gmail.metadata"]));
 check("no send, compose, modify, insert or full-access scope anywhere (drive.file, files Co creates, is the only Drive scope)", !/gmail\.(send|compose|modify|insert|readonly)|mail\.google\.com|auth\/calendar(\.events)?["'\s]|calendar\.events|auth\/drive(?!\.file)/.test(auth + data));
-check("granted scopes must be a subset of what Co asked for", A.scopesAllowed("https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/gmail.metadata") && A.scopesAllowed("https://www.googleapis.com/auth/calendar.freebusy"));
+check("granted scopes must be what Co asked for (free/busy is no longer accepted on this grant)", A.scopesAllowed("https://www.googleapis.com/auth/gmail.metadata") && !A.scopesAllowed("https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/gmail.metadata"));
 check("anything wider is refused", !A.scopesAllowed("https://www.googleapis.com/auth/gmail.metadata https://www.googleapis.com/auth/gmail.send") && !A.scopesAllowed("") && !A.scopesAllowed("https://mail.google.com/"));
 check("wider scopes are revoked, not kept", /if \(!scopesAllowed\(tokens\.scope \?\? ""\)\) \{\s*\/\/[^\n]*\n\s*await revokeToken\(/.test(auth));
 
@@ -64,11 +64,11 @@ check("the wrong key can't read it", wrongKeyThrew);
 check("tokens are only ever stored encrypted", !/INSERT INTO google_connections[\s\S]{0,400}tokens\.(access|refresh)_token[,)]/.test(auth) && /encryptToken\(tokens\.access_token\)/.test(auth) && /encryptToken\(verifier\)/.test(auth));
 
 // ------------------------------------------------ one-time state, owner scoping, disconnect
-check("a connect link is single use and expires (and the combined grant never serves a calendar-only link)", /UPDATE google_oauth_states SET used_at = NOW\(\) WHERE state = \$1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && /WHERE state = \$1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && A.LINK_TTL_MS === 15 * 60 * 1000);
+check("a connect link is single use and expires (and the combined grant never serves a calendar or Docs link)", /UPDATE google_oauth_states SET used_at = NOW\(\) WHERE state = \$1 AND grant_kind = 'google' AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && /WHERE state = \$1 AND grant_kind = 'google' AND used_at IS NULL AND expires_at > NOW\(\)/.test(auth) && A.LINK_TTL_MS === 15 * 60 * 1000);
 check("the state is random and long", /randomBytes\(24\)\.toString\("base64url"\)/.test(auth));
 const userQueries = (auth + data).match(/(FROM|INTO|UPDATE|DELETE FROM) google_(connections|snapshots)[\s\S]{0,300}?\[/g) ?? [];
 check("every token and snapshot query is for one member", userQueries.length >= 6 && userQueries.every((q) => /user_id = \$1|VALUES \(\$1/.test(q)));
-check("disconnect deletes, revokes with Google, and clears the cached summary", /DELETE FROM google_connections WHERE user_id = \$1 RETURNING/.test(auth) && /DELETE FROM google_snapshots WHERE user_id = \$1/.test(auth) && /if \(token\) await revokeToken\(token, fetchImpl\)/.test(auth) && /oauth2\.googleapis\.com\/revoke/.test(auth));
+check("disconnect deletes, revokes with Google, and clears what Gmail gave (busy times belong to the calendar grant)", /DELETE FROM google_connections WHERE user_id = \$1 RETURNING/.test(auth) && /UPDATE google_snapshots SET waiting = NULL WHERE user_id = \$1/.test(auth) && /UPDATE google_snapshots SET busy = NULL WHERE user_id = \$1/.test(src("services/cueGrants.ts")) && /if \(token\) await revokeToken\(token, fetchImpl\)/.test(auth) && /oauth2\.googleapis\.com\/revoke/.test(auth));
 check("a token revoked on Google's side is forgotten here", /t\.error === "invalid_grant"\) await pool\.query\(`DELETE FROM google_connections WHERE user_id = \$1`/.test(auth));
 check("reads are logged as decisions", /decision: "google\.read"/.test(data) && /decision: "google\.connect"/.test(auth) && /decision: "google\.disconnect"/.test(auth));
 
@@ -79,8 +79,36 @@ const fbFetch = ((url: string, init: any) => {
   const body = JSON.parse(init.body);
   return json({ calendars: { primary: { busy: [{ start: "2026-09-29T16:00:00Z", end: "2026-09-29T17:30:00Z" }] } }, _asked: body });
 }) as any;
-const busy = await D.fetchBusy("tok", now, fbFetch);
+// Busy times come from their calendar grant (services/cueGrants.ts; Royce 2026-10-15: "rewire busy-times to read from the new calendar
+// grant"), never the old connection: a member with only the calendar grant gets busy times, and Gmail's token never reads a calendar.
+const busy = await (async () => {
+  const { default: pool } = await import("../../src/db/db.js");
+  const real = (pool as any).query;
+  const G = await import("../../src/services/googleAuth.js");
+  const keyWas = process.env.GOOGLE_TOKEN_KEY;
+  process.env.GOOGLE_TOKEN_KEY = env.GOOGLE_TOKEN_KEY;
+  const saved: any[] = [];
+  const freeBusyAuth: string[] = [];
+  (pool as any).query = async (q: string, a: any[] = []) => {
+    if (/SELECT scopes FROM google_connections/.test(q)) return { rows: [] };
+    if (/SELECT connected_at FROM calendar_grants/.test(q)) return { rows: [{ connected_at: new Date("2026-10-15T00:00:00Z") }] };
+    if (/FROM calendar_grants WHERE user_id = \$1/.test(q)) return { rows: [{ refresh_token_enc: null, access_token_enc: G.encryptToken("cal-tok"), fresh: true }] };
+    if (/INSERT INTO google_snapshots/.test(q)) return (saved.push(a), { rows: [], rowCount: 1 });
+    return { rows: [], rowCount: 1 };
+  };
+  try {
+    const f = ((url: string, init: any) => (/freeBusy/.test(url) && freeBusyAuth.push(String(init?.headers?.Authorization)), fbFetch(url, init))) as any;
+    await D.refreshGoogleSnapshot("u1", f, now);
+    check("busy times are read through their calendar grant (its own token), with no old Google connection", freeBusyAuth.join() === "Bearer cal-tok" && saved.length === 1 && saved[0][2] === null);
+    return JSON.parse(saved[0]?.[1] ?? "null");
+  } finally {
+    (pool as any).query = real;
+    if (keyWas === undefined) delete process.env.GOOGLE_TOKEN_KEY;
+    else process.env.GOOGLE_TOKEN_KEY = keyWas;
+  }
+})();
 check("free/busy is read for the primary calendar", JSON.stringify(busy) === JSON.stringify([{ start: "2026-09-29T16:00:00Z", end: "2026-09-29T17:30:00Z" }]));
+check("the old connection never reads a calendar any more", !/fetchBusy|calendar\/v3\/freeBusy/.test(data) && /cal \? calendarBusy\(userId/.test(data));
 const day = 86_400_000;
 const gmailFetch = ((url: string) => {
   if (url.includes("/messages?labelIds=SENT")) return json({ messages: [{ id: "m1", threadId: "t1" }, { id: "m2", threadId: "t2" }, { id: "m3", threadId: "t3" }] });
@@ -102,26 +130,26 @@ check("busy times read in their own zone, with no event details", /busy Tue Sep 
 check("waiting emails read as who, subject and date, never the message", /"Sponsorship for Oct 10" to Jordan Lee \(acme\.com\), sent Fri Sep 25/.test(facts[1]) && /never the message/.test(facts[1]));
 check("an empty calendar and inbox say so plainly", /free for the next 4 days/.test(D.describeSnapshot({ busy: [], waiting: [], fetchedAt: now }, null, now)[0]) && /None of their recent sent emails is waiting/.test(D.describeSnapshot({ busy: [], waiting: [], fetchedAt: now }, null, now)[1]));
 check("nothing is fetched while they wait: the context reads the cache, refreshes in the background", /refreshGoogleSnapshot\(userId\)\s*\.catch/.test(data) && !/await refreshGoogleSnapshot/.test(data.split("export async function googleFactsFor")[1] ?? ""));
-check("the context only loads Google for members who connected it, and only their own", /if \(!\(await isConnected\(userId\)\)\.connected\) return \[\];/.test(src("services/turnContext.ts")) && /WHERE c\.user_id = \$1/.test(data));
+check("the context only loads Google for members who connected their calendar or Gmail, and only their own", /if \(!\(await isConnected\(userId\)\)\.connected && !\(await calendarConnected\(userId\)/.test(src("services/turnContext.ts")) && /EXISTS \(SELECT 1 FROM calendar_grants WHERE user_id = \$1\)/.test(data) && /JOIN calendar_grants c ON c\.user_id = s\.user_id WHERE s\.user_id = \$1/.test(src("services/timeline.ts")));
 
 // ------------------------------------------------ Co's tool and pages
 const tools = src("services/googleTools.ts");
 const conv = src("agent/conversationTools.ts");
-check("the tool goes through the same guard as every other tool", /Object\.assign\(tools, googleTools\(ctx, notDone\)\);\s*\n\s*\/\/[^\n]*\n\s*guardTools\(tools/.test(conv));
+check("the tool goes through the same guard as every other tool", /Object\.assign\(tools, googleTools\(ctx, notDone\)\);\s*\n\s*if \(!ctx\.isTeam\) for \(const name of teamOnlyTools\(\)\) delete[^\n]*\n\s*\n\s*\/\/[^\n]*\n\s*guardTools\(tools/.test(conv));
 check("the link goes only to this member, as its own text", /ctx\.sendCoReply\(\{ phone: ctx\.phoneNumber, message: link, asVoice: false \}\)/.test(tools) && /createConnectLink\(ctx\.userId\)/.test(tools));
 check("without Google set up, Co says so instead of sending anything", /if \(!googleConfigured\(\)\) \{\s*notDone\(/.test(tools));
 const { capabilitySheet } = await import("../../src/services/capabilities.js");
 const saved = { id: process.env.GOOGLE_CLIENT_ID, sec: process.env.GOOGLE_CLIENT_SECRET, key: process.env.GOOGLE_TOKEN_KEY };
 delete process.env.GOOGLE_CLIENT_ID;
-check("Co says it can't connect Google until it's set up", capabilitySheet().some((l) => l === "Co can't connect to their Google Calendar or Gmail yet."));
+check("Co says it can't connect Gmail until it's set up (to the team; a member never hears of it)", capabilitySheet({ team: true }).some((l) => l === "Co can't connect to Gmail yet.") && !capabilitySheet().some((l) => /Gmail/.test(l)));
 Object.assign(process.env, { GOOGLE_CLIENT_ID: "cid", GOOGLE_CLIENT_SECRET: "sec", GOOGLE_TOKEN_KEY: env.GOOGLE_TOKEN_KEY });
-check("once set up, Co says exactly what it sees and that it never sends or edits", capabilitySheet().some((l) => /busy or free only, never what the events are/.test(l) && /never sends email, never changes their calendar/.test(l) && /disconnect Google/.test(l)));
+check("once set up, Co tells the team exactly what it sees and that it never sends; a member still never hears of it", capabilitySheet({ team: true }).some((l) => /still waiting on a reply \(who, subject and date, never the message\)/.test(l) && /never sends email/.test(l) && /disconnect Google/.test(l)) && !capabilitySheet().some((l) => /Gmail/.test(l)));
 for (const [k, v] of [["GOOGLE_CLIENT_ID", saved.id], ["GOOGLE_CLIENT_SECRET", saved.sec], ["GOOGLE_TOKEN_KEY", saved.key]] as const) {
   if (v === undefined) delete process.env[k];
   else process.env[k] = v;
 }
 const route = src("routes/google.ts");
-check("the pages never show anyone's data and are mounted at /google", !/busy|waiting|snapshot|SELECT/.test(route.replace(/Co can now see when you're busy[^"]*/, "").replace(/export const CALENDAR_GRANT_COPY = \{[\s\S]*?\} as const;/, "")) && /app\.use\("\/google", createGoogleRouter\(\)\)/.test(src("server.ts")));
+check("the pages never show anyone's data and are mounted at /google", !/busy|waiting|snapshot|SELECT/.test(route.replace(/Co can now see which emails[^"]*/, "").replace(/export const CALENDAR_GRANT_COPY = \{[\s\S]*?\} as const;/, "")) && /app\.use\("\/google", createGoogleRouter\(\)\)/.test(src("server.ts")));
 check("an expired or reused link says so and asks for a new one", /if \(!url\) return res\.status\(410\)/.test(route));
 
 console.log(`google rules: ${total - failed}/${total} passed`);

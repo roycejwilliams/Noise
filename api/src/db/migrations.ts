@@ -2400,7 +2400,7 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("google_oauth_states table init failed:", err));
-  // The calendar grant (services/calendarGrant.ts, the bounce, Royce 2026-10-15: free/busy only, its own grant, never the combined one):
+  // The calendar grant (services/cueGrants.ts, the bounce, Royce 2026-10-15: free/busy only, its own grant, never the combined one):
   // its own one-time links and its own token, with a one-tap disconnect (only the hash of its token is kept).
   await pool
     .query(`ALTER TABLE google_oauth_states ADD COLUMN IF NOT EXISTS grant_kind TEXT NOT NULL DEFAULT 'google'`)
@@ -2418,6 +2418,21 @@ export async function runMigrations(): Promise<void> {
       ),
     )
     .catch((err: Error) => console.error("calendar grant tables failed:", err));
+  // The Docs grant (services/cueGrants.ts, Royce 2026-10-15: "drive.file gets its own grant in the published project, same pattern as
+  // the calendar split").
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS docs_grants (
+        user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        refresh_token_enc TEXT,
+        access_token_enc TEXT,
+        access_expires_at TIMESTAMPTZ,
+        scope TEXT NOT NULL,
+        revoke_hash TEXT NOT NULL,
+        connected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .catch((err: Error) => console.error("docs grant table failed:", err));
   // The trigger's proposals (services/bounce.ts): one per want, ever; queued, then proposed when it went, then their answer.
   await pool
     .query(
@@ -2440,6 +2455,12 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .catch((err: Error) => console.error("bounce_proposals failed:", err));
+  // "Want me to keep an eye on it?" (Royce, 2026-10-15): the plan kept with the proposal, and the watch a yes starts. And the one
+  // calendar offer per member, ever.
+  await pool
+    .query(`ALTER TABLE bounce_proposals ADD COLUMN IF NOT EXISTS plan JSONB, ADD COLUMN IF NOT EXISTS watch_until TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS watch_ended_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS watch_outcome TEXT`)
+    .then(() => pool.query(`CREATE TABLE IF NOT EXISTS calendar_offers (user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, want_key TEXT NOT NULL, offered_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`))
+    .catch((err: Error) => console.error("bounce watch tables failed:", err));
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS google_snapshots (
@@ -2511,6 +2532,8 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE document_deliveries ADD CONSTRAINT document_deliveries_channel_check CHECK (channel IN ('pdf_text','google_docs','text_fallback','email'))`))
     // A Google Doc Co made keeps its Drive file ID (Google audit, 2026-10-11), so a later edit updates that Doc instead of re-uploading.
     .then(() => pool.query(`ALTER TABLE document_deliveries ADD COLUMN IF NOT EXISTS drive_file_id TEXT`))
+    // Which grant made the Doc: 'docs' (Cue's Docs grant, 2026-10-15); null, the old combined grant, whose Docs are never updated in place.
+    .then(() => pool.query(`ALTER TABLE document_deliveries ADD COLUMN IF NOT EXISTS drive_grant TEXT`))
     .catch((err: Error) => console.error("document_deliveries table init failed:", err));
   // Co pages (services/coPages): a hosted page at /d/<id>, one member's only (owner_user_id), private by its unguessable id. A page
   // expires (expires_at, 90 days after its last change); taken down or expired, its link answers 404 and its content is wiped

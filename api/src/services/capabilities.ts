@@ -629,25 +629,40 @@ export const ABILITIES: Ability[] = [
   {
     id: "calendar",
     get can() {
-      return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
-        ? "If they connect their calendar (Co texts a one-time link; free/busy only), Co sees when they're busy or free and nothing else: never what an event is, where, or with whom. It's never shared with anyone, including other members, and Co never changes their calendar. It's the only way Co holds a time for them; a free time they tell Co is only ever suggested against. They can disconnect any time."
+      return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
+        ? "If they connect their calendar (Co texts a one-time link; free/busy only), Co sees when they're busy or free and nothing else: never what an event is, where, or with whom. It's never shared with anyone, including other members, and Co never changes their calendar. With it, Co can keep an eye on a plan they said yes to against their real calendar; without it, against a free time they told Co. Co never holds, books or reserves a time. They can disconnect any time."
         : "Co can't connect to their calendar yet.";
     },
     tool: "calendarConnection",
     onCall: true,
     limits: { perTurn: 1, perDay: 3 },
-    use: "connect: when they want Co to plan around their real calendar, or say yes when you offer it; sends a one-time link as its own text. Never instead of the full Google connection, and never to read anything but busy and free. disconnect: when they ask to disconnect their calendar. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
+    use: "Only when a plan needs it: connect when there's a plan for one of their wants that their free time would decide (code refuses otherwise), or when they say yes to that offer; sends a one-time link as its own text. Never before, never instead of the Google connection, and never to read anything but busy and free. disconnect: when they ask to disconnect their calendar. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
+  },
+  // Google Docs, its own grant on Cue's published project (services/cueGrants.ts, Royce 2026-10-15): Drive files only.
+  {
+    id: "docs",
+    get can() {
+      return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
+        ? "If they connect Google Docs (Co texts a one-time link; Drive files only), Co can save a document it makes for them as a Google Doc in their Drive, and sees only the files it creates there, never anything else in their Drive. Co never shares a Doc; it's theirs until they share it. They can disconnect any time, and the Docs stay theirs."
+        : "Co can't save documents to their Google Drive yet.";
+    },
+    tool: "docsConnection",
+    limits: { perTurn: 1, perDay: 3 },
+    use: "Only once a document is being made for them: connect when a document you made for them went as a PDF because Google Docs isn't connected, or when they say yes to that offer; sends a one-time link as its own text. Never offer it before there's a document to put in their Drive (code refuses). Never instead of the Google connection, and never to reach anything in their Drive but the files Co makes. disconnect: when they ask to disconnect Google Docs or their Drive. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
   },
   {
     id: "google",
+    // The Gmail helper's tester flow, the only thing left on the old combined connection (Royce, 2026-10-15): the team only, never a
+    // member. The calendar and Google Docs are their own grants (calendar, docs).
+    teamOnly: true,
     get can() {
       return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
-        ? "If they connect Google (Co texts a one-time link), Co can see when they're busy over the next few days (busy or free only, never what the events are) and which emails they sent are still waiting on a reply (who, subject and date, never the message). If they allow it on Google's screen, Co can also save a document they ask for as a Google Doc in their Drive, and sees only the files it creates there. Co never sends email, never changes their calendar, and never shows any of it to anyone else. They can text \"disconnect Google\" any time."
-        : "Co can't connect to their Google Calendar or Gmail yet.";
+        ? "With the team only (testers): if they connect Gmail (Co texts a one-time link), Co sees which emails they sent are still waiting on a reply (who, subject and date, never the message). Co never sends email and never shows any of it to anyone else. They can text \"disconnect Google\" any time."
+        : "Co can't connect to Gmail yet.";
     },
     tool: "googleConnection",
     limits: { perTurn: 1, perDay: 3 },
-    use: "connect: when they want Co to know their calendar or track their email outreach, or say yes when you offer it; sends a one-time link as its own text. disconnect: when they ask to disconnect or remove Google. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
+    use: "Team only (testers). connect: when they want Co to track their email outreach, or say yes when you offer it; sends a one-time link as its own text. For their calendar use calendarConnection, for Google Docs docsConnection, never this. disconnect: when they ask to disconnect Gmail or Google. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
   },
 ];
 
@@ -745,7 +760,7 @@ const MENU: MenuLine[] = [
   { group: "Being there", main: "check_ins", text: "check in every few days, and ask how things went" },
   { group: "Being there", main: "media", text: "read photos and screenshots, and listen to voice memos", call: null },
   { group: "Being there", main: "what_co_knows", text: "say what it knows about them, and correct or remove it", call: "say what it knows about them, and correct or remove it" },
-  { group: "Being there", main: "google", get text() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Google to see when they're busy and which emails await replies" : null; } },
+  { group: "Being there", main: "google", get text() { return process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY ? "connect Gmail to see which emails await replies" : null; } },
   { group: "Being there", main: "team_feedback", text: "pass feedback to the team", call: null },
 ];
 // What Co can't do, for a complete answer (the LIMITS above say it in full).

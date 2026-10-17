@@ -260,7 +260,37 @@ export const proactiveRegistry: ProactiveRegistry = {
       await pool.query(`UPDATE bounce_proposals SET status = 'proposed', sent_at = NOW(), message = $2 WHERE id = $1 AND status = 'queued'`, [c.payload.proposalId, messages.join(" ").slice(0, 600)]);
     },
     async onDropped(c, _status, reason) {
-      await pool.query(`UPDATE bounce_proposals SET status = 'dropped', answer_words = $2 WHERE id = $1 AND status = 'queued'`, [c.payload.proposalId, String(reason ?? "").slice(0, 300)]).catch(() => {});
+      // The find it was for is remembered on the want (plan.dropped), so the next run never picks the same find again (bounce.ts).
+      await pool.query(`UPDATE bounce_proposals SET status = 'dropped', answer_words = $2, plan = jsonb_set(COALESCE(plan, '{}'::jsonb), '{dropped}', COALESCE(plan->'dropped', '[]'::jsonb) || to_jsonb(find_name || '|' || COALESCE(find_day::text, ''))) WHERE id = $1 AND status = 'queued'`, [c.payload.proposalId, String(reason ?? "").slice(0, 300)]).catch(() => {});
+    },
+  },
+
+  // The plan they asked Cue to keep an eye on changed (services/bounce.ts runBounceWatches): said once, before it starts.
+  bounce_watch: {
+    async draft(c, person) {
+      const p = c.payload;
+      const B = await import("../services/bounce.js");
+      const until = B.watchUntil(p.plan);
+      if (until && until.getTime() <= Date.now()) return skip("the plan has started");
+      const { facts, task } = B.watchBrief({ what: p.what, plan: p.plan });
+      const text = await draftProactive({ functionId: "bounce.watch.draft", firstName: person.firstName, facts, task, maxSentences: 2 });
+      if (!text) return skip("model chose SKIP");
+      return { messages: [text], text, rules: { maxSentences: 2, maxChars: 300, mustIncludeAny: nameTokens(String(p.plan?.match?.name ?? "")) } };
+    },
+  },
+
+  // The one calendar offer, ever (services/bounce.ts queueCalendarOffer): only while a plan still needs it and they haven't connected.
+  bounce_calendar_offer: {
+    async draft(c, person) {
+      const p = c.payload;
+      const C = await import("../services/cueGrants.js");
+      if (await C.calendarConnected(c.userId).catch(() => null)) return skip("they've connected their calendar since");
+      const B = await import("../services/bounce.js");
+      if (!(await B.calendarMomentReached(c.userId).catch(() => false))) return skip("no plan needs their calendar any more");
+      const { facts, task } = B.calendarOfferBrief({ want: p.want, findNames: p.findNames ?? [] });
+      const text = await draftProactive({ functionId: "bounce.calendarOffer.draft", firstName: person.firstName, facts, task, maxSentences: 2 });
+      if (!text) return skip("model chose SKIP");
+      return { messages: [text], text, rules: { maxSentences: 2, maxChars: 300 } };
     },
   },
 

@@ -39,7 +39,7 @@ const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: 
   const pdf = await X.recordSent(doc, { userId: PAIR[1], channel: "email", line: null, source: "test" }, receipts);
   check("anything that isn't a Google Doc has no file ID", pdf.driveFileId === null);
   const dr = src("services/deliveryReceipts.ts");
-  check("it's written to and read from the drive_file_id column", /delivered_at, drive_file_id\)/.test(dr) && /\$18,\$19\)/.test(dr) && /r\.driveFileId \?\? null\]/.test(dr) && /driveFileId: x\.drive_file_id \?\? null/.test(dr));
+  check("it's written to and read from the drive_file_id column", /delivered_at, drive_file_id, drive_grant\)/.test(dr) && /\$18,\$19,\$20\)/.test(dr) && /r\.driveFileId \?\? null, r\.driveGrant \?\? null\]/.test(dr) && /driveFileId: x\.drive_file_id \?\? null/.test(dr));
   check("the column is added to tables made before it", /ALTER TABLE document_deliveries ADD COLUMN IF NOT EXISTS drive_file_id TEXT/.test(src("db/migrations.ts")));
 }
 

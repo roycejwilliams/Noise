@@ -1017,7 +1017,7 @@ export function registerJobs(io: Server) {
   // The bounce's trigger (services/bounce.ts): one plan for a want with a window, in a real gap, every 15 minutes; it goes through the
   // proactive harness like everything Cue starts.
   cron.schedule("7,22,37,52 * * * *", () => {
-    import("../services/bounce.js").then((B) => B.runBounceTriggers()).catch((err: any) => console.error("bounce trigger cron error:", err?.message ?? err));
+    import("../services/bounce.js").then(async (B) => (await B.runBounceWatches(), await B.runBounceTriggers())).catch((err: any) => console.error("bounce trigger cron error:", err?.message ?? err));
   });
 
   // No membership lapse (Royce, 2026-10-14: "Going quiet earns less contact, never ejection." The member's job is nothing):

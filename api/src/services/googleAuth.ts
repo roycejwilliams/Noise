@@ -1,25 +1,23 @@
-// Google Calendar and Gmail, read-only, and (2026-10-08) creating a Google Doc in their Drive when they ask (Royce, 2026-09-28: "Gmail for tracking
+// Google Calendar and Gmail, read-only (Royce, 2026-09-28: "Gmail for tracking
 // sponsor outreach, Calendar so I actually know when you're free instead of
 // guessing"). Off until the Google OAuth client exists (GOOGLE_CLIENT_ID,
 // GOOGLE_CLIENT_SECRET, GOOGLE_TOKEN_KEY on the service).
 //
 // The member connects by text: Co sends a one-time link bound to them
 // (15 minutes, single use), which starts Google's consent screen with a
-// random state and PKCE. Three scopes are ever asked for: free/busy on their
-// calendars, Gmail metadata (who, subject, when; never a message body), and
-// drive.file (only files Co creates for them; never the rest of their Drive). Tokens are encrypted at rest with AES-256-GCM, kept to that
-// member only, and "disconnect Google" deletes and revokes them.
+// random state and PKCE. One scope is asked for: Gmail metadata (who, subject, when; never a message body). Tokens are encrypted at
+// rest with AES-256-GCM, kept to that person only, and "disconnect Google" deletes and revokes them.
+// This is the Co Club project, in Testing (Gmail metadata is a restricted scope; the audit decision is parked). Royce, 2026-10-15:
+// "The old grant dies. No member-facing path can trigger the old combined calendar/Gmail/Docs grant, ever. The only thing left on the
+// old connection is the Gmail helper's tester flow." So it's team-only (services/capabilities.ts google, teamOnly; googleTools checks
+// again), and the calendar and Docs are their own grants on Cue's published project (services/cueGrants.ts).
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 
-// The only scopes Co ever asks for, and the only ones it accepts back. drive.file (2026-10-08): Co can create a Google Doc in their Drive
-// when they ask, and can see only the files it created; never anything else in their Drive (services/googleDocs.ts).
-export const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/calendar.freebusy",
-  "https://www.googleapis.com/auth/gmail.metadata",
-  "https://www.googleapis.com/auth/drive.file",
-] as const;
+// The only scope Co asks for here, and the only one it accepts back. free/busy and drive.file left this grant on 2026-10-15: the
+// calendar and Docs go through Cue's own grants (services/cueGrants.ts), never this one.
+export const GOOGLE_SCOPES = ["https://www.googleapis.com/auth/gmail.metadata"] as const;
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -27,7 +25,12 @@ const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 export const LINK_TTL_MS = 15 * 60 * 1000;
 
 export function googleConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && tokenKey(env) && baseUrl(env));
+  return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && tokenAndBaseReady(env));
+}
+
+// What every Google grant needs besides its own client: the token key and an https base for the callback.
+export function tokenAndBaseReady(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(tokenKey(env) && baseUrl(env));
 }
 
 function baseUrl(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -113,7 +116,7 @@ export async function createConnectLink(userId: string): Promise<string | null> 
 // Opens Google's consent screen for a live, unused state.
 export async function consentUrlFor(state: string): Promise<string | null> {
   const { rows } = await pool.query(
-    `SELECT code_verifier_enc FROM google_oauth_states WHERE state = $1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW()`,
+    `SELECT code_verifier_enc FROM google_oauth_states WHERE state = $1 AND grant_kind = 'google' AND used_at IS NULL AND expires_at > NOW()`,
     [state],
   );
   if (!rows[0]) return null;
@@ -144,7 +147,7 @@ export async function exchangeCode(code: string, verifier: string, fetchImpl: ty
 // spent whatever happens next.
 export async function finishConnect(state: string, code: string, fetchImpl: typeof fetch = fetch): Promise<{ ok: boolean; userId: string | null; why?: string }> {
   const { rows } = await pool.query(
-    `UPDATE google_oauth_states SET used_at = NOW() WHERE state = $1 AND grant_kind <> 'calendar' AND used_at IS NULL AND expires_at > NOW() RETURNING user_id, code_verifier_enc`,
+    `UPDATE google_oauth_states SET used_at = NOW() WHERE state = $1 AND grant_kind = 'google' AND used_at IS NULL AND expires_at > NOW() RETURNING user_id, code_verifier_enc`,
     [state],
   );
   const row = rows[0];
@@ -168,9 +171,6 @@ export async function finishConnect(state: string, code: string, fetchImpl: type
 }
 
 // ------------------------------------------------------------ using and ending it
-
-// Whether they let Co create Docs (drive.file is one tick on Google's consent screen; they can leave it off).
-export const canCreateDocs = (scopes: string[]) => scopes.includes("https://www.googleapis.com/auth/drive.file");
 
 export async function isConnected(userId: string): Promise<{ connected: boolean; scopes: string[] }> {
   const { rows } = await pool.query(`SELECT scopes FROM google_connections WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
@@ -222,10 +222,11 @@ export async function revokeToken(token: string, fetchImpl: typeof fetch = fetch
 }
 
 // "Disconnect Google": revoked with Google, deleted here, and the cached
-// calendar and email summary go with it.
+// email summary goes with it.
 export async function disconnectGoogle(userId: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
   const { rows } = await pool.query(`DELETE FROM google_connections WHERE user_id = $1 RETURNING refresh_token_enc, access_token_enc`, [userId]);
-  await pool.query(`DELETE FROM google_snapshots WHERE user_id = $1`, [userId]).catch(() => {});
+  // What Gmail gave goes with it; busy times belong to their calendar grant (services/cueGrants.ts) and stay with it.
+  await pool.query(`UPDATE google_snapshots SET waiting = NULL WHERE user_id = $1`, [userId]).catch(() => {});
   const r = rows[0];
   if (!r) return false;
   const token = r.refresh_token_enc ? decryptToken(r.refresh_token_enc) : r.access_token_enc ? decryptToken(r.access_token_enc) : null;

@@ -859,7 +859,7 @@ export function loopTools(
         const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone, now, line };
         // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
         // working artifact (venue brief, partnership plan, readout) for a member with Google connected (narrowed by GOOGLE_DOCS_TEST_USERS when set); otherwise the PDF.
-        // Not connected (or Docs not allowed): the PDF goes instead, and Co offers to connect Google.
+        // Google Docs not connected: the PDF goes instead, and Co offers to connect Google Docs (its own grant, services/cueGrants.ts).
         // Recorded (services/deliveryReceipts.ts): a revision goes as the next version with its change line; the same artifact never twice.
         const rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(theirWords()), source: "reply", revises: input.revises ?? null, changed: input.changed ?? null, resend: asksToResend(theirWords()) });
         const { results, sentOk, googleRefused, googleMissing } = rd;
@@ -890,7 +890,7 @@ export function loopTools(
         ctx.facts?.add("did_this_turn", `Sent them a document, "${doc.title}" (${doc.sections.length} sections)${asDoc ? `, as a Google Doc in their own Drive (${inPlace ? `updated in place, same link: ${sent.link}` : `link texted: ${sent.link}; ${sharedLink ? "anyone with the link can open and edit it" : "only they can open it"}`})` : ""}${asDoc && asPdf ? " and" : ""}${asPdf ? " as a PDF in this conversation" : ""}${rd.line ? `, with the line "${rd.line}"` : ""}.`);
         covers(doc);
         await remember({ next: `document sent: ${doc.title}` });
-        const extras = `${rd.docBecamePdf ? "The earlier version was a Google Doc, but this one couldn't go to Google, so it went as a PDF, and the text said so. " : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "Their Google isn't connected with Docs allowed, so it went as a PDF: say so in a line and offer to send the link to connect Google (googleConnection). " : ""}`;
+        const extras = `${rd.docBecamePdf ? "The earlier version was a Google Doc, but this one couldn't go to Google, so it went as a PDF, and the text said so. " : ""}${googleRefused === "kind" ? "They asked for a Google Doc, but a Google Doc is only for a venue brief, partnership plan or readout, so this went as a PDF: say so in a line. " : googleRefused === "not_yet" ? "They asked for a Google Doc, but Google Docs aren't open to them yet, so it went as a PDF: say so in a line, without promising when. " : ""}${googleMissing ? "They haven't connected Google Docs, so it went as a PDF: say so in a line and offer to send the link to connect Google Docs (docsConnection). " : ""}`;
         // A document whose text carried its line is the turn's delivery: no leftover text after it. When Co still owes a line (a Google
         // Doc that became a PDF, connecting Google), the delivery gate stays open so that line goes.
         if (!extras) ctx.onLinkDelivered?.();

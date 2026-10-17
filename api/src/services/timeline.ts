@@ -77,7 +77,7 @@ export async function timelineFor(userId: string, _city: string | null, now: Dat
     q(`SELECT goal, deadline FROM co_tasks WHERE user_id = $1 AND status = 'open' AND deadline IS NOT NULL AND deadline >= $2::date AND deadline < $3::date ORDER BY deadline LIMIT 3`, [userId, days.from, days.until]),
     // Only a fresh calendar read counts as what's ahead: an old snapshot can
     // miss what they added or cancelled since (2026-10-01 code review).
-    q(`SELECT s.busy FROM google_snapshots s JOIN google_connections c ON c.user_id = s.user_id WHERE s.user_id = $1 AND s.fetched_at > NOW() - make_interval(secs => $2)`, [userId, SNAPSHOT_MAX_AGE_MS / 1000]),
+    q(`SELECT s.busy FROM google_snapshots s JOIN calendar_grants c ON c.user_id = s.user_id WHERE s.user_id = $1 AND s.fetched_at > NOW() - make_interval(secs => $2)`, [userId, SNAPSHOT_MAX_AGE_MS / 1000]),
     q(`SELECT event_name_raw, event_date, provenance FROM planned_event_mentions WHERE user_id = $1 AND event_date >= $2::date AND event_date < $3::date ORDER BY event_date LIMIT 3`, [userId, days.today, days.until]),
     loadBrief(userId).catch(() => null),
   ]);
