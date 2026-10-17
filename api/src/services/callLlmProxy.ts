@@ -262,6 +262,8 @@ export type ProxyDeps = {
   // Called with what was kept from the voice and why (for the morning review).
   onDropped?: (sentence: string, why: string) => void;
   onFirstText?: (ms: { upstreamFirstTokenMs: number; firstSentenceMs: number }) => void;
+  // Called when a turn ends on the last-resort line (nothing else could be said), for the daily failure count.
+  onLastResort?: (line: string) => void;
   // Called when the member's last words say they are drained (the turn gets the note and a two-sentence cap).
   onState?: () => void;
   // The brain's decision for this turn (brain/index.ts judgeCallTurn), for the decision log.
@@ -613,6 +615,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     const line = heldEvent ? SAFE_LINE : HELD_LINE;
     spokenLines.push(line);
     deps.onSpoken?.(line);
+    deps.onLastResort?.(line);
     yield chunk({ content: line + " " });
   }
   if (co?.afterTurn) Promise.resolve().then(() => co.afterTurn!({ spoken: spokenLines, ran })).catch((err: any) => console.error("call: after-turn check failed (non-fatal):", err?.message ?? err));
