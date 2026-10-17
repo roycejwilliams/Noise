@@ -139,7 +139,7 @@ async function draftFromCuriosity(firstName: string, recap: string, curious: Com
     facts: {
       something_co_is_still_figuring_out_about_them: curious.about,
       your_recent_texts_with_them: curious.theirWords,
-      ways_co_can_help: "search now for events, communities or opportunities for something they want; point them to people worth meeting at Cue events; a quick call to think something through",
+      ways_co_can_help: "search now for events, communities or opportunities for something they want; point them to people worth meeting at Noise events; a quick call to think something through",
       what_co_cannot_do: "find sponsors, investors or funders themselves (only events where they show up); promise to keep watching or keep an eye out",
       recap_for_background_only: recap.slice(0, 1500),
       work_you_owe_them: ownedWork.length ? ownedWork.join("; ") : null,

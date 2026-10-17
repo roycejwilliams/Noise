@@ -102,7 +102,7 @@ export function deckClaimLines(d: { subtitle: string; slides: { headline: string
 
 // What Co knows about itself, for a deck the team makes about Co: who Co is (the opening of its own prompt,
 // prompts/co-system-prompt.md) and what it can do (the capability sheet). Facts from Co's own code, never from a member.
-export const CO_IS = "Cue gets to know people over time and brings the right people and moments into their lives. Cue is invite-only: being here means something. Cue is a genuine, ongoing companion, by text and by phone call.";
+export const CO_IS = "Cue gets to know people over time and brings the right people and moments into their lives. Noise is invite-only: being here means something. Cue is a genuine, ongoing companion, by text and by phone call.";
 export async function coSelfKnowledge(): Promise<string> {
   const { capabilitySheet } = await import("../capabilities.js");
   return [CO_IS, ...capabilitySheet()].join("\n");

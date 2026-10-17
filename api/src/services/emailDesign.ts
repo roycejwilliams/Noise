@@ -67,7 +67,7 @@ const codeBox = (code: string) =>
 
 const footer = () =>
   `<tr><td style="padding:8px 0 0 0;border-top:1px solid ${C.line};"></td></tr>` +
-  block(`<div style="padding-top:12px;font-family:${SANS};font-size:11px;font-weight:500;letter-spacing:1px;text-transform:uppercase;color:${C.muted};">Cue &nbsp;&middot;&nbsp; Private, by referral</div>`, 0);
+  block(`<div style="padding-top:12px;font-family:${SANS};font-size:11px;font-weight:500;letter-spacing:1px;text-transform:uppercase;color:${C.muted};">Noise &nbsp;&middot;&nbsp; Private, by referral</div>`, 0);
 
 function shell(rows: string, preview: string): string {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light">

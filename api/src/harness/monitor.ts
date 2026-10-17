@@ -66,7 +66,7 @@ export const SIGNALS: Signal[] = [
   // decision for each one.
   { key: "proactive_blocked_at_send", label: "Proactive sends blocked at send time (caps/hours/opt-out changed since the pick)", bad: `decision = 'proactive.dailyPick' AND reason LIKE 'blocked at send:%'`, total: `decision = 'proactive.dailyPick' AND action IS NOT NULL`, floor: 0.1, minCount: 2 },
   { key: "exempt_send_blocked_or_failed", label: "Transactional (exempt) sends blocked by hours/opt-out or failed", bad: `decision = 'proactive.exemptSend' AND outcome = 'skip'`, total: `decision = 'proactive.exemptSend'`, floor: 0.3, minCount: 3 },
-  { key: "announcement_gave_up", label: "Cue event announcements given up on (event gone/past, or opted out)", bad: `decision = 'tier1.announce' AND action LIKE 'gave_up%'`, total: `decision = 'tier1.announce'`, floor: 0.3, minCount: 2 },
+  { key: "announcement_gave_up", label: "Noise event announcements given up on (event gone/past, or opted out)", bad: `decision = 'tier1.announce' AND action LIKE 'gave_up%'`, total: `decision = 'tier1.announce'`, floor: 0.3, minCount: 2 },
   { key: "call_gate_blocked", label: "Calls blocked at the gate before dialing", bad: `decision = 'call.gate' AND outcome = 'skip'`, total: `decision = 'call.gate'`, floor: 0.3, minCount: 3 },
   // Code review, 2026-09-17: the Tier 2 relevance judge was silently
   // rejecting real events on their format label alone ("pitch night" isn't

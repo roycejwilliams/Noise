@@ -110,7 +110,7 @@ export function toolAction(tool: string, input: any): { relation: string; label:
     case "noteReaction":
       return [{ relation: "did", label: `noted how "${s(input?.item)}" landed: ${s(input?.reaction)}${s(input?.quote) ? ` (their words: "${s(input.quote).slice(0, 120)}")` : ""}` }];
     case "markArrived":
-      return [{ relation: "did", label: "recorded that they arrived at a Cue event" }];
+      return [{ relation: "did", label: "recorded that they arrived at a Noise event" }];
     case "requestEventIntro":
       return [{ relation: "did", label: `started a double opt-in intro${s(input?.personName) ? ` with ${s(input.personName)}` : ""}` }];
     case "reactInsteadOfReplying":

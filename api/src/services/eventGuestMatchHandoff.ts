@@ -447,7 +447,7 @@ export async function resolveNamedEventGuest(userId: string, nameGuess: string, 
     `SELECT event_api_id, event_name FROM event_checkin_followups WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
     [userId],
   );
-  if (!recent[0]) return { error: "no recent Cue event on file for them to have met someone at" };
+  if (!recent[0]) return { error: "no recent Noise event on file for them to have met someone at" };
   const eventId: string = recent[0].event_api_id;
   const eventName: string = recent[0].event_name;
 

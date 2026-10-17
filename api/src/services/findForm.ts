@@ -205,7 +205,7 @@ export function exitKey(m: any): string {
 
 // How Co names what it is (Royce, 2026-10-09: "an event Saturday" or "an application closing Friday", never "a real opportunity").
 export function formLabel(m: any, zone: string | null, now = new Date()): string {
-  if (m?.kind === "co_event") return `a Cue event${whenWords(eventDateOf(m, zone), zone, now)}`;
+  if (m?.kind === "co_event") return `a Noise event${whenWords(eventDateOf(m, zone), zone, now)}`;
   const f = formOf(m);
   if (f === "event") return `an event${whenWords(eventDateOf(m, zone), zone, now)}`;
   if (f === "opening") {

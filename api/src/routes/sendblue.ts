@@ -400,7 +400,7 @@ async function welcomeLineFor(userId: string, phone: string, invitedBy: string |
   const stock = (inviter ? pickLine(WELCOME_INVITED, { inviter }) : "") || pickLine(WELCOME);
   // Co writes it (services/voiceLine.ts); the stock line is the fallback.
   const { text: line, written } = await lineInVoice({
-    purpose: "Welcome someone who just got into Cue with a good invite code.",
+    purpose: "Welcome someone who just got into Noise with a good invite code.",
     facts: inviter ? [`${inviter}, a member, invited them.`, "They're in."] : ["They're in. Someone invited them."],
     examples: inviter ? WELCOME_INVITED.map((l) => l.replace("{inviter}", inviter)) : WELCOME,
     mustInclude: inviter ? [inviter] : [],
@@ -475,8 +475,8 @@ async function tellInviterTheyJoined(newUser: { id: string; first_name?: string 
   const stock = pickLine(INVITE_JOINED, { name: inviterName, friend: gate.friend, left });
   const { text: line } = stock
     ? await lineInVoice({
-        purpose: `Tell ${inviterName ?? "a member"} that the friend they invited just joined Cue.`,
-        facts: [`${gate.friend} joined Cue on their invite.`, `They have ${left} invite${left === 1 ? "" : "s"} left; one only counts once someone joins.`],
+        purpose: `Tell ${inviterName ?? "a member"} that the friend they invited just joined Noise.`,
+        facts: [`${gate.friend} joined Noise on their invite.`, `They have ${left} invite${left === 1 ? "" : "s"} left; one only counts once someone joins.`],
         examples: INVITE_JOINED.map((l) => l.replace("{friend}", gate.friend ?? "").replace("{name}", inviterName ?? "").replace("{left}", String(left))),
         mustInclude: gate.friend ? [gate.friend] : [],
         fallback: stock,
@@ -1016,7 +1016,7 @@ export function sendblueRouter(io: Server): Router {
                 purpose: "Right after they gave their name and email: offer a quick five-minute call to get to know them, now or at a time they pick, and make clear texting is fine too.",
                 facts: [
                   `Their first name is ${first_name ?? "unknown"}.`,
-                  "A quick 5-minute call helps Cue know who to introduce them to when they're in the room at Cue events.",
+                  "A quick 5-minute call helps Cue know who to introduce them to when they're in the room at Noise events.",
                   "They can take the call now, pick a time, or keep texting.",
                 ],
                 examples: CALL_OFFER.map((l) => l.replace("{name}", first_name ?? "there")),

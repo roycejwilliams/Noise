@@ -73,7 +73,7 @@ export async function serveInvitePage(req: Request, res: Response) {
     return res.status(410).send(page("This invite has been used.", "Ask whoever sent it for a new one.", null));
   }
   const inviter: string | null = row.first_name?.trim() || null;
-  const title = inviter ? `${inviter} invited you to Cue.` : "You're invited to Cue.";
+  const title = inviter ? `${inviter} invited you to Noise.` : "You're invited to Noise.";
   const href = smsInviteHref(coPhone, inviteGreeting(inviter, code));
   return res.status(200).send(page(title, "Tap below to text Cue. Your invite code is already filled in.", { href, label: "Text Cue" }));
 }

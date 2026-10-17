@@ -191,7 +191,7 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
       await pool
         .query(`INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'recommendation_offered', $2)`, [r.user_id, JSON.stringify({ name: event.name, event_api_id: event.api_id })])
         .catch(() => {});
-      await writeMemory(r.user_id, "event_discovery_surfacing", `Announced Cue's own event "${event.name}" when it was created`).catch(() => {});
+      await writeMemory(r.user_id, "event_discovery_surfacing", `Announced Noise's own event "${event.name}" when it was created`).catch(() => {});
     } else if ((result as any).reason === "already sent") {
       await pool.query(`UPDATE co_event_announcements SET sent_at = NOW() WHERE id = $1`, [r.id]);
     }
@@ -212,13 +212,13 @@ async function draftAnnouncement(person: Person, event: LumaEvent): Promise<stri
   const url = event.url ? (/^https?:\/\//.test(event.url) ? event.url : `https://lu.ma/${event.url}`) : null;
   const details = url ? await fetchLumaEventDetails(url).catch(() => null) : null;
   const record = details ? renderEventDetails(event.name, details).join("\n") : `"${event.name}" starts ${event.start_at}.`;
-  let caption = `Cue's hosting "${event.name}". Wanted you to see it first.`;
+  let caption = `Noise is hosting "${event.name}". Wanted you to see it first.`;
   try {
     const drafted = await draftProactive({
       functionId: "tier1.announce",
       firstName: person.first_name ?? "there",
       facts: { event_co_is_hosting: record },
-      task: `Cue is hosting this event and wants them to see it first. The link preview is already showing above this message, so this is its caption: say it's Cue's own event, when and where, and the one detail that makes it worth coming. Use only event_co_is_hosting. Don't mention the link or sending it.`,
+      task: `Noise is hosting this event and wants them to see it first. The link preview is already showing above this message, so this is its caption: say it's Noise's own event, when and where, and the one detail that makes it worth coming. Use only event_co_is_hosting. Don't mention the link or sending it.`,
     });
     if (drafted && gate(checkDraft(drafted, { maxSentences: 3, maxChars: 320 })).ok) caption = drafted;
   } catch (err: any) {
