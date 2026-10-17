@@ -410,6 +410,22 @@ export function inboundCallerVerified(stirVerstat: string | null | undefined, al
   return stirVerstat === "TN-Validation-Passed-A";
 }
 
+// Who an inbound call may reach (Royce, 2026-10-16): only a member. A users row alone isn't one: anyone who has ever texted Co has
+// a row (services/identity.ts findOrCreateUserByPhone), including partner-night guests, applicants and archived accounts, and a call
+// gets the full call agent with its helpers. A member is invite-verified, through intake, and not archived (the same line the reply
+// agent's tools sit behind on texts). Anyone else is treated exactly like an unrecognized number.
+type Db = { query: (sql: string, args?: unknown[]) => Promise<{ rows: any[] }> };
+export async function inboundCallMember(from: string | null | undefined, db: Db = pool): Promise<{ userId: string | null; why: string | null }> {
+  if (!from) return { userId: null, why: "no caller number" };
+  const { rows } = await db.query(`SELECT id, invite_verified, identity_captured, archived_at FROM users WHERE phone_number = $1`, [from]);
+  const u = rows[0];
+  if (!u) return { userId: null, why: "no account" };
+  if (u.archived_at) return { userId: null, why: "archived" };
+  if (u.invite_verified !== true) return { userId: null, why: "not a member (no invite)" };
+  if (u.identity_captured !== true) return { userId: null, why: "intake not finished" };
+  return { userId: String(u.id), why: null };
+}
+
 // ---- contact since a missed call ---------------------------------------------
 
 // Whether the person reached Co after `since`: a text, a voice memo, or a
