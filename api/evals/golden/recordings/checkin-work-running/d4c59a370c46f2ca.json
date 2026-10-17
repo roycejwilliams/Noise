@@ -1,0 +1,95 @@
+{
+  "hash": "d4c59a370c46f2ca",
+  "case": "checkin-work-running",
+  "recorded_at": "2026-10-17T18:52:16.848Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2088,
+    "system": "",
+    "messages": 1,
+    "last": "user: Cue, a texting companion, is about to send this line: \"nothing back yet\" Does this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Cue or another person) beyond Cue admitting that something did NOT happen (including that it tried and couldn't: \"I ...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2088,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Cue, a texting companion, is about to send this line:\n\"nothing back yet\"\n\nDoes this line assert anything that happened or is true (an action, a state, or a fact about anyone, including Cue or another person) beyond Cue admitting that something did NOT happen (including that it tried and couldn't: \"I couldn't reach them\"), or owning a mistake (\"that's on me\", \"sorry\", \"you're right\")? A reason or an aside that states a fact (\"because Jordan already has your number\", \"since Ellis got it first\") counts as asserting something.\n\nReturn ONLY JSON: {\"onlyAdmission\": true} if the line only admits something didn't happen and/or owns it, else {\"onlyAdmission\": false}.",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"onlyAdmission\": true}",
+      "usage": {
+        "input_tokens": 236,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 59,
+        "output_tokens_details": {
+          "thinking_tokens": 45
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg8KAeRFHvUDLkgqSgVyD",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSowUKEAgSGAI4AUIIdGhpbmtpbmcSDCy1Qh3MEUmVZdGjqhoMSifdSuEH8H7udxfUIjAvwAk56C378Vawvi9jq0b22j8BDCyGspad+iHvToAm/rPuW815Hm5rURqLMo36+6kqwASgmWr8RY5CLfrAQio0lyC7dqrPnzbCd7z6BsAqyOEj0mzt3koXaIOBpm/ChUntOiRCNfKY7DZx/Ac06iE32Dk8WUQDdvgXAA15FUzx6fMOhkvfBP8x+jajEpD/5dH7swf8p/M2GJ42VSzw0zqupcmzM3p1PDoaqu0JVAiF07Xl67LSWNH/9z0E/0dg2D8ItzVLxq2X5Mc5Le9u+QuTfOIwxuESJKrIai9S0U0n5cV+JA2dUUd2FzFJEXsfq/RlivaaiyndVVqFVC+9jLtZCPwMULYIOPvTmoaX3PJscTnysdCuc0Mi+8XgSbFtB7HmiG13Byhu+GQTOodNu2OHUTBpwocz4lho4pQk+WjESANic2wg0ETr23UDE4UKQWlSNGRF0ZB4lukFnR9TULdDuYxCi2OmPBodO+T035OBwFZr2V3qJZZfQTa9RE/FgzLOiz6kJjR4607yTOE/cRtQ4qpFOuURw6oc4BdNPqeGLv8cCdBflvXLnwtNTvI1YtVeYAdMki1i1UFqFzPbVRPibTPHxlVMATAklWdd3h5E+OoA/Hic+GiQXL4cAwgDdRgJbtLCcSZtvOCKoa0IhxP9L95A7htsHhEkDEuQ8pA86UqzCAMf6CgNXGrO2Ulz/SYEatcgt8n8EdrmJ1Yal2F3pmIfzGAKl6bYq/heD6ot18QCdBIlvH8Jn043bJkc9sSGn2cdWZBcs4Ux1MlXucvYNP5NAoX2XkppvL91NfJ9UnxOUD5UWM4YMANlPhkZLNlh4f8YAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"onlyAdmission\": true}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 236,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 59,
+          "output_tokens_details": {
+            "thinking_tokens": 45
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+{
+  "hash": "e77bab620e13a1ca",
+  "case": "sf-finds-link-then-caption",
+  "recorded_at": "2026-10-17T18:58:32.143Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-sonnet-5",
+    "grader": false,
+    "max_tokens": 4000,
+    "system": "",
+    "messages": 1,
+    "last": "user: You route one inbound text message for Cue, a companion people text. Decide what the latest message is doing. You only classify; other code acts on your answer. Recent conversation, in order (read it: short replies only make sense against what Cue last said): (start of the conversation) Their latest...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 4000,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You route one inbound text message for Cue, a companion people text. Decide what the latest message is doing. You only classify; other code acts on your answer.\n\nRecent conversation, in order (read it: short replies only make sense against what Cue last said):\n(start of the conversation)\n\nTheir latest message: \"Anything you have for me in SF?\"\n\nThings Cue has asked that are still waiting on a reply from them (newest first, where known):\n(nothing is waiting on a reply from them)\n\nReturn ONLY a JSON object:\n{\"reason\": \"one short sentence: what their message is doing\", \"answers\": {\"itemId\": \"...\", \"value\": \"...\"} or null, \"ambiguousBetween\": [itemIds], \"call\": \"...\", \"wantsRecommendation\": true/false, \"beyondAsk\": \"...\" or null, \"askUnclear\": \"...\" or null, \"confidence\": \"high\" | \"medium\" | \"low\"}\nWrite \"reason\" first, then make every other field agree with it: if your reason says the message isn't answering a waiting item, answers must be null.\n\nanswers — which waiting item (if any) the latest message is actually replying to:\n- Only set it if the message is genuinely a reply to that item. If they're just talking, or replying to something else Cue said, use null. Having an item open does not make every message an answer to it.\n- A short reply (\"yes\", \"sure\", \"for sure\", \"no\", \"I'm interested\") answers what Cue asked most recently. Look at Cue's last messages in the conversation: if Cue's most recent message asked something that is not one of the waiting items, the short reply answers that, and answers is null.\n- If a short reply could just as plausibly answer two or more waiting items and the conversation does not make clear which, set answers to null and list those item ids in ambiguousBetween. In particular, when Cue asked two or more waiting questions back to back with no reply from them in between, a short reply that doesn't name or refer to one of them (\"sure\", \"yes\", \"ok do it\") is ambiguous between those questions, even though one was sent slightly later.\n- A bare acknowledgment (\"thanks\", \"ok\", \"got it\", \"sounds good\", \"cool\", \"nice\", \"bet\") is not a yes to anything.\n- Tapback reactions such as \"Liked “…”\", \"Loved “…”\", \"Emphasized “…”\", \"Laughed at “…”\" are reactions to a message, not answers or requests.\n- call_offer: \"accept\" only if they clearly say yes to Cue calling them. If the recorded \"call offer\" is really Cue telling them they can call Cue's number, or is not actually an offer for Cue to call them, it cannot be accepted: never answer it with \"accept\". Saying they'd rather keep texting, or no to a call, is \"decline\".\n- outcome_followup / event_checkin: \"named_positive\" = they name or describe someone specific they met, or a specific good outcome (\"met a product person at LinkedIn and an investor\" counts, no names needed); \"named_critical\" = a real negative assessment (\"waste of time\", \"nobody interesting\"), with or without a name; \"not_mentioned\" = neutral or non-committal (\"it was fine\", \"didn't go\", \"no one really\"). Talking about something unrelated is not an answer.\n- match_nudge / network_intro: \"yes\" = they want to be connected/introduced to that specific person; \"no\" = passing.\n- event_tease / network_tease: \"yes\" = they want to hear more / hear who; \"no\" = passing.\n- walkin_ask: \"answered\" if their message says what they hope to find or who they want to meet.\n\ncall — about Cue calling them:\n- \"explicit_request\": they directly ask Cue to call them now, or to talk by phone with no future time (\"call me\", \"can you call me\", \"call me right now\"). A command, not a question about the feature. Not this if they only mention a call while questioning, declining, or complaining about one (\"why did you call me\", \"stop calling\"). When a call request and some other waiting item are both possible, a call request does not also answer the other item.\n- \"asks_about_calling\": a question about whether or how PHONE CALLS with Cue work (\"can I just call you?\", \"how do I call you back?\"). Questions about other Cue features (memory, APIs, how it works in general) are \"none\". When in doubt between a call request and a question about calling, it's the question.\n- \"schedule_request\": a call at a specific future date/time, including changing a time already set (\"push that to 4pm\"), even if the time is only complete combined with earlier messages.\n- \"cancel_scheduled_call\": cancel a scheduled call, with no new time.\n- \"would_benefit\": none of the above, but what they're describing is complex or emotional enough that voice would genuinely help. Never for short, light, or logistical messages.\n- \"none\": anything else. Accepting or declining a waiting call offer goes in answers, not here (use \"none\").\n\nwantsRecommendation — they're asking Cue to find, suggest, or surface something concrete in the world right now (events, programs, people, opportunities): \"find me a networking event\", \"anything real you can find for me\", \"found anything for me?\", \"have you surfaced anything lately?\", \"don't see anything on X?\", \"anything on Twitter?\", \"point me in the right direction\" (after Cue offered to look), \"I want to look for some friends\", \"what's the vibes for Sunday?\" (asking what's on then). It can be true alongside an answer (\"never mind the call, can you find me a founder event\"). false when: Not when they only ask what's new or changed with Cue itself (\"Updates?\", \"what's new?\"): Cue answers that on its own, without a search.\n- they're only answering a waiting item (\"yes\", \"tell me more\"), or asking about something Cue already sent (\"what did you send me\", \"where's the link?\", \"any details?\", \"who is hosting it?\");\n- a false-premise callback (\"that job posting you sent me, is it still open\") when the conversation shows Cue never sent it;\n- they want Cue's own opinion or advice (how to fix something, help planning their pitch, feedback on their build);\n- venting or telling Cue about their life.\n\nbeyondAsk — when wantsRecommendation is true, separate the ask from everything else in the message. The ask is what they want found, including its time frame, place, and who it's for (\"tech week, Oct 5th - Oct 11th?\" is one ask; \"anything about VC looking to fund?\" is one ask). beyondAsk is anything else that needs a real response: a feeling (\"ugh rough week\"), news about their life (\"wasn't feeling the mixer\"), a second, different question, or a reaction to something Cue said. Write it in a few plain words (\"rough week\", \"asked about Maya too\"), or null when the message is only the ask. A feeling or life update is never part of the ask. null when wantsRecommendation is false.\n\naskUnclear — when wantsRecommendation is true, a short, plain question to ask them first if what they want could reasonably mean two clearly different things, so searching would be a guess (Royce, 2026-09-18: \"if you don't have an understanding of the context... ask clarifying questions... rather than just sending them anything\"). Example: a founder asking \"anyone hiring a design engineer?\" could be hiring one or looking for a role, so: \"Are you looking to hire a design engineer, or looking for a design engineer role?\" null whenever the ask is clear enough to act on, including broad ones (\"anything happening this weekend?\", \"any founder events?\") and ones the conversation already makes clear. Never ask about details you could reasonably search broadly for.\n\nconfidence — \"high\" if the read is unambiguous, \"medium\" if it's the most reasonable read but another is possible, \"low\" if you're guessing.\n\nALSO, in the same JSON object, add these fields. They describe the same message and never change the fields above.\n\nWhat they've asked Cue for (their words):\n- (nothing open)\n\nWhat they're in the middle of:\n- (nothing open)\n\nThings Cue sent them recently (newest first):\n- (nothing recently)\n\nEvent offers Cue has texted them in the last 7 days: 0\n\n\"mode\": what they're doing right now: \"sharing\" (telling Cue about their life or feelings), \"reacting\" (responding to something Cue sent), \"asking\" (a question), \"logistics\" (times, places, details), \"feedback\" (about how Cue works), \"planning\", or \"small_talk\" (thanks, ok, a sign-off).\n\"topic\": what this part of the conversation is about, in a few words.\n\"pushback\": if their message corrects or pushes back on something Cue just said, what, in a few words; otherwise null.\n\"lesson\": only when there's pushback, one short standing note about how Cue should be with them from now on, general enough to apply next time (\"when he asks about logistics, answer the logistics; don't tie it to his own event\"); otherwise null.\n\"dots\": at most two connections what's happening now clearly leads to, only when they're sharing or reacting: {\"kind\": \"mention\" (one thing serving two of their asks or bearing on a decision they're stuck on) | \"shape\" (how they're doing should change how Cue responds right now, not something to say), \"link\": \"one short plain sentence\", \"why\": \"which ask or thread it ties to\"}. Only real, specific links from what's written above; never invent facts. Otherwise [].\n\"emotion\": does the latest message carry a real feeling Cue should respond to (stressed, anxious, discouraged, lonely, frustrated, excited, proud, relieved)? Use the conversation: \"fine\" after bad news isn't fine. Ignore plain logistics, greetings and tone you aren't confident about; most messages have none. If none, null; else {\"emotion\": \"one or two words\", \"intensity\": \"low\" | \"medium\" | \"high\", \"valence\": \"negative\" | \"positive\" | \"mixed\", \"about\": \"what it's about, only from what they said\", \"target\": \"co\" when it's about Cue itself (what Cue found or didn't, its suggestions, replies, speed or mistakes, like \"you keep finding nothing\" or \"that's not what I asked\"), else \"life\"}.\n\"seeking\": \"solving\" only if you're genuinely confident they want a real answer or help deciding right now, not just to be heard (weighing options out loud, stuck on a decision, clearly past venting); ordinary sharing, updates and venting are \"none\", far more often than not.\n\"feedback\": each distinct piece of feedback about how Cue works or should work in general, the kind of thing the team would change (how it searches, what it sends, how it texts), or anything they ask Cue to pass to the team, as one clear sentence the team could act on. Not a correction or disagreement about something Cue said in this conversation (a fact, a person, an opinion, how Cue described itself): Cue just gets that right in its reply, and filing it would turn an ordinary correction into a complaint. [] if none.\n\"ack\": whether Cue should react to their message with an emoji before replying, the way a friend sometimes does. A reaction is communication: it says something about their specific message, so most messages get null, and a follow-up to something they just asked (\"well a couple\", \"go ahead\", \"anything else?\") gets null. Read the emotional register first: sad, frustrated, relieved and celebrating each call for something different, and on bad news or something sad, react only if it says you're with them, never \"❤️\" or \"😂\", which read as liking it. Then match the moment: an emoji about what they said beats a generic one (✈️ when they've landed, 🥟 for the dumplings they're eating). Cue's usual language, so they learn what it means: \"🥂\" good news or a win; \"❤️\" something personal and good that matters to them; \"😂\" when they're genuinely funny; \"👀\" something to look at or find; \"✍️\" something to write; \"🤝\" something agreed or handed to Cue; \"🫡\" a correction or an instruction taken; \"🔥\" real news that's genuinely big for them; \"👍\" a plain okay, never on bad news. Vary it: never the same one as Cue's last reaction, and never a generic one when a specific one fits: if nothing fits this exact message, null. Grown and understated, the way a private club is: never rockets, raised hands or confetti.\n\"about_co\": true if they're asking what Cue is, what Cue does or can do for them, how proactive Cue is, or how to describe Cue (to them, a friend, an investor); otherwise false.\n\"asks_for_list\": true only if they ask outright for the list of what Cue can do or help with (\"what can you do\", \"what are all the things you can help with\", \"what else can you do\"); false when they ask what Cue is, how to describe it, or about something specific.\n\"about_sent\": if this message is about one specific thing in \"Things Cue sent them recently\" (asking about it, reacting to it), its name exactly as listed; otherwise null.\n\"covered_now\": topic keys (from the list below) they addressed in this conversation itself, not just in what was known before; [] if none.\n\"missing\": topic keys not yet covered, counting what was already known.\nTopics:\n- current_situation: what's going on in their life right now\n- major_transition: the bigger context or change they're in the middle of\n- goals_challenges: what they're working toward or struggling with\n- looking_for: what kind of connection or outcome they want from this\n- people_to_meet: the kind of people they'd want to be introduced to\n- ways_to_help: what they could offer or help others with\n- personality: some sense of their personality or how they come across\n- location_availability: where they are and when they're free\n- boundaries_preferences: any stated boundaries or preferences\n- long_term_direction: their longer-horizon personal and career direction — where they want to be in a few years, distinct from what's urgent right now",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "low"
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"reason\": \"They're asking Cue to find something concrete for them in SF right now.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": true, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"asking for recommendations in SF\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"location_availability\"], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"boundaries_preferences\", \"long_term_direction\"]}",
+      "usage": {
+        "input_tokens": 4386,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 275,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg8KeBbENb2ohrn3VSU7R",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"reason\": \"They're asking Cue to find something concrete for them in SF right now.\", \"answers\": null, \"ambiguousBetween\": [], \"call\": \"none\", \"wantsRecommendation\": true, \"beyondAsk\": null, \"askUnclear\": null, \"confidence\": \"high\", \"mode\": \"asking\", \"topic\": \"asking for recommendations in SF\", \"pushback\": null, \"lesson\": null, \"dots\": [], \"emotion\": null, \"seeking\": \"none\", \"feedback\": [], \"ack\": null, \"about_co\": false, \"asks_for_list\": false, \"about_sent\": null, \"covered_now\": [\"location_availability\"], \"missing\": [\"current_situation\", \"major_transition\", \"goals_challenges\", \"looking_for\", \"people_to_meet\", \"ways_to_help\", \"personality\", \"boundaries_preferences\", \"long_term_direction\"]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 4386,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 275,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

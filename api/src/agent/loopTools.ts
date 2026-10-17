@@ -6,6 +6,7 @@ import { z } from "zod";
 import { tool } from "ai";
 import { toolUse } from "../services/capabilities.js";
 import { writeMemory } from "../services/memory.js";
+import { meaningWords } from "../services/profileExtraction.js";
 import { pageTools } from "./pageTools.js";
 import { deckTools } from "./deckTools.js";
 import { artifactTools } from "./artifactTools.js";
@@ -30,7 +31,24 @@ import { GOOGLE_DOC_ASK } from "../services/documentDelivery.js";
 // stored: carried in from an earlier turn (seedFound), checked at checkedAt and good until freshUntil; past that its facts back
 // nothing until its page is read again.
 export type Found = { name: string; url: string; facts: string; match: TierMatch | null; blocked: string | null; stored?: boolean; checkedAt?: string | null; freshUntil?: number | null };
-export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number };
+// The line they get while a search runs (Royce, 2026-10-17: "Let me look" is bland). It's Cue's own words, so it sounds like Cue
+// reacting to what they asked, never a status message.
+export const WHILE_LOOKING = "Only on your first search, if it'll take a moment: a few words to them in your own voice that react to what they actually asked (its subject, their timing, their mood), the way a friend who's into it would. Never a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
+// Tests only (golden cases): a fixed set of real events a stubbed search returns, the way a live one would.
+export type StubEvent = { name: string; url: string; tier?: 1 | 2; lines: string[] };
+export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; holdAsked?: boolean };
+// A stock holding line (Royce, 2026-10-17: "Let me look" is bland; golden 55 still said "Let me see what's good this week").
+// Openers only, after an optional "ok,", "sure,", "got it,"; Royce 2026-10-17 asked for the wider list, and what it doesn't cover is in
+// evals/reply/usesItsFinds.ts.
+// A stock opener that names something of theirs ("Looking at founder dinners in SF for Saturday") reacts to what they asked: only one
+// that names nothing from their words is stock (review of the finds batch, 2026-10-17: the wider list caught lines like that).
+const STOCK_WORDS = ["let", "lemme", "look", "looking", "see", "check", "checking", "dig", "digging", "find", "pull", "pulling", "search", "searching", "hunt", "hunting", "scout", "poke", "around", "take", "have", "into", "sec", "second", "moment", "minute", "min", "hang", "hold", "tight", "bear", "back", "right", "sure", "okay", "ok", "got", "alright", "yes", "yep", "working", "gonna", "just", "give", "gimme", "now", "one", "good", "what", "for", "you", "your", "something", "some", "anything", "thing", "things", "options", "go", "going", "out", "there", "happen", "happening", "on"];
+export function stockLine(line: string, theirWords: string): boolean {
+  if (!STOCK_HOLD.test(line)) return false;
+  const said = meaningWords(theirWords, STOCK_WORDS);
+  return ![...meaningWords(line, STOCK_WORDS)].some((w) => said.has(w));
+}
+export const STOCK_HOLD = /^\s*(?:(?:ok|okay|sure|got it|alright|all right|yep|yes|right)[\s,.!:-]+)?(?:(?:let me|lemme|i'?ll|gonna) (?:look|see|check|dig|find|pull|search|hunt|scout|poke around|have a look|take a look|look around|look into|check around)|let'?s see|let'?s (?:look|check|find out)|looking(?! forward)|checking|searching|digging|hunting|on it|working on it|one (?:sec|second|moment|min|minute)|(?:give|gimme) (?:me )?a (?:sec|second|minute|moment|min)|hang (?:on|tight)|hold on|bear with me|just a (?:sec|second|moment|minute|min)|be right back|brb|back in a (?:sec|second|moment|minute|bit))\b/i;
 
 // ---------- yesterday's finds, carried into today's turn (B5, 2026-10-08)
 // What Co found for them on earlier turns (web results kept at research time, a brief's options, events it sent, its shortlist),
@@ -125,7 +143,7 @@ export async function storedFinds(userId: string, now = Date.now()): Promise<Sto
 // started: when their text arrived, so the time budget counts the turn's prep
 // too (2026-10-01 code review); now when not known.
 export function newLoopState(started = Date.now()): LoopState {
-  return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0 };
+  return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0, holdAsked: false };
 }
 
 // What a document tool tells Co once its attachment went with its one line (Royce, 2026-10-08: no second bubble repeating it).
@@ -176,7 +194,7 @@ export function mailtoLink(to: string, subject: string, body: string): string {
 
 export function loopTools(
   ctx: ConversationToolContext,
-  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean },
+  state: { sent: boolean; sentMessages: string[]; linkDelivered?: boolean; holdLines?: string[] },
   loop: LoopState,
   notDone: (what: string) => void,
 ) {
@@ -198,10 +216,21 @@ export function loopTools(
     await writeMemory(ctx.userId, "text_exchange", record).catch((err: any) => console.error("loopTools: logging a sent text failed (it did send):", err?.message ?? err));
     return true;
   };
+  // A stock opener is asked for once more (stockHold below); one that's still stock is never sent: the search goes on without it.
+  const stockHold = (line?: string) => {
+    // On a call the line is never sent (services/callTools.ts), so asking again only spends one of the call's few rounds.
+    if (ctx.onCall || !line?.trim() || loop.holdSent || state.sent || !stockLine(line, theirWords()) || loop.holdAsked) return null;
+    loop.holdAsked = true;
+    return { ok: false, error: `Not searched yet: "${line.trim().slice(0, 80)}" is a stock line. Call this again with a whileLooking that reacts to what they actually asked (its subject, their timing, their mood) in your own words, or leave whileLooking out.` };
+  };
   const hold = async (line?: string) => {
-    if (!line?.trim() || loop.holdSent || state.sent) return;
+    if (!line?.trim() || loop.holdSent || state.sent || stockLine(line, theirWords())) return;
     loop.holdSent = true;
-    if (await say(line.trim(), `${HOLD_PREFIX} ${line.trim()}`)) ctx.facts?.add("did_this_turn", `Told them "${line.trim()}" while looking.`);
+    if (await say(line.trim(), `${HOLD_PREFIX} ${line.trim()}`)) {
+      ctx.facts?.add("did_this_turn", `Told them "${line.trim()}" while looking.`);
+      // A holding line answers nothing (agent/conversationTools.ts sendReply never counts it as the reply).
+      state.holdLines?.push(line.trim());
+    }
   };
   // Code saves the basics whenever a search runs, so the next text picks up
   // even if Co never updates its notes (Royce, 2026-10-01).
@@ -283,11 +312,24 @@ export function loopTools(
         what: z.string().describe("What kind of event, in a few words."),
         when: z.string().optional().describe("The time in their own words: \"this weekend\", \"Friday night\", \"Oct 10\"."),
         city: z.string().optional().describe("The city, when they named one; their own city otherwise."),
-        whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
+        whileLooking: z.string().optional().describe(WHILE_LOOKING),
       }),
       execute: async ({ what, when, city, whileLooking }) => {
+        const stock = stockHold(whileLooking);
+        if (stock) return stock;
         const avoided = await ruledOut(what);
         if (avoided) return { ok: false, error: avoided };
+        if (ctx.stubSearch && ctx.stubEvents?.length) {
+          await hold(whileLooking);
+          const events = ctx.stubEvents.map((e) => {
+            const match = { tier: e.tier ?? 2, kind: e.tier === 1 ? "co_event" : "public_event", name: e.name, url: e.url, reason: "" } as unknown as TierMatch;
+            loop.found.set(e.url, { name: e.name, url: e.url, facts: e.lines.join(" "), match, blocked: null });
+            ctx.facts?.add("known", `Found just now: "${e.name}", link ${e.url}. ${e.lines.join(" ")}`);
+            return { name: e.name, link: e.url, ownEvent: e.tier === 1, details: e.lines };
+          });
+          receipt(`Looked up events for "${what}"${when ? `, ${when}` : ""} just now: ${events.length} came back.`);
+          return { ok: true, events, turnedAway: [], openingsFoundEarlier: [], note: `${events.length} events in the feed nearby; the closest to what you asked are above.` };
+        }
         if (ctx.stubSearch) {
           receipt(`Looked up events for "${what}"${when ? `, ${when}` : ""} just now: nothing came back.`);
           return { ...STUB, events: [] };
@@ -334,13 +376,15 @@ export function loopTools(
       inputSchema: z.object({
         queries: z.array(z.string()).min(1).max(3).describe("1 to 3 short searches, 3 to 7 words each, each a different angle; they run at the same time."),
         sites: z.array(z.string()).optional().describe("Sites where this kind of thing is listed, e.g. peerspace.com, thebash.com, lu.ma."),
-        whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
+        whileLooking: z.string().optional().describe(WHILE_LOOKING),
         theirs: z
           .object({ what: z.string().optional(), city: z.string().optional(), area: z.string().optional(), when: z.string().optional(), headcount: z.number().optional(), budget: z.number().optional(), hours: z.number().optional() })
           .optional()
           .describe("What they've asked for so far (what, place, date, headcount, budget in dollars, hours): saved to your working notes, so the next text picks up from here."),
       }),
       execute: async ({ queries, sites, whileLooking, theirs }) => {
+        const stock = stockHold(whileLooking);
+        if (stock) return stock;
         // Their constraints go into the notes with the search (2026-10-01 next-live run:
         // turn one's 120 people, $3k and 4 hours were lost in 2 of 4 runs when no updateNotes followed).
         for (const q of queries) {
@@ -422,9 +466,11 @@ export function loopTools(
       description: toolUse("searchPosts"),
       inputSchema: z.object({
         query: z.string().describe("2 to 4 distinctive keywords, OR for real synonyms; no city, no year they didn't say."),
-        whileLooking: z.string().optional().describe("Only on your first search, if it'll take a moment: a few words to them, in your own voice."),
+        whileLooking: z.string().optional().describe(WHILE_LOOKING),
       }),
       execute: async ({ query, whileLooking }) => {
+        const stock = stockHold(whileLooking);
+        if (stock) return stock;
         const avoided = await ruledOut(query);
         if (avoided) return { ok: false, error: avoided };
         if (ctx.stubSearch) return { ...STUB, posts: [] };

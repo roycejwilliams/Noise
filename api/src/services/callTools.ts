@@ -209,6 +209,7 @@ export function buildCallTools(i: CallToolsInput): CallToolset {
     // A call has no text thread to post into mid-call: a tool's "looking" line or reply is not sent (documents and briefs still
     // go by their own delivery). Returning false means "not sent", and the tool says so.
     sendCoReply: async () => false,
+    onCall: true,
     // A page's or deck's link (agent/loopTools.ts say) goes to their texts mid-call, from Co's number, logged like any text (PR 6).
     sendLinkText: i.dryRun ? undefined : textThem,
     firstName: i.member.firstName,

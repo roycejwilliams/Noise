@@ -796,6 +796,13 @@ export type GroundingSources = {
   recentMemories?: string;
   // Messages Co already sent earlier in this same turn.
   sentThisTurn?: string[];
+  // The ones that answered them: sentThisTurn without the holding line ("Let me look" answers nothing). Whether a stripped reply
+  // can be dropped as already answered reads these (10-17: the holding line made it "nothing", and the member got the fallback).
+  answeredThisTurn?: string[];
+  // This turn's search found things that haven't gone out, and the reply can still redraft (agent/conversationTools.ts sendReply):
+  // a reply cut to almost nothing is left empty, so the redraft goes through those finds, never the honest "not sure" line (review
+  // of the finds batch, 2026-10-17: with only the holding line sent, that line went out while finds waited).
+  findsWaiting?: boolean;
 };
 
 const norm = (s: string) =>
@@ -1755,9 +1762,10 @@ const MINIMAL_FALLBACK = "Honestly, I'm not sure on that one.";
 
 // The honest "I don't have that" in Co's own words, stating nothing else.
 // What replaces a reply stripped down to almost nothing.
-export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTurn: string[] }): "invite" | "cut" | "nothing" | "honest" {
+export function afterStrip(o: { enough: boolean; inviteCut: boolean; sentThisTurn: string[]; findsWaiting?: boolean }): "invite" | "cut" | "nothing" | "honest" {
   if (o.inviteCut) return "invite";
   if (o.enough) return "cut";
+  if (o.findsWaiting) return "nothing";
   return o.sentThisTurn.some((m) => m.trim()) ? "nothing" : "honest";
 }
 
@@ -1979,7 +1987,7 @@ export function deadAirAt(o: { draft: string; cut: string; failed: GateCheck[]; 
   if (redraftHeldBack(o.rf, o.failed)) return false;
   if (deniesWhatTheyToldCo(o.failed, o.src)) return false;
   if (nothingRunningLineApplies(o)) return false;
-  return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.sentThisTurn });
+  return deadAir({ draft: o.draft, cut: o.cut, world: o.rf.world, failed: o.failed, sentThisTurn: o.src.answeredThisTurn ?? o.src.sentThisTurn });
 }
 
 export async function groundReply(
@@ -2109,7 +2117,7 @@ export async function groundReply(
         // the closing line is dropped rather than replaced with "I don't have
         // an answer", which contradicted the finds just sent (2026-10-01
         // next-live run: a find went out, then "Nothing confirmed on that yet").
-        const after = afterStrip({ enough, inviteCut, sentThisTurn: src.sentThisTurn ?? [] });
+        const after = afterStrip({ enough, inviteCut, sentThisTurn: src.answeredThisTurn ?? src.sentThisTurn ?? [], findsWaiting: src.findsWaiting });
         // Co says it in its own words, claiming nothing (2026-09-28: the one
         // fixed line read as a script); the fixed line is the fallback.
         const honest = after === "honest" ? await honestNoAnswer(src.message, rf.facts.find((f) => f.kind === "scheduled" && AHEAD_LINE.test(f.text))?.text ?? null).catch(() => null) : null;

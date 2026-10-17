@@ -348,7 +348,8 @@ check("the record starts filled from what was already logged", /backfillCoAction
   // 1. No "nothing confirmed" after a confirmed send.
   check("1: stripped to nothing after a send this turn: add nothing, don't deny", RG3.afterStrip({ enough: false, inviteCut: false, sentThisTurn: ["Small Founder Dinner, Oct 3 in SF."] }) === "nothing");
   check("1: stripped with nothing sent yet: the honest no-answer line", RG3.afterStrip({ enough: false, inviteCut: false, sentThisTurn: [] }) === "honest" && RG3.afterStrip({ enough: true, inviteCut: false, sentThisTurn: ["x"] }) === "cut" && RG3.afterStrip({ enough: false, inviteCut: true, sentThisTurn: ["x"] }) === "invite");
-  check("1: an empty reply after a send goes out as nothing", /if \(!message\.trim\(\) && state\.sentMessages\.length\) return \{ ok: true/.test(src("agent/conversationTools.ts")));
+  // (A holding line isn't a send that answers: evals/reply/usesItsFinds.ts tests that case, 2026-10-17.)
+  check("1: an empty reply after a send goes out as nothing", /if \(!message\.trim\(\) && answeredSent\(\)\.length\) return \{ ok: true/.test(src("agent/conversationTools.ts")));
   // 2. Their "we booked it" closes the task first, held to their words.
   const recent = "Co replied: Wave and SOMA Loft are the two venues worth a look.\nUser said: found a venue myself, we booked Wave. still need a DJ though";
   check("2: their newest lines are read", JSON.stringify(TT.newestMemberLines(recent)) === JSON.stringify(["found a venue myself, we booked Wave. still need a DJ though"]));

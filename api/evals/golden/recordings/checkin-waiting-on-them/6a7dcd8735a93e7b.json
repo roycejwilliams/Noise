@@ -1,0 +1,95 @@
+{
+  "hash": "6a7dcd8735a93e7b",
+  "case": "checkin-waiting-on-them",
+  "recorded_at": "2026-10-17T18:52:30.243Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 2pm. Yesterday at 5:30pm Cue sent the member the Harbor Light Fellowship and asked \"Worth a look before you decide on funding timing?\"; they never answered. Cue's daily search is also looking for a rooftop venue. The member texted \"Just checking in\".\n\nCue's text:\n\"\"\"Hey, good to hear from you.\n\nThe Harbor Light fellowship is still sitting there if funding timing's on your mind.\"\"\"\n\nDoes the text give presence AND bring up the Harbor Light Fellowship as the one item, as something there for them to pick up if they want, WITHOUT implying they owe Cue an answer or that Cue is waiting on them (no \"still waiting to hear what you think\", no \"get back to me\"), and without a status report? Is it one breath: a short, conversational reply (presence plus at most ONE item of their world), with no list, no status report, and no rundown of several things? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"still sitting there if funding timing's on your mind\\\" offers the one item without demanding a reply\"}",
+      "usage": {
+        "input_tokens": 380,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 232,
+        "output_tokens_details": {
+          "thinking_tokens": 182
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg8KBTwF4JJeS8QrYZg8y",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EqwHCsQCCBIYAipA5Eg/OXjkPPVF22j46xsAFD1lwkNgEzLYTZeT/M7YwAAlyNHawb04Qq7PTibGUyTrt2iKgKBxN4NqUoLlP+ZxhDIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagB7YfP1gbCAToIBBAAGgwC2ooDTzcFAj4EJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiAL5YqlxJzcPdCkpShz0ire7IttcZY6zC/yhx/vzoV13yIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgz8KM762kD5uvuF75caDBzZw5B9vdq7V8WsaSIwqWL2HpSKZTWrceKtCHlNFfQIYxUxqqGlR4CvtzXvcDnSg4TlRXbXVq5DK5s+WnI/KpQEOvHWpfgXSSF2StBB9difCKQgHHoGZ0OJ/5l1/EjFYgf1bus84rGNNPQFUZSR5ns22cdOs94U1GSdD2gJq0GMkeFK+tRe1kozFakAz0xpLZA4f9ko7+kfWMScj5lm9mtcL+Egx8IWT/OLMDEqzLwpgyKcGBBT0ECdjMwhkeppMuvDXVeegotuVNKi22pZt9vMe1O2MyeueRyb4tWU/U0fq82uxo2nJUUjY5mtPNMnUrgbKsSAvtnZs+DsLwWVq+WA8D2h9/FW4rJ7jPlKx0HJEl40aXYdO0GbhsKKDbbA4143HiwaGt5HbtkfkapVoqrrxUDlDjs+AMgBgtnfmiGWm4hOcA9tQ3o6i25oy4WWnN2L4EI0mTPvdYOvfKlwMJRTHN6vHT4HqwMJr7bBHKCBtFrg/ZqoCL3sSnJJ+mm0eO6v4z92aOlV70GVoZlWS55f2caXsAtMQ9JnwnqKxMQpRNr7XG+Gs2/6bbpQ5C2CnZY/m99VUjmKpvRiBi9FTCCQLb1g5U37SDBvATmwqO+6CF/8284wJLlcPWkEzEFGjgjx1r1NZYS9hIg6XSB/BkaWyGKCjwx99vYzq5E1pGNlxs6099oe5X0BZk9wHOVkC5LxEIBfhEBqZGZukhQE3EixsZyZwNlC+rEHQxtEuB0KPDuR3XqV6kCWy/s8PPKwZGv22UKIfjpF8rNOhwFSdW1P0RIHgxgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"still sitting there if funding timing's on your mind\\\" offers the one item without demanding a reply\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 380,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 232,
+          "output_tokens_details": {
+            "thinking_tokens": 182
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

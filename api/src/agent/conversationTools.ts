@@ -29,7 +29,8 @@ import { askEntries } from "../harness/profileWrite.js";
 import { localStamp, memberZone, memberZoneOrFallback } from "../services/memberTime.js";
 import { DateTime } from "luxon";
 import { googleTools } from "../services/googleTools.js";
-import { loopTools, newLoopState } from "./loopTools.js";
+import { loopTools, newLoopState, type LoopState } from "./loopTools.js";
+import { FIND_READS_PER_TURN, findsRedraftNote, ignoresFinds, isPost, realFindUseRead, turnFinds, unlinkedFinds } from "./findGuards.js";
 import { BEAT_GAP_MS, toBeats } from "../services/beats.js";
 import { carryLaneNotes, LANE_WORDS, laneNote, laneStoreFor, lookoutRestatesTask, moveLane, noteLabel, offersMove, ruleFor } from "../services/laneMoves.js";
 
@@ -83,10 +84,18 @@ export type ConversationToolContext = {
   sendCoReply: SendCoReply;
   // Layer 3 grounding gate (harness/replyGrounding.ts): runs on each drafted
   // message before it's sent or logged, and returns what actually goes out.
-  gate?: (draft: string, sentThisTurn: string[]) => Promise<string>;
+  gate?: (draft: string, sentThisTurn: string[], answeredThisTurn?: string[], findsWaiting?: boolean) => Promise<string>;
   // Tests only: the loop's searches and page reads return a placeholder
   // instead of spending on the web (agent/loopTools.ts).
   stubSearch?: boolean;
+  // Tests only: what a stubbed event search returns (agent/loopTools.ts).
+  stubEvents?: import("./loopTools.js").StubEvent[];
+  // Tests only: the meaning read the find guards use (agent/findGuards.ts realFindUseRead otherwise).
+  findUseRead?: import("./findGuards.js").FindUseRead;
+  // A live call (services/callTools.ts): nothing but a link is texted mid-call.
+  onCall?: boolean;
+  // Whether the reply loop has a step and the seconds left for a redraft (agent/conversationReply.ts); unset means it has.
+  redraftLeft?: () => boolean;
   // The reaction already put on their text this turn (routes/sendblue.ts ack),
   // so Co can leave it at that (leaveItAtReaction).
   ackSent?: string | null;
@@ -196,7 +205,11 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // linkDelivered: a page's, deck's or share link went this turn (agent/loopTools.ts deliver): that text is the whole delivery.
   // laneNotes: a confirmed lane move's one line, waiting for the reply that carries it (laneMoves.ts carryLaneNotes); laneNotesSent: lines
   // already carried this turn, never again. closedTaskGoals: tasks closed this turn, so a lookout Co starts can't restate one.
-  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[] };
+  const state = { safetyFlagged: false, sent: false, reacted: false, replyCount: 0, failedSends: 0, sendStopped: false, sendsHeld: false, partialUnsent: null as string | null, lastReplyText: "", sentMessages: [] as string[], pendingLinks: [] as string[], linkDelivered: false, statusRaised: [] as number[], statusOverridden: [] as number[], statusFacts: [] as number[], laneNotes: [...(ctx.laneNotesOwed ?? [])] as string[], laneNotesSent: [] as string[], stopNotes: [...(ctx.stopNotesOwed ?? [])] as string[], stopNotesSent: [] as string[], closedTaskGoals: [] as string[], holdLines: [] as string[], findsNudged: false, findsReads: 0 };
+  // This turn's loop (what its searches found and what went out with shareFinds), set where the loop tools are made below.
+  let turnLoop: LoopState | null = null;
+  // What went to them this turn that answers something: a holding line ("Let me look") is not an answer.
+  const answeredSent = () => state.sentMessages.filter((m) => !state.holdLines.includes(m.trim()));
   // What went out carries these lane lines: they're said now, and never again this turn.
   const markLaneNotesSent = (went: string) => {
     const said = (n: string) => went.toLowerCase().replace(/\s+/g, " ").includes(n.toLowerCase());
@@ -231,7 +244,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     }
     return { hold: S.looksLike(t, strip) };
   };
-  ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
+  ctx.checkAnswer = async (draft: string) => brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent()) : draft, ctx.resolvedContent);
   ctx.noteAnswerSent = (answer: string) => {
     state.lastReplyText = state.lastReplyText ? `${state.lastReplyText} ${answer}` : answer;
   };
@@ -275,7 +288,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
       inputSchema: z.object({
         message: z.string().describe("Your reply, no em dashes. Each distinct thought (the reaction, the answer, the advice, the question, the offer) is its own short paragraph with a blank line between, and each paragraph goes out as its own text, so never stack several thoughts in one. A question to them is always its own last paragraph. When you've given them lines to say before a moment that's coming (a conversation, a pitch, a result), the last paragraph is the offer to check in after it, not another question. Most replies are one to three short beats, up to five when each earns its place."),
       }),
-      execute: async ({ message: draft }) => {
+      execute: async ({ message: draft }, call?: { toolCallId?: string }) => {
         // Rule 2 (Royce, 2026-10-11): a page or deck goes as ONE text, the line plus the link. Told so, Co still added a second
         // ("Done. The old link is dead now, only this new one works.") in live runs, so after a link went out nothing more does.
         // An answer to something else they asked still goes (Royce, 2026-10-11: never drop it silently); commentary on the link
@@ -310,11 +323,50 @@ export function createConversationTools(ctx: ConversationToolContext) {
             return { ok: false, error: "Not sent: it was about the page or deck, and the link's text is the whole delivery. Don't call sendReply again this turn." };
           }
         }
-        let message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages]) : draft, ctx.resolvedContent);
+        // The reply uses what its own search found (agent/findGuards.ts; Royce, 2026-10-17): a find named without its link, or "it's
+        // thin" while finds wait, gets one redraft through shareFinds. Once a turn, so it can never loop.
+        // Only while a redraft can follow (review of this change): the plain text sent after the loop ended, the last step or the
+        // last seconds go out as written, never swapped for the fallback line.
+        const canRedraft = call?.toolCallId !== "plain-text-reply" && (ctx.redraftLeft?.() ?? true);
+        const finds = turnLoop && canRedraft ? turnFinds(turnLoop.found.values()) : [];
+        if (turnLoop && finds.length && !state.findsNudged) {
+          let kind: "unlinked" | "ignored" | null = unlinkedFinds(draft, finds, turnLoop.shared).length ? "unlinked" : ignoresFinds(draft, finds, turnLoop.shared) ? "ignored" : null;
+          // The words found nothing, finds are waiting and none has gone out, nor rides in this draft: one meaning read
+          // (agent/findGuards.ts). X posts are never asked about by name: a post's name is its own prose, so talk on the same subject
+          // would read as naming it.
+          if (!kind && state.findsReads < FIND_READS_PER_TURN && !turnLoop.shared.length && !finds.some((f) => draft.includes(f.url)) && draft.trim().length >= 12) {
+            state.findsReads += 1;
+            const named = finds.filter((f) => !isPost(f)).slice(0, 12);
+            const use = await (ctx.findUseRead ?? realFindUseRead)(draft, named.length ? named : finds.slice(0, 12));
+            if (use?.named.length && named.length) kind = "unlinked";
+            else if (use?.saysNothing) kind = "ignored";
+          }
+          if (kind) {
+            state.findsNudged = true;
+            if (!ctx.dryRun) {
+              const { recordDecision } = await import("../harness/core.js");
+              await recordDecision({ layer: 3, decision: "reply.finds_guard", userId: ctx.userId, outcome: "skip", action: kind, proposal: { draft: draft.slice(0, 300), finds: finds.length, shared: turnLoop.shared.length } }).catch(() => {});
+            }
+            return stillOwed(), { ok: false, error: findsRedraftNote(kind, finds, turnLoop.shared) };
+          }
+        }
+        // A note to itself ("(no further message needed)") is never the reply while nothing has answered them yet (10-17: it was, and
+        // the fallback line went out).
+        if (/^\s*\([^)]*\)\s*$/.test(draft) && !answeredSent().length) return stillOwed(), { ok: false, error: "Not sent: that's a note to yourself, and nothing has answered them yet (a holding line isn't an answer). Write the reply to them and call sendReply again." };
+        // Finds waiting and a redraft still possible: a reply the check cuts to almost nothing comes back empty, for the redraft below.
+        const findsWaiting = !!turnLoop && !state.findsNudged && finds.some((f) => !turnLoop!.shared.includes(f.url));
+        let message = brandSafe(ctx.gate ? await ctx.gate(draft, [...state.sentMessages], answeredSent(), findsWaiting) : draft, ctx.resolvedContent);
         // An owed answer the check emptied never went: not "already answered", it's said again plainly.
         if (!message.trim() && owed) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         // The fact check left nothing to add after what already went out this turn.
-        if (!message.trim() && state.sentMessages.length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
+        // (A holding line doesn't count: 10-17 "Let me look" was all that had gone, the reply was told it was the answer, and the member
+        // got the fallback.)
+        if (!message.trim() && answeredSent().length) return { ok: true, note: "What you already sent this turn is the answer; nothing more went out. Don't add a closing line." };
+        // Emptied with finds waiting: the one redraft goes through them (agent/findGuards.ts), never the fallback line.
+        if (!message.trim() && turnLoop && !state.findsNudged && finds.some((f) => !turnLoop!.shared.includes(f.url))) {
+          state.findsNudged = true;
+          return stillOwed(), { ok: false, error: findsRedraftNote("emptied", finds, turnLoop.shared) };
+        }
         // Never an empty text (2026-10-12 audit, row 11661): with nothing sent yet, Co says it again from what's true.
         if (!message.trim()) return stillOwed(), { ok: false, error: "Nothing was left to send after the fact check. Say it again plainly, only what you know is true, and call sendReply again." };
         // A confirmed lane move's line rides in this reply, exactly once, after the check (laneMoves.ts carryLaneNotes, Royce 2026-10-13):
@@ -1726,7 +1778,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
   }
 
   // Finding things: Co's own loop (agent/loop.ts), general tools it chains itself.
-  Object.assign(tools, loopTools(ctx, state, newLoopState(ctx.turnStartedAt), notDone));
+  turnLoop = newLoopState(ctx.turnStartedAt);
+  Object.assign(tools, loopTools(ctx, state, turnLoop, notDone));
 
   // The calendar and Docs grants, and the Gmail tester flow (services/googleTools.ts). The Gmail one is team only, so team-only tools
   // are taken out again now that these are in (2026-10-15: no member-facing path to the old combined grant).
@@ -1735,5 +1788,5 @@ export function createConversationTools(ctx: ConversationToolContext) {
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
   guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });
-  return { tools, state, flushLinks };
+  return { tools, state, flushLinks, loop: () => turnLoop };
 }

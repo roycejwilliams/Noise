@@ -14,6 +14,7 @@ import { groundReply, LAYER3_MODELS, renderReplyFacts, type GroundingResult, typ
 import { capitalizeSentences, dropRepeatedQuestion, looksLikeMetaReply } from "../services/textStyle.js";
 import { lastCoLine } from "../services/conversationClose.js";
 import { judgeText, ruledOut, type Decision } from "../brain/index.js";
+import type { StubEvent } from "./loopTools.js";
 import { deliveryFallback, REPLY_DELAYED_NOTE, REPLY_GAVE_UP_NOTE, REPLY_NO_RETRY_NOTE, REPLY_PARTIAL_NOTE } from "../services/turnFailure.js";
 
 // How Co listens, the part of the call guide that carries over to text,
@@ -249,7 +250,7 @@ Return ONLY the numbers of the memories that are genuinely relevant to what the 
 async function holdReply(
   input: ConversationReplyInput & { resumeLater: NonNullable<ConversationReplyInput["resumeLater"]> },
   decision: Decision,
-  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number },
+  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number; stubEvents?: StubEvent[]; cutFirstReply?: boolean },
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
   if (!opts.dryRun) {
     const { recordDecision } = await import("../harness/core.js");
@@ -270,7 +271,7 @@ async function holdReply(
 // on explicit classifier output) — only the secondary gesture + reply.
 export async function runConversationReplyAgent(
   input: ConversationReplyInput,
-  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number } = {},
+  opts: { dryRun?: boolean; record?: boolean; stubSearch?: boolean; attempt?: number; stubEvents?: StubEvent[]; cutFirstReply?: boolean } = {},
 ): Promise<{ sent: boolean; offered: boolean; replyText: string; grounding: GroundingResult[]; toolsCalled: string[]; move: Move }> {
   const grounding: GroundingResult[] = [];
   let decision: Decision = input.decision ?? judgeText({ userId: input.userId, read: null, owed: !!input.replyOwed, safetyConcern: !!input.safetyConcern, clarify: null, turn: null });
@@ -286,9 +287,14 @@ export async function runConversationReplyAgent(
   const isTeam = input.isTeam ?? (opts.dryRun ? false : await import("../services/extensions.js").then((m) => m.isTeamMember(input.userId)).catch(() => false));
   // A retry is its own attempt, with its own clock.
   const turnStart = (opts.attempt ?? 1) === 1 && input.turnStartedAt ? input.turnStartedAt.getTime() : Date.now();
+  const replyDeadlineAt = () => turnStart + (LOOP_BUDGET.seconds + TURN_GRACE_S) * 1000;
   // A first read this turn (services/theDoor.ts), settled once the reply has gone out.
   let firstRead: import("../services/theDoor.js").FirstReadPending | null = null;
+  let cutFirstDone = false;
+  // Steps finished, so a guard knows whether a redraft can still follow (conversationTools.ts sendReply redraftLeft).
+  let stepsDone = 0;
   const { tools, state, flushLinks } = createConversationTools({
+    redraftLeft: () => stepsDone < LOOP_BUDGET.steps - 1 && Date.now() < replyDeadlineAt() - 15_000,
     onFirstRead: (p) => {
       firstRead = p;
     },
@@ -304,6 +310,8 @@ export async function runConversationReplyAgent(
     recentOfferBurstActive: input.recentOfferBurstActive,
     dryRun: opts.dryRun ?? false,
     stubSearch: opts.stubSearch ?? false,
+    // Tests only (golden cases): a stubbed search returns these instead of nothing (agent/loopTools.ts searchEvents).
+    stubEvents: opts.stubSearch ? opts.stubEvents : undefined,
     messageHandle: input.messageHandle ?? null,
     lastReaction: input.lastReaction ?? null,
     replyOwed: input.replyOwed ?? false,
@@ -321,7 +329,14 @@ export async function runConversationReplyAgent(
       add: (kind, text) => addFact(input.facts, kind, text),
       text: () => renderReplyFacts(input.facts),
     },
-    gate: async (draft, sentThisTurn) => {
+    gate: async (draft, sentThisTurn, answeredThisTurn, findsWaiting) => {
+      // Tests only, in a dry run: the first reply is cut to nothing, the way a fact check that strips every claim leaves it, so a
+      // golden case can show what the agent does next (Royce, 2026-10-17: a redraft, never the fallback line).
+      if (opts.dryRun && opts.cutFirstReply && !cutFirstDone) {
+        cutFirstDone = true;
+        grounding.push({ final: "", outcome: "stripped", checks: [{ name: "test_cut_everything", pass: false, reason: "test: every claim cut" }], latencyMs: 0, firstCheckMs: 0, stages: {} } as GroundingResult);
+        return "";
+      }
       const result = await groundReply(
         draft,
         input.facts,
@@ -331,6 +346,8 @@ export async function runConversationReplyAgent(
           contextSummary: input.contextSummary,
           recentMemories: input.recentMemories,
           sentThisTurn,
+          answeredThisTurn,
+          findsWaiting,
         },
         { userId: input.userId, record: opts.record !== false && !opts.dryRun },
       );
@@ -539,7 +556,7 @@ ${TOOL_TURN_RULES(input.isVoice)}
   // the default 22-16 and drafted faster (median 8.0s vs 9.3s, slowest tenth
   // 16.8s vs 30.9s); low lost 17-21. REPLY_EVAL_EFFORT only exists so
   // evals/texting can compare levels.
-  const replyDeadline = turnStart + (LOOP_BUDGET.seconds + TURN_GRACE_S) * 1000;
+  const replyDeadline = replyDeadlineAt();
   const REPLY_EFFORT = (["low", "medium", "high"] as const).find((e) => e === process.env.REPLY_EVAL_EFFORT) ?? "medium";
   // Each model call is capped (2026-09-26: a call stalled for 318s in a
   // test). A timeout after a text already went out ends the turn with what
@@ -586,6 +603,9 @@ ${TOOL_TURN_RULES(input.isVoice)}
     // tools answer "out of time" so Co writes what it has; this stops the
     // loop between steps, never mid-tool, TURN_GRACE_S after that.
     stopWhen: [stepCountIs(LOOP_BUDGET.steps), () => state.sendStopped, () => state.reacted, () => Date.now() > replyDeadline],
+    onStepFinish: () => {
+      stepsDone += 1;
+    },
     experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply" },
     ...(withImage && input.imageForVision
       ? {
