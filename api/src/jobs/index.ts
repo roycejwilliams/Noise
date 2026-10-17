@@ -720,6 +720,8 @@ export function registerJobs(io: Server) {
   cron.schedule("5 * * * *", async () => {
     try {
       const D = await import("../services/dailySweep.js");
+      // Windows past on every clock end first, with their words (wantWhen.ts endPastWindows; each search also ends its own on time).
+      await import("../services/wantWhen.js").then((W) => W.endPastWindows()).catch((err: any) => console.error("Ending past want windows failed (retried next hour):", err?.message ?? err));
       await D.runDailySweepAll(runWithConcurrency);
     } catch (err: any) {
       console.error("Daily sweep failed (members retried next hour):", err?.message ?? err);

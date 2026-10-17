@@ -178,7 +178,7 @@ check("no line when the want said where, when they corrected it, or when it's th
   check("'actually Oakland' changes that want's place, at its source", "now" in a && a.now === "Oakland" && (a as any).was === "SF" && /UPDATE want_places SET place = \$3, source = \$4/.test(set[0]?.sql ?? "") && set[0].args[2] === "Oakland" && set[0].args[3] === "corrected");
   const r = await K.applyOne(db, "u", raw, sf!, "remove", null, "forget where");
   check("removing it leaves the want with no place (the home city stands in, never read again)", "now" in r && r.now === null && set[1].args[2] === null && set[1].args[3] === "removed");
-  check("removed or corrected, it's never re-read: a stored row is always used", /if \(have\) return have;/.test(src("services/wantPlace.ts")));
+  check("removed or corrected, it's never re-read: a stored row is always used (only a window's 'unread' row is read)", /if \(have && have\.source !== "unread"\) return have;/.test(src("services/wantPlace.ts")));
 }
 
 // ---------------------------------------------------------------- 6. the too-tight query, loosened instead of refused
