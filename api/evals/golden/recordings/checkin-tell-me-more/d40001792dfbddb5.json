@@ -1,0 +1,95 @@
+{
+  "hash": "d40001792dfbddb5",
+  "case": "checkin-tell-me-more",
+  "recorded_at": "2026-10-17T17:36:36.287Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: Cue's last text was \"Good to hear from you. Harbor Light Fellowship is there whenever you want it.\" The member replied \"Tell me more\". On file: an 8-week fellowship for full-time founders, $75K on incorporation...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: Cue's last text was \"Good to hear from you. Harbor Light Fellowship is there whenever you want it.\" The member replied \"Tell me more\". On file: an 8-week fellowship for full-time founders, $75K on incorporation, second cohort open, deadline Dec 15.\n\nCue's text:\n\"\"\"Eight weeks, full time, and they want $75K already in the bank on incorporation. Deadline for this cohort is December 15.\"\"\"\n\nDoes the text expand on the Harbor Light Fellowship with what's on file, picking up straight from the last message WITHOUT greeting them again or restarting the conversation? Answer yes only if both hold.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Eight weeks, full time... $75K... Deadline for this cohort is December 15\\\" directly expands without any greeting or restart\"}",
+      "usage": {
+        "input_tokens": 283,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 205,
+        "output_tokens_details": {
+          "thinking_tokens": 143
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg8DPomydjxoowcEv4Z9t",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EtkGCsQCCBIYAipA5cC0qtgnMymUegMSEl3b/zcXVpls/PaM6bbhMHJ4xFjX90xl7kTLRP2Gitu0VFetuew67Rvmf0/9O4j8ey5F6DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBo+TO1gbCAToIBBAAGgwC2ooDTzcFdfoEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiA7z7eqRz0Yax5eqdRgsxK5dhlKOTYp4J5T7+YAn9YhCCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgzJpLc6/jl3QS924lcaDEo0/TjJJMyD55shfSIwiPuRNEA5AvXXZevQW3QNnTaRzThpM38gTGs4F5EVImLd+1Fa6lqCMvS2UTDE6EipKsED3VoW9nDlbSk2oHTEnS+dJG3l7FsbkmHcuZx8A7RfzqMAUg3vfqmvLVE+l5kMU//PCFVwQV2fgCjNRZl/u3HhCRfLqAuz1MEoTrpJ6+YLMHBOOZFhlSXeyUtdsj/CHGGxwz6ZkPbBFtxU44Q99VcH6UJGaZhMt3XjWKHHwnE6dcCE8aIzDeBhZztKHVHLNN+07NcFO+bwg6aFPfD9hwAhRmfEckwCSoMKewKDEVa0YPz8UgFkcwRiYErgbIDHNYD2R37uodbdivfDUlYlkHDS9Xe4Kp2K0fMFI8rNMPt7YNH8k2Ctw71MZtOtCoGeNcjbC68kUI+KYLW67MHE+voYU6NgiTDvQawF+yF6o0pP8bQeu4xhQOsmT5Y9Q2FSukC3+kc/bCOk4036uMWuJChGQbFEhyM4mZ75uNGOZB1tmXpN8SVquhqx/EImiuyYGNPMMnL836x6CXPic3jC8zFhp2r3oL+eApE+F3mMm2j9DJwanEu9D+AyHquqBW9EZmbzKP/Gk4SRTH7SQbO/7r2b55DvurAHkFXK8l5P3Qcx/ut7rMUfs3bgmTVETET0xsVPtAU7yV4gdnDovKolshssv4AYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Eight weeks, full time... $75K... Deadline for this cohort is December 15\\\" directly expands without any greeting or restart\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 283,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 205,
+          "output_tokens_details": {
+            "thinking_tokens": 143
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

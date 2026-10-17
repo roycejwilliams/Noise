@@ -1,0 +1,95 @@
+{
+  "hash": "219374190453b907",
+  "case": "checkin-thread-echo",
+  "recorded_at": "2026-10-17T17:36:37.028Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2108,
+    "system": "",
+    "messages": 1,
+    "last": "user: Cue, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Cue may only say where it stands when the member told Cue. What th...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2108,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "Cue, a texting companion, is about to send these sentences to a member. The member has an open thread of their own: \"Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner\". Only the member knows where it stands, so Cue may only say where it stands when the member told Cue.\nWhat they just told Cue: \"Hayes Valley just confirmed! What should I sort out next for the 14th?\"\nWhat they texted Cue before that, oldest first (their own words):\n- \"Emailed the Hayes Valley place about the 14th. Fingers crossed they get back to me.\"\n- \"Hayes Valley just confirmed! What should I sort out next for the 14th?\"\n\nSentences:\n1. \"Great that Hayes Valley confirmed.\"\n\nFor each sentence: does it state where that thread stands, as a fact (news, a reply, still waiting, nothing back, confirmed, booked, cancelled), rather than advice, a plan, a question, or saying back what the member themselves told Cue?\nA sentence that repeats, reacts to or builds on news the member gave (just now or before) is NOT a status report. For example, after \"the venue said yes\", \"Great that the venue said yes\" is not a report; with no news from them, \"No word yet from the venue\" is a report.\n\nReturn ONLY JSON: {\"reports\": [the numbers of the sentences that state where it stands]}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"reports\": []}",
+      "usage": {
+        "input_tokens": 448,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 63,
+        "output_tokens_details": {
+          "thinking_tokens": 54
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg8DQ12tPMs8sASZKPSfu",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "CAQSsQUKEAgSGAI4AUIIdGhpbmtpbmcSDOXceTsnfNCCpNnKxBoMexwtmyd8MxNYdVJ0IjDQ9EBdmegLbl7uiYLLk1YQztD6VjoF0CsknmJfQQscO+xmpO69fkqhlVuAlMZmtoUqzgT7WcjPFA+eJINtOmoS24OSJUllF6SEpTvWqjbYWTUdOPEY3JRqDvazadPUG9rjT0AqbvDtVi+7KtmwRVtdG0dqud9jqK3KI+9cYEmZa57UZb20N+1Nkt22WovEMKSbjoqzEOfX/9a1qlcUI4nOeSZvrCVBrRG4LC6wsZCcKORa55TfBMyHtM+/9DN35CHfdJszlFYlPnp8bHRPQk60WsP/HsHIfmwxlwiw5TZk3KHrqy5RXqNrVbGjKXkvHVt7lYfioFCUkL58msmpp2ho7GL7O9jbn09QU1o1EtPfKoTrvZHgdwFKfEO3cgsZ9VjgCdgEpxih7VeM0dPLVTD85+bzFNZAw48RstHPoYCpKbLcB//md9Zje/nmscc9+0MzSHoaLROu6JEFzmcYJqczJOMVA7nC48ynUGcGe4/7G5l0rRk3DLfq7YH3glIX05F19YBhO0hgTW22XgTPsruWZkJKxbE7qqLP+4/o9i3K7DM2Hc+Edg4Mn+TI+d++8+Je5WB5BCq5QrIWg0MpT1vLbkdFMtS3aR6UujbClz9Vp4BXsggJi2G1GRYHXUxoUYd/tX4JYUZWI7+bfnkg2HhasKAxpzb2Pp6lIkIXpyeX8TbswS5PV1q9fjFFNLnJjHSNxScU0Eqpj67J2hJOMgvNUkVkr1l48RqJNDo+uhhW90LFtZamg6dN/IVYaKMFZU6Bw96oUlPEtqKuDnheAF9fDEdt8j4P3GdU0dk8M77QGKw+dQGSsYzZrB1ZxZRzqeqh4Tukkkh0mOK9T9oXPWWFURgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"reports\": []}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 448,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 63,
+          "output_tokens_details": {
+            "thinking_tokens": 54
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

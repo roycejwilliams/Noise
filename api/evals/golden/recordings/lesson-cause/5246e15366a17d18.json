@@ -1,0 +1,95 @@
+{
+  "hash": "5246e15366a17d18",
+  "case": "lesson-cause",
+  "recorded_at": "2026-10-17T17:34:29.911Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2448,
+    "system": "",
+    "messages": 1,
+    "last": "user: A member pushed back on a companion's texts, and a lesson was guessed from it. Check the guess against the log of the companion's last replies: what the companion drafted, what a reply check let go out instead, and why. Their message: \"That's not what I asked\" What they pushed back on: Cue offered t...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2448,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "A member pushed back on a companion's texts, and a lesson was guessed from it. Check the guess against the log of the companion's last replies: what the companion drafted, what a reply check let go out instead, and why.\n\nTheir message: \"That's not what I asked\"\nWhat they pushed back on: Cue offered to start something instead of saying what it looks for\nThe guessed lesson: describe it in their terms\n\nThe log (oldest first):\nThey texted: \"What do you actually look for for me?\"\n\nCue's reply (stripped):\nCue drafted: \"I look for events and openings that fit what you're after, like the jazz nights you asked about and small founder dinners. I'll text you when one is worth your evening.\"\nWhat went out: \"Nothing's running on that right now. Want me to start on it?\"\nWhy the check changed it: work_status claim not backed by a running task\n\nThey texted: \"No, I mean what are you looking for right now\"\n\nCue's reply (cut):\nCue drafted: \"Right now I'm watching for jazz nights and small founder dinners in the city, the kind you said you'd actually go to.\"\nWhat went out: \"Nothing's running on that right now. Want me to start on it?\"\nWhy the check changed it: work_status claim not backed by a running task\n\nThey texted: \"Like what kinds of things\"\n\nCue's reply (stripped):\nCue drafted: \"Live music nights, jazz mostly, and founder dinners with eight to twelve people. That's what I keep an eye on for you.\"\nWhat went out: \"Nothing's running on that right now. Want me to start on it?\"\nWhy the check changed it: work_status claim not backed by a running task\n\nThey texted: \"That's not what I asked\"\n\nDecide what caused the thing they pushed back on. Follow the chain, not just the last reply: if the reply check cut or replaced a true answer earlier in this log, and the replies after it went off course from there (the companion answering the replaced line, narrowing or reframing to make sense of it), the cause is the check.\n- \"check\": it is in what went out but not in what the companion drafted (the reply check cut, replaced or added it), or it follows from an earlier reply the check changed. The companion's own behavior didn't start it.\n- \"co\": the companion drafted it, and it went out as drafted.\n- \"unknown\": the log doesn't show the thing they pushed back on.\nThen write the lesson that fits the real cause, in one short sentence: for \"check\", say which line came from the reply check and what was true instead, if the log shows it; for \"co\", keep or correct the guess so it addresses what the draft actually did; for \"unknown\", keep the guess. causeLine: one short plain line naming the cause from the log (for example \"the reply check replaced Cue's answer with 'Nothing's running on that right now' (claim_work_status)\"), or null for unknown.\n\nReturn ONLY JSON: {\"cause\": \"check\" | \"co\" | \"unknown\", \"lesson\": \"...\", \"causeLine\": \"...\" or null}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"cause\": \"check\", \"lesson\": \"The reply check replaced Cue's true answer about what it watches for (jazz nights and small founder dinners) with a status line that didn't answer the question, so Cue's drafts were right and the guessed lesson about terms didn't match the log.\", \"causeLine\": \"the reply check replaced Cue's answer with 'Nothing's running on that right now' (work_status claim not backed by a running task)\"}",
+      "usage": {
+        "input_tokens": 947,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 575,
+        "output_tokens_details": {
+          "thinking_tokens": 433
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg8DEUe3ScvqjxXMUCqHX",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "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"
+          },
+          {
+            "type": "text",
+            "text": "{\"cause\": \"check\", \"lesson\": \"The reply check replaced Cue's true answer about what it watches for (jazz nights and small founder dinners) with a status line that didn't answer the question, so Cue's drafts were right and the guessed lesson about terms didn't match the log.\", \"causeLine\": \"the reply check replaced Cue's answer with 'Nothing's running on that right now' (work_status claim not backed by a running task)\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 947,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 575,
+          "output_tokens_details": {
+            "thinking_tokens": 433
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

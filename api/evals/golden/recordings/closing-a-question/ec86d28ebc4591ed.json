@@ -1,0 +1,93 @@
+{
+  "hash": "ec86d28ebc4591ed",
+  "case": "closing-a-question",
+  "recorded_at": "2026-10-17T17:34:32.194Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-sonnet-5",
+    "grader": false,
+    "max_tokens": 4096,
+    "system": "",
+    "messages": 1,
+    "last": "user: A member asked Cue for things. For each ask below, decide from the conversation AFTER it whether it is finished, and say how, with a QUOTE. Asks: A1. (said 2026-10-13) Quiet dinner spot near Jackson Square for Thursday with Ellis A2. (said 2026-10-11) Rooftop jazz nights in SF this fall How an ask i...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 4096,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "A member asked Cue for things. For each ask below, decide from the conversation AFTER it whether it is finished, and say how, with a QUOTE.\n\nAsks:\nA1. (said 2026-10-13) Quiet dinner spot near Jackson Square for Thursday with Ellis\nA2. (said 2026-10-11) Rooftop jazz nights in SF this fall\n\nHow an ask is finished:\n- \"answered\": Cue's own message gave what the ask wanted (the answer, the guidance, the link, the draft, the shortlist). The quote is copied from that Cue message. A question back, an offer to help, or a partial answer does not count.\n- \"moved_on\": the MEMBER said after the ask that it is done, found, cancelled, off, or no longer wanted. The quote is copied from the member's message.\nAn ask that asks Cue to keep watching or keep looking (\"keep an eye out\", \"let me know when\") is never finished by one answer. If you are not sure, leave it out. Never use a message from before the ask was said.\n\nConversation:\n[Sun Oct 11, 7pm PDT] Member: Keep an eye out for rooftop jazz nights in SF this fall and tell me when one comes up, I'd go to a few.\n[Sun Oct 11, 7:01pm PDT] Cue: Will do. I'll watch for rooftop sets and send the good ones.\n[Tue Oct 13, 10am PDT] Member: Where should I take Ellis for a quiet dinner near Jackson Square Thursday? Somewhere we can actually talk.\n[Tue Oct 13, 10:01am PDT] Cue: Bix on Gold Street. Supper-club room, low light, booths along the wall so you and Ellis can hear each other. Book the 7:30 Thursday and ask for a booth upstairs. Separately, for your jazz watch: there's a rooftop set at the Charmaine's on Friday the 17th.\n[Tue Oct 13, 10:05am PDT] Member: Perfect, booking Bix now.\n\nReturn ONLY JSON: {\"closures\": [{\"ask\": \"A1\", \"how\": \"answered\", \"quote\": \"...\"}]}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-sonnet-5",
+      "output_config": {
+        "effort": "low"
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"closures\": [{\"ask\": \"A1\", \"how\": \"answered\", \"quote\": \"Bix on Gold Street. Supper-club room, low light, booths along the wall so you and Ellis can hear each other. Book the 7:30 Thursday and ask for a booth upstairs.\"}]}",
+      "usage": {
+        "input_tokens": 717,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 95,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg8DEkzHgLiRhoFYAtMPr",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"closures\": [{\"ask\": \"A1\", \"how\": \"answered\", \"quote\": \"Bix on Gold Street. Supper-club room, low light, booths along the wall so you and Ellis can hear each other. Book the 7:30 Thursday and ask for a booth upstairs.\"}]}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 717,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 95,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}
