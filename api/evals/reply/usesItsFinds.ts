@@ -30,7 +30,7 @@ const FINDS = [
 // The meaning read is injected (never a model call here): `read` answers it, and `reads` counts what it was asked.
 type Read = (draft: string, finds: { name: string }[]) => Promise<{ named: number[]; saysNothing: boolean } | null>;
 const NO_USE: Read = async () => ({ named: [], saysNothing: false });
-const turn = (gate: (d: string) => string = (d) => d, o: { held?: boolean; shared?: string[]; read?: Read; finds?: { name: string; url: string; source?: string }[]; redraftLeft?: () => boolean } = {}) => {
+const turn = (gate: (d: string, findsWaiting?: () => boolean) => string = (d) => d, o: { held?: boolean; shared?: string[]; read?: Read; finds?: { name: string; url: string; source?: string }[]; redraftLeft?: () => boolean } = {}) => {
   const sends: string[] = [];
   const reads: { draft: string; finds: string[] }[] = [];
   const gates: { sent: string[]; answered?: string[]; findsWaiting?: boolean }[] = [];
@@ -38,7 +38,8 @@ const turn = (gate: (d: string) => string = (d) => d, o: { held?: boolean; share
   const t = createConversationTools({
     userId: "u", phoneNumber: "+14155550101", resolvedContent: "Anything you have for me in SF?", isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: true,
     sendCoReply: async ({ message }: any) => (sends.push(message), true), facts: { add: () => {}, text: () => "" },
-    gate: async (d: string, sent: string[], answered?: string[], findsWaiting?: boolean) => (gates.push({ sent, answered, findsWaiting }), gate(d)),
+    // findsWaiting is recorded as the check reads it when it starts; the stub gets the live read, as the real check does.
+    gate: async (d: string, sent: string[], answered?: string[], findsWaiting?: () => boolean) => (gates.push({ sent, answered, findsWaiting: findsWaiting?.() }), gate(d, findsWaiting)),
     findUseRead: async (d: string, f: { name: string }[]) => (reads.push({ draft: d, finds: f.map((x) => x.name) }), read(d, f)),
     redraftLeft: o.redraftLeft,
   } as any) as any;
@@ -245,6 +246,23 @@ const LOOSE_NAMED: [string, number][] = [
   const s1 = await second.send("Love that you're up for something this weekend.");
   const s2 = await second.send("Not a lot going on in SF this weekend though.");
   check("review 3: a clean first send doesn't use up the read: the second, saying there's nothing, is read and goes back", s1.ok !== false && s2.ok === false && /says there's little or nothing/.test(s2.error ?? "") && second.reads.length === 2, { s1, s2, reads: second.reads });
+}
+// ---------------------------------------------------------------- the review of #228 (2026-10-17): the window, after the check
+{
+  // The check can strip, redraft and recheck (several model calls) past the redraft window. It chose "nothing" from a read taken
+  // before it ran, the send step asked for a redraft that could no longer happen, and the member got the fallback line. The stub
+  // models the real check's last decision (afterStrip): empty while finds wait and a redraft can follow, its honest line otherwise.
+  const HONEST = "Honestly, I'm not sure on that one.";
+  let open = true;
+  const slow = turn((_d, waiting) => ((open = false), waiting?.() ? "" : HONEST), { redraftLeft: () => open });
+  const r = await slow.send("Small table, $22, that's probably your best bet.");
+  check("#228 review: the check outlasts the redraft window with finds waiting: the honest line goes, never the redraft note (and so never the fallback)", r.ok === true && !/still waiting|shareFinds/.test(r.error ?? "") && slow.state.sent === true && slow.state.sentMessages.at(-1) === HONEST && !slow.state.findsNudged, { r, sent: slow.state.sentMessages });
+  check("... the window was open when the check started (finds were waiting then)", slow.gates[0]?.findsWaiting === true, slow.gates);
+  const still = turn((_d, waiting) => (waiting?.() ? "" : HONEST), { redraftLeft: () => true });
+  const s = await still.send("Small table, $22, that's probably your best bet.");
+  check("... and with the window still open after the check, the one redraft still goes through the finds", s.ok === false && /still waiting/.test(s.error) && /shareFinds/.test(s.error), s);
+  const RG = await import("../../src/harness/replyGrounding.js");
+  check("... the real check reads the window when it decides: closed by then, its honest line; open, empty for the redraft", RG.afterStrip({ enough: false, inviteCut: false, sentThisTurn: [], findsWaiting: () => false }) === "honest" && RG.afterStrip({ enough: false, inviteCut: false, sentThisTurn: [], findsWaiting: () => true }) === "nothing");
 }
 {
   // Should-fix 2: a stock opener that names something of theirs reacts to them.
