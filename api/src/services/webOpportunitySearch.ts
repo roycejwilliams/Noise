@@ -23,7 +23,7 @@ import pool from "../db/db.js";
 import type { PoolClient } from "pg";
 import { xSearchBudget } from "./searchRules.js";
 import { parseModelJson } from "./modelJson.js";
-import { exaFor, exaSearch, fromPagesPrompt, onePage } from "./exaSearch.js";
+import { exaConfigured, exaSearch, fromPagesPrompt, onePage } from "./exaSearch.js";
 import { MODELS } from "../models.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { checkGrounding } from "../harness/matchGate.js";
@@ -232,7 +232,7 @@ export async function findOfficialPage(name: string, timeout: number, place?: { 
     ? `Find the official website page for "${name}"${place.near ? ` in ${place.near}` : ""} (the place's own site, ideally its ${place.page}, not a guide, list, review, booking site or directory about it).`
     : `Find the official website page for "${name}" (the program's or organization's own site, ideally its apply or program page, not a blog, news story, or directory about it).`;
   // Through Exa: no model at all. The first result that is the thing's own site (looksOfficial) is its page.
-  if (await exaFor(userId)) {
+  if (exaConfigured()) {
     const q = place ? `${name}${place.near ? ` ${place.near}` : ""} official site ${place.page}` : `${name} official site`;
     const found = await exaSearch(q, { purpose: "official_page", userId, pages: 6, text: false, timeoutMs: Math.min(timeout, 10_000) });
     return found.pages.map((p) => p.url).find((u) => looksOfficial(u, name)) ?? null;
@@ -268,7 +268,7 @@ export async function searchWebForOpportunity(
   city: string | null,
   profile: string | null | undefined,
   todayStr: string,
-  opts: { source?: "sweep" | "request"; userId?: string | null } = {},
+  opts: { source?: "sweep" | "request" } = {},
 ): Promise<WebOpportunityResult> {
   const sweep = opts.source === "sweep";
   const prompt = `Someone wants: "${askText}"${city ? ` (based in ${city})` : ""}
@@ -289,9 +289,9 @@ Return ONLY valid JSON, nothing else: {"found": true, "name": "...", "url": "the
   try {
     let raw: string;
     let pages: { url: string }[] | null = null;
-    if (await exaFor(opts.userId)) {
+    if (exaConfigured()) {
       // Exa finds the pages; the model judges fit and shape from them alone (services/exaSearch.ts).
-      const found = await exaSearch(`${askText}${city ? ` in or near ${city}` : ""}`, { purpose: sweep ? "opportunity_sweep" : "opportunity_request", userId: opts.userId ?? null, timeoutMs: sweep ? 25_000 : 8_000 });
+      const found = await exaSearch(`${askText}${city ? ` in or near ${city}` : ""}`, { purpose: sweep ? "opportunity_sweep" : "opportunity_request", timeoutMs: sweep ? 25_000 : 8_000 });
       if (!found.pages.length) return null;
       pages = found.pages;
       raw = (

@@ -11,7 +11,7 @@ import { generateText, stepCountIs } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
-import { exaFor, exaSearch, fromPagesPrompt, onePage } from "./exaSearch.js";
+import { exaConfigured, exaSearch, fromPagesPrompt, onePage } from "./exaSearch.js";
 import { eventLookupFromModel, isTicketingHost, namedEventFromModel } from "./searchRules.js";
 import { looksOfficial, pageExcerpt, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { checkGrounding } from "../harness/matchGate.js";
@@ -62,7 +62,7 @@ Return ONLY valid JSON: {"found": true, "name": "...", "url": "the page you actu
   try {
     let raw: string;
     let pages: { url: string; title: string; published: string | null; text: string }[] | null = null;
-    if (await exaFor(opts.userId)) {
+    if (exaConfigured()) {
       // Exa finds the pages (the event's own site, its ticketing page); the model picks its next edition from them alone.
       const found = await exaSearch(`${name} ${todayStr.slice(0, 4)} official site${city ? ` ${city}` : ""}`, { purpose: "named_event", userId: opts.userId, timeoutMs: 6_000 });
       if (!found.pages.length) return { ...NOTHING, name, rejected: found.error ? "the web lookup failed or timed out" : "the web lookup found no official page" };
