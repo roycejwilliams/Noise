@@ -5,7 +5,8 @@
 // 1. Connections Cue made: two real members introduced after both said yes, where the introduction was Cue's idea and they weren't
 //    already connected. Counted from what is already recorded:
 //      - in a room: co_pairs with intro_sent_at, origin 'co' (a pair a member asked for by name is counted apart, not as Cue's)
-//      - between events: network_introductions with introduced_at (Cue proposes every one)
+//      - between events: network_introductions with introduced_at (Cue proposes every one) whose email went: email_sent_at, or
+//        made before the send claim existed (2e5c9c13, 2026-10-12); a claim no send confirmed is set when the send is claimed, so it isn't one
 //    "Wouldn't have happened": no member_connections row for the pair from before this introduction, and the first introduction of
 //    that pair only (a second intro of the same two people is not a new connection). The funnel after it, from co_pairs:
 //      met:   met_at (either of them said they met)
@@ -71,7 +72,7 @@ export const NETWORK_SQL = `
   SELECT count(*) AS network
   FROM network_introductions n
   JOIN users ua ON ua.id = n.person_a_id JOIN users ub ON ub.id = n.person_b_id
-  WHERE n.introduced_at IS NOT NULL AND n.introduced_at > NOW() - ($1 || ' days')::interval AND ${MEMBER("ua")} AND ${MEMBER("ub")}
+  WHERE n.introduced_at IS NOT NULL AND (n.email_sent_at IS NOT NULL OR n.email_claimed_at IS NULL) AND n.introduced_at > NOW() - ($1 || ' days')::interval AND ${MEMBER("ua")} AND ${MEMBER("ub")}
     AND NOT EXISTS (SELECT 1 FROM member_connections mc WHERE mc.person_a = n.person_a_id AND mc.person_b = n.person_b_id
                     AND mc.created_at < n.introduced_at - INTERVAL '1 minute')
     AND NOT EXISTS (SELECT 1 FROM co_pairs p WHERE p.a_id = n.person_a_id AND p.b_id = n.person_b_id AND p.intro_sent_at < n.introduced_at)`;
