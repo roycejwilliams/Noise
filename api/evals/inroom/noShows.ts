@@ -3,6 +3,24 @@
 //   npx tsx evals/inroom/noShows.ts
 import { W, reset, addMember, addEvent, ask, check, results } from "./world.js";
 
+// The clock is pinned to 18:00 UTC today, as in flow.ts: a nudge that says "tonight" is only backed by an evening event, so an
+// unpinned run late at night failed every case (2026-10-17, ~04:00 UTC).
+{
+  const RealDate = Date;
+  const pinned = new RealDate();
+  pinned.setUTCHours(18, 0, 0, 0);
+  const offset = pinned.getTime() - RealDate.now();
+  class PinnedDate extends RealDate {
+    constructor(...a: any[]) {
+      super(...((a.length ? a : [RealDate.now() + offset]) as [any]));
+    }
+    static now() {
+      return RealDate.now() + offset;
+    }
+  }
+  (globalThis as any).Date = PinnedDate;
+}
+
 const S = await import("../../src/services/eventScoring.js");
 const settle = () => new Promise((r) => setTimeout(r, 30));
 const pass = async (ev: string) => {
