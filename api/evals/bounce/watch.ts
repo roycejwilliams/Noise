@@ -69,7 +69,7 @@ const o = (zone: string, f: any) => ({ today, zone, judged: [judged(f)], stated,
   check("both floors end on 'want me to keep an eye on it?'; 'hold it' is gone", /"want me to keep an eye on it\?"/.test(cal.task) && /"want me to keep an eye on it\?"/.test(st.task) && !/hold it\?/.test(cal.task + st.task));
   check("the promise says what's watched at each floor: their calendar, or the time they told Cue", /their calendar stays free/.test(cal.task) && /the time they told you is still theirs/.test(st.task));
   check("never hold, book, reserve or save, at either floor", /Never say you'll hold, book, reserve or save anything/.test(cal.task) && /Never say you'll hold, book, reserve or save anything/.test(st.task));
-  check("what Cue says it can do no longer claims it holds a time", !/holds a time/.test(src("services/capabilities.ts")) && /Co never holds, books or reserves a time/.test(src("services/capabilities.ts")));
+  check("what Cue says it can do no longer claims it holds a time", !/holds a time/.test(src("services/capabilities.ts")) && /Cue never holds, books or reserves a time/.test(src("services/capabilities.ts")));
 
   // A yes starts the watching; a no starts nothing.
   const plan = { match: g.match, askText: "x", gap: { source: "stated", day, from: "15:30", to: "18:00", quote: "dead spot" }, times, zone: CHI };

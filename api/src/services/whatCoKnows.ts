@@ -840,7 +840,7 @@ export async function applyOne(db: Db, userId: string, raw: RawKnown, item: Know
     case "grant": {
       // Their calendar or Docs grant: disconnected (revoked with Google, deleted). Docs already made stay in their Drive.
       const { disconnectGrant } = await import("./cueGrants.js");
-      if (a !== "calendar" && a !== "docs") return { why: "not something Co can change" };
+      if (a !== "calendar" && a !== "docs") return { why: "not something Cue can change" };
       if (!(await disconnectGrant(a, userId))) throw new NotApplied();
       return { ref: item.ref, source: "grant", was, now: null };
     }

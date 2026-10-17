@@ -119,7 +119,7 @@ check("the grant is exactly free/busy: anything wider or else is refused", C.cal
   check("Cue's calendar tool sends the calendar link (never the combined Google one)", /calendarConnection: tool/.test(tools) && /createCalendarLink\(ctx\.userId\)/.test(tools.slice(tools.indexOf("calendarConnection"), tools.indexOf("googleConnection: tool"))));
   const caps = src("services/capabilities.ts");
   const cal = caps.slice(caps.indexOf('id: "calendar"'), caps.indexOf('\n    id: "', caps.indexOf('id: "calendar"') + 10));
-  check("what Cue says it can do: busy or free only, never shared, and it never holds a time", /never what an event is, where, or with whom/.test(cal) && /never shared with anyone, including other members/.test(cal) && /Co never holds, books or reserves a time/.test(cal));
+  check("what Cue says it can do: busy or free only, never shared, and it never holds a time", /never what an event is, where, or with whom/.test(cal) && /never shared with anyone, including other members/.test(cal) && /Cue never holds, books or reserves a time/.test(cal));
 }
 
 // ---------------------------------------------------------------- review of the grants work: forgetting, behaviorally

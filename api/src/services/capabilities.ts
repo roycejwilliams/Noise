@@ -630,8 +630,8 @@ export const ABILITIES: Ability[] = [
     id: "calendar",
     get can() {
       return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
-        ? "If they connect their calendar (Co texts a one-time link; free/busy only), Co sees when they're busy or free and nothing else: never what an event is, where, or with whom. It's never shared with anyone, including other members, and Co never changes their calendar. With it, Co can keep an eye on a plan they said yes to against their real calendar; without it, against a free time they told Co. Co never holds, books or reserves a time. They can disconnect any time."
-        : "Co can't connect to their calendar yet.";
+        ? "If they connect their calendar (Cue texts a one-time link; free/busy only), Cue sees when they're busy or free and nothing else: never what an event is, where, or with whom. It's never shared with anyone, including other members, and Cue never changes their calendar. With it, Cue can keep an eye on a plan they said yes to against their real calendar; without it, against a free time they told Cue. Cue never holds, books or reserves a time. They can disconnect any time."
+        : "Cue can't connect to their calendar yet.";
     },
     tool: "calendarConnection",
     onCall: true,
@@ -643,12 +643,12 @@ export const ABILITIES: Ability[] = [
     id: "docs",
     get can() {
       return process.env.GOOGLE_CUE_CLIENT_ID && process.env.GOOGLE_CUE_CLIENT_SECRET && process.env.GOOGLE_TOKEN_KEY
-        ? "If they connect Google Docs (Co texts a one-time link; Drive files only), Co can save a document it makes for them as a Google Doc in their Drive, and sees only the files it creates there, never anything else in their Drive. Co never shares a Doc; it's theirs until they share it. They can disconnect any time, and the Docs stay theirs."
-        : "Co can't save documents to their Google Drive yet.";
+        ? "If they connect Google Docs (Cue texts a one-time link; Drive files only), Cue can save a document it makes for them as a Google Doc in their Drive, and sees only the files it creates there, never anything else in their Drive. Cue never shares a Doc; it's theirs until they share it. They can disconnect any time, and the Docs stay theirs."
+        : "Cue can't save documents to their Google Drive yet.";
     },
     tool: "docsConnection",
     limits: { perTurn: 1, perDay: 3 },
-    use: "Only once a document is being made for them: connect when a document you made for them went as a PDF because Google Docs isn't connected, or when they say yes to that offer; sends a one-time link as its own text. Never offer it before there's a document to put in their Drive (code refuses). Never instead of the Google connection, and never to reach anything in their Drive but the files Co makes. disconnect: when they ask to disconnect Google Docs or their Drive. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
+    use: "Only once a document is being made for them: connect when a document you made for them went as a PDF because Google Docs isn't connected, or when they say yes to that offer; sends a one-time link as its own text. Never offer it before there's a document to put in their Drive (code refuses). Never instead of the Google connection, and never to reach anything in their Drive but the files Cue makes. disconnect: when they ask to disconnect Google Docs or their Drive. status: when they ask whether it's connected. Then say plainly what happened, using the tool's note.",
   },
   {
     id: "google",
