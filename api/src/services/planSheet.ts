@@ -10,6 +10,7 @@
 import { DateTime } from "luxon";
 import { EMAIL_COLORS as C, escapeHtml, quietEmail } from "./emailDesign.js";
 import { placesBacked } from "./taskWeb.js";
+import { START_LEAD_MINUTES, eventStartProblem } from "./eventStart.js";
 
 export const PLAN_LIMITS = { maxSteps: 8, maxNotes: 4, titleChars: 60, noteChars: 220, textChars: 160, daysAhead: 90, perDay: 2 };
 
@@ -124,6 +125,10 @@ export function planProblems(input: PlanInput, plan: Plan, o: { facts: string; t
       else {
         if (rec.blocked) out.push(`${label}: that event can't go on a plan (${rec.blocked})`);
         if (!rec.startAt) out.push(`${label}: that event's record has no start time`);
+        // An event on a plan is an event offered: started, or starting too soon to get there, it can't go on (START_LEAD_MINUTES;
+        // Royce, 2026-10-17). The hour's grace below is for their own steps, not an event's.
+        const late = eventStartProblem({ startAt: rec.startAt, endAt: rec.endAt }, o.now, START_LEAD_MINUTES, rec.timezone ?? null);
+        if (late) out.push(`${label}: that event can't go on a plan (${late})`);
       }
     } else {
       if (raw.when && !LOCAL.test(raw.when)) out.push(`${label}: the time must be their local date and time like 2026-10-11T16:30, with no zone and never a date alone`);

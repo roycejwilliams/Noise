@@ -51,6 +51,7 @@
     "evals/invites/rules.ts",
     "evals/capture/rules.ts",
     "evals/search/rules.ts",
+    "evals/search/startedEvents.ts",
     "evals/search/intent.ts",
     "evals/loop/rules.ts",
     "evals/loop/probes.ts",

@@ -2017,7 +2017,11 @@ export function sendblueRouter(io: Server): Router {
             const revealZone = await memberZone(user.id);
             const todayStr = localDay(new Date(), revealZone);
             const relevantDate: string | undefined = match.event_date ?? match.deadline;
-            const isStale = relevantDate && relevantDate < todayStr;
+            // On top of the day: its start (Royce, 2026-10-17, the Angel Island run). A yes that comes after it started, or inside the
+            // hour before (START_LEAD_MINUTES), gets the same honest "nothing to act on now", never the name or the link.
+            const { matchStartProblem, START_LEAD_MINUTES } = await import("../services/eventStart.js");
+            const lateBy = relevantDate && relevantDate < todayStr ? null : matchStartProblem(match, new Date(), START_LEAD_MINUTES, revealZone);
+            const isStale = (relevantDate && relevantDate < todayStr) || !!lateBy;
             await recordSuggestionOutcome(
               user.id,
               match.kind === "opportunity" ? "opportunity" : "event",
@@ -2026,9 +2030,14 @@ export function sendblueRouter(io: Server): Router {
               eventReplyAction === "interested" ? "interested" : "declined",
             );
             if (eventReplyAction === "interested" && isStale) {
-              const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
-              addFact(replyFacts, "known", `The thing Cue teased earlier already passed (${passedPhrase}).`);
-              addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}). Let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed. Never reveal the name "${match.name}" since there's nothing to act on now.`);
+              if (lateBy) {
+                addFact(replyFacts, "known", `The thing Cue teased earlier is too late to act on now: ${lateBy}.`);
+                addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier, but it's too late to act on now (${lateBy}). Let them know honestly that it's too late for this one, no pressure or apology needed. Never reveal the name "${match.name}" since there's nothing to act on now.`);
+              } else {
+                const passedPhrase = match.event_date ? `it was on ${relevantDate}` : `the application window closed on ${relevantDate}`;
+                addFact(replyFacts, "known", `The thing Cue teased earlier already passed (${passedPhrase}).`);
+                addInstruction(replyFacts, `They just said yes to hearing more about the thing you teased earlier, but it's already passed (${passedPhrase}). Let them know honestly that it's already happened so there's nothing to share, no pressure or apology needed. Never reveal the name "${match.name}" since there's nothing to act on now.`);
+              }
             } else if (eventReplyAction === "interested") {
               // Sent deterministically, not via agent tool-calling (Royce,
               // 2026-09-02, confirmed live on a DIFFERENT reveal path that

@@ -12,6 +12,7 @@ import { recordDecision } from "../harness/core.js";
 import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
+import { START_LEAD_MINUTES, leadFor, matchStartProblem } from "./eventStart.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -252,6 +253,12 @@ export function isPastEvent(match: TierMatch, zone: string | null = null, now = 
   return date !== null && daysUntilDate(date, zone, now) < 0;
 }
 
+// Pure: too late to offer now, by its start: started, or starting inside START_LEAD_MINUTES (services/eventStart.ts). The day check
+// above passes anything today; this is the hour on top of it (Royce, 2026-10-17).
+export function tooLateToOffer(match: TierMatch, zone: string | null = null, now = new Date()): boolean {
+  return matchStartProblem(match, now, START_LEAD_MINUTES, zone) !== null;
+}
+
 function isShortNotice(match: TierMatch, zone: string | null = null): boolean {
   const date = relevantDate(match, zone);
   return date !== null && daysUntilDate(date, zone) >= 0 && daysUntilDate(date, zone) <= SHORT_NOTICE_DAYS;
@@ -262,10 +269,12 @@ function isShortNotice(match: TierMatch, zone: string | null = null): boolean {
 // only a date: the end of that day in the event's own zone (its page's), else theirs, else Pacific. A deadline: the end of that
 // day in their zone. Undated: UNDATED_QUEUE_DAYS (Phase B, B2, 2026-10-10: it was two weeks, never read again; every send now
 // re-reads its page first, services/sendCheck.ts, and past this it exits on that fact instead of waiting blind).
+// Royce, 2026-10-17 (the Angel Island run): a known start expires START_LEAD_MINUTES before it, not at it: an offer that lands
+// minutes before something starts is too late to act on. The send step checks the start again as it goes (services/sendCheck.ts).
 export function offerExpiresAt(match: TierMatch, zone: string | null, now = new Date()): Date {
-  const startAt = match.kind !== "opportunity" ? match.details?.startAt : null;
+  const startAt = match.kind !== "opportunity" ? (match.details?.startAt ?? match.startAt) : null;
   const start = startAt ? new Date(startAt) : null;
-  if (start && !Number.isNaN(start.getTime())) return start;
+  if (start && !Number.isNaN(start.getTime())) return new Date(start.getTime() - (leadFor(START_LEAD_MINUTES, !!(match.online || match.details?.online)) ?? START_LEAD_MINUTES) * 60_000);
   const date = relevantDate(match);
   const end = date ? endOfLocalDay(date.slice(0, 10), match.details?.timezone ?? zone) : null;
   if (end && !Number.isNaN(end.getTime())) return end;
@@ -591,7 +600,7 @@ async function dropStaleFront(userId: string, items: BacklogItem[], zone: string
   let rest = items;
   while (
     rest.length &&
-    ((await shownSinceQueued(userId, rest[0], zone)) || isPastEvent(rest[0].match, zone) || (await alreadyDecided(userId, rest[0])))
+    ((await shownSinceQueued(userId, rest[0], zone)) || isPastEvent(rest[0].match, zone) || tooLateToOffer(rest[0].match, zone) || (await alreadyDecided(userId, rest[0])))
   ) {
     rest = rest.slice(1);
   }
@@ -828,6 +837,11 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       continue;
     }
     const match = await enrichMatch(item.match);
+    // Started, or starting inside the hour, by its page's start: not queued (it would expire before it could go).
+    if (tooLateToOffer(match, zone)) {
+      skipped.push({ name: item.match.name, why: "it has started, or starts too soon to get there" });
+      continue;
+    }
     const payload: EventOfferPayload = {
       askId: candidate.askId,
       askText: item.askText,
@@ -890,8 +904,10 @@ export async function queuePickedOffer(userId: string, o: { askId: string; askTe
   const zone = await memberZone(userId);
   const item: BacklogItem = { askText: o.askText, match: o.match, source: "full", ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };
   if (await alreadyDecided(userId, item)) return "already decided";
-  if (isPastEvent(o.match, zone)) return "past";
+  if (isPastEvent(o.match, zone) || tooLateToOffer(o.match, zone)) return "past";
   const match = await enrichMatch({ ...o.match, whyItFits: o.why || o.match.whyItFits });
+  // Its page's start, read just now, decides too (the pick's record may not have had one).
+  if (tooLateToOffer(match, zone)) return "past";
   // picked: the daily pick chose it, so the send step bundles it with the other picks waiting (per tier). lastDay: the last day
   // it's worth sending (Royce, 2026-10-09: "Fleet Week should never lose its slot to something that will still exist next week").
   const payload: EventOfferPayload = { askId: o.askId, askText: o.askText, fromProfile: o.fromProfile, match, picked: true, ...(o.pick ? { pick: o.pick } : {}), ...(o.lastDay ? { lastDay: o.lastDay } : {}), ...(o.reminder ? { reminder: true } : {}), ...(o.again ? { again: true } : {}) };

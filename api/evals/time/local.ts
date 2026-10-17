@@ -115,8 +115,10 @@ const NY = "America/New_York";
   const evening: any = { tier: 2, kind: "public_event", event_api_id: "evt1", event_date: "2026-10-08", name: "Founders Supper", url: "https://lu.ma/x", reason: "r", details: { startAt: "2026-10-09T02:00:00Z", endAt: "2026-10-09T05:00:00Z", timezone: LA } };
   const sixPm = at("2026-10-09T01:00:00Z"); // 6pm PDT Oct 8
   const exp = ES.offerExpiresAt(evening, null, sixPm);
-  check("an evening event's offer expires at its start (7pm Pacific), not 23:59 UTC (4:59pm Pacific)", exp.toISOString() === "2026-10-09T02:00:00.000Z", exp.toISOString());
-  check("at 6pm on the day it is still offerable (before the expiry; the old expiry had passed an hour earlier)", sixPm < exp && sixPm > new Date(`${evening.event_date}T23:59:00Z`));
+  // 2026-10-17 (Royce, the Angel Island run): an hour before its start (START_LEAD_MINUTES), no longer at it.
+  check("an evening event's offer expires an hour before its start (6pm Pacific for 7pm), not 23:59 UTC (4:59pm Pacific)", exp.toISOString() === "2026-10-09T01:00:00.000Z", exp.toISOString());
+  const fiveThirty = at("2026-10-09T00:30:00Z"); // 5:30pm PDT Oct 8
+  check("at 5:30pm on the day it is still offerable (before the expiry; the old 23:59 UTC expiry had passed half an hour earlier)", fiveThirty < exp && fiveThirty > new Date(`${evening.event_date}T23:59:00Z`));
   check("at 6pm Pacific it isn't 'past' by the member's day (the UTC day is already tomorrow)", !ES.isPastEvent(evening, null, sixPm) && !ES.isPastEvent(evening, LA, sixPm));
   check("the send-time date check (dateGuard) still offers it at 6pm their time", D.offerable(D.readDates(D.itemDays(evening, LA), D.localToday(LA, sixPm))).ok);
   const dateOnly: any = { ...evening, details: undefined };
