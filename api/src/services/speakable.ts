@@ -312,6 +312,20 @@ export const NARRATION_RULES: { pattern: RegExp; why: string }[] = [
 // opts.allow: a sentence the caller knows is a true statement about the member's side, not Co's machinery (2026-10-10, the reply's
 // fact check: "Nothing's come through on my end yet" is about the file they sent, and is allowed when the inbound record shows
 // nothing readable arrived; services/inboundFile.ts).
+// Pure: a question's leading statement, when the sentence is a statement and a question joined by a comma ("Nothing on my end right
+// now, how's the week treating you?"): that statement is still said, so it's checked like any sentence (golden 28, 2026-10-17: the
+// whole sentence passed as a question). Null for a plain question.
+// Not split: an either-or question ("Working on anything fun, or just resting?") is one question, and a first clause that is itself
+// part of the question (it opens with a helper verb or a wh-word: "Are you still looking, or did you find one?") is no statement.
+const QUESTION_OPENER = /^(?:are|is|was|were|am|did|do|does|have|has|had|can|could|would|will|should|shall|may|might|how|what|whats|what's|when|where|who|whose|which|why|any|anything)\b/i;
+export function statementBeforeQuestion(sentence: string): string | null {
+  const m = sentence.match(/^(.+?)[,;:]\s+(?:and\s+|but\s+|so\s+)?(how|what|anything|any|are|is|was|did|do|does|have|has|had|want|would|could|can|will|where|when|who|which|you|got)\b[^?]*\?\s*["')\]]*$/i);
+  if (!m || /\?/.test(m[1])) return null;
+  const first = m[1].trim();
+  if (QUESTION_OPENER.test(first.replace(/^(?:hey|hi|so|okay|ok|well)[,!]?\s+/i, ""))) return null;
+  return first;
+}
+
 export function narratesInternalState(text: string, opts: { allow?: (sentence: string) => boolean } = {}): string | null {
   const sentences = text
     .replace(/\[[a-z][a-z ]*\]\s*/gi, "")
@@ -319,9 +333,11 @@ export function narratesInternalState(text: string, opts: { allow?: (sentence: s
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
-  for (const s of sentences) {
-    if (/\?\s*["')\]]*$/.test(s)) continue;
-    if (opts.allow?.(s)) continue;
+  for (const whole of sentences) {
+    const s = /\?\s*["')\]]*$/.test(whole) ? statementBeforeQuestion(whole) : whole;
+    if (!s) continue;
+    // An admitted sentence is admitted whole (harness/replyGrounding.ts admitNarratedSentences keys the whole sentence).
+    if (opts.allow?.(s) || (s !== whole && opts.allow?.(whole))) continue;
     for (const r of NARRATION_RULES) if (r.pattern.test(s)) return `${r.why}: "${s.slice(0, 80)}"`;
   }
   return null;
