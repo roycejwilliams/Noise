@@ -124,7 +124,8 @@ export async function readVenueSource(url: string, slot: VenueAsk["slot"]): Prom
   return { reader: "sdk", fields, title };
 }
 
-// The find's search failed outright (every pass): thrown so the brief says it couldn't search, not that nothing fits.
+// The find's search never ran (every pass failed, or the web search budget blocked it): thrown so the brief retries, then says it
+// couldn't search, never that nothing fits.
 export class SearchFailed extends Error {}
 
 // The find, in a background task only. The assembled query (researchQuality.assembleQuery) goes to the verified web search;
@@ -148,14 +149,15 @@ export async function findVenueOptions(userId: string, query: string, ask: Venue
   const kept: import("./taskWeb.js").VerifiedResult[] = [];
   const ownPlaces = () => kept.filter(own).filter((k, i, a) => a.findIndex((x) => placeKey(x) === placeKey(k)) === i);
   const log: { pass: number; kept: number; own: number; listicles: string[] }[] = [];
-  // A search that failed (Exa down or timed out) never ran: when no pass ran, that's a failure, never "no venues fit" (review of #225).
+  // A search that failed (Exa down or timed out) or that the budget blocked never ran: when no pass ran, that's a failure, never
+  // "no venues fit" (review of #225).
   const failures: string[] = [];
   for (const [i, angle] of angles.entries()) {
     if (i > 0 && ownPlaces().length >= BRIEF_LIMITS.maxOptions) break;
     const seen = [...new Set(kept.map((k) => coreName(k.name)))].slice(0, 12).join("; ");
     const q = i === 0 ? `${query} ${ownPage}` : `${query} ${ownPage} ${angle}${seen ? ` ${seen}.` : ""}`;
     const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4, ownPage: "private events or private dining page", readsPageItself: true });
-    if (/^Web search failed/.test(r.note)) failures.push(r.note);
+    if (/^(?:Web search failed|No web search right now)/.test(r.note)) failures.push(r.note);
     for (const k of r.kept) if (!kept.some((x) => x.url === k.url || (own(x) && own(k) && (placeKey(x) === placeKey(k) || sameName(x.name, k.name))))) kept.push(k);
     log.push({ pass: i + 1, kept: r.kept.length, own: r.kept.filter(own).length, listicles: r.kept.filter((k) => !own(k)).map((k) => k.url).slice(0, 4) });
   }
@@ -196,8 +198,15 @@ export function briefOptionsText(title: string, options: { name: string; url: st
 
 export const BRIEF_HOLD_MAX_WAKES = 6;
 
-// What they're told when the find's search failed outright (Exa down or timed out): it couldn't search, never that nothing fits.
+// What they're told when the find's search never ran, after its retries: it couldn't search, never that nothing fits. Wording
+// pending Royce's approval (PR #235).
 export const SEARCH_FAILED_LINE = "My search didn't go through just now, so I couldn't look for venues yet. Want me to try again?";
+// A find whose search never ran (Exa down or timed out, or the web search budget blocked it) is tried again at the task's next wake
+// this many times before they're told (Royce, 2026-10-17: "retry once or twice ... Only tell the member if those fail"). No new
+// machinery: the task is left open, and coTasks.claimDueTasks already leased it to its next wake 45 minutes on, when the whole run
+// (and the find) goes again. task.wakes counts the runs (the first is 1), so runs 1 and 2 retry and run 3 tells them.
+export const BRIEF_SEARCH_RETRIES = 2;
+export const briefSearchNext = (wakes: number): "retry" | "tell" => (wakes <= BRIEF_SEARCH_RETRIES ? "retry" : "tell");
 
 // A brief's identity across sends: what it's for, not its "Venue options" title (services/deliveryReceipts.ts docKeyFor reads only
 // a title's head), so the same ask asked again is its next version and a different ask is its own document.
@@ -342,9 +351,15 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
       find.failed = err instanceof SearchFailed ? err.message : "the find threw an error";
       return [] as ResearchFind[];
     });
-    // The find never ran (the search failed): they're told it couldn't search, never that no venues fit (review of #225).
+    // The find never ran (the search failed or was blocked): tried again at the next wake, then they're told it couldn't search,
+    // never that no venues fit (review of #225).
     if (find.failed) {
-      await tellThenClose(SEARCH_FAILED_LINE, "dropped", `the search failed: ${find.failed}`);
+      if (briefSearchNext(task.wakes) === "retry") {
+        const { recordDecision } = await import("../harness/core.js");
+        await recordDecision({ layer: 7, decision: "research.find", userId: task.userId, outcome: "skip", action: `search didn't run; retry ${task.wakes} of ${BRIEF_SEARCH_RETRIES} at the next wake`, reason: find.failed, proposal: { taskId: task.id, wakes: task.wakes } }).catch(() => {});
+        return;
+      }
+      await tellThenClose(SEARCH_FAILED_LINE, "dropped", `the search didn't run after ${BRIEF_SEARCH_RETRIES} retries: ${find.failed}`);
       return;
     }
   }

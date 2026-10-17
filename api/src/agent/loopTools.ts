@@ -414,14 +414,16 @@ export function loopTools(
           notDone("Web search wasn't available: today's shared web search budget is used up.");
           return { ok: false, error: "No more web searches today. Lead with what you already found or searchEvents; if they still need more, save it (saveAsk) and say when they'll hear back, without naming a limit." };
         }
-        // Every search failed (Exa down or timed out, the picker threw): the search never ran, so it says nothing about what's out
-        // there. No "nothing held up" receipt, which would back "I looked and nothing turned up" (review of #225).
-        const failed = all.filter((x) => /^Web search failed/.test(x.note));
+        // A search that failed (Exa down or timed out, the picker threw) or that the budget blocked never ran, so it says nothing about
+        // what's out there: never in the "nothing held up" receipt, which backs "I looked and nothing turned up" (review of #225).
+        const failedNote = (n: string) => /^Web search failed/.test(n);
+        const notRun = (n: string) => failedNote(n) || /^No web search right now/.test(n);
+        const failed = all.filter((x) => notRun(x.note));
         if (failed.length === all.length) {
-          notDone(`The web search failed just now (${run.map((q) => `"${q}"`).join(", ")}): nothing was searched, so nothing is known about what's out there.`);
+          notDone(`The web search didn't run just now (${run.map((q) => `"${q}"`).join(", ")}): nothing was searched, so nothing is known about what's out there.`);
           return { ok: false, error: "The web search failed just now: it never ran, so it says nothing about what exists. Try it once more, or tell them you couldn't search right now and offer to look again. Never say nothing turned up." };
         }
-        await remember({ tried: run.filter((_, i) => !/^Web search failed/.test(all[i].note)).map((q) => `web: ${q}`) });
+        await remember({ tried: run.filter((_, i) => !notRun(all[i].note)).map((q) => `web: ${q}`) });
         const seenUrls = new Set<string>();
         // Jev reads each fact against its passage (services/factCheck.ts); a "no" is dropped.
         const { checkVerified } = await import("../services/factCheck.js");
@@ -447,11 +449,12 @@ export function loopTools(
             ...empty.map((k) => ({ name: k.name, url: k.url, why: "nothing about it on its page" })),
             ...(blocked.length ? [{ name: `${blocked.join(", ")} listings`, url: "", why: "those sites block reading, so their listings can't be checked; look for places' own pages" }] : []),
           ],
-          note: `${all.map((x) => x.note).find((n) => /checked/.test(n)) ?? all.find((x) => !/^Web search failed/.test(x.note))?.note ?? ""}${failed.length ? ` ${failed.length} of ${all.length} searches failed and never ran: that's not the same as nothing there.` : ""}`.trim() };
-        // A search that failed among ones that ran is named as failed, never counted in what came up empty.
-        const ranOk = run.filter((_, i) => !/^Web search failed/.test(all[i].note));
-        const ranFailed = run.filter((_, i) => /^Web search failed/.test(all[i].note));
-        receipt(`Searched the web just now (${ranOk.map((q) => `"${q}"`).join(", ")}): ${r.kept.length} held up on their own pages${r.dropped.length ? `, ${r.dropped.length} didn't` : ""}.${ranFailed.length ? ` The search for ${ranFailed.map((q) => `"${q}"`).join(", ")} failed and never ran.` : ""}`);
+          note: `${all.map((x) => x.note).find((n) => /checked/.test(n)) ?? all.find((x) => !notRun(x.note))?.note ?? ""}${failed.length ? ` ${failed.length} of ${all.length} searches didn't run (failed, or no web search was available): that's not the same as nothing there.` : ""}`.trim() };
+        // A search that didn't run among ones that did is named as not run, never counted in what came up empty.
+        const ranOk = run.filter((_, i) => !notRun(all[i].note));
+        const ranFailed = run.filter((_, i) => failedNote(all[i].note));
+        const ranBlocked = run.filter((_, i) => !failedNote(all[i].note) && notRun(all[i].note));
+        receipt(`Searched the web just now (${ranOk.map((q) => `"${q}"`).join(", ")}): ${r.kept.length} held up on their own pages${r.dropped.length ? `, ${r.dropped.length} didn't` : ""}.${ranFailed.length ? ` The search for ${ranFailed.map((q) => `"${q}"`).join(", ")} failed and never ran.` : ""}${ranBlocked.length ? ` The search for ${ranBlocked.map((q) => `"${q}"`).join(", ")} never ran: no web search was available.` : ""}`);
         for (const k of r.kept) {
           const facts = [...k.facts, ...(k.date ? [`date: ${k.date}`] : [])].join("; ");
           const match = { tier: 3, kind: "opportunity", source: "web", name: k.name, url: k.url, reason: facts || k.name, evidence: `${k.name}. ${facts}`, ...(k.date ? { statedDates: { start: k.date } } : {}) } as unknown as TierMatch;

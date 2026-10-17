@@ -83,11 +83,14 @@ export function scrubQuery(q: string): string {
     .trim();
 }
 
-// A query param that only tracks who clicked from where (an ad, a newsletter, a share): never part of what the page is. Anything
-// else (an event id, a date, a listing number) stays.
-const TRACKING_PARAM = /^(utm_[a-z0-9_]*|gclid|gbraid|wbraid|dclid|fbclid|msclkid|yclid|twclid|ttclid|igshid|mc_cid|mc_eid|_hsenc|_hsmi|mkt_tok|ref|ref_src)$/i;
+// Known ad and email tracking only (Royce, 2026-10-17: "Strip only known ad tracking (utm and similar). Leave ref= alone, so a
+// referral code or a GitHub branch survives."): utm_* campaign tags; ad click ids from Google (gclid, gbraid, wbraid, dclid),
+// Meta (fbclid), Microsoft (msclkid), Yandex (yclid), X (twclid) and TikTok (ttclid); Instagram's share id (igshid); and email
+// campaign ids from Mailchimp (mc_cid, mc_eid), HubSpot (_hsenc, _hsmi) and Marketo (mkt_tok). Anything else (ref, an event id, a
+// date, a listing number) stays.
+const TRACKING_PARAM = /^(utm_[a-z0-9_]*|gclid|gbraid|wbraid|dclid|fbclid|msclkid|yclid|twclid|ttclid|igshid|mc_cid|mc_eid|_hsenc|_hsmi|mkt_tok)$/i;
 
-// Pure: a found link without its tracking tags (review of #225: Exa's links can carry utm_*, gclid, fbclid and the like, and Cue
+// Pure: a found link without its ad tracking tags (review of #225: Exa's links can carry utm_*, gclid, fbclid and the like, and Cue
 // shouldn't send them to a member). Every other param is kept exactly as written, in order; a link with none to strip comes back
 // as it was.
 export function withoutTracking(url: string): string {
@@ -137,14 +140,14 @@ ${pagesBlock(pages)}`;
 }
 
 // Pure: a url the picker returned is one of the pages (a url it made up, or one off another site, is nothing). Compared without the
-// scheme, "www.", a trailing slash, the fragment and tracking tags, so a copy that lost a slash still counts; the page's own url is
-// what's returned.
+// scheme, "www.", a trailing slash, the fragment, tracking tags, ref and source, so a copy that lost a slash still counts; the page's
+// own url (its ref kept) is what's returned.
 export function onePage(url: unknown, pages: ExaPage[]): string | null {
   if (typeof url !== "string") return null;
   const key = (u: string) => {
     try {
       const x = new URL(u.trim());
-      for (const k of [...x.searchParams.keys()]) if (TRACKING_PARAM.test(k) || /^source$/i.test(k)) x.searchParams.delete(k);
+      for (const k of [...x.searchParams.keys()]) if (TRACKING_PARAM.test(k) || /^(ref|source)$/i.test(k)) x.searchParams.delete(k);
       return `${x.hostname.replace(/^www\./, "").toLowerCase()}${x.pathname.replace(/\/+$/, "")}${x.searchParams.toString() ? `?${x.searchParams}` : ""}`;
     } catch {
       return null;
