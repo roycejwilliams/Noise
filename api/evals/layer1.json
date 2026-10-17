@@ -184,6 +184,7 @@
     "evals/member/textKnowledge.ts",
     "evals/calls/reasonGate.ts",
     "evals/calls/autoIntakeParked.ts",
+    "evals/calls/dashboardIntakeCall.ts",
     "evals/reply-flow/fixes1010.ts",
     "evals/tasks/awayReplay.ts",
     "evals/calls/memory.ts",
