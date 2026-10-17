@@ -134,6 +134,8 @@
     "evals/bounce/wants.ts",
     "evals/bounce/calendar.ts",
     "evals/bounce/trigger.ts",
+    "evals/bounce/watch.ts",
+    "evals/docs/docsGrant.ts",
     "evals/browserPilot/rules.ts",
     "evals/docs/researchBrief.ts",
     "evals/research/quality.ts",

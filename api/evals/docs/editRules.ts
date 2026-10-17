@@ -36,7 +36,7 @@ const to = { userId: PAIR[0], firstName: "Jordan", phone: "+15550100001", zone: 
 }
 
 // ---------------------------------------------------------------- rules 3, 4, 6 through deliverAndRecord
-const run = async (o: { update?: any; meta?: any; token?: any } = {}) => {
+const run = async (o: { update?: any; meta?: any; token?: any; oldGrant?: boolean } = {}) => {
   const texts: string[] = [];
   const uploads: string[] = [];
   const updates: string[] = [];
@@ -55,9 +55,13 @@ const run = async (o: { update?: any; meta?: any; token?: any } = {}) => {
   const deliver = (d: any, t: any, target: any) => X.deliverDocument(d, t, target, deps);
   const first = await X.deliverAndRecord(v1, { ...to, line: "Here's the venue brief." }, { saveTo: "google_doc", askedForGoogle: true, source: "reply" }, { deliver, receipts, log: async () => null });
   texts.length = 0;
+  // A Doc the old combined Google grant made (before 2026-10-15): its receipt names no grant.
+  if (o.oldGrant) for (const x of receipts.all) x.driveGrant = null;
+  const metaAsked = { n: 0 };
+  deps.docMeta = ((m) => async (...a: any[]) => (metaAsked.n++, m(...a)))(deps.docMeta);
   const rid = first.receipts[0]?.id;
   const second = await X.deliverAndRecord(v2, to, { askedForGoogle: false, source: "reply", revises: rid, changed: "swapped Friday at Alder and Ash for Saturday at Mesa Verde" }, { deliver, receipts, log: async () => null });
-  return { first, second, texts, uploads, updates, receipts };
+  return { first, second, texts, uploads, updates, receipts, metaAsked: metaAsked.n };
 };
 {
   const r = await run();
@@ -77,6 +81,15 @@ const run = async (o: { update?: any; meta?: any; token?: any } = {}) => {
 {
   const r = await run({ meta: { modifiedAt: new Date("2026-10-11T19:30:00Z") } });
   check("review of #143: edits made in the Doc after Co's are never written over: a new Doc, and the text says why", r.updates.length === 0 && r.uploads.length === 2 && /has edits since I made it, so I left it as it is/.test(r.texts[0] ?? ""), r.texts);
+}
+{
+  const r = await run();
+  check("a Doc made on Cue's Docs grant is recorded as such, so its next version can go in place", r.receipts.all.every((x) => x.driveGrant === "docs"), r.receipts.all.map((x) => x.driveGrant));
+}
+{
+  // Docs moved to their own grant on Cue's project (2026-10-15); drive.file is per project, so the new grant can't see the old Docs.
+  const r = await run({ oldGrant: true });
+  check("a Doc the old combined grant made is never checked or written: a new Doc, with the true reason (never 'isn't in your Drive')", r.updates.length === 0 && r.metaAsked === 0 && r.uploads.length === 2 && /I couldn't check the earlier Doc, so this is a new one\./.test(r.texts[0] ?? "") && !/isn't in your Drive/.test(r.texts[0] ?? ""), r.texts);
 }
 {
   const r = await run({ meta: { gone: true } });

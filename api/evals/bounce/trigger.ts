@@ -73,9 +73,9 @@ check("a window that already ended: silence", B.pickProposal({ ...want, until: D
 {
   const cal = B.proposalBrief({ want, match: gallery.match, gap: { source: "calendar", day, from: "16:00", to: "17:30", quote: null }, times: { day, from: "16:00", to: "17:30" }, zone });
   const st = B.proposalBrief({ want, match: gallery.match, gap: { source: "stated", day, from: "15:30", to: "18:00", quote: "Tuesday 3:30 to 6 is my dead spot" }, times: { day, from: "16:00", to: "17:30" }, zone });
-  check("a calendar gap may be offered as held ('want me to hold it?')", /want me to hold it\?/.test(cal.task) && /free on their calendar/.test(cal.facts.their_free_time));
-  check("a stated time is only suggested, never held or booked", /want to go\?/.test(st.task) && /Never say you'll hold or book anything/.test(st.task) && /a time they told you they're free/.test(st.facts.their_free_time));
-  check("the proactive message test: a traceable reason (their words), the work done (the plan), a one-word close", cal.facts.their_own_words_about_it === "I'm in Chicago til Friday" && /one solved thing, not options/.test(cal.task) && /Two sentences at most/.test(cal.task));
+  check("a calendar gap closes on 'want me to keep an eye on it?' (Royce, 2026-10-15), never a hold", /want me to keep an eye on it\?/.test(cal.task) && /free on their calendar/.test(cal.facts.their_free_time) && !/hold it\?/.test(cal.task));
+  check("a stated time the same, watched against what they told Cue, never held or booked", /want me to keep an eye on it\?/.test(st.task) && /Never say you'll hold, book, reserve or save anything/.test(st.task) && /a time they told you they're free/.test(st.facts.their_free_time));
+  check("the proactive message test: a traceable reason (their words), the work done (the plan), a short close", cal.facts.their_own_words_about_it === "I'm in Chicago til Friday" && /one solved thing, not options/.test(cal.task) && /Two sentences at most/.test(cal.task));
   check("reflect what's told, never how they seem", /Reflect only what they told you, never how they seem/.test(cal.task));
   check("the free time is said plainly (the day, the span in minutes)", /90 minutes/.test(cal.facts.their_free_time) && cal.facts.the_day.includes(day));
 }
@@ -111,13 +111,113 @@ check("a window that already ended: silence", B.pickProposal({ ...want, until: D
   const b = src("services/bounce.ts");
   check("a proposal that never went (find or gap died first) doesn't use up the want", /status <> 'dropped'/.test(b) && /WHERE bounce_proposals\.status = 'dropped'/.test(b));
   check("the answer binds to the latest proposal sent, only within a few days", /status = 'proposed' AND sent_at > NOW\(\) - make_interval\(days => \$4\)/.test(b) && B.BOUNCE.answerDays === 3);
-  const answer = b.slice(b.indexOf("export async function answerLatest"), b.indexOf("\n// Pure: the plan's facts"));
-  check("a yes is recorded, nothing booked or held anywhere (execution is the next pass)", !/sendblue|calendar|enqueueCandidate|INSERT INTO/i.test(answer));
+  const answer = b.slice(b.indexOf("export async function answerLatest"), b.indexOf("\n// Pure: when the watch ends"));
+  check("a yes is recorded and starts a watch, nothing booked or held anywhere", answer.length > 200 && !/sendblue|calendar|enqueueCandidate|INSERT INTO/i.test(answer));
   const tools = src("agent/conversationTools.ts");
   const t = tools.slice(tools.indexOf("answerProposal: tool"), tools.indexOf("noteFreeTime: tool"));
   check("their answer must be in their own words, and Cue never says it's booked", /theirQuote\(ctx\.resolvedContent, recentOf\(ctx\), theirWords\)/.test(t) && /don't claim anything is booked or held/.test(t));
   check("a no gets no apology and no other options", /no apology, no other options/.test(t));
   check("it goes through the proactive harness (their hours and caps), and runs every 15 minutes", /type: "bounce_proposal"/.test(b) && /bounce_proposal: \{ priority: 85 \}/.test(src("harness/proactive.ts")) && /B\.runBounceTriggers\(\)/.test(src("jobs/index.ts")));
+}
+
+// ---------------------------------------------------------------- the calendar ask: only when a plan needs it (Royce, 2026-10-15)
+{
+  const o = { today, zone, judged: [judged(gallery)], stated: [] as any[], proposed: new Set<string>() };
+  check("a plan that only their calendar could place needs it", B.planNeedsCalendar(want, [gallery], o));
+  check("a time they stated already covers it: the calendar isn't needed", !B.planNeedsCalendar(want, [gallery], { ...o, stated: [{ ...stated[0], quote: "dead spot" }] }));
+  check("nothing high-fit to plan: the calendar isn't needed", !B.planNeedsCalendar(want, [gallery], { ...o, judged: [judged(gallery, "hold")] }) && !B.planNeedsCalendar(want, [], o));
+  check("a want already proposed, or a window that ended: not needed", !B.planNeedsCalendar(want, [gallery], { ...o, proposed: new Set(["ask:a1"]) }) && !B.planNeedsCalendar({ ...want, until: DateTime.fromISO(today).minus({ days: 1 }).toISODate()! }, [gallery], o));
+  const noTime = find("No time on it", day, null);
+  check("a find with no start time can't use a calendar: not needed", !B.planNeedsCalendar(want, [noTime], { ...o, judged: [judged(noTime)] }));
+
+  const { googleTools } = await import("../../src/services/googleTools.js");
+  const { default: pool } = await import("../../src/db/db.js");
+  const real = (pool as any).query;
+  const links: string[] = [];
+  const sent: string[] = [];
+  const notDone: string[] = [];
+  (pool as any).query = async (q: string) => (/INSERT INTO google_oauth_states/.test(q) && links.push(q), /FROM users WHERE id = \$1 AND invite_verified = true AND identity_captured = true AND archived_at IS NULL/.test(q) ? { rows: [{ x: 1 }] } : { rows: [], rowCount: 1 });
+  const envWas = { id: process.env.GOOGLE_CUE_CLIENT_ID, sec: process.env.GOOGLE_CUE_CLIENT_SECRET, key: process.env.GOOGLE_TOKEN_KEY, url: process.env.API_URL };
+  Object.assign(process.env, { GOOGLE_CUE_CLIENT_ID: "c", GOOGLE_CUE_CLIENT_SECRET: "s", GOOGLE_TOKEN_KEY: Buffer.alloc(32, 3).toString("base64"), API_URL: "https://api.example.test" });
+  try {
+    const ctx = { userId: "u1", phoneNumber: "+15550100001", dryRun: false, sendCoReply: async (m: any) => { sent.push(m.message); return true; } };
+    const early = await (googleTools(ctx, (t) => notDone.push(t), { calendarMoment: async () => false }).calendarConnection as any).execute({ action: "connect" }, {});
+    check("asked before a plan needs it (even when they ask): no link made or sent, and Cue is told not to offer it", early.ok === false && links.length === 0 && sent.length === 0 && /Don't send a link or offer it now/.test(early.error) && /no plan needs their calendar/.test(notDone.at(-1) ?? ""));
+    const now = await (googleTools(ctx, (t) => notDone.push(t), { calendarMoment: async () => true }).calendarConnection as any).execute({ action: "connect" }, {});
+    check("once a plan needs it: the one-time link goes, as its own text", now.ok === true && links.length === 1 && sent.length === 1 && /\/google\/connect\//.test(sent[0]));
+    const st = await (googleTools(ctx, () => {}, { calendarMoment: async () => false }).calendarConnection as any).execute({ action: "status" }, {});
+    check("status and disconnect are never held back by the moment", st.ok === true);
+  } finally {
+    (pool as any).query = real;
+    for (const [k, v] of [["GOOGLE_CUE_CLIENT_ID", envWas.id], ["GOOGLE_CUE_CLIENT_SECRET", envWas.sec], ["GOOGLE_TOKEN_KEY", envWas.key], ["API_URL", envWas.url]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+  check("the real check reads the same pieces the trigger does, and any failure is 'not yet'", /export async function calendarMomentReached/.test(src("services/bounce.ts")) && /\.calendarMomentReached\(u\)\)\)\(ctx\.userId\)\.catch\(\(\) => false\)/.test(src("services/googleTools.ts")));
+}
+
+// ---------------------------------------------------------------- review of #222 and the grants work
+{
+  const o = { today, zone, judged: [] as any[], stated: [] as any[], calendarFree: () => true, proposed: new Set<string>() };
+  const gallery = find("Gallery night", day, "18:00");
+  const want = { key: "ask:a1", text: "something good to do", place: "Chicago", until: DateTime.fromISO(day).plus({ days: 2 }).toISODate()!, quote: null };
+  const j = [judged(gallery)];
+  const second = find("Jazz at the Green Mill", day, "20:00");
+  const dropped = new Map([["ask:a1", new Set([`Gallery night|${day}`])]]);
+  check("a find a dropped attempt was for is never picked again for that want (no 15-minute requeue loop); another find can be",
+    B.pickProposal(want, [gallery], { ...o, judged: j, dropped }) === null && B.pickProposal(want, [gallery, second], { ...o, judged: [...j, judged(second)], dropped })?.find.match.name === "Jazz at the Green Mill");
+  const bs = src("services/bounce.ts"), reg = src("harness/proactiveRegistry.ts");
+  check("both drop paths remember the find on the want, and a re-queue keeps that list",
+    /status = 'dropped', answer_words = \$2, plan = jsonb_set\(COALESCE\(plan, '\{\}'::jsonb\), '\{dropped\}'/.test(reg) && /status = 'dropped', plan = jsonb_set\(/.test(bs) && /plan = EXCLUDED\.plan \|\| jsonb_build_object\('dropped', COALESCE\(bounce_proposals\.plan->'dropped', '\[\]'::jsonb\)\)/.test(bs));
+  check("a find already sent or queued as a find is never proposed again as a plan (no double ping)", !!B.pickProposal(want, [gallery], { ...o, judged: j }) && B.pickProposal(want, [gallery], { ...o, judged: j, offered: new Set([shadowKey("Gallery night", day)]) }) === null);
+  const b = src("services/bounce.ts");
+  check("each proposal attempt has its own key, and a refused enqueue puts the row back to 'dropped' (a dropped proposal never kills its want)",
+    /targetKey: `bounce:\$\{p\.want\.key\}:\$\{rows\[0\]\.attempt\}`/.test(b) && /if \(!r\?\.queued\) \{\s*await pool\.query\(`UPDATE bounce_proposals SET status = 'dropped', plan = jsonb_set\(/.test(b) && /if \(!\(await queueProposal\(userId, pick, pick\.zone\)\)\) continue;/.test(b));
+
+  // Behavior, through the real enqueue: a first attempt dropped before it went, then queued again, gets its own key the harness takes.
+  const { default: pool } = await import("../../src/db/db.js");
+  const realQuery = (pool as any).query, realConnect = (pool as any).connect;
+  let attempt = 1000;
+  let status = "dropped";
+  const candidates = new Map<string, string>();
+  const stub = async (q: string, p: any[] = []) => {
+    if (/INSERT INTO bounce_proposals/.test(q)) return status === "dropped" ? ((status = "queued"), { rows: [{ id: "7", attempt: ++attempt }] }) : { rows: [] };
+    if (/UPDATE bounce_proposals SET status = 'dropped'/.test(q)) return (status = "dropped"), { rows: [] };
+    if (/FROM proactive_candidates WHERE user_id = \$1 AND target_key = \$2 FOR UPDATE/.test(q)) {
+      const st = candidates.get(p[1]);
+      return { rows: st ? [{ id: 1, status: st, payload: {}, expires_at: null }] : [] };
+    }
+    if (/INSERT INTO proactive_candidates/.test(q)) return candidates.set(p[2], "pending"), { rows: [{ id: 2 }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  };
+  (pool as any).query = stub;
+  (pool as any).connect = async () => ({ query: stub, release: () => {} });
+  try {
+    const pick = { want, find: gallery as any, gap: { source: "stated", day, from: "17:00", to: "21:00", quote: "free Thursday 5 to 9" }, times: { day, from: "18:00", to: "20:00", start: new Date(), end: new Date() }, zone } as any;
+    const first = await B.queueProposal("u1", pick, zone);
+    const firstKey = [...candidates.keys()][0];
+    candidates.set(firstKey, "skipped"); // it was dropped before it went (its find died): the harness marks the candidate done
+    status = "dropped";
+    const again = await B.queueProposal("u1", pick, zone);
+    check("a want whose proposal was dropped before it went can be proposed again, under a new key (the want isn't used up)", first && again && candidates.size === 2 && [...candidates.values()].filter((v) => v === "pending").length === 1 && status === "queued", { first, again, candidates: [...candidates.entries()], status });
+    // And when the harness refuses it anyway, the row goes back to 'dropped' instead of sitting 'queued' forever.
+    status = "dropped";
+    candidates.clear();
+    attempt = 2000;
+    candidates.set("bounce:ask:a1:2001", "sent");
+    const refused = await B.queueProposal("u1", pick, zone);
+    check("... and a refused enqueue leaves the row 'dropped', never stuck 'queued'", refused === false && status === "dropped", { refused, status });
+  } finally {
+    (pool as any).query = realQuery;
+    (pool as any).connect = realConnect;
+  }
+}
+{
+  const s = new Date("2026-10-17T23:00:00Z"), e = new Date("2026-10-18T01:00:00Z");
+  check("watch: their own plan put in their calendar (the plan's own span) still reads as clear", B.planStillClear(s, e, [{ start: "2026-10-17T23:00:00Z", end: "2026-10-18T01:00:00Z" }]) && B.planStillClear(s, e, [{ start: "2026-10-17T22:45:00Z", end: "2026-10-18T01:15:00Z" }]));
+  check("watch: something else over the plan is a clash", !B.planStillClear(s, e, [{ start: "2026-10-17T23:50:00Z", end: "2026-10-18T00:20:00Z" }]) && !B.planStillClear(s, e, [{ start: "2026-10-17T20:00:00Z", end: "2026-10-18T03:00:00Z" }]) && B.planStillClear(s, e, []));
+  check("watch: the calendar re-read uses that rule", /planStillClear\(s, e, busy\) \? "holds" : "changed"/.test(src("services/bounce.ts")));
 }
 
 console.log(`bounce trigger: ${total - failed}/${total} passed`);

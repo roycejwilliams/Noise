@@ -31,6 +31,9 @@ export type Receipt = {
   link: string | null;
   // A Google Doc Co made: its Drive file ID, so a later edit can update that Doc instead of uploading a new one. Null otherwise.
   driveFileId: string | null;
+  // Which grant made that Doc: "docs" (Cue's own Docs grant, since 2026-10-15). Null: the old combined Google grant on the Co Club
+  // project, whose files Cue's Docs grant can't see (drive.file is per project), so they're never updated in place.
+  driveGrant?: "docs" | null;
   taskId: number | null;
   source: string;
   changeNote: string | null;
@@ -175,6 +178,7 @@ const fromRow = (x: any): Receipt => ({
   line: x.line ?? null,
   link: x.link ?? null,
   driveFileId: x.drive_file_id ?? null,
+  driveGrant: x.drive_grant === "docs" ? "docs" : null,
   taskId: x.task_id === null || x.task_id === undefined ? null : Number(x.task_id),
   source: String(x.source),
   changeNote: x.change_note ?? null,
@@ -187,9 +191,9 @@ const fromRow = (x: any): Receipt => ({
 export const pgReceipts: ReceiptStore = {
   insert: async (r) => {
     const { rows } = await pool.query(
-      `INSERT INTO document_deliveries (user_id, doc_key, version, title, kind, content, content_hash, channel, status, line, link, task_id, source, change_note, error, attempts, next_retry_at, delivered_at, drive_file_id)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
-      [r.userId, r.docKey, r.version, r.title, r.kind, JSON.stringify(r.doc), r.contentHash, r.channel, r.status, r.line, r.link, r.taskId, r.source, r.changeNote, r.error, r.attempts ?? 0, r.nextRetryAt, r.deliveredAt, r.driveFileId ?? null],
+      `INSERT INTO document_deliveries (user_id, doc_key, version, title, kind, content, content_hash, channel, status, line, link, task_id, source, change_note, error, attempts, next_retry_at, delivered_at, drive_file_id, drive_grant)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
+      [r.userId, r.docKey, r.version, r.title, r.kind, JSON.stringify(r.doc), r.contentHash, r.channel, r.status, r.line, r.link, r.taskId, r.source, r.changeNote, r.error, r.attempts ?? 0, r.nextRetryAt, r.deliveredAt, r.driveFileId ?? null, r.driveGrant ?? null],
     );
     return fromRow(rows[0]);
   },

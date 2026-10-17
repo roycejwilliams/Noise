@@ -1262,8 +1262,9 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const r = await B.answerLatest(ctx.userId, answer === "yes", quote);
         if (!r) return { ok: false, error: "There's no plan of yours waiting on an answer." };
         await recordDecision({ layer: 3, decision: "bounce.answer", userId: ctx.userId, outcome: "act", action: answer === "yes" ? "accepted" : "declined", proposal: { id: r.id, find: r.find, day: r.day, quote } });
-        ctx.facts?.add("did_this_turn", answer === "yes" ? `They said yes to ${r.find} on ${r.day} at ${r.from}. It's noted; nothing is booked or held yet, so don't say it is.` : `They passed on ${r.find}. Noted; no apology, no other options now.`);
-        return { ok: true, note: answer === "yes" ? "Noted their yes. Say it's noted in a few words; don't claim anything is booked or held." : "Noted. Acknowledge lightly." };
+        const watched = r.gapSource === "calendar" ? "their calendar stays free then" : "the time they told you is still theirs";
+        ctx.facts?.add("did_this_turn", answer === "yes" ? (r.watching ? `They said yes to ${r.find} on ${r.day} at ${r.from}. You're keeping an eye on it until it starts: Cue checks it's still on and that ${watched}, and tells them if that changes. Nothing is booked or held; don't say it is.` : `They said yes to ${r.find} on ${r.day} at ${r.from}. It's noted, but it can't be watched; don't say you're keeping an eye on it. Nothing is booked or held.`) : `They passed on ${r.find}. Noted; no apology, no other options now.`);
+        return { ok: true, note: answer === "yes" ? (r.watching ? "Say in a few words you'll keep an eye on it and tell them if anything changes; don't claim anything is booked or held." : "Say it's noted in a few words; don't promise to watch it or claim anything is booked.") : "Noted. Acknowledge lightly." };
       },
     }),
 
@@ -1727,8 +1728,10 @@ export function createConversationTools(ctx: ConversationToolContext) {
   // Finding things: Co's own loop (agent/loop.ts), general tools it chains itself.
   Object.assign(tools, loopTools(ctx, state, newLoopState(ctx.turnStartedAt), notDone));
 
-  // Google Calendar and Gmail, read-only (services/googleTools.ts).
+  // The calendar and Docs grants, and the Gmail tester flow (services/googleTools.ts). The Gmail one is team only, so team-only tools
+  // are taken out again now that these are in (2026-10-15: no member-facing path to the old combined grant).
   Object.assign(tools, googleTools(ctx, notDone));
+  if (!ctx.isTeam) for (const name of teamOnlyTools()) delete (tools as Record<string, unknown>)[name];
 
   // Switches, limits, their yes, receipts and the decision log (toolGuard.ts).
   guardTools(tools, { userId: ctx.userId, resolvedContent: ctx.resolvedContent, dryRun: ctx.dryRun, notDone, recentExchange: recentOf(ctx) });

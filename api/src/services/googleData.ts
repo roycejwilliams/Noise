@@ -1,9 +1,7 @@
-// What Co can see once a member connects Google (services/googleAuth.ts):
-// when they're busy over the next few days (free/busy only, no event
-// titles), and which email threads they started are still waiting on a reply
-// (Gmail metadata: who, subject, when; never a body). Read in the background
-// and cached, never while they wait on a reply, and only ever for that
-// member's own context.
+// What Co can see: when they're busy over the next few days (free/busy only, no event titles), from their calendar grant
+// (services/cueGrants.ts; Royce 2026-10-15: "rewire busy-times to read from the new calendar grant"), and, for the team's Gmail tester
+// flow (services/googleAuth.ts), which email threads they started are still waiting on a reply (Gmail metadata: who, subject, when;
+// never a body). Read in the background and cached, never while they wait on a reply, and only ever for that member's own context.
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
@@ -17,19 +15,6 @@ export type WaitingThread = { subject: string; to: string; sentAt: string };
 export type GoogleSnapshot = { busy: Busy[] | null; waiting: WaitingThread[] | null; fetchedAt: Date };
 
 // ------------------------------------------------------------ fetching (background)
-
-export async function fetchBusy(token: string, now = new Date(), fetchImpl: typeof fetch = fetch): Promise<Busy[] | null> {
-  const res = await fetchImpl("https://www.googleapis.com/calendar/v3/freeBusy", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ timeMin: now.toISOString(), timeMax: new Date(now.getTime() + DAYS_AHEAD * 86_400_000).toISOString(), items: [{ id: "primary" }] }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) return null;
-  const j: any = await res.json();
-  const busy = j?.calendars?.primary?.busy;
-  return Array.isArray(busy) ? busy.filter((b: any) => b?.start && b?.end).map((b: any) => ({ start: String(b.start), end: String(b.end) })) : null;
-}
 
 const header = (msg: any, name: string) => String(msg?.payload?.headers?.find((h: any) => String(h?.name).toLowerCase() === name.toLowerCase())?.value ?? "");
 
@@ -68,15 +53,17 @@ export function recipientLabel(to: string): string {
   return name ? `${name}${domain ? ` (${domain})` : ""}` : domain || email || "someone";
 }
 
-// Refreshes one member's snapshot. Background only.
-export async function refreshGoogleSnapshot(userId: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const conn = await isConnected(userId);
-  if (!conn.connected) return;
-  const token = await accessTokenFor(userId, fetchImpl).catch(() => null);
-  if (!token) return;
-  const canCal = conn.scopes.some((s) => s.endsWith("/calendar.freebusy"));
-  const canMail = conn.scopes.some((s) => s.endsWith("/gmail.metadata"));
-  const [busy, waiting] = await Promise.all([canCal ? fetchBusy(token, new Date(), fetchImpl).catch(() => null) : null, canMail ? fetchWaiting(token, new Date(), fetchImpl).catch(() => null) : null]);
+// Refreshes one member's snapshot. Background only. Busy comes only from the calendar grant; waiting only from Gmail.
+export async function refreshGoogleSnapshot(userId: string, fetchImpl: typeof fetch = fetch, now = new Date()): Promise<void> {
+  const { calendarConnected, calendarBusy } = await import("./cueGrants.js");
+  const [conn, cal] = await Promise.all([isConnected(userId), calendarConnected(userId).catch(() => null)]);
+  const canMail = conn.connected && conn.scopes.some((s) => s.endsWith("/gmail.metadata"));
+  if (!cal && !canMail) return;
+  const token = canMail ? await accessTokenFor(userId, fetchImpl).catch(() => null) : null;
+  const [busy, waiting] = await Promise.all([
+    cal ? calendarBusy(userId, now, new Date(now.getTime() + DAYS_AHEAD * 86_400_000), fetchImpl).catch(() => null) : null,
+    token ? fetchWaiting(token, now, fetchImpl).catch(() => null) : null,
+  ]);
   await pool.query(
     `INSERT INTO google_snapshots (user_id, busy, waiting, fetched_at) VALUES ($1, $2::jsonb, $3::jsonb, NOW())
      ON CONFLICT (user_id) DO UPDATE SET busy = EXCLUDED.busy, waiting = EXCLUDED.waiting, fetched_at = NOW()`,
@@ -93,7 +80,11 @@ const refreshing = new Set<string>();
 // missing one is refreshed in the background for next time.
 export async function googleFactsFor(userId: string, zone: string | null, now = new Date()): Promise<string[]> {
   const { rows } = await pool
-    .query(`SELECT s.busy, s.waiting, s.fetched_at, (c.user_id IS NOT NULL) AS connected FROM google_connections c LEFT JOIN google_snapshots s ON s.user_id = c.user_id WHERE c.user_id = $1`, [userId])
+    .query(
+      `SELECT s.busy, s.waiting, s.fetched_at, (EXISTS (SELECT 1 FROM calendar_grants WHERE user_id = $1) OR EXISTS (SELECT 1 FROM google_connections WHERE user_id = $1)) AS connected
+       FROM (SELECT $1::uuid AS user_id) u LEFT JOIN google_snapshots s ON s.user_id = u.user_id`,
+      [userId],
+    )
     .catch(() => ({ rows: [] as any[] }));
   const r = rows[0];
   if (!r?.connected) return [];
@@ -104,7 +95,7 @@ export async function googleFactsFor(userId: string, zone: string | null, now = 
       .catch(() => {})
       .finally(() => refreshing.delete(userId));
   }
-  if (!fetchedAt) return ["They connected Google, but Co hasn't read their calendar or email yet."];
+  if (!fetchedAt) return ["They connected their calendar or Gmail, but Co hasn't read it yet."];
   return describeSnapshot({ busy: r.busy, waiting: r.waiting, fetchedAt }, zone, now);
 }
 
