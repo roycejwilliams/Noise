@@ -12,7 +12,7 @@ Promise.all([computeMetrics(days), import("../harness/northStar.js").then((n) =>
   .then(([m, north]) => {
     console.log(`The two numbers, last ${days} days\n`);
     for (const line of north) console.log(`- ${line}`);
-    console.log(`\nCo numbers, last ${days} days\n`);
+    console.log(`\nCue numbers, last ${days} days\n`);
     for (const line of metricLines(m)) console.log(`- ${line}`);
     process.exit(0);
   })

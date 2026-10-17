@@ -23,7 +23,7 @@ export const ALLOWED: { file: string; text: string; why: string; exact?: true }[
   { file: "api/src/routes/sendblue.ts", text: "Co is looking:", why: "stored prefix of a search note" },
   { file: "api/src/services/engagementRhythm.ts", text: "Co is looking:", why: "SQL reader of the stored search-note prefix" },
   { file: "api/src/services/callTrigger.ts", text: "Co initiated call to ", why: "stored marker row of a call attempt, read by SQL elsewhere" },
-  ...["api/src/harness/callGate.ts", "api/src/jobs/index.ts", "api/src/services/claims.ts", "api/src/services/elevenLabsCalls.ts", "api/src/services/membershipLapse.ts", "api/src/services/memoryCompaction.ts"].map((file) => ({ file, text: "Co initiated call", why: "SQL reader of the stored call-attempt marker" })),
+  ...["api/src/harness/callGate.ts", "api/src/jobs/index.ts", "api/src/services/claims.ts", "api/src/services/elevenLabsCalls.ts", "api/src/services/memoryCompaction.ts"].map((file) => ({ file, text: "Co initiated call", why: "SQL reader of the stored call-attempt marker" })),
   ...["api/src/harness/callGate.ts", "api/src/routes/co.ts"].map((file) => ({ file, text: "Co called ", why: "stored call note and the gate's internal reason, parsed by SQL and services/callReasons.ts" })),
   { file: "api/src/services/roomMatching.ts", text: "content LIKE 'Co %'", why: "SQL reader of every stored agent line" },
   // Readers of old rows Mo wrote before it was removed (2026-10-14): they keep those rows fenced out.

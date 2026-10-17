@@ -63,7 +63,7 @@ export function mayUseTold(w: Want, since: Date | null): boolean {
 }
 
 export function placePrompt(w: Want, told: string[]): string {
-  return `A member asked Co to look out for something. Say where it's for, only if their words say so.
+  return `A member asked Cue to look out for something. Say where it's for, only if their words say so.
 
 What they want: "${w.text.slice(0, 300)}"
 ${told.length ? `\nTheir own words about where things happen for them (newest first):\n${told.map((t) => `- "${t.slice(0, 240)}"`).join("\n")}\n` : ""}

@@ -1293,7 +1293,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           await WW.saveFreeTime(pool, ctx.userId, f, quote!);
           await recordDecision({ layer: 3, decision: "reply.noteFreeTime", userId: ctx.userId, outcome: "act", action: "stated", proposal: { ...f, quote } });
         }
-        ctx.facts?.add("ongoing", `They said they're free ${WW.describeFreeTime(f)}. Co may suggest one thing for then; it never books or holds it.`);
+        ctx.facts?.add("ongoing", `They said they're free ${WW.describeFreeTime(f)}. Cue may suggest one thing for then; it never books or holds it.`);
         return { ok: true, note: `Kept: free ${WW.describeFreeTime(f)}. Say it back in a few words.` };
       },
     }),
