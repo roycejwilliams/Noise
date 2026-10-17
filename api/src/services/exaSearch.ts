@@ -4,7 +4,8 @@
 // high-end bar). Luma stays the public-event tier and X stays a parallel source; only the web search moves here.
 //
 // On when EXA_API_KEY is set (a key, not a switch): without one, every caller keeps Anthropic's web search exactly as before.
-// Member wants are the query text, so the key goes on only once Exa's data retention is settled (Royce's call).
+// Royce, 2026-10-17: "Exa needed to be our main search engine for tier 3 along with X." On for every member wherever the key is set
+// (co-test); member wants are the query text, and Exa's answer on data retention is still open.
 // Cost: about $0.005 a search plus $0.001 a page of text (Exa's pricing, 2026-10); each search's reported cost is logged.
 import { recordDecision } from "../harness/core.js";
 
@@ -19,21 +20,6 @@ export const EXA = {
 } as const;
 
 export const exaConfigured = (env: NodeJS.ProcessEnv = process.env): boolean => !!env.EXA_API_KEY?.trim();
-
-// Test members only until Exa answers on data retention (Royce, 2026-10-17: "Test members only until retention is answered"): a real
-// member's wants never reach Exa before then, and they keep Anthropic's web search exactly as before. A search with no member behind
-// it doesn't use Exa either. Every caller asks this, never exaConfigured alone.
-// Tests only: who counts as a test member (evals/exa stand in for one without a database).
-export const exaMembers = { isTest: (userId: string): Promise<boolean> => isTestMember(userId) };
-export async function exaFor(userId: string | null | undefined, env: NodeJS.ProcessEnv = process.env, isTest: (userId: string) => Promise<boolean> = exaMembers.isTest): Promise<boolean> {
-  if (!exaConfigured(env) || !userId) return false;
-  return isTest(userId).catch(() => false);
-}
-async function isTestMember(userId: string): Promise<boolean> {
-  const [{ default: pool }, { isTestNumber }] = await Promise.all([import("../db/db.js"), import("./testNumbers.js")]);
-  const { rows } = await pool.query(`SELECT phone_number FROM users WHERE id = $1`, [userId]);
-  return isTestNumber(rows[0]?.phone_number);
-}
 
 export type ExaPage = { url: string; title: string; published: string | null; text: string };
 export type ExaSearch = { pages: ExaPage[]; cost: number | null; error: string | null };

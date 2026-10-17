@@ -18,7 +18,7 @@ import { checkGrounding, checkTiming, placesClaimed } from "../harness/matchGate
 import type { TierMatch } from "./tieredRecommendation.js";
 import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
-import { exaFor, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
+import { exaConfigured, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
 
 export type RawDetail = { label: string; value: string };
 export type RawResult = { name: string; url: string; details: RawDetail[]; date?: string | null; deadline?: string | null };
@@ -270,7 +270,7 @@ export async function taskWebSearch(
 Up to ${Math.min(6, Math.max(1, opts.max ?? 3))} real, specific options, each from a page you actually read, ideally the thing's own site. For each, the details that matter (capacity, price, dates, address or neighborhood, deadline), each copied from that page as it's written there.
 Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read", "details": [{"label": "capacity", "value": "..."}], "date": "YYYY-MM-DD or null (when it happens, if it's an event)", "deadline": "YYYY-MM-DD or null"}]}. {"items": []} if nothing real.`;
   try {
-    if (await exaFor(userId)) {
+    if (exaConfigured()) {
       // Exa finds the pages; the model picks from them alone (services/exaSearch.ts). Any url it gives must be one of them.
       // The sites and the recent window the prompt names reach Exa as searches of their own (review: the picker only saw general
       // pages, so "good places to look" and "favor the last N hours" did nothing). More searches asked for: more pages.
