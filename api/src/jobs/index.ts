@@ -1003,7 +1003,7 @@ export function registerJobs(io: Server) {
   }, { timezone: "America/Los_Angeles" });
 
   // The daily failure count (harness/failureCount.ts, Royce 2026-10-17): yesterday's numbers logged each morning (no message), and one
-  // text to Royce the first time a member or the team got a failure on a member-facing day, between 8am and 9pm Pacific. Team-only.
+  // text to Royce the first time a member hit a failure on a member-facing day, between 8am and 9pm Pacific. Team-only.
   cron.schedule("5 8 * * *", () => {
     import("../harness/failureCount.js")
       .then((m) => m.recordDailyFailures())
