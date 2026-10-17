@@ -101,7 +101,7 @@ export async function matchGuestsToUsers(guests: LumaGuest[]): Promise<ScorableG
 //     arrived): texting the QR phrase alone is not enough, it's only a claim;
 //   - a current member: not archived, not opted out of texts;
 //   - not someone who told Co they can't make it (event_presence.not_going_at);
-//   - and not someone sharing their location who hasn't arrived yet (sharing_seen_at without arrived_at): held out until they do.
+//   - and not someone sharing their location who hasn't arrived yet (sharing_seen_at without arrived_at, still sharing): held out until they do.
 // guests: the event's Luma guest list when the caller already has it.
 // This is the roster (who is in the room while it's on). Whether someone is in it RIGHT NOW (the room open, not left, not
 // closed for the night) is services/roomMatching.ts inRoomNow, which every live reader uses on top of this.
@@ -114,14 +114,14 @@ export async function inRoomPool(eventId: string, guests?: LumaGuest[]): Promise
   ]);
   const ids = [...new Set([...registered, ...walkins].map((g) => g.user_id))];
   if (!ids.length) return [];
-  const { rows } = await pool.query(`SELECT user_id, arrived_at, not_going_at, sharing_seen_at FROM event_presence WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, ids]);
-  const presence = new Map<string, { arrived_at: unknown; not_going_at: unknown; sharing_seen_at: unknown }>(rows.map((r: any) => [String(r.user_id), r]));
+  const { rows } = await pool.query(`SELECT user_id, arrived_at, not_going_at, sharing_seen_at, location_stopped_at FROM event_presence WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, ids]);
+  const presence = new Map<string, { arrived_at: unknown; not_going_at: unknown; sharing_seen_at: unknown; location_stopped_at: unknown }>(rows.map((r: any) => [String(r.user_id), r]));
   const notGoing = (id: string) => Boolean(presence.get(id)?.not_going_at);
   const arrived = (id: string) => Boolean(presence.get(id)?.arrived_at);
   // Someone sharing their location who hasn't arrived is held out of matching until they do (Royce, 2026-10-14): Cue can see
   // they aren't there yet, so nobody is pointed at them and they aren't matched. A registered guest who doesn't share counts as
-  // in the room, as before.
-  const notHereYet = (id: string) => Boolean(presence.get(id)?.sharing_seen_at) && !arrived(id);
+  // in the room, as before, and so does one who stopped sharing: Cue can't see where they are any more (review of #215).
+  const notHereYet = (id: string) => Boolean(presence.get(id)?.sharing_seen_at) && !presence.get(id)?.location_stopped_at && !arrived(id);
   return dedupeByUserId([...registered.filter((g) => !notGoing(g.user_id) && !notHereYet(g.user_id)), ...walkins.filter((g) => arrived(g.user_id) && !notGoing(g.user_id))]);
 }
 

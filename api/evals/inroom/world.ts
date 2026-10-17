@@ -340,7 +340,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
 
   // presence
-  if (has("SELECT sharing_seen_at, arrived_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2")) {
+  if (has("SELECT sharing_seen_at, arrived_at, location_stopped_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2")) {
     const r = W.presence.get(`${p[0]}|${p[1]}`);
     return R(r ? [r] : []);
   }
