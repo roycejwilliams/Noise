@@ -8,6 +8,8 @@ process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
 import { readFileSync } from "fs";
 
 const X = await import("../../src/services/exaSearch.js");
+// The callers below run as a test member (Exa is test members only until Exa answers on data retention; evals/exa/testMembersOnly.ts).
+X.exaMembers.isTest = async () => true;
 const T = await import("../../src/services/taskWeb.js");
 const O = await import("../../src/services/webOpportunitySearch.js");
 const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
@@ -101,20 +103,20 @@ try {
   process.env.EXA_API_KEY = "test-key";
   exaAnswer = PAGES;
   modelText = '{"found": true, "name": "Joules Accelerator", "url": "https://joulesaccelerator.org/apply", "category": "accelerator", "reason": "Applications are open until Nov 30.", "deadline": "2026-11-30", "date": null}';
-  const r1 = await O.searchWebForOpportunity("climate hardware accelerators", "San Francisco", null, "2026-10-16", { source: "sweep" });
+  const r1 = await O.searchWebForOpportunity("climate hardware accelerators", "San Francisco", null, "2026-10-16", { source: "sweep", userId: "test-member" });
   const m1 = modelCalls.at(-1);
   check("with a key: the opportunity search asks Exa (the ask and the city), then a model with no search tool picks from the pages", exaCalls.at(-1)!.body.query === "climate hardware accelerators in or near San Francisco" && !JSON.stringify(m1?.tools ?? []).includes("web_search") && /\[P1\] https:\/\/joulesaccelerator\.org\/apply/.test(promptOf(m1)));
   check("... and a pick on one of the pages comes back, to be checked as every web find is", r1?.url === "https://joulesaccelerator.org/apply" && r1?.name === "Joules Accelerator", r1);
   modelText = '{"found": true, "name": "Joules Accelerator", "url": "https://joules-remembered.example.com", "category": "accelerator", "reason": "x", "deadline": null, "date": null}';
-  check("a url that isn't one of the pages found is nothing (never a remembered or made-up link)", (await O.searchWebForOpportunity("climate hardware accelerators", "San Francisco", null, "2026-10-16", { source: "sweep" })) === null);
+  check("a url that isn't one of the pages found is nothing (never a remembered or made-up link)", (await O.searchWebForOpportunity("climate hardware accelerators", "San Francisco", null, "2026-10-16", { source: "sweep", userId: "test-member" })) === null);
   exaAnswer = { results: [] };
   const calls = modelCalls.length;
-  check("no pages: nothing, and no model call is spent", (await O.searchWebForOpportunity("x", null, null, "2026-10-16")) === null && modelCalls.length === calls);
+  check("no pages: nothing, and no model call is spent", (await O.searchWebForOpportunity("x", null, null, "2026-10-16", { userId: "test-member" })) === null && modelCalls.length === calls);
 
   // The official-page lookup needs no model: the first result that's the thing's own site.
   exaAnswer = { results: [{ url: "https://www.crunchbase.com/organization/joules", title: "Joules on Crunchbase" }, { url: "https://joulesaccelerator.org/", title: "Joules" }] };
   const mBefore = modelCalls.length;
-  const official = await O.findOfficialPage("Joules Accelerator", 20_000);
+  const official = await O.findOfficialPage("Joules Accelerator", 20_000, undefined, "test-member");
   check("the official page through Exa: the first result on its own site, no model call", official === "https://joulesaccelerator.org/" && modelCalls.length === mBefore && exaCalls.at(-1)!.body.contents === undefined, { official });
 
   // The task search: only picks on the found pages go on to Cue's own page checks.
@@ -138,7 +140,7 @@ try {
 
   // The named-event lookup and every caller keep the old path without a key, and check the url with one.
   const ne = src("services/namedEventLookup.ts");
-  check("the named-event lookup: Exa with a key, the url must be a found page, the old search without", /if \(exaConfigured\(\)\)/.test(ne) && /if \(pages && !onePage\(found\.url, pages\)\)/.test(ne) && /webSearch_20250305/.test(ne));
+  check("the named-event lookup: Exa with a key, the url must be a found page, the old search without", /if \(await exaFor\(opts\.userId\)\)/.test(ne) && /if \(pages && !onePage\(found\.url, pages\)\)/.test(ne) && /webSearch_20250305/.test(ne));
   const tw = src("services/taskWeb.ts");
   check("every page check after the search is unchanged (pickPage, verifyResult, withVerifiedFacts run on Exa's picks too)", /raws = parseRawResults\(text, opts\.max \?\? 3\)\.filter\(\(r\) => onePage\(r\.url, found\.pages\)\);/.test(tw) && /const pages = await Promise\.all\(raws\.map\(\(raw\) => pickPage\(/.test(tw) && /withVerifiedFacts\(kept/.test(tw));
 } finally {

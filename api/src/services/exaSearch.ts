@@ -20,6 +20,21 @@ export const EXA = {
 
 export const exaConfigured = (env: NodeJS.ProcessEnv = process.env): boolean => !!env.EXA_API_KEY?.trim();
 
+// Test members only until Exa answers on data retention (Royce, 2026-10-17: "Test members only until retention is answered"): a real
+// member's wants never reach Exa before then, and they keep Anthropic's web search exactly as before. A search with no member behind
+// it doesn't use Exa either. Every caller asks this, never exaConfigured alone.
+// Tests only: who counts as a test member (evals/exa stand in for one without a database).
+export const exaMembers = { isTest: (userId: string): Promise<boolean> => isTestMember(userId) };
+export async function exaFor(userId: string | null | undefined, env: NodeJS.ProcessEnv = process.env, isTest: (userId: string) => Promise<boolean> = exaMembers.isTest): Promise<boolean> {
+  if (!exaConfigured(env) || !userId) return false;
+  return isTest(userId).catch(() => false);
+}
+async function isTestMember(userId: string): Promise<boolean> {
+  const [{ default: pool }, { isTestNumber }] = await Promise.all([import("../db/db.js"), import("./testNumbers.js")]);
+  const { rows } = await pool.query(`SELECT phone_number FROM users WHERE id = $1`, [userId]);
+  return isTestNumber(rows[0]?.phone_number);
+}
+
 export type ExaPage = { url: string; title: string; published: string | null; text: string };
 export type ExaSearch = { pages: ExaPage[]; cost: number | null; error: string | null };
 

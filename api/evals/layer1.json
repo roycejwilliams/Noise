@@ -58,6 +58,7 @@
     "evals/calls/rules.ts",
     "evals/calls/inboundMembers.ts",
     "evals/exa/search.ts",
+    "evals/exa/testMembersOnly.ts",
     "evals/calls/elevenlabs.ts",
     "evals/calls/opening.ts",
     "evals/calls/coreShared.ts",
