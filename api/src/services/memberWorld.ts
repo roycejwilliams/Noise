@@ -346,6 +346,12 @@ const distinctive = (name: string) => {
   commonStems ??= new Set([...COMMON_NOUNS].flatMap((w) => [w, ...meaningWords(w)]));
   return [...meaningWords(name, GENERIC)].filter((w) => !commonStems!.has(w) && !/^\d+(?:st|nd|rd|th)?$/.test(w));
 };
+// Where-it-stands words ("nothing yet", "still waiting", "heard back"): with them, a sentence that names the thread only by a common
+// noun ("Nothing yet from the venue") is a candidate too (golden 30, 2026-10-17: it went out as a report, since "venue" alone never
+// matched). The read still decides; this only decides what it's asked about.
+const STANDS = /\b(?:nothing (?:yet|back|new|from)|no (?:word|news|reply|answer|update|response)(?: yet)?|not yet on|still (?:waiting|nothing|no word|hasn't|haven't)|haven't (?:heard|replied|gotten back)|hasn't (?:heard|replied|answered|gotten back)|heard back|got back to|came back|(?:are|is) (?:confirmed|booked|locked)|fell through|cancel+ed)\b/i;
+// Waiting words are the shape of most thread names ("Waiting to hear back from..."): sharing them alone names no thread.
+const WAIT_WORDS = new Set(["wait", "waiting", "waited", "hear", "heard", "hearing", "back"]);
 export function threadCandidates(w: MemberWorld | null | undefined, text: string): string[] {
   const t = w?.thread;
   if (!t?.name) return [];
@@ -359,7 +365,9 @@ export function threadCandidates(w: MemberWorld | null | undefined, text: string
       if (/\?\s*["')\]]*$/.test(s)) return false;
       const words = meaningWords(s, GENERIC);
       // A thread with no distinctive word on file: two shared words of any kind, since the read decides.
-      return own.length ? own.some((x) => words.has(x)) : sharedWords(t.name!, s) >= 2;
+      if (own.length ? own.some((x) => words.has(x)) : sharedWords(t.name!, s) >= 2) return true;
+      // Only a common noun of the thread's, said with where it stands.
+      return STANDS.test(s) && [...meaningWords(t.name!, GENERIC)].some((x) => !WAIT_WORDS.has(x) && words.has(x));
     });
 }
 // Pure: do the cut work claims themselves name their live thread (threadCandidates' match), every one of them? Then the cut was about

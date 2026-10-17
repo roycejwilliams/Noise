@@ -624,5 +624,23 @@ const QUIET = EXCHANGE.slice(0, 3); // ends on their text: nothing of Co's waits
   check("the rhythm read selects timestamps and who sent each line, never what was said", !/SELECT[^`]*\bcontent\s*(,|FROM)/.test(rsrc));
 }
 
+// ---------------------------------------------------------------- 2026-10-17: two holes the live model found (golden 28 and 30)
+{
+  // 28: "Nothing on my end right now, how's the week treating you?" passed as a question; its statement is still said.
+  check("a statement joined to a question by a comma is still checked for machinery", !!SP.narratesInternalState("Hey, good to hear from you. Nothing on my end right now, how's the week treating you?") && SP.statementBeforeQuestion("Nothing on my end right now, how's the week treating you?") === "Nothing on my end right now");
+  check("... while a real question still passes, and so does a warm statement before one", SP.narratesInternalState("Hey, good to hear from you. Anything on your mind, or just saying hi?") === null && SP.narratesInternalState("Good to hear from you, how's the week going?") === null && SP.narratesInternalState("Is anything stuck on my end?") === null);
+  // 30: "Nothing yet from the venue." named the thread only by a common noun, so the thread read never saw it.
+  const world: any = { thread: { kind: "thread", name: "Waiting to hear back from the Hayes Valley venue about the Nov 14 dinner", fact: "x" } };
+  check("a report of their thread in common words ('Nothing yet from the venue.') goes to the thread read", M.threadCandidates(world, "Good to hear from you. Nothing yet from the venue.").length === 1 && M.threadCandidates(world, "Still waiting on the dinner place, I'd guess.").length === 1);
+  check("... a common word without where-it-stands words doesn't (advice costs no read), and a question never does", M.threadCandidates(world, "For the dinner, smart casual is right.").length === 0 && M.threadCandidates(world, "Any word from the venue yet?").length === 0 && M.threadCandidates(world, "Good to hear from you.").length === 0);
+  check("... and a distinctive name still goes to the read, as before", M.threadCandidates(world, "Still nothing back from the Hayes Valley place.").length === 1);
+  // Review of the fix: real questions are never split, an admitted sentence stays admitted, and waiting words name no thread.
+  check("an either-or or inverted question is one question, never flagged", ["Working on anything fun, or just resting?", "Are you still looking, or did you find one?", "Is that still in progress, or did it wrap?", "Did you hit a snag, or is it moving?", "Totally fair, want me to look?", "Good call, how did it go?", "Did Maya, the designer, reply?"].every((q) => SP.narratesInternalState(q) === null), ["Working on anything fun, or just resting?", "Are you still looking, or did you find one?", "Is that still in progress, or did it wrap?", "Did you hit a snag, or is it moving?"].map((q) => [q, SP.narratesInternalState(q)]));
+  check("a statement that only sounds casual is still checked ('Still digging on my end, any thoughts?')", !!SP.narratesInternalState("Still digging on my end, any thoughts?") && !!SP.narratesInternalState("Hey, nothing on my end right now, how's the week treating you?"));
+  check("an admitted sentence is admitted whole, comma-joined question included", SP.narratesInternalState("I couldn't confirm the time on my end, want me to call them?", { allow: (x) => x === "I couldn't confirm the time on my end, want me to call them?" }) === null);
+  check("waiting words alone name no thread ('Still waiting on the gallery to confirm.')", M.threadCandidates(world, "Still waiting on the gallery to confirm.").length === 0 && M.threadCandidates(world, "Still waiting to hear on the Sequin deck, I'll send it tonight.").length === 0);
+  check("more ways a thread is reported in common words go to the read", ["Nothing from the venue yet.", "No update from the venue.", "Not yet on the dinner, they said Friday."].every((x) => M.threadCandidates(world, x).length === 1), ["Nothing from the venue yet.", "No update from the venue.", "Not yet on the dinner, they said Friday."].map((x) => [x, M.threadCandidates(world, x).length]));
+}
+
 console.log(`checkin rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
