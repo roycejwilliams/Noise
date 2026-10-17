@@ -131,7 +131,8 @@ check("the migration adds closed_reason, closed_evidence, answered_checked_at", 
 
 // ---- per-type pause (ask check-ins held while the rest flows)
 check("PROACTIVE_PAUSED_TYPES holds named types only", PZ.pausedTypes({ PROACTIVE_PAUSED_TYPES: "ask_checkin, window_followup" } as any).join() === "ask_checkin,window_followup" && PZ.pausedTypes({} as any).length === 0);
-check("the dispatcher leaves paused types waiting (not dropped)", /status = 'pending' AND NOT \(type = ANY\(\$2::text\[\]\)\)`,\s*\[userId, pausedTypes\(\)\]/.test(src("harness/proactive.ts")));
+// heldTypes() is the env pause list plus the parked types (services/proactivePause.ts, goal_nudge parked 2026-10-17).
+check("the dispatcher leaves paused types waiting (not dropped)", /status = 'pending' AND NOT \(type = ANY\(\$2::text\[\]\)\)`,\s*(?:\/\/[^\n]*\n\s*)?\[userId, heldTypes\(\)\]/.test(src("harness/proactive.ts")) && /return \[\.\.\.new Set\(\[\.\.\.pausedTypes\(env\), \.\.\.PARKED_TYPES\]\)\];/.test(src("services/proactivePause.ts")));
 
 console.log(`ask lifecycle: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

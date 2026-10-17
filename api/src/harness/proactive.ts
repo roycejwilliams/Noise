@@ -25,7 +25,7 @@
 // outside this harness.
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
 import { inventedFailure } from "../services/speakable.js";
-import { proactivePaused, pausedTypes } from "../services/proactivePause.js";
+import { proactivePaused, pausedTypes, heldTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
 import { narratesInternalState } from "../services/speakable.js";
@@ -2141,7 +2141,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
 
   const { rows: candRows } = await pool.query(
     `SELECT * FROM proactive_candidates WHERE user_id = $1 AND status = 'pending' AND NOT (type = ANY($2::text[]))`,
-    [userId, pausedTypes()],
+    // Paused types wait; parked ones (services/proactivePause.ts PARKED_TYPES, goal_nudge since 2026-10-17) are never picked either.
+    [userId, heldTypes()],
   );
   // A queued find whose ask has closed since it was queued is dead (Royce, 2026-10-12): it leaves the queue here, before the pick
   // sees it, not only when it's drafted. A reminder is exempt (services/askLifecycle.ts servesClosedAsk).

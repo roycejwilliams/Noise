@@ -5,6 +5,9 @@
 //                        timed inside their send window with enough lead;
 //   c. goal_nudge        a goal gone quiet (not restated, not mentioned, nothing kept lately): at most one gentle surface, never
 //                        for a done or set-aside goal, never inside the seasonal goal window (goalJourney.ts GOAL_CHECKIN);
+//                        PARKED (Royce, 2026-10-17: "Park the member-state 'goal gone quiet' nudge and let the Nudges helper
+//                        be the one goal nudge."): still detected (call reasons read it), never queued (planNudges;
+//                        services/proactivePause.ts PARKED_TYPES says why and how to turn it back on);
 //   d. commitment_nudge  something they said they'd do by a date ("I'll send them the deck Friday"), on the morning it's due.
 // Each becomes a proactive CANDIDATE in the one dispatcher (harness/proactive.ts), so quiet hours, the pause switches, opt-out,
 // caps, spacing, dedupe and the kind restraint (services/kindRestraint.ts) all apply. Nothing here sends.
@@ -29,6 +32,7 @@ import { notToTeammate } from "./teamLines.js";
 import { GOAL_CHECKIN, dueGoalCheckin } from "./goalJourney.js";
 import type { ProactiveKind } from "./kindRestraint.js";
 import { recheckAskOpen } from "./goalRecheck.js";
+import { PARKED_TYPES } from "./proactivePause.js";
 
 export type NudgeType = "intro_nudge" | "deadline_nudge" | "goal_nudge" | "commitment_nudge";
 export const NUDGE_TYPES: NudgeType[] = ["intro_nudge", "deadline_nudge", "goal_nudge", "commitment_nudge"];
@@ -344,6 +348,11 @@ export function planNudges(s: Snapshot, stored: StoredEntry[]): { queue: NudgeEn
   const queue: NudgeEntry[] = [];
   const held: { entry: NudgeEntry; why: string }[] = [];
   for (const e of detectAll(s)) {
+    // A parked type (services/proactivePause.ts PARKED_TYPES: goal_nudge, Royce 2026-10-17) is detected but never queued.
+    if (PARKED_TYPES.includes(e.type)) {
+      held.push({ entry: e, why: "parked (Royce, 2026-10-17)" });
+      continue;
+    }
     const prior = stored.find((x) => x.entryKey === e.entryKey);
     if (prior && prior.fingerprint === e.fingerprint) {
       held.push({ entry: e, why: `already ${prior.status} for this state` });
