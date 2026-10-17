@@ -444,13 +444,16 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Co Loop Stage 3 — daily at 3 AM, re-sweep every open stated ask against
-  // the current network. This (not a per-event trigger on every profile
-  // update) is what surfaces a new joiner to everyone with a standing ask —
-  // sweepAllOpenAsks re-runs each ask and logRelevanceEdges de-dupes, so
-  // running it daily is cheap and safe. Density-phase only: nothing
-  // downstream acts on relevance_edges yet, this just builds and logs the
-  // graph for Stage 6 to validate later.
+  // Co Loop Stage 3 — daily at 3 AM server time, re-sweep every open stated
+  // ask against the current network. sweepAllOpenAsks re-runs each ask and
+  // logRelevanceEdges de-dupes, so running it daily is cheap and safe.
+  // relevance_edges is read downstream (corrected 2026-10-17, Royce: "fix the
+  // outdated comment"): the network tease, the start of a double opt-in intro,
+  // queues from open edges (networkIntroNudge.ts findFreshCandidates), and a
+  // new edge is "movement" that lets the ask check-in below go after 3 days
+  // instead of 7. A new joiner now reaches the standing asks the moment their
+  // own ask lands (relevance.ts sweepStandingAsksForNewcomer); this pass is the
+  // backstop for anyone that missed and refreshes the open edges as people change.
   cron.schedule("0 3 * * *", async () => {
     try {
       await sweepAllOpenAsks();

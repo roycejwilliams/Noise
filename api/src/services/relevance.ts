@@ -1,4 +1,5 @@
 import pool from "../db/db.js";
+import { isOpenAsk } from "../harness/profileWrite.js";
 import { getActiveOfferingAsk, getActiveSeekingAsk, getOpenAsksOfType, scoreAgainstStatedAsk, scoreOfferingAgainstCandidates, type StatedIntent } from "./matching.js";
 import { withTraceUser } from "./llmTraceText.js";
 
@@ -151,12 +152,7 @@ async function sweepOneSeekingAsk(userId: string, ask: StatedIntent, profile: an
     // Short summary of the asker's own profile, given to scoreAgainstStatedAsk
     // only to judge the mutual/two-way flag — never to inflate the
     // one-directional score itself.
-    const askerContextParts = [
-      profile?.goals?.length ? `goals: ${profile.goals.join(", ")}` : null,
-      profile?.blockers?.length ? `blockers: ${profile.blockers.join(", ")}` : null,
-      profile?.long_term_direction ? `long-term direction: ${profile.long_term_direction}` : null,
-    ].filter((p): p is string => Boolean(p));
-    const askerContext = askerContextParts.length ? askerContextParts.join("; ") : undefined;
+    const askerContext = askerContextOf(profile);
 
     const scored = await scoreAgainstStatedAsk(ask, candidates, askerContext, undefined, { askerFirstName: await firstNameOf(userId) });
     await logRelevanceEdges(
@@ -209,11 +205,116 @@ async function sweepOneOffering(userId: string, offering: StatedIntent): Promise
   }
 }
 
+// The late-joiner gap (Royce, 2026-10-17: "fix ... the late-joiner matching
+// gap"). A fresh ask is also the moment its member becomes someone other
+// members' standing asks can find: the prefilter above qualifies a candidate
+// by their open ask embeddings. The capture-time sweeps only look outward from
+// the new ask, so the asks already on file met this member only at the next
+// 3am pass, up to a day later. On dev every edge from a standing ask to
+// someone who joined after it was written by the 3am pass, none at capture
+// (91 of 91, 2026-10-17). So right after a fresh ask, the standing asks
+// nearest to this member are checked against them alone: the same scorers and
+// the same edge log as the 3am pass, one model call per ask, capped.
+const STANDING_ASKS_PER_NEWCOMER = 5;
+
+export type StandingAsk = { personId: string; ask: StatedIntent; askerContext?: string };
+type EdgeScore = { user_id: string; score: number; reason: string; shareReason: string; mutual: boolean };
+
+export type NewcomerSweepDeps = {
+  newcomer: (userId: string) => Promise<RelevanceCandidate | null>;
+  standingAsksNear: (userId: string, limit: number) => Promise<StandingAsk[]>;
+  scoreSeeking: (ask: StatedIntent, candidates: RelevanceCandidate[], askerContext?: string) => Promise<EdgeScore[]>;
+  scoreOffering: (offering: StatedIntent, candidates: RelevanceCandidate[]) => Promise<EdgeScore[]>;
+  logEdges: (personId: string, askId: string, askText: string, scored: EdgeScore[]) => Promise<void>;
+};
+
+function askerContextOf(profile: any): string | undefined {
+  const parts = [
+    profile?.goals?.length ? `goals: ${profile.goals.join(", ")}` : null,
+    profile?.blockers?.length ? `blockers: ${profile.blockers.join(", ")}` : null,
+    profile?.long_term_direction ? `long-term direction: ${profile.long_term_direction}` : null,
+  ].filter((p): p is string => Boolean(p));
+  return parts.length ? parts.join("; ") : undefined;
+}
+
+const toEdgeScores = (scored: { candidate: { user_id: string }; score: number; reason: string; shareReason: string; mutual: boolean }[]): EdgeScore[] =>
+  scored.map((s) => ({ user_id: s.candidate.user_id, score: s.score, reason: s.reason, shareReason: s.shareReason, mutual: s.mutual }));
+
+const realNewcomerDeps: NewcomerSweepDeps = {
+  newcomer: async (userId) => {
+    const { rows } = await pool.query(
+      `SELECT cp.user_id, cp.goals, cp.blockers, cp.activity_preferences, cp.intent
+       FROM co_profiles cp
+       JOIN users u ON u.id = cp.user_id AND u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false
+       WHERE cp.user_id = $1`,
+      [userId],
+    );
+    const r = rows[0];
+    return r ? { user_id: r.user_id, goals: r.goals ?? undefined, blockers: r.blockers ?? undefined, activity_preferences: r.activity_preferences ?? undefined, intent: r.intent ?? undefined } : null;
+  },
+  // Other members' open asks, nearest first by the same distance the
+  // prefilter uses (the closer of this member's goal_embeddings and their
+  // open ask embeddings), with the same live-member filter as the 3am pass.
+  standingAsksNear: async (userId, limit) => {
+    const { rows } = await pool.query(
+      `WITH me AS (SELECT cp.goal_embeddings, cp.intent FROM co_profiles cp WHERE cp.user_id = $1),
+            mine AS (
+              SELECT (e->'embedding')::text::vector AS emb
+              FROM me, jsonb_array_elements(CASE WHEN jsonb_typeof(me.intent) = 'array' THEN me.intent ELSE '[]'::jsonb END) AS e
+              WHERE e->>'status' = 'active' AND COALESCE(e->>'kind', 'ask') = 'ask' AND COALESCE(btrim(e->>'text'), '') <> '' AND jsonb_typeof(e->'embedding') = 'array'
+            )
+       SELECT person_id, goals, blockers, long_term_direction, entry FROM (
+         SELECT cp.user_id AS person_id, cp.goals, cp.blockers, cp.long_term_direction, a.entry,
+                LEAST(
+                  COALESCE((SELECT me.goal_embeddings FROM me) <=> (a.entry->'embedding')::text::vector, 2),
+                  COALESCE((SELECT MIN(mine.emb <=> (a.entry->'embedding')::text::vector) FROM mine), 2)
+                ) AS dist
+         FROM co_profiles cp
+         JOIN users u ON u.id = cp.user_id AND u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false
+         CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(cp.intent) = 'array' THEN cp.intent ELSE '[]'::jsonb END) AS a(entry)
+         WHERE cp.user_id != $1
+           AND a.entry->>'status' = 'active' AND COALESCE(a.entry->>'kind', 'ask') = 'ask'
+           AND COALESCE(btrim(a.entry->>'text'), '') <> '' AND jsonb_typeof(a.entry->'embedding') = 'array'
+       ) s
+       ORDER BY dist
+       LIMIT $2`,
+      [userId, limit],
+    );
+    return rows.map((r: any) => ({ personId: r.person_id, ask: r.entry as StatedIntent, askerContext: askerContextOf(r) }));
+  },
+  scoreSeeking: async (ask, candidates, askerContext) => toEdgeScores(await scoreAgainstStatedAsk(ask, candidates, askerContext)),
+  scoreOffering: async (offering, candidates) => toEdgeScores(await scoreOfferingAgainstCandidates(offering, candidates)),
+  logEdges: (personId, askId, askText, scored) => logRelevanceEdges(personId, askId, askText, scored),
+};
+
+export async function sweepStandingAsksForNewcomer(userId: string, deps: NewcomerSweepDeps = realNewcomerDeps): Promise<void> {
+  try {
+    const newcomer = await deps.newcomer(userId);
+    if (!newcomer) return;
+    const standing = await deps.standingAsksNear(userId, STANDING_ASKS_PER_NEWCOMER);
+    for (const { personId, ask, askerContext } of standing) {
+      if (personId === userId || !isOpenAsk(ask) || !ask.id || !ask.text || !ask.embedding?.length) continue;
+      try {
+        const scored = ask.type === "offering"
+          ? await deps.scoreOffering(ask, [newcomer])
+          : ask.type === "seeking"
+            ? await deps.scoreSeeking(ask, [newcomer], askerContext)
+            : [];
+        if (scored.length) await deps.logEdges(personId, ask.id, ask.text, scored);
+      } catch (err) {
+        console.error(`sweepStandingAsksForNewcomer: ask ${ask.id} failed (non-fatal):`, err);
+      }
+    }
+  } catch (err) {
+    console.error(`sweepStandingAsksForNewcomer failed for user ${userId} (non-fatal):`, err);
+  }
+}
+
 // Direction: "the network just changed — re-check every open ask against
 // it." Re-running an existing ask is cheap and safe (logRelevanceEdges
-// de-dupes/refreshes open rows), so this is what actually surfaces a new
-// joiner to everyone who already has a standing ask, without needing a
-// separate reverse-search path keyed off the joiner instead of the asker.
+// de-dupes/refreshes open rows). sweepStandingAsksForNewcomer above reaches a
+// new joiner the moment their ask lands; this daily pass is the backstop for
+// anyone that missed, and it refreshes every open edge as people change.
 // Covers both directions — a standing "seeking" ask re-checked against new
 // candidates, and a standing "offering" re-checked for new people who might
 // want it. Run daily, not per-event — see jobs/index.ts — since looping

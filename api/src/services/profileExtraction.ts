@@ -7,7 +7,7 @@ import pool from "../db/db.js";
 import { classifyAsk, isCoCommitment, markIntentResolved } from "./askKind.js";
 import { classifyEntryKind } from "./entryKind.js";
 import { generateEmbedding, generateGoalEmbedding } from "./embeddings.js";
-import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork } from "./relevance.js";
+import { sweepAskAgainstNetwork, sweepOfferingAgainstNetwork, sweepStandingAsksForNewcomer } from "./relevance.js";
 import { recordDecision } from "../harness/core.js";
 import { askExpiresAtForUser } from "./askExpiry.js";
 import {
@@ -1378,6 +1378,15 @@ export async function persistIntentFrom(
     if (fresh.some((r) => r.type === "offering")) {
       sweepOfferingAgainstNetwork(user_id).catch((err) =>
         console.error("sweepOfferingAgainstNetwork failed (non-fatal):", err),
+      );
+    }
+    // The other way round: the standing asks already on file get checked
+    // against this member now, not at the next 3am pass (the late-joiner gap,
+    // Royce 2026-10-17; relevance.ts sweepStandingAsksForNewcomer). Only a
+    // fresh ask: a goal never makes anyone findable by another member's ask.
+    if (fresh.some((r) => r.kind === "ask")) {
+      sweepStandingAsksForNewcomer(user_id).catch((err) =>
+        console.error("sweepStandingAsksForNewcomer failed (non-fatal):", err),
       );
     }
 

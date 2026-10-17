@@ -221,6 +221,7 @@
     "evals/forget/residueAudit.ts",
     "evals/forget/stores.ts",
     "evals/forget/guardedReaders.ts",
-    "evals/checkins/askFrame.ts"
+    "evals/checkins/askFrame.ts",
+    "evals/relevance/lateJoiner.ts"
   ]
 }
