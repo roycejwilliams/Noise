@@ -427,7 +427,6 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R(W.checkinFollowups.filter((r) => r.user_id === p[0]).slice(-1).map((r) => ({ event_api_id: r.event_api_id, event_name: r.event_name })));
   }
 
-  // Everything else (co_facts writes, outbound_messages, checkin followups, user state): accepted, nothing returned.
   // ---------------------------------------------------------------- the pair record (services/roomMatching.ts co_pairs), added for the
   // room simulation (evals/roomsim): one row per (event, pair), a_id < b_id, with the lifecycle the gates read (asked, answered,
   // declined, both yes, the intro claim and send, value lines). Without it a big room silently skipped those gates.
@@ -532,6 +531,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R([]);
   }
 
+  // Anything else is a query the fake world doesn't know: recorded (the room simulation fails on any), nothing returned.
   W.unknownSql.add(sql.slice(0, 120));
   return R([]);
 }

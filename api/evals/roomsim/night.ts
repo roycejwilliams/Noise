@@ -9,8 +9,10 @@
 //   - hard traps: near misses the scorer is fooled by (rated just over the bar), to see what the gates after the score do with them
 //   - members who must never be named or quoted: private asks (not shareable), opted out of texts, archived
 //   - members with no ask at all, and members who decline or never answer
-// Then the night runs in arrival waves, each wave re-scoring the room, and every open question is answered at once (Promise.all) so
-// races show up. The scorecard counts what Cue did against what was planted.
+// Then the night runs in arrival waves, each wave re-scoring the room, and every open question is answered at once (Promise.all), some
+// yeses sent twice. The fake database answers every query in one tick (locks and transactions are no-ops), so replies interleave in
+// lock-step: this finds ordering holes, not races that need real database or model latency. One seed per room size.
+// The other person only answers a direct ask they were actually sent. The scorecard counts what Cue did against what was planted.
 //
 //   npx tsx evals/roomsim/night.ts            (layer 1: nights of 25, 60 and 120)
 //
@@ -76,6 +78,7 @@ const NAMES = ["Jordan", "Noor", "Ellis", "Sarah Hao", "Rina", "Theo", "Mara", "
 type Planted = {
   members: Member[];
   truePairs: [string, string][]; // [seekerId, offererId]
+  oneSided: Set<string>; // true pairs only the seeker's side scores high: the other hears of it only by a direct ask
   nearPairs: [string, string][];
   hardTraps: [string, string][];
   privateAskText: Map<string, string>; // member id -> their non-shareable ask
@@ -85,7 +88,7 @@ type Planted = {
 
 function plant(size: number, seed: number): Planted {
   const r = rng(seed);
-  const p: Planted = { members: [], truePairs: [], nearPairs: [], hardTraps: [], privateAskText: new Map(), optedOut: new Set(), noAsk: new Set() };
+  const p: Planted = { members: [], truePairs: [], oneSided: new Set(), nearPairs: [], hardTraps: [], privateAskText: new Map(), optedOut: new Set(), noAsk: new Set() };
   const name = (i: number) => `${NAMES[i % NAMES.length]}${i >= NAMES.length ? ` ${Math.floor(i / NAMES.length) + 1}` : ""}`;
   let i = 0;
   const add = (m: Parameters<typeof addMember>[0]) => {
@@ -98,8 +101,13 @@ function plant(size: number, seed: number): Planted {
   for (let k = 0; k < pairs; k++) {
     const d = DOMAINS[k % DOMAINS.length];
     const a = add({ first_name: name(i), intent: [ask(uniq(d.seek, i++))] });
-    const b = add({ first_name: name(i), intent: [ask(uniq(d.offer, i++), "offering")] });
+    // Every third offering side keeps its ask private: a real match Cue may make, whose ask must never be quoted to the seeker.
+    const secret = k % 3 === 2;
+    const offerText = uniq(secret ? `${d.offer}, kept private` : d.offer, i);
+    const b = add({ first_name: name(i++), intent: [ask(offerText, "offering", !secret)] });
+    if (secret) p.privateAskText.set(b.id, offerText);
     p.truePairs.push([a.id, b.id]);
+    if (k % 3 === 1) p.oneSided.add(`${a.id}|${b.id}`);
   }
   const nears = Math.max(1, Math.round(size * 0.15));
   for (let k = 0; k < nears && i < size; k++) {
@@ -138,7 +146,7 @@ function scorerFrom(p: Planted, r: () => number) {
   const score = new Map<string, number>();
   for (const [a, b] of p.truePairs) {
     score.set(key(a, b), 80 + Math.floor(r() * 15));
-    score.set(key(b, a), 78 + Math.floor(r() * 15));
+    score.set(key(b, a), p.oneSided.has(key(a, b)) ? 20 + Math.floor(r() * 10) : 78 + Math.floor(r() * 15));
   }
   for (const [a, b] of p.hardTraps) score.set(key(a, b), 61 + Math.floor(r() * 4));
   for (const [a, b] of p.nearPairs) score.set(key(a, b), 40 + Math.floor(r() * 18));
@@ -162,9 +170,11 @@ type Card = {
   trapsProposed: number;
   trapsIntroduced: number;
   intros: number;
+  introsViaAsk: number;
   duplicateIntros: number;
   duplicateAsks: number;
   privateQuoted: number;
+  privateProposed: number;
   optedOutTexted: number;
   textsMax: number;
   leftWithNothing: number;
@@ -181,6 +191,10 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   const byId = new Map(p.members.map((m) => [m.id, m]));
   const asMNC = (m: Member) => ({ user_id: m.id, first_name: m.first_name, phone_number: m.phone_number!, email: m.email });
   const answered = new Set<string>(); // `${person}|${candidate}`
+  const viaAsk = new Set<string>(); // pairs where the other person answered a direct ask they were sent
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // A direct ask from a to b, as b's phone got it (the stub drafter: "<a> from <event> would like an intro").
+  const askedDirectly = (a: Member, b: Member) => W.sent.some((s) => s.to === b.phone_number && new RegExp(`^${esc(a.first_name)} from .* would like an intro`).test(s.content));
 
   // Arrivals in four waves; each wave re-scores the room (the debounce is cleared, as a fresh pass after a new arrival).
   const order = [...p.members].sort(() => r() - 0.5);
@@ -199,19 +213,23 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
       const b = byId.get(n.candidate_id)!;
       const roll = r();
       if (roll < rates.yes) {
+        // Some yeses arrive twice at once (a double tap, a resend): the pair record, not luck, has to keep it one ask.
+        const twice = r() < 0.3;
+        const yes = () => H.handleMatchNudgeReply(evId, evName, "interested", asMNC(a), asMNC(b));
         replies.push(
-          H.handleMatchNudgeReply(evId, evName, "interested", asMNC(a), asMNC(b)).then(async () => {
-            // The other side answers the direct ask: a true pair says yes at the same rate, anyone else mostly no.
+          Promise.all(twice ? [yes(), yes()] : [yes()]).then(async () => {
+            await new Promise((res) => setTimeout(res, 5));
+            // The other side answers only a direct ask that reached them: a true pair says yes at the same rate, anyone else mostly no.
+            if (!askedDirectly(a, b) || answered.has(`${b.id}|${a.id}`)) return;
             const isTrue = p.truePairs.some(([x, y]) => (x === a.id && y === b.id) || (x === b.id && y === a.id));
             const yesB = r() < (isTrue ? rates.yes : 0.25);
-            if (!answered.has(`${b.id}|${a.id}`)) {
-              answered.add(`${b.id}|${a.id}`);
-              await H.handleMatchNudgeReply(evId, evName, yesB ? "interested" : "not_interested" as any, asMNC(b), asMNC(a));
-            }
+            answered.add(`${b.id}|${a.id}`);
+            if (yesB) viaAsk.add([a.id, b.id].sort().join("|"));
+            await H.handleMatchNudgeReply(evId, evName, yesB ? "interested" : "not_interested", asMNC(b), asMNC(a));
           }),
         );
       } else if (roll < rates.yes + rates.no) {
-        replies.push(H.handleMatchNudgeReply(evId, evName, "not_interested" as any, asMNC(a), asMNC(b)));
+        replies.push(H.handleMatchNudgeReply(evId, evName, "not_interested", asMNC(a), asMNC(b)));
       }
     }
     await Promise.all(replies);
@@ -219,7 +237,6 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   }
 
   // ---------------------------------------------------------------- the scorecard
-  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pairKey = (a: string, b: string) => [a, b].sort().join("|");
   // Intros from the pair record (exact ids): a pair is introduced when its intro_sent_at is set. Sends of the email are counted from
   // the intro memories each side gets (two per email), by the pair record's ids, never by first name.
@@ -253,9 +270,18 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
     trapsProposed: p.hardTraps.filter(([a, b]) => nudgePairs.has(pairKey(a, b))).length,
     trapsIntroduced: p.hardTraps.filter(([a, b]) => introPairs.has(pairKey(a, b))).length,
     intros: introPairs.size,
+    introsViaAsk: [...introPairs.keys()].filter((k) => viaAsk.has(k)).length,
     duplicateIntros: [...introPairs.values()].filter((n) => n > 2).length,
     duplicateAsks: [...directAsks.values()].filter((n) => n > 1).length,
-    privateQuoted: [...p.privateAskText.entries()].filter(([owner, t]) => W.sent.some((s) => s.content.includes(t) && s.to !== byId.get(owner)?.phone_number)).length,
+    // A private ask is quoted when its words reach anyone but someone who holds those words privately, with or without the "(ref N)"
+    // tag. Only private asks say "kept private", but two members can hold the same private words (domains repeat in a big room), so
+    // the words said back to their own owner never count as a leak.
+    privateQuoted: [...p.privateAskText.entries()].filter(([, t]) => {
+      const words = t.replace(/\s*\(ref \d+\)$/, "");
+      const holders = new Set([...p.privateAskText.entries()].filter(([, u]) => u.replace(/\s*\(ref \d+\)$/, "") === words).map(([id]) => byId.get(id)?.phone_number));
+      return W.sent.some((s) => !holders.has(s.to) && s.content.includes(words));
+    }).length,
+    privateProposed: p.truePairs.filter(([a, b]) => p.privateAskText.has(b) && nudgePairs.has(pairKey(a, b))).length,
     optedOutTexted: p.members.filter((m) => p.optedOut.has(m.id) && textsOf(m).length > 0).length,
     textsMax: Math.max(0, ...p.members.map((m) => textsOf(m).length)),
     leftWithNothing: askers.filter((m) => textsOf(m).length === 0).length,
@@ -277,15 +303,20 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
   // Must hold today.
   check(`room ${size}: nobody opted out of texts is texted`, c.optedOutTexted === 0, c);
   check(`room ${size}: no private (not shareable) ask is quoted to anyone else`, c.privateQuoted === 0, c);
+  console.log(`  private asks: ${c.privateProposed} true pair(s) whose offering side keeps their ask private were proposed`);
   check(`room ${size}: no pair is introduced twice`, c.duplicateIntros === 0, c);
   check(`room ${size}: nobody gets the same direct ask twice (replies answered all at once)`, c.duplicateAsks === 0, c);
   check(`room ${size}: a near miss scored under the bar is never proposed`, c.nearProposed === 0, c);
   check(`room ${size}: some true pairs are introduced`, c.trueFound > 0, c);
+  // Per room only where the room is big enough to be steady (room 25 has one or two of these, and unrelated changes move it).
+  if (size >= 60) check(`room ${size}: some intros come through a direct ask that reached the other person (not only two nudges crossing)`, c.introsViaAsk > 0, c);
   check(`room ${size}: every query the night runs is one the fake world knows (nothing silently unanswered)`, c.unknownSql === 0, { unknown: [...W.unknownSql].slice(0, 5) });
   // Baselines for the strict double opt-in work (printed, never failing yet).
   console.log(`  baseline (double opt-in must make this 0): ${c.namedBeforeYes} nudge(s) named the other person before they said yes`);
   console.log(`  baseline (quality gate everywhere): ${c.trapsProposed} hard trap(s) proposed, ${c.trapsIntroduced} introduced`);
 }
+
+check("across the nights: intros come through direct asks that reached the other person", cards.reduce((n, c) => n + c.introsViaAsk, 0) > 0, cards.map((c) => c.introsViaAsk));
 
 const { total, failed } = results;
 console.log(`room simulation: ${total - failed}/${total} passed`);
