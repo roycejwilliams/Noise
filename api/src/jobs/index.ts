@@ -65,6 +65,95 @@ async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
 // attempts.
 const MAX_AUTO_INTAKE_ATTEMPTS = 3;
 
+// The auto-intake call job: PARKED (Royce, 2026-10-17: "Park the auto-intake call job." / "Auto-intake call job: park it. All 14
+// calls were ones members asked for."). It is no longer scheduled in registerJobs, so it never dials. Why: it has placed 0 calls
+// (none of the 14 calls the call gate placed since 09-19 was an auto intake), it dials outside the proactive gate, and a call
+// nobody asked for clashes with "the member's job is nothing" (sweep review 2026-10-17). The function is kept as it was, and so is
+// the call gate's auto_intake kind (harness/callGate.ts): a call started with no kind (the co-test dashboard's call button,
+// co-test/src/routes/phone.ts) can still be inferred as one. To turn the job back on, schedule it again in registerJobs:
+//   cron.schedule("0 * * * *", () => runAutoIntakeCalls(io));
+// Hourly, every hour (Royce, 2026-09-02: was "10am-8pm UTC" — 3am-1pm
+// Pacific, wrong for exactly the users this product is built around; a
+// real "thinking about you" text from a DIFFERENT cron arrived at 2am
+// Pacific the same day). Now gated per-user on their own local hour
+// (localHours.ts) instead of a single fixed UTC window — LIMIT widened
+// 5->25 since the hour gate filters most candidates out on any given
+// tick, but the actual-dial cap stays at 5 via the `placed` counter, same
+// Twilio-rate-limit reasoning as before.
+// Won't retry a user who had a call attempt in the last 24 hours. Dials via
+// triggerCallForUser (the media-stream bridge) rather than a third
+// independent copy of the dial logic — this used to hit Hume's native
+// /v0/evi/twilio integration directly, which silently drops
+// first_name/context_summary.
+export async function runAutoIntakeCalls(io: Server): Promise<void> {
+  try {
+    // Selection rewritten (code review, 2026-09-17): "empty life_chapters"
+    // isn't the same thing as "intake isn't done" — life_chapters can stay
+    // empty even after a real intake call or a profile with real content
+    // (a goals/activity_preferences/intent extraction gap, not a reason to
+    // keep calling someone who already came through intake). Now excludes
+    // anyone whose identity isn't captured yet (a text-first placeholder
+    // row, not someone to cold-call) or who already has a completed call
+    // transcript (not just an attempt marker — callTrigger.ts's own
+    // "Co initiated call to..." row) or a profile with any real content.
+    // MAX_AUTO_INTAKE_ATTEMPTS caps attempts consistent with the gate-side
+    // cap the calls agent is adding to src/harness/callGate.ts (not owned
+    // here) — attempts counted the same way callGate.ts already counts
+    // them, via the "Co initiated call to..." attempt-marker rows.
+    const uncalled = await pool.query(
+      `SELECT u.id, cp.city
+       FROM users u
+       LEFT JOIN co_profiles cp ON cp.user_id = u.id
+       WHERE u.subscription_status = 'active'
+         AND COALESCE(u.identity_captured, true) = true
+         AND NOT EXISTS (
+           SELECT 1 FROM co_memories cm
+           WHERE cm.user_id = u.id
+             AND cm.memory_type = 'call_transcript'
+             AND cm.created_at > NOW() - INTERVAL '24 hours'
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM co_memories cm2
+           WHERE cm2.user_id = u.id AND cm2.memory_type = 'call_transcript'
+             AND cm2.content NOT LIKE 'Co initiated call%'
+         )
+         AND (
+           cp.user_id IS NULL
+           OR (
+             (cp.life_chapters IS NULL OR array_length(cp.life_chapters, 1) IS NULL)
+             AND (cp.goals IS NULL OR array_length(cp.goals, 1) IS NULL)
+             AND (cp.activity_preferences IS NULL OR array_length(cp.activity_preferences, 1) IS NULL)
+             AND jsonb_array_length(COALESCE(cp.intent, '[]'::jsonb)) = 0
+           )
+         )
+         AND (
+           SELECT COUNT(*) FROM co_memories cm3
+           WHERE cm3.user_id = u.id AND cm3.memory_type = 'call_transcript'
+             AND cm3.content LIKE 'Co initiated call%'
+         ) < ${MAX_AUTO_INTAKE_ATTEMPTS}
+       LIMIT 25`,
+    );
+
+    let placed = 0;
+    for (const user of uncalled.rows) {
+      if (placed >= 5) break;
+      const timezone = user.city ? await getTimezoneForCity(user.city) : null;
+      if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — no state touched, retried next hourly tick
+      placed++;
+      try {
+        const result = await triggerCallForUser(user.id, io, { kind: "auto_intake" });
+        if (!result.success) {
+          console.error(`Auto-call failed for user ${user.id}:`, result.error);
+        }
+      } catch (callErr: any) {
+        console.error(`Auto-call failed for user ${user.id}:`, callErr?.message ?? callErr);
+      }
+    }
+  } catch (err) {
+    console.error("Auto-call cron error:", err);
+  }
+}
+
 export function registerJobs(io: Server) {
   // Co pages past their 90 days lose their content; the link answers 404 (services/coPages/store.ts, security review 2026-10-11).
   cron.schedule("20 4 * * *", () => {
@@ -87,87 +176,8 @@ export function registerJobs(io: Server) {
       .then((n) => { if (n) console.log(`member assets: wiped ${n} unused`); })
       .catch((err: any) => console.error("member assets: wipe failed:", err?.message ?? err));
   });
-  // Hourly, every hour (Royce, 2026-09-02: was "10am-8pm UTC" — 3am-1pm
-  // Pacific, wrong for exactly the users this product is built around; a
-  // real "thinking about you" text from a DIFFERENT cron arrived at 2am
-  // Pacific the same day). Now gated per-user on their own local hour
-  // (localHours.ts) instead of a single fixed UTC window — LIMIT widened
-  // 5->25 since the hour gate filters most candidates out on any given
-  // tick, but the actual-dial cap stays at 5 via the `placed` counter, same
-  // Twilio-rate-limit reasoning as before.
-  // Won't retry a user who had a call attempt in the last 24 hours. Dials via
-  // triggerCallForUser (the media-stream bridge) rather than a third
-  // independent copy of the dial logic — this used to hit Hume's native
-  // /v0/evi/twilio integration directly, which silently drops
-  // first_name/context_summary.
-  cron.schedule("0 * * * *", async () => {
-    try {
-      // Selection rewritten (code review, 2026-09-17): "empty life_chapters"
-      // isn't the same thing as "intake isn't done" — life_chapters can stay
-      // empty even after a real intake call or a profile with real content
-      // (a goals/activity_preferences/intent extraction gap, not a reason to
-      // keep calling someone who already came through intake). Now excludes
-      // anyone whose identity isn't captured yet (a text-first placeholder
-      // row, not someone to cold-call) or who already has a completed call
-      // transcript (not just an attempt marker — callTrigger.ts's own
-      // "Co initiated call to..." row) or a profile with any real content.
-      // MAX_AUTO_INTAKE_ATTEMPTS caps attempts consistent with the gate-side
-      // cap the calls agent is adding to src/harness/callGate.ts (not owned
-      // here) — attempts counted the same way callGate.ts already counts
-      // them, via the "Co initiated call to..." attempt-marker rows.
-      const uncalled = await pool.query(
-        `SELECT u.id, cp.city
-         FROM users u
-         LEFT JOIN co_profiles cp ON cp.user_id = u.id
-         WHERE u.subscription_status = 'active'
-           AND COALESCE(u.identity_captured, true) = true
-           AND NOT EXISTS (
-             SELECT 1 FROM co_memories cm
-             WHERE cm.user_id = u.id
-               AND cm.memory_type = 'call_transcript'
-               AND cm.created_at > NOW() - INTERVAL '24 hours'
-           )
-           AND NOT EXISTS (
-             SELECT 1 FROM co_memories cm2
-             WHERE cm2.user_id = u.id AND cm2.memory_type = 'call_transcript'
-               AND cm2.content NOT LIKE 'Co initiated call%'
-           )
-           AND (
-             cp.user_id IS NULL
-             OR (
-               (cp.life_chapters IS NULL OR array_length(cp.life_chapters, 1) IS NULL)
-               AND (cp.goals IS NULL OR array_length(cp.goals, 1) IS NULL)
-               AND (cp.activity_preferences IS NULL OR array_length(cp.activity_preferences, 1) IS NULL)
-               AND jsonb_array_length(COALESCE(cp.intent, '[]'::jsonb)) = 0
-             )
-           )
-           AND (
-             SELECT COUNT(*) FROM co_memories cm3
-             WHERE cm3.user_id = u.id AND cm3.memory_type = 'call_transcript'
-               AND cm3.content LIKE 'Co initiated call%'
-           ) < ${MAX_AUTO_INTAKE_ATTEMPTS}
-         LIMIT 25`,
-      );
-
-      let placed = 0;
-      for (const user of uncalled.rows) {
-        if (placed >= 5) break;
-        const timezone = user.city ? await getTimezoneForCity(user.city) : null;
-        if (!isReasonableLocalHour(timezone)) continue; // wrong hour for them — no state touched, retried next hourly tick
-        placed++;
-        try {
-          const result = await triggerCallForUser(user.id, io, { kind: "auto_intake" });
-          if (!result.success) {
-            console.error(`Auto-call failed for user ${user.id}:`, result.error);
-          }
-        } catch (callErr: any) {
-          console.error(`Auto-call failed for user ${user.id}:`, callErr?.message ?? callErr);
-        }
-      }
-    } catch (err) {
-      console.error("Auto-call cron error:", err);
-    }
-  });
+  // The hourly auto-intake call job is PARKED (Royce, 2026-10-17): runAutoIntakeCalls, above registerJobs, says why and how to turn
+  // it back on. Scheduled calls, check-in cadence calls and calls a member asks for are untouched.
 
   // Layer 7 proactive harness (2026-09-14): the ONE place Co texts first.
   // Every sweep/scheduler below only queues candidates; this picks at most
