@@ -19,6 +19,7 @@ import { fetchLumaEventDetails, renderEventDetails } from "./eventDetails.js";
 import { draftProactive, checkDraft, localHourOk, sendExempt } from "../harness/proactive.js";
 import { gate, recordDecision } from "../harness/core.js";
 import { writeMemory } from "./memory.js";
+import { START_LEAD_MINUTES, startProblem } from "./eventStart.js";
 
 type Person = { id: string; first_name: string | null; phone_number: string; city: string | null };
 
@@ -80,7 +81,8 @@ async function findEventWithRetry(eventId: string, attempts = 5, delayMs = 4000)
 // out now. Called from the Luma event.created webhook.
 export async function announceCoEvent(eventId: string): Promise<{ queued: number; sent: number }> {
   const event = await findEventWithRetry(eventId);
-  if (!event || new Date(event.start_at).getTime() < Date.now()) {
+  // Started, or starting too soon to get there (START_LEAD_MINUTES; Royce, 2026-10-17): not announced.
+  if (!event || startProblem(event.start_at, new Date(), START_LEAD_MINUTES) !== null) {
     await recordDecision({ layer: 6, decision: "tier1.announce", userId: null, outcome: "skip", action: "no_event_or_past", proposal: { eventId } }).catch(() => {});
     return { queued: 0, sent: 0 };
   }
@@ -164,9 +166,11 @@ export async function sendDueCoEventAnnouncements(onlyEventId?: string): Promise
       }
       event = { api_id: details.api_id, name: details.name, start_at: details.start_at, end_at: details.end_at, city: r.city ?? null, url: details.url };
     }
-    if (new Date(event.start_at).getTime() < Date.now() || r.opted_out) {
+    // One held for their hours that would now land after the start, or inside the hour before it, is given up (Royce, 2026-10-17).
+    const late = startProblem(event.start_at, new Date(), START_LEAD_MINUTES);
+    if (late || r.opted_out) {
       await pool.query(`UPDATE co_event_announcements SET gave_up_at = NOW() WHERE id = $1`, [r.id]);
-      await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.user_id, outcome: "skip", action: r.opted_out ? "gave_up_opted_out" : "gave_up_event_past", proposal: { eventId: r.event_api_id } }).catch(() => {});
+      await recordDecision({ layer: 6, decision: "tier1.announce", userId: r.user_id, outcome: "skip", action: r.opted_out ? "gave_up_opted_out" : /already started/.test(late ?? "") ? "gave_up_event_past" : "gave_up_too_soon", proposal: { eventId: r.event_api_id } }).catch(() => {});
       continue;
     }
     const timezone = await memberZone(r.user_id);

@@ -11,7 +11,7 @@ import { generateText, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { gateMatches, type GatedOut } from "../harness/matchGate.js";
+import { gateMatches, START_LEAD_MINUTES, type GatedOut } from "../harness/matchGate.js";
 import { localDay } from "./memberTime.js";
 import { avoidFor, limitsGate } from "./memberLimits.js";
 import type { KnowledgeSection, MemberKnowledge } from "./memberKnowledge.js";
@@ -478,7 +478,8 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   }
   // Facts only: sold out, past, too far, and a name/date the record actually states.
   const gatedOut: GatedOut[] = [];
-  const factGated = await gateMatches(kept, { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null, gatedOut }).catch(() => kept);
+  // Started, or starting inside the hour (START_LEAD_MINUTES): never kept, the way the reply's search turns it away (Royce, 2026-10-17).
+  const factGated = await gateMatches(kept, { userId: c.userId, searchCity: c.city, checkRepeat: false, zone: opts.timezone ?? null, gatedOut, leadMinutes: START_LEAD_MINUTES }).catch(() => kept);
   // Kept but stopped by the fact gate: the gate's reason, unless Co gave one.
   for (const g of gatedOut) if (g.url && !passReasons.has(g.url)) passReasons.set(g.url, `kept, then the fact gate: ${g.reasons.join("; ")}`);
   // Their limits, for every member (Phase A2): a kind they ruled out, judged by its main activity, and an event outside when they're free.

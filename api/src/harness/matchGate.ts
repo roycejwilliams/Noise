@@ -107,7 +107,15 @@ export type MatchFacts = {
   // about 5pm Pacific every same-evening event read as already happened).
   // UTC only when no zone is known.
   zone?: string | null;
+  // How soon before its start an event can still be offered (START_LEAD_MINUTES), when this caller checks it. Whether it already
+  // started is checked for every caller that knows the start.
+  leadMinutes?: number | null;
 };
+
+// The start check (START_LEAD_MINUTES, startProblem, eventStartProblem, matchStartProblem) lives in services/eventStart.ts, pure, so
+// every place Cue offers an event uses the one rule; re-exported here for the gate's callers.
+export { START_LEAD_MINUTES, MULTI_DAY_HOURS, startProblem, eventStartProblem, matchStartProblem } from "../services/eventStart.js";
+import { matchStartProblem } from "../services/eventStart.js";
 
 export function checkLocation(match: TierMatch, facts: MatchFacts): GateCheck {
   const name = "location";
@@ -145,6 +153,9 @@ export function checkTiming(match: TierMatch, facts: MatchFacts): GateCheck {
   if (!match.event_date) return { name, pass: false, reason: "event has no date" };
   const days = daysBetween(today, match.event_date);
   if (days < 0) return { name, pass: false, reason: `event on ${match.event_date} already happened` };
+  // On top of the day check: the start itself, when it's known.
+  const late = matchStartProblem(match, facts.now, facts.leadMinutes ?? null, facts.zone ?? null);
+  if (late) return { name, pass: false, reason: late };
   // A time frame they named sets how far out is fine (2026-09-16: an Oct 6
   // event inside the "Oct 5 - Oct 14th" they asked about was rejected as past
   // the 14-day lookahead, and Co told them it was outside their range).
@@ -404,7 +415,7 @@ export type GatedOut = { name: string; tier: number; reasons: string[]; url: str
 
 export async function gateMatches(
   matches: TierMatch[],
-  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[]; askedUntil?: string | null; lookaheadDays?: number | null; zone?: string | null },
+  ctx: { userId: string | null; searchCity: string | null; checkRepeat?: boolean; evidenceByUrl?: Map<string, string>; now?: Date; gatedOut?: GatedOut[]; askedUntil?: string | null; lookaheadDays?: number | null; zone?: string | null; leadMinutes?: number | null },
 ): Promise<TierMatch[]> {
   const now = ctx.now ?? new Date();
   const kept: TierMatch[] = [];
@@ -430,6 +441,7 @@ export async function gateMatches(
         askedUntil: ctx.askedUntil ?? null,
         lookaheadDays: ctx.lookaheadDays ?? null,
         zone: ctx.zone ?? null,
+        leadMinutes: ctx.leadMinutes ?? null,
       };
     }),
   );

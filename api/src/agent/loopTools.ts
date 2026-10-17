@@ -18,6 +18,7 @@ import { loadBrief, saveBrief, type SearchIntent } from "../services/searchInten
 import { numbersBacked, placesBacked, unbackedClaims } from "../services/taskWeb.js";
 import { captionNumbersBacked } from "../services/sendCheck.js";
 import { LOOP_BUDGET } from "./loop.js";
+import { START_LEAD_MINUTES, matchStartProblem } from "../harness/matchGate.js";
 import { identityDropped } from "../services/guardDrops.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
@@ -556,6 +557,13 @@ export function loopTools(
           }
           if (f.blocked) {
             refused.push(`${f.name}: ${f.blocked}`);
+            continue;
+          }
+          // Its start, read again as it goes: an event found earlier that has started, or starts too soon to get to, never goes
+          // (harness/matchGate.ts startProblem; Royce, 2026-10-17, the Angel Island run).
+          const late = matchStartProblem(f.match, new Date(), START_LEAD_MINUTES);
+          if (late) {
+            refused.push(`${f.name}: ${late}`);
             continue;
           }
           if (loop.shared.includes(it.link)) continue;

@@ -27,6 +27,7 @@ import type { TierMatch } from "./tieredRecommendation.js";
 import type { EventDetails } from "./eventDetails.js";
 import { datesOnPage, dayIn, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { writeExitFact, type ExitDeps, type ExitState } from "./workingSet.js";
+import { START_LEAD_MINUTES, matchStartProblem } from "./eventStart.js";
 
 // A read this recent counts as now: the plan/email tool's own window for a Luma page (agent/loopTools.ts emailPlan).
 export const RECHECK_FRESH_MS = 30 * 60 * 1000;
@@ -184,6 +185,10 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
     // Over: past its end when it has one (a festival that started yesterday still runs), else past its start.
     const over = d.endAt ? d.endAt : d.startAt;
     if (over && new Date(over).getTime() <= now.getTime()) return { ok: false, exit: true, state: "expired", why: `it was already ${d.endAt ? "over" : "under way"} (${over}) when Cue read its page` };
+    // Its start as the page has it now: started, or too soon to get there (START_LEAD_MINUTES; Royce, 2026-10-17, the Angel Island run).
+    // Certain, so an exit. An event that runs a day or more is judged by its end above (services/eventStart.ts).
+    const late = matchStartProblem({ ...match, startAt: undefined, details: d } as TierMatch, now, START_LEAD_MINUTES, d.timezone ?? zone);
+    if (late) return { ok: false, exit: true, state: "expired", why: `${late}, when Cue read its page` };
     const old = match.details ?? null;
     const changed: string[] = [];
     if (old?.startAt && d.startAt && old.startAt !== d.startAt) changed.push(`start moved from ${old.startAt} to ${d.startAt}`);
@@ -198,7 +203,12 @@ export async function recheckFind(match: TierMatch, o: { now: Date; zone: string
   }
   // No page to read again: a Co event with no link, or an X post with no event page behind it (the post can't be read again without
   // the X API). It goes as it was found, marked unverified; its caption may not claim spots or a price its record doesn't state.
-  if (!url || isX(url) || match.kind !== "opportunity") return { ok: true, match, checkedAt: match.checkedAt ?? "", changed: [], verified: false };
+  if (!url || isX(url) || match.kind !== "opportunity") {
+    // Nothing to read again, so its start on record decides (a Noise event with no link).
+    const late = matchStartProblem(match, now, START_LEAD_MINUTES, zone);
+    if (late) return { ok: false, exit: true, state: "expired", why: late };
+    return { ok: true, match, checkedAt: match.checkedAt ?? "", changed: [], verified: false };
+  }
   const r = await deps.page(url).catch((): PageRead => ({ text: null, gone: false }));
   // A dead link is certain.
   if (r.gone) return { ok: false, exit: true, state: "cancelled", why: `its page is gone (a dead link when Cue checked on ${today})` };
@@ -271,8 +281,11 @@ export async function checkBeforeSend(c: SendCandidate, zone: string | null, dep
   const later = new Date(now.getTime() + RECHECK_RETRY_HOURS * 3_600_000);
   // Read moments ago (stillRelevant ran first this tick): no second read.
   const at = match.checkedAt ? Date.parse(match.checkedAt) : NaN;
-  if (!Number.isNaN(at) && now.getTime() - at < RECHECK_FRESH_MS) return { ok: true, match };
-  const r = await recheckFind(match, { now, zone, deps });
+  // Its start still decides: read 20 minutes ago, it may have started since (or come inside the hour).
+  const fresh = !Number.isNaN(at) && now.getTime() - at < RECHECK_FRESH_MS;
+  const late = fresh ? matchStartProblem(match, now, START_LEAD_MINUTES, zone) : null;
+  if (fresh && !late) return { ok: true, match };
+  const r: Recheck = late ? { ok: false, exit: true, state: "expired", why: late } : await recheckFind(match, { now, zone, deps });
   if (r.ok) {
     p.match = r.match;
     if (r.verified && !dry) await deps.saveMatch(c.id, r.match).catch((err: any) => console.error("sendCheck: refreshed record not saved (non-fatal):", err?.message ?? err));
