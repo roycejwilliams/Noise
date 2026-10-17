@@ -80,9 +80,9 @@ export const sendSMS = async ({
 
   try {
     if (status === "accepted") {
-      await send(`You're in. You were chosen to join Cue. Use the code below to get started.\n${otp_code}`);
+      await send(`You're in. You were chosen to join Noise. Use the code below to get started.\n${otp_code}`);
     } else if (status === "rejected") {
-      await send(`Your Cue application wasn't accepted. You're welcome to update and resubmit.`);
+      await send(`Your Noise application wasn't accepted. You're welcome to update and resubmit.`);
     }
 
     if (resent) {
@@ -170,14 +170,14 @@ export const sendEmail = async ({
 
     if (status === "accepted") {
       await send(
-        `Welcome to Cue.`,
+        `Welcome to Noise.`,
         quietEmail({ preview: "Your access code. It expires in five minutes.", headline: "You were chosen.", code: otp_code!, lines: ["Use this code to step in. It expires in five minutes."], note: "Don't share this code." }),
       );
     }
 
     if (status === "rejected") {
       await send(
-        `Your Cue application.`,
+        `Your Noise application.`,
         quietEmail({ preview: "An update on your application.", headline: "Not this time.", lines: ["Your application wasn't accepted. You're welcome to update it and ask for another look."] }),
       );
     }
@@ -237,9 +237,9 @@ export const sendEmail = async ({
       await send(
         `Cue noticed you.`,
         quietEmail({
-          preview: "Cue is invite-only, not just an events page.",
+          preview: "Noise is invite-only, not just an events page.",
           headline: firstName ? `Hello, ${firstName}.` : "Hello.",
-          lines: ["You followed the Co Presents calendar. Cue is invite-only, not just an events page.", "Reply with a little about what you're hoping to find, and Cue will keep you in mind for what's next."],
+          lines: ["You followed the Co Presents calendar. Noise is invite-only, not just an events page.", "Reply with a little about what you're hoping to find, and Cue will keep you in mind for what's next."],
         }),
       );
     }

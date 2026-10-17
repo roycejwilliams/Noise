@@ -89,7 +89,7 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   const tools = readFileSync(new URL("../../src/agent/conversationTools.ts", import.meta.url), "utf8");
   const introTool = tools.slice(tools.indexOf("requestEventIntro: tool({"), tools.indexOf("markTopicAsked: tool({"));
   c(!/couldn't find anyone named|on the guest list for/.test(introTool), "the intro tool never tells the asker whether a named person was found on a guest list");
-  c((introTool.match(/Never confirm or deny that the person is someone you know, is a Cue member, or was on the guest list/g) ?? []).length === 2, "found and not-found get the same neutral answer, so neither reveals membership");
+  c((introTool.match(/Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list/g) ?? []).length === 2, "found and not-found get the same neutral answer, so neither reveals membership");
   c(/don't say whether you know anyone by that first name, how many, or whether they were there/.test(introTool), "asking for the last name never reveals whether, or how many, people have that name");
 
   const pairPrompt = unmatchedPairPrompt({ recipientFirstName: "Jordan", otherFirstName: "Ellis", eventName: "Cache Me Outside", shareReason: "both building in climate tech", feedback: null });

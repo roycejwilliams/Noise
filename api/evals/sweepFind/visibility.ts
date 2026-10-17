@@ -60,7 +60,7 @@ const sf = fs.readFileSync(new URL("../../src/services/sweepFind.ts", import.met
 // ---- the brief: tiers, and when X fits
 {
   const p = SF.sweepPrompt({ userId: "u", firstName: "Jordan", askText: "a founder dinner this month", city: "San Francisco" }, { today: "2026-10-08", record: SF.emptySweepRecord() });
-  check("the brief names every tier and how to reach it", p.includes(SF.SWEEP_TIERS) && /Cue's own events/.test(SF.SWEEP_TIERS) && /public event feed/.test(SF.SWEEP_TIERS) && /webSearch/.test(SF.SWEEP_TIERS) && /searchPosts/.test(SF.SWEEP_TIERS));
+  check("the brief names every tier and how to reach it", p.includes(SF.SWEEP_TIERS) && /Noise's own events/.test(SF.SWEEP_TIERS) && /public event feed/.test(SF.SWEEP_TIERS) && /webSearch/.test(SF.SWEEP_TIERS) && /searchPosts/.test(SF.SWEEP_TIERS));
   // Royce, 2026-10-13: forcing all three sources is allowed only in the 9am floor run (opts.allSources); the hourly sweeps keep
   // "guidance, not forced".
   check("an event-shaped ask looks at searchEvents before finishing (hourly: guidance, not a forced call)", /look at searchEvents before you finish/.test(SF.SWEEP_TIERS) && (sf.match(/toolChoice/g) ?? []).length === 1 && /\.\.\.\(opts\.allSources\s*\?\s*\{\s*prepareStep:[\s\S]{0,300}?toolChoice[\s\S]{0,200}?\}\s*:\s*\{\}\)/.test(sf));

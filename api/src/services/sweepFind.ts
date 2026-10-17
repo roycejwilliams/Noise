@@ -32,7 +32,7 @@ export const SWEEP_X_GUIDANCE = `X is where programs and gatherings are announce
 // Every place Co can look, named in the brief (2026-10-08: sweeps ended without
 // ever looking at Co's own events for an event-shaped ask). Guidance, not a
 // forced call: Co still picks the tools.
-export const SWEEP_TIERS = `Where you can look, in order: (1) Cue's own events and (2) the public event feed and openings Cue already found, both through searchEvents; (3) the web (webSearch) and X (searchPosts) for programs, places and people. When the ask is something to go to or join (an event, a dinner, a meetup, a class, a community gathering), look at searchEvents before you finish, even if you expect it thin: Cue's own events come first when they fit.`;
+export const SWEEP_TIERS = `Where you can look, in order: (1) Noise's own events and (2) the public event feed and openings Cue already found, both through searchEvents; (3) the web (webSearch) and X (searchPosts) for programs, places and people. When the ask is something to go to or join (an event, a dinner, a meetup, a class, a community gathering), look at searchEvents before you finish, even if you expect it thin: Noise's own events come first when they fit.`;
 
 // The 9am daily sweep looks in all three places (Royce, 2026-10-13: "Search all three sources (events, web, X) for every open ask ...
 // No per-ask source selectivity"): Co's own events and the public feed (searchEvents), the web (webSearch) and X (searchPosts). Co
@@ -264,7 +264,7 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   const sourceFailures: string[] = [];
   const tools = {
     searchEvents: tool({
-      description: "Cue's own events, the public event feed, and openings Cue already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",
+      description: "Noise's own events, the public event feed, and openings Cue already found, in the days you name. Put `when` in plain words (\"next two weeks\", \"this weekend\").",
       inputSchema: z.object({ what: z.string(), when: z.string().optional() }),
       execute: async ({ what, when }) => {
         called.add("events");

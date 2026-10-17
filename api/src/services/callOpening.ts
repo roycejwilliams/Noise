@@ -88,7 +88,7 @@ ${o.recent.map((l) => `- ${l}`).join("\n")}
 Rules:
 - Only use facts that are in what Cue knows. No times, places, names or numbers that aren't there.
 - Never name or guess how they feel or sound.
-- The line is heard the moment anyone picks up, maybe not them. Pick up work, plans, projects or logistics only. Never health, loss, family, money trouble, legal matters, relationships, or anything another member of Cue said or did.
+- The line is heard the moment anyone picks up, maybe not them. Pick up work, plans, projects or logistics only. Never health, loss, family, money trouble, legal matters, relationships, or anything another member of Noise said or did.
 - No times or dates relative to now (today, tomorrow, this week, a weekday) unless the exact words are in what Cue knows.
 - No "how are you", no "good to hear your voice", no "I remember", no "I was thinking about you".
 - Plain speech: no dashes, brackets, quotes or placeholders.

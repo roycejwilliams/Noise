@@ -198,7 +198,7 @@ function world(lists: { ask_id: string; items: any[] }[], o: { classify?: (m: an
   check("tiers (e): an event is pitched with its day", F.formLabel({ kind: "opportunity", form: "event", statedDates: { start: "2026-10-10" } }, "America/Los_Angeles", now) === "an event on Saturday");
   check("an opening with a deadline is pitched with it", F.formLabel({ kind: "opportunity", form: "opening", deadline: "2026-10-09" }, "America/Los_Angeles", now) === "an opening, applications close Friday");
   check("a rolling opening says so", F.formLabel({ kind: "opportunity", form: "opening" }, "America/Los_Angeles", now) === "an opening you can apply to or join now");
-  check("a Cue event and a public event keep their names, with the day", F.formLabel({ kind: "co_event", event_date: "2026-10-08" }, "America/Los_Angeles", now) === "a Cue event tomorrow" && F.formLabel({ kind: "public_event", event_date: "2026-10-20" }, "America/Los_Angeles", now) === "an event on Oct 20");
+  check("a Noise event and a public event keep their names, with the day", F.formLabel({ kind: "co_event", event_date: "2026-10-08" }, "America/Los_Angeles", now) === "a Noise event tomorrow" && F.formLabel({ kind: "public_event", event_date: "2026-10-20" }, "America/Los_Angeles", now) === "an event on Oct 20");
   check("never the generic \"a real opportunity\"", !/a real opportunity"\s*;?\s*$/m.test(src("agent/eventDiscoverySurfacing.ts").replace(/\/\/.*$/gm, "")) && /return formLabel\(match, zone\);/.test(src("agent/eventDiscoverySurfacing.ts")) && !/\(a real opportunity Cue pointed/.test(src("harness/proactiveRegistry.ts")));
 }
 

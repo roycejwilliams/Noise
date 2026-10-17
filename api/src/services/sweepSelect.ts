@@ -118,11 +118,11 @@ Return ONLY JSON:
 {"set":"...","verdicts":[{"id":"C1","verdict":"send","whyMember":"...","cites":["A2","T5"],"whyNow":"...","wow":true,"lastDay":"2026-10-08","taste":"matches"},{"id":"C2","verdict":"hold","why":"...","until":"2026-10-08"},{"id":"C3","verdict":"reject","reason":"weak_fit","why":"..."},{"id":"C4","verdict":"reject","reason":"already_known","cites":["S3"],"why":"..."}]}`;
 
 // The morning run's own instructions (member prompt, so SELECT_SYSTEM stays the same for every run and keeps its cache).
-export const MORNING_NOTE = `THIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Cue event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate "rank": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and "forThem": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or "not a wow" only moves it down its kind; it never empties a kind.`;
+export const MORNING_NOTE = `THIS IS THEIR MORNING SEND. One find from each kind goes out this morning: a Noise event, an event, an opening (program, place or opportunity), whichever kinds have candidates. Your verdicts still say what you think of each. Also give every candidate "rank": its place among the candidates of its own kind (1 = the one you'd send from that kind), ranked by fit and the room they want, what they asked for first; and "forThem": one plain line on what it offers them, used if it's the one that goes from its kind. A kind's best goes unless something real rules it out: it's over or too late to act on (too_late), they already have it, are going or said no to it (already_known, cited), or their own words rule it out (ruled_out, citing the ask or text). A weak fit or "not a wow" only moves it down its kind; it never empties a kind.`;
 
 // What the thing is, not a rank: tier numbers read as a quality score (the
 // 2026-10-02 replay rejected things for being "tier 3").
-const SOURCE_LABEL: Record<number, string> = { 1: "a Cue event", 2: "an event", 3: "an opening (program, place or opportunity)" };
+const SOURCE_LABEL: Record<number, string> = { 1: "a Noise event", 2: "an event", 3: "an opening (program, place or opportunity)" };
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 

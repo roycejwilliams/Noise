@@ -109,7 +109,7 @@ const sb = src("src/routes/sendblue.ts");
 // Arrival is Co's call now (conversationTools.ts markArrived, 2026-09-25):
 // members only (the reply agent only runs for members), and it re-scores.
 check("saying they've arrived marks arrival and re-scores", /markArrived: tool\(\{[\s\S]{0,900}recordTextArrival\(ctx\.userId\)[\s\S]{0,400}arrived\.isNew[\s\S]{0,80}scoreGuestListForEvent/.test(src("src/agent/conversationTools.ts")));
-check("no Cue event on: nothing recorded, and Cue doesn't welcome them", /no Cue event of theirs on right now/.test(src("src/agent/conversationTools.ts")));
+check("no Noise event on: nothing recorded, and Cue doesn't welcome them", /no Noise event of theirs on right now/.test(src("src/agent/conversationTools.ts")));
 check("the reply welcomes them without naming anyone", /don't name anyone or promise a person here/.test(src("src/agent/conversationTools.ts")));
 {
   const geo = src("src/services/geocoding.ts");

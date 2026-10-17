@@ -438,7 +438,7 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
   const tools = {
     search: tool({
       description:
-        "Look up events for this task: Cue's own events and the public feed, in the days you name, plus openings Cue's daily search already found. You get real events with their details, closest to what you asked first, and you judge which fit, because they're candidates, not answers. Put `when` in their words (\"this weekend\", \"Oct 10\") so the dates come out right. The feed is short (a few events a day), so when it's thin, use webSearch for the same thing.",
+        "Look up events for this task: Noise's own events and the public feed, in the days you name, plus openings Cue's daily search already found. You get real events with their details, closest to what you asked first, and you judge which fit, because they're candidates, not answers. Put `when` in their words (\"this weekend\", \"Oct 10\") so the dates come out right. The feed is short (a few events a day), so when it's thin, use webSearch for the same thing.",
       inputSchema: z.object({ what: z.string(), when: z.string().optional() }),
       execute: async ({ what, when }) => {
         did.push(`search: ${what}${when ? `, ${when}` : ""}`);

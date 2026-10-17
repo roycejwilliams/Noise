@@ -888,8 +888,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
         if (!today) {
-          notDone("Their location wasn't turned on: they have no Cue event today.");
-          return { ok: false, error: "They aren't going to a Cue event today, so there's nothing to use it for." };
+          notDone("Their location wasn't turned on: they have no Noise event today.");
+          return { ok: false, error: "They aren't going to a Noise event today, so there's nothing to use it for." };
         }
         if (!ctx.dryRun) await P.recordLocationYes(today.eventApiId, ctx.userId, theirYes);
         ctx.facts?.add("did_this_turn", `They said yes to sharing their location for "${today.name}" only. Cue will use it just to know when they've arrived. They share it themselves in Messages (Share My Location with Cue), and "stop sharing" ends it.`);
@@ -966,7 +966,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "Quote their own words." };
         }
         const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
-        if (!today) return { ok: false, error: "No Cue event of theirs today." };
+        if (!today) return { ok: false, error: "No Noise event of theirs today." };
         if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(today.eventApiId, ctx.userId, going));
         ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Cue won't send them anything more about it.`);
         return { ok: true };
@@ -1123,8 +1123,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         }
         const arrived = await recordTextArrival(ctx.userId);
         if (!arrived) {
-          notDone("No arrival was recorded: there's no Cue event of theirs on right now.");
-          return { ok: false, error: "There's no Cue event of theirs on right now, so nothing was recorded. Don't welcome them to an event." };
+          notDone("No arrival was recorded: there's no Noise event of theirs on right now.");
+          return { ok: false, error: "There's no Noise event of theirs on right now, so nothing was recorded. Don't welcome them to an event." };
         }
         if (arrived.isNew) {
           scoreGuestListForEvent(arrived.eventApiId, arrived.eventName).catch((err: any) =>
@@ -1416,7 +1416,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
     noteRoomMeeting: tool({
       description: toolUse("noteRoomMeeting"),
       inputSchema: z.object({
-        person: z.string().describe("The first name of someone Cue pointed them to or introduced them to at a Cue event."),
+        person: z.string().describe("The first name of someone Cue pointed them to or introduced them to at a Noise event."),
         outcome: z.enum(["met_good", "met_fine", "met_not_a_fit", "did_not_meet"]).describe("They met and it was worth it, met and it was fine, met and it wasn't a fit, or didn't meet."),
         note: z.string().optional().describe("Their words, briefly."),
       }),
@@ -1428,8 +1428,8 @@ export function createConversationTools(ctx: ConversationToolContext) {
         const people = [...new Set(told.map((p) => p.otherId))];
         if (people.length > 1) return { ok: false, error: `More than one person Cue pointed them to is called ${person}. Ask which one, then try again.` };
         if (!told.length) {
-          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue pointed them to at a Cue event.`);
-          return { ok: false, error: "That isn't someone Cue pointed them to at a Cue event (only Cue's own suggestions count)." };
+          notDone(`Nothing recorded: ${person.slice(0, 40)} isn't someone Cue pointed them to at a Noise event.`);
+          return { ok: false, error: "That isn't someone Cue pointed them to at a Noise event (only Cue's own suggestions count)." };
         }
         await RM.notePairMet(ctx.userId, told[0].pairId, outcome, note ?? null);
         ctx.facts?.add("did_this_turn", `Noted how meeting ${told[0].firstName} went for them, so Cue's next introductions learn from it.`);
@@ -1616,7 +1616,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
           // same answer too (no one is contacted).
           return {
             ok: true,
-            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Cue member, or was on the guest list, and don't say whether you found them.",
+            note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list, and don't say whether you found them.",
           };
         }
         const { rows } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [ctx.userId]);
@@ -1647,7 +1647,7 @@ export function createConversationTools(ctx: ConversationToolContext) {
         );
         return {
           ok: true,
-          note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Cue member, or was on the guest list.",
+          note: "Tell them that if it's someone you know from that event, you'll check whether they're open to it too. Never confirm or deny that the person is someone you know, is a Noise member, or was on the guest list.",
         };
       },
     }),

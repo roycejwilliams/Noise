@@ -49,10 +49,10 @@ export type CallClaim = {
 // the audit read "I can learn who's coming, who each person is trying to meet" (Co's in-room guest-list matching, its core
 // product) as a false capability claim. The registry (services/capabilities.ts) is now the source; these only add to it.
 export const CALL_CAPABILITIES = `Cue can: look for events, communities, opportunities, and people after a call and text them if something real fits (never a guaranteed result or time); take on work over days that they asked for and text what it finds; call them back if they ask; text them.
-Cue can't: promise when something will be found or a guaranteed result, or know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Cue's own events it does know the guest list and what each guest told Cue they're looking for.`;
+Cue can't: promise when something will be found or a guaranteed result, or know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Noise's own events it does know the guest list and what each guest told Cue they're looking for.`;
 const CALL_ONLY_LIMITS = [
   "On a call, Cue can't promise when something will be found, or a guaranteed result.",
-  "Cue can't know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Cue's own events it does know the guest list and what each guest told Cue they're looking for.",
+  "Cue can't know a detail it wasn't given (a time, a place, what someone outside its own events wants). At Noise's own events it does know the guest list and what each guest told Cue they're looking for.",
 ];
 
 // The registry, as the audit reads it: what Co can do by id, and what it can't by number (team-only abilities left out).
