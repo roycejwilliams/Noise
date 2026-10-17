@@ -48,7 +48,7 @@ check("too soon only where the caller asks for the lead", G.checkTiming(SOON, fa
 }
 {
   const src = readFileSync(new URL("../../src/services/tieredRecommendation.ts", import.meta.url), "utf8");
-  check("the reply's search carries each event's start and asks for the lead (pinned in the source)", /startAt: e\.start_at,/.test(src) && /leadMinutes: START_LEAD_MINUTES \}\);/.test(src));
+  check("the reply's search carries each event's start and asks for the lead (pinned in the source)", /startAt: e\.start_at,/.test(src) && /raw\.map\(\(m\) => \(\{ \.\.\.m, startAt: undefined \}\) as TierMatch\)/.test(src) && /const late = eventStartProblem\(\{ startAt, endAt: details\?\.endAt \?\? null, online: !!\(m\.online \|\| details\?\.online\) \}, new Date\(\), START_LEAD_MINUTES/.test(src) && /turnedAway\.push\(\{ name: m\.name, tier: m\.tier, reasons: \[late\]/.test(src));
 }
 
 // ---------------------------------------------------------------- and again as it goes out
@@ -153,7 +153,7 @@ check("a call's events come from the reply's own search (so the lead applies), s
 // ---------------------------------------------------------------- Noise's own event announcements
 {
   const an = src("services/coEventAnnouncement.ts");
-  check("a Noise event isn't announced once it started or inside the hour, at creation or when a held one goes (pinned)", /if \(!event \|\| startProblem\(event\.start_at, new Date\(\), START_LEAD_MINUTES\) !== null\)/.test(an) && /const late = startProblem\(event\.start_at, new Date\(\), START_LEAD_MINUTES\);\n\s+if \(late \|\| r\.opted_out\)/.test(an));
+  check("a Noise event isn't announced once it started or inside the hour, at creation or when a held one goes (pinned)", /if \(!event \|\| eventStartProblem\(\{ startAt: event\.start_at, endAt: event\.end_at \}, new Date\(\), START_LEAD_MINUTES\) !== null\)/.test(an) && /const late = eventStartProblem\(\{ startAt: event\.start_at, endAt: event\.end_at \}, new Date\(\), START_LEAD_MINUTES\);\n\s+if \(late \|\| r\.opted_out\)/.test(an));
 }
 
 // ---------------------------------------------------------------- a plan's event steps
@@ -177,6 +177,24 @@ check("a call's events come from the reply's own search (so the lead applies), s
   check("... started is started, online or not", /already started/.test(E.matchStartProblem({ ...ONLINE, startAt: at(-5) } as any, NOW, E.START_LEAD_MINUTES, ZONE) ?? ""));
   const exp = ES.offerExpiresAt({ ...ONLINE, startAt: at(120) } as any, ZONE, NOW).getTime();
   check("... a queued online offer expires 15 minutes before it, an in-person one 60", exp === new Date(at(105)).getTime() && ES.offerExpiresAt({ ...ONLINE, online: false, startAt: at(120) } as any, ZONE, NOW).getTime() === new Date(at(60)).getTime());
+}
+// ---------------------------------------------------------------- the review of #229 (2026-10-17)
+{
+  // Must-fix: the reply path judged the start from the feed alone (no end, no online). Its rule, once the page is read:
+  const FEST = { startAt: at(-240), endAt: at(3 * 24 * 60), online: false };
+  check("review 1: a festival that started this morning and runs 3 days stays offerable once its page gives the end", E.eventStartProblem(FEST, NOW, E.START_LEAD_MINUTES, ZONE) === null && /already started/.test(E.eventStartProblem({ startAt: FEST.startAt, endAt: null }, NOW, E.START_LEAD_MINUTES, ZONE) ?? ""));
+  check("review 2: an online event 30 minutes out passes once its page says online (15, not 60)", E.eventStartProblem({ startAt: at(30), endAt: at(90), online: true }, NOW, E.START_LEAD_MINUTES, ZONE) === null);
+  // Should-fix 3: day 2 of a festival isn't expired from the queue on arrival.
+  const fest = { ...FESTIVAL, startAt: at(-24 * 60), details: page({ startAt: at(-24 * 60), endAt: at(2 * 24 * 60) }) };
+  check("review 3: a queued multi-day event lives until it ends", ES.offerExpiresAt(fest as any, ZONE, NOW).toISOString() === at(2 * 24 * 60) && !ES.tooLateToOffer(fest as any, ZONE, NOW));
+  // Should-fix 4: a web or X find whose page is a Luma event that started is refused at send.
+  const web = { tier: 3, kind: "opportunity", name: "Builders who Run SF", url: "https://lu.ma/m0oexu2k", reason: "A run then BBQ.", evidence: "Builders who Run SF https://lu.ma/m0oexu2k" };
+  const { deps: d4 } = deps(page());
+  const r4 = await S.checkBeforeSend(queued(web), ZONE, d4);
+  check("review 4: a web find whose page is a Luma event that started is refused as it goes, with why", "skip" in r4 && /already started/.test((r4 as any).skip), r4);
+  const xpost = { ...web, url: "https://x.com/someone/status/1", evidence: "run club! https://lu.ma/m0oexu2k see you there" };
+  const r5 = await S.checkBeforeSend(queued(xpost), ZONE, deps(page()).deps);
+  check("... and an X post linking it", "skip" in r5 && /already started/.test((r5 as any).skip), r5);
 }
 console.log(`started events: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

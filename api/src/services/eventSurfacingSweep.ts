@@ -12,7 +12,7 @@ import { recordDecision } from "../harness/core.js";
 import { classifyFind, eventDateOf, exitKey, formOf, lifeEndOf } from "./findForm.js";
 import { offerItemKey, recordRevealedOffers } from "./offerReactions.js";
 import { offerHistory, repeatInput, repeatRule, type RepeatAction } from "../harness/matchGate.js";
-import { START_LEAD_MINUTES, leadFor, matchStartProblem } from "./eventStart.js";
+import { MULTI_DAY_HOURS, START_LEAD_MINUTES, leadFor, matchStartProblem } from "./eventStart.js";
 
 export type SurfacingCandidate = {
   // ask_checkins.id — NOT the same as userId. A user can have more than one
@@ -274,6 +274,11 @@ function isShortNotice(match: TierMatch, zone: string | null = null): boolean {
 export function offerExpiresAt(match: TierMatch, zone: string | null, now = new Date()): Date {
   const startAt = match.kind !== "opportunity" ? (match.details?.startAt ?? match.startAt) : null;
   const start = startAt ? new Date(startAt) : null;
+  // An event that runs a day or more is offerable until it ends (services/eventStart.ts), so its queued offer lives that long too
+  // (review of #229: day 2 of a festival expired on arrival).
+  const endAt = match.kind !== "opportunity" ? match.details?.endAt : null;
+  const ends = endAt ? new Date(endAt) : null;
+  if (start && ends && !Number.isNaN(start.getTime()) && !Number.isNaN(ends.getTime()) && ends.getTime() - start.getTime() >= MULTI_DAY_HOURS * 3_600_000) return ends;
   if (start && !Number.isNaN(start.getTime())) return new Date(start.getTime() - (leadFor(START_LEAD_MINUTES, !!(match.online || match.details?.online)) ?? START_LEAD_MINUTES) * 60_000);
   const date = relevantDate(match);
   const end = date ? endOfLocalDay(date.slice(0, 10), match.details?.timezone ?? zone) : null;
