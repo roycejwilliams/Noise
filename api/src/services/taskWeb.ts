@@ -289,7 +289,11 @@ Return ONLY JSON: {"items": [{"name": "...", "url": "https://the page you read",
         // A listing site that can't be opened to check: its real name is enough here, its own site is found and read after (pickPage).
         prompt: fromPagesPrompt(prompt.replace("so for anything found there give the place's OWN website and its real name", "so for anything found there give its real name exactly as the listing shows it (its own site is found and read after)"), found.pages),
       });
-      raws = parseRawResults(text, opts.max ?? 3).filter((r) => onePage(r.url, found.pages));
+      // Each pick carries its page's own url (without tracking tags, services/exaSearch.ts pagesFrom), not the copy the model wrote.
+      raws = parseRawResults(text, opts.max ?? 3).flatMap((r) => {
+        const url = onePage(r.url, found.pages);
+        return url ? [{ ...r, url }] : [];
+      });
     } else {
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),

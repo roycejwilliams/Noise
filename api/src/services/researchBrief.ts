@@ -124,6 +124,9 @@ export async function readVenueSource(url: string, slot: VenueAsk["slot"]): Prom
   return { reader: "sdk", fields, title };
 }
 
+// The find's search failed outright (every pass): thrown so the brief says it couldn't search, not that nothing fits.
+export class SearchFailed extends Error {}
+
 // The find, in a background task only. The assembled query (researchQuality.assembleQuery) goes to the verified web search;
 // each result below Co's bar is skipped; each other result is read as the venue schema.
 export async function findVenueOptions(userId: string, query: string, ask: VenueAsk, zone: string | null): Promise<ResearchFind[]> {
@@ -145,14 +148,18 @@ export async function findVenueOptions(userId: string, query: string, ask: Venue
   const kept: import("./taskWeb.js").VerifiedResult[] = [];
   const ownPlaces = () => kept.filter(own).filter((k, i, a) => a.findIndex((x) => placeKey(x) === placeKey(k)) === i);
   const log: { pass: number; kept: number; own: number; listicles: string[] }[] = [];
+  // A search that failed (Exa down or timed out) never ran: when no pass ran, that's a failure, never "no venues fit" (review of #225).
+  const failures: string[] = [];
   for (const [i, angle] of angles.entries()) {
     if (i > 0 && ownPlaces().length >= BRIEF_LIMITS.maxOptions) break;
     const seen = [...new Set(kept.map((k) => coreName(k.name)))].slice(0, 12).join("; ");
     const q = i === 0 ? `${query} ${ownPage}` : `${query} ${ownPage} ${angle}${seen ? ` ${seen}.` : ""}`;
     const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4, ownPage: "private events or private dining page", readsPageItself: true });
+    if (/^Web search failed/.test(r.note)) failures.push(r.note);
     for (const k of r.kept) if (!kept.some((x) => x.url === k.url || (own(x) && own(k) && (placeKey(x) === placeKey(k) || sameName(x.name, k.name))))) kept.push(k);
     log.push({ pass: i + 1, kept: r.kept.length, own: r.kept.filter(own).length, listicles: r.kept.filter((k) => !own(k)).map((k) => k.url).slice(0, 4) });
   }
+  if (failures.length === log.length && !kept.length) throw new SearchFailed(failures[0]);
   const urls = [...new Set(ownPlaces().map((k) => (PEERSPACE_LISTING.test(k.url.split("?")[0]) ? k.url.split("?")[0] : k.url)).filter((u) => u.startsWith("https://") && !belowTheBar(u)))].slice(0, BRIEF_LIMITS.maxReads);
   // The place's name, without the room the search named: the fields read below are the venue's, and may be another room's
   // (2026-10-07 live brief: "Scoma's Restaurant – The Scalia Room" over the Bayside Patio's capacity).
@@ -188,6 +195,9 @@ export function briefOptionsText(title: string, options: { name: string; url: st
 }
 
 export const BRIEF_HOLD_MAX_WAKES = 6;
+
+// What they're told when the find's search failed outright (Exa down or timed out): it couldn't search, never that nothing fits.
+export const SEARCH_FAILED_LINE = "My search didn't go through just now, so I couldn't look for venues yet. Want me to try again?";
 
 // A brief's identity across sends: what it's for, not its "Venue options" title (services/deliveryReceipts.ts docKeyFor reads only
 // a title's head), so the same ask asked again is its next version and a different ask is its own document.
@@ -326,10 +336,17 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
       await tellThenClose(q.question, "dropped", `asked them first: missing ${q.missing.join(", ")}`);
       return;
     }
+    const find = { failed: null as string | null };
     finds = await findVenueOptions(task.userId, q.query, { what: p.what, city, slot }, zone).catch((err: any) => {
       console.error("research brief find failed (non-fatal):", err?.message ?? err);
+      find.failed = err instanceof SearchFailed ? err.message : "the find threw an error";
       return [] as ResearchFind[];
     });
+    // The find never ran (the search failed): they're told it couldn't search, never that no venues fit (review of #225).
+    if (find.failed) {
+      await tellThenClose(SEARCH_FAILED_LINE, "dropped", `the search failed: ${find.failed}`);
+      return;
+    }
   }
   // Ordered by what they (or everyone) said yes and no to before.
   const signal = await Q.rankingSignal(task.userId);

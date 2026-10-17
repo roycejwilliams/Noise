@@ -474,9 +474,11 @@ export async function companionPayloadFor(userId: string): Promise<CompanionPayl
     if (!budget.ok) checks.push({ name: "web_budget", pass: false, reason: budget.reason ?? "over budget" });
     else {
       const { rows } = await pool.query(`SELECT city FROM co_profiles WHERE user_id = $1`, [userId]).catch(() => ({ rows: [] as any[] }));
-      const found = await searchWebForOpportunity(thread.text, rows[0]?.city ?? null, null, today, { source: "sweep" });
+      // A failed search is recorded as one, never as "nothing found" (review of #225).
+      const search = { failed: null as string | null };
+      const found = await searchWebForOpportunity(thread.text, rows[0]?.city ?? null, null, today, { source: "sweep", failed: (why) => (search.failed = why) });
       const g = found ? checkGrounding(found, { searchCity: null, distanceMiles: null, alreadyOffered: false, now: new Date(), evidence: found.evidence ?? null }) : null;
-      checks.push(g ?? { name: "grounding", pass: false, reason: "nothing found" });
+      checks.push(g ?? (search.failed ? { name: "web_search", pass: false, reason: `the search failed: ${search.failed}` } : { name: "grounding", pass: false, reason: "nothing found" }));
       if (found && g?.pass) item = { kind: "web", name: found.name, url: found.url, reason: found.reason };
     }
   }
