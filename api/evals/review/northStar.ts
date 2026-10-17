@@ -20,6 +20,7 @@ check("room: both said yes and the intro went out (intro_sent_at)", /p\.intro_se
 check("room: never two people already connected before the intro", /NOT EXISTS \(SELECT 1 FROM member_connections mc WHERE mc\.person_a = f\.a_id AND mc\.person_b = f\.b_id AND mc\.created_at < COALESCE\(f\.both_yes_at, f\.intro_sent_at\)/.test(flat(ROOM_SQL)));
 check("room: met is met_at; went well is either side saying met_good", /f\.met_at IS NOT NULL/.test(ROOM_SQL) && /f\.a_outcome = 'met_good' OR f\.b_outcome = 'met_good'/.test(ROOM_SQL));
 check("network: introduced between real members, not already connected, not already introduced in a room", /n\.introduced_at IS NOT NULL/.test(NETWORK_SQL) && /NOT EXISTS \(SELECT 1 FROM member_connections/.test(NETWORK_SQL) && /NOT EXISTS \(SELECT 1 FROM co_pairs p/.test(NETWORK_SQL));
+check("network: only intros whose email went (a claim no send confirmed never counts; one from before claims existed does)", /\(n\.email_sent_at IS NOT NULL OR n\.email_claimed_at IS NULL\)/.test(NETWORK_SQL));
 check("real members only: intake, not archived, not simulated, never a test number", [ROOM_SQL, NETWORK_SQL, ENGAGEMENT_SQL].every((q) => /identity_captured = true/.test(q) && /archived_at IS NULL/.test(q) && /is_simulated/.test(q) && q.includes("!~")));
 check("the test-number pattern is the fictional 555-01xx range", new RegExp(TEST_NUMBER).test("+14155550192") && new RegExp(TEST_NUMBER).test("+16175550149") && !new RegExp(TEST_NUMBER).test("+14155551234") && !new RegExp(TEST_NUMBER).test("+13105550100x"));
 
