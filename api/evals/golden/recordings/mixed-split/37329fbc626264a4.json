@@ -1,0 +1,88 @@
+{
+  "hash": "37329fbc626264a4",
+  "case": "mixed-split",
+  "recorded_at": "2026-10-17T17:35:08.066Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-haiku-5-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": false,
+    "max_tokens": 2248,
+    "system": "",
+    "messages": 1,
+    "last": "user: A member asked Cue (a texting companion) for this: \"Draft the launch plan for the Sequin party and keep an eye out for venues\" Cue does some things itself (drafting, writing, planning, outlining, preparing something for them) and finds things in the world with its daily search (events, venues, place...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2248,
+      "messages": [
+        {
+          "content": "A member asked Cue (a texting companion) for this: \"Draft the launch plan for the Sequin party and keep an eye out for venues\"\n\nCue does some things itself (drafting, writing, planning, outlining, preparing something for them) and finds things in the world with its daily search (events, venues, places, people, programs, communities).\nWhat is this request?\n- \"work\": only a piece of work for Cue to do (draft, write, plan, prepare something).\n- \"find\": only something to find, even if it's worded as \"have Cue look for...\" or it's for a piece of work they're doing themselves.\n- \"mixed\": both a piece of work for Cue AND a separate thing to find.\nAnswer {\"kind\": \"work\"} or {\"kind\": \"find\"} or {\"kind\": \"mixed\", \"work\": \"the work, in a few words, their terms\", \"find\": \"the thing to find, in a few words, their terms\", \"findIsLookout\": true only if their words ask Cue to keep watching or tell them when (keep an eye out, let me know when, look out for), else false}\nNever invent a part they didn't ask for. Return ONLY JSON.",
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5",
+      "thinking": {
+        "type": "disabled"
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-haiku-5-5",
+      "text": "{\"kind\": \"mixed\", \"work\": \"draft the launch plan for the Sequin party\", \"find\": \"venues for the Sequin party\", \"findIsLookout\": true}",
+      "usage": {
+        "input_tokens": 358,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 55,
+        "output_tokens_details": {
+          "thinking_tokens": 0
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-haiku-5-5",
+        "id": "msg_011Cg8DHSVeC1ELfqTGKgN4X",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"kind\": \"mixed\", \"work\": \"draft the launch plan for the Sequin party\", \"find\": \"venues for the Sequin party\", \"findIsLookout\": true}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 358,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 55,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

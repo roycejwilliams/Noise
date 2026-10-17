@@ -1,0 +1,95 @@
+{
+  "hash": "8c01e616431bebab",
+  "case": "checkin-late-night",
+  "recorded_at": "2026-10-17T17:36:15.516Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member of a private club. The situation: It's 12:04am for the member. They texted \"Hey cue\", Cue said \"Hey Noor. What's up?\", and now they texted \"Just checking in\". At 5:30pm Cue had sent them the Harbor Light Fellowship with a question they never an...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member of a private club.\n\nThe situation: It's 12:04am for the member. They texted \"Hey cue\", Cue said \"Hey Noor. What's up?\", and now they texted \"Just checking in\". At 5:30pm Cue had sent them the Harbor Light Fellowship with a question they never answered.\n\nCue's text:\n\"\"\"It's late to just be checking in, Noor. Everything ok?\"\"\"\n\nDoes the text open soft and open for the hour: noticing it's late or asking gently if everything's ok or what's keeping them up, before anything else, with any mention of the fellowship or other business kept light and secondary (or left out), and no status report? Answer yes only if the soft, open line comes first.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"Opens with 'It's late to just be checking in' then 'Everything ok?' with no mention of the fellowship.\"}",
+      "usage": {
+        "input_tokens": 284,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 117,
+        "output_tokens_details": {
+          "thinking_tokens": 62
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg8DNLStbZNvDuiDAuFBJ",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EtYECsQCCBIYAipA0dbebaYRkpPE1TjY/PzHYOAR/HpxOS8yc0eBcNO5DkcQcER4hivfjXtSaZhCHtlJfADBdAxXOswl5OTLUMoxNjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagBjuTO1gbCAToIBBAAGgwC2ooDTzcFIdwEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiDh8UWDwd/t/OdkNIq2XFE+JZaOjklD5aecCuM/NZd1pCIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgy72/mudC3dpGz29pgaDDQkfgHjqAyyQ0WWKCIwzbr9fmWyp8FMlADuZjSZzo4bKQu3vOIlsvJlCrqeRDWeRH1pWUBNYHF8U8UzlQtaKr4BnqdLik/WyKEhn4cv3Jrtx6eNBQCjCyHyByO12Pm7w+l3ZnqzTiT26MZDbUqjUpTjefQmhRApcTMrVzHuHHZ31awA5+i59ZaCO5rlHr+1d+9ZijOaARqHD6nMRH7SDvPJLkQwZcSyNrXNe/NJmcn4MRT99MQAcxTZv7P69V11KAlnKJlAMFoybq7rMMuxyc/sFtLrTmHddaKsCjnP74MeVVROY8UMRM0bbFXwdmyOAjXxCkcgtY9FpruF6ZHOMBgB"
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"Opens with 'It's late to just be checking in' then 'Everything ok?' with no mention of the fellowship.\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 284,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 117,
+          "output_tokens_details": {
+            "thinking_tokens": 62
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}

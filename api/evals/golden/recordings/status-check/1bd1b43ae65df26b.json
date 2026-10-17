@@ -1,0 +1,95 @@
+{
+  "hash": "1bd1b43ae65df26b",
+  "case": "status-check",
+  "recorded_at": "2026-10-17T17:35:06.067Z",
+  "golden_now": "2026-10-13T21:00:00.000Z",
+  "model": "claude-sonnet-5",
+  "request": {
+    "path": "api.anthropic.com/v1/messages",
+    "model": "claude-haiku-5-5",
+    "grader": true,
+    "max_tokens": 2348,
+    "system": "",
+    "messages": 1,
+    "last": "user: You grade one text a companion called Cue sent a member. The situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you dr...",
+    "tools": [],
+    "beta": null,
+    "body": {
+      "max_tokens": 2348,
+      "messages": [
+        {
+          "content": [
+            {
+              "text": "You grade one text a companion called Cue sent a member.\n\nThe situation: Cue is already drafting the Sequin AI planning docs for the member: the launch timeline is outlined (venue walk-through Nov 3, invites out Nov 10), the partner section is next, around tomorrow 10am. The member texted \"Can you draft the planning docs for Sequin?\".\n\nCue's text:\n\"\"\"Already on it. I outlined the launch timeline, venue walk-through Nov 3 and invites out Nov 10, and I'm drafting the partner section next.\n\nI'll have the full draft to you after that's done.\"\"\"\n\nDoes the text tell them Cue is already working on the Sequin planning docs AND say where it stands (something from: the timeline is outlined, the dates, the partner section is next, when the next step happens), WITHOUT offering to start it, saying anything was stopped or paused, or claiming a new search or task was started? Answer yes only if all of that holds.\n\nReturn ONLY JSON: {\"answer\": \"yes\" | \"no\", \"count\": <number, only if the question asks for one>, \"reason\": \"one short line quoting the words that decide it\"}",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      ],
+      "model": "claude-haiku-5-5"
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "content_type": "application/json",
+      "model": "claude-sonnet-5",
+      "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Already on it. I outlined the launch timeline...and I'm drafting the partner section next.\\\" gives status without offering, pausing, or new task claims\"}",
+      "usage": {
+        "input_tokens": 370,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 153,
+        "output_tokens_details": {
+          "thinking_tokens": 87
+        },
+        "service_tier": "standard",
+        "inference_geo": "global",
+        "speed": "standard"
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "id": "msg_011Cg8DHC5xdPEp5xBmvWEXd",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "signature": "EsAFCsQCCBIYAipAW+TAsjClzbHdfNu4y0rf/i9qt1eUTWVwfDTXGnpAfCs8Z/pJm1Wgdd2M5BNXtOoiwjUTb4Kl71KKlii3VP/sajIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiRjZmQ1OGU1OC1hMjE0LTRmNDUtYTg3Yy00OWNjMTk2ODdjM2SaAREKD2NsYXVkZS1zb25uZXQtNagByePO1gbCAToIBBAAGgwC2ooDTzcFlYMEJq0gATIEEnHPJToEODMjikIEODMjikoEODMjilAAWgTZBeFWYAJoAXAA2gFgChZwcmVmaXhfYmVmb3JlX2Jsb2NrX3YxEiBCQSZ6gW//ERwYjamWEoXsEHMlDUYzrsbWRmWzIxTBPyIAMiDCwBPIapyS4i+Wbz2GF3aPi3pEyQKtzAl7+h4JivtOH0gDEgyGYFycN4LZSML+8zMaDBaie3BaCRZV146/byIwGO2H/HDyAp9BFTMXjVvTOq9g593iLZVS0iDMOkbOZs2gKzvB6mrndT14+0Jy46MPKqgCO4A9WzVD+3nH98riKJ/y+6Lc47cj8Xb3E2lNfOWFMGT7V806vVLbhXf18JBryI1ksMNrmzuUzkTagA+BWUrSJqTRtBfOKNcN3SObeiqJY2lwA5u+I8fiXL0zBwPz3KnlH+rt3JK4Lq1IK+lj9sIb2BkRXD5GQujElCe4rI3+6ZkhH3M2FapINXGEaMk8+TOg2INXy+H/NOn0U3xvP9rQnpti9E1/Uhb/fQAMNre26GLnPlTsmtOT83ajBIXMWyYgyrW+8CJmF938xZM5VzUJCFgBg56uKpXQVm6cYFSz7BYQ2g8ZrjFqQd41hSb8HjzdalWC99so/oSuvXOX6CnwSkUI6Fp0RHsyiTEQ90wAoRqo2qWwcgW556BKvXflzoVnB1hwR0Ma90IYAQ=="
+          },
+          {
+            "type": "text",
+            "text": "{\"answer\": \"yes\", \"reason\": \"\\\"Already on it. I outlined the launch timeline...and I'm drafting the partner section next.\\\" gives status without offering, pausing, or new task claims\"}"
+          }
+        ],
+        "container": null,
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "stop_details": null,
+        "usage": {
+          "input_tokens": 370,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 153,
+          "output_tokens_details": {
+            "thinking_tokens": 87
+          },
+          "service_tier": "standard",
+          "inference_geo": "global",
+          "speed": "standard"
+        },
+        "diagnostics": null
+      }
+    }
+  ]
+}
