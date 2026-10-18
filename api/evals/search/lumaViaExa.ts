@@ -249,6 +249,26 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   globalThis.fetch = realFetch;
   const last = results[results.length - 1];
   check(`the reply runs ${LOOP_BUDGET.eventSearches} event searches a turn; the next is refused, saying what to do instead`, LOOP_BUDGET.eventSearches === 3 && results.slice(0, 3).every((r) => r.ok === true) && last.ok === false && /No event searches left this turn \(3 used\): work with the events you already have, or try webSearch\./.test(last.error), results.map((r) => JSON.stringify(r).slice(0, 120)));
+  // A call's turn (isVoice) never runs Exa; a text turn does. Exa is "configured" here and answered by a stub that counts its calls.
+  const exaCalls: string[] = [];
+  globalThis.fetch = (async (u: any, init: any) => {
+    if (String(u?.url ?? u).startsWith("https://api.exa.ai/")) {
+      exaCalls.push(JSON.parse(init?.body ?? "{}").query ?? "");
+      return new Response(JSON.stringify({ results: [], costDollars: { total: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error("no network in this test");
+  }) as any;
+  process.env.EXA_API_KEY = "test-key";
+  const turn = async (isVoice: boolean, what: string) => {
+    const L2 = L.loopTools({ ...ctx, isVoice }, { sent: false, sentMessages: [] }, L.newLoopState(Date.now()), () => {}) as any;
+    return L2.searchEvents.execute({ what, when: "this weekend" }, { toolCallId: what, messages: [] }).catch((e: any) => ({ threw: String(e) }));
+  };
+  const voice = await turn(true, "jazz on a call");
+  const onCall = exaCalls.length;
+  const text = await turn(false, "jazz by text");
+  delete process.env.EXA_API_KEY;
+  globalThis.fetch = realFetch;
+  check("a call's searchEvents (isVoice) makes no Exa call; a text turn's does", voice.ok === true && onCall === 0 && text.ok === true && exaCalls.length === 1 && /jazz by text/.test(exaCalls[0]), { onCall, exaCalls, voice: JSON.stringify(voice).slice(0, 120) });
   check("the sweep's note says 'Luma is thin' once Exa added any, 'the feed is thin' when it's the feed's alone (pinned)", /note: r\.inWindow < 4 \? `\$\{r\.viaExa\?\.nearby \? "Luma is" : "The feed is"\} thin here; webSearch may find more\.`/.test(src("services/sweepFind.ts")));
 }
 
@@ -318,7 +338,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("viaExa: false (a call): no Exa search, the feed's events only, nothing logged", exaCalls.length === 0 && links(r).join() === "https://lu.ma/feed1,https://lu.ma/feed2" && r.viaExa === null && logs.length === 0, { exaCalls, links: links(r) });
   check("calls (voiceFinds) pass viaExa: false; replies, tasks and the sweep leave it on (pinned)",
     /eventCandidates\(what, city, \{ when: brief\?\.when \?\? null, userId, limit: 5, viaExa: false \}\)/.test(src("services/voiceFinds.ts")) &&
-    /eventCandidates\(what, city \?\? ctx\.turn\?\.profile\?\.city \?\? null, \{ when: when \?\? null, userId: ctx\.userId, limit: 8 \}\)/.test(src("agent/loopTools.ts")) &&
+    /eventCandidates\(what, city \?\? ctx\.turn\?\.profile\?\.city \?\? null, \{ when: when \?\? null, userId: ctx\.userId, limit: 8, viaExa: !ctx\.isVoice \}\)/.test(src("agent/loopTools.ts")) &&
     /eventCandidates\(what, person\.city \?\? null, \{ when: when \?\? null, userId, timezone: zone, limit: 6 \}\)/.test(src("services/taskTurn.ts")) &&
     /eventCandidates\(what, c\.city, \{ when: when \?\? null, userId: c\.userId, timezone: opts\.timezone \?\? null, limit: 8 \}\)/.test(src("services/sweepFind.ts")));
 }
