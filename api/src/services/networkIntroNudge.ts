@@ -394,6 +394,24 @@ async function holdNetworkIntro(a: MatchNudgeCandidate, b: MatchNudgeCandidate, 
 }
 
 // "sent", "held" (the pause; it goes when the pause lifts) or "failed".
+// The email's reason (a shared ask, checked at the reveal) is checked once more against both members' hidden parts (private
+// asks and blockers, harness/hiddenEcho.ts): both of them read it. A failed read holds the email (fails closed).
+export async function introEmailHiddenCheck(reason: string, userIds: string[]): Promise<{ name: string; pass: boolean; reason?: string }> {
+  const { hiddenSideOf, SENSITIVE } = await import("../harness/matchGate.js");
+  const { hiddenEcho } = await import("../harness/hiddenEcho.js");
+  try {
+    const sides = await Promise.all(userIds.map((id) => hiddenSideOf(id)));
+    const shared = sides.flatMap((x) => x.shared);
+    for (const side of sides) {
+      const why = hiddenEcho(String(reason ?? "").replace(/^what they(?:'|\u2019)ve said they(?:(?:'|\u2019)re looking for| can offer):\s*/i, ""), side.hidden, shared, [], SENSITIVE);
+      if (why) return { name: "email_no_hidden_echo", pass: false, reason: why };
+    }
+    return { name: "email_no_hidden_echo", pass: true };
+  } catch {
+    return { name: "email_no_hidden_echo", pass: false, reason: "couldn't read what they keep private" };
+  }
+}
+
 async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandidate, matchReason: string): Promise<"sent" | "held" | "failed"> {
   const [aYes, bYes] = await Promise.all([networkOptedIn(a.user_id, b.user_id), networkOptedIn(b.user_id, a.user_id)]);
   // The matching kill switch (all events) holds the email instead of dropping it; Co never says it went.
@@ -402,7 +420,7 @@ async function sendNetworkIntroEmail(a: MatchNudgeCandidate, b: MatchNudgeCandid
     await holdNetworkIntro(a, b, paused);
     return "held";
   }
-  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes)], { b: b.user_id }))) return "failed";
+  if (!(await gateIntroAction(a.user_id, "networkIntroNudge.introEmail", [checkBothYes(aYes, bYes), await introEmailHiddenCheck(matchReason, [a.user_id, b.user_id])], { b: b.user_id }))) return "failed";
   // The pair in one order (by id), so a retry from either side or after a crash builds the very same email: the send's
   // idempotency key covers the same body only (as eventGuestMatchHandoff.ts introEmailContent).
   const [p1, p2] = a.user_id < b.user_id ? [a, b] : [b, a];

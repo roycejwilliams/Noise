@@ -358,14 +358,37 @@ export function checkInventedSpecifics(draft: string, ctx: Pick<ConsentContext, 
   return bad.length ? { name, pass: false, reason: `states ${bad.map((b) => `"${b.text}"`).join(", ")}, which nothing real backs (${bad[0].why}); use only the event's real name, day and time, or leave it out` } : { name, pass: true };
 }
 
+// The other member's hidden part (private asks and blockers, harness/hiddenEcho.ts): never echoed in a draft, word for word or
+// near it (Royce, 2026-10-18). What the draft may rest on (ctx.said, their shareable asks) is allowed. A failed read withholds
+// the draft: this check fails closed.
+export async function hiddenEchoCheck(draft: string, ctx: Pick<ConsentContext, "otherUserIds" | "said" | "facts">): Promise<GateCheck | null> {
+  if (!ctx.otherUserIds?.length) return null;
+  const { hiddenSideOf, SENSITIVE } = await import("./matchGate.js");
+  const { hiddenEcho } = await import("./hiddenEcho.js");
+  const names = [ctx.facts?.otherFirstName, ctx.facts?.recipientFirstName].filter((n): n is string => !!n && n.trim().length > 1);
+  for (const id of ctx.otherUserIds) {
+    let side: { hidden: string[]; shared: string[] };
+    try {
+      side = await hiddenSideOf(id);
+    } catch {
+      return { name: "no_hidden_echo", pass: false, reason: "couldn't read what the other member keeps private, so nothing is sent" };
+    }
+    const why = hiddenEcho(draft, side.hidden, [...side.shared, ...(ctx.said ?? []), ...(ctx.facts?.otherStatedAsks ?? [])], names, SENSITIVE);
+    if (why) return { name: "no_hidden_echo", pass: false, reason: why };
+  }
+  return { name: "no_hidden_echo", pass: true };
+}
+
 async function checkWithPrivacy(draft: string, ctx: ConsentContext): Promise<{ ok: boolean; checks: GateCheck[] }> {
   const priv = await privateFactCheck(draft, ctx.otherUserIds);
   if (priv && !priv.pass) return { ok: false, checks: [priv] };
+  const hid = await hiddenEchoCheck(draft, ctx);
+  if (hid && !hid.pass) return { ok: false, checks: [...(priv ? [priv] : []), hid] };
   // Every draft about an event (ctx.event set) is held to it. Network intros carry no event and keep their own checks.
   const invented = ctx.event !== undefined ? checkInventedSpecifics(draft, ctx) : null;
   if (invented && !invented.pass) return { ok: false, checks: [...(priv ? [priv] : []), invented] };
   const r = await checkDraftFull(draft, ctx.facts, ctx.extraDraftChecks);
-  return { ok: r.ok, checks: [...(priv ? [priv] : []), ...(invented ? [invented] : []), ...r.checks] };
+  return { ok: r.ok, checks: [...(priv ? [priv] : []), ...(hid ? [hid] : []), ...(invented ? [invented] : []), ...r.checks] };
 }
 
 // Drafts, checks, redrafts once with the failures named, then gives up.

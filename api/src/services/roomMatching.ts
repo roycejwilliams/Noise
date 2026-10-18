@@ -20,6 +20,9 @@
 //    frame for someone with no shareable ask); consent facts carry shareable asks only; every in-room draft also passes
 //    checkNoPrivateQuote (below) against the other member's private asks, profile, notes and owner-only facts; and value
 //    lines (below) never see a private ask, rest only on the other member's shareable asks, and are checked in code.
+//    Since 2026-10-18 (Royce): the scorer also reads a candidate's private asks and blockers as a marked hidden signal
+//    (services/matching.ts); still never anyone's frame, never a reason, and no line or draft may echo them
+//    (harness/hiddenEcho.ts).
 //
 // 2. Emergency pause (kill switch, not a toggle).
 //    Was: PROACTIVE_PAUSED, an env var: global only, needs a redeploy to flip, and it never covered the intro email
@@ -104,6 +107,7 @@
 //     other side's answer or outcome.
 //   - Value lines: the line for one side is stored under that side and drafted only into that side's text.
 import { anthropic } from "@ai-sdk/anthropic";
+import { checkNoHiddenEcho } from "../harness/hiddenEcho.js";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
@@ -461,6 +465,9 @@ export type ValueSide = {
   privateAsks: string[];
   // Everything else about them (outcome notes included), never to appear in the other side's line.
   privateTexts: string[];
+  // Their hidden part: private asks and blockers (Royce, 2026-10-18). No line the other member reads may echo it, word for word
+  // or near it (harness/hiddenEcho.ts). Optional for callers that build a side by hand; read as none.
+  hiddenTexts?: string[];
 };
 
 // What the reader's call may know about the other member: their first name and what they marked shareable. Nothing else
@@ -583,6 +590,8 @@ export function checkValueLines(j: ValueJudgment | null, x: ValueSide, y: ValueS
     checks.push(groundedIn(line, other.shared) ? { name: `grounded_${label}`, pass: true } : { name: `grounded_${label}`, pass: false, reason: `line for ${reader.firstName} doesn't rest on what ${other.firstName} shared` });
     // Backstops: the other member's data never enters this side's prompt; these catch it anyway if it did.
     checks.push(checkNoPrivateQuote(line, other.privateTexts, other.shared, `private_${label}`, allow));
+    // What the other member keeps private or is going through: never echoed, even in other words that share its distinctive ones.
+    checks.push(checkNoHiddenEcho(line, other.hiddenTexts ?? [], [...other.shared, ...reader.ownAsks.map((a) => a.text), ...reader.goals], allow, `hidden_${label}`, sensitive));
     checks.push(checkNoPrivateQuote(line, reader.privateAsks, reader.shared, `own_private_ask_${label}`, allow));
     const n = ` ${norm(line)} `;
     const hit = sensitive.map((re) => n.match(re)?.[0]).find(Boolean);
@@ -641,6 +650,7 @@ export async function gatherValueSide(userId: string): Promise<ValueSide> {
     pastOutcomes: past.rows.map((r: any) => `${String(r.outcome).replace(/_/g, " ")}${r.note ? `, in their words: "${scrub(String(r.note), String(r.first_name ?? "")).slice(0, 160)}"` : ""}`),
     shared: ownAsks.filter((a: { shareable: boolean }) => a.shareable).map((a: { text: string }) => a.text),
     privateAsks,
+    hiddenTexts: [...privateAsks, ...(Array.isArray(prof.blockers) ? prof.blockers.map(String) : [])],
     privateTexts: [
       ...privateAsks,
       ...(prof.goals ?? []),

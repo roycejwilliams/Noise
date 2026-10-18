@@ -779,14 +779,20 @@ export async function scoreMatchedGroup(
   // Everyone's wants and offers current before the room is scored
   // (services/peopleGraph.ts). A dry run reads only what's already there.
   if (!opts.dryRun) await refreshRoom(matched.map((m) => m.user_id)).catch(() => {});
-  // Matching reads only asks a member marked shareable (Royce, 2026-10-12): a private ask is neither anyone's frame nor
-  // anything the scorer sees about a candidate. Goals stay the frame for someone with no shareable ask.
+  // A frame is only asks a member marked shareable (Royce, 2026-10-12): a private ask is never anyone's frame and never a
+  // reason. Goals stay the frame for someone with no shareable ask. (Since 2026-10-18 the scorer sees a candidate's private
+  // asks as a hidden signal, below.)
   const { matchableIntent } = await import("./roomMatching.js");
   // For the team (2026-10-12 audit: a room of text-only members produced zero nudges with no warning): how many guests
   // have nothing shareable, so nobody can be pointed to them. Logged on every pass; never told to a member, no email.
   const unshared = matched.filter((g) => !shareableAsks(g.intent).length);
   console.log(`eventScoring: ${eventId} has ${unshared.length} of ${matched.length} guests with no shareable ask`);
   await recordDecision({ layer: 6, decision: "match.room.unshared", userId: null, outcome: unshared.length ? "skip" : "act", action: "count", proposal: { eventId, guests: matched.length, noShareableAsk: unshared.length, ids: unshared.map((g) => g.user_id) }, reason: unshared.length ? `${unshared.length} of ${matched.length} guests have no shareable ask: nobody can be pointed to them` : null }).catch(() => {});
+  // Their private asks come back to the scorer only as each candidate's hidden part (Royce, 2026-10-18: a hidden signal on
+  // every matching path, rooms included; never mentioned, never cited, never a match's only basis, services/matching.ts).
+  // Kept apart from the guests themselves, so nothing after scoring ever reads them.
+  const { privateAskTexts } = await import("./matching.js");
+  const hiddenAsks = new Map(matched.map((g) => [g.user_id, privateAskTexts(g.intent)] as const));
   const room = matched.map((g) => ({ ...g, intent: matchableIntent(g.intent) }));
   matched = room;
   // Co's read of which asks are about people (services/peopleAsks.ts), for the whole room in one call; each person's frame
@@ -846,6 +852,7 @@ export async function scoreMatchedGroup(
       others,
       askerContextParts.length ? askerContextParts.join("; ") : undefined,
       hints,
+      hiddenAsks,
     );
     const ranked: RankedCandidate[] = scored
       .map((s) => {

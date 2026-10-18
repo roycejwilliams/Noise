@@ -21,6 +21,8 @@ const LOG_SCORE_FLOOR = 20;
 
 type RelevanceCandidate = {
   user_id: string;
+  // Never shown to the scorer: it lets matching.ts leave out any item that names another candidate in the same prompt.
+  first_name?: string;
   goals?: string[];
   blockers?: string[];
   activity_preferences?: string[];
@@ -49,8 +51,8 @@ const OPEN_ASK_EMBEDDINGS = `
 
 async function prefilterCandidates(personId: string, askEmbedding: number[]): Promise<RelevanceCandidate[]> {
   const { rows } = await pool.query(
-    `SELECT user_id, goals, blockers, activity_preferences, intent FROM (
-       SELECT cp.user_id, cp.goals, cp.blockers, cp.activity_preferences, cp.intent,
+    `SELECT user_id, first_name, goals, blockers, activity_preferences, intent FROM (
+       SELECT cp.user_id, u.first_name, cp.goals, cp.blockers, cp.activity_preferences, cp.intent,
               LEAST(
                 COALESCE(cp.goal_embeddings <=> $2::vector, 2),
                 COALESCE((SELECT MIN(x.emb <=> $2::vector) FROM (${OPEN_ASK_EMBEDDINGS}) x), 2)
@@ -68,6 +70,7 @@ async function prefilterCandidates(personId: string, askEmbedding: number[]): Pr
   );
   return rows.map((r: any) => ({
     user_id: r.user_id,
+    first_name: r.first_name ?? undefined,
     goals: r.goals ?? undefined,
     blockers: r.blockers ?? undefined,
     activity_preferences: r.activity_preferences ?? undefined,
