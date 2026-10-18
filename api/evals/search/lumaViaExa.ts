@@ -124,7 +124,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("only the upcoming, in-window event survives: past, a start outside the window and one already started are dropped (by its page, not Exa's title)", r?.events.map((e) => e.url).join() === "https://lu.ma/good1", r);
   check("...its start, city and Luma id come from its own page, and its link is the plain lu.ma one", r?.events[0]?.start_at === world.pages.good1.startAt && r?.events[0]?.city === "San Francisco" && r?.events[0]?.api_id === "evt-good1", r?.events[0]);
   check("...the report counts it: 5 event pages (Discover and a repeat aren't), 4 read, 1 kept", r?.report.pages === 5 && r?.report.read === 4 && r?.report.kept === 1 && r?.report.cached === false, r?.report);
-  check("the search is Luma's pages only, 25 results, no page text, with the want, the city and the dates", exaCalls[0] === "founder dinners in San Francisco, now to then");
+  check("the search is built from fixed parts only: the kinds, the city (dates not in Cue's own form are left out)", exaCalls[0] === "startup founder, dinner events in San Francisco", exaCalls);
 }
 
 // ================================================================ no key, no search
@@ -192,7 +192,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("one starting in 30 minutes goes through #229's start check like a feed event: turned away, with why", !got.includes("https://lu.ma/soon1") && r.turnedAway.some((g) => g.url === "https://lu.ma/soon1" && g.reasons.some((x) => /too soon/.test(x))), r.turnedAway);
   const mixer = r.candidates.find(({ match }) => "url" in match && match.url === "https://lu.ma/mixer1")?.match as any;
   check("Exa's event goes out as a Luma link, tier 2, a public event, with its Luma id and the details from its page", mixer?.tier === 2 && mixer?.kind === "public_event" && mixer?.event_api_id === "evt-mixer1" && mixer?.details?.startAt === world.pages.mixer1.startAt && mixer?.reason === "A public event.", mixer);
-  check("the log: what Exa added, counts only, not the want", r.viaExa?.added === 5 && r.viaExa?.nearby === 4 && r.viaExa?.offered === 3 && logs.length === 1 && logs[0].decision === "luma.via_exa" && logs[0].proposal.added === 5 && logs[0].proposal.feed === 2 && !JSON.stringify(logs[0]).includes("founder"), { viaExa: r.viaExa, logs });
+  check("the log: what Exa added, counts only, not the want", r.viaExa?.added === 5 && r.viaExa?.nearby === 4 && r.viaExa?.offered === 3 && logs.length === 1 && logs[0].decision === "luma.via_exa" && logs[0].proposal.added === 5 && logs[0].proposal.feed === 2 && !JSON.stringify(logs[0]).includes("founder dinners") && (logs[0].proposal.kinds ?? []).every((k: string) => V.EVENT_KINDS.some((x) => x.kind === k)), { viaExa: r.viaExa, logs });
 }
 {
   // Feed-only baseline for the next two.
@@ -288,7 +288,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   delete process.env.EXA_API_KEY;
   globalThis.fetch = realFetch;
   (pool as any).connect = realConnect;
-  check("a call's searchEvents (isVoice) makes no Exa call; a text turn's does", voice.ok === true && onCall === 0 && text.ok === true && exaCalls.length === 1 && /jazz by text/.test(exaCalls[0]), { onCall, exaCalls, voice: JSON.stringify(voice).slice(0, 120) });
+  check("a call's searchEvents (isVoice) makes no Exa call; a text turn's does", voice.ok === true && onCall === 0 && text.ok === true && exaCalls.length === 1 && /^jazz events/.test(exaCalls[0]) && !/by text/.test(exaCalls[0]), { onCall, exaCalls, voice: JSON.stringify(voice).slice(0, 120) });
   check("the sweep's note says 'Luma is thin' once Exa added any, 'the feed is thin' when it's the feed's alone (pinned)", /note: r\.inWindow < 4 \? `\$\{r\.viaExa\?\.nearby \? "Luma is" : "The feed is"\} thin here; webSearch may find more\.`/.test(src("services/sweepFind.ts")));
 }
 
@@ -458,6 +458,52 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   await T.eventCandidates("supper clubs", "San Francisco", { userId: "u9", timezone: "America/Los_Angeles", limit: 8, source: "request", sources: sources() });
   await T.eventCandidates("gallery openings", "San Francisco", { userId: "u9", timezone: "America/Los_Angeles", limit: 8, sources: sources() });
   check("a member's ask draws on the request share; with none named, the sweep's (the stricter one)", reserves.map((x) => x.source).join() === "request,sweep" && reserves[0].userId === "u9", reserves);
+}
+
+// ================================================================ what Exa is sent: never their words (Royce, 2026-10-18, option (d))
+{
+  const D1 = "October 20 to October 26, 2026";
+  const q = (w: string, city: string | null = "San Francisco", dates = D1) => V.lumaExaQuery(w, city, dates).query;
+  const plan = "dinner with Jordan Lee to talk about her raise, somewhere quiet in the Mission";
+  check("a private plan: only the kind of event, the city and the dates go to Exa", q(plan) === "dinner events in San Francisco, October 20 to October 26, 2026", q(plan));
+  const adversarial: [string, RegExp][] = [
+    [plan, /jordan|lee|raise|quiet|mission|talk/i],
+    ["coffee with Priya Patel from Stripe about my Series A", /priya|patel|stripe|series|coffee/i],
+    ["Ellis Park looking for founder dinners near his office", /ellis|park|office|looking/i],
+    ["founder dinners, email me at ellis.park@example.com or text 415-555-0142", /ellis|example|415|555|0142|@/i],
+    ["find a cofounder for my climate startup so I can quit my job by spring", /cofounder|quit|job|spring|find/i],
+    ["something to take my mind off the divorce", /divorce|mind/i],
+    ["AI meetups where I could meet Sam Altman", /sam|altman|could/i],
+    ["supper club for my 40th birthday with Noor and the Acme Corp team", /noor|acme|corp|birthday|40th|team/i],
+  ];
+  for (const [w, bad] of adversarial) check(`"${w.slice(0, 50)}": none of their words reach Exa`, !bad.test(q(w)), q(w));
+  // Every word of every query is one of the fixed parts: a kind, "events", "online"/"in person", the city, the dates.
+  const allowed = new Set([...V.EVENT_KINDS.flatMap((k) => k.kind.toLowerCase().split(/[\s,]+/)), "events", "online", "in", "person", "san", "francisco", "to", "october", "20", "26", "2026"]);
+  const strays = adversarial.flatMap(([w]) => q(w).toLowerCase().split(/[\s,]+/).filter((x) => x && !allowed.has(x)));
+  check("every word sent is from the fixed parts (kinds, city, dates, online / in person)", strays.length === 0, strays);
+  check("no kind on the list: plain events for the city and dates", q("something to take my mind off the divorce") === "events in San Francisco, October 20 to October 26, 2026");
+  check("online or in person is said when they say it", q("virtual AI talks") === "AI, talk events online in San Francisco, October 20 to October 26, 2026" && q("in-person design workshops") === "design, workshop events in person in San Francisco, October 20 to October 26, 2026", [q("virtual AI talks"), q("in-person design workshops")]);
+  check("a city that isn't a plain place name is left out, and so are dates not in Cue's own form", q("jazz", "SF <script>") === "jazz events, October 20 to October 26, 2026" && q("jazz", "jordan@example.com") === "jazz events, October 20 to October 26, 2026" && q("jazz", "Chicago", "next Tuesday with Jordan") === "jazz events in Chicago", [q("jazz", "SF <script>"), q("jazz", "Chicago", "next Tuesday with Jordan")]);
+  check("everyday words that look like a kind aren't one ('talk about', 'book a table', 'no energy', 'it runs late')", q("I want to talk about it, book a table, I have no energy and it runs late") === "events in San Francisco, October 20 to October 26, 2026", q("I want to talk about it, book a table, I have no energy and it runs late"));
+  check("at most 3 kinds", V.lumaExaQuery("founder investor climate hardware AI meetups", "San Francisco", D1).kinds.length === 3);
+  // The receipt's wants (search-compare q4, q5, q10), as Exa now gets them.
+  const receipt: [string, string, string, string][] = [
+    ["q4", "startup founder events and meetups", "October 19 to October 25, 2026", "startup founder, meetup events in San Francisco, October 19 to October 25, 2026"],
+    ["q5", "climate tech or climate hardware founder meetups", "October 18 to November 30, 2026", "startup founder, climate tech, hardware events in San Francisco, October 18 to November 30, 2026"],
+    ["q10", "intimate supper clubs or chef's table dinners", "October 20 to October 31, 2026", "supper club, chef's table dinner events in San Francisco, October 20 to October 31, 2026"],
+  ];
+  for (const [id, w, d, want] of receipt) {
+    const got = q(w, "San Francisco", d);
+    console.log(`  ${id}: "${w}" -> "${got}"`);
+    check(`${id} still makes a sensible search: ${want}`, got === want, got);
+  }
+  // The cache key is the built query: two different wants with the same kinds are one search (their words can't be in the key).
+  reset({ exa: [{ url: "https://lu.ma/good1", title: "Founder dinner" }], pages: { good1: page({ startAt: at(50) }) } });
+  const o = { inRange: () => true, dates: D1, deps: viaDeps() };
+  await V.lumaEventsViaExa("founder dinner with Jordan Lee", "San Francisco", o);
+  const second = await V.lumaEventsViaExa("a dinner for founders, maybe Priya comes", "San Francisco", o);
+  check("the cache key is the built query: two wants with the same kinds are one Exa call, and neither's words are in it", exaCalls.length === 1 && second?.report.cached === true && exaCalls[0] === "startup founder, dinner events in San Francisco, October 20 to October 26, 2026", exaCalls);
+  check("the log records the kinds used (fixed words only)", JSON.stringify(second?.report.kinds) === '["startup founder","dinner"]');
 }
 
 console.log(`luma via exa: ${total - failed}/${total} passed`);
