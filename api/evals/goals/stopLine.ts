@@ -28,7 +28,29 @@ const CASES: [kind: string, text: string][] = [
   ["ask: seeking", "Seeking a lead investor for the pre-seed round"],
   ["ask: long, cut at the cap", "Pottery classes near the Mission that run on weekday evenings after work hours"],
   ["nothing usable (empty)", ""],
+  // Second review of #236 (2026-10-17): shapes the first reword broke.
+  ["review: infinitive find", "To find a cofounder"],
+  ["review: infinitive verb", "To meet founders"],
+  ["review: about to", "About to move to Lisbon"],
+  ["review: an opener", "Of course, a cofounder"],
+  ["review: a bare preposition (for)", "for"],
+  ["review: a bare preposition (to)", "to"],
+  ["review: the search for", "The search for a cofounder"],
+  ["review: a verb-looking noun", "Date night spots"],
+  ["review: one word over the cap", "Supercalifragilisticexpialidociousnesslyhyperextraordinarilylongword"],
 ];
+// The exact label each review case must come out as.
+const EXPECT: Record<string, string> = {
+  "To find a cofounder": "a cofounder",
+  "To meet founders": "meeting founders",
+  "About to move to Lisbon": "moving to Lisbon",
+  "Of course, a cofounder": "a cofounder",
+  "for": "",
+  "to": "",
+  "The search for a cofounder": "a cofounder",
+  "Date night spots": "date night spots",
+  "Supercalifragilisticexpialidociousnesslyhyperextraordinarilylongword": "supercalifragilisticexpialidociousnesslyhyperextraordinarilylongword".slice(0, 64),
+};
 
 const PREP = "(?:for|on|of|to|in|at|with|about|into|from|by)";
 const DOUBLE_PREP = new RegExp(`\\b${PREP}\\s+${PREP}\\b`, "i");
@@ -46,6 +68,8 @@ for (const [kind, text] of CASES) {
   why(!/\b(?:Cue|Co)\b/.test(line) && !/\b(?:I want|wants to|seeking|find me|looking for|can you)\b/i.test(label), "never names Cue, no request framing left in the label");
   why(A.noteKeepsRules(line), "keeps the note rules (the same check a written line gets)");
   why(label.length <= A.NOTE_LABEL_CHARS && !/\s$/.test(label), "label under the cap, cut on a word");
+  why(!/^I've paused the search on (?:find|meet|move|to|for|of|about|course|the search|the hunt)\b/i.test(line), "no framing word left right after \"the search on\"");
+  if (text in EXPECT) why(label === EXPECT[text], `the label is exactly "${EXPECT[text]}" (got "${label}")`);
 }
 check("a label that comes out empty reads \"this\", never a gap", A.fallbackNote("") === "I've paused the search on this; say the word and I'll pick it back up" && A.fallbackNote("Find AI events with Cue") !== A.fallbackNote(""), A.fallbackNote(""));
 check("a doing reads as a doing (raising, hiring, moving), a thing as a thing", A.fallbackLabel("Hire a founding engineer who knows Rust") === "hiring a founding engineer who knows Rust" && A.fallbackLabel("Looking for a wedding photographer who does film") === "a wedding photographer who does film");
