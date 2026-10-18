@@ -561,7 +561,7 @@ export async function loadTheirWords(userId: string): Promise<string> {
 // The same words, one entry per text or call (oldest first), for a reader that orders them its own way (a deck's judge reads the
 // newest first: agent/deckTools.ts deckSource).
 export async function loadTheirLines(userId: string): Promise<string[]> {
-  const { rows } = await pool
+  const { rows: raw } = await pool
     .query(
       `SELECT memory_type, content FROM co_memories
        WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days' AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}))
@@ -569,6 +569,9 @@ export async function loadTheirLines(userId: string): Promise<string[]> {
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
+  // What they had Cue forget or correct never comes back (services/whatCoKnows.ts guardRows, the read-time guard the reply's memory
+  // and member knowledge use; a failed guard read leaves the rows as they were, as for those readers).
+  const rows = await (await import("./whatCoKnows.js")).guardRows(userId, raw);
   // Oldest first (the newest 120): one stable order, so a claim that spans two of their texts reads in the order they said it, and
   // the verdict doesn't turn on which messages sit next to which (2026-10-12).
   return rows.reverse().map(theirLine);
@@ -582,8 +585,14 @@ const theirLine = (r: any): string =>
 // picks the parts that match the deck's lines). The same rows as their 14 days, any age: their texts and their side of calls, their
 // user id only, teammate texts left out. Oldest first; the newest HISTORY_LIMIT rows.
 export const HISTORY_LIMIT = 3000;
-export async function loadTheirHistory(userId: string): Promise<{ at: string; text: string }[]> {
-  const { rows } = await pool
+// Forgetting holds here too (Royce, 2026-10-18): every row goes through the read-time guard (whatCoKnows.ts guardText), so a thing
+// they removed or had Cue forget is never read or matched. If the guard can't be read, no history at all (fails closed: a removed
+// fact must never come back by this door).
+export async function loadTheirHistory(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<{ at: string; text: string }[]> {
+  const W = await import("./whatCoKnows.js");
+  const guards = await W.forgottenRows(userId, q).catch(() => null);
+  if (guards === null) return [];
+  const { rows } = await q
     .query(
       `SELECT memory_type, content, created_at FROM co_memories
        WHERE user_id = $1 AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}))
@@ -593,6 +602,9 @@ export async function loadTheirHistory(userId: string): Promise<{ at: string; te
     .catch(() => ({ rows: [] as any[] }));
   return rows
     .reverse()
-    .map((r: any) => ({ at: new Date(r.created_at).toISOString(), text: theirLine(r) }))
+    .flatMap((r: any) => {
+      const content = W.guardText(String(r.content ?? ""), guards);
+      return content === null ? [] : [{ at: new Date(r.created_at).toISOString(), text: theirLine({ ...r, content }) }];
+    })
     .filter((r) => r.text.trim());
 }

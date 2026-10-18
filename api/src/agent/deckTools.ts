@@ -87,7 +87,8 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
            ORDER BY created_at DESC LIMIT 60`,
           [ctx.userId, DECK_WINDOW_HOURS],
         )
-        .then((r) => r.rows.map((x: any) => String(x.content).replace(/^User said:\s*/i, "")))
+        // What they had Cue forget never comes back (whatCoKnows.ts guardRows, as their 14 days and their history).
+        .then(async (r) => (await (await import("../services/whatCoKnows.js")).guardRows(ctx.userId, r.rows)).map((x: any) => String(x.content).replace(/^User said:\s*/i, "")))
         .catch(() => [] as string[]);
   // words and judged: only what they said (the claim check must never take Co's own earlier lines as their word). What's written in an
   // image Co read as a look reference is taken out (services/designSystem.ts withoutReferenceText): it's data for the look, never

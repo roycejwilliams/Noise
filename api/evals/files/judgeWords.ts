@@ -70,6 +70,19 @@ const NEWEST = Array.from({ length: 300 }, (_, i) => `newest text ${i}: some lon
   const para = J.judgeWords(["Bootstrapped"], NEWEST, HISTORY, NOW);
   check('paraphrase: a line and words with no word in common are matched by topic ("Bootstrapped" and "no investors at all")', /\[said 5 months ago\] [^\n]*no investors at all/.test(para), para.slice(0, 500));
   check("paraphrase: how candidates are picked (names, numbers, topic words, changeable-topic clusters)", J.lineKeys("Bootstrapped").clusters.includes("funding stage or raise") && J.relevance("no investors at all", J.lineKeys("Bootstrapped")) >= J.JUDGE_WORDS.minScore);
+  // A rare word finds its row among many on the same topic (Royce's real case: "bootstrapped" in one call among dozens about funding).
+  const crowd = [{ at: ago(30), text: "honestly we're bootstrapped right now and that's fine" }, ...Array.from({ length: 30 }, (_, i) => ({ at: ago(20 - i * 0.1), text: `still thinking about funding and investors, maybe a grant, note ${i}` }))];
+  const rareW = J.judgeWords(["Bootstrapped, no outside funding yet"], "hi", crowd, NOW);
+  check("paraphrase: a topic word matches its other forms (\"bootstrapping\", \"unfunded\" for a \"Bootstrapped\" line)", J.lineKeys("Bootstrapped").clusters.includes("funding stage or raise") && J.relevance("kinda bootstrapping this, we're unfunded", J.lineKeys("Bootstrapped")) >= 3 && J.relevance("we're unfunded", J.lineKeys("Bootstrapped")) >= 3);
+  check("history: a rare word finds its row among many rows on the same topic", rareW.includes("we're bootstrapped right now"), rareW.slice(0, 400));
+  // 25 lines with weak matches first, the strong one last: it still gets in.
+  const many = [...Array.from({ length: 24 }, (_, i) => `The menu at Fieldhouse for night ${i}`), "Bootstrapped, no outside funding yet"];
+  const weak = Array.from({ length: 60 }, (_, i) => ({ at: ago(10 - i * 0.1), text: `the menu at Fieldhouse was great and the music was loud that night, number ${i} of the series of nights we have hosted there with friends, neighbours, guests and a few new faces who came along to see the place for the first time` }));
+  const strong = J.judgeWords(many, "hi", [{ at: ago(40), text: "we're unfunded and kinda bootstrapping this whole thing ourselves for now, which honestly means every dollar we spend on the dinners comes out of our own pockets and we are careful with it, week to week, until we decide what comes next" }, ...weak], NOW);
+  const call = { at: ago(12), text: "Uh, hey. Funding is something we talk about a lot, investors and all that, every single week with everyone we meet at every event in the city, and it never stops. But honestly, we're kind of bootstrapping it, so we don't have any investors. Anyway the event is next month and the venue is set." };
+  const callW = J.judgeWords(["Bootstrapped, no outside funding yet"], "hi", [call, ...Array.from({ length: 30 }, (_, i) => ({ at: ago(11 - i * 0.1), text: `funding and investors talk again, note ${i}` }))], NOW);
+  check("history: a long row shows the sentence with the line's rare word", /we're kind of bootstrapping it/.test(callW), callW.slice(0, 500));
+  check("history: the strongest matches go first, whatever the line order", strong.includes("kinda bootstrapping this whole thing"), strong.slice(0, 300));
   check("history: with nothing matched, the judge reads their newest words as before", J.judgeWords(["Zzyzx"], "hello there", HISTORY, NOW) === "hello there");
   check("age: under 90 days in days, then months", J.ageOf(ago(3), NOW) === "said 3 days ago" && J.ageOf(ago(61), NOW) === "said 61 days ago" && J.ageOf(ago(125), NOW) === "said 4 months ago" && J.ageOf(ago(0.2), NOW) === "said today");
 }
@@ -128,9 +141,29 @@ const NEWEST = Array.from({ length: 300 }, (_, i) => `newest text ${i}: some lon
 // ---------------------------------------------------------------- 7. the history is theirs: their texts and calls, any age, their id only
 {
   const del = src("services/documentDelivery.ts");
-  const fn = del.slice(del.indexOf("export async function loadTheirHistory"), del.indexOf("export async function loadTheirHistory") + 900);
-  check("history: their user id only, their texts and their side of calls, no age limit, teammate texts out", /WHERE user_id = \$1 AND \(memory_type = 'call_transcript' OR \(memory_type = 'text_exchange' AND content LIKE 'User said:%' AND \$\{notToTeammate\(\)\}\)\)/.test(fn) && !/INTERVAL/.test(fn) && /LIMIT \$2`,\s*\[userId, HISTORY_LIMIT\]/.test(fn) && /\.map\(theirLine\)|text: theirLine\(r\)/.test(fn), fn.slice(0, 400));
+  const fn = del.slice(del.indexOf("export async function loadTheirHistory"), del.indexOf("export async function loadTheirHistory") + 1600);
+  check("history: their user id only, their texts and their side of calls, no age limit, teammate texts out", /WHERE user_id = \$1 AND \(memory_type = 'call_transcript' OR \(memory_type = 'text_exchange' AND content LIKE 'User said:%' AND \$\{notToTeammate\(\)\}\)\)/.test(fn) && !/INTERVAL/.test(fn) && /LIMIT \$2`,\s*\[userId, HISTORY_LIMIT\]/.test(fn) && /text: theirLine\(\{ \.\.\.r, content \}\)/.test(fn), fn.slice(0, 400));
   check("history: reference images taken out, like their 14 days", /const history = history0\.map\(\(h\) => \(\{ at: h\.at, text: withoutReferenceText\(h\.text, refs\) \}\)\);/.test(src("agent/deckTools.ts")) && /loadTheirHistory\(ctx\.userId\)/.test(src("agent/deckTools.ts")));
+}
+
+// ---------------------------------------------------------------- 8. forgetting holds: a removed fact never reaches the judge
+{
+  const DD = await import("../../src/services/documentDelivery.js");
+  const mem = [
+    { memory_type: "text_exchange", content: "User said: We're bootstrapped, no outside funding yet", created_at: ago(40) },
+    { memory_type: "text_exchange", content: "User said: honestly going through a divorce with Sam right now, it's rough", created_at: ago(50) },
+  ];
+  const removal = [{ field: "claim", old_value: "going through a divorce with Sam", new_value: null, item_ref: "claim:7", removed: "true" }];
+  const fakeQ = (corr: unknown[] | "fail") => ({ query: async (sql: string) => { if (/profile_corrections/.test(sql)) { if (corr === "fail") throw new Error("down"); return { rows: corr }; } return { rows: mem }; } });
+  const hist = await DD.loadTheirHistory("a1", fakeQ(removal) as any);
+  const w = J.judgeWords(["Bootstrapped, no outside funding yet", "Going through a divorce with Sam"], "hi", hist, NOW);
+  check("forget: a fact they removed never reaches the judge's input", !/divorce/i.test(w) && !hist.some((h) => /divorce/i.test(h.text)), { w: w.slice(0, 300), hist });
+  check("forget: a fact they kept still does", /bootstrapped, no outside funding yet/.test(w), w.slice(0, 300));
+  check("forget: with no removals, both are read", (await DD.loadTheirHistory("a1", fakeQ([]) as any)).length === 2);
+  check("forget: when the removals can't be read, no history at all (fails closed)", (await DD.loadTheirHistory("a1", fakeQ("fail") as any)).length === 0);
+  const del = src("services/documentDelivery.ts");
+  check("forget: their 14 days go through the same guard", /const rows = await \(await import\("\.\/whatCoKnows\.js"\)\)\.guardRows\(userId, raw\);/.test(del));
+  check("forget: the deck's 12-hour rows go through the same guard", /guardRows\(ctx\.userId, r\.rows\)/.test(src("agent/deckTools.ts")));
 }
 
 console.log(`judge words: ${total - failed}/${total} passed`);
