@@ -31,9 +31,10 @@ export const eventTitle = (title: string | null | undefined) => String(title ?? 
 
 export type ViaExaEvent = DiscoveredEvent & { online?: boolean };
 // What one search did, for the log (counts only: the query is the member's want). pages: event pages Exa returned; read: how many of
-// those pages gave a start; kept: upcoming and inside the window.
+// those pages gave a start; notPublic: read but not listed as public by their host (dropped); kept: public, upcoming and inside the
+// window.
 // error: what failed and what to do about it, for the log (never the member: they get the feed's events as before).
-export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; kept: number };
+export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; notPublic: number; kept: number };
 
 // Pure: why a Luma search through Exa failed, said with its fix, from exaSearch's error (or what a call threw). Timed out, refused
 // with an HTTP status, unreachable, unreadable: each its own line. Every one ends the same way, because that's what the member got.
@@ -96,17 +97,21 @@ export async function lumaEventsViaExa(
   // A failed search is never kept: the next ask searches again.
   if (error && cache.get(key) === mine) cache.delete(key);
   const read = await Promise.all(
-    found.map(async ({ slug, title }): Promise<ViaExaEvent | null> => {
+    found.map(async ({ slug, title }): Promise<ViaExaEvent | "not_public" | null> => {
       // Read at the same url the feed uses, so the reads after this one (ranking, the gate) hit eventDetails' cache.
       const url = `https://lu.ma/${slug}`;
       const d = await deps.page(url).catch(() => null);
       if (!d?.startAt) return null;
+      // A host's private or unlisted event never goes to strangers: the public feed only lists public events, and an event Exa found
+      // by its url goes out only when its own page says "public". Unknown is not public (fails closed).
+      if (d.visibility !== "public") return "not_public" as const;
       return { api_id: d.apiId ?? `luma:${slug}`, name: d.name || title, start_at: d.startAt, city: d.city ?? null, url, ...(d.online ? { online: true } : {}) };
     }),
   );
-  const withStart = read.filter((e): e is ViaExaEvent => e !== null);
-  const events = withStart.filter((e) => new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
-  return { events, report: { cached: !!fresh, error: exaFailureReason(error), pages: found.length, read: withStart.length, kept: events.length } };
+  const notPublic = read.filter((e) => e === "not_public").length;
+  const listed = read.filter((e): e is ViaExaEvent => e !== null && e !== "not_public");
+  const events = listed.filter((e) => new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
+  return { events, report: { cached: !!fresh, error: exaFailureReason(error), pages: found.length, read: listed.length + notPublic, notPublic, kept: events.length } };
 }
 
 async function search(query: string, userId: string | null, deps: LumaViaExaDeps): Promise<{ found: Found[]; error: string | null }> {

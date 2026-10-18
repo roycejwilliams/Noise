@@ -31,7 +31,7 @@ const check = (label: string, ok: boolean, detail?: unknown) => {
 const H = 3_600_000;
 const at = (hours: number) => new Date(Date.now() + hours * H).toISOString();
 // A Luma page as eventDetails reads it.
-const page = (o: Record<string, unknown> = {}): any => ({ startAt: at(48), endAt: null, timezone: "America/Los_Angeles", online: false, venue: null, address: null, city: "San Francisco", hosts: [], price: null, spotsRemaining: null, requiresApproval: false, soldOut: false, guestCount: null, description: null, apiId: null, ...o });
+const page = (o: Record<string, unknown> = {}): any => ({ startAt: at(48), endAt: null, timezone: "America/Los_Angeles", online: false, venue: null, address: null, city: "San Francisco", hosts: [], price: null, spotsRemaining: null, requiresApproval: false, soldOut: false, guestCount: null, description: null, apiId: null, visibility: "public", ...o });
 const exaPage = (url: string, title: string) => ({ url, title, published: null, text: "" });
 
 // The world, per test: what Exa returns, each page, the feed.
@@ -202,6 +202,54 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   let pool: string[] = [];
   const s = await T.eventCandidates("founder dinners", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { ...sources(), rank: (async (events: any[]) => { pool = events.map((e) => e.url); return { ranked: [], closest: null }; }) as any } });
   check("a full feed (45 in the window) doesn't push Exa's event out of what the ranking reads", pool[0] === "https://lu.ma/mixer1" && pool.length === 46 && s.viaExa?.added === 1, pool.slice(0, 3));
+}
+
+// ================================================================ a host's private or unlisted event never goes out through Exa
+{
+  reset({
+    feed: FEED,
+    exa: [
+      { url: "https://lu.ma/pub1", title: "Founder dinner (public) · Luma" },
+      { url: "https://lu.ma/priv1", title: "Robot Wave Founder Dinner · Luma" },
+      { url: "https://lu.ma/unl1", title: "Members-only founder breakfast · Luma" },
+      { url: "https://lu.ma/unk1", title: "A page with no visibility · Luma" },
+    ],
+    pages: {
+      ...FEED_PAGES,
+      pub1: page({ startAt: at(40), apiId: "evt-pub1" }),
+      // lu.ma/45r1tqno, read 2026-10-17: a real SF founder dinner Exa found, listed by its host as "private".
+      priv1: page({ startAt: at(42), apiId: "evt-priv1", visibility: "private" }),
+      unl1: page({ startAt: at(44), apiId: "evt-unl1", visibility: "members-only" }),
+      unk1: page({ startAt: at(46), apiId: "evt-unk1", visibility: null }),
+    },
+  });
+  const r = await search();
+  const got = links(r);
+  check("a private event Exa found never reaches the search (its page says private)", !got.includes("https://lu.ma/priv1") && !r.turnedAway.some((g) => g.url === "https://lu.ma/priv1"), got);
+  check("...nor one listed for members only", !got.includes("https://lu.ma/unl1"), got);
+  check("...nor one whose page doesn't say (unknown is not public: fails closed)", !got.includes("https://lu.ma/unk1"), got);
+  check("...the public one goes out, and the feed's events are untouched", got.includes("https://lu.ma/pub1") && got.includes("https://lu.ma/feed1") && got.includes("https://lu.ma/feed2"), got);
+  check("...and the log counts the three dropped as not public", r.viaExa?.notPublic === 3 && r.viaExa?.kept === 1 && logs[0]?.proposal?.notPublic === 3, r.viaExa);
+  const parse = (v: unknown) => D.parseLumaEventPage(`<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-x", start_at: at(40), ...(v === undefined ? {} : { visibility: v }) } } } } } })}</script></html>`)?.visibility;
+  check("a Luma page's visibility is read as written, and missing is null", parse("public") === "public" && parse("private") === "private" && parse(undefined) === null);
+}
+
+// ================================================================ the reply's event searches are capped per turn, like web searches
+{
+  const L = await import("../../src/agent/loopTools.js");
+  const { LOOP_BUDGET } = await import("../../src/agent/loop.js");
+  // No network at all here: the feed, the calendar and the openings fail, so each search is empty and costs nothing.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error("no network in this test"); }) as any;
+  const ctx = { userId: "u", phoneNumber: "+14155550101", resolvedContent: "Anything this weekend?", isVoice: false, dryRun: true, sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any;
+  const loop = L.newLoopState(Date.now());
+  const tools = L.loopTools(ctx, { sent: false, sentMessages: [] }, loop, () => {}) as any;
+  const results: any[] = [];
+  for (let i = 0; i < LOOP_BUDGET.eventSearches + 1; i++) results.push(await tools.searchEvents.execute({ what: `founder dinners ${i}`, when: "this weekend" }, { toolCallId: String(i), messages: [] }).catch((e: any) => ({ threw: String(e) })));
+  globalThis.fetch = realFetch;
+  const last = results[results.length - 1];
+  check(`the reply runs ${LOOP_BUDGET.eventSearches} event searches a turn; the next is refused, saying what to do instead`, LOOP_BUDGET.eventSearches === 3 && results.slice(0, 3).every((r) => r.ok === true) && last.ok === false && /No event searches left this turn \(3 used\): work with the events you already have, or try webSearch\./.test(last.error), results.map((r) => JSON.stringify(r).slice(0, 120)));
+  check("the sweep's note says 'Luma is thin' once Exa added any, 'the feed is thin' when it's the feed's alone (pinned)", /note: r\.inWindow < 4 \? `\$\{r\.viaExa\?\.nearby \? "Luma is" : "The feed is"\} thin here; webSearch may find more\.`/.test(src("services/sweepFind.ts")));
 }
 
 // ================================================================ errors say what failed and the fix; the member's results don't change

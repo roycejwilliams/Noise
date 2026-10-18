@@ -38,7 +38,7 @@ export type Found = { name: string; url: string; facts: string; match: TierMatch
 export const WHILE_LOOKING = "Only on your first search, if it'll take a moment: a few words to them in your own voice that react to what they actually asked (its subject, their timing, their mood), the way a friend who's into it would. Never a generic status line (\"let me look\", \"checking\", \"one sec\", \"on it\"), and never one you've sent them before.";
 // Tests only (golden cases): a fixed set of real events a stubbed search returns, the way a live one would.
 export type StubEvent = { name: string; url: string; tier?: 1 | 2; lines: string[] };
-export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; holdAsked?: boolean };
+export type LoopState = { started: number; found: Map<string, Found>; pages: Map<string, string>; holdSent: boolean; shared: string[]; webQueries: number; eventSearches?: number; holdAsked?: boolean };
 // A stock holding line (Royce, 2026-10-17: "Let me look" is bland; golden 55 still said "Let me see what's good this week").
 // Openers only, after an optional "ok,", "sure,", "got it,"; Royce 2026-10-17 asked for the wider list, and what it doesn't cover is in
 // evals/reply/usesItsFinds.ts.
@@ -145,7 +145,7 @@ export async function storedFinds(userId: string, now = Date.now()): Promise<Sto
 // started: when their text arrived, so the time budget counts the turn's prep
 // too (2026-10-01 code review); now when not known.
 export function newLoopState(started = Date.now()): LoopState {
-  return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0, holdAsked: false };
+  return { started, found: new Map(), pages: new Map(), holdSent: false, shared: [], webQueries: 0, eventSearches: 0, holdAsked: false };
 }
 
 // What a document tool tells Co once its attachment went with its one line (Royce, 2026-10-08: no second bubble repeating it).
@@ -337,6 +337,9 @@ export function loopTools(
           return { ...STUB, events: [] };
         }
         if (outOfTime()) return OUT_OF_TIME;
+        // LOOP_BUDGET.eventSearches a turn, like webSearches: each one can be an Exa search now (services/lumaViaExa.ts).
+        if ((loop.eventSearches ?? 0) >= LOOP_BUDGET.eventSearches) return { ok: false, error: `No event searches left this turn (${LOOP_BUDGET.eventSearches} used): work with the events you already have, or try webSearch.` };
+        loop.eventSearches = (loop.eventSearches ?? 0) + 1;
         await hold(whileLooking);
         // Where it looks (services/askPlace.ts): the city passed, unless it's just their home city and "what" names another place
         // ("in/near/around X", or SF/NYC-style short names; "visiting Lisbon" or lowercase isn't seen); else that named place; else their

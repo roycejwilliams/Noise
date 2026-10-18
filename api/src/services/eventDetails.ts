@@ -45,6 +45,9 @@ export type EventDetails = {
   apiId?: string | null;
   // The event's own name on its page (an Exa-found event is named by this, not by Exa's page title).
   name?: string | null;
+  // Who the host listed it for, as the page says ("public", "private"; checked on real pages 2026-10-17: lu.ma/45r1tqno, found by
+  // Exa for an SF founders want, is "private"). An event found another way than the public feed goes out only when this is "public".
+  visibility?: string | null;
 };
 
 // Tier 3: what the source post actually says.
@@ -101,6 +104,7 @@ export function parseLumaEventPage(html: string): EventDetails | null {
     description: description ? description.slice(0, DESCRIPTION_MAX) : null,
     apiId: typeof ev.api_id === "string" ? ev.api_id : null,
     name: typeof ev.name === "string" && ev.name.trim() ? ev.name.trim() : null,
+    visibility: typeof ev.visibility === "string" ? ev.visibility : null,
   };
 }
 
