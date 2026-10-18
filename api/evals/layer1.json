@@ -183,6 +183,7 @@
     "evals/tasks/heldReplay.ts",
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",
+    "evals/member/safeCase.ts",
     "evals/member/textKnowledge.ts",
     "evals/calls/reasonGate.ts",
     "evals/calls/autoIntakeParked.ts",
