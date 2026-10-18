@@ -55,29 +55,46 @@ export function gerund(verb: string): string {
   return `${v}ing`;
 }
 // Pure: what the fallback line names, from their words, made to read after "the search on" (a thing, "a cofounder for your climate
-// startup", or a doing, "raising a pre-seed round"): the wanting and request framing goes ("I want to", "Wants to", "can you find
-// me", a leading "Seeking"), Co is never named, a leading verb becomes its doing ("raise" is "raising"), a leading preposition goes,
-// "my" is "your", the first word lower-case unless a capitalized name follows it, no quotes, dashes or exclamation points, at most
-// NOTE_LABEL_CHARS on a word boundary. (It used to read after "looking for", with a doing as "things for <doing it>"; Royce,
+// startup", or a doing, "raising a pre-seed round"). In order: the framing goes (an opener like "Of course,", wanting and request
+// words, "about to", an infinitive "to", "find me", "the search for", a leading preposition), repeated until nothing more comes off;
+// Co is never named; "my" is "your"; a leading verb used as one becomes its doing ("raise" is "raising"), but never the first word
+// of a noun phrase ("date night spots", "launch party venues"); the first word lower-case unless a capitalized name follows it; no
+// quotes, dashes or exclamation points; nothing but a preposition left is nothing ("this", in the line); at most NOTE_LABEL_CHARS,
+// on a word boundary when there is one. (It used to read after "looking for", with a doing as "things for <doing it>"; Royce,
 // 2026-10-17: "reword it so it works for any goal".)
+const OPENERS = /^(?:of course|honestly|basically|ideally|well|also|okay|ok|for now|right now)\s*,?\s+/i;
+const WANTING = /^(?:(?:can|could|would) you |please |pls |help me |i(?:'d| would) like to |i want to |wants to |want to |would like to |hoping to |trying to |looking to |planning to |about to |going to |need to |i'm |im |i am |to )+/i;
+const SEARCHING = /^(?:(?:the|a|my|our) (?:search|hunt|look) for |on the (?:search|hunt|lookout) for |looking for |look(?:ing)? out for |keep an eye out for |find(?:ing)? |look for |search(?:ing)? for |get me |watch for |track down |seeking )(?:me )?/i;
+// A leading preposition comes off only with something after it that isn't another preposition ("for my sister's birthday dinner").
+const LEAD_PREP = /^(?:for|on|about|into|of|to)\s+(?!(?:for|on|about|into|of|to|in|at|with|by)\b)(?=\S)/i;
+const BARE_PREP = /^(?:for|on|about|into|of|to|in|at|with|by|from)?$/i;
+// The second word that makes a leading verb the first half of a noun ("date night", "run club", "launch party", "pitch deck").
+const COMPOUND_NOUN = new Set(["night", "nights", "club", "clubs", "party", "parties", "plan", "plans", "event", "events", "deck", "decks", "store", "stores", "group", "groups", "book", "books", "date", "dates", "spot", "spots", "list", "lists", "space", "spaces", "session", "sessions", "buddy", "buddies", "crew", "crews", "team", "teams", "venue", "venues", "idea", "ideas", "trip", "trips", "ticket", "tickets", "mate", "mates", "partner", "partners", "shoe", "shoes", "gear", "night's", "nights'", "class", "classes", "room", "rooms", "studio", "studios"]);
 export function fallbackLabel(text: string): string {
   let t = String(text ?? "").replace(/[“”"]/g, "").replace(/\s*[—–]\s*/g, ", ").replace(/!/g, "").replace(/\s+/g, " ").trim().replace(/[.,;:?]+$/, "");
   t = t.replace(/\s*\b(?:with|for|via|through|by|from|and) (?:Co|Cue)\b('s)?/gi, "").replace(/\bCo's\s+/gi, "").replace(/\s+/g, " ").trim();
-  t = t.replace(/^(?:(?:can|could|would) you |please |pls |help me |i(?:'d| would) like to |i want to |wants to |want to |would like to |hoping to |trying to |looking to |i'm |im |i am )+/i, "");
-  t = t.replace(/^(?:looking for |look(?:ing)? out for |keep an eye out for |find(?:ing)? |look for |search(?:ing)? for |get me |watch for |track down |seeking )(?:me )?/i, "");
+  for (let i = 0; i < 4; i++) {
+    const before = t;
+    t = t.replace(OPENERS, "").replace(WANTING, "").replace(SEARCHING, "").replace(LEAD_PREP, "").trim();
+    if (t === before) break;
+  }
   // "Getting into pottery" is about getting into it; "Getting a dog" is the dog.
   const getting = t.match(/^getting\s+(\S+)/i);
   if (getting) t = /^(?:into|back|better|in|on|out|started|fit|over|through)$/i.test(getting[1]) ? `getting${t.slice("getting".length)}` : t.replace(/^getting\s+/i, "");
   t = t.replace(/\bmy\b/gi, "your").replace(/\bme\b/gi, "you").replace(/\bI'm\b/g, "you're").trim();
   const words = t.split(" ");
   const first = (words[0] ?? "").toLowerCase();
-  if (GOAL_VERBS.has(first)) t = `${gerund(first)}${t.slice(words[0].length)}`;
-  // Any other leading "-ing" verb ("partnering with Sequin AI…") is a doing too, never a thing to look for.
+  const nounPhrase = COMPOUND_NOUN.has(String(words[1] ?? "").toLowerCase());
+  if (GOAL_VERBS.has(first) && !nounPhrase) t = `${gerund(first)}${t.slice(words[0].length)}`;
+  // Any other leading "-ing" verb ("partnering with Sequin AI…") is a doing already.
   else if (/^[a-z]+ing$/.test(first) && first.length > 5 && !/^(?:thing|something|anything|evening|morning|building|meeting|ring|king|wedding|clothing|housing|wing|string|painting|reading|tasting|screening)$/.test(first)) t = `${first}${t.slice(words[0].length)}`;
   else if (/^[A-Z][a-z]+$/.test(words[0] ?? "") && !/^[A-Z]/.test(words[1] ?? "")) t = `${first}${t.slice(words[0].length)}`;
-  // "for my sister's birthday dinner" after "the search on" would stack two prepositions.
-  t = t.replace(/^(?:for|on|about|to|into|of)\s+/i, "");
-  if (t.length > NOTE_LABEL_CHARS) t = t.slice(0, NOTE_LABEL_CHARS + 1).replace(/\s+\S*$/, "").replace(/[,;:]$/, "").replace(/(?:\s+(?:on|in|at|for|that|the|a|an|and|to|of|with|near|from|by|or))+$/i, "");
+  if (BARE_PREP.test(t.trim())) return "";
+  if (t.length > NOTE_LABEL_CHARS) {
+    const cut = t.slice(0, NOTE_LABEL_CHARS + 1);
+    // One word longer than the cap has no boundary to cut on: it's cut hard.
+    t = /\s/.test(cut) ? cut.replace(/\s+\S*$/, "").replace(/[,;:]$/, "").replace(/(?:\s+(?:on|in|at|for|that|the|a|an|and|to|of|with|near|from|by|or))+$/i, "") : cut.slice(0, NOTE_LABEL_CHARS);
+  }
   return t;
 }
 // The fixed line (Royce, 2026-10-17: "reword it so it works for any goal, and show me the exact line before it ships"; PENDING his
