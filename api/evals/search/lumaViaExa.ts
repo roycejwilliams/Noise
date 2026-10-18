@@ -59,6 +59,7 @@ const sources = (o: { configured?: boolean; viaExa?: any } = {}) => ({
   // The real gate (the start check, sold out, the window), without its geocoding (a real call): the nearby test above stands in.
   gate: ((m: any, ctx: any) => T_gate(m, { ...ctx, searchCity: null })) as any,
   record: (async (d: any) => { logs.push(d); }) as any,
+  exaOn: () => o.configured ?? true,
 });
 const reset = (w: Partial<World>) => {
   V.clearLumaViaExaCache();
@@ -122,7 +123,10 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("no EXA_API_KEY: no Exa call, nothing added", r === null && exaCalls.length === 0, { r, exaCalls });
   reset({ feed: FEED, pages: { ...FEED_PAGES, good1: page({ startAt: at(50) }) }, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
   const s = await search({ configured: false });
-  check("...and the search is the feed's, with nothing logged for Exa", exaCalls.length === 0 && links(s).join() === "https://lu.ma/feed1,https://lu.ma/feed2" && s.viaExa === null && !logs.some((l) => l.decision === "luma.via_exa"), { links: links(s), logs });
+  check("...and the search is the feed's; the log says once that Exa is off and how to turn it on (no key, not a failure)", exaCalls.length === 0 && links(s).join() === "https://lu.ma/feed1,https://lu.ma/feed2" && s.viaExa === null && logs.length === 1 && logs[0].action === "off" && /EXA_API_KEY isn't set on this service.*set EXA_API_KEY to turn on/.test(logs[0].reason), { links: links(s), logs });
+  logs = [];
+  await search({ configured: false });
+  check("...once per start, not on every search", logs.length === 0, logs);
 }
 
 // ================================================================ the cache
@@ -200,6 +204,65 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("a full feed (45 in the window) doesn't push Exa's event out of what the ranking reads", pool[0] === "https://lu.ma/mixer1" && pool.length === 46 && s.viaExa?.added === 1, pool.slice(0, 3));
 }
 
+// ================================================================ errors say what failed and the fix; the member's results don't change
+{
+  const reasonFor = async (exa: any) => {
+    reset({ feed: FEED, pages: FEED_PAGES });
+    const via = async (what: string, city: string | null, opt: any) => V.lumaEventsViaExa(what, city, { ...opt, deps: { ...viaDeps(), exa } });
+    const r = await search({ viaExa: via });
+    return { reason: logs.find((l) => l.decision === "luma.via_exa")?.reason ?? null, links: links(r) };
+  };
+  const fail = (error: string) => async () => ({ pages: [], cost: null, error });
+  const cases: [string, any, RegExp][] = [
+    ["timed out", fail("Exa timed out"), /^Exa timed out \(no answer in 10s\); tier 2 went out from Luma's feed alone; the next search for this want asks Exa again/],
+    ["a refused key", fail("Exa 401 INVALID_API_KEY"), /^Exa refused the key \(HTTP 401 INVALID_API_KEY\): check EXA_API_KEY on this service; tier 2 went out from Luma's feed alone$/],
+    ["out of credit", fail("Exa 402"), /^Exa says the account is out of credit \(HTTP 402\): add credit in Exa's dashboard/],
+    ["rate-limited", fail("Exa 429"), /^Exa rate-limited the search \(HTTP 429\)/],
+    ["Exa's own outage", fail("Exa 503"), /^Exa's own side failed \(HTTP 503\)/],
+    ["a bad request", fail("Exa 400 INVALID_REQUEST"), /^Exa rejected the request \(HTTP 400 INVALID_REQUEST\): the request services\/lumaViaExa\.ts builds needs fixing/],
+    ["unreachable", fail("Exa couldn't be reached"), /^Exa couldn't be reached \(network\): check this service's outbound connection to api\.exa\.ai/],
+    ["an unreadable reply", fail("Exa sent a reply that couldn't be read"), /^Exa answered with a reply that couldn't be read/],
+    ["a throw", async () => { throw new Error("socket hang up"); }, /^the Luma search through Exa threw \(socket hang up\); tier 2 went out from Luma's feed alone$/],
+  ];
+  for (const [label, exa, want] of cases) {
+    const { reason, links: got } = await reasonFor(exa);
+    check(`Exa ${label}: the log's reason says exactly that, with its fix; the member gets the feed's events unchanged`, want.test(reason ?? "") && got.join() === "https://lu.ma/feed1,https://lu.ma/feed2", { reason, got });
+  }
+  reset({ feed: FEED, pages: FEED_PAGES });
+  await search({ viaExa: async () => { throw new Error("boom"); } });
+  check("the whole Exa step throwing is logged too, saying so", /^the Luma search through Exa threw \(boom\)/.test(logs[0]?.reason ?? ""), logs);
+  check("a search that worked has no reason", V.exaFailureReason(null) === null);
+}
+
+// ================================================================ what Cue's model reads: the same lines, the same limit
+{
+  reset({
+    feed: FEED,
+    exa: [{ url: "https://lu.ma/mixer1", title: "Register: GP/LP mixer (SF) | Luma" }],
+    pages: { ...FEED_PAGES, mixer1: page({ startAt: at(40), apiId: "evt-mixer1", name: "GP/LP Mixer at AngelList", venue: "AngelList", address: "45 Fremont St, San Francisco", hosts: ["Ada"], price: "free" }) },
+  });
+  const r = await search();
+  const c = r.candidates.find(({ match }) => "url" in match && match.url === "https://lu.ma/mixer1");
+  check("an Exa-found event is named as its own page names it, not by Exa's page title", c?.match.name === "GP/LP Mixer at AngelList", c?.match.name);
+  check("its lines are the feed's lines: the same renderer on its own page (name, start, place, host, price), nothing else", JSON.stringify(c?.lines) === JSON.stringify(D.renderEventDetails("GP/LP Mixer at AngelList", world.pages.mixer1)) && /starts .* at /.test(c?.lines[0] ?? "") && c!.lines.some((l) => /is at AngelList, 45 Fremont St/.test(l)), c?.lines);
+  check("no internal ids in what the model reads (no evt-, no luma: ids) and the link is the plain Luma one", !/evt-|luma:/.test(JSON.stringify(r.candidates.map((x) => x.lines))) && ("url" in c!.match && c!.match.url === "https://lu.ma/mixer1"));
+  const lt = src("agent/loopTools.ts");
+  check("the reply's tool gives the model name, link, own-event flag and lines per event, no ids (pinned)", /return \{ name: match\.name, link: url \|\| null, ownEvent: match\.tier === 1, details: lines \};/.test(lt));
+  check("the reply's count says 'on Luma' once Exa added any nearby, 'in the feed' when it's the feed's alone (pinned)", /\$\{r\.inWindow\} events \$\{r\.viaExa\?\.nearby \? "on Luma" : "in the feed"\}/.test(lt) && /\$\{r\.viaExa\?\.nearby \? "Luma" : "The feed"\} is thin here/.test(lt));
+}
+{
+  // A full feed: 20 events in the window. With Exa's 3 more, the reply still gets the same number of events (the limit), not more.
+  const feed = Array.from({ length: 20 }, (_, i) => ({ api_id: `evt-f${i}`, name: `Feed event ${i}`, start_at: at(24 + i), city: "San Francisco", url: `https://lu.ma/f${i}` }));
+  const pages = Object.fromEntries(feed.map((e, i) => [`f${i}`, page({ startAt: e.start_at, apiId: e.api_id, description: "x".repeat(400) })]));
+  reset({ feed, pages: { ...pages, x1: page({ startAt: at(30) }), x2: page({ startAt: at(31) }), x3: page({ startAt: at(32) }) }, exa: [1, 2, 3].map((n) => ({ url: `https://lu.ma/x${n}`, title: `Exa event ${n}` })) });
+  const withExa = await search();
+  reset({ feed, pages });
+  const alone = await search({ exaOn: false });
+  const lines = (r: any) => r.candidates.reduce((n: number, c: any) => n + c.lines.length, 0);
+  check("same limit: with Exa the reply gets 8 events, as from the feed alone (Exa's take places, they don't add any)", withExa.candidates.length === 8 && alone.candidates.length === 8 && withExa.candidates.filter(({ match }) => /\/x\d$/.test((match as any).url)).length === 3, { withExa: links(withExa), alone: links(alone) });
+  check("...and no more lines in the model's context than the feed's eight would give", lines(withExa) <= lines(alone), { withExa: lines(withExa), alone: lines(alone) });
+}
+
 // ================================================================ calls skip it
 {
   reset({ feed: FEED, pages: { ...FEED_PAGES, mixer1: page({ startAt: at(40) }) }, exa: [{ url: "https://lu.ma/mixer1", title: "GP/LP mixer" }] });
@@ -224,8 +287,9 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   const r = await X.exaSearch("founder dinners in San Francisco", { purpose: "luma_events", pages: V.LUMA_VIA_EXA.results, text: false, includeDomains: V.LUMA_DOMAINS, fetchImpl, env: { EXA_API_KEY: "k" } as any });
   check("Exa is asked for 25 results on lu.ma and luma.com, with no page text", body?.numResults === 25 && JSON.stringify(body?.includeDomains) === '["lu.ma","luma.com"]' && body?.contents === undefined, body);
   check("...and its links come back without tracking tags (#235), so the slug and the link are clean", r.pages[0]?.url === "https://luma.com/mixer1" && V.lumaEventSlug(r.pages[0].url) === "mixer1", r.pages);
-  const html = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-r6tazveGHPqyaFv", start_at: "2026-10-23T01:00:00.000Z", geo_address_info: { city: "San Francisco" } } } } } } })}</script></html>`;
+  const html = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-r6tazveGHPqyaFv", name: " ElevenLabs Funded Founders Three Course Private Dinner ", start_at: "2026-10-23T01:00:00.000Z", geo_address_info: { city: "San Francisco" } } } } } } })}</script></html>`;
   check("a Luma page gives its event id (the feed's evt- id), so the same event is one event however it was found", D.parseLumaEventPage(html)?.apiId === "evt-r6tazveGHPqyaFv");
+  check("...and its own name, trimmed", D.parseLumaEventPage(html)?.name === "ElevenLabs Funded Founders Three Course Private Dinner");
 }
 
 console.log(`luma via exa: ${total - failed}/${total} passed`);
