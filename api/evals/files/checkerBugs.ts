@@ -222,26 +222,30 @@ for (const [label, sunday] of [
   check("still refused, tier 3: a place the post never names (W. Fakeville)", !t3("Builders Night in W. Fakeville, open to all", "Builders Night, an open meetup for builders w/ pizza. San Francisco.").pass);
   check("still refused, tier 3: Dr. Pelletier's office, not in the post", !t3("Builders Night in Dr. Pelletier's office", "Builders Night hosted by Dr. Lee, open meetup. San Francisco.").pass);
   check("still refused, tier 1: W. Fakeville for an event in New York", !t1("Builders night in W. Fakeville", "New York").pass);
-  // Tightened (passed on co-test too): a one- or two-letter place is backed only as a whole word.
-  check('a two-letter place is not backed by a longer word ("LA" in "Atlanta")', captionProblems("A rooftop show in LA tonight.", "Rooftop show. Atlanta, Georgia.", "").some((x) => x.includes('"LA"')), captionProblems("A rooftop show in LA tonight.", "Rooftop show. Atlanta, Georgia.", ""));
-  check('... nor by a city name containing it (tier 1, "in LA" for Atlanta)', !t1("Rooftop night in LA", "Atlanta").pass);
 
   // Re-review of #239: a one-word place cut at a point is backed only as a whole word ("Gov" isn't "Government"), in captions, task
   // texts and plan sheets (all placesBacked). Refused on co-test and here.
   const { placesBacked } = await import("../../src/services/taskWeb.js");
   check('still refused: "in Gov. Pelletier\'s lodge" when the facts say "Government Camp"', !placesBacked("A rooftop show in Gov. Pelletier's lodge.", "Rooftop show at the Government Camp lodge.").ok, placesBacked("A rooftop show in Gov. Pelletier's lodge.", "Rooftop show at the Government Camp lodge."));
   check('still refused: "in Rev. Pelletier\'s church" when the facts say "Revenue"', !placesBacked("A rooftop show in Rev. Pelletier's church.", "Rooftop show. Revenue goes to charity.").ok, placesBacked("A rooftop show in Rev. Pelletier's church.", "Rooftop show. Revenue goes to charity."));
+  check("still refused, tier 1: \"in Gov. Pelletier's office\" for an event at Government Camp", !t1("Night in Gov. Pelletier's office", "Government Camp").pass);
   check("still refused, caption: Gov. Pelletier's lodge", captionProblems("Rooftop show in Gov. Pelletier's lodge, free.", "Rooftop show at the Government Camp lodge. Free.", "").length > 0);
-  // ... and a city's usual short names still match (passed on co-test, must still pass, except the caption alias, new): NY for NYC or New York, LA for Los Angeles,
-  // DC for Washington, DC. LA is still not Lakewood.
+  // City short names behave exactly as on co-test (re-review of #239: short-city matching is out of C's scope). These pass on
+  // co-test and must still pass: NY for NYC, LA for Los Angeles, DC for Washington, DC, Bogota for Bogotá.
   const loc = (city: string, searchCity: string) => MG.checkLocation({ tier: 2, name: "x", city } as any, { searchCity, distanceMiles: null } as any);
-  check('"in NY" for an event in NYC', t1("Builders night in NY", "NYC").pass);
+  check('"in NY" for an event in NYC, and an NYC event for a search in NY', t1("Builders night in NY", "NYC").pass && loc("NYC", "NY").pass && loc("New York, NY", "NY").pass);
   check('"in LA" for an event in Los Angeles', t1("Builders night in LA", "Los Angeles").pass);
   check('"in DC" for an event in Washington, DC', t1("Builders night in DC", "Washington, DC").pass);
-  check("an NYC event for a search in NY", loc("NYC", "NY").pass && loc("New York, NY", "NY").pass);
-  check('caption "in NY" backed by "New York"', placesBacked("A rooftop show in NY tonight.", "Rooftop show, New York. Many bands, any age.").ok);
-  check('caption "in LA" backed by "Los Angeles" (co-test refused this one: captions had no aliases)', captionProblems("Echo Park Rising is Saturday in LA: free, live music on six stages.", "Echo Park Rising. Saturday, Echo Park, Los Angeles. Free street festival, live music on six stages.", "anything fun this weekend?").length === 0);
-  check('still refused: "in LA" for an event in Lakewood (tightened: co-test matched it inside the word)', !t1("Builders night in LA", "Lakewood").pass && !loc("Lakewood", "LA").pass);
+  check('"in Bogota" for an event in Bogotá', t1("Night in Bogota", "Bogotá").pass && loc("Bogotá", "Bogota").pass);
+  // ... and a city's other names never back a different place (refused on co-test, must stay refused; the final pass on #239 found
+  // an alias rule that passed every one of these).
+  check('still refused: "in New York City" backed by "Albany, NY"', !placesBacked("A rooftop show in New York City tonight.", "Rooftop show, Albany, NY.").ok);
+  check('still refused: "in NYC" backed by "Buffalo, NY"', !placesBacked("A rooftop show in NYC tonight.", "Rooftop show, Buffalo, NY.").ok);
+  check('still refused: "in Los Angeles" backed by "La Jolla Cove, San Diego"', !placesBacked("A rooftop show in Los Angeles tonight.", "Rooftop show at La Jolla Cove, San Diego.").ok);
+  check('still refused: "in Los Angeles" backed by "Bar La Cabra, Brooklyn"', !placesBacked("A rooftop show in Los Angeles tonight.", "Rooftop show at Bar La Cabra, Brooklyn.").ok);
+  check('still refused: "in Washington DC" backed by "DC Ranch, Scottsdale"', !placesBacked("A rooftop show in Washington DC tonight.", "Rooftop show, DC Ranch, Scottsdale.").ok);
+  check('still refused, tier 3: "in NYC" when the post says "Albany, NY"', !t3("Builders Night in NYC", "Builders Night, open meetup. Albany, NY.").pass);
+  check('still refused, caption: "in NYC" when the facts say "Buffalo, NY"', captionProblems("Rooftop show Saturday in NYC, free.", "Rooftop show. Saturday. Buffalo, NY. Free.", "").length > 0);
 
   const H: [string, string, string][] = [
     ["Pelletier Evening", WREN, "Pelletier"],
