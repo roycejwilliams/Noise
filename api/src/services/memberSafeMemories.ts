@@ -6,7 +6,10 @@
 //
 // The tension: "Co introduced you to Maya" is the member's own history and
 // stays; "Maya is building grid storage and left Tesla" is Maya's, and goes.
-//   - Their own words ("User said:" lines) are theirs and stay as they are.
+//   - Their own words ("User said:" lines, how their texts are stored) are theirs and stay as they are. A
+//     line that only looks like a transcript ("User: ...") is not one of their stored texts and is stripped
+//     like any other (2026-10-18: "User: coffee with Noor about her Oakland gallery" got through).
+//   - A linked name is found in any case, as a whole word ("noor", "NOOR", "noor's"): see nameFinder.
 //   - Templated intro records (an intro email sent, a match nudge, an opt-in)
 //     carry only names and the event, so they stay whole as history.
 //   - Records that carry the other member's profile (network intro offers,
@@ -19,9 +22,56 @@ import pool from "../db/db.js";
 // Already just names and the event (eventGuestMatchHandoff.ts,
 // proactiveRegistry.ts, networkIntroNudge.ts).
 const SAFE_TYPES = new Set(["event_intro_email_sent", "event_guest_match_nudge", "event_guest_match_optin", "network_offer_resolved"]);
-const OWN_WORDS = /^\s*(User said:|User:)/i;
+const OWN_WORDS = /^\s*User said:/i;
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// First names that are also everyday words. Any other linked name is found in any case. One of these is found when it's
+// written with a capital ("Rose", "ROSE"), unless it opens a question as the verb ("Will you come?", "May I ask"); written in
+// lowercase only in a person-like place: before "'s" or a person's verb ("rose said yes", "will's"), or after a verb that takes
+// a person ("meet rose"). So "the gallery rose in value" and "it will rain" stay. The tradeoff: a lowercase one of these
+// anywhere else ("dinner with rose") is kept, and a capitalized one that isn't the person is stripped ("Rose gold", "in May"). Every other name is matched in any case wherever it stands, so a place or thing that shares it is
+// stripped too ("Jordan River trip" with a member named Jordan): safety over context, since "Jordan Rivers" is the person.
+const WORD_NAMES = new Set(
+  "will may june april august rose grace hope faith joy mark bill pat art frank rich drew grant chase hunter dawn summer autumn sky ray max miles lane dean reed brook ivy iris lily daisy ruby amber jade pearl olive hazel holly penny robin sunny sandy rusty crystal heather violet rocky cliff gene jack ash eve sage river rain storm wren star melody harmony destiny bob sue rob don carol bud buck dot kit nick peg"
+    .split(" "),
+);
+// The names that are also a question's opening verb.
+const QUESTION_VERBS = new Set(["will", "may"]);
+const PERSON_AFTER = /^(?:['’]s\b|\s+(?:said|says|told|tells|asked|asks|wants|wanted|thinks|thought|mentioned|replied|texted|called|emailed|agreed|is|was|has)\b)/i;
+const PERSON_BEFORE = /\b(?:meet|met|meeting|introduce|introduced|intro|ask|asked|tell|told|text|texted|call|called|email|emailed)\s+$/i;
+const PRONOUN_AFTER = /^\s+(?:i|you|we|they|he|she|it|this|that|there|not)\b/i;
+const OPENS_SENTENCE = /(?:^|[.!?:]\s+|\n)\s*["'“‘(]?$/;
+
+function personLike(s: string, at: number, hit: string, name: string): boolean {
+  if (!WORD_NAMES.has(name.toLowerCase()) || /\s/.test(name)) return true;
+  const before = s.slice(0, at);
+  const after = s.slice(at + hit.length);
+  if (hit[0] === hit[0].toLowerCase()) return PERSON_AFTER.test(after) || PERSON_BEFORE.test(before);
+  return !(QUESTION_VERBS.has(name.toLowerCase()) && OPENS_SENTENCE.test(before) && PRONOUN_AFTER.test(after));
+}
+
+// Pure: a finder for the linked names. Each name is a whole word (letters on either side don't count, accents included) in any
+// case; it returns the name as given (not as written), for the leftmost one that stands for a person, or null.
+export function nameFinder(linkedNames: string[]): (s: string) => string | null {
+  const names = [...new Set(linkedNames.map((n) => n.trim()).filter((n) => n.length >= 2))];
+  if (!names.length) return () => null;
+  const res = names.map((name) => ({ name, re: new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name).replace(/\s+/g, "\\s+")}(?![\\p{L}\\p{N}_])`, "giu") }));
+  return (s: string) => {
+    let best: { at: number; name: string } | null = null;
+    for (const { name, re } of res) {
+      for (const m of s.matchAll(re)) {
+        const at = m.index ?? 0;
+        if (best && at >= best.at) break;
+        if (personLike(s, at, m[0], name)) {
+          best = { at, name };
+          break;
+        }
+      }
+    }
+    return best?.name ?? null;
+  };
+}
 
 // Pure: what one history sentence about a member says, from the sentence that named them.
 export function historyLine(sentence: string, name: string): string {
@@ -52,16 +102,17 @@ export function safeMemory(type: string | null, content: string, linkedNames: st
   if (t === "recommendation") return text.replace(/\[Tier 0\]\s*([^:|]+?)\s*:\s*[^|]*/g, (_m, name: string) => `[Tier 0] ${name.trim()}, another member (Cue suggested meeting them) `).trim() || null;
   const names = linkedNames.map((n) => n.trim()).filter((n) => n.length >= 2);
   if (!names.length) return text.trim() || null;
-  const named = new RegExp(`\\b(${names.map(escape).join("|")})\\b`);
+  const find = nameFinder(names);
+  const named = { test: (x: string) => find(x) !== null };
   const out = text
     .split("\n")
     .map((line) => {
       if (OWN_WORDS.test(line) || !named.test(line)) return line;
       const seen = new Set<string>();
       const strip = (s: string) => {
-        const m = s.match(named);
-        if (!m) return s;
-        const h = historyLine(s, m[1]);
+        const name = find(s);
+        if (!name) return s;
+        const h = historyLine(s, name);
         if (seen.has(h)) return "";
         seen.add(h);
         return h;
