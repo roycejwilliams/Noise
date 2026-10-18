@@ -12,8 +12,9 @@ export function pausedTypes(env: NodeJS.ProcessEnv = process.env): string[] {
 }
 
 // Parked types, in code, never an env switch. goal_nudge (Royce, 2026-10-17: "Park the member-state 'goal gone quiet' nudge and let
-// the Nudges helper be the one goal nudge. ... Park, don't delete."). The other goal messages keep running (goal_recheck,
-// goal_checkin, goal_closed, goal-ownership check-ins, goal finds; PR #236 lists each with when it fires). Why: goal_nudge never
+// the Nudges helper be the one goal nudge. ... Park, don't delete." Then: "'the Nudges helper' is the goal recheck ... That is the
+// one goal nudge."). The goal recheck (services/goalRecheck.ts) is the one goal nudge; the other goal messages keep running as they
+// are (goal_checkin, goal_closed, goal-ownership check-ins, goal finds; PR #236 lists each). Why: goal_nudge never
 // fired since it was built (10-08), it asks nearly the recheck's question, and goal_season already holds the goal texts to one
 // slot (sweep review 2026-10-17). A parked type is not queued (services/memberStateNudges.ts planNudges), and a row already
 // pending is never loaded by the dispatcher, so it is never picked, drafted or sent; it expires on its own date (expires_at) and

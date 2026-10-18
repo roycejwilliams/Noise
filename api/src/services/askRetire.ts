@@ -54,10 +54,12 @@ export function gerund(verb: string): string {
   if (/^[^aeiou]*[aeiou][^aeiouwxy]$/.test(v) && v.length <= 4 && !/^(?:open|visit)$/.test(v)) return `${v}${v.slice(-1)}ing`;
   return `${v}ing`;
 }
-// Pure: what the fallback line names, from their words, made to read after "looking for": the wanting and request framing goes ("I
-// want to", "Wants to", "can you find me", a leading "Seeking"), Co is never named, a verb becomes "things for <doing it>", "my" is
-// "your", the first word lower-case unless a capitalized name follows it, no quotes, dashes or exclamation points, at most
-// NOTE_LABEL_CHARS on a word boundary.
+// Pure: what the fallback line names, from their words, made to read after "the search on" (a thing, "a cofounder for your climate
+// startup", or a doing, "raising a pre-seed round"): the wanting and request framing goes ("I want to", "Wants to", "can you find
+// me", a leading "Seeking"), Co is never named, a leading verb becomes its doing ("raise" is "raising"), a leading preposition goes,
+// "my" is "your", the first word lower-case unless a capitalized name follows it, no quotes, dashes or exclamation points, at most
+// NOTE_LABEL_CHARS on a word boundary. (It used to read after "looking for", with a doing as "things for <doing it>"; Royce,
+// 2026-10-17: "reword it so it works for any goal".)
 export function fallbackLabel(text: string): string {
   let t = String(text ?? "").replace(/[“”"]/g, "").replace(/\s*[—–]\s*/g, ", ").replace(/!/g, "").replace(/\s+/g, " ").trim().replace(/[.,;:?]+$/, "");
   t = t.replace(/\s*\b(?:with|for|via|through|by|from|and) (?:Co|Cue)\b('s)?/gi, "").replace(/\bCo's\s+/gi, "").replace(/\s+/g, " ").trim();
@@ -65,19 +67,23 @@ export function fallbackLabel(text: string): string {
   t = t.replace(/^(?:looking for |look(?:ing)? out for |keep an eye out for |find(?:ing)? |look for |search(?:ing)? for |get me |watch for |track down |seeking )(?:me )?/i, "");
   // "Getting into pottery" is about getting into it; "Getting a dog" is the dog.
   const getting = t.match(/^getting\s+(\S+)/i);
-  if (getting) t = /^(?:into|back|better|in|on|out|started|fit|over|through)$/i.test(getting[1]) ? `things for getting${t.slice("getting".length)}` : t.replace(/^getting\s+/i, "");
+  if (getting) t = /^(?:into|back|better|in|on|out|started|fit|over|through)$/i.test(getting[1]) ? `getting${t.slice("getting".length)}` : t.replace(/^getting\s+/i, "");
   t = t.replace(/\bmy\b/gi, "your").replace(/\bme\b/gi, "you").replace(/\bI'm\b/g, "you're").trim();
   const words = t.split(" ");
   const first = (words[0] ?? "").toLowerCase();
-  if (GOAL_VERBS.has(first)) t = `things for ${gerund(first)}${t.slice(words[0].length)}`;
+  if (GOAL_VERBS.has(first)) t = `${gerund(first)}${t.slice(words[0].length)}`;
   // Any other leading "-ing" verb ("partnering with Sequin AI…") is a doing too, never a thing to look for.
-  else if (/^[a-z]+ing$/.test(first) && first.length > 5 && !/^(?:thing|something|anything|evening|morning|building|meeting|ring|king|wedding|clothing|housing|wing|string|painting|reading|tasting|screening)$/.test(first)) t = `things for ${first}${t.slice(words[0].length)}`;
+  else if (/^[a-z]+ing$/.test(first) && first.length > 5 && !/^(?:thing|something|anything|evening|morning|building|meeting|ring|king|wedding|clothing|housing|wing|string|painting|reading|tasting|screening)$/.test(first)) t = `${first}${t.slice(words[0].length)}`;
   else if (/^[A-Z][a-z]+$/.test(words[0] ?? "") && !/^[A-Z]/.test(words[1] ?? "")) t = `${first}${t.slice(words[0].length)}`;
+  // "for my sister's birthday dinner" after "the search on" would stack two prepositions.
+  t = t.replace(/^(?:for|on|about|to|into|of)\s+/i, "");
   if (t.length > NOTE_LABEL_CHARS) t = t.slice(0, NOTE_LABEL_CHARS + 1).replace(/\s+\S*$/, "").replace(/[,;:]$/, "").replace(/(?:\s+(?:on|in|at|for|that|the|a|an|and|to|of|with|near|from|by|or))+$/i, "");
   return t;
 }
+// The fixed line (Royce, 2026-10-17: "reword it so it works for any goal, and show me the exact line before it ships"; PENDING his
+// approval, PR #236). "The search on" reads the same before a thing or a doing, and "paused" is what "pick it back up" undoes.
 export function fallbackNote(text: string): string {
-  return `I've stopped looking for ${fallbackLabel(text)}; say the word and I'll pick it back up`;
+  return `I've paused the search on ${fallbackLabel(text) || "this"}; say the word and I'll pick it back up`;
 }
 // Pure: whether a written note keeps the rules: one line, short, no exclamation point or dash, not a question, and Co never names
 // itself by a role (goalOwnership.ts ROLE_NOUN, the one guard for that).
