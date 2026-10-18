@@ -39,11 +39,14 @@ export function pageLines(d: CoPageData): { where: string; text: string }[] {
 const MONTHS: Record<string, string> = { Jan: "January", Feb: "February", Mar: "March", Apr: "April", Jun: "June", Jul: "July", Aug: "August", Sep: "September", Sept: "September", Oct: "October", Nov: "November", Dec: "December" };
 const DAYS: Record<string, string> = { Mon: "Monday", Tue: "Tuesday", Tues: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Thur: "Thursday", Thurs: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
 const MON = Object.keys(MONTHS).join("|");
-export function sameTimes(s: string, side: "page" | "theirs" = "page"): string {
-  let out = s
-    .replace(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/gi, (_m, h: string, mm: string | undefined, ap: string) => `${Number(h)}${mm && mm !== "00" ? `:${mm}` : ""}${ap.toLowerCase().startsWith("p") ? "pm" : "am"}`)
-    .replace(new RegExp(`\\b(${MON})\\.?(?=\\s+\\d)`, "g"), (_m, w: string) => MONTHS[w])
-    .replace(new RegExp(`\\b(${Object.keys(DAYS).join("|")})\\.?(?=,?\\s+(\\d|${MON}|${Object.values(MONTHS).join("|")}))`, "g"), (_m, w: string) => DAYS[w]);
+// o.dates false (decks, review of the deck-times commit): times only, no month or weekday expansion. A deck has no number check in
+// code and full month and weekday names skip the name check, so expanding "Sat Oct 31" would let a date nobody gave through.
+export function sameTimes(s: string, side: "page" | "theirs" = "page", o: { dates?: boolean } = {}): string {
+  let out = s.replace(/\b(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)(?![a-z])/gi, (_m, h: string, mm: string | undefined, ap: string) => `${Number(h)}${mm && mm !== "00" ? `:${mm}` : ""}${ap.toLowerCase().startsWith("p") ? "pm" : "am"}`);
+  if (o.dates !== false)
+    out = out
+      .replace(new RegExp(`\\b(${MON})\\.?(?=\\s+\\d)`, "g"), (_m, w: string) => MONTHS[w])
+      .replace(new RegExp(`\\b(${Object.keys(DAYS).join("|")})\\.?(?=,?\\s+(\\d|${MON}|${Object.values(MONTHS).join("|")}))`, "g"), (_m, w: string) => DAYS[w]);
   if (side === "theirs") out = out.replace(/\b(at|by|from|until|til|around)\s+(\d{1,2})(?::(\d{2}))?\b(?!\s*(?:am|pm|:\d))/gi, (m, _p, h: string, mm: string | undefined) => `${m} ${h}${mm ? `:${mm}` : ""}am ${h}${mm ? `:${mm}` : ""}pm`).replace(/\b(\d{1,2}):(\d{2})\b(?!\s*(?:am|pm|:\d))/gi, (m, h: string, mm: string) => `${m} ${h}:${mm}am ${h}:${mm}pm`);
   return out;
 }
@@ -92,9 +95,10 @@ export function pageProblems(d: CoPageData, source: PageSource): string[] {
 // word-for-word claim check pages use is left off (live run, 2026-10-11: it refused "Built for..." and "No-shows eat a fifth of
 // bookings", both said in their own text); facts are guarded, phrasing isn't.
 export function deckProblems(d: import("./deck.js").DeckData, source: PageSource): string[] {
-  // Times and dates read the way pages read them (sameTimes, Royce 2026-10-17: "'8:00 PM' matches the member's '8 PM', the same as
-  // pages. Made-up times stay refused"). S1-a: 15 decks were refused for "8:00 PM: Supper" when the member wrote "supper … 8 PM".
-  const corpus = `${sameTimes(source.theirs, "theirs")}\n${sameTimes(source.read)}`;
+  // Times read the way pages read them (sameTimes, Royce 2026-10-17: "'8:00 PM' matches the member's '8 PM', the same as pages. Made-up
+  // times stay refused"). S1-a: 15 decks were refused for "8:00 PM: Supper" when the member wrote "supper … 8 PM". Times only: dates
+  // are compared as written, as before (sameTimes o.dates).
+  const corpus = `${sameTimes(source.theirs, "theirs", { dates: false })}\n${sameTimes(source.read, "page", { dates: false })}`;
   const lines: { where: string; text: string }[] = [
     { where: "title", text: d.title },
     { where: "subtitle", text: d.subtitle },
@@ -108,7 +112,7 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
     if (placeholderIn(l.text)) out.push(`${l.where}: "${placeholderIn(l.text)}" is a placeholder, and a deck never ships one: ask them for the missing piece, or write the slide as the point itself without the example`);
     // A common word opening what follows a time ("9:30 PM: Choose a cup") is its capital, not a name: the headline check's rule
     // (lowerSentenceStarts), here because with times read the same as pages, it was the last thing refusing 2 of those decks.
-    const bad = unsourced(lowerSentenceStarts(sameTimes(l.text)), corpus);
+    const bad = unsourced(lowerSentenceStarts(sameTimes(l.text, "page", { dates: false }), { afterTime: true }), corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   return out.slice(0, 7);
@@ -152,9 +156,11 @@ const commonWord = (w: string) => COMMON.has(w) || NOT_NAMES_IN_HEADLINES.has(w)
 // a capital there is the start of a sentence, so a common word there is lowered before the name check reads it. Only there, and only
 // when the next word isn't capitalized too: "Seats go fast. Open Room hosts" still names Open Room, and a common word mid-sentence is
 // still read (review of #239). Only after a time, not after any colon, so "Proof point: Acme" is still read as a name.
-function lowerSentenceStarts(headline: string): string {
+// afterTime (the deck line check): only what follows a time label, not a later sentence.
+function lowerSentenceStarts(headline: string, o: { afterTime?: boolean } = {}): string {
+  const re = o.afterTime ? /(^\s*\d{1,2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?\s*:\s+)([A-Z][A-Za-z'’-]*)/g : /([.!?]\s+|^\s*\d{1,2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?\s*:\s+)([A-Z][A-Za-z'’-]*)/g;
   return headline.replace(
-    /([.!?]\s+|^\s*\d{1,2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?\s*:\s+)([A-Z][A-Za-z'’-]*)/g,
+    re,
     (m: string, lead: string, w: string, at: number, all: string) => {
       const after = all.slice(at + m.length).match(/^\s+(\S)/)?.[1] ?? "";
       return commonWord(w.toLowerCase()) && !/[A-Z]/.test(after) ? `${lead}${w.toLowerCase()}` : m;

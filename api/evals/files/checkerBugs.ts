@@ -311,6 +311,21 @@ for (const [label, sunday] of [
   check('format: "8:00 PM" on the deck for their bare "at 8" (pages read it the same way)', await pair("8:00 PM", "at 8"));
   check('format, still refused: "8:00 AM" on the deck for their "8 PM"', !(await pair("8:00 AM", "8 PM")));
   check('format, still refused: "8:30 PM" on the deck for their "8 PM"', !(await pair("8:30 PM", "8 PM")));
+  // Times only, never dates (review of the deck-times commit): expanding "Sat Oct 31" to "Saturday October 31" let a date nobody gave
+  // pass, because full month and weekday names skip the name check and decks have no number check in code.
+  const DATED = "Make me a deck for a ceramics night with supper and a wheel demo, wear clothes that can take clay.";
+  const dated = async (line: string, theirs: string) => deckCheck([{ headline: "The evening", bullets: [line] }, { headline: "One thing to know", bullets: ["Wear clothes that can take clay"] }], `${DATED} ${theirs}`);
+  for (const [line, theirs] of [
+    ["Doors open Sat Oct 31 at 6:30 PM", "Saturday Nov 7, doors 6:30 PM."],
+    ["Doors open Sat Nov 14 at 6:30 PM", "Saturday Nov 7, doors 6:30 PM."],
+    ["Supper on Fri Nov 6 at 8 PM", "Saturday Nov 7, supper at 8 PM."],
+  ]) {
+    const p = await dated(line, theirs);
+    check(`still refused on a deck: "${line}" when they said "${theirs}"`, p.length > 0, p);
+  }
+  // The line check excuses a common word only right after a time label, not at a later sentence ("Room hosts" stays read).
+  const room = await dated("9:30 PM: Choose a cup. Room hosts", "At 9:30 PM everyone picks a cup.");
+  check('still refused on a deck: "9:30 PM: Choose a cup. Room hosts" (Room is read, as before)', room.some((x) => /Room/.test(x)), room);
 }
 
 console.log(`checker bugs: ${total - failed}/${total} passed`);
