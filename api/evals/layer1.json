@@ -5,6 +5,7 @@
     "evals/reply/codeChecks.ts",
     "evals/profile/lists.ts",
     "evals/matching/run.ts",
+    "evals/matching/memberSafe.ts",
     "evals/intro/run.ts",
     "evals/proactive/run.ts",
     "evals/proactive/rules.ts",

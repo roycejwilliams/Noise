@@ -1,9 +1,9 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
-import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { goalEntries, isOpenAsk } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
+import { safeMemory } from "./memberSafeMemories.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
 // whom, so it runs on Sonnet 5.
@@ -60,45 +60,13 @@ function getActiveOfferingAsk(intent: unknown): StatedIntent | null {
   return offering.length ? offering[offering.length - 1] : null;
 }
 
-// Pulls each candidate's top 3 semantically relevant stored memories (call
-// transcripts, text exchanges, etc.) against the ask's embedding — this is
-// what lets a fact like "worked at Google" surface even though nothing in
-// the structured profile schema tags job history; it's just whatever the
-// person actually said, found generically rather than via a fixed taxonomy.
-// Top 3 (not top 1) gives the judgment call more to work with before it says
-// no — a single closest memory can miss context a second or third would add.
-async function fetchTopMemoryPerCandidate(
-  candidateIds: string[],
-  askEmbedding: number[],
-): Promise<Map<string, string[]>> {
-  if (!candidateIds.length) return new Map();
-  const { rows } = await pool.query(
-    `SELECT user_id, content FROM (
-       SELECT user_id, content,
-              ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY content_embedding <=> $2::vector) AS rn
-       FROM co_memories
-       WHERE user_id = ANY($1::uuid[]) AND content_embedding IS NOT NULL
-     ) ranked
-     WHERE rn <= 3
-     ORDER BY user_id, rn`,
-    [candidateIds, `[${askEmbedding.join(",")}]`],
-  );
-  const byUser = new Map<string, string[]>();
-  for (const r of rows as any[]) {
-    const list = byUser.get(r.user_id) ?? [];
-    list.push(r.content);
-    byUser.set(r.user_id, list);
-  }
-  return byUser;
-}
-
 export type AskScore<T> = {
   candidate: T;
   score: number;
   reason: string;
   // The only reason that may ever be shown to a person (the asker, the
   // candidate, an intro email). `reason` is built from the candidate's
-  // private profile and memories and stays internal. Empty = nothing
+  // profile line (formatCandidateDigest) and stays internal. Empty = nothing
   // shareable, so the match must not be surfaced to anyone.
   shareReason: string;
   mutual: boolean;
@@ -112,50 +80,91 @@ type ScorableCandidate = {
   intent?: unknown;
 };
 
-// A stated ask ("find founders with experience at Google") is the strongest,
-// most explicit signal a user can give about who's relevant to them. This
-// grades every candidate 0-100 instead of a hard yes/no, and returns a
-// one-line grounded reason plus a mutual flag (does the candidate's OWN
-// stated ask/offering also plausibly point back at the asker) — so a "no
-// strong match" result is distinguishable from "three people were close",
-// and relevance_edges ends up with something a human can actually read
-// instead of a bare count. askerContext (optional) is a short summary of the
-// asker's own goals/blockers/long-term direction, given only so the model
-// can judge mutuality — it does not affect the one-directional score.
-// Deliberately generic: judges whatever's actually on file rather than any
-// fixed set of attributes, so it works the same whether the ask is about a
-// career background, a hobby, or a life circumstance.
-async function buildCandidateDigest<T extends ScorableCandidate>(
-  candidates: T[],
-  askEmbedding?: number[] | null,
-  hints?: Map<string, string>,
-): Promise<string> {
-  const memoryByUser =
-    askEmbedding && askEmbedding.length
-      ? await fetchTopMemoryPerCandidate(candidates.map((c) => c.user_id), askEmbedding)
-      : new Map<string, string[]>();
-  return formatCandidateDigest(candidates, memoryByUser, hints);
+// What the scorer may read about each candidate (Royce, 2026-10-18; outbound inventory, matching rows). A matching prompt is
+// made for one member and carries up to 40 others, and it goes to Anthropic (and Langfuse) under the asking member's trace. So
+// each candidate's line is built from a short list of labelled fields only, never from rows:
+//   - asks they agreed to share (the only words the double opt-in flow ever shows another member), each clipped
+//   - goals, blockers and activity likes from their profile, each clipped
+//   - the people graph's internal hint (short wants/offers labels, no names), when the caller passes one
+// Never on the line: any co_memories row (call transcripts, text exchanges, Cue's own records), and any private ask, not even
+// as a category (a private ask is private by default; the room path already scores on shareable asks only, roomMatching.ts
+// matchableIntent). The same lines feed the Jev prune (services/jevMatching.ts).
+// An item that names another person in the same prompt is left out (memberSafeMemories.ts safeMemory, the reply context's
+// strip, with the first names on the candidates in this call).
+// Caps: each item is clipped to DIGEST_ITEM_CHARS; each line holds DIGEST_CANDIDATE_CHARS; a prompt's lines share
+// DIGEST_PROMPT_CHARS, so a big room gets shorter lines, never fewer candidates (each line keeps DIGEST_MIN_CANDIDATE_CHARS,
+// enough for one clipped shared ask: above 88 candidates that floor is what bounds the prompt). A line fills in this order until it is
+// full: shared asks newest first, then the hint, then goals, blockers and likes. Whole items only.
+export const DIGEST_ITEM_CHARS = 120;
+export const DIGEST_CANDIDATE_CHARS = 400;
+export const DIGEST_PROMPT_CHARS = 16_000;
+export const DIGEST_MIN_CANDIDATE_CHARS = 180;
+const DIGEST_HINT_CHARS = 220;
+
+// Pure: one item, whitespace folded, cut at a word near the cap.
+export function clipItem(s: unknown, max = DIGEST_ITEM_CHARS): string {
+  const t = String(s ?? "").replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max - 1);
+  const sp = cut.lastIndexOf(" ");
+  return `${(sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd()}…`;
 }
 
-// Pure half of buildCandidateDigest, exported for evals/matching.
-// hints: the people graph's internal read of an overlap (peopleGraph.ts
-// edgeHint), for the scorer only.
-export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], memoryByUser: Map<string, string[]>, hints?: Map<string, string>): string {
-  return candidates
-    .map((c, i) => {
-      const facts = [...(c.goals ?? []), ...(c.blockers ?? []), ...(c.activity_preferences ?? [])];
-      const memories = memoryByUser.get(c.user_id) ?? [];
-      const shared = shareableAsks(c.intent);
-      const privateAsks = (Array.isArray(c.intent) ? (c.intent as StatedIntent[]) : []).filter((i) => isOpenAsk(i) && i.shareable !== true);
-      const parts = [
-        facts.length ? facts.join("; ") : null,
-        memories.length ? `mentioned: ${memories.map((m) => `"${m}"`).join(" / ")}` : null,
-        privateAsks.length ? `private asks (never shareable): ${privateAsks.map((a) => `"${a.text}"`).join(" / ")}` : null,
-        shared.length ? `asks they agreed to share: ${shared.map((a, k) => `[S${k + 1}] ${a.type ?? "seeking"} "${a.text}"`).join(" / ")}` : null,
-        hints?.get(c.user_id) ?? null,
-      ].filter(Boolean);
-      return `${i}. ${parts.length ? parts.join(" | ") : "(nothing on file)"}`;
-    })
+const firstNameOf = (c: ScorableCandidate) => String((c as { first_name?: unknown }).first_name ?? "").trim();
+const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Pure: true when the reply context's strip (memberSafeMemories.ts safeMemory) would change the item, i.e. it names one of these people.
+function namesSomeone(item: string, names: string[]): boolean {
+  if (!names.length) return false;
+  const bare = item.replace(/^\s*(User said:|User:)\s*/i, "");
+  return safeMemory("matching", bare, names) !== bare.trim();
+}
+
+// Pure: one candidate's line, within budget.
+function candidateLine(c: ScorableCandidate, budget: number, named: (item: string) => boolean, hint: string | null | undefined): string {
+  const safe = (xs: unknown) => (Array.isArray(xs) ? xs : []).map((x) => clipItem(x)).filter((x) => x && !named(x));
+  const shared = shareableAsks(c.intent).map((a, k) => ({ k, text: `[S${k + 1}] ${a.type ?? "seeking"} "${clipItem(a.text)}"` }));
+  const facts: string[] = [];
+  const keptShared: { k: number; text: string }[] = [];
+  let keptHint: string | null = null;
+  const render = () =>
+    [
+      facts.length ? facts.join("; ") : null,
+      keptShared.length ? `asks they agreed to share: ${[...keptShared].sort((x, y) => x.k - y.k).map((x) => x.text).join(" / ")}` : null,
+      keptHint,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+  const tryAdd = (add: () => void, undo: () => void) => {
+    add();
+    if (render().length > budget) undo();
+  };
+  // Newest shared ask first: it is what a share reason most likely rests on. One clipped ask always fits the smallest budget.
+  for (const x of [...shared].reverse()) tryAdd(() => keptShared.push(x), () => keptShared.pop());
+  if (hint && !named(hint)) tryAdd(() => (keptHint = clipItem(hint, DIGEST_HINT_CHARS)), () => (keptHint = null));
+  for (const f of [...safe(c.goals), ...safe(c.blockers), ...safe(c.activity_preferences)]) tryAdd(() => facts.push(f), () => facts.pop());
+  return render() || "(nothing on file)";
+}
+
+// Pure: each candidate's line, in order, without its list number (the Jev prune reads these one by one).
+export function candidateLines<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>): string[] {
+  const budget = Math.max(DIGEST_MIN_CANDIDATE_CHARS, Math.min(DIGEST_CANDIDATE_CHARS, Math.floor(DIGEST_PROMPT_CHARS / Math.max(1, candidates.length))));
+  // Everyone in this call with a first name (the room and partner paths carry one; the network sweep's candidates don't). One
+  // pattern screens every item; only an item it hits goes through the strip, with everyone but the candidate themself.
+  const names = [...new Set(candidates.map(firstNameOf))].filter((n) => n.length >= 2);
+  const anyName = names.length ? new RegExp(`\\b(${names.map(escapeRe).join("|")})\\b`) : null;
+  return candidates.map((c) => {
+    const own = firstNameOf(c);
+    const named = (item: string) => !!anyName && anyName.test(item) && namesSomeone(item, names.filter((n) => n !== own));
+    return candidateLine(c, budget, named, hints?.get(c.user_id));
+  });
+}
+
+// Pure: the numbered list the scorer reads, exported for evals/matching.
+// hints: the people graph's internal read of an overlap (peopleGraph.ts edgeHint), for the scorer only.
+export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>): string {
+  return candidateLines(candidates, hints)
+    .map((l, i) => `${i}. ${l}`)
     .join("\n");
 }
 
@@ -263,7 +272,7 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
     }
   }
   if (!toScore.length) return dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
-  const digest = await buildCandidateDigest(toScore, ask.embedding, hints);
+  const digest = formatCandidateDigest(toScore, hints);
   const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore);
   return [...scored, ...dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>)];
 }
@@ -282,7 +291,7 @@ Return ONLY valid JSON, no preamble:
 score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisfy it. Score every candidate, even a 0.
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
 share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
-mutual: true only if one of the candidate's own asks (shared or private, if listed) also plausibly points back at what's known about the asker above. false if the candidate has no ask listed, or it doesn't plausibly connect.`;
+mutual: true only if one of the candidate's own asks (if listed) also plausibly points back at what's known about the asker above. false if the candidate has no ask listed, or it doesn't plausibly connect.`;
 }
 
 // Reverse direction of scoreAgainstStatedAsk — "I have something to offer,
@@ -298,7 +307,7 @@ export async function scoreOfferingAgainstCandidates<T extends ScorableCandidate
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || !offering.text) return [];
 
-  const digest = await buildCandidateDigest(candidates, offering.embedding);
+  const digest = formatCandidateDigest(candidates);
 
   const prompt = `Someone has this to offer others: "${offering.text}"
 
@@ -391,14 +400,7 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   }
   const zero = dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
   if (!toScore.length) return zero;
-  // What each candidate said that bears on any of the lines (top memories per ask embedding, merged).
-  const embeddings = [...f.asks, ...(f.goal ? [f.goal] : [])].map((a) => a.embedding).filter((e): e is number[] => Array.isArray(e) && e.length > 0).slice(-3);
-  const memoryByUser = new Map<string, string[]>();
-  for (const e of embeddings) {
-    const m = await fetchTopMemoryPerCandidate(toScore.map((c) => c.user_id), e).catch(() => new Map<string, string[]>());
-    for (const [id, list] of m) memoryByUser.set(id, [...new Set([...(memoryByUser.get(id) ?? []), ...list])].slice(0, 4));
-  }
-  const digest = formatCandidateDigest(toScore, memoryByUser, hints);
+  const digest = formatCandidateDigest(toScore, hints);
   const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore);
   return [...scored, ...zero];
 }
