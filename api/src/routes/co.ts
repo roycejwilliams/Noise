@@ -3,6 +3,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { cueAudit } from "../services/voiceCues.js";
 import { recordSafetyConcern, soundsLikeCrisis } from "../services/safety.js";
 import { generateText } from "ai";
+import { noteTraceUser } from "../services/llmTraceText.js";
 import { propagateAttributes } from "@langfuse/tracing";
 import express, { NextFunction, Request, Response } from "express";
 import twilio from "twilio";
@@ -698,6 +699,9 @@ async function processEndedCall(o: {
     const byId = await pool.query(`SELECT id, first_name, phone_number, call_sid FROM users WHERE id = $1`, [user_id]);
     const callUser: { id: string; first_name: string; phone_number: string; call_sid: string | null } | null =
       byId.rows[0] ?? null;
+
+    // Every model call after the call (extraction, learning, follow-up) is filed under them in our trace text (services/llmTraceText.ts).
+    noteTraceUser(callUser?.id ?? user_id);
 
     // The AMD callback already flagged this call as an answering
     // machine/voicemail and sent its own instant follow-up — skip the

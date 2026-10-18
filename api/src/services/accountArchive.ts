@@ -8,7 +8,7 @@
 //   - it's opted out of texts, its open asks are closed and anything queued is
 //     skipped, so nothing ever tries to text the placeholder;
 //   - sign-in sessions are cleared.
-// Nothing is deleted.
+// Nothing is deleted, except their model prompt/answer text (llm_trace_text, a 14-day debugging copy).
 //
 // Shared (moved from co-test/, 2026-09-22) for the membership lapse job, which is gone (2026-10-14: quiet members are never
 // archived on a clock). co-test's tester reset still uses it through a re-export.
@@ -38,6 +38,8 @@ export async function archiveAccount(userId: string): Promise<{ archived: boolea
       [userId],
     );
     await client.query("COMMIT");
+    // Their model prompt/answer text goes too (services/llmTraceText.ts). After the commit, best-effort: never undoes the archive.
+    await import("./llmTraceText.js").then((T) => T.forgetTraceText(userId, "archived")).catch(() => 0);
     return { archived: true };
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});

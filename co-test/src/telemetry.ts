@@ -1,6 +1,7 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { langfuseWithoutText } from "../../api/src/services/langfuseNoText.js";
 import { LlmUsageSpanProcessor } from "../../api/src/services/llmUsage.js";
+import { TraceTextSpanProcessor } from "../../api/src/services/llmTraceText.js";
 import { onShutdown } from "../../api/src/services/shutdown.js";
 
 // Same wiring as api/src/telemetry.ts — separate call because co-test is its
@@ -16,6 +17,8 @@ import { onShutdown } from "../../api/src/services/shutdown.js";
 export function initTelemetry(): void {
   // Cost per Claude request goes to llm_usage whether or not Langfuse is set.
   const spanProcessors: any[] = [new LlmUsageSpanProcessor()];
+  // Prompt and answer text kept on our side for 14 days (api/src/services/llmTraceText.ts); none goes to Langfuse.
+  spanProcessors.push(new TraceTextSpanProcessor());
   if (!process.env.LANGFUSE_SECRET_KEY || !process.env.LANGFUSE_PUBLIC_KEY) {
     console.warn("LANGFUSE_SECRET_KEY/LANGFUSE_PUBLIC_KEY not set — LLM call tracing is disabled.");
   } else {

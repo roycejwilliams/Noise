@@ -4,6 +4,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { captureIssueReport } from "../services/issueReports.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
+import { noteTraceUser } from "../services/llmTraceText.js";
 import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
@@ -757,6 +758,8 @@ export function sendblueRouter(io: Server): Router {
         // ahead of time — the conversation with Co itself is the intake now,
         // so an unknown number can't just be dropped the way it used to be.
         let user = await findOrCreateUserByPhone(number);
+        // Every model call in this turn is filed under them in our trace text (services/llmTraceText.ts).
+        noteTraceUser(user?.id);
 
         // STOP/START handling — checked before anything else (intake,
         // duplicate/debounce, the real reply) so it works regardless of

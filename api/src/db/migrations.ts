@@ -63,6 +63,27 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_time ON llm_usage (created_at DESC, function_id)`))
     .catch((err: Error) => console.error("llm_usage table init failed:", err));
 
+  // Each model request's prompt and answer, ours only (2026-10-18): Langfuse gets no text, so the trace id it shows is
+  // looked up here (services/llmTraceText.ts). 14 days, then the daily job deletes it; it goes with the member (cascade on
+  // delete, deleted on archive and on any removal they ask for). Images are stored as a marker, never their bytes.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS llm_trace_text (
+        id BIGSERIAL PRIMARY KEY,
+        trace_id TEXT NOT NULL,
+        span_id TEXT NOT NULL,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        function_id TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        input TEXT,
+        output TEXT
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_trace_text_trace ON llm_trace_text (trace_id)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_trace_text_user ON llm_trace_text (user_id, created_at)`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_trace_text_time ON llm_trace_text (created_at)`))
+    .catch((err: Error) => console.error("llm_trace_text table init failed:", err));
+
   // Dated corrections (2026-09-23): when someone corrects something on
   // their profile, the old value comes off co_profiles and the change is
   // kept here with its date (services/profileExtraction.ts storeProfile).

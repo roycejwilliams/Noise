@@ -169,6 +169,13 @@ export function registerJobs(io: Server) {
       .then((n) => { if (n) console.log(`co pages: queued ${n} expiry notices`); })
       .catch((err: any) => console.error("co pages: expiry notices failed:", err?.message ?? err));
   });
+  // Model prompt/answer text past its 14 days is deleted, with or without a member on it (services/llmTraceText.ts).
+  cron.schedule("35 4 * * *", () => {
+    import("../services/llmTraceText.js")
+      .then((m) => m.expireTraceText())
+      .then((n) => { if (n) console.log(`trace text: deleted ${n} expired rows`); })
+      .catch((err: any) => console.error("trace text: expiry failed:", err?.name ?? "Error"));
+  });
   // Member assets unused for 90 days lose their bytes (services/memberAssets.ts).
   cron.schedule("25 4 * * *", () => {
     import("../services/memberAssets.js")

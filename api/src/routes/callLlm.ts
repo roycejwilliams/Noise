@@ -7,6 +7,7 @@ import { timingSafeEqual } from "crypto";
 import { recordDecision } from "../harness/core.js";
 import { exchangeText } from "../services/theirYes.js";
 import { verifyCallToken } from "../services/elevenLabsCalls.js";
+import { noteTraceUser } from "../services/llmTraceText.js";
 import { anthropicStream, runCallLlm, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
 import { commitmentProblem, trackCallCommitment } from "../services/callCommitments.js";
 import type { CallToolset, MemberOnCall } from "../services/callTools.js";
@@ -94,6 +95,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     if (!body || !Array.isArray(body.messages)) return res.status(400).json({ error: "messages required" });
     const extra = body.elevenlabs_extra_body ?? {};
     const userId = verifyCallToken(String(extra.user_id ?? ""), extra.call_token) ? String(extra.user_id) : null;
+    noteTraceUser(userId); // this call turn's model calls, under them in our trace text (services/llmTraceText.ts)
     const theirLine = lastUserLine(body);
     const coBefore = coLineBefore(body);
     const t0 = Date.now();

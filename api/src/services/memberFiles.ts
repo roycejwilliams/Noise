@@ -130,6 +130,8 @@ export async function deleteFiles(userId: string, n?: number | null): Promise<nu
   const { rowCount } = n ? await pool.query(`DELETE FROM member_files WHERE user_id = $1 AND n = $2`, [userId, n]) : await pool.query(`DELETE FROM member_files WHERE user_id = $1`, [userId]);
   // Item titles a goal took from a deleted file go with it (services/goalOwnership.ts forgetFileTitles).
   if (rowCount) await import("./goalOwnership.js").then((G) => G.forgetFileTitles(userId, n ?? null)).catch((err: any) => console.error("memberFiles: forgetting a deleted file's goal titles failed:", err?.message ?? err));
+  // A removal: all of their model prompt/answer text goes with it (services/llmTraceText.ts).
+  if (rowCount) await import("./llmTraceText.js").then((T) => T.forgetTraceText(userId, "file removed")).catch(() => 0);
   return rowCount ?? 0;
 }
 
