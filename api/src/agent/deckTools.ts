@@ -136,8 +136,8 @@ async function referenceCopyProblem(ctx: ConversationToolContext, data: any, wor
 // member: their own first name counts as given (ruling iii); nothing else from their record does.
 async function headlineNames(slides: { headline: string }[] | undefined, theirs: string, read: string, member: DeckSource["member"] = null): Promise<string | null> {
   const { headlineNameProblems } = await import("../services/coPages/grounding.js");
-  const { withOwnName } = await import("../services/memberRecord.js");
-  const out = (slides ?? []).map((s, i) => headlineNameProblems(s.headline, withOwnName(`${theirs}\n${read}`, member), `slide ${i + 2} headline`)).filter(Boolean);
+  const { ownName } = await import("../services/memberRecord.js");
+  const out = (slides ?? []).map((s, i) => headlineNameProblems(s.headline, `${theirs}\n${read}`, `slide ${i + 2} headline`, ownName(member))).filter(Boolean);
   return out.length ? out.slice(0, 3).join("; ") : null;
 }
 
@@ -153,7 +153,7 @@ async function deckRefused(ctx: ConversationToolContext, checker: "deck.names" |
 
 // Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
 // deck and what Co read. An error message when a line adds a claim; null when it passes or the check couldn't run (logged).
-// The judge reads their name and goals first (services/memberRecord.ts memberHeader), then their 14 days of words and what Co read.
+// The judge reads their name and goals first (services/memberRecord.ts memberHeader), then what Co read, then their 14 days of words.
 async function inventedClaims(ctx: ConversationToolContext, data: any, source: Pick<DeckSource, "judged" | "read" | "member"> & { thread?: string }, before: any | null): Promise<string | null> {
   if (ctx.dryRun || ctx.stubSearch) return null;
   const C = await import("../services/coPages/deckClaims.js");
@@ -162,7 +162,8 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: P
   const lines = C.deckClaimLines(data).filter((l) => !had.has(l));
   const self = await selfIfAboutCo(ctx, data);
   const header = M.memberHeader(source.member);
-  const fails = await C.inventedLines(lines, [source.judged, source.read].filter(Boolean).join("\n"), undefined, self, source.thread ?? "", header);
+  // What Co read gets its own block, before their words (deckClaims.ts judgeBox), so 14 days of words never push it out.
+  const fails = await C.inventedLines(lines, source.judged, undefined, self, source.thread ?? "", header, source.read);
   const { recordDecision } = await import("../harness/core.js");
   const saw = M.recordSeen(source.member);
   if (fails === null) {

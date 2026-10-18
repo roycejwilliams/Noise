@@ -10,8 +10,10 @@
 //
 // Two uses, never mixed:
 //   - the judges (coPages/deckClaims.ts, documentClaims.ts) read memberHeader FIRST, then their words: name and goals as context;
-//   - the code checks (coPages/grounding.ts, documentSheet.ts) read withOwnName: their own FIRST NAME only, never a goal or a last
-//     name (ruling iii: "the code may clear a missing name only for the member's own first name"). A name that is only in a goal is
+//   - the code checks (coPages/grounding.ts, documentSheet.ts, documentGrounding.ts) clear a missing name only when it IS their own
+//     first name (ownName / isOwnName: the first word of users.first_name, alone or as a possessive), never a goal or a last name
+//     (ruling iii: "the code may clear a missing name only for the member's own first name"). Their name is never added to the words
+//     the checks read: there, "Ellis Capital" would pass when they said "capital" (review of #241). A name that is only in a goal is
 //     still a name they never gave, as far as code is concerned.
 // Pure parts first; the loader imports member knowledge and the database only when it runs, so the code checks that import this
 // stay pure.
@@ -25,16 +27,30 @@ export const HEADER_LIMITS = { chars: 1200, goals: 6, goalChars: 200 } as const;
 export const HEADER_TITLE = "On file for them (their own record, from what they told Cue):";
 
 const oneLine = (s: string) => s.replace(/\s+/g, " ").replace(/"/g, "'").trim();
+// Pure: at most n UTF-16 units, never splitting a character (an emoji is two units; review of #241).
+export function sliceSafe(s: string, n: number): string {
+  if (s.length <= n) return s;
+  let out = "";
+  for (const ch of s) {
+    if (out.length + ch.length > n) break;
+    out += ch;
+  }
+  return out;
+}
 const cut = (s: string, n: number) => {
   if (s.length <= n) return s;
-  const at = s.slice(0, n - 3).replace(/\s+\S*$/, "");
-  return `${at || s.slice(0, n - 3)}...`;
+  const head = sliceSafe(s, n - 3);
+  const at = head.replace(/\s+\S*$/, "");
+  return `${at || head}...`;
 };
 
 // Pure: the header, or "" when there's nothing on file. Name first, then goals as aims, in their own wording.
 export function memberHeader(r: MemberRecord | null | undefined): string {
   if (!r) return "";
-  const name = [r.firstName, r.lastName].map((x) => oneLine(x ?? "")).filter(Boolean).join(" ").slice(0, 120);
+  const first = oneLine(r.firstName ?? "");
+  const last = oneLine(r.lastName ?? "");
+  // A first_name holding the whole name ("Ellis Hart") isn't said twice.
+  const name = sliceSafe([first, last && !first.toLowerCase().split(" ").includes(last.toLowerCase()) ? last : ""].filter(Boolean).join(" "), 120);
   const lines: string[] = [HEADER_TITLE];
   if (name) lines.push(`- Their name: ${name}`);
   const goals = [...new Set(r.goals.map((g) => oneLine(g)).filter(Boolean))];
@@ -70,10 +86,17 @@ export const MEMBER_RECORD_RULES = `At the top of what they said is what Cue has
 - a goal is an aim, not a result: a line stating it as done ("X confirmed", "Signed with X", "X is sponsoring") is not backed by a goal of partnering with X;
 - a detail beyond the goal (a dollar figure, a date, "confirmed", "signed", a count) is not backed by the goal.`;
 
-// Pure: what a code check reads as their words: their own first name, first, then their words. Only the first name (ruling iii).
-export function withOwnName(theirs: string, r: MemberRecord | null | undefined): string {
-  const first = oneLine(r?.firstName ?? "");
-  return first.length >= 2 ? `${first}\n${theirs}` : theirs;
+// Pure: their own first name as a code check may clear it: the first word of users.first_name (a full name stored there never
+// clears the last name), lowercased; null when there's none worth clearing.
+export function ownName(r: MemberRecord | null | undefined): string | null {
+  const w = oneLine(r?.firstName ?? "").split(" ")[0]?.replace(/[^\p{L}\p{M}'’-]/gu, "") ?? "";
+  return w.length >= 2 ? w.toLowerCase() : null;
+}
+// Pure: is this name, as a check found it, exactly their own first name (or its possessive)? "Ellis", "Ellis's" yes; "Ellis Capital",
+// "Ellis Hart" no.
+export function isOwnName(name: string, own: string | null | undefined): boolean {
+  if (!own) return false;
+  return name.trim().replace(/['’]s$/i, "").replace(/[.,!?;:]+$/, "").toLowerCase() === own;
 }
 
 // Pure: what's on file, in a few words, for a refusal's log row (never the goals themselves).

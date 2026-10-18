@@ -92,15 +92,24 @@ const box = (prompt: string, open: string) => {
   const p = DC.claimsPrompt(["Partnering with Lumen Labs"], LONG, "", "", hA);
   const b = box(p, "What they said (and what was read for this deck, when anything was):");
   check("order (deck judge): what the judge reads opens with the header", b.startsWith(M.HEADER_TITLE), b.slice(0, 120));
-  check("order (deck judge): the whole header survives the 6,000-character cut with 60k characters of their words", b.includes(hA) && b.length <= DC.JUDGE_WORDS_CHARS, { len: b.length, words: LONG.length });
+  check("order (deck judge): the whole header is read with 60k characters of their words, and their words keep their own 6,000", b.startsWith(hA) && b.length <= hA.length + 2 + DC.JUDGE_WORDS_CHARS && b.length - hA.length - 2 >= DC.JUDGE_WORDS_CHARS - 1, { len: b.length, words: LONG.length });
   check("order (deck judge): their words follow the header, newest kept", b.indexOf("text 0:") > b.indexOf(GOAL_A2), b.slice(0, 300));
-  check("order (deck judge): the cut is the one the judge reads (6,000)", DC.JUDGE_WORDS_CHARS === 6000 && /headerFirst\(header, theirWords\)\.slice\(0, JUDGE_WORDS_CHARS\)/.test(src("services/coPages/deckClaims.ts")));
+  check("order (deck judge): the cut is the one the judge reads (6,000 of their words)", DC.JUDGE_WORDS_CHARS === 6000 && /\$\{judgeBox\(header, theirWords, read\)\}/.test(src("services/coPages/deckClaims.ts")));
+  // Review of #241: with 14 days of their words, a page Cue read fell past the 6,000 cut. It has its own block, after the header.
+  const words14 = Array.from({ length: 120 }, (_, i) => `text ${i}: some long message about the dinner plans and who is coming and the menu`).join("\n");
+  const page = "PAGE READ: The Battery, 717 Battery St, private dining room seats 40, $150 per head";
+  const pr = DC.claimsPrompt(["The Battery seats 40"], words14, "", "", hA, page);
+  const pb = box(pr, "What they said (and what was read for this deck, when anything was):");
+  check("order (deck judge): a page Cue read is in the prompt with 120 long texts of their words", pr.includes(page) && words14.length > DC.JUDGE_WORDS_CHARS, { words: words14.length });
+  check("order (deck judge): header, then what Cue read, then their words", pb.startsWith(hA) && pb.indexOf(DC.READ_TITLE) > pb.indexOf(hA) && pb.indexOf("text 0:") > pb.indexOf(page), pb.slice(0, 400));
+  check("order (deck judge): what Cue read is capped (4,000) and their words keep their 6,000", DC.JUDGE_READ_CHARS === 4000 && !box(DC.claimsPrompt(["x"], words14, "", "", "", "r".repeat(9000)), "What they said (and what was read for this deck, when anything was):").includes("r".repeat(4001)) && box(DC.claimsPrompt(["x"], words14, "", "", "", "r".repeat(9000)), "What they said (and what was read for this deck, when anything was):").includes(words14.slice(0, 5990)));
+  check("order (deck tool): what Cue read goes in its own block, not after their words", /C\.inventedLines\(lines, source\.judged, undefined, self, source\.thread \?\? "", header, source\.read\)/.test(src("agent/deckTools.ts")));
   const many = M.memberHeader({ firstName: "Ellis", lastName: "Hart", goals: Array.from({ length: 30 }, (_, i) => `goal ${i} ${"word ".repeat(120)}`) });
   // The cap as proposed (1,200 characters, 6 goals, 200 a goal), pinned as numbers so a looser constant fails here.
   check("cap: the header is at most 1,200 characters, 6 goals, 200 characters a goal", M.HEADER_LIMITS.chars === 1200 && M.HEADER_LIMITS.goals === 6 && M.HEADER_LIMITS.goalChars === 200 && many.length <= 1200 && (many.match(/^ {2}- "/gm) ?? []).length <= 6 && many.split("\n").every((l) => l.length <= 208), { len: many.length, goals: (many.match(/^ {2}- "/gm) ?? []).length });
-  check("cap: a capped header leaves most of the judge's window to their words", (() => {
+  check("cap: a capped header leaves their words their whole 6,000", (() => {
     const b2 = box(DC.claimsPrompt(["x"], LONG, "", "", many), "What they said (and what was read for this deck, when anything was):");
-    return b2.startsWith(M.HEADER_TITLE) && b2.length - many.length >= DC.JUDGE_WORDS_CHARS - M.HEADER_LIMITS.chars - 2;
+    return b2.startsWith(M.HEADER_TITLE) && b2.length - many.length >= DC.JUDGE_WORDS_CHARS - 2;
   })());
   const dp = DJ.documentClaimsPrompt(["x"], LONG, hA);
   const db = box(dp, "What they said:");
@@ -124,19 +133,24 @@ const box = (prompt: string, open: string) => {
   check("rules: the deck judge reads them, before their words", p.includes(R0) && p.indexOf(R0) < p.indexOf(hA), null);
   const d = DJ.documentClaimsPrompt(["a"], "w", hA);
   check("rules: the document judge reads them, before their words", d.includes(R0) && d.indexOf(R0) < d.indexOf(hA), null);
-  check("rules: with nothing on file, both prompts are as they were (no rules, no header)", DC.claimsPrompt(["a"], "w") === DC.claimsPrompt(["a"], "w", "", "", "") && !DC.claimsPrompt(["a"], "w").includes("On file for them") && !DJ.documentClaimsPrompt(["a"], "w").includes(R0));
+  check("rules: with nothing on file, both prompts are as they were (no rules, no header)", DC.claimsPrompt(["a"], "w") === DC.claimsPrompt(["a"], "w", "", "", "", "") && !DC.claimsPrompt(["a"], "w").includes("On file for them") && !DJ.documentClaimsPrompt(["a"], "w").includes(R0));
 }
 
 // ---------------------------------------------------------------- 4. the code checks: own first name passes; a goal's name doesn't
-const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse is my company. I host the launch dinner at the fieldhouse in November, on a saturday.";
+const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capital for the launch. Fieldhouse is my company. I host the launch dinner at the fieldhouse in November, on a saturday.";
 {
-  const h = (headline: string, member: typeof A) => headlineNameProblems(headline, M.withOwnName(WORDS, member), "slide 2 headline");
+  const h = (headline: string, member: typeof A) => headlineNameProblems(headline, WORDS, "slide 2 headline", M.ownName(member));
   check('code: "Built by Ellis" passes the headline name check with their record', h("Built by Ellis", A) === null, h("Built by Ellis", A));
   check('code: "Built by Ellis" was refused without it (their name never in their words)', h("Built by Ellis", null) !== null);
   check('code: their own company in their words passes ("Hosted by Fieldhouse")', h("Hosted by Fieldhouse", A) === null, h("Hosted by Fieldhouse", A));
   check('code: a name only in their goal is still refused ("Partnering with Lumen Labs")', /Lumen Labs/.test(h("Partnering with Lumen Labs", A) ?? ""), h("Partnering with Lumen Labs", A));
   check('code: their last name is not cleared (first name only, ruling iii): "Built by Ellis Hart"', /Ellis Hart/.test(h("Built by Ellis Hart", A) ?? ""), h("Built by Ellis Hart", A));
   check('code: an invented third party is still refused ("Sponsored by Acme Ventures")', /Acme Ventures/.test(h("Sponsored by Acme Ventures", A) ?? ""));
+  // Review of #241: their name added to their words let a made-up name pass whose words each appear there ("capital" is theirs).
+  check('code: a made-up name built on their first name is refused ("Backed by Ellis Capital")', /Ellis Capital/.test(h("Backed by Ellis Capital", A) ?? ""), h("Backed by Ellis Capital", A));
+  check("code: their possessive is theirs (\"Ellis's launch dinner\")", h("Ellis's launch dinner", A) === null && h("The launch with Ellis's team", A) === null, h("The launch with Ellis's team", A));
+  const fullFirst = { firstName: "Ellis Hart", lastName: null, goals: [] };
+  check('code: a whole name stored as first_name clears only its first word ("Built by Ellis Hart" refused)', M.ownName(fullFirst) === "ellis" && /Ellis Hart/.test(h("Built by Ellis Hart", fullFirst) ?? ""), h("Built by Ellis Hart", fullFirst));
 
   const deck = async (bullets: string[], member: typeof A) => {
     const data = await deckDataFrom({ title: "Fieldhouse", subtitle: "A launch dinner for founders", slides: [{ headline: "The launch", bullets }, { headline: "The dinner", bullets: ["We're bootstrapped, pre-seed"] }] } as any, null, new Map(), null, { theirWords: WORDS });
@@ -147,6 +161,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse 
   check('code (deck line): and was refused without it', (await deck(["The launch dinner is hosted by Ellis"], null)).some((p) => /Ellis/.test(p)));
   check('code (deck line): a goal-only name is still refused ("Our November launch party with Lumen Labs")', (await deck(["Our November launch party with Lumen Labs"], A)).some((p) => /Lumen Labs/.test(p)), await deck(["Our November launch party with Lumen Labs"], A));
   check('code (deck line): an invented partner on an event line is still refused ("Launch dinner co-hosted with Acme Ventures")', (await deck(["Launch dinner co-hosted with Acme Ventures"], A)).some((p) => /Acme Ventures/.test(p)));
+  check('code (deck line): a made-up name built on their first name is refused ("The launch dinner is backed by Ellis Capital")', (await deck(["The launch dinner is backed by Ellis Capital"], A)).some((p) => /Ellis Capital/.test(p)), await deck(["The launch dinner is backed by Ellis Capital"], A));
 
   const page = async (text: string, member: typeof A) => {
     const input = { why: "They asked for a page for the launch dinner.", line: "Here's the launch dinner.", title: "Fieldhouse Launch Dinner", context: "The launch dinner at the fieldhouse", sections: [{ heading: "The night", blocks: [{ type: "bullets", items: [{ text }] }] }], designContext: "professional" };
@@ -156,6 +171,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse 
   };
   check('code (page): "The launch dinner at the Fieldhouse is hosted by Ellis" passes with their record', (await page("The launch dinner at the Fieldhouse is hosted by Ellis", A)).length === 0, await page("The launch dinner at the Fieldhouse is hosted by Ellis", A));
   check("code (page): and was refused without it", (await page("The launch dinner at the Fieldhouse is hosted by Ellis", null)).some((p) => /Ellis/.test(p)));
+  check('code (page): a made-up name built on their first name is refused ("The launch dinner at the Fieldhouse is backed by Ellis Capital")', (await page("The launch dinner at the Fieldhouse is backed by Ellis Capital", A)).some((p) => /Ellis Capital|capital/i.test(p)), await page("The launch dinner at the Fieldhouse is backed by Ellis Capital", A));
   check('code (page): a goal-only name is still refused ("The launch dinner at the Fieldhouse is with Lumen Labs")', (await page("The launch dinner at the Fieldhouse is with Lumen Labs", A)).some((p) => /Lumen/.test(p)), await page("The launch dinner at the Fieldhouse is with Lumen Labs", A));
 
   const doc = (bullet: string) => DS.resolveDocument({ title: "Launch dinner plan", note: "What you told me.", sections: [{ heading: "The dinner", bullets: [bullet, "We're bootstrapped, pre-seed, no outside funding yet."] }] });
@@ -163,7 +179,13 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse 
   check('code (doc): "The launch dinner at the Fieldhouse is hosted by Ellis." passes with their record', !dp("The launch dinner at the Fieldhouse is hosted by Ellis.", A).some((p) => /Ellis/.test(p)), dp("The launch dinner at the Fieldhouse is hosted by Ellis.", A));
   check("code (doc): and was refused without it", dp("The launch dinner at the Fieldhouse is hosted by Ellis.", null).some((p) => /Ellis|ellis/.test(p)));
   check('code (doc): a goal-only name is still refused ("The November launch party is with Lumen Labs.")', dp("The November launch party is with Lumen Labs.", A).some((p) => /Lumen|lumen/.test(p)), dp("The November launch party is with Lumen Labs.", A));
-  check("code: only the first name is added, never a goal or the last name", M.withOwnName("w", A) === "Ellis\nw" && M.withOwnName("w", null) === "w");
+  check('code (doc): a made-up name built on their first name is refused ("The launch dinner is backed by Ellis Capital.")', dp("The launch dinner is backed by Ellis Capital.", A).some((p) => /capital/i.test(p)), dp("The launch dinner is backed by Ellis Capital.", A));
+  check("code: only the exact first name clears, never a goal, the last name or a longer name", M.ownName(A) === "ellis" && M.isOwnName("Ellis", "ellis") && M.isOwnName("Ellis's", "ellis") && !M.isOwnName("Ellis Capital", "ellis") && !M.isOwnName("Ellis Hart", "ellis") && !M.isOwnName("Lumen Labs", "ellis") && M.ownName(null) === null);
+  check("code: their name is never added to the words the checks read", !/export function withOwnName/.test(src("services/memberRecord.ts")) && ![src("services/coPages/grounding.ts"), src("services/documentSheet.ts"), src("services/documentClaims.ts"), src("agent/deckTools.ts")].some((t) => /withOwnName/.test(t)));
+  // Unicode: a cut never splits a character (review of #241).
+  const uni = M.memberHeader({ firstName: "Zoë", lastName: "Ñúñez", goals: ["🚀".repeat(150), ...Array.from({ length: 8 }, (_, i) => `ゴール ${i} ` + "長い🎉".repeat(80))] });
+  check("header: cuts never split a character, and the cap holds", !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(uni) && uni.length <= 1200 && uni.includes("Their name: Zoë Ñúñez"), uni.length);
+  check("header: a whole name in first_name isn't said twice", M.memberHeader({ firstName: "Ellis Hart", lastName: "Hart", goals: [] }).includes("Their name: Ellis Hart\n") || M.memberHeader({ firstName: "Ellis Hart", lastName: "Hart", goals: [] }).endsWith("Their name: Ellis Hart"));
 }
 
 // ---------------------------------------------------------------- 5. stubbed judges: their verdicts pass through as they are
@@ -181,7 +203,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse 
   check("stub (deck): a judge that passes every line passes every line (code adds no refusal)", Array.isArray(none) && none.length === 0, none);
   const all = await DC.inventedLines(lines, WORDS, judge(JSON.stringify({ fails: lines.map((_, i) => ({ n: i + 1, why: "x" })) })), "", "", hA);
   check("stub (deck): a judge that fails the member's own name and goal lines fails them (no code clearing from the record)", all?.length === 4, all);
-  check("stub (deck): the call passes the header through (deckTools inventedClaims)", /const header = M\.memberHeader\(source\.member\);/.test(src("agent/deckTools.ts")) && /C\.inventedLines\(lines, \[source\.judged, source\.read\]\.filter\(Boolean\)\.join\("\\n"\), undefined, self, source\.thread \?\? "", header\)/.test(src("agent/deckTools.ts")));
+  check("stub (deck): the call passes the header through (deckTools inventedClaims)", /const header = M\.memberHeader\(source\.member\);/.test(src("agent/deckTools.ts")) && /C\.inventedLines\(lines, source\.judged, undefined, self, source\.thread \?\? "", header, source\.read\)/.test(src("agent/deckTools.ts")));
 
   // The document judge: a line the word check can't place goes to it; its verdict stands, and a goal's name is still refused in code.
   const docOf = (bullets: string[]) => DS.resolveDocument({ title: "Launch dinner plan", note: "What you told me.", sections: [{ heading: "The dinner", bullets }] });
@@ -211,7 +233,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse 
   const deckData = await deckDataFrom(deckIn, null, new Map(), null, { theirWords: WORDS });
   const deckC = checkPage(deckData, { theirs: WORDS, read: "", member: A });
   const deckProblems = deckC.ok ? [] : deckC.problems;
-  const named = headlineNameProblems("Partnering with Lumen Labs", M.withOwnName(WORDS, A), "slide 2 headline");
+  const named = headlineNameProblems("Partnering with Lumen Labs", WORDS, "slide 2 headline", M.ownName(A));
   const docIn = DS.resolveDocument({ title: "Lumen Labs launch plan", note: "What you told me.", sections: [{ heading: "The dinner", bullets: ["We're bootstrapped, pre-seed, no outside funding yet.", "The November launch party is with Lumen Labs and 40 guests."] }], suggestions: ["Ask Parallel Arts to co-host the dinner"] });
   const docProblems = DS.documentProblems(docIn, { theirs: WORDS, member: A });
   const rows = [
@@ -262,8 +284,8 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse 
   check("wired (page): their own record with their words", /loadMemberRecord\(ctx\.userId\)[\s\S]{0,300}return \{ theirs, read, member \};/.test(loopT));
   check("wired (document): their own record with their words", /const source = \{ theirs, read, member \};/.test(loopT) && /documentProblems\(doc, \{ theirs: `\$\{theirs\}\\n\$\{file\.text\}`, member \}\)/.test(loopT));
   check("wired (task documents): the research brief and a task's document", /loadMemberRecord\(task\.userId\)/.test(brief) && /judgedDocumentProblems\(doc, \{ theirs, member \}\)/.test(brief) && /deps\.member\(o\.userId\)/.test(del) && /member: async \(userId\) => \(await import\("\.\/memberRecord\.js"\)\)\.loadMemberRecord\(userId\)/.test(del));
-  check("wired: the document judge gets the header, its word checks the first name", /judgeLines\(lines, source\.theirs, judge, memberHeader\(source\.member\)\)/.test(src("services/documentClaims.ts")) && /const theirs = withOwnName\(source\.theirs, source\.member\);/.test(src("services/documentClaims.ts")));
-  check("wired: the page and deck code checks read the first name", (src("services/coPages/grounding.ts").match(/withOwnName\(source\.theirs, source\.member\)/g) ?? []).length === 2 && /const theirs = withOwnName\(source\.theirs, source\.member\);/.test(src("services/documentSheet.ts")));
+  check("wired: the document judge gets the header, its word checks the exact first name", /judgeLines\(lines, source\.theirs, judge, memberHeader\(source\.member\)\)/.test(src("services/documentClaims.ts")) && (src("services/documentClaims.ts").match(/\{ strict: true, own \}/g) ?? []).length === 2 && /unknownOpeners\(parts, theirs, own\)/.test(src("services/documentClaims.ts")));
+  check("wired: the page, deck and document code checks clear only the exact first name", (src("services/coPages/grounding.ts").match(/\.filter\(notOwnName\(own\)\)/g) ?? []).length === 2 && /unbackedClaims\(claims\.map[^\n]*corpus, \{ own \}\)/.test(src("services/coPages/grounding.ts")) && /\.filter\(\(m\) => !isOwnName\(m\.text, own\)\)/.test(src("services/coPages/grounding.ts")) && /\{ strict: true, own \}/.test(src("services/documentSheet.ts")) && /headlineNameProblems\(s\.headline, `\$\{theirs\}\\n\$\{read\}`, `slide \$\{i \+ 2\} headline`, ownName\(member\)\)/.test(src("agent/deckTools.ts")));
 }
 
 console.log(`checkers know the member: ${total - failed}/${total} passed`);

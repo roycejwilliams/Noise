@@ -129,7 +129,15 @@ const STARTERS = new Set(("every each one some most many all no not our their yo
   + "what why how who where which proof format partnership partner launch dinner dinners guests guest people members member seating seats seat table "
   + "pairings pairing wine host hosts chef chefs ask next step steps goal goals plan plans why how where").split(/\s+/).filter(Boolean));
 
-export type SupportOptions = { strict?: boolean };
+// own: their own first name (services/memberRecord.ts ownName). Code clears a missing name only when it is exactly that word (ruling
+// iii; review of #241: their name is never added to their words, where "Ellis Capital" would have passed on "capital").
+export type SupportOptions = { strict?: boolean; own?: string | null };
+// Their name read the way these checks read words (a-z only: "Zoë" is "zo" here, as in namesIn and unknownOpeners).
+const ownWord = (own: string | null | undefined) => (own ? words(own)[0] ?? null : null);
+const notOwn = (o: SupportOptions) => {
+  const me = ownWord(o.own);
+  return (w: string) => !me || w.replace(/'s$/, "") !== me;
+};
 
 // Pure: how much of a sentence rests on one stretch of what they said.
 //   o.strict (documents): counts said as words ("both", "twice", "a second dinner") are held as numbers.
@@ -144,9 +152,9 @@ export function support(sentence: string, src: SourceWindows, o: SupportOptions 
     }
   }
   // Every name or place must be one they said, anywhere.
-  const missingNames = [...new Set(namesIn(sentence).filter((n) => !has(src.all, n)))];
-  const distinct = [...new Set(ws.filter((w) => w.length >= 5 && !STOP.has(w) && !/\d/.test(w) && !isNumberWord(w)))];
-  const meaning = [...new Set(ws.filter((w) => w.length >= 2 && !GLUE.has(w) && !/\d/.test(w) && !isNumberWord(w)))];
+  const missingNames = [...new Set(namesIn(sentence).filter((n) => !has(src.all, n)).filter(notOwn(o)))];
+  const distinct = [...new Set(ws.filter((w) => w.length >= 5 && !STOP.has(w) && !/\d/.test(w) && !isNumberWord(w)).filter(notOwn(o)))];
+  const meaning = [...new Set(ws.filter((w) => w.length >= 2 && !GLUE.has(w) && !/\d/.test(w) && !isNumberWord(w)).filter(notOwn(o)))];
   const judgedLong = distinct.length >= GROUNDING.minWords && meaning.length > GROUNDING.strictUpTo;
   // Long lines: most of their distinctive words, close together. Short lines: every word that carries meaning, close together.
   const need = judgedLong ? distinct : meaning;
@@ -182,13 +190,13 @@ export function unbackedClaims(parts: string[], source: string, o: SupportOption
 // Pure: the word opening a line, when it is capitalized, never in their words and not an ordinary starter: it may be a name ("Pelletier
 // pours for every dinner"). Ordinary words open lines too ("Reserved for...", "Open: ..."), so these go to the judge, never refused
 // on the capital alone; only when the judge can't run is the line held (documentClaims.ts).
-export function unknownOpeners(parts: string[], source: string): { line: string; word: string }[] {
+export function unknownOpeners(parts: string[], source: string, own: string | null = null): { line: string; word: string }[] {
   const all = sourceWindows(source).all;
   const out: { line: string; word: string }[] = [];
   for (const p of parts) for (const s of sentencesOf(p)) {
     const opener = s.replace(/[’‘]/g, "'").match(/^\W*([A-Z][A-Za-z']+)/)?.[1];
     const w = opener?.toLowerCase().replace(/'s$/, "");
-    if (w && w.length >= 3 && !GLUE.has(w) && !STARTERS.has(w) && !isNumberWord(w) && !(w in QUANTITY) && !has(all, w)) out.push({ line: s, word: opener! });
+    if (w && w.length >= 3 && w !== ownWord(own) && !GLUE.has(w) && !STARTERS.has(w) && !isNumberWord(w) && !(w in QUANTITY) && !has(all, w)) out.push({ line: s, word: opener! });
   }
   return out;
 }
@@ -202,7 +210,7 @@ export function partlyBacked(parts: string[], source: string, o: SupportOptions 
   for (const p of parts) for (const s of sentencesOf(p)) {
     if (support(s, src, o)) continue;
     // Every word that carries meaning, short ones too ("came back", "sales go up"): the long-line check only weighs longer words.
-    const meaning = [...new Set(words(s).filter((w) => w.length >= 2 && !GLUE.has(w) && !/\d/.test(w) && !isNumberWord(w)))];
+    const meaning = [...new Set(words(s).filter((w) => w.length >= 2 && !GLUE.has(w) && !/\d/.test(w) && !isNumberWord(w)).filter(notOwn(o)))];
     if (!meaning.length) continue;
     const best = Math.max(0, ...src.windows.map((w) => meaning.filter((d) => has(w, d)).length));
     if (best < meaning.length) out.push(s);

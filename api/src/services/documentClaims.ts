@@ -13,7 +13,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { documentProblems, memberParts, type Doc } from "./documentSheet.js";
 import { partlyBacked, unbackedClaims, unknownOpeners } from "./documentGrounding.js";
-import { MEMBER_RECORD_RULES, headerFirst, memberHeader, withOwnName, type MemberRecord } from "./memberRecord.js";
+import { MEMBER_RECORD_RULES, headerFirst, memberHeader, ownName, type MemberRecord } from "./memberRecord.js";
 
 export type Judge = (prompt: string) => Promise<string>;
 export const haikuJudge: Judge = async (prompt) =>
@@ -82,15 +82,17 @@ export async function judgeLines(lines: string[], theirWords: string, judge: Jud
 // the word check couldn't place, and for long lines it passed with some words not theirs (where a claim of Co's own can hide in their
 // vocabulary). Numbers and names they never gave are never sent to it. Fail safe: if the judge can't run, the word check's verdict
 // stands. problems: documentProblems(doc, source) already run by the caller.
-// source.member (services/memberRecord.ts): the word checks here read their own first name with their words (withOwnName, ruling
-// iii: never a goal), and the judge reads their name and goals first (memberHeader). The judge's verdict is passed through as it is.
+// source.member (services/memberRecord.ts): the word checks here clear a missing name only when it is exactly their own first name
+// (ownName, ruling iii: never a goal), and the judge reads their name and goals first (memberHeader). The judge's verdict is passed
+// through as it is.
 export async function judgedDocumentProblems(doc: Doc, source: { theirs: string; read?: string; member?: MemberRecord | null }, problems: string[] = documentProblems(doc, source), judge: Judge = haikuJudge): Promise<string[]> {
   const parts = memberParts(doc);
-  const theirs = withOwnName(source.theirs, source.member);
-  const soft = unbackedClaims(parts, theirs, { strict: true }).filter((u) => !u.hard.length).map((u) => u.text);
-  const partial = partlyBacked(parts, theirs, { strict: true });
+  const theirs = source.theirs;
+  const own = ownName(source.member);
+  const soft = unbackedClaims(parts, theirs, { strict: true, own }).filter((u) => !u.hard.length).map((u) => u.text);
+  const partial = partlyBacked(parts, theirs, { strict: true, own });
   // A line opening on a capitalized word they never used may open on a name: the judge reads it, and without a judge it's held.
-  const openers = unknownOpeners(parts, theirs);
+  const openers = unknownOpeners(parts, theirs, own);
   const judged = [...new Set([...partial, ...openers.map((x) => x.line)])];
   const lines = [...new Set([...soft, ...judged])];
   if (!lines.length) return problems;

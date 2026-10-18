@@ -8,10 +8,12 @@ import { placeholderIn } from "./art.js";
 import { unsourced } from "../offerGuard.js";
 import * as OG from "../offerGuard.js";
 import { unbackedClaims } from "../documentGrounding.js";
-import { withOwnName, type MemberRecord } from "../memberRecord.js";
+import { isOwnName, ownName, type MemberRecord } from "../memberRecord.js";
 
-// member: their own record (services/memberRecord.ts, Royce 2026-10-18 A+H). The checks here read only their own first name from it,
-// with their words (withOwnName): a name in a goal is still one they never gave (ruling iii).
+// member: their own record (services/memberRecord.ts, Royce 2026-10-18 A+H). The checks here take only their own first name from it,
+// and clear a missing name only when it is exactly that name (ownName, isOwnName): a name in a goal is still one they never gave
+// (ruling iii), and "Ellis Capital" is still a name they never gave (review of #241: adding their name to their words let it pass).
+const notOwnName = (own: string | null) => (m: { kind: string; text: string }) => !(m.kind === "name" && isOwnName(m.text, own));
 export type PageSource = { theirs: string; read: string; member?: MemberRecord | null };
 
 // Pure: every line of text a page shows, with where it is (for the problem message).
@@ -76,17 +78,18 @@ const unlabeled = (s: string) => {
 
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
   // A bare time stands for am and pm only in their own words, never in a page Co read ("open until 11"): review of PR 2.
-  const corpus = `${sameTimes(withOwnName(source.theirs, source.member), "theirs")}\n${sameTimes(source.read)}`;
+  const corpus = `${sameTimes(source.theirs, "theirs")}\n${sameTimes(source.read)}`;
+  const own = ownName(source.member);
   const out: string[] = [];
   for (const l of pageLines(d)) {
     // A bracketed gap never ships on a page either (the deck rule below; review: "[Gallery]" in a title).
     if (placeholderIn(l.text)) out.push(`${l.where}: "${placeholderIn(l.text)}" is a placeholder, and a page never ships one: ask them for the missing piece, or write it without it`);
-    const bad = unsourced(sameTimes(l.text), corpus);
+    const bad = unsourced(sameTimes(l.text), corpus).filter(notOwnName(own));
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // Headings and the title are Co's labels; the content lines are the claims.
   const claims = pageLines(d).filter((l) => !/heading$|^title$|place$/.test(l.where));
-  for (const u of unbackedClaims(claims.map((l) => unlabeled(sameTimes(l.text))), corpus).slice(0, 4)) {
+  for (const u of unbackedClaims(claims.map((l) => unlabeled(sameTimes(l.text))), corpus, { own }).slice(0, 4)) {
     // The line as the writer can find it: without the "then" a stripped label leaves (unlabeled).
     out.push(`"${u.text.replace(/^then /, "").slice(0, 90)}" isn't backed by what they said or what you read (nothing puts ${u.missing.slice(0, 4).join(", ")} together)`);
   }
@@ -101,7 +104,8 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
   // Times read the way pages read them (sameTimes, Royce 2026-10-17: "'8:00 PM' matches the member's '8 PM', the same as pages. Made-up
   // times stay refused"). S1-a: 15 decks were refused for "8:00 PM: Supper" when the member wrote "supper … 8 PM". Times only: dates
   // are compared as written, as before (sameTimes o.dates).
-  const corpus = `${sameTimes(withOwnName(source.theirs, source.member), "theirs", { dates: false })}\n${sameTimes(source.read, "page", { dates: false })}`;
+  const corpus = `${sameTimes(source.theirs, "theirs", { dates: false })}\n${sameTimes(source.read, "page", { dates: false })}`;
+  const own = ownName(source.member);
   const lines: { where: string; text: string }[] = [
     { where: "title", text: d.title },
     { where: "subtitle", text: d.subtitle },
@@ -115,7 +119,7 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
     if (placeholderIn(l.text)) out.push(`${l.where}: "${placeholderIn(l.text)}" is a placeholder, and a deck never ships one: ask them for the missing piece, or write the slide as the point itself without the example`);
     // A common word opening what follows a time ("9:30 PM: Choose a cup") is its capital, not a name: the headline check's rule
     // (lowerSentenceStarts), here because with times read the same as pages, it was the last thing refusing 2 of those decks.
-    const bad = unsourced(lowerSentenceStarts(sameTimes(l.text, "page", { dates: false }), { afterTime: true }), corpus);
+    const bad = unsourced(lowerSentenceStarts(sameTimes(l.text, "page", { dates: false }), { afterTime: true }), corpus).filter(notOwnName(own));
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   return out.slice(0, 7);
@@ -175,7 +179,8 @@ function lowerSentenceStarts(headline: string, o: { afterTime?: boolean } = {}):
 // hide a name). Every capitalized run after the first word, in their words or not: in sentence case each is a name the writer meant;
 // in Title Case a run counts as a name only when it holds a word that isn't a common word, so "Why Co Wins Against Parties" passes
 // and "Partnering With Founders Club And Signal" does not. Unlike the event check, this runs on every headline.
-export function headlineNameProblems(headline: string, theirWords: string, where: string): string | null {
+// own: their own first name (memberRecord.ts ownName): a name that is exactly it is theirs (ruling iii); nothing else is cleared.
+export function headlineNameProblems(headline: string, theirWords: string, where: string, own: string | null = null): string | null {
   const { mentionsIn } = OG;
   const found = needsCasing(headline);
   if (found === "lower") return null;
@@ -187,6 +192,7 @@ export function headlineNameProblems(headline: string, theirWords: string, where
   const hay = ` ${theirWords.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ")} `;
   const bad = mentionsIn(lowerSentenceStarts(headline))
     .filter((m) => m.kind === "name")
+    .filter((m) => !isOwnName(m.text, own))
     .filter((m) => {
       const parts = m.text
         .toLowerCase()
