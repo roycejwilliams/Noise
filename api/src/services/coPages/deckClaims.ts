@@ -12,8 +12,8 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../../models.js";
 import { parseModelJson } from "../modelJson.js";
-import { mentionsIn, numbersOf } from "../offerGuard.js";
-import { sameTimes } from "./grounding.js";
+import { numbersOf } from "../offerGuard.js";
+import { COMMON, sameTimes } from "./grounding.js";
 
 export type Judge = (prompt: string) => Promise<string>;
 const haiku: Judge = async (prompt) =>
@@ -147,7 +147,7 @@ export function nameIsTheirs(missing: string, hay: string, line?: string): boole
   return inText(missing, hay);
 }
 
-// Pure: the figures in a line their words (or goals) don't give: numbers (with %, $, k), number words from two up, "thousands",
+// Pure: the figures in a line their words don't give: numbers (with %, $, k), number words from two up, "thousands",
 // "hundreds", "a million", "dozens", months, weekdays and noon or midnight. Times and dates are put the same way on both sides first
 // (grounding.ts sameTimes), so "7pm" matches "7:00 PM", and a short month followed by a day ("Nov 14") is the full month. A month is
 // matched by its case in their words ("you may want" never backs "Launch party in May").
@@ -181,18 +181,30 @@ const CLAIM_WORDS = new RegExp(
   "i",
 );
 // What code reads besides their words (knownFor): their own first name, the only name code may clear (Royce, 2026-10-17: "Names the
-// code may clear: the member's own first name only"; no nickname is kept on record today), and their active goals, which back a figure
-// (a month, a count) but never a name.
+// code may clear: the member's own first name only"; no nickname is kept on record today). Their active goals ride along for the
+// wording of a refusal only: a goal is an aim, so it backs neither a name nor a figure ("40 members by March" never backs "40 members").
 export type Known = { text: string; firstName: string | null };
 const knownOf = (k: Known | string): Known => (typeof k === "string" ? { text: k, firstName: null } : k);
-// The one relationship form their own name may carry: "Hosted by Odile" is them hosting. It's exempt only when no other name follows
-// the hosting words (review of #240: "Hosted by Odile and Sequin AI", and a co-host the judge didn't list); any other name the judge
-// listed stands on its own, since only their first name clears. Names are read by the reply guard's own parser (offerGuard mentionsIn).
+// The one relationship form their own name may carry: "Hosted by Odile" is them hosting, so the hosting words never count as a claim.
+// A co-host can't slip through it: their own name clears only on a line with no other name on it (otherNameOn).
 const HOSTING = /^hosted (?:by|with)$/i;
 const isOwnName = (missing: string, firstName: string | null) => !!firstName && plain(missing).trim().length > 0 && plain(missing) === plain(firstName);
 const ownNameInLine = (firstName: string | null, line: string) => !!firstName && plain(firstName).trim().length > 0 && plain(line).includes(plain(firstName));
-const othersAfter = (line: string, at: number, firstName: string | null) =>
-  mentionsIn(`with ${line.slice(at)}`).some((m) => m.kind === "name" && !(firstName && plain(m.text) === plain(firstName)));
+// Pure: another name on the line. Any capitalized word (each part of a hyphenated one) counts, unless it is their own first name (or its
+// possessive, any case), a common word (grounding.ts COMMON), "I", or a hosting word. Simple on purpose (review of #240): "Odile and
+// Acme host", "Odile Martin cooks", "Odile-Marie cooks", "ex-Google" all carry another name.
+const HOST_TOKENS = new Set(["hosted", "host", "hosts", "hosting", "by", "with"]);
+export function otherNameOn(line: string, firstName: string | null): boolean {
+  const own = (firstName ?? "").trim().toLowerCase();
+  for (const raw of line.split(/[\s,.;:!?()"“”/+&\-–—]+/)) {
+    const w = raw.replace(/^['‘’]+|['‘’]+$/g, "");
+    if (!/^[A-Z]/.test(w)) continue;
+    const base = w.replace(/['’]s$/i, "").toLowerCase();
+    if ((own && base === own) || COMMON.has(base) || HOST_TOKENS.has(base) || base === "i" || /^i['’]/.test(base)) continue;
+    return true;
+  }
+  return false;
+}
 
 // Pure: what code makes of the verdicts. A failed line stands unless every fact listed on it is cleared: a stance (no unbacked figure
 // on the line), or a missing name that is their own first name (in the line; no unbacked figure or relationship word on it). A name in
@@ -205,15 +217,14 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
   for (const v of verdicts) {
     if (v.verdict !== "fail") continue;
     const line = lines[v.n - 1];
-    // Figures are backed by their words or their goals (both theirs); their own name backs no figure.
-    const figures = unbackedFigures(line, `${theirWords}\n${k.text}`);
-    // "Hosted by/with" counts as a claim unless only their own name follows it (any other name listed on the line stands anyway).
-    const claimWord = [...line.matchAll(new RegExp(CLAIM_WORDS.source, "gi"))]
-      .find((m) => !(HOSTING.test(m[0]) && !othersAfter(line, (m.index ?? 0) + m[0].length, k.firstName)))?.[0];
+    // Figures are backed by their words only: a goal is an aim (a figure from it would read as done), and their own name backs none.
+    const figures = unbackedFigures(line, theirWords);
+    // "Hosted by/with" is never the claim: their own name clears only on a line with no other name anyway.
+    const claimWord = [...line.matchAll(new RegExp(CLAIM_WORDS.source, "gi"))].map((m) => m[0]).find((w) => !HOSTING.test(w));
     const claimy = figures.length > 0 || !!claimWord;
     const standing = v.facts.filter((f) => {
       if (f.kind === "stance") return figures.length > 0;
-      if (NAME_KINDS.has(f.kind) && !claimy && isOwnName(f.missing, k.firstName) && ownNameInLine(k.firstName, line)) return false;
+      if (NAME_KINDS.has(f.kind) && !claimy && isOwnName(f.missing, k.firstName) && ownNameInLine(k.firstName, line) && !otherNameOn(line, k.firstName)) return false;
       return true;
     });
     if (!standing.length) continue;
@@ -221,7 +232,9 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
     const says = standing.map((f) =>
       f.kind === "stance"
         ? `a figure their words don't give: ${figures.join(", ")}`
-        : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line) && claimy
+        : NAME_KINDS.has(f.kind) && isOwnName(f.missing, k.firstName) && !claimy && otherNameOn(line, k.firstName)
+          ? `their own name, ${f.missing}, is on a line that names someone else too; write it without the other name, or check that name with them`
+          : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line) && claimy
           ? `this line says more about ${f.missing} than their words do (${[claimWord, ...figures].filter(Boolean).join(", ")}); write the name without the claim`
           : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line)
             ? `${KIND_SAYS[f.kind]} read as a fact their words don't give: ${f.missing}; name it the way they did, or leave it out`
@@ -232,8 +245,8 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
   return out;
 }
 
-// Pure: their own first name (the only name code may clear) and their active goals (they back a figure, never a name); a done or
-// set-aside goal is history.
+// Pure: their own first name (the only name code may clear) and their active goals (used only to word a refusal: a goal backs neither a
+// name nor a figure); a done or set-aside goal is history.
 export function knownFor(o: { firstName?: string | null; goals?: { text: string; state: string }[] }): Known {
   return { firstName: o.firstName?.trim() || null, text: (o.goals ?? []).filter((g) => g.state === "active").map((g) => g.text.trim()).filter(Boolean).join("\n") };
 }
@@ -241,7 +254,7 @@ export function knownFor(o: { firstName?: string | null; goals?: { text: string;
 // The lines that add a claim, or null when the check couldn't run.
 // Tried twice before giving up (PR 6: on a call the check timed out and, failing open, let "no free tier, no trials" onto a deck).
 // An answer that doesn't read (parseLineVerdicts) counts as the check not running: tried again, then null, and the caller makes
-// nothing. known: their own first name (the only name code may clear) and their goals (back a figure); the judge doesn't see them.
+// nothing. known: their own first name (the only name code may clear) and their goals (wording only); the judge doesn't see them.
 export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = "", known: Known | string = ""): Promise<{ line: string; why: string }[] | null> {
   if (!lines.length) return [];
   for (let attempt = 0; attempt < 2; attempt++) {

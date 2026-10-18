@@ -45,7 +45,7 @@ check("a stance line whose figures are all theirs passes", passed(await one("Eig
   const ans = { lines: [fail(1, ["named_company", "Sequin AI"])] };
   check("a name in their active goals is never cleared by code (only their own first name is)", refused(await one("Proof: Sequin AI, November", "Let's make the investor deck", ans, royce)));
   check("a name in their own words is never cleared by code either", refused(await one("Proof: Sequin AI, November", "Our November launch with Sequin AI", ans, DC.knownFor({ firstName: "Royce" }))));
-  check("a goal still backs a figure on a stance line", passed(await one("Launch in November", "make my deck", { lines: [fail(1, ["stance", "framing"])] }, royce)));
+  check("a goal never backs a figure (a goal is an aim)", refused(await one("Launch in November", "make my deck", { lines: [fail(1, ["stance", "framing"])] }, royce)));
   check("the same name in neither their words nor their goals still refuses", refused(await one("Proof: Sequin AI, November", "Let's make the investor deck", ans, DC.knownFor({ firstName: "Royce" }))));
   check("a done goal is history: it doesn't back the name", refused(await one("Proof: Sequin AI, November", "Let's make the investor deck", ans, DC.knownFor({ goals: [{ text: "partnering with Sequin AI for a November launch party", state: "done" }] }))));
   check("a goal name never clears a relationship it doesn't state as done: \"launch party with\"", refused(await one("Our November launch party with Sequin AI", "Let's make the investor deck", ans, royce)));
@@ -74,15 +74,34 @@ check("their own first name is never a missing name", passed(await one("Juno's c
     const out = await one(line, tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile);
     check(`a co-host the judge didn't list still keeps hosting from being exempt: "${line}"`, refused(out), out);
   }
-  check("their own hosting after another name in the line still passes", passed(await one("A ceramics night at Heath Ceramics, hosted by Odile", "a ceramics night I'm hosting at Heath Ceramics", { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  check("their own hosting on a line with another name refuses (Heath Ceramics is a name)", refused(await one("A ceramics night at Heath Ceramics, hosted by Odile", "a ceramics night I'm hosting at Heath Ceramics", { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
   check("a person named for a month who isn't them refuses", refused(await one("Dinner by April", tw, { lines: [fail(1, ["named_person", "April"])] }, odile)));
   check("their own name that is a month still carries the month: \"June's cooking tonight\" refuses unless they said June", refused(await one("June's cooking tonight", "my birthday dinner, I'm cooking", { lines: [fail(1, ["named_person", "June"])] }, DC.knownFor({ firstName: "June" }))));
   check("a short own first name clears (whole word)", passed(await one("Al's cooking tonight", "my birthday dinner, I'm cooking", { lines: [fail(1, ["named_person", "Al"])] }, DC.knownFor({ firstName: "Al" }))));
+  for (const line of ["Odile and Acme host", "Acme and Odile host the night", "Odile & Acme present", "Odile with Acme", "Odile x Acme", "Odile Martin, ex-Google, at the table", "Odile Martin cooks", "Odile-Marie cooks", "Odile, ex-Google"]) {
+    const out = await one(line, tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile);
+    check(`their own name never clears on a line with another name: "${line}"`, refused(out), out);
+  }
+  const besideWhy = (await one("Odile and Acme host", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile))?.[0]?.why ?? "";
+  check("the refusal says their name is beside another name, not that their name is missing", /their own name, Odile, is on a line that names someone else/.test(besideWhy), besideWhy);
+  check("their own name in any case and possessive still clears", passed(await one("ODILE's table", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  check("a capitalized common word or \"I\" is not another name", passed(await one("I cook, Odile hosts the Night", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  {
+    const aims = DC.knownFor({ firstName: "Odile", goals: [{ text: "raise $500k for the studio", state: "active" }, { text: "40 members by March", state: "active" }] });
+    for (const [line, facts] of [["$500k raised", [["stance", "framing"]]], ["40 members and counting", [["stance", "framing"]]], ["Sold out in March", [["stance", "framing"]]], ["Odile raised $500k", [["named_person", "Odile"]]]] as [string, [string, string][]][]) {
+      const out = await one(line, "make my deck", { lines: [fail(1, ...facts)] }, aims);
+      check(`a goal's figure reads as done, so it never backs one: "${line}"`, refused(out), out);
+    }
+  }
+  for (const line of ["Odile joined the board", "Odile's deal with the club", "Odile, our first client"]) {
+    const out = await one(line, tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile);
+    check(`a relationship word about the member themself keeps it refused: "${line}"`, refused(out), out);
+  }
   check("a claim about the member themself still refuses: \"Odile joined Acme\" (judge lists only Odile)", refused(await one("Odile joined Acme", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
   check("a claim about the member themself still refuses: \"Odile's deal with Acme\"", refused(await one("Odile's deal with Acme", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
-  check("their own first name must be in the line itself", refused(await one("Made for OpenAI fans", "a club", { lines: [fail(1, ["named_person", "Juno"])] }, DC.knownFor({ firstName: "Juno" }))));
+  check("their own first name must be in the line itself", refused(await one("made for fans of the long table", "a club", { lines: [fail(1, ["named_person", "Juno"])] }, DC.knownFor({ firstName: "Juno" }))));
 }
-check("hosted by their own name passes", passed(await one("A ceramics night at Heath Ceramics, hosted by Odile", "a ceramics night I'm hosting at Heath Ceramics", { lines: [fail(1, ["named_person", "Odile"])] }, DC.knownFor({ firstName: "Odile" }))));
+check("hosted by their own name, on a line with another name, refuses", refused(await one("A ceramics night at Heath Ceramics, hosted by Odile", "a ceramics night I'm hosting at Heath Ceramics", { lines: [fail(1, ["named_person", "Odile"])] }, DC.knownFor({ firstName: "Odile" }))));
 check("someone else's name they never gave still refuses", refused(await one("Chef Marco cooks Saturday", cabin, { lines: [fail(1, ["named_person", "Marco"])] }, DC.knownFor({ firstName: "Juno" }))));
 // 5. a name they gave never clears a claim about it (review of #240): relationship words, figures, other facts on the line
 {
@@ -105,7 +124,7 @@ check("someone else's name they never gave still refuses", refused(await one("Ch
   check("a partnership claim is never overruled", refused(await one("Co-hosted with Sequin AI", pitch, { lines: [fail(1, ["partnership", "Sequin AI co-hosting"])] })));
   check("a name they gave doesn't clear an invented claim beside it", refused(await one("Chef Marco cooks Saturday", "Marco can't make it this time", { lines: [fail(1, ["named_person", "Marco"])] })));
   check("a line is refused unless every fact on it is cleared", refused(await one("Sequin AI brings 300 guests", pitch, { lines: [fail(1, ["named_company", "Sequin AI"], ["count", "300 guests"])] })));
-  check("a cleared name doesn't clear another fact on the same line", refused(await one("Juno's cooking, the best chef in Portland", cabin, { lines: [fail(1, ["named_person", "Juno"], ["result", "best chef in Portland"])] }, DC.knownFor({ firstName: "Juno" }))));
+  check("a cleared name doesn't clear another fact on the same line", refused(await one("Juno's cooking, the best chef in town", cabin, { lines: [fail(1, ["named_person", "Juno"], ["result", "best chef in town"])] }, DC.knownFor({ firstName: "Juno" }))));
   check("an advisor claim from a goal name refuses", refused(await one("Advised by Sequin", "make my deck", { lines: [fail(1, ["named_company", "Sequin"])] }, DC.knownFor({ goals: [{ text: "raise from Sequin Capital", state: "active" }] }))));
   check("a goal-only name stated as an investor refuses", refused(await one("Our lead investor: Sequin Capital", "make my deck", { lines: [fail(1, ["named_company", "Sequin Capital"])] }, DC.knownFor({ goals: [{ text: "raise a seed round from Sequin Capital", state: "active" }] }))));
 }
