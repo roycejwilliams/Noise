@@ -13,7 +13,7 @@ import { artifactTools } from "./artifactTools.js";
 import { owedAnswerNote } from "./linkAnswer.js";
 import { recordDecision } from "../harness/core.js";
 import { loadMemberRecord } from "../services/memberRecord.js";
-import { logRefusal } from "../services/checkerRefusals.js";
+import { docPositions, logRefusal } from "../services/checkerRefusals.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
 import { loadBrief, saveBrief, type SearchIntent } from "../services/searchIntent.js";
@@ -893,7 +893,7 @@ export function loopTools(
         // (services/documentClaims.ts). Numbers and names they never gave are refused in code either way.
         const problems = await (await import("../services/documentClaims.js")).judgedDocumentProblems(doc, source, documentProblems(doc, source));
         if (problems.length) {
-          if (!ctx.dryRun) await logRefusal({ checker: "doc.grounding", userId: ctx.userId, problems, member, extra: { title: doc.title.slice(0, 120) } });
+          if (!ctx.dryRun) await logRefusal({ checker: "doc.grounding", userId: ctx.userId, problems, lines: docPositions(doc), member, extra: { refusal: docRefusals + 1 } });
           // Plain in the turn's facts: no document exists, so nothing about one (its sections, what's in it, what was left open) is said
           // (2026-10-12: after every try was refused, Co texted "I left the example section open..." about a document that never existed).
           docRefusals++;
@@ -1024,7 +1024,7 @@ export function loopTools(
         // Rule 4: the same grounding as writeDocument, with their file as part of their own record. Nothing of either is shown to Co.
         const problems = documentProblems(doc, { theirs: `${theirs}\n${file.text}`, member });
         if (problems.length) {
-          await logRefusal({ checker: "doc.fromFile", userId: ctx.userId, problems, member, extra: { file: file.n } });
+          await logRefusal({ checker: "doc.fromFile", userId: ctx.userId, problems, lines: docPositions(doc), member, extra: { file: file.n } });
           notDone(`No document sent from their file #${file.n}: it didn't hold to their file and words.`);
           return { ok: false, error: "The draft leaned on things that weren't in their file or their words, so it wasn't sent. Say you couldn't make it hold to what they gave you, and ask what they want it to cover." };
         }

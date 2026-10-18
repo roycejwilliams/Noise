@@ -142,9 +142,13 @@ async function headlineNames(slides: { headline: string }[] | undefined, theirs:
 }
 
 // Every refusal logged with its reason (services/checkerRefusals.ts, Royce 2026-10-18): the deck checks in code, by name.
-async function deckRefused(ctx: ConversationToolContext, checker: "deck.names" | "deck.grounding", problems: string[], source: DeckSource, extra: Record<string, unknown>): Promise<void> {
+// The row names each line by its place on the deck and the kind of problem, never its words (forget by default).
+async function deckRefused(ctx: ConversationToolContext, checker: "deck.names" | "deck.grounding", problems: string[], source: DeckSource, deck: any, extra: Record<string, string | number | boolean | null>): Promise<void> {
   if (ctx.dryRun) return;
-  await (await import("../services/checkerRefusals.js")).logRefusal({ checker, userId: ctx.userId, problems, member: source.member, extra });
+  const R = await import("../services/checkerRefusals.js");
+  // The headline check joins its problems with "; " (headlineNames): one per headline.
+  const each = problems.flatMap((p) => p.split(/; (?=slide \d+ headline: )/));
+  await R.logRefusal({ checker, userId: ctx.userId, problems: each, lines: R.deckPositions(deck), member: source.member, extra });
 }
 
 // Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
@@ -166,8 +170,11 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: P
     return "The check that every line is theirs couldn't run just now, so nothing was made. Say plainly it didn't go through and you'll try again in a moment.";
   }
   if (!fails.length) return null;
-  const { refusalReason } = await import("../services/checkerRefusals.js");
-  await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "invented", reason: refusalReason(fails.map((f) => `"${f.line.slice(0, 100)}": ${f.why || "a hard fact they never gave"}`)), proposal: { fails, saw } }).catch(() => {});
+  // Logged by place and kind only, never the line or the judge's words about it (forget by default; services/checkerRefusals.ts).
+  const R = await import("../services/checkerRefusals.js");
+  const at = R.deckPositions(data);
+  const refused = fails.map((f) => ({ at: at.find((x) => x.text === f.line)?.where ?? `line ${lines.indexOf(f.line) + 1} of ${lines.length} checked`, kind: R.judgedKind(f.why) }));
+  await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "invented", reason: R.refusalReason(refused), proposal: { refused, saw } }).catch(() => {});
   return `These lines state a hard fact they never gave: ${fails.map((f) => `"${f.line}" (${f.why})`).join(" | ")}. Rewrite just those lines safer (the stance, not the fact: "Built for live rooms" instead of "Partnering with X") and keep every slide full; never strip the deck to bare lines. Then try once more. If it still can't be made, tell them plainly in one text that the deck isn't made, which fact you couldn't back, and ask them to confirm it.`;
 }
 
@@ -673,7 +680,7 @@ export function deckTools(
           // The name check on the headlines as written, before they're put in sentence case (grounding.ts headlineNameProblems).
           const named = await headlineNames(deckIn.slides, source.theirs, `${source.read}\n${await selfIfAboutCo(ctx, { ...deckIn, brief: input.brief })}`, source.member);
           if (named) {
-            await deckRefused(ctx, "deck.names", [named], source, { title: String(deckIn.title ?? "").slice(0, 120), event: "make", attempt });
+            await deckRefused(ctx, "deck.names", [named], source, deckIn, { event: "make", attempt });
             if (retry(named)) continue;
             o.notDone(`No deck made: ${named}.`);
             return { ok: false, error: `Not made: ${named}. Fix it (only what they told you or you read) and try once more.` };
@@ -711,7 +718,7 @@ export function deckTools(
           const backed = self ? { ...source, read: `${source.read}\n${self}` } : source;
           const checked = store.checkPage(data, backed);
           if (!checked.ok) {
-            await deckRefused(ctx, "deck.grounding", checked.problems, source, { title: String(deckIn.title ?? "").slice(0, 120), event: "make", attempt });
+            await deckRefused(ctx, "deck.grounding", checked.problems, source, data, { event: "make", attempt });
             if (retry(checked.problems.slice(0, 4).join("; "))) continue;
             o.notDone(`No deck made: ${checked.problems.slice(0, 3).join("; ")}.`);
             return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these (only what they told you or you read) and try once more, or give them the points in a text and say the deck isn't there yet.` };
@@ -751,7 +758,7 @@ export function deckTools(
           const shipped = final.ok ? qa.final : qa.first;
           const made = await store.createCoPage(toStore, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
           if (!made.ok) {
-            await deckRefused(ctx, "deck.grounding", made.problems, source, { title: String(deckIn.title ?? "").slice(0, 120), event: "store" });
+            await deckRefused(ctx, "deck.grounding", made.problems, source, toStore, { event: "store" });
             o.notDone("The deck wasn't made.");
             return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
           }
@@ -858,7 +865,7 @@ export function deckTools(
           if ("error" in ids) return { ok: false, error: ids.error };
           const named = await headlineNames(input.slides, source.theirs, source.read, source.member);
           if (named) {
-            await deckRefused(ctx, "deck.names", [named], source, { deck: pick.id.slice(0, 4), event: "change", attempt });
+            await deckRefused(ctx, "deck.names", [named], source, input, { deck: pick.id.slice(0, 4), event: "change", attempt });
             if (retry(named)) continue;
             o.notDone(`The deck wasn't changed: ${named}.`);
             return { ok: false, error: `Not changed: ${named}. Fix it and try once more.` };
@@ -947,7 +954,7 @@ export function deckTools(
             return { ok: false, error: "Not changed: another change to this deck landed while this one was being written, so it was read before that change. Open it again and make this change on the newest version, or tell them plainly it isn't changed yet." };
           }
           if (!r.ok) {
-            await deckRefused(ctx, "deck.grounding", r.problems, source, { deck: pick.id.slice(0, 4), event: "change", attempt });
+            await deckRefused(ctx, "deck.grounding", r.problems, source, next, { deck: pick.id.slice(0, 4), event: "change", attempt });
             if (retry(r.problems.slice(0, 4).join("; "))) continue;
             o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
             return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };

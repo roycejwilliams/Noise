@@ -343,7 +343,8 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   // Their own record (services/memberRecord.ts): name and goals for the judge, first name for the word checks.
   const problems = [...researchProblems(doc), ...(await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs, member }))];
   if (problems.length) {
-    await (await import("./checkerRefusals.js")).logRefusal({ checker: "task.brief", layer: 7, userId: task.userId, problems, member, extra: { taskId: task.id, title: doc.title.slice(0, 120) } });
+    const R = await import("./checkerRefusals.js");
+    await R.logRefusal({ checker: "task.brief", layer: 7, userId: task.userId, problems, lines: R.docPositions(doc), member, extra: { taskId: task.id } });
     const line = finds.length ? "I looked, but I couldn't verify enough to put a brief together that I'd stand behind. I'll tell you what I can check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?";
     await tellThenClose(line, "done", `no brief: ${problems.slice(0, 3).join("; ")}`);
     return;

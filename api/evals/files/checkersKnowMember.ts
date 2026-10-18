@@ -202,32 +202,55 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. Fieldhouse 
   check("stub (doc): a name only in their goal is refused in code whatever the judge says", hard.some((p) => /Lumen|lumen/.test(p)), hard);
 }
 
-// ---------------------------------------------------------------- 6. every refusal logged with a short reason
+// ---------------------------------------------------------------- 6. every refusal logged with a short reason, and no member text
+// Forget by default (coordinator, 2026-10-18): a removal deletes their raw lines, so the log never keeps a copy. A row names each
+// refused line by its place and the kind of problem; the writer's refusal can still quote it.
 {
-  const problems = ['slide 3 headline: "Partnering with Lumen Labs" names Lumen Labs, which they never said and you never read'];
-  const row = R.refusalRow({ checker: "deck.names", userId: "a1", problems, member: A, extra: { event: "make" } });
-  check("log: one row, the checker as the decision, refused", row.decision === "deck.names" && row.outcome === "skip" && row.action === "refused" && row.layer === 3, row);
-  check("log: the reason is one line naming the line and what was missing", row.reason === `1 problem: ${problems[0]}` && !/\n/.test(String(row.reason)), row.reason);
-  check("log: what was on file, as counts only (never the goals)", JSON.stringify((row.proposal as any).saw) === JSON.stringify({ name: true, goals: 2 }) && !JSON.stringify(row).includes(GOAL_A), row.proposal);
-  const two = R.refusalReason(['slide 2: "Our launch with Acme" names Acme,\nwhich they never said', 'slide 4 headline: "Backed by Sequoia" names Sequoia']);
-  check("log: several problems are still one line, each named", !/\n/.test(two) && two.startsWith("2 problems: ") && two.includes(" | ") && two.includes("Acme, which") && two.includes("Sequoia"), two);
-  check("log: a long refusal is still one capped line", R.refusalReason(Array.from({ length: 9 }, (_, i) => `line ${i} ${"x".repeat(300)}`)).length <= R.REASON_CHARS);
-  const rows: unknown[] = [];
-  await R.logRefusal({ checker: "page.grounding", userId: "a1", problems: ["p"] }, async (d) => rows.push(d));
+  // Real refusals from the checks above, as each tool logs them.
+  const deckIn = { title: "Fieldhouse", subtitle: "A launch dinner for founders", slides: [{ headline: "Partnering with Lumen Labs", bullets: ["Our November launch party with Lumen Labs", "Dinner at 9pm sharp"] }, { headline: "The dinner", bullets: ["We're bootstrapped, pre-seed"] }] } as any;
+  const deckData = await deckDataFrom(deckIn, null, new Map(), null, { theirWords: WORDS });
+  const deckC = checkPage(deckData, { theirs: WORDS, read: "", member: A });
+  const deckProblems = deckC.ok ? [] : deckC.problems;
+  const named = headlineNameProblems("Partnering with Lumen Labs", M.withOwnName(WORDS, A), "slide 2 headline");
+  const docIn = DS.resolveDocument({ title: "Lumen Labs launch plan", note: "What you told me.", sections: [{ heading: "The dinner", bullets: ["We're bootstrapped, pre-seed, no outside funding yet.", "The November launch party is with Lumen Labs and 40 guests."] }], suggestions: ["Ask Parallel Arts to co-host the dinner"] });
+  const docProblems = DS.documentProblems(docIn, { theirs: WORDS, member: A });
+  const rows = [
+    R.refusalRow({ checker: "deck.grounding", userId: "a1", problems: deckProblems, lines: R.deckPositions(deckData), member: A, extra: { event: "make" } }),
+    R.refusalRow({ checker: "deck.names", userId: "a1", problems: [named ?? ""], lines: R.deckPositions(deckIn), member: A }),
+    R.refusalRow({ checker: "doc.grounding", userId: "a1", problems: docProblems, lines: R.docPositions(docIn), member: A }),
+  ];
+  check("log: the fixtures were refused (so the rows below are real refusals)", deckProblems.length > 0 && !!named && docProblems.length > 0, { deckProblems, named, docProblems });
+  // Every word of theirs that could identify a line: none may be in any row.
+  const MEMBER_TEXT = ["Lumen", "Fieldhouse", "Partnering", "launch party", "bootstrapped", "9pm", "40 guests", "Parallel", "co-host", "Ellis", "Hart", GOAL_A, "founders"];
+  for (const row of rows) {
+    const j = JSON.stringify(row);
+    check(`log (${row.decision}): no member text in the row (no quoted line, fragment, title or goal)`, !MEMBER_TEXT.some((t) => j.toLowerCase().includes(t.toLowerCase())) && !/"[^"]*\\"/.test(j), j);
+    check(`log (${row.decision}): one row, refused, a one-line reason`, row.outcome === "skip" && row.action === "refused" && !/\n/.test(String(row.reason)) && /^\d+ problems?: /.test(String(row.reason)), row.reason);
+  }
+  check('log: a headline is named by its place and kind ("slide 2 headline: a name not in their words")', rows[1].reason === "1 problem: slide 2 headline: a name not in their words", rows[1].reason);
+  check("log: a deck bullet is placed by its slide and bullet, with its kind", /slide 2 bullet 1: a name not in their words/.test(String(rows[0].reason)) && /slide 2 bullet 2: an unbacked time/.test(String(rows[0].reason)), rows[0].reason);
+  check("log: a document line is placed by its section and bullet, its kinds named", /section 1 bullet 2: /.test(String(rows[2].reason)) && /suggestion 1: a name not in their words/.test(String(rows[2].reason)), rows[2].reason);
+  check("log: the row stores positions and kinds, never the problems' text", Array.isArray((rows[0].proposal as any).refused) && (rows[0].proposal as any).problems === undefined && (rows[0].proposal as any).refused.every((x: any) => Object.keys(x).join() === "at,kind"), rows[0].proposal);
+  check("log: what was on file, as counts only (never the goals)", JSON.stringify((rows[0].proposal as any).saw) === JSON.stringify({ name: true, goals: 2 }), rows[0].proposal);
+  check("log: the deck judge's reason is read for its kind, never kept", R.judgedKind("Lumen Labs confirming the partnership") === "a third-party claim" && R.judgedKind("$50k raised") === "an unbacked number" && R.judgedKind("our November launch date") === "an unbacked date");
+  const many = R.refusalReason(Array.from({ length: 40 }, (_, i) => ({ at: `slide ${i} bullet 1`, kind: "a name not in their words" })));
+  check("log: a long refusal is still one capped line", many.length <= R.REASON_CHARS && !/\n/.test(many));
+  const got: unknown[] = [];
+  await R.logRefusal({ checker: "page.grounding", userId: "a1", problems: ["p"] }, async (d) => got.push(d));
   let threw = false;
   try {
     await R.logRefusal({ checker: "page.grounding", userId: "a1", problems: ["p"] }, async () => { throw new Error("db down"); });
   } catch {
     threw = true;
   }
-  check("log: written through the decision log; a failed write never throws", rows.length === 1 && !threw);
+  check("log: written through the decision log; a failed write never throws", got.length === 1 && !threw);
   const deckT = src("agent/deckTools.ts"), pageT = src("agent/pageTools.ts"), loopT = src("agent/loopTools.ts"), brief = src("services/researchBrief.ts");
-  check("log sites: deck headline names and deck grounding (make, store, change)", (deckT.match(/deckRefused\(ctx, "deck\.names"/g) ?? []).length === 2 && (deckT.match(/deckRefused\(ctx, "deck\.grounding"/g) ?? []).length === 3);
-  check("log sites: the deck claims judge's rows carry a reason", /action: "invented", reason: refusalReason\(/.test(deckT) && /action: "check_unavailable", reason: /.test(deckT));
-  check("log sites: pages (make, store, change)", (pageT.match(/await refused\(/g) ?? []).length === 3 && /checker: "page\.grounding"/.test(pageT));
-  check("log sites: documents and documents from a file", /checker: "doc\.grounding"/.test(loopT) && /checker: "doc\.fromFile"/.test(loopT));
-  check("log sites: a research brief", /checker: "task\.brief", layer: 7/.test(brief));
-  check("log sites: a task document's refusal already carries its reason (taskTurn task.writeDocument)", /decision: "task\.writeDocument"[^\n]*reason: r\.ok \? null : r\.why/.test(src("services/taskTurn.ts")));
+  check("log sites: deck headline names and deck grounding (make, store, change), each with the deck's places", (deckT.match(/deckRefused\(ctx, "deck\.names"/g) ?? []).length === 2 && (deckT.match(/deckRefused\(ctx, "deck\.grounding"/g) ?? []).length === 3 && /lines: R\.deckPositions\(deck\)/.test(deckT));
+  check("log sites: the deck claims judge's rows carry places and kinds only", /proposal: \{ refused, saw \}/.test(deckT) && /kind: R\.judgedKind\(f\.why\)/.test(deckT) && !/proposal: \{ fails/.test(deckT) && /action: "check_unavailable", reason: /.test(deckT));
+  check("log sites: pages (make, store, change), with the page's places", (pageT.match(/await refused\(/g) ?? []).length === 3 && /checker: "page\.grounding", userId: ctx\.userId, problems, lines,/.test(pageT));
+  check("log sites: documents and documents from a file, with the document's places", (loopT.match(/lines: docPositions\(doc\)/g) ?? []).length === 2 && /checker: "doc\.grounding"/.test(loopT) && /checker: "doc\.fromFile"/.test(loopT));
+  check("log sites: a research brief, with its places", /checker: "task\.brief", layer: 7, userId: task\.userId, problems, lines: R\.docPositions\(doc\)/.test(brief));
+  check("log sites: no title or other member text passed as extra", ![deckT, pageT, loopT, brief].some((t) => /extra: \{[^}]*title/.test(t) || /, \{ title: String\(/.test(t)));
 }
 
 // ---------------------------------------------------------------- 7. every checker reads the one source, from the member's own record
