@@ -191,16 +191,23 @@ const HOSTING = /^hosted (?:by|with)$/i;
 const isOwnName = (missing: string, firstName: string | null) => !!firstName && plain(missing).trim().length > 0 && plain(missing) === plain(firstName);
 const ownNameInLine = (firstName: string | null, line: string) => !!firstName && plain(firstName).trim().length > 0 && plain(line).includes(plain(firstName));
 // Pure: another name on the line. Any capitalized word (each part of a hyphenated one) counts, unless it is their own first name (or its
-// possessive, any case), a common word (grounding.ts COMMON), "I", or a hosting word. Simple on purpose (review of #240): "Odile and
-// Acme host", "Odile Martin cooks", "Odile-Marie cooks", "ex-Google" all carry another name.
+// possessive, any case) or "I". A capitalized common word (grounding.ts COMMON) or hosting word is skipped only where a line starts: its
+// first word, or the first word after a colon ("Morning: Breakfast", "9:30 PM: Choose a cup"); mid-line it may be a brand ("Odile at
+// Open Table", "Odile with Loop", "Hosted by Odile with Host"). Simple on purpose (reviews of #240).
 const HOST_TOKENS = new Set(["hosted", "host", "hosts", "hosting", "by", "with"]);
 export function otherNameOn(line: string, firstName: string | null): boolean {
   const own = (firstName ?? "").trim().toLowerCase();
-  for (const raw of line.split(/[\s,.;:!?()"“”/+&\-–—]+/)) {
-    const w = raw.replace(/^['‘’]+|['‘’]+$/g, "");
+  const parts = line.split(/([\s,.;:!?()"“”/+&\-–—]+)/);
+  let atStart = true;
+  for (let i = 0; i < parts.length; i += 2) {
+    const w = (parts[i] ?? "").replace(/^['‘’]+|['‘’]+$/g, "");
+    const startHere = atStart;
+    if (w) atStart = /:/.test(parts[i + 1] ?? "");
+    else if (/:/.test(parts[i + 1] ?? "")) atStart = true;
     if (!/^[A-Z]/.test(w)) continue;
     const base = w.replace(/['’]s$/i, "").toLowerCase();
-    if ((own && base === own) || COMMON.has(base) || HOST_TOKENS.has(base) || base === "i" || /^i['’]/.test(base)) continue;
+    if ((own && base === own) || base === "i" || /^i['’]/.test(base)) continue;
+    if (startHere && (COMMON.has(base) || HOST_TOKENS.has(base))) continue;
     return true;
   }
   return false;

@@ -85,7 +85,13 @@ check("their own first name is never a missing name", passed(await one("Juno's c
   const besideWhy = (await one("Odile and Acme host", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile))?.[0]?.why ?? "";
   check("the refusal says their name is beside another name, not that their name is missing", /their own name, Odile, is on a line that names someone else/.test(besideWhy), besideWhy);
   check("their own name in any case and possessive still clears", passed(await one("ODILE's table", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
-  check("a capitalized common word or \"I\" is not another name", passed(await one("I cook, Odile hosts the Night", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  check("\"I\" is not another name", passed(await one("I cook, Odile hosts the night", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  check("a capitalized common word where a line starts is not another name", passed(await one("Night: Odile hosts", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)) && passed(await one("Party at mine, Odile hosts", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  check("a capitalized common word right after a colon starts the line again", passed(await one("odile's night: Dinner at mine", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  for (const line of ["Odile at Open Table", "Odile with Loop", "Odile with Kind", "Odile with Real", "Odile with Clear", "Odile with Space", "Odile with Venue", "Odile with Host", "Odile with Better", "Odile with Scale", "Odile x Social", "Odile and The Room", "Hosted by Odile with Host"]) {
+    const out = await one(line, tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile);
+    check(`a capitalized common word mid-line may be a brand, so their name doesn't clear: "${line}"`, refused(out), out);
+  }
   {
     const aims = DC.knownFor({ firstName: "Odile", goals: [{ text: "raise $500k for the studio", state: "active" }, { text: "40 members by March", state: "active" }] });
     for (const [line, facts] of [["$500k raised", [["stance", "framing"]]], ["40 members and counting", [["stance", "framing"]]], ["Sold out in March", [["stance", "framing"]]], ["Odile raised $500k", [["named_person", "Odile"]]]] as [string, [string, string][]][]) {
