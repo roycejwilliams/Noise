@@ -423,17 +423,21 @@ ${HIDDEN_FIELDS}`;
 // ---------------------------------------------------------------- the room frame (2026-10-12 intelligence audit)
 //
 // A room is scored against everything a person is open to, not their newest ask: every open, people-shaped ask in both
-// directions (what they need, and what they offer), de-duplicated, errands left out (services/peopleAsks.ts), with their
-// newest goal as the frame when no ask is about people. The caller passes only what matching may read (roomMatching.ts
-// matchableIntent: shareable asks only), so this changes nothing about what is private.
+// directions (what they need, and what they offer), de-duplicated, errands left out (services/peopleAsks.ts). Their newest goal
+// rides along with those asks as "headed toward"; it is never the frame on its own (Royce, 2026-10-18: "The situation decides what
+// Cue looks for and which helpers run. What we know about a member shapes how, never which helper."). With no ask about people
+// there is no frame: they're asked what they'd like from the room, like anyone with no ask, and never scored against a goal.
+// The caller passes only what matching may read (roomMatching.ts matchableIntent: shareable asks only), so this changes nothing
+// about what is private.
 export type RoomFrame = { asks: StatedIntent[]; goal: StatedIntent | null };
 
 export async function roomFrame(intent: unknown): Promise<RoomFrame | null> {
   const open = Array.isArray(intent) ? (intent as StatedIntent[]).filter(isOpenAsk) : [];
   const { peopleAsksOf } = await import("./peopleAsks.js");
   const asks = await peopleAsksOf(open);
+  if (!asks.length) return null;
   const goal = getGoalFrame(intent);
-  return asks.length || goal?.text ? { asks, goal: goal?.text ? goal : null } : null;
+  return { asks, goal: goal?.text ? goal : null };
 }
 
 // Pure: the one line the frame is quoted as (also what the stub scorer and the Jev prune read).
