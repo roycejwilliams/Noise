@@ -147,11 +147,14 @@ export function nameIsTheirs(missing: string, hay: string, line?: string): boole
   return inText(missing, hay);
 }
 
-// Pure: the figures in a line their words (or goals) don't give: numbers (with %, $, k), number words from two up, months, weekdays and noon or
-// midnight. Times and dates are put the same way on both sides first (grounding.ts sameTimes), so "7pm" matches "7:00 PM".
+// Pure: the figures in a line their words (or goals) don't give: numbers (with %, $, k), number words from two up, "thousands",
+// "hundreds", "a million", "dozens", months, weekdays and noon or midnight. Times and dates are put the same way on both sides first
+// (grounding.ts sameTimes), so "7pm" matches "7:00 PM". A month is matched by its case in their words ("you may want" never backs
+// "Launch party in May"); "May" or "March" opening a line with no date after it is a verb, not a month.
 const MONTH_RE = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/g;
 const WEEKDAY_RE = /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)s?\b/gi;
 const CLOCK_WORDS = /\b(noon|midday|midnight)\b/gi;
+const AMOUNT_WORDS = /\b(thousands?|hundreds|millions?|billions?|dozens)\b/gi;
 export function unbackedFigures(line: string, theirWords: string): string[] {
   const l = sameTimes(line);
   const t = sameTimes(theirWords, "theirs");
@@ -159,24 +162,46 @@ export function unbackedFigures(line: string, theirWords: string): string[] {
   // "one" is how a stance talks ("one table", "one idea"); a digit 1 is still a figure.
   const digits = numbersOf(l);
   const nums = [...numbersOf(l, true)].filter((n) => (n !== "1" || digits.has("1")) && !theirNums.has(n));
-  const words = [...(l.match(MONTH_RE) ?? []), ...(l.match(WEEKDAY_RE) ?? []).map((w) => w.replace(/s$/i, "")), ...(l.match(CLOCK_WORDS) ?? [])].filter((w) => !new RegExp(`\\b${w}`, "i").test(t));
-  return [...new Set([...nums, ...words])];
+  const verbStart = /^\s*(May|March)\b(?!\s+\d)/.exec(l)?.[1];
+  const months = (l.match(MONTH_RE) ?? []).filter((m, i) => !(i === 0 && m === verbStart)).filter((m) => !new RegExp(`\\b(?:${m}|${m.slice(0, 3)})\\b`).test(t));
+  const other = [...(l.match(WEEKDAY_RE) ?? []).map((w) => w.replace(/s$/i, "")), ...(l.match(CLOCK_WORDS) ?? []), ...(l.match(AMOUNT_WORDS) ?? [])].filter((w) => !new RegExp(`\\b${w}`, "i").test(t));
+  return [...new Set([...nums, ...months, ...other])];
 }
-// A relationship or commitment word: a name on a line with one of these is a claim about that name, never just the name.
-const CLAIM_WORDS = /\b(partner(?:s|ed|ing|ship|ships)?|sponsor(?:s|ed|ing|ship|ships)?|back(?:ed|ing|er|ers)|co-?host(?:s|ed|ing)?|team(?:ed|ing)? up|invest(?:or|ors|ed|ing|ment|ments)?|fund(?:ed|ing|er|ers)|advis(?:or|ors|er|ers|ed|ing)|mentor(?:s|ed)?|confirm(?:ed|s)?|signed|approved|committed|deal)\b/i;
+// A relationship or commitment word: a name on a line with one of these is a claim about that name, never just the name (reviews of
+// #240: "Hosted by", "Powered by", "Featuring", "Alongside", "our first client", "loves it", "is in", "says yes"...). Whether the word
+// is also in their words never clears it: the judge reads the claim, code only refuses to wave it through.
+const CLAIM_WORDS = new RegExp(
+  [
+    "partner(?:s|ed|ing|ship|ships)?", "sponsor(?:s|ed|ing|ship|ships)?", "back(?:ed|ing|er|ers)", "co-?host(?:s|ed|ing)?", "team(?:ed|ing)? up",
+    "invest(?:or|ors|ed|ing|ment|ments)?", "fund(?:ed|ing|er|ers)", "advis(?:or|ors|er|ers|ed|ing)", "mentor(?:s|ed|ing)?", "confirm(?:ed|s)?",
+    "signed", "approved", "committed", "(?:a|the|our|signed|closed) deals? with", "collaborat\\w*", "joins", "featur(?:ing|ed|es)", "alongside",
+    "on ?board", "clients?", "customers?", "members?", "official\\w*", "acquir\\w*", "lov(?:e|es|ed)", "is in", "says? yes",
+    "(?:party|launch|night|dinner|evening|event) with",
+    "(?:hosted|presented|powered|supported|trusted|used|endorsed|joined|led|run|curated|organi[sz]ed|produced|built|chosen|loved|recommended|certified|verified|sponsored|backed|funded|mentored|advised) (?:by|with)",
+  ].map((w) => `\\b${w}\\b`).join("|"),
+  "i",
+);
+// What the name overrule reads besides their words: their own first name and the goals they're working toward (knownFor).
+export type Known = { text: string; firstName: string | null };
+const knownOf = (k: Known | string): Known => (typeof k === "string" ? { text: k, firstName: null } : k);
+// The one relationship form their own name may carry: "hosted by Odile", "hosted with Odile" is them hosting, not a claim about anyone.
+const withoutOwnHosting = (line: string, firstName: string | null) =>
+  firstName && firstName.trim().length >= 2 ? line.replace(new RegExp(`\\bhosted (?:by|with) ${firstName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), " ") : line;
 
 // Pure: what code makes of the verdicts. A failed line stands unless every fact listed on it is cleared: a stance (no unbacked figure
 // on the line), or a missing name that's theirs (in their words, own name or goals; in the line; no unbacked figure or relationship
 // word on the line). Each line that stands says what's missing, so it can go back to the writer.
-export function standingFails(lines: string[], verdicts: LineVerdict[], theirWords: string, known = ""): { line: string; why: string }[] {
-  const hay = `${theirWords}\n${known}`;
+export function standingFails(lines: string[], verdicts: LineVerdict[], theirWords: string, known: Known | string = ""): { line: string; why: string }[] {
+  const k = knownOf(known);
+  const hay = `${theirWords}\n${k.firstName ?? ""}\n${k.text}`;
   const out: { line: string; why: string }[] = [];
   for (const v of verdicts) {
     if (v.verdict !== "fail") continue;
     const line = lines[v.n - 1];
     // Figures are backed by their words or their goals (both theirs); their own name backs no figure.
     const figures = unbackedFigures(line, hay);
-    const claimy = figures.length > 0 || CLAIM_WORDS.test(line);
+    const claimWord = withoutOwnHosting(line, k.firstName).match(CLAIM_WORDS)?.[0];
+    const claimy = figures.length > 0 || !!claimWord;
     const standing = v.facts.filter((f) => {
       if (f.kind === "stance") return figures.length > 0;
       if (NAME_KINDS.has(f.kind) && !claimy && nameIsTheirs(f.missing, hay, line)) return false;
@@ -184,12 +209,11 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
     });
     if (!standing.length) continue;
     // A name they did give that stands only because of what the line says about it is said that way, so the writer fixes the claim.
-    const claimWord = line.match(CLAIM_WORDS)?.[0];
     const says = standing.map((f) =>
       f.kind === "stance"
         ? `a figure their words don't give: ${figures.join(", ")}`
         : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line)
-          ? `a claim about ${f.missing} their words don't make (${[claimWord, ...figures].filter(Boolean).join(", ")})`
+          ? `this line says more about ${f.missing} than their words do (${[claimWord, ...figures].filter(Boolean).join(", ")}); write the name without the claim`
           : `${KIND_SAYS[f.kind]} their words don't give${f.missing ? `: ${f.missing}` : ""}`,
     );
     out.push({ line, why: says.join("; ") });
@@ -199,15 +223,15 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
 
 // Pure: what the name overrule reads besides their words: their own first name and the goals they're working toward (active only;
 // a done or set-aside goal is history).
-export function knownFor(o: { firstName?: string | null; goals?: { text: string; state: string }[] }): string {
-  return [o.firstName ?? "", ...(o.goals ?? []).filter((g) => g.state === "active").map((g) => g.text)].map((s) => s.trim()).filter(Boolean).join("\n");
+export function knownFor(o: { firstName?: string | null; goals?: { text: string; state: string }[] }): Known {
+  return { firstName: o.firstName?.trim() || null, text: (o.goals ?? []).filter((g) => g.state === "active").map((g) => g.text.trim()).filter(Boolean).join("\n") };
 }
 
 // The lines that add a claim, or null when the check couldn't run.
 // Tried twice before giving up (PR 6: on a call the check timed out and, failing open, let "no free tier, no trials" onto a deck).
 // An answer that doesn't read (parseLineVerdicts) counts as the check not running: tried again, then null, and the caller makes
 // nothing. known: their own name and their goals, read only by the name overrule (the judge doesn't see it).
-export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = "", known = ""): Promise<{ line: string; why: string }[] | null> {
+export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = "", known: Known | string = ""): Promise<{ line: string; why: string }[] | null> {
   if (!lines.length) return [];
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
