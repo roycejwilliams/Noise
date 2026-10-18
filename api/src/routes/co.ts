@@ -26,6 +26,7 @@ import { writeMemory } from "../services/memory.js";
 import sendblue from "../services/sendblue.js";
 import { generateVoiceNote } from "../services/voiceNote.js";
 import { triggerCallForUser } from "../services/callTrigger.js";
+import { takeCallLink } from "../services/callLink.js";
 import { CO_VOICE, CO_TEXT_CHANNEL } from "../services/coVoice.js";
 import { recordDecision } from "../harness/core.js";
 import {
@@ -410,13 +411,16 @@ async function openingForCall(userId: string, firstName: string, direction: "inb
 
 // Outbound: Twilio fetches this once the call connects (callTrigger.ts
 // dials with this url); we register the call with ElevenLabs and return its
-// TwiML. The user id rides in the url with a short-lived token, and the
-// whole url (query included) is what Twilio signs.
+// TwiML. The url carries only a one-time call id (services/callLink.ts,
+// 2026-10-18): never the member's id or a token, since Twilio logs the url.
+// The whole url (query included) is what Twilio signs; the signature is
+// checked first, so an unsigned request can't use up a call's id.
 router.post("/el/outbound-twiml", async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!validateTwilioSignature(req, req.originalUrl)) return res.status(401).send("Invalid Twilio signature.");
-    const userId = String(req.query.u ?? "");
-    if (!verifyCallToken(userId, String(req.query.t ?? ""))) return res.status(401).send("Invalid call token.");
+    // Good once, within the call's window: a second fetch, an old link or a made-up one gets nothing.
+    const userId = await takeCallLink(typeof req.query.c === "string" ? req.query.c : null);
+    if (!userId) return res.status(401).send("Invalid call link.");
     const [{ rows: u }, ctx, briefing] = await Promise.all([
       pool.query(`SELECT first_name, phone_number FROM users WHERE id = $1`, [userId]),
       takeCallContext(userId, buildCallContextSummary),
