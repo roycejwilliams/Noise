@@ -6,11 +6,11 @@
 // share-reasons downstream are unchanged. Anything Jev can't read is kept, so
 // the worst case is how it worked before.
 //
-// Candidates' profile text goes to TypeSafe only through Vercel's gateway
+// Candidates' profile lines (shareable asks and short profile items only, matching.ts candidateLines) go to TypeSafe only through Vercel's gateway
 // with zero data retention (services/jevGateway.ts), and only where member
 // text may go to Jev at all (JEV_MEMBER=on). JEV_PRUNE=off turns this off.
 import { askJevZdr, jevForMemberText } from "./jevGateway.js";
-import { formatCandidateDigest } from "./matching.js";
+import { candidateLines } from "./matching.js";
 
 // Below this, Claude reads everyone anyway: pruning isn't worth a round trip.
 export const PRUNE_MIN_CANDIDATES = 7;
@@ -32,14 +32,16 @@ export async function jevMatchScores(askText: string, candidates: Cand[]): Promi
   const out: (number | null)[] = new Array(candidates.length).fill(null);
   const chunks: number[][] = [];
   for (let i = 0; i < candidates.length; i += PRUNE_CHUNK) chunks.push(Array.from({ length: Math.min(PRUNE_CHUNK, candidates.length - i) }, (_, j) => i + j));
+  // The same member-safe, capped lines Claude reads (matching.ts candidateLines): shareable asks, short profile items, never a
+  // private ask or a memory row.
+  const lines = candidateLines(candidates);
   await Promise.all(
     chunks.map(async (idx) => {
       const listed: Record<string, string> = {};
       const questions: Record<string, { type: "boolean"; instructions: string }> = {};
       for (const i of idx) {
         const key = `c${i}`;
-        // The same line Claude reads, minus its list number.
-        listed[key] = formatCandidateDigest([candidates[i] as any], new Map()).replace(/^0\.\s*/, "");
+        listed[key] = lines[i];
         questions[key] = { type: "boolean", instructions: `Does what is listed for candidates.${key} plausibly fit what asked_for is looking for? No only if nothing listed supports it.` };
       }
       // One retry: the gateway is sometimes busy (503) for a moment.

@@ -88,9 +88,9 @@ async function main() {
         goals: x.goals,
         blockers: x.blockers,
         activity_preferences: x.activity_preferences,
-        intent: x.statedAsk ? [{ status: "active", type: "seeking", text: x.statedAsk }] : [],
+        // The stated ask is the one the person agreed may be shared: the digest carries shareable asks only (2026-10-18).
+        intent: x.statedAsk ? [{ status: "active", type: "seeking", text: x.statedAsk, shareable: true }] : [],
       })),
-      new Map(),
     );
     const { text } = await generateText({ model: anthropic(SCORING_MODEL), prompt: buildStatedAskPrompt(c.askText, digest) });
     const results = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] ?? '{"results":[]}').results ?? [];
