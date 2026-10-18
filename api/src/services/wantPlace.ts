@@ -128,7 +128,7 @@ export async function placeFor(userId: string, w: Want, deps: PlaceDeps = realPl
 // What the first find from a place they didn't name carries, once: their place for this want, when it came from what they told Co
 // (not the want's own words, not a correction they made) and wasn't said yet.
 // Their home city by any spelling ("Sacramento" and "Sacramento, CA") is home.
-const ALIASES: Record<string, string> = { sf: "san francisco", "san fran": "san francisco", nyc: "new york", "new york city": "new york", ny: "new york", la: "los angeles", dc: "washington", "washington dc": "washington", philly: "philadelphia", atl: "atlanta", chi: "chicago", sac: "sacramento" };
+export const ALIASES: Record<string, string> = { sf: "san francisco", "san fran": "san francisco", nyc: "new york", "new york city": "new york", ny: "new york", la: "los angeles", dc: "washington", "washington dc": "washington", philly: "philadelphia", atl: "atlanta", chi: "chicago", sac: "sacramento" };
 export const samePlace = (a: string | null | undefined, b: string | null | undefined) => {
   const k = (x: string | null | undefined) => {
     const c = String(x ?? "").split(",")[0].trim().toLowerCase().replace(/\./g, "");

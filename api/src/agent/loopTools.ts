@@ -19,6 +19,7 @@ import { numbersBacked, placesBacked, unbackedClaims } from "../services/taskWeb
 import { captionNumbersBacked } from "../services/sendCheck.js";
 import { LOOP_BUDGET } from "./loop.js";
 import { START_LEAD_MINUTES, matchStartProblem } from "../harness/matchGate.js";
+import { replySearchPlace, webSearchCity } from "../services/askPlace.js";
 import { identityDropped } from "../services/guardDrops.js";
 import { stripUngroundedIdentity } from "../services/identityGuard.js";
 import type { ConversationToolContext } from "./conversationTools.js";
@@ -337,8 +338,11 @@ export function loopTools(
         }
         if (outOfTime()) return OUT_OF_TIME;
         await hold(whileLooking);
+        // Where it looks comes from the ask (services/askPlace.ts): a place its words or their message name, else the city passed,
+        // else their home city. The profile city never decides it when the ask names a place.
+        const where = replySearchPlace({ kind: "events", words: what, toolCity: city, message: askWords(), home: ctx.turn?.profile?.city ?? null });
         const [r, earlier] = await Promise.all([
-          eventCandidates(what, city ?? ctx.turn?.profile?.city ?? null, { when: when ?? null, userId: ctx.userId, limit: 8 }),
+          eventCandidates(what, where.place, { when: when ?? null, userId: ctx.userId, limit: 8 }),
           // Openings Co's daily search already found and checked for them (the
           // old reply search offered these too): programs, grants, open calls.
           import("../services/eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(ctx.userId)).catch(() => [] as TierMatch[]),
@@ -405,9 +409,13 @@ export function loopTools(
         loop.webQueries += run.length;
         await hold(whileLooking);
         const { taskWebSearch } = await import("../services/taskWeb.js");
-        const city = ctx.turn?.profile?.city ?? null;
+        // Each search looks where its ask is (services/askPlace.ts): a query that names a place gets nothing added on top; else the
+        // place they gave (theirs.city), else their home city, unless the query is for no place (online, remote). The profile city
+        // never decides it when the ask names a place.
+        const home = ctx.turn?.profile?.city ?? null;
+        const cityFor = (q: string) => webSearchCity(replySearchPlace({ kind: "web", words: q, toolCity: theirs?.city ?? null, message: askWords(), home }));
         const siteList = (sites ?? []).filter((s) => /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)).slice(0, 4);
-        const all = await Promise.all(run.map((q) => taskWebSearch(ctx.userId, q, { city, sites: siteList, source: "request", log: !ctx.dryRun }).catch(() => ({ kept: [], dropped: [], droppedDetails: [], note: "Web search failed: error." }))));
+        const all = await Promise.all(run.map((q) => taskWebSearch(ctx.userId, q, { city: cityFor(q), sites: siteList, source: "request", log: !ctx.dryRun }).catch(() => ({ kept: [], dropped: [], droppedDetails: [], note: "Web search failed: error." }))));
         // The shared daily web search budget is spent: say so plainly rather than
         // "nothing yet" (2026-10-01: a day of testing used all 60, and Co gave up vaguely).
         if (all.every((x) => /^No web search right now/.test(x.note))) {
