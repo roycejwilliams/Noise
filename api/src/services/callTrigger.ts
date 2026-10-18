@@ -4,7 +4,8 @@ import twilio from "twilio";
 import type { Server as IOServer } from "socket.io";
 import pool from "../db/db.js";
 import { generateEmbedding } from "./embeddings.js";
-import { issueCallToken, prebuildCallContext } from "./elevenLabsCalls.js";
+import { prebuildCallContext } from "./elevenLabsCalls.js";
+import { dropCallLink, issueCallLink } from "./callLink.js";
 import { prebuildCallBriefing } from "./callBriefing.js";
 import { prebuildOpening } from "./callOpening.js";
 import { buildCallContextSummary } from "./callContext.js";
@@ -89,11 +90,14 @@ export async function triggerCallForUser(
   // And the clock and what Co has found for them, so the call never waits on a lookup (services/callBriefing.ts).
   prebuildCallBriefing(userId);
   let call: { sid: string };
+  // The TwiML URL carries a one-time call id only (services/callLink.ts), never the member's id or a token: Twilio keeps the URL in its logs.
+  let callId: string | null = null;
   try {
+    callId = await issueCallLink(userId);
     call = await twilioClient.calls.create({
     to: user.phone_number,
     from: process.env.TWILIO_PHONE_NUMBER!,
-    url: `${process.env.API_URL}/co/el/outbound-twiml?u=${encodeURIComponent(userId)}&t=${encodeURIComponent(issueCallToken(userId))}`,
+    url: `${process.env.API_URL}/co/el/outbound-twiml?c=${encodeURIComponent(callId)}`,
     method: "POST",
     statusCallback: statusCallbackUrl,
     statusCallbackEvent: ["ringing", "answered", "completed"],
@@ -101,6 +105,7 @@ export async function triggerCallForUser(
     timeout: 20,
     });
   } catch (err) {
+    if (callId) await dropCallLink(callId).catch(() => {});
     await releaseDial(userId, claim).catch(() => {});
     throw err;
   }

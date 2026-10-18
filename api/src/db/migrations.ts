@@ -2918,6 +2918,19 @@ export async function runMigrations(): Promise<void> {
   await pool
     .query(`CREATE INDEX IF NOT EXISTS proactive_sends_kinded ON proactive_sends (sent_at) WHERE kind IS NOT NULL`)
     .catch((err: Error) => console.error("proactive_sends_kinded index init failed:", err));
+  // One-time call links (services/callLink.ts, 2026-10-18): the outbound TwiML URL carries an opaque id, not the member's id and a
+  // token, since Twilio logs the URL. Only the id's hash is kept; a row is deleted when it's used, and expired ones on the next dial.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS call_links (
+        id_hash TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS call_links_expires ON call_links (expires_at)`))
+    .catch((err: Error) => console.error("call_links table init failed:", err));
   await concurrencyMigrations();
 }
 
