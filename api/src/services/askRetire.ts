@@ -57,8 +57,9 @@ export function gerund(verb: string): string {
 // Pure: what the fallback line names, from their words, made to read after "the search on" (a thing, "a cofounder for your climate
 // startup", or a doing, "raising a pre-seed round"). In order: the framing goes (an opener like "Of course,", wanting and request
 // words, an infinitive "to", "going to"/"need to"/"about to"/"planning to" only before a verb, "find me", "the search for", a leading
-// preposition), repeated until nothing more comes off; Cue is never named; "my" is "your"; a leading verb used as one becomes its
-// doing ("raise" is "raising"), but never the first word of a noun phrase ("date night spots", "launch party venues"); only the
+// preposition), repeated until nothing more comes off; Cue is dropped only when addressed ("Cue, find me jazz", a leading "Cue's",
+// "find Cue" or Cue alone), never as an ordinary noun ("Cue cards for my talk", "Pool Cue repair"); "my" is "your"; a leading verb
+// used as one becomes its doing ("raise" is "raising"), but never the first word of a noun phrase ("date night spots", "launch party venues"); only the
 // word that started their text is lower-cased, and never a capitalized name after it ("To Lisbon" keeps "Lisbon"); no quotes,
 // dashes or exclamation points; nothing but framing or prepositions left is nothing ("this", in the line); at most
 // NOTE_LABEL_CHARS, on a word boundary when there is one. (It used to read after "looking for", with a doing as "things for
@@ -77,7 +78,7 @@ const ONLY_PREPS = /^(?:(?:for|on|about|into|of|to|in|at|with|by|from)\b\s*)*$/i
 const COMPOUND_NOUN = new Set(["night", "nights", "club", "clubs", "party", "parties", "plan", "plans", "event", "events", "deck", "decks", "store", "stores", "group", "groups", "book", "books", "date", "dates", "spot", "spots", "list", "lists", "space", "spaces", "session", "sessions", "buddy", "buddies", "crew", "crews", "team", "teams", "venue", "venues", "idea", "ideas", "trip", "trips", "ticket", "tickets", "mate", "mates", "partner", "partners", "shoe", "shoes", "gear", "night's", "nights'", "class", "classes", "room", "rooms", "studio", "studios"]);
 export function fallbackLabel(text: string): string {
   let t = String(text ?? "").replace(/[“”"]/g, "").replace(/\s*[—–]\s*/g, ", ").replace(/!/g, "").replace(/\s+/g, " ").trim().replace(/[.,;:?]+$/, "");
-  t = t.replace(/\s*\b(?:with|for|via|through|by|from|and) (?:Co|Cue)\b('s)?/gi, "").replace(/\bCo's\s+/gi, "").replace(/(?<![\w-])Cue(?:'s)?(?![\w-])/g, "").replace(/^(?:find |ask )?cue$/i, "").replace(/\s+/g, " ").trim();
+  t = t.replace(/\s*\b(?:with|for|via|through|by|from|and) (?:Co|Cue)\b('s)?/gi, "").replace(/\bCo's\s+/gi, "").replace(/^cue(?:,\s*|'s\s+)/i, "").replace(/^(?:(?:find|ask) )?cue(?:'s)?$/i, "").replace(/\s+/g, " ").trim();
   const opening = t;
   for (let i = 0; i < 4; i++) {
     const before = t;

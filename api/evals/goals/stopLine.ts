@@ -53,7 +53,16 @@ const CASES: [kind: string, text: string][] = [
   ["review 3: only framing (My search)", "My search"],
   ["review 3: only prepositions", "for for"],
   ["review 3: Cue named alone", "Find Cue"],
+  // Fourth review of #236: Cue as an ordinary noun stays; Cue addressed goes.
+  ["review 4: Cue as a noun (cards)", "Cue cards for my talk"],
+  ["review 4: Cue as a noun (sheet)", "Learn to read a Cue sheet"],
+  ["review 4: Cue in a name", "Cue Bar SF happy hour"],
+  ["review 4: Cue after a noun", "Pool Cue repair"],
+  ["review 4: Cue addressed", "Cue, find me jazz"],
+  ["review 4: Cue alone, all caps", "CUE"],
 ];
+// Labels where Cue is an ordinary word and must stay.
+const KEEPS_CUE = new Set(["Cue cards for my talk", "Learn to read a Cue sheet", "Cue Bar SF happy hour", "Pool Cue repair"]);
 // The exact label each review case must come out as.
 const EXPECT: Record<string, string> = {
   "To find a cofounder": "a cofounder",
@@ -79,6 +88,12 @@ const EXPECT: Record<string, string> = {
   "My search": "",
   "for for": "",
   "Find Cue": "",
+  "Cue cards for my talk": "cue cards for your talk",
+  "Learn to read a Cue sheet": "learning to read a Cue sheet",
+  "Cue Bar SF happy hour": "Cue Bar SF happy hour",
+  "Pool Cue repair": "Pool Cue repair",
+  "Cue, find me jazz": "jazz",
+  "CUE": "",
 };
 
 const PREP = "(?:for|on|of|to|in|at|with|about|into|from|by)";
@@ -94,7 +109,7 @@ for (const [kind, text] of CASES) {
   why(!/\bthings for\b/i.test(line), "no \"things for\"");
   why(!DOUBLE_PREP.test(line), "no two prepositions in a row");
   why(!/\n/.test(line) && !/\?/.test(line) && !/[—–!"]/.test(line), "one line, no question, no dash, quote or exclamation point");
-  why(!/(?<![\w-])(?:cue|co)(?![\w-])/i.test(label) && !/\b(?:Cue|Co)\b/.test(line) && !/\b(?:I want|wants to|seeking|find me|looking for|can you)\b/i.test(label), "never names Cue, no request framing left in the label");
+  why((KEEPS_CUE.has(text) ? /\bcue\b/i.test(label) : !/(?<![\w-])(?:cue|co)(?![\w-])/i.test(label)) && (KEEPS_CUE.has(text) || !/\b(?:Cue|Co)\b/.test(line)) && !/\b(?:I want|wants to|seeking|find me|looking for|can you)\b/i.test(label), KEEPS_CUE.has(text) ? "keeps Cue as an ordinary word, no request framing left" : "never names Cue, no request framing left in the label");
   why(A.noteKeepsRules(line), "keeps the note rules (the same check a written line gets)");
   why(label.length <= A.NOTE_LABEL_CHARS && !/\s$/.test(label), "label under the cap, cut on a word");
   why(!/^I've paused the search on (?:find|meet|move|to|for|of|about|course|the search|the hunt)\b/i.test(line), "no framing word left right after \"the search on\"");
