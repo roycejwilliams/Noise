@@ -284,7 +284,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         }
         did.push(`events: ${what}${when ? `, ${when}` : ""}`);
         const [r, openings] = await Promise.all([
-          eventCandidates(what, c.city, { when: when ?? null, userId: c.userId, timezone: opts.timezone ?? null, limit: 8 }),
+          eventCandidates(what, c.city, { when: when ?? null, userId: c.userId, timezone: opts.timezone ?? null, limit: 8, source: "sweep" }),
           import("./eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(c.userId)).catch(() => [] as TierMatch[]),
         ]).catch((err) => {
           blocked = true;

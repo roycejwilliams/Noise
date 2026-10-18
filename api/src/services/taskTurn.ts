@@ -947,7 +947,7 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
     // by the task's own model, not the old pipeline's gates (2026-10-01).
     search: async (what, when) => {
       const [r, openings] = await Promise.all([
-        eventCandidates(what, person.city ?? null, { when: when ?? null, userId, timezone: zone, limit: 6 }),
+        eventCandidates(what, person.city ?? null, { when: when ?? null, userId, timezone: zone, limit: 6, source: "request" }),
         alreadyFoundOpenings(userId).catch(() => []),
       ]);
       const events = r.candidates.map(({ match, lines }) => ({ name: match.name, url: "url" in match ? (match.url ?? null) : null, date: (match as any).event_date ? String((match as any).event_date).slice(0, 10) : null, tier: match.tier, details: lines }));

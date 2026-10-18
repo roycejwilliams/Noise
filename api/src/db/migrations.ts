@@ -2099,6 +2099,20 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_web_search_log_created ON web_search_log (created_at DESC)`))
     .catch((err: Error) => console.error("web_search_log table init failed:", err));
 
+  // Tier 2's Luma search through Exa: its daily budget log (2026-10-18) — services/lumaViaExa.ts reserveLumaExaSearch. Who, which
+  // share (request or sweep) and when; no query column, because what was searched is the member's want and this only counts.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS luma_exa_search_log (
+        id BIGSERIAL PRIMARY KEY,
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_luma_exa_search_log_created ON luma_exa_search_log (created_at DESC)`))
+    .catch((err: Error) => console.error("luma_exa_search_log table init failed:", err));
+
   // Current picture of each person (harness/personSnapshot.ts) and the
   // result of every suggestion (services/outcomes.ts), 2026-09-15.
   await pool
