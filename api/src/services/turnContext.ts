@@ -96,7 +96,8 @@ export type TurnContext = {
   // A find ask marked retire-due (services/askRetire.ts retireForTurn): the one to ask about, when no goal question is offered this
   // turn, and any already asked, so the reply reads their answer.
   retire?: { ask: import("./askRetire.js").RetireRow | null; asked: import("./askRetire.js").RetireRow[] };
-  // The one stopped-looking note owed (services/askRetire.ts), carried by code in this turn's reply. None while they're struggling.
+  // The one stopped-looking note owed (services/askRetire.ts), carried by code in this turn's reply. A hard day makes it wait, decided on
+  // this message's own read (harness/replyGrounding.ts, services/moodHold.ts).
   stopNote?: import("./askRetire.js").StopNote | null;
   // Their message may be about something Co is already doing (services/statusCheck.ts, Royce 2026-10-13): the candidate task and where
   // it stands; the reply decides whether it's a status check.
@@ -481,8 +482,10 @@ export async function assembleContext(
   // No member knowledge (it failed closed): no cold-start steer either, since it would read their asks unstripped (re-review of #125).
   const coldStartP = knowledge ? import("./coldStart.js").then((c) => c.loadColdStart(userId, { profile, asks })).catch(() => null) : Promise.resolve(null);
   const doorP = import("./theDoor.js").then((d) => d.loadDoor(userId)).catch(() => null);
-  // The stopped-looking notes owed (services/askRetire.ts), read alongside the goal reads.
-  const stopNotesP = emotional?.needsCare ? Promise.resolve([] as import("./askRetire.js").StopNote[]) : import("./askRetire.js").then((A) => A.pendingStopNotes(userId)).catch(() => [] as import("./askRetire.js").StopNote[]);
+  // The stopped-looking notes owed (services/askRetire.ts), read alongside the goal reads. Whether a hard day holds the one that goes is
+  // decided where the reply's facts are gathered, from this message's own feeling read (replyGrounding.ts, services/moodHold.ts); the
+  // read here is from before this message.
+  const stopNotesP = import("./askRetire.js").then((A) => A.pendingStopNotes(userId)).catch(() => [] as import("./askRetire.js").StopNote[]);
   const goalSetAsides = await import("./goalEdges.js").then((g) => g.untoldSetAsides(userId)).catch(() => []);
   // The goal recheck (services/goalRecheck.ts): a quiet goal's one question, after the set-asides on the same hint, and any already
   // asked, so the reply reads their answer. This message is read through the turn's fence; no fence, no recheck.
@@ -493,7 +496,7 @@ export async function assembleContext(
   const keepAsk = <T extends { text: string }>(r: T | null): T | null => { const t = r ? keep(r.text) : null; return r && t ? { ...r, text: t } : null; };
   const retire = retireRaw ? { ask: keepAsk(retireRaw.ask), asked: retireRaw.asked.map(keepAsk).filter((r): r is NonNullable<typeof r> => !!r) } : undefined;
   // A note carries their own words, so it goes out only if keep() leaves it whole; the first that does (a stripped one never blocks
-  // a newer one). None while they're struggling.
+  // a newer one).
   const stopNote = await Promise.all([import("./askRetire.js"), stopNotesP]).then(([A, notes]) => A.firstSurviving(notes, keep)).catch(() => null);
   const coldStart = await coldStartP;
   const door = await doorP;

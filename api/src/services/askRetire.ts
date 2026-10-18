@@ -21,9 +21,9 @@
 //      read of their reply against Co's last text, acted on only when that text asked it.
 //   5. No silent expiries: an ask (or a goal the recheck idled) that stops being searched leaves one short line in Co's voice,
 //      written once when it idles (lineInVoice, stored: retire_note, idle_note), carried by code in the next natural reply, or, with
-//      no exchange for RECHECK_TEXT_AFTER_DAYS, in the next paced text Co sends anyway (never a heavy check-in, never while they're
-//      struggling). Never a text of its own, never a list, never twice. For REVIVE_DAYS after it, their reply is read: "pick it back
-//      up" brings it back.
+//      no exchange for RECHECK_TEXT_AFTER_DAYS, in the next paced text Co sends anyway (never a heavy check-in; a hard day makes it
+//      wait, at most the cap: services/moodHold.ts). Never a text of its own, never a list, never twice. For REVIVE_DAYS after it,
+//      their reply is read: "pick it back up" brings it back.
 // Every decision is made in pure functions here (retireDecide, marksToClear, notesFrom, noteToRide, fallbackLabel); every read and
 // write is one member's own.
 import pool from "../db/db.js";
@@ -149,9 +149,10 @@ export function noteCarried(sent: string, note: Pick<StopNote, "line">): boolean
 // The proactive types a note may ride in: Co's own companion and offer texts. Never an event-day or in-room text, a lapse or expiry
 // notice, or a recheck question about something else.
 export const NOTE_RIDES = new Set(["companion", "ask_checkin", "window_followup", "debrief", "event_offer", "network_tease", "loop_check", "goal_checkin", "goal_nudge", "intro_nudge", "commitment_nudge", "deadline_nudge", "calendar_follow", "event_followthrough", "post_call", "goal_closed"]);
-// Pure: whether this paced text may carry a note: an allowed type, never a heavy check-in, never while they're struggling.
-export function noteMayRide(c: { type: string; payload?: any }, needsCare: boolean): boolean {
-  return NOTE_RIDES.has(c.type) && !c.payload?.heavy && !needsCare;
+// Pure: whether this paced text may carry a note: an allowed type, never a heavy check-in, never while a hard day holds it. moodHeld is
+// the capped hold (harness/proactive.ts heldForMood, services/moodHold.ts): the note waits, never dropped, at most the cap.
+export function noteMayRide(c: { type: string; payload?: any }, moodHeld: boolean): boolean {
+  return NOTE_RIDES.has(c.type) && !c.payload?.heavy && !moodHeld;
 }
 // Pure: the paced text with the note in it: the last message that isn't a bare link carries it (laneMoves.ts carryLaneNotes).
 export function rideAlong(messages: string[], line: string, carry: (draft: string, pending: string[]) => { text: string }): string[] {

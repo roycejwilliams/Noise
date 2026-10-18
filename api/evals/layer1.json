@@ -15,6 +15,7 @@
     "evals/proactive/cadence.ts",
     "evals/proactive/durableSends.ts",
     "evals/proactive/nameChange.ts",
+    "evals/proactive/moodHolds.ts",
     "evals/events/audience.ts",
     "evals/plan/rules.ts",
     "evals/rhythm/rules.ts",
