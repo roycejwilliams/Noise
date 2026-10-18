@@ -86,10 +86,15 @@ export function nearestPlace(places: DiscoverPlace[], city: string, point: GeoPo
 // when they have no city on file or Luma doesn't cover it — the feed then
 // falls back to unfiltered, as before.
 export async function discoverPlaceId(city: string | null): Promise<string | null> {
+  return (await discoverPlaceFor(city))?.apiId ?? null;
+}
+// The catalog's own place for wherever this person is, or null. The Luma search through Exa (services/lumaViaExa.ts) names a city
+// only by this place's name, never by what it was given.
+export async function discoverPlaceFor(city: string | null): Promise<DiscoverPlace | null> {
   if (!city?.trim()) return null;
   const [places, point] = await Promise.all([discoverPlaces(), geocodeCity(city).catch(() => null)]);
   if (!places.length) return null;
-  return nearestPlace(places, city, point)?.apiId ?? null;
+  return nearestPlace(places, city, point);
 }
 
 // One page of the discover feed is a single day, so the days after today

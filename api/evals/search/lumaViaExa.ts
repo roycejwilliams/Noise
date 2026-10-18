@@ -54,7 +54,15 @@ const reserveDep = async (userId: string | null, source: string) => {
   reserves.push({ userId, source });
   return budgetSays;
 };
-const viaDeps = (configured = true) => ({ exa: exaDep, page: pageDep, configured: () => configured, now: () => new Date(), refusing: () => lumaRefusing, pauseMinutes: 10, reserve: reserveDep });
+// Luma's catalog of discover cities, as lu.ma/discover publishes it (names, slugs, coordinates).
+const CATALOG = [
+  { apiId: "discplace-sf", name: "San Francisco", slug: "sf", lat: 37.7749, lng: -122.4194 },
+  { apiId: "discplace-chi", name: "Chicago", slug: "chicago", lat: 41.8781, lng: -87.6298 },
+  { apiId: "discplace-la", name: "Los Angeles", slug: "la", lat: 34.0522, lng: -118.2437 },
+  { apiId: "discplace-nyc", name: "New York", slug: "nyc", lat: 40.7128, lng: -74.006 },
+];
+const placeDep = async (city: string | null) => V.catalogCity(CATALOG, city);
+const viaDeps = (configured = true) => ({ exa: exaDep, page: pageDep, configured: () => configured, now: () => new Date(), refusing: () => lumaRefusing, pauseMinutes: 10, reserve: reserveDep, place: placeDep });
 // eventCandidates with every outside source stubbed. Nearby: San Francisco and Oakland are near each other, nothing else is.
 const BAY = new Set(["san francisco", "oakland"]);
 const sources = (o: { configured?: boolean; viaExa?: any } = {}) => ({
@@ -463,7 +471,7 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
 // ================================================================ what Exa is sent: never their words (Royce, 2026-10-18, option (d))
 {
   const D1 = "October 20 to October 26, 2026";
-  const q = (w: string, city: string | null = "San Francisco", dates = D1) => V.lumaExaQuery(w, city, dates).query;
+  const q = (w: string, city: string | null = "San Francisco", dates = D1) => V.lumaExaQuery(w, V.catalogCity(CATALOG, city), dates).query;
   const plan = "dinner with Jordan Lee to talk about her raise, somewhere quiet in the Mission";
   check("a private plan: only the kind of event, the city and the dates go to Exa", q(plan) === "dinner events in San Francisco, October 20 to October 26, 2026", q(plan));
   const adversarial: [string, RegExp][] = [
@@ -483,9 +491,27 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   check("every word sent is from the fixed parts (kinds, city, dates, online / in person)", strays.length === 0, strays);
   check("no kind on the list: plain events for the city and dates", q("something to take my mind off the divorce") === "events in San Francisco, October 20 to October 26, 2026");
   check("online or in person is said when they say it", q("virtual AI talks") === "AI, talk events online in San Francisco, October 20 to October 26, 2026" && q("in-person design workshops") === "design, workshop events in person in San Francisco, October 20 to October 26, 2026", [q("virtual AI talks"), q("in-person design workshops")]);
-  check("a city that isn't a plain place name is left out, and so are dates not in Cue's own form", q("jazz", "SF <script>") === "jazz events, October 20 to October 26, 2026" && q("jazz", "jordan@example.com") === "jazz events, October 20 to October 26, 2026" && q("jazz", "Chicago", "next Tuesday with Jordan") === "jazz events in Chicago", [q("jazz", "SF <script>"), q("jazz", "Chicago", "next Tuesday with Jordan")]);
+  check("a city that isn't in Luma's catalog is left out, and so are dates not in Cue's own form", q("jazz", "SF <script>") === "jazz events, October 20 to October 26, 2026" && q("jazz", "jordan@example.com") === "jazz events, October 20 to October 26, 2026" && q("jazz", "Chicago", "next Tuesday with Jordan") === "jazz events in Chicago", [q("jazz", "SF <script>"), q("jazz", "Chicago", "next Tuesday with Jordan")]);
+  // The review of 14f6d2f8: a city slot that takes any place-shaped text sends a person, a home, a clinic. Only the catalog's name goes.
+  const cities = ["Jordan's place", "Sarah Chen", "my ex's house", "Mount Sinai Hospital", "Betty Ford Center", "rehab in Malibu", "near my moms in Oakland", "Acme Corp HQ"];
+  const noPoint = cities.map((c) => q("dinner", c));
+  check("the review's 8 cities, by name: none is in Luma's catalog, so no city is sent at all", noPoint.every((x) => x === "dinner events, October 20 to October 26, 2026"), noPoint);
+  // Geocoded to a point (the feed's own place lookup does this), the catalog's nearest city is named, never the string.
+  const OAKLAND = { lat: 37.8044, lng: -122.2712 };
+  const MALIBU = { lat: 34.0259, lng: -118.7798 };
+  const nearSf = V.lumaExaQuery("dinner", V.catalogCity(CATALOG, "near my moms in Oakland", OAKLAND), D1).query;
+  const nearLa = V.lumaExaQuery("dinner", V.catalogCity(CATALOG, "rehab in Malibu", MALIBU), D1).query;
+  check("...near a catalog city, that city's catalog name is sent, never the words ('near my moms in Oakland' -> San Francisco, 'rehab in Malibu' -> Los Angeles)", nearSf === "dinner events in San Francisco, October 20 to October 26, 2026" && nearLa === "dinner events in Los Angeles, October 20 to October 26, 2026", [nearSf, nearLa]);
+  const farAway = V.lumaExaQuery("dinner", V.catalogCity(CATALOG, "Sarah Chen", { lat: 0, lng: 0 }), D1).query;
+  check("...and far from every catalog city, no city", farAway === "dinner events, October 20 to October 26, 2026", farAway);
+  check("a catalog slug resolves to its name ('sf' -> San Francisco)", q("dinner", "sf") === "dinner events in San Francisco, October 20 to October 26, 2026" && q("dinner", "SAN FRANCISCO") === "dinner events in San Francisco, October 20 to October 26, 2026");
+  check("a place that isn't a plain place name is never named, even from the catalog (the last line)", V.lumaExaQuery("jazz", { name: "SF <script>" }, D1).query === "jazz events, October 20 to October 26, 2026");
+  check("'a pottery class' is a workshop; 'world-class' isn't", q("a pottery class") === "workshop events in San Francisco, October 20 to October 26, 2026" && q("a world-class dinner") === "dinner events in San Francisco, October 20 to October 26, 2026", [q("a pottery class"), q("a world-class dinner")]);
+  check("dates need real month names (a name in a month's place is left out)", q("online talks", "San Francisco", "Jordan 1 to Lee 2, 2026") === "talk events online in San Francisco" && q("jazz", "Chicago", "October 20 to November 2, 2026") === "jazz events in Chicago, October 20 to November 2, 2026");
+  check("'show me', 'state-of-the-art' and 'world-class' aren't live music, art or a workshop", q("show me something fun, world-class and state-of-the-art") === "events in San Francisco, October 20 to October 26, 2026" && q("live shows and art classes") === "workshop, live music, art events in San Francisco, October 20 to October 26, 2026", [q("show me something fun, world-class and state-of-the-art"), q("live shows and art classes")]);
   check("everyday words that look like a kind aren't one ('talk about', 'book a table', 'no energy', 'it runs late')", q("I want to talk about it, book a table, I have no energy and it runs late") === "events in San Francisco, October 20 to October 26, 2026", q("I want to talk about it, book a table, I have no energy and it runs late"));
-  check("at most 3 kinds", V.lumaExaQuery("founder investor climate hardware AI meetups", "San Francisco", D1).kinds.length === 3);
+  check("at most 3 kinds", V.lumaExaQuery("founder investor climate hardware AI meetups", { name: "San Francisco" }, D1).kinds.length === 3);
+  check("the search itself names the city only through the catalog (pinned)", /const place = await deps\.place\(city\)\.catch\(\(\) => null\);\n  const \{ query, kinds \} = lumaExaQuery\(what, place, o\.dates\);/.test(src("services/lumaViaExa.ts")) && /place: d\.place \?\? \(\(city\) => L\.discoverPlaceFor\(city\)\.then\(\(p\) => \(p \? \{ name: p\.name \} : null\)\)\)/.test(src("services/lumaViaExa.ts")));
   // The receipt's wants (search-compare q4, q5, q10), as Exa now gets them.
   const receipt: [string, string, string, string][] = [
     ["q4", "startup founder events and meetups", "October 19 to October 25, 2026", "startup founder, meetup events in San Francisco, October 19 to October 25, 2026"],
