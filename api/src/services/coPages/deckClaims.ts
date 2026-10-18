@@ -12,7 +12,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../../models.js";
 import { parseModelJson } from "../modelJson.js";
-import { numbersOf } from "../offerGuard.js";
+import { mentionsIn, numbersOf } from "../offerGuard.js";
 import { sameTimes } from "./grounding.js";
 
 export type Judge = (prompt: string) => Promise<string>;
@@ -26,10 +26,10 @@ const haiku: Judge = async (prompt) =>
 // what's missing). Code then decides, and guards facts, not the judge's labels (review of #240):
 //   - a fail the judge calls a stance passes, unless the line carries a figure their words don't (a number, %, $, a count, a date, a
 //     month, a weekday or a time): a mislabelled "30% off" still refuses;
-//   - a missing name is dropped only when it is a real name (3+ characters), stands in the line itself as whole words, and is in their
-//     words, their own first name or their active goals; and never on a line that also carries an unbacked figure or a relationship
-//     word (partner, sponsor, backed, co-host, investor, advisor, confirmed...): "Co-hosted with Sequin AI" stays refused when they only
-//     said they'd pitch Sequin AI;
+//   - a missing name is dropped only when it is the member's own first name and stands in the line (Royce, 2026-10-17: "Names the
+//     code may clear: the member's own first name only"), and never on a line that also carries an unbacked figure or a relationship
+//     word (partner, sponsor, backed, co-host, investor, advisor, confirmed...). Any other name, even one in their words or goals, is
+//     the judge's to decide;
 //   - a line is refused unless every fact the judge listed on it is cleared.
 // Temperature 0 was part of the plan; Haiku 5.5 rejects it ("temperature is deprecated for this model", checked 2026-10-17), so the
 // call is unchanged.
@@ -39,7 +39,7 @@ export const FACT_KINDS = ["partnership", "count", "number", "date", "named_pers
 export type FactKind = (typeof FACT_KINDS)[number];
 export type Fact = { kind: FactKind | "stance"; missing: string };
 export type LineVerdict = { n: number; verdict: "pass" | "fail"; facts: Fact[] };
-// The kinds a name decides: when the missing name is in their words, their own name or their goals, the fail is code's to drop.
+// The kinds a name decides: when the missing name is the member's own first name, the fail is code's to drop.
 const NAME_KINDS = new Set<string>(["named_person", "named_company", "named_event"]);
 // How each kind reads in the error the writer gets back (G hands it to the writer, so it says what's missing, plainly).
 const KIND_SAYS: Record<FactKind | "stance", string> = {
@@ -140,8 +140,8 @@ const inText = (phrase: string, text: string) => {
   const p = plain(phrase.replace(/^["“]|["”]$/g, ""));
   return p.trim().length >= 3 && plain(text).includes(p);
 };
-// Pure: a missing name is theirs when it's a real name (3+ characters), it stands in the deck line itself, and it's in hay (their
-// words, own name, goals). "AI" for "Built with OpenAI" is never a name; "Sequin" for "Sequin Capital" needs Sequin as a whole word.
+// Pure: a missing name appears in what they said (their words, own name, goals) and in the deck line itself, as whole words and 3+
+// characters. It only picks the wording of a refusal; it never clears one (only their own first name does).
 export function nameIsTheirs(missing: string, hay: string, line?: string): boolean {
   if (line !== undefined && !inText(missing, line)) return false;
   return inText(missing, hay);
@@ -180,17 +180,24 @@ const CLAIM_WORDS = new RegExp(
   ].map((w) => `\\b${w}\\b`).join("|"),
   "i",
 );
-// What the name overrule reads besides their words: their own first name and the goals they're working toward (knownFor).
+// What code reads besides their words (knownFor): their own first name, the only name code may clear (Royce, 2026-10-17: "Names the
+// code may clear: the member's own first name only"; no nickname is kept on record today), and their active goals, which back a figure
+// (a month, a count) but never a name.
 export type Known = { text: string; firstName: string | null };
 const knownOf = (k: Known | string): Known => (typeof k === "string" ? { text: k, firstName: null } : k);
-// The one relationship form their own name may carry: "Hosted by Odile" is them hosting. It's exempt only when every name the judge
-// listed on the line is their own first name (review of #240: a text rule cleared "Hosted by Odile and Sequin AI").
+// The one relationship form their own name may carry: "Hosted by Odile" is them hosting. It's exempt only when no other name follows
+// the hosting words (review of #240: "Hosted by Odile and Sequin AI", and a co-host the judge didn't list); any other name the judge
+// listed stands on its own, since only their first name clears. Names are read by the reply guard's own parser (offerGuard mentionsIn).
 const HOSTING = /^hosted (?:by|with)$/i;
-const isOwnName = (missing: string, firstName: string | null) => !!firstName && plain(missing) === plain(firstName);
+const isOwnName = (missing: string, firstName: string | null) => !!firstName && plain(missing).trim().length > 0 && plain(missing) === plain(firstName);
+const ownNameInLine = (firstName: string | null, line: string) => !!firstName && plain(firstName).trim().length > 0 && plain(line).includes(plain(firstName));
+const othersAfter = (line: string, at: number, firstName: string | null) =>
+  mentionsIn(`with ${line.slice(at)}`).some((m) => m.kind === "name" && !(firstName && plain(m.text) === plain(firstName)));
 
 // Pure: what code makes of the verdicts. A failed line stands unless every fact listed on it is cleared: a stance (no unbacked figure
-// on the line), or a missing name that's theirs (in their words, own name or goals; in the line; no unbacked figure or relationship
-// word on the line). Each line that stands says what's missing, so it can go back to the writer.
+// on the line), or a missing name that is their own first name (in the line; no unbacked figure or relationship word on it). A name in
+// their words or goals is never cleared by code: the judge decides it. Each line that stands says what's missing, so it can go back to
+// the writer.
 export function standingFails(lines: string[], verdicts: LineVerdict[], theirWords: string, known: Known | string = ""): { line: string; why: string }[] {
   const k = knownOf(known);
   const hay = `${theirWords}\n${k.firstName ?? ""}\n${k.text}`;
@@ -199,14 +206,14 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
     if (v.verdict !== "fail") continue;
     const line = lines[v.n - 1];
     // Figures are backed by their words or their goals (both theirs); their own name backs no figure.
-    const figures = unbackedFigures(line, hay);
-    const names = v.facts.filter((f) => NAME_KINDS.has(f.kind));
-    const ownOnly = names.length > 0 && names.every((f) => isOwnName(f.missing, k.firstName));
-    const claimWord = [...line.matchAll(new RegExp(CLAIM_WORDS.source, "gi"))].map((m) => m[0]).find((w) => !(ownOnly && HOSTING.test(w)));
+    const figures = unbackedFigures(line, `${theirWords}\n${k.text}`);
+    // "Hosted by/with" counts as a claim unless only their own name follows it (any other name listed on the line stands anyway).
+    const claimWord = [...line.matchAll(new RegExp(CLAIM_WORDS.source, "gi"))]
+      .find((m) => !(HOSTING.test(m[0]) && !othersAfter(line, (m.index ?? 0) + m[0].length, k.firstName)))?.[0];
     const claimy = figures.length > 0 || !!claimWord;
     const standing = v.facts.filter((f) => {
       if (f.kind === "stance") return figures.length > 0;
-      if (NAME_KINDS.has(f.kind) && !claimy && nameIsTheirs(f.missing, hay, line)) return false;
+      if (NAME_KINDS.has(f.kind) && !claimy && isOwnName(f.missing, k.firstName) && ownNameInLine(k.firstName, line)) return false;
       return true;
     });
     if (!standing.length) continue;
@@ -214,8 +221,10 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
     const says = standing.map((f) =>
       f.kind === "stance"
         ? `a figure their words don't give: ${figures.join(", ")}`
-        : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line)
+        : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line) && claimy
           ? `this line says more about ${f.missing} than their words do (${[claimWord, ...figures].filter(Boolean).join(", ")}); write the name without the claim`
+          : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line)
+            ? `${KIND_SAYS[f.kind]} read as a fact their words don't give: ${f.missing}; name it the way they did, or leave it out`
           : `${KIND_SAYS[f.kind]} their words don't give${f.missing ? `: ${f.missing}` : ""}`,
     );
     out.push({ line, why: says.join("; ") });
@@ -223,8 +232,8 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
   return out;
 }
 
-// Pure: what the name overrule reads besides their words: their own first name and the goals they're working toward (active only;
-// a done or set-aside goal is history).
+// Pure: their own first name (the only name code may clear) and their active goals (they back a figure, never a name); a done or
+// set-aside goal is history.
 export function knownFor(o: { firstName?: string | null; goals?: { text: string; state: string }[] }): Known {
   return { firstName: o.firstName?.trim() || null, text: (o.goals ?? []).filter((g) => g.state === "active").map((g) => g.text.trim()).filter(Boolean).join("\n") };
 }
@@ -232,7 +241,7 @@ export function knownFor(o: { firstName?: string | null; goals?: { text: string;
 // The lines that add a claim, or null when the check couldn't run.
 // Tried twice before giving up (PR 6: on a call the check timed out and, failing open, let "no free tier, no trials" onto a deck).
 // An answer that doesn't read (parseLineVerdicts) counts as the check not running: tried again, then null, and the caller makes
-// nothing. known: their own name and their goals, read only by the name overrule (the judge doesn't see it).
+// nothing. known: their own first name (the only name code may clear) and their goals (back a figure); the judge doesn't see them.
 export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = "", known: Known | string = ""): Promise<{ line: string; why: string }[] | null> {
   if (!lines.length) return [];
   for (let attempt = 0; attempt < 2; attempt++) {

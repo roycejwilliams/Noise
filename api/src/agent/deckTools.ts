@@ -114,7 +114,8 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: {
   const had = new Set(before ? C.deckClaimLines(before) : []);
   const lines = C.deckClaimLines(data).filter((l) => !had.has(l));
   const self = await selfIfAboutCo(ctx, data);
-  // Their own name and the goals they're working toward: the judge doesn't see them; code drops a "missing name" fail they carry (K).
+  // Their own first name (the only "missing name" code may drop) and their active goals (they back a figure, never a name). The judge
+  // doesn't see them (K).
   const known = C.knownFor({ firstName: ctx.firstName ?? ctx.turn?.knowledge?.identity?.firstName ?? null, goals: ctx.turn?.knowledge?.goals ?? [] });
   const fails = await C.inventedLines(lines, [source.words, source.read].filter(Boolean).join("\n"), undefined, self, source.thread ?? "", known);
   const { recordDecision } = await import("../harness/core.js");
