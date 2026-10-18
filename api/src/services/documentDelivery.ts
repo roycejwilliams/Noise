@@ -480,7 +480,57 @@ export async function recordDocumentSent(userId: string, doc: Pick<Doc, "title">
 // reply: the same input, the same grounding (their points rest on their words; Co's own plan goes in suggestions, which may lean
 // only on what Co read), the same targets. What a reply doesn't need and a task does: their hours and opt-out re-checked right
 // before it goes, and the record written here (co_facts + their thread), since no reply turn records it.
-export type TaskDocResult = { ok: true; title: string; via: string; line?: string; pdfPending?: boolean } | { ok: false; why: string; problems?: string[]; blocked?: boolean; nextAt?: Date; duplicate?: boolean };
+// told: refused and settled with one text instead (services/refusalOutcome.ts): "ask" (the one question), "down" (the check couldn't
+// run). The document is held for their reply (services/pendingFiles.ts), and the task waits for it.
+export type TaskDocResult = { ok: true; title: string; via: string; line?: string; pdfPending?: boolean } | { ok: false; why: string; problems?: string[]; blocked?: boolean; nextAt?: Date; duplicate?: boolean; told?: "ask" | "down"; line?: string };
+
+// ---------------------------------------------------------------- a refused document (Royce, 2026-10-18: no refusal ends in silence)
+// The one flow every file goes through (services/refusalOutcome.ts), with a document's own checks: the word check and the claims judge.
+// A judge that couldn't run is the check that couldn't run (case 3), never a fix or a drop on the word check alone.
+export async function docFlow(
+  input: import("./documentSheet.js").WriteDocumentInput,
+  first: string[],
+  o: { theirs: string; read?: string; member?: import("./memberRecord.js").MemberRecord | null; word: import("./refusalOutcome.js").FileWord; noAsk?: boolean; firstDown?: boolean; judge?: import("./documentClaims.js").Judge },
+): Promise<import("./refusalOutcome.js").FlowEnd<import("./documentSheet.js").WriteDocumentInput, Doc>> {
+  const S = await import("./documentSheet.js");
+  const R = await import("./refusalOutcome.js");
+  const C = await import("./checkerRefusals.js");
+  const J = await import("./documentClaims.js");
+  const source = { theirs: o.theirs, read: o.read ?? "", member: o.member ?? null };
+  const shown = (inp: typeof input) => R.docInputOf(inp, S.resolveDocument(inp));
+  const at = (inp: typeof input) => C.docPositions(S.resolveDocument(inp));
+  const norm = shown(input);
+  const check = async (inp: typeof input) => {
+    const doc = S.resolveDocument(inp);
+    let down = false;
+    const ps = await J.judgedDocumentProblems(doc, source, S.documentProblems(doc, source), o.judge, { onDown: () => (down = true) });
+    if (!ps.length) return { ok: true as const, file: R.docInputOf(inp, doc), data: doc };
+    return { ok: false as const, problems: down ? [R.downProblem("the claims judge couldn't run"), ...R.asProblems(ps, at(inp))] : R.asProblems(ps, at(inp)) };
+  };
+  const docOnly = (inp: typeof input) => ({ title: inp.title, note: inp.note, sections: inp.sections, suggestions: inp.suggestions, kind: inp.kind });
+  return R.afterRefusal(norm, o.firstDown ? [R.downProblem("the claims judge couldn't run")] : R.asProblems(first, at(norm)), {
+    word: o.word,
+    theirs: o.theirs,
+    noAsk: o.noAsk,
+    check,
+    fix: (inp, ps) => R.fixWith(o.word, o.theirs, docOnly(inp), ps, (raw) => {
+      const p = S.WRITE_DOCUMENT_INPUT.safeParse({ ...docOnly(inp), ...(raw && typeof raw === "object" ? raw : {}) });
+      return p.success ? shown({ ...inp, ...p.data }) : null;
+    }),
+    drop: (inp, where) => R.dropDocLines(inp, where),
+    size: (inp) => R.docSize(inp),
+  });
+}
+
+// What a task needs to settle a refused document with one text: its send path (owed, inside their hours), a safety hold read, and
+// where the document waits for their reply. Absent (older stubs), a refusal comes back to the task as before.
+export type DocRefusalDeps = {
+  safetyHold: (userId: string) => Promise<boolean>;
+  // coInitiated: a Co look-out's document, whose line waits on the same pacing as its texts (never owed).
+  say: (o: { userId: string; phone: string; zone: string | null; taskId: number; text: string; now: Date; coInitiated?: { kind: "find" | null } }) => Promise<boolean>;
+  hold: (o: { userId: string; taskId: number; mode: "answer" | "retry"; input: unknown; word: import("./refusalOutcome.js").FileWord; now: Date }) => Promise<void>;
+  log?: (row: Parameters<typeof import("./refusalOutcome.js").logOutcome>[0]) => Promise<void>;
+};
 export type TaskDocDeps = {
   theirWords: (userId: string) => Promise<string>;
   // Their own record for the checks (services/memberRecord.ts): name and goals for the judge, first name for the word checks.
@@ -494,11 +544,25 @@ export type TaskDocDeps = {
   // A Co-initiated document (a look-out from Co's own promise): claimed on the proactive ledger first, released if nothing went.
   claim?: (o: { userId: string; targetKey: string; message: string; kind: "find" | null; zone: string | null; now: Date }) => Promise<{ ok: true; ledgerId: number } | { ok: false; reason: string; retryAt?: Date }>;
   release?: (userId: string, ledgerId: number) => Promise<void>;
+  refusals?: DocRefusalDeps;
+};
+// A task's refused document waits on the task itself (services/pendingFiles.ts holdOnTask): their reply wakes it, and its next turn
+// writes it from their answer. The wait ends with the held file's days.
+export const realDocRefusals: DocRefusalDeps = {
+  safetyHold: async (userId) => (await import("./safety.js")).safetyHoldActive(userId).catch(() => true),
+  say: async (o) => {
+    const { sendExempt } = await import("../harness/proactive.js");
+    const r = await sendExempt({ userId: o.userId, phoneNumber: o.phone, type: "task_update", targetKey: `task:${o.taskId}:refusal:${o.now.getTime()}`, messages: [o.text], timezone: o.zone, respectHours: true, now: o.now, ...(o.coInitiated ? { coInitiated: o.coInitiated } : {}) }).catch(() => ({ sent: false }));
+    if (r.sent) await import("./memory.js").then((m) => m.writeMemory(o.userId, "text_exchange", `Co replied: ${o.text}`)).catch(() => {});
+    return r.sent;
+  },
+  hold: async (o) => (await import("./pendingFiles.js")).holdOnTask(o),
 };
 export const realTaskDocDeps: TaskDocDeps = {
   theirWords: loadTheirWords, member: async (userId) => (await import("./memberRecord.js")).loadMemberRecord(userId), blocked: documentSendBlocked, deliver: deliverDocument, record: recordDocumentSent, now: () => new Date(),
   claim: async (c) => (await import("../harness/proactive.js")).claimCoInitiatedSend({ userId: c.userId, type: "task_update", targetKey: c.targetKey, message: c.message, kind: c.kind, timezone: c.zone, now: c.now }),
   release: async (userId, id) => (await import("../harness/proactive.js")).releaseCoInitiatedClaim(userId, id),
+  refusals: realDocRefusals,
 };
 
 export async function sendDocumentForTask(
@@ -506,23 +570,59 @@ export async function sendDocumentForTask(
   // askedAt: when they asked (the promise task's start), so a later delivery says when: "Here's the plan you asked for last night."
   // coInitiated: a document Co starts itself (a look-out from Co's own promise), PDF or Google Doc alike: it waits on the same gate
   // as any Co-initiated text and goes on the ledger with its kind (Royce, 2026-10-09). Absent: owed, as before.
-  o: { userId: string; taskId: number; firstName: string; phone: string; zone: string | null; taskTheirWords: string; read: string; askedAt?: Date | null; coInitiated?: { kind: "find" | null } },
+  // finishing: a held document written again from their reply (services/pendingFiles.ts): never a second question, and a
+  // check still down on their yes says nothing more. word: what the line calls it ("document"; a reply's held doc is a "doc").
+  o: { userId: string; taskId: number; firstName: string; phone: string; zone: string | null; taskTheirWords: string; read: string; askedAt?: Date | null; coInitiated?: { kind: "find" | null }; finishing?: { mode: "answer" | "retry" }; word?: import("./refusalOutcome.js").FileWord; onHold?: DocRefusalDeps["hold"] },
   deps: TaskDocDeps = realTaskDocDeps,
 ): Promise<TaskDocResult> {
   const { resolveDocument, documentProblems } = await import("./documentSheet.js");
-  const doc = resolveDocument(input);
+  let doc = resolveDocument(input);
   const theirs = [await deps.theirWords(o.userId).catch(() => ""), o.taskTheirWords].join("\n");
   const member = deps.member ? await deps.member(o.userId).catch(() => null) : null;
-  const problems = await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs, read: o.read, member }, documentProblems(doc, { theirs, read: o.read, member }));
-  if (problems.length) return { ok: false, problems, why: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try once more: their points only in their own words; your plan, ideas and recommendations go in suggestions.` };
-  // Their quiet hours hold it to their 8am, unless they asked for it right away, in their own words.
+  let judgeDown = false;
+  const problems = await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs, read: o.read, member }, documentProblems(doc, { theirs, read: o.read, member }), undefined, { onDown: () => (judgeDown = true) });
+  // Their quiet hours hold it to their 8am, unless they asked for it right away, in their own words. The same hours hold the one
+  // text a refusal ends in.
   const { askedForImmediate, nextDeliveryTime } = await import("./memberTime.js");
   const immediate = askedForImmediate(o.taskTheirWords);
-  const blocked = await deps.blocked(o.userId, o.zone, deps.now(), { immediate });
-  if (blocked) {
+  const blockedNow = async (): Promise<TaskDocResult | null> => {
+    const blocked = await deps.blocked(o.userId, o.zone, deps.now(), { immediate });
+    if (!blocked) return null;
     const nextAt = blocked === QUIET_HOURS ? nextDeliveryTime(deps.now(), o.zone) : undefined;
     return { ok: false, blocked: true, nextAt, why: `Not sent: ${blocked}.${nextAt ? ` It goes at ${DateTime.fromJSDate(nextAt).setZone(o.zone && DateTime.now().setZone(o.zone).isValid ? o.zone : "America/Los_Angeles").toFormat("h:mma cccc").toLowerCase()} their time; your next look is set for then.` : " Note it and schedule your next look for when it can go."}` };
+  };
+  // A refused document (services/refusalOutcome.ts): one fix from the refusal, then the document as fixed, the document without the
+  // lines it couldn't confirm (its line is the caption), or one text: the one question, or that the check couldn't run.
+  let dropLine: string | null = null;
+  let flowEnd: import("./refusalOutcome.js").FlowEnd<unknown, unknown> | null = null;
+  const word = o.word ?? "document";
+  if (problems.length) {
+    if (!deps.refusals) return { ok: false, problems, why: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try once more: their points only in their own words; your plan, ideas and recommendations go in suggestions.` };
+    const R = await import("./refusalOutcome.js");
+    const end = await docFlow(input, problems, { theirs, read: o.read, member, word, noAsk: !!o.finishing, firstDown: judgeDown });
+    const log = deps.refusals.log ?? R.logOutcome;
+    if (end.case === "ask" || end.case === "down") {
+      // Their yes found the check still down: nothing more is asked (never "try again?" twice).
+      if (o.finishing?.mode === "retry" && end.case === "down") {
+        await log({ place: "document.task", userId: o.userId, end, sent: false, layer: 7, extra: { taskId: o.taskId, finishing: true } });
+        return { ok: false, problems, why: "Not sent: the check still couldn't run. Don't text them about it again; close the task or look again later." };
+      }
+      const held = await blockedNow();
+      if (held) return held;
+      // Never a question, or "try again?", while a safety hold is on: it waits a day.
+      if (await deps.refusals.safetyHold(o.userId)) return { ok: false, blocked: true, nextAt: new Date(deps.now().getTime() + 24 * 3_600_000), why: "Not sent: a safety hold is on (only care, nothing asked of them). Your next look is set for a day from now." };
+      const sent = await deps.refusals.say({ userId: o.userId, phone: o.phone, zone: o.zone, taskId: o.taskId, text: end.line, now: deps.now(), ...(o.coInitiated ? { coInitiated: o.coInitiated } : {}) });
+      await log({ place: "document.task", userId: o.userId, end, sent, layer: 7, extra: { taskId: o.taskId, ...(o.finishing ? { finishing: true } : {}) } });
+      if (!sent) return { ok: false, problems, why: "Not sent: the document was refused, and the text telling them so didn't go either. Look again later." };
+      await (o.onHold ?? deps.refusals.hold)({ userId: o.userId, taskId: o.taskId, mode: end.case === "ask" ? "answer" : "retry", input: end.case === "ask" ? end.file : input, word, now: deps.now() });
+      return { ok: false, told: end.case, line: end.line, problems, why: end.case === "ask" ? "Not sent yet: they were asked the one thing it needs, in one text. Their reply wakes this task; write it then from their answer." : "Not sent: the check couldn't run, and they were asked in one text if they want it tried again. Their reply wakes this task." };
+    }
+    doc = end.data;
+    flowEnd = end;
+    if (end.case === "dropped") dropLine = end.line;
   }
+  const blocked = await blockedNow();
+  if (blocked) return blocked;
   const now = deps.now();
   let claimed: number | null = null;
   if (o.coInitiated) {
@@ -537,7 +637,8 @@ export async function sendDocumentForTask(
   let line: string;
   try {
     // Co's own line when it holds to the delivery rules (it must still say when they asked), else "Here's the X you asked for last night."
-    line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone });
+    // Sent without lines it couldn't confirm: the approved line is its caption (case 2).
+    line = dropLine ?? (await captionFor({ line: input.line, title: doc.title, kind: doc.kind, askedAt: o.askedAt ?? null, sendAt: now, zone: o.zone }));
     const to: DeliverTo = { userId: o.userId, firstName: o.firstName, phone: o.phone, zone: o.zone, now, line, };
     rd = await deliverAndRecord(doc, to, { saveTo: input.saveTo, askedForGoogle: GOOGLE_DOC_ASK.test(o.taskTheirWords), source: `task:${o.taskId}`, taskId: o.taskId, revises: input.revises ?? null, changed: input.changed ?? null }, { deliver: deps.deliver, receipts: deps.receipts, now: deps.now });
   } catch (err) {
@@ -551,6 +652,7 @@ export async function sendDocumentForTask(
   const via = sentOk.map((r) => r.via).join("+");
   // Recorded at the real moment it went (never a pinned test clock: a send dated in the future would "keep" later promises).
   await deps.record(o.userId, doc, via, `task:${o.taskId}`);
+  if (flowEnd) await (deps.refusals?.log ?? (await import("./refusalOutcome.js")).logOutcome)({ place: "document.task", userId: o.userId, end: flowEnd, sent: true, layer: 7, extra: { taskId: o.taskId } });
   return { ok: true, title: doc.title, via, line: rd.line, pdfPending: sentOk.some((r) => r.pdfPending) };
 }
 

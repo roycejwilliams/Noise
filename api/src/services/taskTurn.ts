@@ -68,7 +68,8 @@ export type TaskTurnDeps = {
   // What Co sent them since a time (texts, links, documents): a promise closes as done only on a matching send after it.
   sentSince?: (since: Date) => Promise<Sent[]>;
   // The document tool, texting's own (services/documentDelivery.ts sendDocumentForTask): grounded, inside their hours, recorded.
-  writeDocument?: (input: WriteDocumentInput, o: { read: string }) => Promise<{ ok: true; title: string; via: string } | { ok: false; why: string; nextAt?: Date }>;
+  // told: refused, and settled with one text instead (services/refusalOutcome.ts): the document waits on their reply.
+  writeDocument?: (input: WriteDocumentInput, o: { read: string }) => Promise<{ ok: true; title: string; via: string } | { ok: false; why: string; nextAt?: Date; told?: "ask" | "down"; line?: string }>;
   // A commitment's window (services/memberTime.ts): the miss warning, sent once per window through the send path with quiet hours,
   // the window moved to the new time, and the next check set to when the deliverable can go out.
   warn?: (text: string, key: string) => Promise<{ sent: boolean; reason?: string }>;
@@ -532,6 +533,14 @@ export async function runTaskTurnWith(task: CoTask, deps: TaskTurnDeps): Promise
         // What Co read this wake-up can back a place or event in its own suggestions; never a claim about them.
         const read = [verifiedFactLines(verified).join("\n"), events.map((e) => `${e.name} ${e.facts.join(" ")}`).join("\n"), pageFacts.join("\n")].join("\n");
         const r = await deps.writeDocument(input, { read }).catch((err: any) => ({ ok: false as const, why: `it didn't go out (${String(err?.message ?? err).slice(0, 80)})` }));
+        // Refused and told in one text (the one question, or that the check couldn't run): that text is this wake's message, and the
+        // task waits on their reply, which wakes it (services/documentDelivery.ts holds the document on the task).
+        if (!r.ok && "told" in r && r.told) {
+          if (r.line) texts.push(r.line);
+          did.push(r.told === "ask" ? "document held: asked them the one thing it needs" : "document held: the check couldn't run; asked if they want it tried again");
+          decided = "scheduled";
+          return { ok: false, error: r.why };
+        }
         if (!r.ok) {
           did.push(`document not sent: ${r.why.slice(0, 140)}`);
           // Their quiet hours (9pm to 8am): the next look is their 8am, set here, not left to the model's arithmetic.
@@ -886,6 +895,10 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
     return null;
   });
   const zone = k ? k.identity.zone : await memberZone(userId).catch(() => null);
+  // A document this task held on a refusal (services/documentDelivery.ts): this wake is their reply, so it's written again from it,
+  // never asking twice. The hold is cleared now: whatever this wake does, it's the answer's one run (forget by default).
+  const held: { mode: "answer" | "retry" } | null = task.followup?.pendingFile?.mode ? { mode: task.followup.pendingFile.mode } : null;
+  if (held) await pool.query(`UPDATE co_tasks SET followup = followup - 'pendingFile', updated_at = NOW() WHERE user_id = $1 AND id = $2`, [userId, task.id]).catch(() => {});
   const deps: TaskTurnDeps = {
     person,
     zone,
@@ -918,7 +931,8 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
       const { sendDocumentForTask, realTaskDocDeps } = await import("./documentDelivery.js");
       // A Co look-out's document, PDF or Google Doc, is a Co-initiated find like its texts; a member look-out's is owed (Royce, 2026-10-09).
       const kind = lookoutKind(task);
-      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null, ...(kind ? { coInitiated: { kind } } : {}) }, { ...realTaskDocDeps, now: clock });
+      // A document held on a refusal and written again from their reply: finishing, so it never asks a second question.
+      const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null, ...(kind ? { coInitiated: { kind } } : {}), ...(held ? { finishing: { mode: held.mode } } : {}) }, { ...realTaskDocDeps, now: clock });
       // A refusal is logged as the rules it broke and where, never the member's text (Royce, 2026-10-18: "Logs hold the rule and the
       // kind of thing, never member text"). Holds (quiet hours, the ledger) keep their reason, which names no member text.
       const DS = await import("./documentSheet.js");
@@ -973,6 +987,12 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
   return { action: r.action, did: r.did, warning: r.warning ?? null };
 }
 
+// Pure: a task's held document has its reply (their text came after the hold).
+export function heldAnswered(t: Pick<CoTask, "theirReplyAt" | "followup">): boolean {
+  const at = t.followup?.pendingFile?.at;
+  return !!t.theirReplyAt && (!at || new Date(t.theirReplyAt).getTime() > new Date(at).getTime());
+}
+
 export async function runDueTasks(): Promise<void> {
   const { claimDueTasks } = await import("./coTasks.js");
   const L = await import("./commitmentLog.js");
@@ -983,6 +1003,10 @@ export async function runDueTasks(): Promise<void> {
     if (t.kind === "work" && t.followup?.checkin) await import("./goalOwnership.js").then((g) => g.runGoalCheckin(t)).catch((err: any) => console.error("goal check-in failed (non-fatal):", err?.message ?? err));
     else if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
     else if (t.kind === "research_brief") await import("./researchBrief.js").then((r) => r.runResearchBriefTask(t)).catch((err: any) => console.error("research brief task failed (non-fatal):", err?.message ?? err));
+    // A file held on a refusal (services/pendingFiles.ts): finished from their answer, in code, through the tool it came from.
+    else if (t.kind === "pending_file") await import("./pendingFiles.js").then((p) => p.realFinish(t)).catch((err: any) => console.error("held file failed (non-fatal):", err?.message ?? err));
+    // A task's own document held on a refusal waits for their reply; the wake before it (a lease, a loop) only waits again.
+    else if (t.followup?.pendingFile && !heldAnswered(t)) await import("./pendingFiles.js").then((p) => p.waitForAnswer(t)).catch(() => {});
     else await runTaskTurn(t);
   }
 }

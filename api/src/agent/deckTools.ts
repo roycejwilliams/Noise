@@ -14,6 +14,8 @@ import { pickPage } from "./pageTools.js";
 import { ART_DIRECTION, COVER_MOOD, PLACE, TASTE_INPUT, imageN } from "./artifactInputs.js";
 export { TASTE_INPUT } from "./artifactInputs.js";
 import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
+import { ALREADY_TOLD, afterFileSent, finishingOf, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
+import type { Problem } from "../services/refusalOutcome.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 export const DECK_INPUT = z.object({
@@ -163,7 +165,7 @@ async function deckRefused(ctx: ConversationToolContext, checker: "deck.names" |
 // Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
 // deck and what Co read. An error message when a line adds a claim; null when it passes or the check couldn't run (logged).
 // The judge reads their name and goals first (services/memberRecord.ts memberHeader), then what Co read, then their 14 days of words.
-async function inventedClaims(ctx: ConversationToolContext, data: any, source: Pick<DeckSource, "judged" | "read" | "member"> & { history?: DeckSource["history"]; thread?: string }, before: any | null): Promise<string | null> {
+async function inventedClaims(ctx: ConversationToolContext, data: any, source: Pick<DeckSource, "judged" | "read" | "member"> & { history?: DeckSource["history"]; thread?: string }, before: any | null): Promise<{ error: string; problems: Problem[] } | null> {
   if (ctx.dryRun || ctx.stubSearch) return null;
   const C = await import("../services/coPages/deckClaims.js");
   const M = await import("../services/memberRecord.js");
@@ -181,7 +183,8 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: P
   const saw = M.recordSeen(source.member);
   if (fails === null) {
     await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "check_unavailable", reason: `the claims judge couldn't run (twice) on ${lines.length} lines`, proposal: { lines: lines.length, saw } }).catch(() => {});
-    return "The check that every line is theirs couldn't run just now, so nothing was made. Say plainly it didn't go through and you'll try again in a moment.";
+    const error = "The check that every line is theirs couldn't run just now, so nothing was made. Say plainly it didn't go through and you'll try again in a moment.";
+    return { error, problems: [(await import("../services/refusalOutcome.js")).downProblem(error)] };
   }
   if (!fails.length) return null;
   // Logged by place and kind only, never the line or the judge's words about it (forget by default; services/checkerRefusals.ts).
@@ -189,7 +192,10 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: P
   const at = R.deckPositions(data);
   const refused = fails.map((f) => ({ at: at.find((x) => x.text === f.line)?.where ?? `line ${lines.indexOf(f.line) + 1} of ${lines.length} checked`, kind: f.old ? R.OLD_FACT : R.judgedKind(f.why) }));
   await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "invented", reason: R.refusalReason(refused), proposal: { refused, saw } }).catch(() => {});
-  return `These lines state a hard fact they never gave: ${fails.map((f) => `"${f.line}" (${f.old ? `an old fact that may have changed: ${f.why}` : f.why})`).join(" | ")}. Rewrite just those lines safer (the stance, not the fact: "Built for live rooms" instead of "Partnering with X") and keep every slide full; never strip the deck to bare lines. Then try once more. If it still can't be made, tell them plainly in one text that the deck isn't made, which fact you couldn't back, and ask them to confirm it.`;
+  const error = `These lines state a hard fact they never gave: ${fails.map((f) => `"${f.line}" (${f.old ? `an old fact that may have changed: ${f.why}` : f.why})`).join(" | ")}. Rewrite just those lines safer (the stance, not the fact: "Built for live rooms" instead of "Partnering with X") and keep every slide full; never strip the deck to bare lines. Then try once more. If it still can't be made, tell them plainly in one text that the deck isn't made, which fact you couldn't back, and ask them to confirm it.`;
+  // Each refused line as the flow reads it (services/refusalOutcome.ts): its place on the deck and the kind the judge named. An old
+  // fact that may have changed (checkerRefusals.ts OLD_FACT) is G's one question: is it still true.
+  return { error, problems: fails.map((f, i) => ({ text: `"${f.line}" (${f.old ? `an old fact that may have changed: ${f.why}` : f.why})`, at: refused[i].at, kind: refused[i].kind })) };
 }
 
 // A deck the team makes about Co itself (Royce, 2026-10-11): what Co knows about itself counts as fact. The team only, and only when
@@ -431,6 +437,18 @@ async function deckQa(userId: string, data: any) {
   return Q.qaDeck(data, imgs, { screenshot: false, art });
 }
 
+// Pure: a deck's own fields (what the writer fixes), without the tool's (line, taste, audience, the answer riding along).
+const DECK_FIELDS = ["title", "subtitle", "logo", "cover", "artDirection", "coverMood", "place", "slides"] as const;
+export function deckOnly(d: any): Record<string, unknown> {
+  return Object.fromEntries(DECK_FIELDS.filter((k) => d?.[k] !== undefined).map((k) => [k, d[k]]));
+}
+// Pure: what a held deck keeps for its finish (services/pendingFiles.ts): the deck as written and the tool's fields, without the taste
+// (already saved, never recorded twice), a read's confirm (already answered) or the brief (the slides are written).
+export function heldInput(input: any, deck: any): Record<string, unknown> {
+  const { taste: _t, readConfirmed: _r, brief: _b, alsoAnswer: _a, ...rest } = input ?? {};
+  return { ...rest, ...deckOnly(deck) };
+}
+
 export function deckTools(
   ctx: ConversationToolContext,
   o: { say: (text: string, record: string) => Promise<boolean>; notDone: (what: string) => void; source: () => Promise<{ theirs: string; read: string }> },
@@ -472,7 +490,9 @@ export function deckTools(
     const said0 = "taste" in t && t.taste ? t.taste : null;
     const dry = said0 ? [{ context: d.context, source: "stated" as const, values: S.cleanTokens({ mood: said0.dontCare ? undefined : said0.mood, ...said0.colors, type: said0.type, dontCare: said0.dontCare }), quote: said0.quote ?? null, ref: null, confirmed: true, askedAt: null, at: new Date() }] : [];
     let ds = ctx.dryRun ? S.foldSignals(dry, d.context) : await S.loadDesignSystem(ctx.userId, d.context);
-    if (!ctx.dryRun && ds.pending.length) {
+    // A held deck finished in the background (services/pendingFiles.ts) asks nothing: it's built from the look on file.
+    const finishing = !!finishingOf(ctx);
+    if (!ctx.dryRun && ds.pending.length && !finishing) {
       const read = S.foldSignals(ds.pending.map((p) => ({ ...p, confirmed: true })), d.context).tokens;
       const line = S.confirmLine(read);
       if (ds.pending.some((p) => p.id && readThisTurn.has(p.id)) || ds.pending.some((p) => !p.askedAt)) {
@@ -491,7 +511,7 @@ export function deckTools(
       }
       ds = await S.loadDesignSystem(ctx.userId, d.context);
     }
-    if ("ask" in t && t.ask && !ds.answered.size && !ds.dontCare) return { ask: "taste" };
+    if ("ask" in t && t.ask && !ds.answered.size && !ds.dontCare && !finishing) return { ask: "taste" };
     const filled = S.fillDesign(ds, { audience: d.audience, hasLogo: d.hasLogo });
     return { filled, refs: ds.references, fontNotes: [...("fontNotes" in t && t.fontNotes ? t.fontNotes : []), ...ds.fontNotes].slice(0, 1), confirmed: confirmed ?? confirmedThisTurn, words: [said?.quote ?? "", ...(ds.quotes ?? [])].join(" ") };
   };
@@ -635,6 +655,7 @@ export function deckTools(
         alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input) => {
+        if (toldThisTurn(ctx)) return ALREADY_TOLD;
         const context = input.context ?? (await import("../services/designSystem.js")).audienceContext(input.audience) ?? "professional";
         const words0 = `${ctx.resolvedContent ?? ""}`;
         const t = await designFor(input.taste, { context, audience: input.audience ?? null, hasLogo: input.logo != null || /\blogo\b/i.test(words0), readConfirmed: input.readConfirmed });
@@ -668,36 +689,28 @@ export function deckTools(
         if (composing && !input.brief?.trim()) return { ok: false, error: "Write the slides, or pass a brief of what they want." };
         if (!composing && (!input.title?.trim() || !input.subtitle?.trim())) return { ok: false, error: "With slides, give the deck a title and a subtitle too." };
         let refused: string | null = null;
-        for (let attempt = 0; ; attempt++) {
-          // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
-          const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
-          let deckIn: any = input;
-          if (composing) {
-            if (ctx.dryRun) return { ok: true, note: "Test run: nothing was written or sent." };
-            const C = await import("../services/deckCompose.js");
-            const selfForBrief = await selfIfAboutCo(ctx, { brief: input.brief, title: input.title });
-            const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.forWriting}\n\nWhat Cue is and does (the deck is about Cue; these are facts):\n${selfForBrief}` : source.forWriting, input.brief!, null, refused, input.audience ?? null));
-            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides, artDirection: input.artDirection ?? out?.artDirection, coverMood: input.coverMood ?? out?.coverMood, cover: input.cover, place: input.place ?? out?.place });
-            if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
-            deckIn = { ...input, ...parsed.data };
-          }
-          // "Use our logo" and one image that reads as a logo, sent for this deck: it goes on the title slide (replay, 2026-10-11:
-          // the logo they sent was left off).
-          if (deckIn.logo == null && /\blogo\b/i.test(source.words) && !ctx.dryRun) {
-            const since = Date.now() - DECK_WINDOW_HOURS * 3600_000;
-            const logos = (await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => [])).filter((a) => a.at.getTime() > since && /\blogo\b|wordmark/i.test(a.description ?? "") && !/cut to its content by (?:Co|Cue)/.test(a.description ?? ""));
-            if (logos.length === 1) deckIn = { ...deckIn, logo: logos[0].n };
-          }
+        // A refused deck (services/refusalOutcome.ts, Royce 2026-10-18: no refusal ends in silence): one fix from the refusal, then
+        // the deck as fixed, the deck without the lines that couldn't be confirmed (sent with its line), or the one text (tellRefusal).
+        let dropLine: string | null = null;
+        let flowEnd: any = null;
+        const fin = finishingOf(ctx);
+        // A held deck finished in the background is never sent back for a rewrite: nobody is there to write it.
+        if (fin) qaBounced = true;
+        // The deck's checks on one version, in order: the headline names, the grounding check, a reference image's own words, the
+        // claims judge. A refusal comes back as problems for the flow, and as the writer was told before (on a call, in a test run).
+        type Pass = { deckIn: any; checked: any; placed: string[]; backed: DeckSource };
+        type Refused = { ok: false; problems: Problem[]; why: string; notDone: string; error: string };
+        const checkDeck = async (deckIn: any, attempt: number): Promise<{ imageError: string } | { ok: true; file: any; data: Pass } | Refused> => {
+          const R = await import("../services/refusalOutcome.js");
+          const C = await import("../services/checkerRefusals.js");
           const ids = await assetIds(ctx.userId, deckIn, !!ctx.dryRun, { words: source.forWriting, onDeck: [] });
-          if ("error" in ids) return { ok: false, error: ids.error };
+          if ("error" in ids) return { imageError: ids.error };
           const store = await S();
           // The name check on the headlines as written, before they're put in sentence case (grounding.ts headlineNameProblems).
           const named = await headlineNames(deckIn.slides, source.theirs, `${source.read}\n${await selfIfAboutCo(ctx, { ...deckIn, brief: input.brief })}`, source.member);
           if (named) {
             await deckRefused(ctx, "deck.names", [named], source, deckIn, { event: "make", attempt });
-            if (retry(named)) continue;
-            o.notDone(`No deck made: ${named}.`);
-            return { ok: false, error: `Not made: ${named}. Fix it (only what they told you or you read) and try once more.` };
+            return { ok: false, problems: R.asProblems(named.split(/; (?=slide \d+ headline: )/), C.deckPositions(deckIn)), why: named, notDone: `No deck made: ${named}.`, error: `Not made: ${named}. Fix it (only what they told you or you read) and try once more.` };
           }
           const data: any = await deckDataFrom(deckIn, null, ids.map, null, { style: { ...design.filled.style, context }, theirWords: source.forWriting });
           // Images placed by their own pixels: a logo lost in empty space is cut to its content, a low-res picture placed small, a
@@ -733,22 +746,73 @@ export function deckTools(
           const checked = store.checkPage(data, backed);
           if (!checked.ok) {
             await deckRefused(ctx, "deck.grounding", checked.problems, source, data, { event: "make", attempt });
-            if (retry(checked.problems.slice(0, 4).join("; "))) continue;
-            o.notDone(`No deck made: ${checked.problems.slice(0, 3).join("; ")}.`);
-            return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these (only what they told you or you read) and try once more, or give them the points in a text and say the deck isn't there yet.` };
+            return { ok: false, problems: R.asProblems(checked.problems, C.deckPositions(deckIn)), why: checked.problems.slice(0, 4).join("; "), notDone: `No deck made: ${checked.problems.slice(0, 3).join("; ")}.`, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these (only what they told you or you read) and try once more, or give them the points in a text and say the deck isn't there yet.` };
           }
           const copied = await referenceCopyProblem(ctx, checked.data, source.words);
-          if (copied) {
-            if (retry(copied)) continue;
-            o.notDone("No deck made: some lines copied an inspiration image's own words.");
-            return { ok: false, error: `Not made. ${copied}` };
-          }
+          if (copied) return { ok: false, problems: R.asProblems([copied], C.deckPositions(deckIn)), why: copied, notDone: "No deck made: some lines copied an inspiration image's own words.", error: `Not made. ${copied}` };
           const invented = await inventedClaims(ctx, checked.data, source, null);
-          if (invented) {
-            if (retry(invented)) continue;
-            o.notDone("No deck made: some lines added claims they never made.");
-            return { ok: false, error: `Not made. ${invented}` };
+          if (invented) return { ok: false, problems: invented.problems, why: invented.error, notDone: "No deck made: some lines added claims they never made.", error: `Not made. ${invented.error}` };
+          return { ok: true, file: deckIn, data: { deckIn, checked: checked.data, placed, backed } };
+        };
+        let pass: Pass | null = null;
+        for (let attempt = 0; ; attempt++) {
+          // A refusal from a check that couldn't run isn't worth a rewrite (review of PR 6).
+          const retry = (why: string) => (composing && attempt === 0 && !ctx.dryRun && !/couldn't run/.test(why) ? ((refused = why), true) : false);
+          let deckIn: any = input;
+          if (composing) {
+            if (ctx.dryRun) return { ok: true, note: "Test run: nothing was written or sent." };
+            const C = await import("../services/deckCompose.js");
+            const selfForBrief = await selfIfAboutCo(ctx, { brief: input.brief, title: input.title });
+            const out = await C.compose<any>(C.newDeckPrompt(selfForBrief ? `${source.forWriting}\n\nWhat Cue is and does (the deck is about Cue; these are facts):\n${selfForBrief}` : source.forWriting, input.brief!, null, refused, input.audience ?? null));
+            const parsed = DECK_INPUT.safeParse({ title: out?.title ?? input.title, subtitle: out?.subtitle ?? input.subtitle, slides: out?.slides, artDirection: input.artDirection ?? out?.artDirection, coverMood: input.coverMood ?? out?.coverMood, cover: input.cover, place: input.place ?? out?.place });
+            if (!parsed.success) return { ok: false, error: "The deck couldn't be written from what they said. Say so plainly." };
+            deckIn = { ...input, ...parsed.data };
           }
+          // "Use our logo" and one image that reads as a logo, sent for this deck: it goes on the title slide (replay, 2026-10-11:
+          // the logo they sent was left off).
+          if (deckIn.logo == null && /\blogo\b/i.test(source.words) && !ctx.dryRun) {
+            const since = Date.now() - DECK_WINDOW_HOURS * 3600_000;
+            const logos = (await (await import("../services/memberAssets.js")).listAssets(ctx.userId).catch(() => [])).filter((a) => a.at.getTime() > since && /\blogo\b|wordmark/i.test(a.description ?? "") && !/cut to its content by (?:Co|Cue)/.test(a.description ?? ""));
+            if (logos.length === 1) deckIn = { ...deckIn, logo: logos[0].n };
+          }
+          // A QA rewrite comes back here with the checks' pass in hand only when it changed nothing they read; otherwise checked again.
+          const c = await checkDeck(deckIn, attempt);
+          if ("imageError" in c) return { ok: false, error: c.imageError };
+          if (!c.ok) {
+            if (retry(c.why)) continue;
+            if (!settlesHere(ctx)) {
+              o.notDone(c.notDone);
+              return { ok: false, error: c.error };
+            }
+            const R = await import("../services/refusalOutcome.js");
+            const end = await R.afterRefusal<any, Pass>(deckIn, c.problems, {
+              word: "deck",
+              theirs: source.judged,
+              noAsk: !!fin,
+              check: async (f) => {
+                const r = await checkDeck(f, attempt + 1);
+                return "imageError" in r ? { ok: false, problems: [{ text: r.imageError, at: "the file", kind: "the file's shape" }] } : r.ok ? r : { ok: false, problems: r.problems };
+              },
+              // A deck written from a brief was already written once more with the refusal in hand (retry above): that was its fix.
+              fix: composing ? null : (f, ps) => R.fixWith("deck", source.forWriting, deckOnly(f), ps, (raw) => {
+                const p = DECK_INPUT.safeParse({ ...deckOnly(f), ...(raw && typeof raw === "object" ? raw : {}) });
+                return p.success ? { ...f, ...p.data } : null;
+              }),
+              drop: (f, at) => R.dropDeckLines(f, at),
+              size: (f) => R.deckSize(f),
+            });
+            if (end.case === "ask" || end.case === "down") return tellRefusal(ctx, o, end, { type: "deck", word: "deck", input: heldInput(input, end.file), place: "deck.make" });
+            flowEnd = end;
+            if (end.case === "dropped") dropLine = end.line;
+            // Shipped as checked: no design rewrite after this (it would be checked as a new deck).
+            qaBounced = true;
+            pass = end.data;
+          } else pass = c.data;
+          deckIn = pass.deckIn;
+          const checked = { data: pass.checked };
+          const backed = pass.backed;
+          const placed = pass.placed;
+          const store = await S();
           if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent.", style: (checked.data as any).style };
           // Design QA before it goes (services/designQa.ts): rendered, screenshotted, measured; what code can fix is fixed and measured
           // again. A slide carrying more than one idea goes back once (rewritten on a brief, to Co otherwise).
@@ -773,6 +837,7 @@ export function deckTools(
           const made = await store.createCoPage(toStore, { ownerUserId: ctx.userId, source: backed }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
           if (!made.ok) {
             await deckRefused(ctx, "deck.grounding", made.problems, source, toStore, { event: "store" });
+            if (settlesHere(ctx)) return tellRefusal(ctx, o, (await import("../services/refusalOutcome.js")).downEnd("deck", deckIn), { type: "deck", word: "deck", input: heldInput(input, deckIn), place: "deck.store" });
             o.notDone("The deck wasn't made.");
             return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the deck isn't there.` };
           }
@@ -790,7 +855,8 @@ export function deckTools(
           ctx.facts?.add("known", `The deck's look, as Cue chose it: ${choices}`);
           // What QA found and code couldn't fix is said, in one line (never shipped silently).
           const short = Q.qaShortfall(shipped.findings);
-          const { text, confirm } = await withAnswer(ctx, `${lineText} ${choices}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
+          // Sent without lines it couldn't confirm: the approved line is the whole text with the link (case 2).
+          const { text, confirm } = dropLine ? { text: `${dropLine}\n${made.url}`, confirm: () => {} } : await withAnswer(ctx, `${lineText} ${choices}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
           if (!(await o.say(text, `Co replied: ${text}`))) {
             o.notDone(`The deck "${deckIn.title}" was made, but its link didn't send.`);
             // made: it exists (toolGuard.ts treats it as done, never as "nothing was made"); only the text didn't go.
@@ -798,6 +864,8 @@ export function deckTools(
           }
           ctx.onLinkDelivered?.();
           confirm();
+          await afterFileSent(ctx, { types: ["deck"], end: flowEnd, place: "deck.make" });
+          if (dropLine) ctx.facts?.add("did_this_turn", `Some lines were left out of the deck because nothing they said backs them, and the text said so ("${dropLine}").`);
           ctx.facts?.add("did_this_turn", `Made them a deck, "${deckIn.title}", ${deckIn.slides.length + 1} slides, and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
           return {
             ok: true,
@@ -824,6 +892,7 @@ export function deckTools(
         alsoAnswer: ALSO_ANSWER,
       }),
       execute: async (input0) => {
+        if (toldThisTurn(ctx)) return ALREADY_TOLD;
         let input: any = input0;
         const store = await S();
         const pick = pickPage(await decks(), input.deck);
@@ -858,6 +927,9 @@ export function deckTools(
         const composing = !input0.slides?.length;
         if (composing && !was) return { ok: false, error: "That deck can't be opened to change it." };
         let refused: string | null = null;
+        // A refused change (services/refusalOutcome.ts): the deck without the lines it couldn't confirm goes with its line.
+        let dropLine: string | null = null;
+        let flowEnd: any = null;
         let r: any = null;
         let reread = false;
         let updateQa: any = null;
@@ -872,61 +944,102 @@ export function deckTools(
             if (!parsed.success) return { ok: false, error: "The change couldn't be written. Say so plainly." };
             input = { ...input0, ...parsed.data, changed: String(out?.changed ?? input0.changed).slice(0, 140) };
           }
-          // A change that leaves the title or subtitle out keeps them (2026-10-12: "title is required | subtitle is required" on an edit
-          // that only added a slide), and a deck that ended on its ask still does.
-          if (was) input = { ...input, title: input.title ?? was.title, subtitle: input.subtitle ?? was.subtitle, slides: keepClosingLast(was.slides, input.slides, ctx.resolvedContent) };
-          const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.forWriting, onDeck });
-          if ("error" in ids) return { ok: false, error: ids.error };
-          const named = await headlineNames(input.slides, source.theirs, source.read, source.member);
-          if (named) {
-            await deckRefused(ctx, "deck.names", [named], source, input, { deck: pick.id.slice(0, 4), event: "change", attempt });
-            if (retry(named)) continue;
-            o.notDone(`The deck wasn't changed: ${named}.`);
-            return { ok: false, error: `Not changed: ${named}. Fix it and try once more.` };
-          }
-          const next: any = await deckDataFrom(input, taste, ids.map, was, { style: restyle, theirWords: source.forWriting });
-          // Image placement carries over from the deck as it was. The logo they name by number is the original; the deck shows its
-          // cleaned-up copy, so the copy is kept (review: comparing the two ids dropped it).
-          if (was?.logo && typeof input.logo === "number" && next.logo !== was.logo && !ctx.dryRun) {
-            const copy = await (await import("../services/memberAssets.js")).derivedAssetId(ctx.userId, input.logo).catch(() => null);
-            if (copy === was.logo) next.logo = was.logo;
-          }
-          // Every edit keeps its pictures, composed or written in full (review of PR 6; founder's review, 2026-10-12): left out is
-          // kept, taken off (0 or removeImages) goes. A kept picture they've since deleted is dropped, never sent to be refused.
-          if (was) {
-            const c = carryImages(next, was, { logo: input0.logo, slides: composing ? [] : input.slides }, input0.removeImages ?? []);
-            next.logo = c.logo;
-            next.slides = next.slides.map((sl: any, k: number) => {
-              const image = c.images[k];
-              // A split kept its picture back: its layout comes back with it (deckDataFrom drops a split it saw without one).
-              const same = !sl.layout && image ? was.slides.find((x: any) => x.image === image && x.layout === "split") : null;
-              return { ...sl, image, ...(same ? { layout: "split" } : {}) };
-            });
-            if (!ctx.dryRun) {
-              const ids = [next.logo, ...next.slides.map((sl: any) => sl.image)].filter((x): x is string => !!x);
-              const live = await (await import("../services/memberAssets.js")).ownedAssetIds(ctx.userId, ids).catch(() => null);
-              if (live) {
-                if (next.logo && !live.has(next.logo)) next.logo = null;
-                next.slides = next.slides.map((sl: any) => (sl.image && !live.has(sl.image) ? { ...sl, image: null } : sl));
+          // The change's checks on one version, in order: the headline names, a reference image's own words, the claims judge, then the
+          // grounding check the store runs (here first, so a refusal can go through the flow before anything is written). A refusal
+          // comes back as problems for the flow, and as the writer was told before (on a call, in a test run).
+          type Change = { input: any; next: any };
+          type Refused = { ok: false; problems: Problem[]; why: string; notDone: string; error: string };
+          const R = await import("../services/refusalOutcome.js");
+          const CR = await import("../services/checkerRefusals.js");
+          const checkChange = async (inp: any, at: number): Promise<{ imageError: string } | { ok: true; file: any; data: Change } | Refused> => {
+            let input = inp;
+            // A change that leaves the title or subtitle out keeps them (2026-10-12: "title is required | subtitle is required" on an
+            // edit that only added a slide), and a deck that ended on its ask still does.
+            if (was) input = { ...input, title: input.title ?? was.title, subtitle: input.subtitle ?? was.subtitle, slides: keepClosingLast(was.slides, input.slides, ctx.resolvedContent) };
+            const ids = await assetIds(ctx.userId, input, !!ctx.dryRun, { words: source.forWriting, onDeck });
+            if ("error" in ids) return { imageError: ids.error };
+            const named = await headlineNames(input.slides, source.theirs, source.read, source.member);
+            if (named) {
+              await deckRefused(ctx, "deck.names", [named], source, input, { deck: pick.id.slice(0, 4), event: "change", attempt: at });
+              return { ok: false, problems: R.asProblems(named.split(/; (?=slide \d+ headline: )/), CR.deckPositions(input)), why: named, notDone: `The deck wasn't changed: ${named}.`, error: `Not changed: ${named}. Fix it and try once more.` };
+            }
+            const next: any = await deckDataFrom(input, taste, ids.map, was, { style: restyle, theirWords: source.forWriting });
+            // Image placement carries over from the deck as it was. The logo they name by number is the original; the deck shows its
+            // cleaned-up copy, so the copy is kept (review: comparing the two ids dropped it).
+            if (was?.logo && typeof input.logo === "number" && next.logo !== was.logo && !ctx.dryRun) {
+              const copy = await (await import("../services/memberAssets.js")).derivedAssetId(ctx.userId, input.logo).catch(() => null);
+              if (copy === was.logo) next.logo = was.logo;
+            }
+            // Every edit keeps its pictures, composed or written in full (review of PR 6; founder's review, 2026-10-12): left out is
+            // kept, taken off (0 or removeImages) goes. A kept picture they've since deleted is dropped, never sent to be refused.
+            if (was) {
+              const c = carryImages(next, was, { logo: input0.logo, slides: composing ? [] : input.slides }, input0.removeImages ?? []);
+              next.logo = c.logo;
+              next.slides = next.slides.map((sl: any, k: number) => {
+                const image = c.images[k];
+                // A split kept its picture back: its layout comes back with it (deckDataFrom drops a split it saw without one).
+                const same = !sl.layout && image ? was.slides.find((x: any) => x.image === image && x.layout === "split") : null;
+                return { ...sl, image, ...(same ? { layout: "split" } : {}) };
+              });
+              if (!ctx.dryRun) {
+                const ids = [next.logo, ...next.slides.map((sl: any) => sl.image)].filter((x): x is string => !!x);
+                const live = await (await import("../services/memberAssets.js")).ownedAssetIds(ctx.userId, ids).catch(() => null);
+                if (live) {
+                  if (next.logo && !live.has(next.logo)) next.logo = null;
+                  next.slides = next.slides.map((sl: any) => (sl.image && !live.has(sl.image) ? { ...sl, image: null } : sl));
+                }
               }
             }
-          }
-          if (was?.logoMeta && next.logo === was.logo) next.logoMeta = was.logoMeta;
-          for (const sl of next.slides) {
-            const w = was?.slides?.find((x: any) => x.image && x.image === sl.image);
-            if (w?.imageMeta) sl.imageMeta = w.imageMeta;
-          }
-          const copied = await referenceCopyProblem(ctx, next, source.words);
-          if (copied) {
-            if (retry(copied)) continue;
-            o.notDone("The deck wasn't changed: some lines copied an inspiration image's own words.");
-            return { ok: false, error: `Not changed. ${copied}` };
-          }
-          const invented = await inventedClaims(ctx, next, source, was);
-          if (invented) {
-            if (retry(invented)) continue;
-            o.notDone("The deck wasn't changed: some lines added claims they never made.");
-            return { ok: false, error: `Not changed. ${invented}` };
+            if (was?.logoMeta && next.logo === was.logo) next.logoMeta = was.logoMeta;
+            for (const sl of next.slides) {
+              const w = was?.slides?.find((x: any) => x.image && x.image === sl.image);
+              if (w?.imageMeta) sl.imageMeta = w.imageMeta;
+            }
+            const copied = await referenceCopyProblem(ctx, next, source.words);
+            if (copied) return { ok: false, problems: R.asProblems([copied], CR.deckPositions(input)), why: copied, notDone: "The deck wasn't changed: some lines copied an inspiration image's own words.", error: `Not changed. ${copied}` };
+            const invented = await inventedClaims(ctx, next, source, was);
+            if (invented) return { ok: false, problems: invented.problems, why: invented.error, notDone: "The deck wasn't changed: some lines added claims they never made.", error: `Not changed. ${invented.error}` };
+            const selfNow = await selfIfAboutCo(ctx, next);
+            const g = store.checkPage(next, selfNow ? { ...source, read: `${source.read}\n${selfNow}` } : source);
+            if (!g.ok) {
+              await deckRefused(ctx, "deck.grounding", g.problems, source, next, { deck: pick.id.slice(0, 4), event: "change", attempt: at });
+              return { ok: false, problems: R.asProblems(g.problems, CR.deckPositions(input)), why: g.problems.slice(0, 4).join("; "), notDone: `The deck wasn't changed: ${g.problems.slice(0, 2).join("; ")}.`, error: `Not changed: ${g.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
+            }
+            return { ok: true, file: input, data: { input, next } };
+          };
+          const cc = await checkChange(input, attempt);
+          if ("imageError" in cc) return { ok: false, error: cc.imageError };
+          let next: any;
+          if (!cc.ok) {
+            if (retry(cc.why)) continue;
+            if (!settlesHere(ctx)) {
+              o.notDone(cc.notDone);
+              return { ok: false, error: cc.error };
+            }
+            const end = await R.afterRefusal<any, Change>(input, cc.problems, {
+              word: "deck",
+              theirs: source.judged,
+              noAsk: !!finishingOf(ctx),
+              check: async (f) => {
+                const x = await checkChange(f, attempt + 1);
+                return "imageError" in x ? { ok: false, problems: [{ text: x.imageError, at: "the file", kind: "the file's shape" }] } : x.ok ? x : { ok: false, problems: x.problems };
+              },
+              // A change written from the deck was already written once more with the refusal in hand (retry above): that was its fix.
+              fix: composing ? null : (f, ps) => R.fixWith("deck", source.forWriting, deckOnly(f), ps, (raw) => {
+                const p = DECK_INPUT.safeParse({ ...deckOnly(f), ...(raw && typeof raw === "object" ? raw : {}) });
+                return p.success ? { ...f, ...p.data } : null;
+              }),
+              drop: (f, where) => R.dropDeckLines(f, where),
+              size: (f) => R.deckSize(f),
+            });
+            if (end.case === "ask" || end.case === "down") return tellRefusal(ctx, o, end, { type: "deck_update", word: "deck", input: heldInput(input0, end.file), place: "deck.change" });
+            flowEnd = end;
+            if (end.case === "dropped") dropLine = end.line;
+            input = end.data.input;
+            next = end.data.next;
+          } else {
+            input = cc.data.input;
+            next = cc.data.next;
           }
           const self = await selfIfAboutCo(ctx, next);
           // Its pictures and map again, from the places on it now (a cover they gave, or a mood image it had, stays).
@@ -969,7 +1082,8 @@ export function deckTools(
           }
           if (!r.ok) {
             await deckRefused(ctx, "deck.grounding", r.problems, source, next, { deck: pick.id.slice(0, 4), event: "change", attempt });
-            if (retry(r.problems.slice(0, 4).join("; "))) continue;
+            if (!flowEnd && retry(r.problems.slice(0, 4).join("; "))) continue;
+            if (settlesHere(ctx)) return tellRefusal(ctx, o, R.downEnd("deck", input), { type: "deck_update", word: "deck", input: heldInput(input0, input), place: "deck.store" });
             o.notDone(`The deck wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
             return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
           }
@@ -993,13 +1107,16 @@ export function deckTools(
           }
         }
         const short = updateQa ? (await import("../services/designQa.js")).qaShortfall(updateQa.final.findings) : null;
-        const { text, confirm } = await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${partial ? ` One part I couldn't do: ${partial}.` : ""}${lookLine}${short ? ` ${short}` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
+        // Changed without lines it couldn't confirm: the approved line, with the link (case 2).
+        const { text, confirm } = dropLine ? { text: `${dropLine}\n${r.moved?.url ?? store.coPageUrl(pick.id)}`, confirm: () => {} } : await withAnswer(ctx, `Updated the deck: ${input.changed.trim().replace(/[.\s]+$/, "")}.${partial ? ` One part I couldn't do: ${partial}.` : ""}${lookLine}${short ? ` ${short}` : ""}${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The deck is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
         ctx.onLinkDelivered?.();
         confirm();
+        await afterFileSent(ctx, { types: ["deck_update", "deck"], end: flowEnd, place: "deck.change" });
+        if (dropLine) ctx.facts?.add("did_this_turn", `Some lines were left out of the change because nothing they said backs them, and the text said so ("${dropLine}").`);
         ctx.facts?.add("did_this_turn", `Updated their deck "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}) and told them what changed${partial ? `, and what it didn't do (${partial})` : ""}. A deck has one look for every slide.`);
         return { ok: true, note: "Same deck, same link; the text said what changed. Send nothing more about it." };
       },

@@ -11,6 +11,7 @@ import { pageTools } from "./pageTools.js";
 import { deckTools } from "./deckTools.js";
 import { artifactTools } from "./artifactTools.js";
 import { owedAnswerNote } from "./linkAnswer.js";
+import { ALREADY_TOLD, afterFileSent, finishingOf, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
 import { recordDecision } from "../harness/core.js";
 import { loadMemberRecord } from "../services/memberRecord.js";
 import { docPositions, logRefusal } from "../services/checkerRefusals.js";
@@ -881,7 +882,8 @@ export function loopTools(
         const covers = (d: Parameters<typeof docText>[0]) => ctx.facts?.add("did_this_turn", `What "${d.title}" says (it went to them this turn): ${docText(d).replace(/\s+/g, " ").slice(0, 1200)}`);
         const { deliverAndRecord, asksToResend, loadTheirWords, captionFor } = await import("../services/documentDelivery.js");
         const { recordDocumentWritten } = await import("../services/documentOffer.js");
-        const doc = resolveDocument(input);
+        if (toldThisTurn(ctx)) return ALREADY_TOLD;
+        let doc = resolveDocument(input);
         // Their record is their words: two weeks of their texts and calls, and this message. What Co read this turn can back only
         // an event or place in Co's own marked suggestions, never a claim about them.
         const [words, member] = await Promise.all([loadTheirWords(ctx.userId).catch(() => ""), loadMemberRecord(ctx.userId).catch(() => null)]);
@@ -891,8 +893,21 @@ export function loopTools(
         const source = { theirs, read, member };
         // The word check first; a line it can't place in their words goes to a judge, so their own facts said another way pass
         // (services/documentClaims.ts). Numbers and names they never gave are refused in code either way.
-        const problems = await (await import("../services/documentClaims.js")).judgedDocumentProblems(doc, source, documentProblems(doc, source));
-        if (problems.length) {
+        let judgeDown = false;
+        const problems = await (await import("../services/documentClaims.js")).judgedDocumentProblems(doc, source, documentProblems(doc, source), undefined, { onDown: () => (judgeDown = true) });
+        // A refused doc (services/refusalOutcome.ts, Royce 2026-10-18: no refusal ends in silence): one fix from the refusal, then the
+        // doc as fixed, the doc without the lines it couldn't confirm (its line is the caption), or the one text (tellRefusal).
+        let dropLine: string | null = null;
+        let flowEnd: any = null;
+        if (problems.length && settlesHere(ctx)) {
+          await logRefusal({ checker: "doc.grounding", userId: ctx.userId, problems, lines: docPositions(doc), member, extra: { refusal: docRefusals + 1 } });
+          const { docFlow } = await import("../services/documentDelivery.js");
+          const end = await docFlow(input, problems, { theirs, read, member, word: "doc", noAsk: !!finishingOf(ctx), firstDown: judgeDown });
+          if (end.case === "ask" || end.case === "down") return tellRefusal(ctx, { say }, end, { type: "doc", word: "doc", input, place: "doc.reply" });
+          doc = end.data;
+          flowEnd = end;
+          if (end.case === "dropped") dropLine = end.line;
+        } else if (problems.length) {
           if (!ctx.dryRun) await logRefusal({ checker: "doc.grounding", userId: ctx.userId, problems, lines: docPositions(doc), member, extra: { refusal: docRefusals + 1 } });
           // Plain in the turn's facts: no document exists, so nothing about one (its sections, what's in it, what was left open) is said
           // (2026-10-12: after every try was refused, Co texted "I left the example section open..." about a document that never existed).
@@ -915,7 +930,8 @@ export function loopTools(
         const zone = await (await import("../services/memberTime.js")).memberZone(ctx.userId);
         // The tool owns its one line (Co's, held to the delivery rules, or "Here's the X."): the caption on the attachment, nothing after it.
         const now = new Date();
-        const line = await captionFor({ line: input.line, title: doc.title, kind: doc.kind, sendAt: now, zone });
+        // Sent without lines it couldn't confirm: the approved line is its caption (case 2).
+        const line = dropLine ?? (await captionFor({ line: input.line, title: doc.title, kind: doc.kind, sendAt: now, zone }));
         await holdWhileWriting(input.whileWriting);
         const to = { userId: ctx.userId, firstName: String(rows[0]?.first_name ?? ctx.firstName ?? ""), phone: ctx.phoneNumber, zone, now, line };
         // A Google Doc only when they asked for one in their own words (code checks the words, not Co's say-so), and only for a shared
@@ -941,6 +957,8 @@ export function loopTools(
         state.sentMessages.push(`[sent a document: ${doc.title}]`);
         if (rd.line) state.sentMessages.push(rd.line);
         await recordDocumentWritten(ctx.userId, doc.title).catch(() => {});
+        await afterFileSent(ctx, { types: ["doc"], end: flowEnd, place: "doc.reply" });
+        if (dropLine) ctx.facts?.add("did_this_turn", `Some lines were left out of "${doc.title}" because nothing they said backs them, and its caption said so ("${dropLine}").`);
         await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: doc.title, proposal: { sections: doc.sections.length, via: sent.via } }).catch(() => {});
         const asPdf = sentOk.some((r) => r.via === "pdf_text");
         const asDoc = sentOk.some((r) => r.via === "google_docs");

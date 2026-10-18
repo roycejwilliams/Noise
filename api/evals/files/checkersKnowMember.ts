@@ -267,10 +267,10 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capi
   }
   check("log: written through the decision log; a failed write never throws", got.length === 1 && !threw);
   const deckT = src("agent/deckTools.ts"), pageT = src("agent/pageTools.ts"), loopT = src("agent/loopTools.ts"), brief = src("services/researchBrief.ts");
-  check("log sites: deck headline names and deck grounding (make, store, change), each with the deck's places", (deckT.match(/deckRefused\(ctx, "deck\.names"/g) ?? []).length === 2 && (deckT.match(/deckRefused\(ctx, "deck\.grounding"/g) ?? []).length === 3 && /lines: R\.deckPositions\(deck\)/.test(deckT));
+  check("log sites: deck headline names and deck grounding (make, store, change), each with the deck's places", (deckT.match(/deckRefused\(ctx, "deck\.names"/g) ?? []).length === 2 && (deckT.match(/deckRefused\(ctx, "deck\.grounding"/g) ?? []).length === 4 && /lines: R\.deckPositions\(deck\)/.test(deckT));
   check("log sites: the deck claims judge's rows carry places and kinds only", /proposal: \{ refused, saw \}/.test(deckT) && /kind: (?:f\.old \? R\.OLD_FACT : )?R\.judgedKind\(f\.why\)/.test(deckT) && !/proposal: \{ fails/.test(deckT) && /action: "check_unavailable", reason: /.test(deckT));
-  check("log sites: pages (make, store, change), with the page's places", (pageT.match(/await refused\(/g) ?? []).length === 3 && /checker: "page\.grounding", userId: ctx\.userId, problems, lines,/.test(pageT));
-  check("log sites: documents and documents from a file, with the document's places", (loopT.match(/lines: docPositions\(doc\)/g) ?? []).length === 2 && /checker: "doc\.grounding"/.test(loopT) && /checker: "doc\.fromFile"/.test(loopT));
+  check("log sites: pages (make, store, change), with the page's places", (pageT.match(/await refused\(/g) ?? []).length === 4 && /checker: "page\.grounding", userId: ctx\.userId, problems, lines,/.test(pageT));
+  check("log sites: documents and documents from a file, with the document's places", (loopT.match(/lines: docPositions\(doc\)/g) ?? []).length === 3 && /checker: "doc\.grounding"/.test(loopT) && /checker: "doc\.fromFile"/.test(loopT));
   check("log sites: a research brief, with its places", /checker: "task\.brief", layer: 7, userId: task\.userId, problems, lines: R\.docPositions\(doc\)/.test(brief));
   check("log sites: no title or other member text passed as extra", ![deckT, pageT, loopT, brief].some((t) => /extra: \{[^}]*title/.test(t) || /, \{ title: String\(/.test(t)));
 }
@@ -279,7 +279,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capi
 {
   const deckT = src("agent/deckTools.ts"), loopT = src("agent/loopTools.ts"), brief = src("services/researchBrief.ts"), del = src("services/documentDelivery.ts");
   check("wired (deck): 14 days of texts and calls (loadTheirLines) and their own record, for the checks", /loadTheirLines\(ctx\.userId\)/.test(deckT) && /loadMemberRecord\(ctx\.userId\)/.test(deckT) && /const theirs = \[judged, deck\?\.lines \?\? ""\]/.test(deckT));
-  check("wired (deck): the writer, casing and image numbers keep the 12-hour window (nothing it writes changes)", (deckT.match(/source\.forWriting/g) ?? []).length === 7 && !/compose<any>\(C\.(?:new|change)DeckPrompt\([^)]*source\.theirs/.test(deckT));
+  check("wired (deck): the writer, casing and image numbers keep the 12-hour window (nothing it writes changes)", (deckT.match(/source\.forWriting/g) ?? []).length === 9 && !/compose<any>\(C\.(?:new|change)DeckPrompt\([^)]*source\.theirs/.test(deckT));
   check("wired (deck): headline names read their first name", (deckT.match(/headlineNames\([^;]*source\.member\)/g) ?? []).length === 2);
   check("wired (page): their own record with their words", /loadMemberRecord\(ctx\.userId\)[\s\S]{0,300}return \{ theirs, read, member \};/.test(loopT));
   check("wired (document): their own record with their words", /const source = \{ theirs, read, member \};/.test(loopT) && /documentProblems\(doc, \{ theirs: `\$\{theirs\}\\n\$\{file\.text\}`, member \}\)/.test(loopT));

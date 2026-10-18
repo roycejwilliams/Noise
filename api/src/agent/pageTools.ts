@@ -10,6 +10,7 @@ import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
 import { ART_DIRECTION, COVER_MOOD, PLACE, TASTE_INPUT, imageN } from "./artifactInputs.js";
+import { ALREADY_TOLD, afterFileSent, finishingOf, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 const url = z.string().nullable().optional().describe("Its own https link, only one you read or they gave you. Leave it out otherwise.");
@@ -189,6 +190,45 @@ export function pageTools(
   // saved) or their saved taste, else Co's own design (a page never asks); images only theirs, sent for it, already on it, or named.
   const lookFor = (input: any, was: any | null, theirs: string) => pageLook(ctx, input, was, theirs);
   const pages = async () => (ctx.dryRun ? [] : (await S()).livePagesFor(ctx.userId).catch(() => []));
+  // A refused page, through the one flow (services/refusalOutcome.ts): the page's own checks, one fix from the refusal, the lines
+  // that couldn't be confirmed dropped and checked again, or the one text. was: the page as it is, on a change (its pictures ride).
+  const pageFlow = async (input: any, problems: string[], pageData: unknown, source: { theirs: string; read: string; member?: any }, look: { style: unknown | null; assets: Map<number, string>; was?: any | null }, was: any | null) => {
+    const R = await import("../services/refusalOutcome.js");
+    const C = await import("../services/checkerRefusals.js");
+    const { pageLines } = await import("../services/coPages/grounding.js");
+    const store = await S();
+    const at = (d: unknown) => {
+      try {
+        return C.pagePositions(pageLines(d as any));
+      } catch {
+        return [];
+      }
+    };
+    // The same build the tool does, without fetching anything: a change keeps the pictures and art the page has.
+    const build = async (inp: any) => {
+      const i2 = await pageWords(inp, source.theirs);
+      const d0 = pageDataFrom(i2, look);
+      const d = was ? (await import("../services/artImagery.js")).carryArt(await withImages(d0, was, 0, async (x) => ({ data: x })), was) : d0;
+      return { i2, d };
+    };
+    const { line: _l, alsoAnswer: _a, taste: _t, designContext: _c, page: _p, changed: _ch, ...pageOnly } = input;
+    return R.afterRefusal<any, any>(input, R.asProblems(problems, at(pageData)), {
+      word: "page",
+      theirs: source.theirs,
+      noAsk: !!finishingOf(ctx),
+      check: async (inp) => {
+        const { i2, d } = await build(inp);
+        const c = store.checkPage(d, source);
+        return c.ok ? { ok: true, file: i2, data: c.data } : { ok: false, problems: R.asProblems(c.problems, at(d)) };
+      },
+      fix: (inp, ps) => R.fixWith("page", source.theirs, pageOnly, ps, (raw) => {
+        const p = PAGE_INPUT.safeParse(raw);
+        return p.success ? { ...inp, ...p.data } : null;
+      }),
+      drop: (inp, where) => R.dropPageLines(inp, where),
+      size: (inp) => R.pageSize(inp),
+    });
+  };
   return {
     makePage: tool({
       description: toolUse("makePage"),
@@ -199,17 +239,30 @@ export function pageTools(
         designContext: z.enum(["professional", "personal"]).optional().describe("Whose look this page takes: professional (work, clients, a venue) or personal (their own plans, friends, family), for what the page is for. Leave it out for a personal plan; a change keeps the page's own."),
       }),
       execute: async (input0) => {
+        if (toldThisTurn(ctx)) return ALREADY_TOLD;
         const store = await S();
         const source = await o.source();
-        const input = await pageWords(input0, source.theirs);
+        let input = await pageWords(input0, source.theirs);
         const look = await lookFor(input, null, source.theirs);
         if ("error" in look) return { ok: false, error: look.error };
         const pageData = pageDataFrom(input, look);
-        const checked = store.checkPage(pageData, source);
+        let checked = store.checkPage(pageData, source);
+        // A refused page (services/refusalOutcome.ts, Royce 2026-10-18: no refusal ends in silence): one fix from the refusal, then
+        // the page as fixed, the page without the lines that couldn't be confirmed (with its line), or the one text (askOrDown).
+        let dropLine: string | null = null;
+        let flowEnd: any = null;
         if (!checked.ok) {
           await refused(checked.problems, source, pageData, { event: "make" });
-          o.notDone(`No page made: ${checked.problems.slice(0, 3).join("; ")}.`);
-          return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these and try once more, or give them the points in a text and say the page isn't there yet.` };
+          if (!settlesHere(ctx)) {
+            o.notDone(`No page made: ${checked.problems.slice(0, 3).join("; ")}.`);
+            return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these and try once more, or give them the points in a text and say the page isn't there yet.` };
+          }
+          const end = await pageFlow(input, checked.problems, pageData, source, look, null);
+          if (end.case === "ask" || end.case === "down") return tellRefusal(ctx, o, end, { type: "page", word: "page", input: input0, place: "page.make" });
+          input = { ...input, ...(end.file as any) };
+          checked = { ok: true, data: end.data };
+          flowEnd = end;
+          if (end.case === "dropped") dropLine = end.line;
         }
         if (ctx.dryRun) return { ok: true, note: "Test run: nothing was stored or sent." };
         const og = await withImages(checked.data);
@@ -232,6 +285,7 @@ export function pageTools(
         const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
           await refused(made.problems, source, imaged, { event: "store" });
+          if (settlesHere(ctx)) return tellRefusal(ctx, o, (await import("../services/refusalOutcome.js")).downEnd("page", input0), { type: "page", word: "page", input: input0, place: "page.store" });
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
         }
@@ -246,13 +300,15 @@ export function pageTools(
         for (const loc of art.report.track) AI.trackUnsplash(loc).catch(() => {});
         ctx.facts?.add("known", `The page's art direction, as Cue chose it: ${artLine}`);
         // Said when Co chose an art direction for it (a page made without one keeps the one line and the link).
-        const { text, confirm } = await withAnswer(ctx, `${input.line.trim()}${input.artDirection ? ` ${artLine}` : ""}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
+        // Sent without lines it couldn't confirm: the approved line is the whole text with the link (case 2).
+        const { text, confirm } = dropLine ? { text: `${dropLine}\n${made.url}`, confirm: () => {} } : await withAnswer(ctx, `${input.line.trim()}${input.artDirection ? ` ${artLine}` : ""}${short ? ` ${short}` : ""}\n${made.url}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           o.notDone(`The page "${input.title}" was made, but its link didn't send.`);
           return unsentLink(ctx, { url: made.url, text, what: `the page "${input.title}"` });
         }
         ctx.onLinkDelivered?.();
         confirm();
+        await afterFileSent(ctx, { types: ["page"], end: flowEnd, place: "page.make" });
         ctx.facts?.add("did_this_turn", `Made them a page, "${input.title}", and texted it with one line (${made.url}). Anyone with the link can view it; it isn't listed anywhere.`);
         return { ok: true, url: made.url, ...(shipped ? { qa: Q.qaSummary(shipped) } : {}), note: "The line and the link went as one text, and that's the whole delivery: send nothing more about it, no summary, no second text. Nothing more goes out this turn, so don't call sendReply." };
       },
@@ -267,6 +323,7 @@ export function pageTools(
         designContext: z.enum(["professional", "personal"]).optional().describe("Whose look this page takes: professional (work, clients, a venue) or personal (their own plans, friends, family), for what the page is for. Leave it out for a personal plan; a change keeps the page's own."),
       }),
       execute: async (input0) => {
+        if (toldThisTurn(ctx)) return ALREADY_TOLD;
         const store = await S();
         const input = await pageWords(input0, (await o.source()).theirs);
         // Pages only: a deck is changed with updateDeck (agent/deckTools.ts).
@@ -285,7 +342,19 @@ export function pageTools(
         const carried = AI.carryArt(next0, was);
         const art = ctx.dryRun ? null : await AI.fillPageArt(carried, { mood: input.coverMood ?? null }).catch(() => null);
         for (const loc of art?.report.track ?? []) AI.trackUnsplash(loc).catch(() => {});
-        const next = art && store.checkPage(art.data, source).ok ? art.data : store.checkPage(carried, source).ok ? carried : next0;
+        let next = art && store.checkPage(art.data, source).ok ? art.data : store.checkPage(carried, source).ok ? carried : next0;
+        // A refused change goes through the same flow as a refused page (services/refusalOutcome.ts), before it's written.
+        let dropLine: string | null = null;
+        let flowEnd: any = null;
+        const pre = settlesHere(ctx) ? store.checkPage(next, source) : null;
+        if (pre && !pre.ok) {
+          await refused(pre.problems, source, next, { page: pick.id.slice(0, 4), event: "change" });
+          const end = await pageFlow(input, pre.problems, next, source, look, was);
+          if (end.case === "ask" || end.case === "down") return tellRefusal(ctx, o, end, { type: "page_update", word: "page", input: input0, place: "page.change" });
+          next = end.data;
+          flowEnd = end;
+          if (end.case === "dropped") dropLine = end.line;
+        }
         const r = await store.updateCoPage(pick.id, ctx.userId, next, source, { expectVersion: was ? before?.version : null });
         if (!r) return { ok: false, error: "That page is gone (taken down or expired). Make a new one if they want it." };
         // Another change landed after this one read the page (concurrency audit, 2026-10-12): never written over.
@@ -295,17 +364,20 @@ export function pageTools(
         }
         if (!r.ok) {
           await refused(r.problems, source, next, { page: pick.id.slice(0, 4), event: "change" });
+          if (settlesHere(ctx)) return tellRefusal(ctx, o, (await import("../services/refusalOutcome.js")).downEnd("page", input0), { type: "page_update", word: "page", input: input0, place: "page.store" });
           o.notDone(`The page wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
         if (!ctx.dryRun) await (await import("../services/designSystem.js")).logArtifactDesign({ ownerUserId: ctx.userId, pageId: r.moved?.id ?? pick.id, medium: "page", event: "revised" }).catch(() => {});
-        const { text, confirm } = await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
+        // Changed without lines it couldn't confirm: the approved line, with the link (case 2).
+        const { text, confirm } = dropLine ? { text: `${dropLine}\n${r.moved?.url ?? store.coPageUrl(pick.id)}`, confirm: () => {} } : await withAnswer(ctx, `Updated the page: ${input.changed.trim().replace(/[.\s]+$/, "")}.${r.moved ? ` Its link was just reset, so this is the new one:\n${r.moved.url}` : ""}`, input.alsoAnswer);
         if (!(await o.say(text, `Co replied: ${text}`))) {
           ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}), but the text saying so didn't send.`);
           return { ok: true, note: "The page is updated (same link), but the line saying so didn't send: say in your reply, in a few words, what changed." };
         }
         ctx.onLinkDelivered?.();
         confirm();
+        await afterFileSent(ctx, { types: ["page_update", "page"], end: flowEnd, place: "page.change" });
         ctx.facts?.add("did_this_turn", `Updated their page "${pick.title}" (version ${r.version}, ${r.moved ? `its link was just reset, now ${r.moved.url}` : "same link"}) and told them what changed.`);
         return { ok: true, note: "Same page, same link; the text said what changed. Nothing more goes out this turn, so don't call sendReply." };
       },

@@ -85,7 +85,9 @@ export async function judgeLines(lines: string[], theirWords: string, judge: Jud
 // source.member (services/memberRecord.ts): the word checks here clear a missing name only when it is exactly their own first name
 // (ownName, ruling iii: never a goal), and the judge reads their name and goals first (memberHeader). The judge's verdict is passed
 // through as it is.
-export async function judgedDocumentProblems(doc: Doc, source: { theirs: string; read?: string; member?: MemberRecord | null }, problems: string[] = documentProblems(doc, source), judge: Judge = haikuJudge): Promise<string[]> {
+// o.onDown: told when the judge couldn't run and its lines were held on the word check alone (services/refusalOutcome.ts reads that as
+// the check that couldn't run: case 3, never a fix or a drop on a guess).
+export async function judgedDocumentProblems(doc: Doc, source: { theirs: string; read?: string; member?: MemberRecord | null }, problems: string[] = documentProblems(doc, source), judge: Judge = haikuJudge, o: { onDown?: () => void } = {}): Promise<string[]> {
   const parts = memberParts(doc);
   const theirs = source.theirs;
   const own = ownName(source.member);
@@ -97,6 +99,7 @@ export async function judgedDocumentProblems(doc: Doc, source: { theirs: string;
   const lines = [...new Set([...soft, ...judged])];
   if (!lines.length) return problems;
   const v = await judgeLines(lines, source.theirs, judge, memberHeader(source.member, lines));
+  if (!v) o.onDown?.();
   if (!v) return [...problems, ...openers.filter((x) => !problems.some((p) => p.includes(x.line.slice(0, 60)))).map((x) => `"${x.line.slice(0, 90)}" opens on ${x.word}, which they never said: if it's a name, leave it out or ask them`)].slice(0, 7);
   const judgedOut = new Map(judged.filter((l) => !v.backed.has(l)).map((l) => [l, v.why.get(l) ?? "it adds something they never said"] as [string, string]));
   return documentProblems(doc, source, { backed: v.backed, judgedOut });

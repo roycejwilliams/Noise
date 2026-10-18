@@ -187,6 +187,7 @@
     "evals/reply/usesItsFinds.ts",
     "evals/files/checkerBugs.ts",
     "evals/files/checkersKnowMember.ts",
-    "evals/files/judgeWords.ts"
+    "evals/files/judgeWords.ts",
+    "evals/files/noSilentRefusal.ts"
   ]
 }

@@ -100,7 +100,7 @@ const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; co
   const tc = src("services/turnContext.ts");
   check("the reply's turn loads briefs next to tasks (tasks stay work-only, so the task tools' count is unchanged)", /recentBriefs\(userId\)\.then\(\(b\) => briefFactLines\(b, zone\)\)/.test(tc) && /openTasks\(userId\)\.then\(\(t\) => taskFactLines\(t, undefined, zone\)\)/.test(tc));
   check("the reply's facts include them: running/held as scheduled, finished as Cue's record", /for \(const line of opts\.turn\?\.briefs \?\? \[\]\) addFact\(rf, \/\^\(\?:Co\|Cue\) is putting together\|hasn't reached them yet\/\.test\(line\) \? "scheduled" : "did_before", line\)/.test(src("harness/replyGrounding.ts")));
-  check("open loops carry a brief in progress (it closes by the same task-status read)", /kind IN \('work', 'research_brief'\)/.test(src("services/openLoops.ts")));
+  check("open loops carry a brief in progress (it closes by the same task-status read)", /kind IN \('work', 'research_brief'(?:, 'pending_file')?\)/.test(src("services/openLoops.ts")));
 }
 
 // ---------------------------------------------------------------- 4. follow-ups handed to Co

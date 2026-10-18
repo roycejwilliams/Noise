@@ -58,8 +58,23 @@ const tools: any = P.pageTools(ctx, { say: async (t) => { said.push(t); return t
   check("rule 2: one text, the line and the link, nothing about its contents", r.ok && said.length === 1 && /^Here's Saturday in the Mission, two dinners side by side\.\nhttps:\/\/co\.example\/d\/[A-Za-z0-9_-]{24}$/.test(said[0]) && !/Alder|Mesa|\$85/.test(said[0]), { r, said });
   check("stored as theirs (owner); Cue is told that one text is the whole delivery (review of #148: no second text)", ins?.params[1] === "owner-a" && /send nothing more about it, no summary, no second text/.test(r.note));
   said.length = 0;
-  const bad = await tools.makePage.execute({ ...input, sections: [{ heading: "Also", blocks: [{ type: "text", text: "Ellis Park is coming too, newly divorced and looking to meet people." }] }], line: "Here it is." }, {});
-  check("rule 6: a page that fails the grounding isn't made, and Cue is told to give the points in a text", !bad.ok && said.length === 0 && /give them the points in a text/.test(bad.error) && notDone.length === 1, bad);
+  // On a call, a refused page goes back to the voice agent as it always did. By text it ends in one line from code (services/
+  // refusalOutcome.ts, evals/files/noSilentRefusal.ts): here nothing of it can pass, so it's the "didn't go through" line. Its own
+  // context, so the line's once-a-turn mark doesn't carry into the cases below; the writer and slot models are stood in for.
+  const R = await import("../../src/services/refusalOutcome.js");
+  const PF = await import("../../src/services/pendingFiles.js");
+  R.setRefusalModelsForTests({ fix: async () => "{}", slots: { ask: async () => "{}", what: async () => "{}" } });
+  PF.usePendingDb({ query: async () => ({ rows: [], rowCount: 0 }) });
+  const badPage = { ...input, sections: [{ heading: "Also", blocks: [{ type: "text", text: "Ellis Park is coming too, newly divorced and looking to meet people." }] }], line: "Here it is." };
+  const onCall: any = P.pageTools({ ...ctx, onCall: true }, { say: async (t) => { said.push(t); return true; }, notDone: (w) => notDone.push(w), source: async () => source });
+  const bad = await onCall.makePage.execute(badPage, {});
+  check("rule 6: on a call, a page that fails the grounding isn't made, and Cue is told to give the points in a text", !bad.ok && said.length === 0 && /give them the points in a text/.test(bad.error) && notDone.length === 1, bad);
+  const byText: any = P.pageTools({ ...ctx }, { say: async (t) => { said.push(t); return true; }, notDone: (w) => notDone.push(w), source: async () => source });
+  const told = await byText.makePage.execute(badPage, {});
+  check("rule 6: by text, it isn't made, and the member gets one line saying so (never silence)", !told.ok && told.told === true && said.length === 1 && said[0] === R.downLine("page") && !/Ellis/.test(said[0]), { told, said });
+  said.length = 0;
+  R.setRefusalModelsForTests(null);
+  PF.usePendingDb(null);
 }
 {
   said.length = 0;

@@ -46,7 +46,8 @@ export type CoTask = {
   theirReplyAt: string | null;
   // "followup": a check-in Co decides the timing of (services/followUps.ts).
   // "research_brief": a find and a document, run as a fixed sequence (services/researchBrief.ts), not a model loop.
-  kind?: "work" | "followup" | "research_brief";
+  // "pending_file": a file held on a refusal until they answer (services/pendingFiles.ts), finished in code, not a model loop.
+  kind?: "work" | "followup" | "research_brief" | "pending_file";
   followup?: any;
   targetKey?: string | null;
   // Where it came from: what they asked for, a promise Co made in a reply (services/promises.ts), or a look-out Co said on a call
@@ -259,11 +260,11 @@ function rowTo(r: any): CoTask {
     finalTold: !!r.final_told,
     awaitingReply: !!r.awaiting_reply,
     theirReplyAt: r.their_reply_at ? new Date(r.their_reply_at).toISOString() : null,
-    kind: r.kind === "followup" ? "followup" : r.kind === "research_brief" ? "research_brief" : "work",
+    kind: r.kind === "followup" ? "followup" : r.kind === "research_brief" ? "research_brief" : r.kind === "pending_file" ? "pending_file" : "work",
     followup: r.followup ?? null,
     targetKey: r.target_key ?? null,
     source: r.source === "promise" ? "promise" : r.source === "lookout" ? "lookout" : "ask",
-    window: r.kind === "followup" || r.kind === "research_brief" ? null : windowOf(r.followup),
+    window: r.kind === "followup" || r.kind === "research_brief" || r.kind === "pending_file" ? null : windowOf(r.followup),
     lookoutOrigin: lookoutOriginOf(r.source, r.followup),
     outcome: r.outcome ?? null,
   };
@@ -366,7 +367,8 @@ export async function markFinalTold(userId: string, id: number): Promise<void> {
 }
 
 // They texted after a task texted them: that task wakes in a few minutes, after
-// the reply to their message has gone out (routes/sendblue.ts). Returns how many woke.
+// the reply to their message has gone out (routes/sendblue.ts). Returns how many woke. A file held on a refusal waits the same way
+// (services/pendingFiles.ts): their reply is its answer.
 export async function wakeOnReply(userId: string): Promise<number> {
   const { rowCount } = await pool.query(
     `UPDATE co_tasks SET awaiting_reply = false, their_reply_at = NOW(),
@@ -374,7 +376,14 @@ export async function wakeOnReply(userId: string): Promise<number> {
      WHERE user_id = $1 AND status = 'open' AND awaiting_reply AND kind = 'work'`,
     [userId],
   );
-  return rowCount ?? 0;
+  // A file held on a refusal wakes the same way (services/pendingFiles.ts): their reply is its answer. Its own statement, so the work
+  // tasks' wake-up stays as it was.
+  const held = await pool.query(
+    `UPDATE co_tasks SET awaiting_reply = false, their_reply_at = NOW(), next_check_at = NOW() + INTERVAL '${TASK_LIMITS.wakeAfterReplyMinutes} minutes', updated_at = NOW()
+     WHERE user_id = $1 AND status = 'open' AND awaiting_reply AND kind = 'pending_file'`,
+    [userId],
+  );
+  return (rowCount ?? 0) + (held.rowCount ?? 0);
 }
 
 // Closing a task closes its window too (followup.window.closedAt), so nothing warns about a commitment that's finished.
