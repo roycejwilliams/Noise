@@ -226,6 +226,23 @@ for (const [label, sunday] of [
   check('a two-letter place is not backed by a longer word ("LA" in "Atlanta")', captionProblems("A rooftop show in LA tonight.", "Rooftop show. Atlanta, Georgia.", "").some((x) => x.includes('"LA"')), captionProblems("A rooftop show in LA tonight.", "Rooftop show. Atlanta, Georgia.", ""));
   check('... nor by a city name containing it (tier 1, "in LA" for Atlanta)', !t1("Rooftop night in LA", "Atlanta").pass);
 
+  // Re-review of #239: a one-word place cut at a point is backed only as a whole word ("Gov" isn't "Government"), in captions, task
+  // texts and plan sheets (all placesBacked). Refused on co-test and here.
+  const { placesBacked } = await import("../../src/services/taskWeb.js");
+  check('still refused: "in Gov. Pelletier\'s lodge" when the facts say "Government Camp"', !placesBacked("A rooftop show in Gov. Pelletier's lodge.", "Rooftop show at the Government Camp lodge.").ok, placesBacked("A rooftop show in Gov. Pelletier's lodge.", "Rooftop show at the Government Camp lodge."));
+  check('still refused: "in Rev. Pelletier\'s church" when the facts say "Revenue"', !placesBacked("A rooftop show in Rev. Pelletier's church.", "Rooftop show. Revenue goes to charity.").ok, placesBacked("A rooftop show in Rev. Pelletier's church.", "Rooftop show. Revenue goes to charity."));
+  check("still refused, caption: Gov. Pelletier's lodge", captionProblems("Rooftop show in Gov. Pelletier's lodge, free.", "Rooftop show at the Government Camp lodge. Free.", "").length > 0);
+  // ... and a city's usual short names still match (passed on co-test, must still pass, except the caption alias, new): NY for NYC or New York, LA for Los Angeles,
+  // DC for Washington, DC. LA is still not Lakewood.
+  const loc = (city: string, searchCity: string) => MG.checkLocation({ tier: 2, name: "x", city } as any, { searchCity, distanceMiles: null } as any);
+  check('"in NY" for an event in NYC', t1("Builders night in NY", "NYC").pass);
+  check('"in LA" for an event in Los Angeles', t1("Builders night in LA", "Los Angeles").pass);
+  check('"in DC" for an event in Washington, DC', t1("Builders night in DC", "Washington, DC").pass);
+  check("an NYC event for a search in NY", loc("NYC", "NY").pass && loc("New York, NY", "NY").pass);
+  check('caption "in NY" backed by "New York"', placesBacked("A rooftop show in NY tonight.", "Rooftop show, New York. Many bands, any age.").ok);
+  check('caption "in LA" backed by "Los Angeles" (co-test refused this one: captions had no aliases)', captionProblems("Echo Park Rising is Saturday in LA: free, live music on six stages.", "Echo Park Rising. Saturday, Echo Park, Los Angeles. Free street festival, live music on six stages.", "anything fun this weekend?").length === 0);
+  check('still refused: "in LA" for an event in Lakewood (tightened: co-test matched it inside the word)', !t1("Builders night in LA", "Lakewood").pass && !loc("Lakewood", "LA").pass);
+
   const H: [string, string, string][] = [
     ["Pelletier Evening", WREN, "Pelletier"],
     ["Seats go fast. Open Room hosts", `${WREN} the room`, "Open Room"],

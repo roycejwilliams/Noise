@@ -14,7 +14,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, stepCountIs } from "ai";
 import { MODELS } from "../models.js";
 import { recordDecision } from "../harness/core.js";
-import { checkGrounding, checkTiming, placesClaimed } from "../harness/matchGate.js";
+import { checkGrounding, checkTiming, placeAliases, placesClaimed } from "../harness/matchGate.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
@@ -376,10 +376,14 @@ export function verifiedFactLines(results: VerifiedResult[]): string[] {
 export function placesBacked(text: string, facts: string): { ok: boolean; missing: string[] } {
   const have = facts.toLowerCase();
   // A place that ends a sentence keeps its full stop in the match ("SF."); compare without it.
+  // Review of #239: a place of one or two letters, or one word cut at a point ("Gov." in "Gov. Pelletier's lodge"), is backed only as a
+  // whole word ("LA" is inside "relaxed", "Gov" inside "Government"); any of its usual names backs it ("LA" by "Los Angeles").
+  const whole = (f: string) => new RegExp(`(?:^|[^a-z0-9])${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^a-z0-9])`).test(have);
+  const backed = (p: string, cutAtPoint: boolean) => [p.toLowerCase(), ...placeAliases(p)].some((f) => (f.length <= 2 || (cutAtPoint && !/\s/.test(f)) ? whole(f) : have.includes(f)));
   const missing = placesClaimed(text)
-    .map((p) => p.replace(/[.,;:!?)"'\u2019]+$/, ""))
-    // A one- or two-letter place is backed only as a whole word ("W" is inside nearly any text; review of #239).
-    .filter((p) => p && !(p.length <= 2 ? new RegExp(`(?:^|[^a-z0-9])${p.toLowerCase().replace(/[^a-z0-9]/g, "")}(?:$|[^a-z0-9])`).test(have) : have.includes(p.toLowerCase())) && !["san francisco", "sf", "the city"].includes(p.toLowerCase()));
+    .map((raw) => ({ p: raw.replace(/[.,;:!?)"'\u2019]+$/, ""), point: /\.$/.test(raw) }))
+    .filter(({ p, point }) => p && !backed(p, point) && !["san francisco", "sf", "the city"].includes(p.toLowerCase()))
+    .map(({ p }) => p);
   return { ok: missing.length === 0, missing };
 }
 

@@ -28,12 +28,16 @@ function norm(s: string): string {
 // Short names people and pages use for the same city (2026-09-18: a YC
 // result was rejected because its reason said "SF" and the page said "San
 // Francisco").
-const CITY_ALIASES = [["san francisco", "sf"], ["new york", "new york city", "nyc"], ["los angeles", "la"], ["washington dc", "dc"]];
+// "NY" joined New York in the review of #239: once a two-letter place has to match as a whole word, "NY" no longer passed on "NYC"
+// by being inside it.
+const CITY_ALIASES = [["san francisco", "sf"], ["new york", "new york city", "nyc", "ny"], ["los angeles", "la"], ["washington dc", "dc"]];
 
 function placeForms(place: string): string[] {
   const n = norm(place);
   return CITY_ALIASES.find((group) => group.includes(n)) ?? [n];
 }
+// Every way of writing a place, lowercase ("la" -> "los angeles", "la"), for checks outside this file (taskWeb placesBacked).
+export const placeAliases = (place: string): string[] => placeForms(place);
 
 // Whole words only, so "la" doesn't match inside "place".
 function mentionsPlace(text: string, place: string): boolean {
@@ -77,9 +81,9 @@ export function spelledNumbers(text: string): number[] {
 
 function sameCityName(a: string, b: string): boolean {
   const first = (s: string) => norm(s.split(",")[0]);
-  if (placeForms(first(a)).includes(first(b))) return true;
-  // One or two letters ("W", "DC" are only real as whole words): never matched inside another word (review of #239).
-  const inside = (hay: string, x: string) => (x.length <= 2 ? ` ${hay} `.includes(` ${x} `) : hay.includes(x));
+  if (placeForms(first(a)).includes(first(b)) || placeForms(first(a)).includes(norm(b)) || placeForms(first(b)).includes(norm(a))) return true;
+  // A one-word place ("W", "LA", "Gov") is matched only as a whole word, never inside another ("LA" in "Lakewood"; review of #239).
+  const inside = (hay: string, x: string) => (/\s/.test(x) ? hay.includes(x) : ` ${hay} `.includes(` ${x} `));
   return first(a) === first(b) || inside(norm(a), first(b)) || inside(norm(b), first(a));
 }
 
