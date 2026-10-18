@@ -82,12 +82,25 @@ export function expandPost(post: any, usernames: Map<string, string> = new Map()
   };
 }
 
+// What a failed search's error says: X's status and a fixed reason for it, never
+// X's response body, which can repeat the search terms back (2026-10-18: member
+// data out of logs). The "(status)" form is what sweepFind.ts xFailure reads.
+export function xSearchFailure(status: number): string {
+  const reason = status === 401 || status === 403 ? "auth" : status === 429 ? "rate limited" : status >= 500 ? "X server error" : status >= 400 ? "request refused" : "unexpected response";
+  return `xSearch: searchRecentPosts failed (${status}): ${reason}`;
+}
+
 export async function searchRecentPosts(query: string, maxResults = X_SEARCH_RESULTS, opts: { sinceHours?: number } = {}): Promise<XPost[]> {
   const res = await fetch(xSearchUrl(query, maxResults, new Date(), opts.sinceHours), { headers: xHeaders() });
   if (!res.ok) {
-    throw new Error(`xSearch: searchRecentPosts failed (${res.status}): ${await res.text()}`);
+    // The body is dropped unread, so nothing of it can reach the error.
+    await res.body?.cancel().catch(() => {});
+    throw new Error(xSearchFailure(res.status));
   }
-  const data: any = await res.json();
+  // A body that isn't JSON: the parser's own error quotes the start of the body, so it gets a fixed reason instead.
+  const data: any = await res.json().catch(() => {
+    throw new Error(`xSearch: searchRecentPosts failed (${res.status}): unreadable response`);
+  });
   const usernames = new Map<string, string>((data.includes?.users ?? []).map((u: any) => [u.id, u.username]));
   return (data.data ?? []).map((post: any) => expandPost(post, usernames));
 }

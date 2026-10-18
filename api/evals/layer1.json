@@ -42,6 +42,7 @@
     "evals/details/run.ts",
     "evals/monitor/run.ts",
     "evals/tier3/x.ts",
+    "evals/tier3/xErrorLog.ts",
     "evals/issues/run.ts",
     "evals/review/rules.ts",
     "evals/review/northStar.ts",
