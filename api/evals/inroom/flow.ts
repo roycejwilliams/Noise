@@ -151,16 +151,19 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   check("thin: solicitation is not repeated inside the 3-day cooldown", r2.solicitedCount === 0);
 }
 {
-  // A goals-only member can be matched FROM (goal frame) but never TO: shareReason only reads open asks.
+  // A goals-only member is never framed by her goal (Royce, 2026-10-18: "What we know about a member shapes how, never which helper"):
+  // with no ask for the night she's asked what she'd like from the room, like anyone with no ask. She's still a candidate for others,
+  // and never suggested TO anyone from her goal: shareReason only reads open asks.
   reset();
   const a = addMember({ first_name: "Jordan", intent: [ask("an angel investor in edtech")] });
   const g = addMember({ first_name: "Noor", intent: [goal("invest in early edtech founders")] });
   addEvent({ api_id: "evt-goal", name: "Cue Night" }, [{ m: a }, { m: g }]);
   scores({ "angel investor": { Noor: 92 }, "invest in early edtech": { Jordan: 90 } });
   await freshPass("evt-goal");
-  check("goals-only: Noor is scored using her goal as the frame", W.rankings.has(`evt-goal|${g.id}`));
+  check("goals-only: Noor is not scored against her goal; she's asked what she'd like from the room (an ask solicitation)", !W.rankings.has(`evt-goal|${g.id}`) && W.candidates.some((c) => c.user_id === g.id && c.type === "ask_solicitation"), { cands: W.candidates.map((c) => [c.user_id, c.type]) });
+  check("goals-only: Jordan (his ask is the frame) is still scored, with Noor among his candidates", W.rankings.has(`evt-goal|${a.id}`));
   check("goals-only: Jordan is never told about Noor from her private goal (no reason he may see, so no forward nudge)", !nudgeOf("evt-goal", a));
-  check("goals-only: Noor herself is nudged about Jordan (his ask is shareable)", nudgeOf("evt-goal", g)?.candidate_id === a.id);
+  check("goals-only: Noor gets no nudge picked by her goal", !nudgeOf("evt-goal", g));
   // The way Noor reaches Jordan without exposing her goal: she says yes to him, and only then is he asked about her.
   const asM = (m: Member) => ({ user_id: m.id, first_name: m.first_name, phone_number: m.phone_number!, email: m.email });
   await H.handleMatchNudgeReply("evt-goal", "Cue Night", "interested", asM(g), asM(a));

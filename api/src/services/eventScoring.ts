@@ -5,7 +5,7 @@ import pool from "../db/db.js";
 import { matchablePhone } from "../utils/phone.js";
 import { runEventAskSolicitationAgent } from "../agent/eventAskSolicitation.js";
 import { getEventDetails, getEventGuestList, listCalendarEvents, type LumaGuest, type LumaEventDetail } from "./luma.js";
-import { getActiveOfferingAsk, getActiveSeekingAsk, getGoalFrame, roomFrame, scoreAgainstRoomFrame, shareableAsks, type RoomFrame } from "./matching.js";
+import { getActiveOfferingAsk, getActiveSeekingAsk, roomFrame, scoreAgainstRoomFrame, shareableAsks, type RoomFrame } from "./matching.js";
 import { goalTexts } from "./goalJourney.js";
 import { detectAndScheduleCheckins } from "./eventCheckinFollowUp.js";
 import { scheduleUnmatchedFollowUp } from "./eventUnmatchedFollowUp.js";
@@ -781,8 +781,8 @@ export async function scoreMatchedGroup(
   // (services/peopleGraph.ts). A dry run reads only what's already there.
   if (!opts.dryRun) await refreshRoom(matched.map((m) => m.user_id)).catch(() => {});
   // A frame is only asks a member marked shareable (Royce, 2026-10-12): a private ask is never anyone's frame and never a
-  // reason. Goals stay the frame for someone with no shareable ask. (Since 2026-10-18 the scorer sees a candidate's private
-  // asks as a hidden signal, below.)
+  // reason. Someone with no shareable ask has no frame (a goal isn't one): they're asked. (Since 2026-10-18 the scorer sees a
+  // candidate's private asks as a hidden signal, below.)
   const { matchableIntent } = await import("./roomMatching.js");
   // For the team (2026-10-12 audit: a room of text-only members produced zero nudges with no warning): how many guests
   // have nothing shareable, so nobody can be pointed to them. Logged on every pass; never told to a member, no email.
@@ -806,13 +806,15 @@ export async function scoreMatchedGroup(
   }
   for (const person of matched) {
     const others = matched.filter((m) => m.user_id !== person.user_id);
-    // Goals are the frame for who is worth meeting; asks write the specific reason (a candidate's own ask is the share reason). Someone with only
-    // goals is scored against them instead of being asked what they want from the room. Someone with only an OFFERING ("climate
-    // hardware founders to back at seed") is scored against it too (2026-10-07): it names who they're there for.
-    const ask = getActiveSeekingAsk(person.intent) ?? getGoalFrame(person.intent) ?? getActiveOfferingAsk(person.intent);
+    // What they said they're looking for or can offer decides who they're scored against; asks write the specific reason (a
+    // candidate's own ask is the share reason). Someone with only an OFFERING ("climate hardware founders to back at seed") is
+    // scored against it too (2026-10-07): it names who they're there for. A goal never picks who they're scored against on its own
+    // (Royce, 2026-10-18: "What we know about a member shapes how, never which helper"): someone with only goals is asked what
+    // they'd like from the room, like anyone with no ask.
+    const ask = getActiveSeekingAsk(person.intent) ?? getActiveOfferingAsk(person.intent);
     // What they're scored on (services/matching.ts roomFrame, 2026-10-12 audit): every open people-shaped ask, both
-    // directions, de-duplicated, errands left out, the goal as the frame when no ask is about people. Only errands on file
-    // and no goal: nothing to judge a room by, so they're asked what they'd like from it, like someone with no ask.
+    // directions, de-duplicated, errands left out, their goal riding along as where they're headed. No ask about people (only
+    // errands, or nothing): nothing to judge a room by, so they're asked what they'd like from it, like someone with no ask.
     // Under this person's mark: on a cache miss it reads their own asks again.
     const frame: RoomFrame | null = ask?.text ? await withTraceUser(person.user_id, () => roomFrame(person.intent)) : null;
 
