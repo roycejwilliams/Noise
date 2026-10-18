@@ -181,6 +181,7 @@
     "evals/phaseB/verifyAtSend.ts",
     "evals/phaseC/composer.ts",
     "evals/tasks/heldReplay.ts",
+    "evals/tasks/olderLogs.ts",
     "evals/tasks/deliveryReplay.ts",
     "evals/member/safeGaps.ts",
     "evals/member/safeCase.ts",

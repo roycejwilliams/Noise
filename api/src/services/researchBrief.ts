@@ -78,6 +78,38 @@ export function researchProblems(doc: Doc, opts: { sdkAllowed?: boolean } = {}):
   return out;
 }
 
+// Pure: why a brief was refused, as the kinds of problem and how many of each ("no brief: unbacked time (2), research sourcing
+// (1)"), never a problem's own text: the checks quote the brief's lines, and those are the member's words (forget by default,
+// 2026-10-18). Read from the checkers' own wording (documentSheet.ts documentProblems, documentClaims.ts, researchProblems above).
+export function problemKinds(problems: string[]): string {
+  const timeLike = (x: string) => /^\s*\d{1,2}(?::\d{2})?\s*(?:[ap]\.?m\.?)?\s*$/i.test(x);
+  const numberLike = (x: string) => /\d/.test(x);
+  // What a "names X, Y, which they never said" or "it has X, Y, which they never gave" lists: times, numbers, names, or a mix.
+  const facts = (list: string) => {
+    const items = list.split(/,\s*|\s+and\s+/).map((x) => x.trim()).filter(Boolean);
+    if (items.length && items.every(timeLike)) return "unbacked time";
+    if (items.length && items.every(numberLike)) return "unbacked number";
+    if (items.some((x) => timeLike(x) || numberLike(x))) return "name and number or time not in their words";
+    return "name not in their words";
+  };
+  const kindOf = (p: string): string => {
+    const listed = p.match(/it has (.+?), which they never gave/) ?? p.match(/\bnames (.+?), which they never said/);
+    if (listed) return facts(listed[1]);
+    if (/opens on .+, which they never said/.test(p)) return "opening word not in their words";
+    if (/isn't something they said/.test(p)) return "line not in their words";
+    if (/placeholder/.test(p)) return "placeholder";
+    if (/too thin|too long|needs a title|nothing in it|paragraph runs|no bullets|only repeat their headings/.test(p)) return "document shape";
+    if (/source link|time it was checked|general reader|free text|source and check time|isn't a sourced field|researched option/.test(p)) return "research sourcing";
+    return "other check";
+  };
+  const counts = new Map<string, number>();
+  for (const p of problems) {
+    const k = kindOf(String(p ?? ""));
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return [...counts].map(([k, n]) => `${k} (${n})`).join(", ") || "no reason given";
+}
+
 // ---------------------------------------------------------------- reading a source as the venue schema
 
 export type VenueAsk = { what: string; city: string | null; slot: { date: string; start: string } | null };
@@ -311,7 +343,7 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   if (pendingDoc?.doc) {
     const r = await sendBrief(pendingDoc.doc, p.what ?? pendingDoc.title);
     if (r.sent) {
-      await closeTask(task.userId, task.id, "done", `sent the brief "${pendingDoc.title}"${pendingDoc.tries ? ` on retry ${pendingDoc.tries}` : ""}${r.pdfPending ? " as text, the PDF to follow" : ""}: ${pendingDoc.list}`);
+      await closeTask(task.userId, task.id, "done", `sent the brief${pendingDoc.tries ? ` on retry ${pendingDoc.tries}` : ""}${r.pdfPending ? " as text, the PDF to follow" : ""}: ${pendingDoc.list}`);
       return;
     }
     // Their quiet hours: not a failed try, just later (their 8am).
@@ -376,7 +408,8 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const problems = [...researchProblems(doc), ...(await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs }))];
   if (problems.length) {
     const line = finds.length ? "I looked, but I couldn't verify enough to put a brief together that I'd stand behind. I'll tell you what I can check by hand if you want." : "I looked, but couldn't verify any venues that fit. Want me to widen the search?";
-    await tellThenClose(line, "done", `no brief: ${problems.slice(0, 3).join("; ")}`);
+    // The note is read back to Cue (coTasks.ts briefFactLines): what it came to and why, as kinds, never the lines the checks quoted.
+    await tellThenClose(line, "done", `no brief: ${problemKinds(problems)}`);
     return;
   }
   // Through the receipts (deliverAndRecord): its version, its one line, and a failed PDF that went as text retried from its receipt.
@@ -385,8 +418,10 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
   const shown = finds.slice(0, BRIEF_LIMITS.maxOptions);
   if (sent) await Q.recordShownFinds(task.userId, task.id, shown.map((f) => ({ type: "venue", name: f.name, url: f.url, reader: f.reader, fields: f.fields }) as StoredFind));
   const { recordDecision } = await import("../harness/core.js");
-  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: sent ? "act" : "skip", action: doc.title, proposal: { taskId: task.id, options: shown.length, again: !!p.again, rechecked, readers: [...new Set(shown.map((f) => f.reader))] } }).catch(() => {});
-  // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched.
+  // The kind of thing, never its title (the title is their ask in words).
+  await recordDecision({ layer: 7, decision: "task.researchBrief", userId: task.userId, outcome: sent ? "act" : "skip", action: sent ? "venue brief sent" : "venue brief not sent", proposal: { taskId: task.id, options: shown.length, again: !!p.again, rechecked, readers: [...new Set(shown.map((f) => f.reader))] } }).catch(() => {});
+  // The close note is Co's record of what went out: the options by number, so a reaction ("the second one") can be matched. The
+  // options are the places found, never their words; the brief's title isn't in it (what it was for is the task's own goal).
   const list = shown.map((f, i) => `${i + 1}. ${f.name}`).join("; ");
   if (!delivered.sent) {
     // The brief is done but its document didn't go: keep it and send it again shortly (or at their 8am when it's their quiet
@@ -397,5 +432,5 @@ export async function runResearchBriefTask(task: import("./coTasks.js").CoTask):
     await tellThenClose(briefOptionsText(doc.title, options), "done", `the PDF wouldn't send; sent the options as a text: ${list}`);
     return;
   }
-  await closeTask(task.userId, task.id, "done", `sent the brief "${doc.title}"${delivered.pdfPending ? " as text, the PDF to follow" : ""}: ${list}`);
+  await closeTask(task.userId, task.id, "done", `sent the brief${delivered.pdfPending ? " as text, the PDF to follow" : ""}: ${list}`);
 }
