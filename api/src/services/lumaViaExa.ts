@@ -32,7 +32,32 @@ export const eventTitle = (title: string | null | undefined) => String(title ?? 
 export type ViaExaEvent = DiscoveredEvent & { online?: boolean };
 // What one search did, for the log (counts only: the query is the member's want). pages: event pages Exa returned; read: how many of
 // those pages gave a start; kept: upcoming and inside the window.
+// error: what failed and what to do about it, for the log (never the member: they get the feed's events as before).
 export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; kept: number };
+
+// Pure: why a Luma search through Exa failed, said with its fix, from exaSearch's error (or what a call threw). Timed out, refused
+// with an HTTP status, unreachable, unreadable: each its own line. Every one ends the same way, because that's what the member got.
+const FEED_ALONE = "tier 2 went out from Luma's feed alone";
+export function exaFailureReason(error: string | null): string | null {
+  if (!error) return null;
+  const status = error.match(/^Exa (\d{3})\b\s*(.*)$/);
+  if (/timed out/i.test(error)) return `Exa timed out (no answer in ${LUMA_VIA_EXA.timeoutMs / 1000}s); ${FEED_ALONE}; the next search for this want asks Exa again (a failed search isn't kept)`;
+  if (status) {
+    const s = Number(status[1]);
+    const tag = status[2] ? ` ${status[2]}` : "";
+    if (s === 401 || s === 403) return `Exa refused the key (HTTP ${s}${tag}): check EXA_API_KEY on this service; ${FEED_ALONE}`;
+    if (s === 402) return `Exa says the account is out of credit (HTTP 402${tag}): add credit in Exa's dashboard; ${FEED_ALONE}`;
+    if (s === 429) return `Exa rate-limited the search (HTTP 429${tag}); ${FEED_ALONE}; the next search asks again`;
+    if (s >= 500) return `Exa's own side failed (HTTP ${s}${tag}); ${FEED_ALONE}; the next search asks again`;
+    return `Exa rejected the request (HTTP ${s}${tag}): the request services/lumaViaExa.ts builds needs fixing; ${FEED_ALONE}`;
+  }
+  if (/couldn't be reached/i.test(error)) return `Exa couldn't be reached (network): check this service's outbound connection to api.exa.ai; ${FEED_ALONE}`;
+  if (/couldn't be read/i.test(error)) return `Exa answered with a reply that couldn't be read; ${FEED_ALONE}; the next search asks again`;
+  if (/isn't configured/i.test(error)) return EXA_OFF;
+  return `the Luma search through Exa threw (${error.replace(/^threw:\s*/, "").slice(0, 120)}); ${FEED_ALONE}`;
+}
+// Off, not failed: said once per start of the service (services/tieredRecommendation.ts), not on every search.
+export const EXA_OFF = "EXA_API_KEY isn't set on this service, so tier 2 is Luma's feed alone; set EXA_API_KEY to turn on the Luma search through Exa";
 
 export type LumaViaExaDeps = {
   exa: (query: string, o: { purpose: string; userId: string | null; pages: number; text: false; includeDomains: string[]; timeoutMs: number }) => Promise<ExaSearch>;
@@ -76,18 +101,18 @@ export async function lumaEventsViaExa(
       const url = `https://lu.ma/${slug}`;
       const d = await deps.page(url).catch(() => null);
       if (!d?.startAt) return null;
-      return { api_id: d.apiId ?? `luma:${slug}`, name: title, start_at: d.startAt, city: d.city ?? null, url, ...(d.online ? { online: true } : {}) };
+      return { api_id: d.apiId ?? `luma:${slug}`, name: d.name || title, start_at: d.startAt, city: d.city ?? null, url, ...(d.online ? { online: true } : {}) };
     }),
   );
   const withStart = read.filter((e): e is ViaExaEvent => e !== null);
   const events = withStart.filter((e) => new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
-  return { events, report: { cached: !!fresh, error, pages: found.length, read: withStart.length, kept: events.length } };
+  return { events, report: { cached: !!fresh, error: exaFailureReason(error), pages: found.length, read: withStart.length, kept: events.length } };
 }
 
 async function search(query: string, userId: string | null, deps: LumaViaExaDeps): Promise<{ found: Found[]; error: string | null }> {
   const r = await deps
     .exa(query, { purpose: "luma_events", userId, pages: LUMA_VIA_EXA.results, text: false, includeDomains: LUMA_DOMAINS, timeoutMs: LUMA_VIA_EXA.timeoutMs })
-    .catch((err: any): ExaSearch => ({ pages: [], cost: null, error: String(err?.message ?? err).slice(0, 80) }));
+    .catch((err: any): ExaSearch => ({ pages: [], cost: null, error: `threw: ${String(err?.message ?? err).slice(0, 80)}` }));
   const seen = new Set<string>();
   const found: Found[] = [];
   for (const p of r.pages) {

@@ -372,7 +372,8 @@ export function loopTools(
           events,
           turnedAway: r.turnedAway.map((g) => `${g.name}: ${g.reasons.join(", ")}`),
           openingsFoundEarlier: openings,
-          note: `${r.inWindow} events in the feed for ${r.window ?? "the next two weeks"} nearby; the ${events.length} closest to what you asked are above.${r.inWindow < 4 ? " The feed is thin here: try webSearch for the same thing." : ""}`,
+          // "On Luma" once a search of Luma's pages added any (services/lumaViaExa.ts): the count is no longer the feed's alone.
+          note: `${r.inWindow} events ${r.viaExa?.nearby ? "on Luma" : "in the feed"} for ${r.window ?? "the next two weeks"} nearby; the ${events.length} closest to what you asked are above.${r.inWindow < 4 ? ` ${r.viaExa?.nearby ? "Luma" : "The feed"} is thin here: try webSearch for the same thing.` : ""}`,
         };
       },
     }),

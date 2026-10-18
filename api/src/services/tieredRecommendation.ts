@@ -3,7 +3,8 @@ import { DateTime } from "luxon";
 import { MAX_ASK_DAYS_AHEAD, resolveAskWindow, whenForWindow, withinWindow } from "./askWindow.js";
 import { listCalendarEvents, resolveCoEventPlace } from "./luma.js";
 import { DEFAULT_FEED_DAYS, fetchPublicEvents, type DiscoveredEvent } from "./lumaDiscovery.js";
-import { lumaEventsViaExa, withExaEvents, type ViaExaReport } from "./lumaViaExa.js";
+import { EXA_OFF, exaFailureReason, lumaEventsViaExa, withExaEvents, type ViaExaReport } from "./lumaViaExa.js";
+import { exaConfigured } from "./exaSearch.js";
 import { recordDecision } from "../harness/core.js";
 import { rankEventsByDescription } from "./eventRanking.js";
 import { localDate, searchZone } from "./eventOrder.js";
@@ -225,8 +226,11 @@ export type EventSources = {
   rank: typeof rankEventsByDescription;
   gate: typeof gateMatches;
   record: typeof recordDecision;
+  exaOn: () => boolean;
 };
-const realSources: EventSources = { feed: cachedPublicEvents, calendar: cachedCalendarEvents, viaExa: lumaEventsViaExa, page: (url) => fetchLumaEventDetails(url), near: withinRadius, rank: rankEventsByDescription, gate: gateMatches, record: recordDecision };
+const realSources: EventSources = { feed: cachedPublicEvents, calendar: cachedCalendarEvents, viaExa: lumaEventsViaExa, page: (url) => fetchLumaEventDetails(url), near: withinRadius, rank: rankEventsByDescription, gate: gateMatches, record: recordDecision, exaOn: () => exaConfigured() };
+// Exa being off (no key) is logged once per start, not on every search: it's a setting, not a failure.
+let toldExaOff = false;
 // What Exa added to one search, for the log and the caller: null when Exa didn't run (no key, or a call: viaExa false).
 // added: Exa's events the feed didn't have; offered: how many of those passed the nearby filter, the ranking and the gate.
 export type ViaExaCounts = (ViaExaReport & { added: number; nearby: number; offered: number }) | null;
@@ -256,8 +260,14 @@ export async function eventCandidates(
   const [feed, coEvents, exa] = await Promise.all([
     src.feed(city, until).catch(() => [] as DiscoveredEvent[]),
     src.calendar().catch(() => [] as CoCalendarEvent[]),
-    opts.viaExa === false ? Promise.resolve(null) : src.viaExa(what, city, { userId: opts.userId ?? null, inRange, dates }).catch(() => null),
+    opts.viaExa === false
+      ? Promise.resolve(null)
+      : src.viaExa(what, city, { userId: opts.userId ?? null, inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, kept: 0 } })),
   ]);
+  if (!exa && opts.viaExa !== false && !toldExaOff && !src.exaOn()) {
+    toldExaOff = true;
+    await src.record({ layer: 7, decision: "luma.via_exa", userId: null, outcome: "skip", action: "off", reason: EXA_OFF, proposal: { once: "per start of the service" } }).catch(() => {});
+  }
   const coIds = new Set(coEvents.map((e) => e.api_id).filter(Boolean));
   const ours = await filterByRadius(coEvents.filter((e) => inRange(e.start_at)), city, src.near);
   // Exa's events join the feed's before anything else (deduped by Luma slug and event id, the feed's copy kept), so they get the same

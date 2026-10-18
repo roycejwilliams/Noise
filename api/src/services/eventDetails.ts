@@ -43,6 +43,8 @@ export type EventDetails = {
   // Luma's own event id (evt-...), the same one the Discover feed gives, so an event found another way (services/lumaViaExa.ts) is
   // the same event to the rest of Cue. Absent on records read before 2026-10-17.
   apiId?: string | null;
+  // The event's own name on its page (an Exa-found event is named by this, not by Exa's page title).
+  name?: string | null;
 };
 
 // Tier 3: what the source post actually says.
@@ -98,6 +100,7 @@ export function parseLumaEventPage(html: string): EventDetails | null {
     guestCount: typeof data.guest_count === "number" ? data.guest_count : null,
     description: description ? description.slice(0, DESCRIPTION_MAX) : null,
     apiId: typeof ev.api_id === "string" ? ev.api_id : null,
+    name: typeof ev.name === "string" && ev.name.trim() ? ev.name.trim() : null,
   };
 }
 
