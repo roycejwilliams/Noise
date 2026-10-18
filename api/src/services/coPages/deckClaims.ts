@@ -12,6 +12,8 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../../models.js";
 import { parseModelJson } from "../modelJson.js";
+import { numbersOf } from "../offerGuard.js";
+import { sameTimes } from "./grounding.js";
 
 export type Judge = (prompt: string) => Promise<string>;
 const haiku: Judge = async (prompt) =>
@@ -20,19 +22,27 @@ const haiku: Judge = async (prompt) =>
 // The judge's verdict, one per line (K, Royce 2026-10-17: "per-line verdicts where stance lines can't fail, a code overrule for a
 // 'missing name' that's in their words or goals"). The 5-replay "K before" measurement found the old one-shot answer (a free-text
 // list of fails) refused the same deck on some reads and not others, and refused stance lines and the member's own name every time.
-// So the judge now says, for every line, whether it's a stance or a fact and, for a fact their words don't give, what's missing.
-// Code then decides: a stance never fails, and a missing name that is in their words, their own name or their goals is dropped.
+// So the judge now says, for every line, pass or fail and, for a fail, every fact on that line their words don't give (its kind and
+// what's missing). Code then decides, and guards facts, not the judge's labels (review of #240):
+//   - a fail the judge calls a stance passes, unless the line carries a figure their words don't (a number, %, $, a count, a date, a
+//     month, a weekday or a time): a mislabelled "30% off" still refuses;
+//   - a missing name is dropped only when it is a real name (3+ characters), stands in the line itself as whole words, and is in their
+//     words, their own first name or their active goals; and never on a line that also carries an unbacked figure or a relationship
+//     word (partner, sponsor, backed, co-host, investor, advisor, confirmed...): "Co-hosted with Sequin AI" stays refused when they only
+//     said they'd pitch Sequin AI;
+//   - a line is refused unless every fact the judge listed on it is cleared.
 // Temperature 0 was part of the plan; Haiku 5.5 rejects it ("temperature is deprecated for this model", checked 2026-10-17), so the
 // call is unchanged.
 
-// The kinds of fact a line can state. A fail of any other kind (or "stance") is read as a pass: stance can't fail.
+// The kinds of fact a line can state. "stance" is accepted in a fact list and read as no fact (unless a figure says otherwise).
 export const FACT_KINDS = ["partnership", "count", "number", "date", "named_person", "named_company", "named_event", "result", "market_fact"] as const;
 export type FactKind = (typeof FACT_KINDS)[number];
-export type LineVerdict = { n: number; verdict: "pass" | "fail"; kind: FactKind | "stance"; missing: string };
+export type Fact = { kind: FactKind | "stance"; missing: string };
+export type LineVerdict = { n: number; verdict: "pass" | "fail"; facts: Fact[] };
 // The kinds a name decides: when the missing name is in their words, their own name or their goals, the fail is code's to drop.
 const NAME_KINDS = new Set<string>(["named_person", "named_company", "named_event"]);
 // How each kind reads in the error the writer gets back (G hands it to the writer, so it says what's missing, plainly).
-const KIND_SAYS: Record<FactKind, string> = {
+const KIND_SAYS: Record<FactKind | "stance", string> = {
   partnership: "a partnership or deal",
   count: "a count",
   number: "a number, price or metric",
@@ -42,6 +52,7 @@ const KIND_SAYS: Record<FactKind, string> = {
   named_event: "a named event",
   result: "a result or proof",
   market_fact: "a claim about the market",
+  stance: "a figure",
 };
 
 // Pure: the prompt. theirWords: what they said for this deck (and what was read for it). self: what Cue knows about itself, when
@@ -49,20 +60,20 @@ const KIND_SAYS: Record<FactKind, string> = {
 // a line Cue proposed and they approved ("Ok create the doc", 2026-10-12 audit) is theirs; whether they approved it is the judge's
 // read, never a word list. The judge gets only these and the deck's lines.
 export function claimsPrompt(lines: string[], theirWords: string, self = "", thread = ""): string {
-  return `A member asked for a slide deck. For each line on it, say whether it is a stance or a fact, and whether their words give it.
+  return `A member asked for a slide deck. For each line on it, say whether it passes or fails.
 
 THEIR WORDS means the box below marked "What they said"${self ? ", and the box of what Cue knows about itself (this deck is about Cue)" : ""}. A fact counts as theirs when it is said there in any wording: rephrased, shortened or combined is fine.
 
 A STANCE is how they present themselves, what they believe, or how they frame the offer. It can't be checked true or false. A stance always passes, even in words they never used. Example: "Not another social club".
 A label ("The problem", "The ask") is a stance too.
 
-A FACT is something that could be checked true or false. Example: "14 studios pay $89 a month". A fact passes when their words give it and fails when they don't. Its kind is one of:
-- partnership: working with someone, a deal ("Partnering with X" when they only named X is a fail)
+A FACT is something that could be checked true or false. Example: "14 studios pay $89 a month". A fact passes when their words give it and fails when they don't. A line fails when any fact on it isn't in their words. The kinds of fact:
+- partnership: working with someone, a deal, a sponsor, a backer, a co-host, an investor ("Partnering with X" when they only named X is a fail)
 - count: how many people, customers, members or seats
 - number: a price, metric, amount or share
 - date: a day, time, month or year
 - named_person, named_company, named_event: a name presented as a fact
-- result: something proven, won, achieved or tested
+- result: something proven, won, achieved, confirmed or tested
 - market_fact: how the market, industry or world is ("Demand is doubling"); a belief about it ("The next wave needs Y") is a stance
 ${thread ? `
 Their approval of Cue's last text (below) makes a stance in it theirs. It never makes a fact theirs: names, numbers, partners, counts, dates and events must be in their own words. A Cue text they didn't clearly approve backs nothing.
@@ -85,14 +96,13 @@ ${thread.slice(-3000)}
 Deck lines:
 ${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}
 
-Return ONLY JSON, one entry for every line, in order:
-{"lines": [{"n": 1, "verdict": "pass", "kind": "stance"}, {"n": 2, "verdict": "fail", "kind": "count", "missing": "30 members"}]}
-"kind" is "stance" or one of the fact kinds. "missing" is, for a fail, the fact their words don't give, in a few words.`;
+Return ONLY JSON, one entry for every line, in order. For a fail, list every fact on that line their words don't give, each with its kind and what's missing in a few words:
+{"lines": [{"n": 1, "verdict": "pass"}, {"n": 2, "verdict": "fail", "facts": [{"kind": "count", "missing": "30 members"}, {"kind": "named_company", "missing": "Blue Bottle"}]}]}`;
 }
 
 // Pure: the judge's answer read strictly, or null when it isn't one. It must give one entry for every line, each naming its line by
-// its whole number, with a verdict and a kind: an answer that skips a line, or is in the old free-text shape, is an answer the check
-// can't trust, so it is never read as a pass.
+// its whole number, with a verdict; a fail must list at least one fact, each of a known kind. An answer that skips a line, carries the
+// old free-text "fails" list (alone or beside "lines"), or has an unknown kind is an answer the check can't trust: never a pass.
 export function parseLineVerdicts(text: string, lineCount: number): LineVerdict[] | null {
   let out: unknown;
   try {
@@ -100,38 +110,91 @@ export function parseLineVerdicts(text: string, lineCount: number): LineVerdict[
   } catch {
     return null;
   }
-  const rows = (out as { lines?: unknown } | null)?.lines;
+  if (!out || typeof out !== "object" || Array.isArray(out) || "fails" in (out as object)) return null;
+  const rows = (out as { lines?: unknown }).lines;
   if (!Array.isArray(rows) || rows.length !== lineCount) return null;
   const seen = new Set<number>();
   const read: LineVerdict[] = [];
   for (const r of rows) {
-    const o = (r ?? {}) as { n?: unknown; verdict?: unknown; kind?: unknown; missing?: unknown };
+    const o = (r ?? {}) as { n?: unknown; verdict?: unknown; facts?: unknown };
     const n = o.n;
     if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > lineCount || seen.has(n)) return null;
     if (o.verdict !== "pass" && o.verdict !== "fail") return null;
-    const kind = String(o.kind ?? "");
-    if (kind !== "stance" && !(FACT_KINDS as readonly string[]).includes(kind)) return null;
+    const facts: Fact[] = [];
+    if (o.facts !== undefined && !Array.isArray(o.facts)) return null;
+    for (const f of (o.facts ?? []) as unknown[]) {
+      const kind = String((f as { kind?: unknown } | null)?.kind ?? "");
+      if (kind !== "stance" && !(FACT_KINDS as readonly string[]).includes(kind)) return null;
+      facts.push({ kind: kind as Fact["kind"], missing: String((f as { missing?: unknown }).missing ?? "").trim().slice(0, 120) });
+    }
+    if (o.verdict === "fail" && !facts.length) return null;
     seen.add(n);
-    read.push({ n, verdict: o.verdict, kind: kind as LineVerdict["kind"], missing: String(o.missing ?? "").trim().slice(0, 120) });
+    read.push({ n, verdict: o.verdict, facts });
   }
   return read.sort((a, b) => a.n - b.n);
 }
 
-// Pure: a name is "there" when its words appear, in order, in their words, their own name or their goals (case and punctuation aside).
+// Pure: a phrase is "in" a text when its words appear there whole and in order (case, punctuation and a possessive aside).
 const plain = (s: string) => ` ${s.toLowerCase().replace(/[’']s\b/g, "").replace(/[^a-z0-9]+/g, " ").trim()} `;
-export function nameIsTheirs(missing: string, hay: string): boolean {
-  const m = plain(missing.replace(/^["“]|["”]$/g, ""));
-  return m.trim().length > 1 && plain(hay).includes(m);
+const inText = (phrase: string, text: string) => {
+  const p = plain(phrase.replace(/^["“]|["”]$/g, ""));
+  return p.trim().length >= 3 && plain(text).includes(p);
+};
+// Pure: a missing name is theirs when it's a real name (3+ characters), it stands in the deck line itself, and it's in hay (their
+// words, own name, goals). "AI" for "Built with OpenAI" is never a name; "Sequin" for "Sequin Capital" needs Sequin as a whole word.
+export function nameIsTheirs(missing: string, hay: string, line?: string): boolean {
+  if (line !== undefined && !inText(missing, line)) return false;
+  return inText(missing, hay);
 }
 
-// Pure: what code makes of the verdicts. A fail stands only when it's a fact (stance can't fail) and, for a name, the name isn't in
-// their words, their own name or their goals (known). Each one that stands says which line and what's missing.
+// Pure: the figures in a line their words (or goals) don't give: numbers (with %, $, k), number words from two up, months, weekdays and noon or
+// midnight. Times and dates are put the same way on both sides first (grounding.ts sameTimes), so "7pm" matches "7:00 PM".
+const MONTH_RE = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/g;
+const WEEKDAY_RE = /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)s?\b/gi;
+const CLOCK_WORDS = /\b(noon|midday|midnight)\b/gi;
+export function unbackedFigures(line: string, theirWords: string): string[] {
+  const l = sameTimes(line);
+  const t = sameTimes(theirWords, "theirs");
+  const theirNums = numbersOf(t, true);
+  // "one" is how a stance talks ("one table", "one idea"); a digit 1 is still a figure.
+  const digits = numbersOf(l);
+  const nums = [...numbersOf(l, true)].filter((n) => (n !== "1" || digits.has("1")) && !theirNums.has(n));
+  const words = [...(l.match(MONTH_RE) ?? []), ...(l.match(WEEKDAY_RE) ?? []).map((w) => w.replace(/s$/i, "")), ...(l.match(CLOCK_WORDS) ?? [])].filter((w) => !new RegExp(`\\b${w}`, "i").test(t));
+  return [...new Set([...nums, ...words])];
+}
+// A relationship or commitment word: a name on a line with one of these is a claim about that name, never just the name.
+const CLAIM_WORDS = /\b(partner(?:s|ed|ing|ship|ships)?|sponsor(?:s|ed|ing|ship|ships)?|back(?:ed|ing|er|ers)|co-?host(?:s|ed|ing)?|team(?:ed|ing)? up|invest(?:or|ors|ed|ing|ment|ments)?|fund(?:ed|ing|er|ers)|advis(?:or|ors|er|ers|ed|ing)|mentor(?:s|ed)?|confirm(?:ed|s)?|signed|approved|committed|deal)\b/i;
+
+// Pure: what code makes of the verdicts. A failed line stands unless every fact listed on it is cleared: a stance (no unbacked figure
+// on the line), or a missing name that's theirs (in their words, own name or goals; in the line; no unbacked figure or relationship
+// word on the line). Each line that stands says what's missing, so it can go back to the writer.
 export function standingFails(lines: string[], verdicts: LineVerdict[], theirWords: string, known = ""): { line: string; why: string }[] {
   const hay = `${theirWords}\n${known}`;
-  return verdicts
-    .filter((v) => v.verdict === "fail" && v.kind !== "stance")
-    .filter((v) => !(NAME_KINDS.has(v.kind) && v.missing && nameIsTheirs(v.missing, hay)))
-    .map((v) => ({ line: lines[v.n - 1], why: `${KIND_SAYS[v.kind as FactKind]} their words don't give${v.missing ? `: ${v.missing}` : ""}` }));
+  const out: { line: string; why: string }[] = [];
+  for (const v of verdicts) {
+    if (v.verdict !== "fail") continue;
+    const line = lines[v.n - 1];
+    // Figures are backed by their words or their goals (both theirs); their own name backs no figure.
+    const figures = unbackedFigures(line, hay);
+    const claimy = figures.length > 0 || CLAIM_WORDS.test(line);
+    const standing = v.facts.filter((f) => {
+      if (f.kind === "stance") return figures.length > 0;
+      if (NAME_KINDS.has(f.kind) && !claimy && nameIsTheirs(f.missing, hay, line)) return false;
+      return true;
+    });
+    if (!standing.length) continue;
+    // A name they did give that stands only because of what the line says about it is said that way, so the writer fixes the claim.
+    const claimWord = line.match(CLAIM_WORDS)?.[0];
+    const says = standing.map((f) =>
+      f.kind === "stance"
+        ? `a figure their words don't give: ${figures.join(", ")}`
+        : NAME_KINDS.has(f.kind) && f.missing && nameIsTheirs(f.missing, hay, line)
+          ? `a claim about ${f.missing} their words don't make (${[claimWord, ...figures].filter(Boolean).join(", ")})`
+          : `${KIND_SAYS[f.kind]} their words don't give${f.missing ? `: ${f.missing}` : ""}`,
+    );
+    out.push({ line, why: says.join("; ") });
+  }
+  return out;
 }
 
 // Pure: what the name overrule reads besides their words: their own first name and the goals they're working toward (active only;
