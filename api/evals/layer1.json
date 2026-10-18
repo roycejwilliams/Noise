@@ -158,6 +158,8 @@
     "evals/asks/mixed.ts",
     "evals/goals/readCutOff.ts",
     "evals/goals/recheck.ts",
+    "evals/goals/stopLine.ts",
+    "evals/goals/oneGoalNudge.ts",
     "evals/goals/retire.ts",
     "evals/sweepFind/queries.ts",
     "evals/coldstart/rules.ts",
