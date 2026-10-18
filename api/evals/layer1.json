@@ -84,6 +84,7 @@
     "evals/exa/followups.ts",
     "evals/calls/elevenlabs.ts",
     "evals/calls/callLink.ts",
+    "evals/calls/elevenLabsForget.ts",
     "evals/calls/opening.ts",
     "evals/calls/coreShared.ts",
     "evals/companion/heavy.ts",

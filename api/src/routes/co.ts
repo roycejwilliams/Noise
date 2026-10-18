@@ -49,6 +49,7 @@ import { callKeyOf, takeVoiceMoments } from "../services/mediaStreamBridge.js";
 import { callerTurnsFrom, momentSignals } from "../services/voiceRead.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { narratesInternalState } from "../services/speakable.js";
+import { forgetAfterCall, transcriptHash } from "../services/elevenLabsForget.js";
 import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
 
@@ -552,6 +553,10 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // Moments where their voice said more than their words, beside the text
     // read (services/voiceFlags.ts). Test members only for now; never fails the call.
     if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
+    // Forget by default (services/elevenLabsForget.ts): with the transcript stored on our side and the call's processing
+    // completed, ElevenLabs' copy (audio and transcript) is deleted. Not awaited and never throws: the member-facing steps
+    // above are done and nothing here changes them. Held for a call voice flags will listen to.
+    if (ended.stored && u[0]) forgetAfterCall({ userId, conversationId, transcriptSha256: ended.stored.transcriptSha256, phone: u[0].phone_number }).catch(() => {});
     // Co never tells a member what they feel. Speech can't be filtered mid-call
     // (ElevenLabs speaks its model's reply directly), so every call is checked
     // after: a line that names their feeling is logged for the review.
@@ -699,7 +704,7 @@ async function processEndedCall(o: {
   // When the call started and ended (the webhook's metadata): which commitments were this call's, and the confirmation's latency.
   startedAt?: Date | null;
   endedAt?: Date | null;
-}): Promise<{ status: number; body: unknown }> {
+}): Promise<{ status: number; body: unknown; stored?: { transcriptSha256: string } }> {
   const user_id = o.userId;
   const chat_id = o.callKey;
   const twilio_metadata = o.twilioMetadata ?? undefined;
@@ -967,7 +972,9 @@ async function processEndedCall(o: {
         await scheduleFollowUpText(user_id, cleanTranscript);
       }
 
-      return { status: 200, body: { success: true } };
+      // The transcript is stored and the processing completed: what ElevenLabs' copy may be deleted against (the raw transcript,
+      // the one stored above).
+      return { status: 200, body: { success: true }, stored: { transcriptSha256: transcriptHash(transcript) } };
     } catch (pipelineErr) {
       await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
       if (chat_id) await finishCallProcessing(chat_id, "failed");

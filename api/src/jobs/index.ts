@@ -278,6 +278,17 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // Calls whose ElevenLabs copy wasn't deleted right after the call (services/elevenLabsForget.ts): verified again and retried,
+  // a bounded number of times. Sends nothing to anyone.
+  cron.schedule("*/30 * * * *", async () => {
+    try {
+      const { retryPendingDeletes } = await import("../services/elevenLabsForget.js");
+      await retryPendingDeletes();
+    } catch (err: any) {
+      console.error("elevenlabs delete retry error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // Things Co sent in the last 3 days are re-read every few hours
   // (services/linkReader.ts); if one that someone was interested in sold out,
   // moved or disappeared, they hear it once (services/staleWatch.ts). Luma
