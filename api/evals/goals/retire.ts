@@ -193,7 +193,7 @@ const withPool = async <T>(fn: (sql: string, args: any[]) => any, run: () => Pro
   check("the turn gets one ask", !!t1.ask && t1.ask.id === UUID2 && t1.asked.length === 0);
   check("...none with a goal question offered, inside the spacing, with no fence, or when this message names it", !(await A.retireForTurn("u1", "Morning", fence, { goalQuestion: true, now: NOW }, tdeps([ask()]))).ask && !(await A.retireForTurn("u1", "Morning", fence, { goalQuestion: false, now: NOW }, tdeps([ask()], { lastAsk: ago(1) }))).ask && !(await A.retireForTurn("u1", "Morning", { userId: "u1", strip: () => null, failed: true }, { goalQuestion: false, now: NOW }, tdeps([ask()]))).ask && !(await A.retireForTurn("u1", "found a great Sequin AI launch party venue", fence, { goalQuestion: false, now: NOW }, tdeps([ask()]))).ask);
   // The fallback line (used only when the written line fails): six labels that read badly as-is. Reworded 2026-10-17 (Royce: "works
-  // for any goal"), pending his approval; every label shape is checked in evals/goals/stopLine.ts.
+  // for any goal"), approved by Royce 2026-10-17; every label shape is checked in evals/goals/stopLine.ts.
   const labels: [string, string][] = [
     ["I want to find a cofounder for my climate startup", "I've paused the search on a cofounder for your climate startup; say the word and I'll pick it back up"],
     ["Wants to meet more climate founders in SF", "I've paused the search on meeting more climate founders in SF; say the word and I'll pick it back up"],

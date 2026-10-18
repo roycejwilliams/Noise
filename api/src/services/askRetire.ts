@@ -106,8 +106,8 @@ export function fallbackLabel(text: string): string {
   }
   return t;
 }
-// The fixed line (Royce, 2026-10-17: "reword it so it works for any goal, and show me the exact line before it ships"; PENDING his
-// approval, PR #236). "The search on" reads the same before a thing or a doing, and "paused" is what "pick it back up" undoes.
+// The fixed line (Royce, 2026-10-17: "reword it so it works for any goal, and show me the exact line before it ships"; approved by
+// Royce 2026-10-17, PR #236). "The search on" reads the same before a thing or a doing, and "paused" is what "pick it back up" undoes.
 export function fallbackNote(text: string): string {
   return `I've paused the search on ${fallbackLabel(text) || "this"}; say the word and I'll pick it back up`;
 }

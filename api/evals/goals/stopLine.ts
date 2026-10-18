@@ -1,6 +1,6 @@
 // The one fixed "stopped looking" line (services/askRetire.ts fallbackNote), used when the written line fails: it must read cleanly
 // for every shape of label fallbackLabel makes, for goals and asks alike (Royce, 2026-10-17: "reword it so it works for any goal, and
-// show me the exact line before it ships"). PENDING Royce's approval, PR #236. Invented details only.
+// show me the exact line before it ships"). Approved by Royce 2026-10-17, PR #236. Invented details only.
 // Layer 1: pure, zero tokens, no DB.   npx tsx evals/goals/stopLine.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
 process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
