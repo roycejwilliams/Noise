@@ -25,6 +25,7 @@
     "evals/adaptable/rules.ts",
     "evals/llmUsage/rules.ts",
     "evals/logs/voiceMemo.ts",
+    "evals/langfuse/noText.ts",
     "evals/silence/rules.ts",
     "evals/corrections/rules.ts",
     "evals/member/knowledge.ts",

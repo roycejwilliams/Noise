@@ -1,11 +1,12 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
-import { LangfuseSpanProcessor } from "@langfuse/otel";
+import { langfuseWithoutText } from "./services/langfuseNoText.js";
 import { LlmUsageSpanProcessor } from "./services/llmUsage.js";
 import { onShutdown } from "./services/shutdown.js";
 
 // Traces every Claude call the Vercel AI SDK makes (generateText across
 // profileExtraction/matching/circleInvite/circleApproval/booking/scheduling/
-// places/co/sendblue/ai) into Langfuse. LangfuseSpanProcessor recognizes the
+// places/co/sendblue/ai) into Langfuse, with no prompt or reply text (ids,
+// names, model, tokens and timing only: services/langfuseNoText.ts). It recognizes the
 // AI SDK's own OTEL Gen AI spans directly — every call site just needs
 // `experimental_telemetry: { isEnabled: true, functionId: "..." }` to start
 // showing up here; nothing else has to change for that baseline. Call sites
@@ -27,11 +28,9 @@ export function initTelemetry(): void {
     // Tags every trace so local/dev runs never mix into the "production"
     // view in Langfuse — reuses the same NODE_ENV check the rest of this
     // codebase already relies on (e.g. validateTwilioSignature in co.ts).
-    spanProcessors.push(
-      new LangfuseSpanProcessor({
-        environment: process.env.NODE_ENV === "production" ? "production" : "development",
-      }),
-    );
+    // Langfuse gets ids, names, model, tokens, latency and status, never
+    // prompt or reply text (services/langfuseNoText.ts).
+    spanProcessors.push(langfuseWithoutText(process.env.NODE_ENV === "production" ? "production" : "development"));
   }
   const sdk = new NodeSDK({ spanProcessors });
   sdk.start();
