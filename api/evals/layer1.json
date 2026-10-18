@@ -127,6 +127,7 @@
     "evals/coPages/document.ts",
     "evals/coPages/security.ts",
     "evals/coPages/tools.ts",
+    "evals/coPages/deckJudge.ts",
     "evals/intros/secondContact.ts",
     "evals/docs/memberFiles.ts",
     "evals/presence/readoutFlow.ts",
