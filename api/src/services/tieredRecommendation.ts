@@ -262,7 +262,7 @@ export async function eventCandidates(
     src.calendar().catch(() => [] as CoCalendarEvent[]),
     opts.viaExa === false
       ? Promise.resolve(null)
-      : src.viaExa(what, city, { userId: opts.userId ?? null, inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, kept: 0 } })),
+      : src.viaExa(what, city, { userId: opts.userId ?? null, inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, notPublic: 0, kept: 0 } })),
   ]);
   if (!exa && opts.viaExa !== false && !toldExaOff && !src.exaOn()) {
     toldExaOff = true;

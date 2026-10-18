@@ -303,7 +303,7 @@ async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | n
         return {
           events: r.candidates.map(({ match, lines }) => ({ link: "url" in match ? match.url : null, details: lines })),
           openings: openings.slice(0, 4).map((m) => ({ link: (m as any).url, name: m.name, details: m.reason })),
-          note: r.inWindow < 4 ? "The feed is thin here; webSearch may find more." : undefined,
+          note: r.inWindow < 4 ? `${r.viaExa?.nearby ? "Luma is" : "The feed is"} thin here; webSearch may find more.` : undefined,
         };
       },
     }),
