@@ -92,7 +92,9 @@ export function pageProblems(d: CoPageData, source: PageSource): string[] {
 // word-for-word claim check pages use is left off (live run, 2026-10-11: it refused "Built for..." and "No-shows eat a fifth of
 // bookings", both said in their own text); facts are guarded, phrasing isn't.
 export function deckProblems(d: import("./deck.js").DeckData, source: PageSource): string[] {
-  const corpus = `${source.theirs}\n${source.read}`;
+  // Times and dates read the way pages read them (sameTimes, Royce 2026-10-17: "'8:00 PM' matches the member's '8 PM', the same as
+  // pages. Made-up times stay refused"). S1-a: 15 decks were refused for "8:00 PM: Supper" when the member wrote "supper … 8 PM".
+  const corpus = `${sameTimes(source.theirs, "theirs")}\n${sameTimes(source.read)}`;
   const lines: { where: string; text: string }[] = [
     { where: "title", text: d.title },
     { where: "subtitle", text: d.subtitle },
@@ -104,7 +106,9 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
     // A bracketed gap is a live placeholder on a shareable link (2026-10-12: "[Example seat to drop in: who sat where...]" went to
     // the importer). It never ships: ask them for the missing piece, or make the slide the point without it.
     if (placeholderIn(l.text)) out.push(`${l.where}: "${placeholderIn(l.text)}" is a placeholder, and a deck never ships one: ask them for the missing piece, or write the slide as the point itself without the example`);
-    const bad = unsourced(l.text, corpus);
+    // A common word opening what follows a time ("9:30 PM: Choose a cup") is its capital, not a name: the headline check's rule
+    // (lowerSentenceStarts), here because with times read the same as pages, it was the last thing refusing 2 of those decks.
+    const bad = unsourced(lowerSentenceStarts(sameTimes(l.text)), corpus);
     if (bad.length) out.push(`${l.where}: "${l.text.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   return out.slice(0, 7);

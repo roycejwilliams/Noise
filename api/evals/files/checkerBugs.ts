@@ -277,5 +277,41 @@ for (const [label, sunday] of [
   check("... while the structure lines Royce named still pass on the same source", ok.length === 0, ok);
 }
 
+// ---------------------------------------------------------------- 7. deck times read the way pages read them
+// Royce, 2026-10-17: "Deck times: yes. '8:00 PM' matches the member's '8 PM', the same as pages. Made-up times stay refused ('8:00 PM:
+// Supper' with nothing behind it)." S1-a: 15 Ceramics Night decks (test member, names swapped) were refused for "8:00 PM" when her
+// message said "supper at a long table 8 PM".
+{
+  const { deckDataFrom } = await import("../../src/agent/deckTools.js");
+  const deckCheck = async (slides: { headline: string; bullets: string[] }[], theirs: string) => {
+    const named = slides.map((s, i) => headlineNameProblems(s.headline, theirs, `slide ${i + 2} headline`)).filter(Boolean) as string[];
+    const c = checkPage(await deckDataFrom({ title: "Ceramics Night", subtitle: "Heath Ceramics, San Francisco, Saturday, November 7", slides } as any, null, new Map(), null, { theirWords: theirs }), { theirs, read: "" });
+    return [...named, ...(c.ok ? [] : c.problems)];
+  };
+  const NOTIME = "Can you make me a deck for a ceramics night I'm hosting at Heath Ceramics in San Francisco on Saturday Nov 7? Twelve friends. Doors 6:30 PM, then supper at a long table, and everyone picks a cup to take home.";
+  // The replayed deck (S1-a 16045's slides): every time is one she gave, in a different format.
+  const real = await deckCheck([
+    { headline: "Saturday, November 7th", bullets: ["Heath Ceramics, San Francisco", "Twelve friends, one long table"] },
+    { headline: "6:30 PM: Doors", bullets: ["Arrive, settle in, say hello"] },
+    { headline: "7:15 PM: Wheel demo", bullets: ["Led by the Heath studio team"] },
+    { headline: "8:00 PM: Supper", bullets: ["At a long table, family style"] },
+    { headline: "9:30 PM: Choose your cup", bullets: ["Everyone picks one to take home"] },
+  ], WREN);
+  check('deck passes: "8:00 PM: Supper" when she said "supper at a long table 8 PM" (and "9:30 PM: Choose your cup")', real.length === 0, real);
+  const bullet = await deckCheck([{ headline: "The night", bullets: ["8:00 PM: Supper at a long table"] }, { headline: "One thing to know", bullets: ["Wear clothes that can take clay"] }], WREN);
+  check('deck passes: "8:00 PM: Supper at a long table" as a bullet', bullet.length === 0, bullet);
+  const made = await deckCheck([{ headline: "6:30 PM: Doors", bullets: ["Arrive at Heath Ceramics"] }, { headline: "8:00 PM: Supper", bullets: ["A long table, together"] }], NOTIME);
+  check('still refused on a deck: "8:00 PM: Supper" when she gave no supper time', made.some((x) => /8:00 PM|8pm/.test(x)), made);
+  const doors = await deckCheck([{ headline: "7:00 PM: Doors", bullets: ["Arrive at Heath Ceramics"] }, { headline: "8:00 PM: Supper", bullets: ["A long table, together"] }], WREN);
+  check('still refused on a deck: "7:00 PM: Doors" when she said doors at 6:30', doors.some((x) => /7:00 PM|7pm/.test(x)) && !doors.some((x) => /8:00 PM|8pm/.test(x)), doors);
+  // Format pairs, the same as pages (sameTimes): a time keeps its am/pm; only in their words does a bare "at 8" stand for 8am and 8pm.
+  const pair = async (deckTime: string, theirs: string) => (await deckCheck([{ headline: "The night", bullets: [`${deckTime}: Supper at a long table`] }, { headline: "One thing to know", bullets: ["Wear clothes that can take clay"] }], `Ceramics night at Heath Ceramics, Saturday. Supper at a long table ${theirs}. Wear clothes that can take clay.`)).length === 0;
+  check('format: "8pm" on the deck for their "8 PM"', await pair("8pm", "8 PM"));
+  check('format: "8 PM" on the deck for their "8:00 pm"', await pair("8 PM", "8:00 pm"));
+  check('format: "8:00 PM" on the deck for their bare "at 8" (pages read it the same way)', await pair("8:00 PM", "at 8"));
+  check('format, still refused: "8:00 AM" on the deck for their "8 PM"', !(await pair("8:00 AM", "8 PM")));
+  check('format, still refused: "8:30 PM" on the deck for their "8 PM"', !(await pair("8:30 PM", "8 PM")));
+}
+
 console.log(`checker bugs: ${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
