@@ -947,7 +947,8 @@ export function loopTools(
         state.sentMessages.push(`[sent a document: ${doc.title}]`);
         if (rd.line) state.sentMessages.push(rd.line);
         await recordDocumentWritten(ctx.userId, doc.title).catch(() => {});
-        await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: doc.title, proposal: { sections: doc.sections.length, via: sent.via } }).catch(() => {});
+        // The kind of thing, never its title (forget by default: the title is their words).
+        await recordDecision({ layer: 3, decision: "loop.writeDocument", userId: ctx.userId, outcome: "act", action: "document sent", proposal: { kind: doc.kind ?? "other", sections: doc.sections.length, via: sent.via } }).catch(() => {});
         const asPdf = sentOk.some((r) => r.via === "pdf_text");
         const asDoc = sentOk.some((r) => r.via === "google_docs");
         const sharedLink = sentOk.some((r) => r.via === "google_docs" && r.shared);
