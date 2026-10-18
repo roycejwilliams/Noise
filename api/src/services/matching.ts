@@ -3,7 +3,6 @@ import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { goalEntries, isOpenAsk } from "../harness/profileWrite.js";
 import { parseModelJson } from "./modelJson.js";
-import { safeMemory } from "./memberSafeMemories.js";
 
 // Model policy (Royce, 2026-09-14): scoring decides who gets introduced to
 // whom, so it runs on Sonnet 5.
@@ -84,22 +83,29 @@ type ScorableCandidate = {
 // made for one member and carries up to 40 others, and it goes to Anthropic (and Langfuse) under the asking member's trace. So
 // each candidate's line is built from a short list of labelled fields only, never from rows:
 //   - asks they agreed to share (the only words the double opt-in flow ever shows another member), each clipped
-//   - goals, blockers and activity likes from their profile, each clipped
+//   - goals and activity likes from their profile, each clipped
 //   - the people graph's internal hint (short wants/offers labels, no names), when the caller passes one
-// Never on the line: any co_memories row (call transcripts, text exchanges, Cue's own records), and any private ask, not even
-// as a category (a private ask is private by default; the room path already scores on shareable asks only, roomMatching.ts
-// matchableIntent). The same lines feed the Jev prune (services/jevMatching.ts).
-// An item that names another person in the same prompt is left out (memberSafeMemories.ts safeMemory, the reply context's
-// strip, with the first names on the candidates in this call).
-// Caps: each item is clipped to DIGEST_ITEM_CHARS; each line holds DIGEST_CANDIDATE_CHARS; a prompt's lines share
-// DIGEST_PROMPT_CHARS, so a big room gets shorter lines, never fewer candidates (each line keeps DIGEST_MIN_CANDIDATE_CHARS,
-// enough for one clipped shared ask: above 88 candidates that floor is what bounds the prompt). A line fills in this order until it is
-// full: shared asks newest first, then the hint, then goals, blockers and likes. Whole items only.
+//   - a HIDDEN part: their private asks and their blockers (Royce, 2026-10-18: "It should never be mentioned to another user
+//     what that person is going through"). The scorer may use it to judge fit and is told never to mention or cite it; code
+//     makes sure it is never the basis of a match (runAskScoring: hidden_only or no reason means no share reason, so nothing is
+//     proposed) and that no intro text echoes it (harness/matchGate.ts hiddenEcho, on share reasons, value lines, drafts and
+//     the network intro email). On every path, rooms included: the room path passes its private asks in `hidden`, since it
+//     scores on intent with private asks taken out (roomMatching.ts matchableIntent). The Jev prune reads lines without the
+//     hidden part: a fit only the hidden part supports can never be proposed, so the prune needs nothing of it.
+// Never on the line: any co_memories row (call transcripts, text exchanges, Cue's own records), and no field outside the list.
+// An item that names another person in the same prompt is left out (nameFinder below: whole word, any case, accents folded).
+// Caps: each item is clipped to DIGEST_ITEM_CHARS, the hidden part to DIGEST_HIDDEN_CHARS; each line holds
+// DIGEST_CANDIDATE_CHARS; a prompt's lines share DIGEST_PROMPT_CHARS, so a big room gets shorter lines, never fewer candidates
+// (each line keeps DIGEST_MIN_CANDIDATE_CHARS, enough for one clipped shared ask: above 88 candidates that floor is what bounds
+// the prompt). A line fills in this order until it is full: shared asks newest first, then the hint, then goals, then the hidden
+// part (private asks newest first, then blockers), then likes. Whole items only.
 export const DIGEST_ITEM_CHARS = 120;
+export const DIGEST_HIDDEN_CHARS = 200;
 export const DIGEST_CANDIDATE_CHARS = 400;
 export const DIGEST_PROMPT_CHARS = 16_000;
 export const DIGEST_MIN_CANDIDATE_CHARS = 180;
 const DIGEST_HINT_CHARS = 220;
+export const HIDDEN_LABEL = "hidden, to judge fit only (never mention, never cite):";
 
 // Pure: one item, whitespace folded, cut at a word near the cap.
 export function clipItem(s: unknown, max = DIGEST_ITEM_CHARS): string {
@@ -112,61 +118,83 @@ export function clipItem(s: unknown, max = DIGEST_ITEM_CHARS): string {
 
 const firstNameOf = (c: ScorableCandidate) => String((c as { first_name?: unknown }).first_name ?? "").trim();
 const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Accents folded and lowercased, so "Zoë", "ZOE" and "zoe" are one name.
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase();
 
-// Pure: true when the reply context's strip (memberSafeMemories.ts safeMemory) would change the item, i.e. it names one of these people.
-function namesSomeone(item: string, names: string[]): boolean {
-  if (!names.length) return false;
-  const bare = item.replace(/^\s*(User said:|User:)\s*/i, "");
-  return safeMemory("matching", bare, names) !== bare.trim();
+// Pure: which of these names a text carries, as whole words in any case, accents folded. A local stand-in: PR #248's
+// nameFinder (services/memberSafeMemories.ts, unmerged) can replace it once it lands.
+export function nameFinder(names: string[]): (text: string) => string[] {
+  const ns = [...new Set(names.map((n) => fold(String(n ?? "").trim())).filter((n) => n.length >= 2))].sort((x, y) => y.length - x.length);
+  if (!ns.length) return () => [];
+  const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${ns.map(escapeRe).join("|")})(?![\\p{L}\\p{N}])`, "gu");
+  return (text: string) => [...new Set([...fold(String(text ?? "")).matchAll(re)].map((m) => m[0]))];
+}
+
+// Pure: a member's open asks they did not mark shareable (private by default).
+export function privateAskTexts(intent: unknown): string[] {
+  return (Array.isArray(intent) ? (intent as StatedIntent[]) : []).filter((i) => isOpenAsk(i) && i.shareable !== true).map((i) => String(i.text));
 }
 
 // Pure: one candidate's line, within budget.
-function candidateLine(c: ScorableCandidate, budget: number, named: (item: string) => boolean, hint: string | null | undefined): string {
-  const safe = (xs: unknown) => (Array.isArray(xs) ? xs : []).map((x) => clipItem(x)).filter((x) => x && !named(x));
+function candidateLine(c: ScorableCandidate, budget: number, named: (item: string) => boolean, hint: string | null | undefined, extraHidden: string[], withHidden: boolean): string {
+  const safe = (xs: unknown, max = DIGEST_ITEM_CHARS) => (Array.isArray(xs) ? xs : []).map((x) => clipItem(x, max)).filter((x) => x && !named(x));
   const shared = shareableAsks(c.intent).map((a, k) => ({ k, text: `[S${k + 1}] ${a.type ?? "seeking"} "${clipItem(a.text)}"` }));
+  const privateAsks = [...new Set([...privateAskTexts(c.intent), ...extraHidden])].reverse();
+  const hiddenItems = withHidden ? [...safe(privateAsks).map((x) => `private ask "${x}"`), ...safe(c.blockers).map((x) => `going through "${x}"`)] : [];
   const facts: string[] = [];
+  const likes: string[] = [];
+  const hidden: string[] = [];
   const keptShared: { k: number; text: string }[] = [];
   let keptHint: string | null = null;
+  const hiddenPart = () => (hidden.length ? `${HIDDEN_LABEL} ${hidden.join("; ")}` : null);
   const render = () =>
     [
-      facts.length ? facts.join("; ") : null,
+      facts.length || likes.length ? [...facts, ...likes].join("; ") : null,
       keptShared.length ? `asks they agreed to share: ${[...keptShared].sort((x, y) => x.k - y.k).map((x) => x.text).join(" / ")}` : null,
       keptHint,
+      hiddenPart(),
     ]
       .filter(Boolean)
       .join(" | ");
-  const tryAdd = (add: () => void, undo: () => void) => {
+  const tryAdd = (add: () => void, undo: () => void, fits: () => boolean = () => true) => {
     add();
-    if (render().length > budget) undo();
+    if (render().length > budget || !fits()) undo();
   };
   // Newest shared ask first: it is what a share reason most likely rests on. One clipped ask always fits the smallest budget.
   for (const x of [...shared].reverse()) tryAdd(() => keptShared.push(x), () => keptShared.pop());
   if (hint && !named(hint)) tryAdd(() => (keptHint = clipItem(hint, DIGEST_HINT_CHARS)), () => (keptHint = null));
-  for (const f of [...safe(c.goals), ...safe(c.blockers), ...safe(c.activity_preferences)]) tryAdd(() => facts.push(f), () => facts.pop());
+  for (const g of safe(c.goals)) tryAdd(() => facts.push(g), () => facts.pop());
+  for (const h of hiddenItems) tryAdd(() => hidden.push(h), () => hidden.pop(), () => (hiddenPart() ?? "").length <= DIGEST_HIDDEN_CHARS + HIDDEN_LABEL.length + 1);
+  for (const l of safe(c.activity_preferences)) tryAdd(() => likes.push(l), () => likes.pop());
   return render() || "(nothing on file)";
 }
 
-// Pure: each candidate's line, in order, without its list number (the Jev prune reads these one by one).
-export function candidateLines<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>): string[] {
+// Pure: each candidate's line, in order, without its list number.
+// hidden: private asks the caller took out of a candidate's intent (the room path), put back in the hidden part.
+// withHidden false: no hidden part at all (the Jev prune).
+export function candidateLines<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>, opts: { withHidden?: boolean } = {}): string[] {
   const budget = Math.max(DIGEST_MIN_CANDIDATE_CHARS, Math.min(DIGEST_CANDIDATE_CHARS, Math.floor(DIGEST_PROMPT_CHARS / Math.max(1, candidates.length))));
-  // Everyone in this call with a first name (the room and partner paths carry one; the network sweep's candidates don't). One
-  // pattern screens every item; only an item it hits goes through the strip, with everyone but the candidate themself.
-  const names = [...new Set(candidates.map(firstNameOf))].filter((n) => n.length >= 2);
-  const anyName = names.length ? new RegExp(`\\b(${names.map(escapeRe).join("|")})\\b`) : null;
+  // Everyone in this call with a first name (the room, partner and network paths carry one). One pattern screens every item;
+  // an item naming anyone but the candidate themself is left out.
+  const find = nameFinder(candidates.map(firstNameOf));
   return candidates.map((c) => {
-    const own = firstNameOf(c);
-    const named = (item: string) => !!anyName && anyName.test(item) && namesSomeone(item, names.filter((n) => n !== own));
-    return candidateLine(c, budget, named, hints?.get(c.user_id));
+    const own = fold(firstNameOf(c));
+    const named = (item: string) => find(item).some((n) => n !== own);
+    return candidateLine(c, budget, named, hints?.get(c.user_id), hidden?.get(c.user_id) ?? [], opts.withHidden !== false);
   });
 }
 
 // Pure: the numbered list the scorer reads, exported for evals/matching.
 // hints: the people graph's internal read of an overlap (peopleGraph.ts edgeHint), for the scorer only.
-export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>): string {
-  return candidateLines(candidates, hints)
+export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>): string {
+  return candidateLines(candidates, hints, hidden)
     .map((l, i) => `${i}. ${l}`)
     .join("\n");
 }
+
+// The scorer's rule for the hidden part, in every scoring prompt.
+export const HIDDEN_RULE = `A candidate's "${HIDDEN_LABEL}" part is what they told Cue in confidence: an ask they did not agree to share, or something they're going through. Use it only to judge fit. Never mention, quote or paraphrase it, not even in "reason". It can raise a match but never be its only basis: share_ask must still name a shared ask that supports the fit without it.`;
+const HIDDEN_FIELDS = `hidden_only: true when the fit rests on the hidden part alone (no shared ask supports it without the hidden part); then share_ask must be "". false otherwise.`;
 
 // Shared prompt-call/parse logic for both scoring directions below — only
 // the prompt text itself actually differs between "who satisfies my ask"
@@ -187,6 +215,15 @@ export function shareReasonFromOwnAsk(intent: unknown, label?: unknown): string 
   return ask.type === "offering" ? `what they've said they can offer: "${ask.text}"` : `what they've said they're looking for: "${ask.text}"`;
 }
 
+// Pure: the share reason for one scored candidate. Only a shared ask the scorer named, and only when the scorer gave a reason
+// and said the fit doesn't rest on the hidden part alone (Royce, 2026-10-18): no reason, no intro; hidden alone, no intro.
+export function shareReasonFor(intent: unknown, r: { reason?: unknown; share_ask?: unknown; hidden_only?: unknown }): string {
+  if (typeof r?.reason !== "string" || !r.reason.trim()) return "";
+  // Fails closed: only an explicit "not on the hidden part alone" lets a share reason through.
+  if (r.hidden_only !== false) return "";
+  return shareReasonFromOwnAsk(intent, r.share_ask);
+}
+
 async function runAskScoring<T extends ScorableCandidate>(
   functionId: string,
   prompt: string,
@@ -203,15 +240,19 @@ async function runAskScoring<T extends ScorableCandidate>(
     const results = Array.isArray(parsed.results) ? parsed.results : [];
     return results
       .filter((r: any) => Number.isInteger(r.index) && r.index >= 0 && r.index < candidates.length)
-      .map((r: any) => ({
-        candidate: candidates[r.index],
-        score: typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
-        reason: typeof r.reason === "string" ? r.reason : "",
-        // The model only names WHICH shared ask the match rests on; the words shown to people are that ask, in their own
-        // words, and only if they marked it shareable. Nothing private or inferred (e.g. "actively fundraising") can leak.
-        shareReason: shareReasonFromOwnAsk(candidates[r.index].intent, r.share_ask),
-        mutual: Boolean(r.mutual),
-      }));
+      .map((r: any) => {
+        const reason = typeof r.reason === "string" ? r.reason.trim() : "";
+        return {
+          candidate: candidates[r.index],
+          score: typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
+          reason,
+          // The model only names WHICH shared ask the match rests on; the words shown to people are that ask, in their own
+          // words, and only if they marked it shareable. Nothing private or inferred (e.g. "actively fundraising") can leak.
+          // A fit resting on the hidden part alone, or with no reason at all, gets no share reason: nothing is proposed.
+          shareReason: shareReasonFor(candidates[r.index].intent, r),
+          mutual: Boolean(r.mutual),
+        };
+      });
   } catch (err) {
     // Fail closed — an explicit stated requirement that we can't verify is
     // treated as unmet, same as any other hard filter falling short, rather
@@ -283,15 +324,16 @@ ${askerContext ? `\nWhat's known about the person asking (use ONLY to judge "mut
 Here is what's known about each candidate, one per line:
 ${digest}
 
-For each candidate, judge how well they satisfy the ask, based only on what's listed — never assume or infer facts that aren't present.
+For each candidate, judge how well they satisfy the ask, based only on what's listed — never assume or infer facts that aren't present. ${HIDDEN_RULE}
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false}, ...]}
 
 score: 0-100. 0 means nothing on file supports it, 100 means they clearly satisfy it. Score every candidate, even a 0.
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
 share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
-mutual: true only if one of the candidate's own asks (if listed) also plausibly points back at what's known about the asker above. false if the candidate has no ask listed, or it doesn't plausibly connect.`;
+mutual: true only if one of the candidate's own asks (any listed, the hidden part included) also plausibly points back at what's known about the asker above. false if the candidate has no ask listed, or it doesn't plausibly connect.
+${HIDDEN_FIELDS}`;
 }
 
 // Reverse direction of scoreAgainstStatedAsk — "I have something to offer,
@@ -314,15 +356,16 @@ export async function scoreOfferingAgainstCandidates<T extends ScorableCandidate
 Here is what's known about each candidate, one per line:
 ${digest}
 
-For each candidate, judge how much they would likely want or benefit from this offering, based only on what's listed — never assume or infer facts that aren't present.
+For each candidate, judge how much they would likely want or benefit from this offering, based only on what's listed — never assume or infer facts that aren't present. ${HIDDEN_RULE}
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false}, ...]}
 
 score: 0-100. 0 means nothing on file suggests they'd want this, 100 means it clearly matches something they're after. Score every candidate, even a 0.
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
 share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
-mutual: true only if one of the candidate's own asks (if listed) is a "seeking" ask that plausibly wants this specific offering. false if the candidate has no stated ask listed, or it doesn't plausibly connect.`;
+mutual: true only if one of the candidate's own asks (if listed) is a "seeking" ask that plausibly wants this specific offering. false if the candidate has no stated ask listed, or it doesn't plausibly connect.
+${HIDDEN_FIELDS}`;
 
   return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);
 }
@@ -364,22 +407,26 @@ ${askerContext ? `\nWhat's known about the person asking (use it to judge what t
 Here is what's known about each candidate, one per line:
 ${digest}
 
-For each candidate, judge how well they fit, based only on what's listed — never assume or infer facts that aren't present. A fit runs either way: the candidate can meet one of the person's needs, or the candidate needs what the person offers or does (a founder who needs a product designer fits a product designer weighing freelance work). Judge by who the candidate is and what they do, not only by whether the candidate's own ask repeats the person's words.
+For each candidate, judge how well they fit, based only on what's listed — never assume or infer facts that aren't present. ${HIDDEN_RULE} A fit runs either way: the candidate can meet one of the person's needs, or the candidate needs what the person offers or does (a founder who needs a product designer fits a product designer weighing freelance work). Judge by who the candidate is and what they do, not only by whether the candidate's own ask repeats the person's words.
 
 Return ONLY valid JSON, no preamble:
-{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "mutual": false}, ...]}
+{"results": [{"index": 0, "score": 0, "reason": "one short grounded sentence", "share_ask": "", "hidden_only": false, "mutual": false}, ...]}
 
 score: 0-100. 0 means nothing on file supports a fit, 100 means a clear fit for one of their lines. Score every candidate, even a 0.
 reason: one short sentence explaining the score, referencing only what's actually listed for that candidate. Internal only, never shown to anyone.
 share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed to share" that is the reason this candidate fits. Only that ask can ever be said to other people. Empty string if none of their shared asks supports the match, even when something else on file does. Never pick a shared ask that is unrelated to the match.
-mutual: true only if one of the candidate's own asks also plausibly points back at the person (what they need, offer or do). false if the candidate has no ask listed, or it doesn't plausibly connect.`;
+mutual: true only if one of the candidate's own asks also plausibly points back at the person (what they need, offer or do). false if the candidate has no ask listed, or it doesn't plausibly connect.
+${HIDDEN_FIELDS}`;
 }
 
+// hidden: each candidate's private asks, taken out of their intent before the room was scored (eventScoring.ts, matchableIntent),
+// for the line's hidden part only.
 export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   f: RoomFrame,
   candidates: T[],
   askerContext?: string,
   hints?: Map<string, string>,
+  hidden?: Map<string, string[]>,
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || (!f.asks.length && !f.goal?.text)) return [];
   const line = frameLine(f);
@@ -400,7 +447,7 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   }
   const zero = dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
   if (!toScore.length) return zero;
-  const digest = formatCandidateDigest(toScore, hints);
+  const digest = formatCandidateDigest(toScore, hints, hidden);
   const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore);
   return [...scored, ...zero];
 }

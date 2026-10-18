@@ -71,7 +71,7 @@ check("the scorer's hint names both sides", /asker wants "technical cofounder" a
 check("inferred wants and offers are owner-only", /'owner', 'peopleGraph'/.test(src("services/peopleGraph.ts")));
 const es = src("services/eventScoring.ts");
 check("scoring refreshes the room, reads the links, and hints the scorer", /await refreshRoom\(matched\.map/.test(es) && /await roomEdges\(person\.user_id/.test(es) && /askerContextParts\.join\("; "\) : undefined,\s*hints,/.test(es));
-check("the shown reason is still their own stated ask (the one shared ask the match rests on)", /shareReasonFromOwnAsk\(candidates\[r\.index\]\.intent, r\.share_ask\)/.test(src("services/matching.ts")));
+check("the shown reason is still their own stated ask (the one shared ask the match rests on)", /shareReason: shareReasonFor\(candidates\[r\.index\]\.intent, r\)/.test(src("services/matching.ts")) && /return shareReasonFromOwnAsk\(intent, r\.share_ask\);/.test(src("services/matching.ts")));
 
 // ------------------------------------------------ overpromising (2026-09-26)
 {

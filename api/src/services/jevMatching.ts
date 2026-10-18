@@ -6,7 +6,7 @@
 // share-reasons downstream are unchanged. Anything Jev can't read is kept, so
 // the worst case is how it worked before.
 //
-// Candidates' profile lines (shareable asks and short profile items only, matching.ts candidateLines) go to TypeSafe only through Vercel's gateway
+// Candidates' profile lines (shareable asks, goals and likes only, matching.ts candidateLines) go to TypeSafe only through Vercel's gateway
 // with zero data retention (services/jevGateway.ts), and only where member
 // text may go to Jev at all (JEV_MEMBER=on). JEV_PRUNE=off turns this off.
 import { askJevZdr, jevForMemberText } from "./jevGateway.js";
@@ -32,9 +32,9 @@ export async function jevMatchScores(askText: string, candidates: Cand[]): Promi
   const out: (number | null)[] = new Array(candidates.length).fill(null);
   const chunks: number[][] = [];
   for (let i = 0; i < candidates.length; i += PRUNE_CHUNK) chunks.push(Array.from({ length: Math.min(PRUNE_CHUNK, candidates.length - i) }, (_, j) => i + j));
-  // The same member-safe, capped lines Claude reads (matching.ts candidateLines): shareable asks, short profile items, never a
-  // private ask or a memory row.
-  const lines = candidateLines(candidates);
+  // The same member-safe, capped lines Claude reads (matching.ts candidateLines) without their hidden part: no private ask, no
+  // blocker, no memory row. A fit only the hidden part supports is never proposed, so the prune has no use for it.
+  const lines = candidateLines(candidates, undefined, undefined, { withHidden: false });
   await Promise.all(
     chunks.map(async (idx) => {
       const listed: Record<string, string> = {};

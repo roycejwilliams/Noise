@@ -587,8 +587,9 @@ function fakeAnthropic(init: any): Response {
         const index = Number(l.match(/^(\d+)\./)![1]);
         const tag = l.match(/tag(\d{6})/)?.[1];
         const cand = [...W.members.values()].find((mm) => mm.id.endsWith(tag ?? "--"));
-        const s = W.scorer && cand ? W.scorer(askText, cand) : defaultScore(askText, l);
-        return { index, score: s.score, reason: "internal", share_ask: s.share ? shareLabel(askText, l) : "", mutual: !!s.mutual };
+        // The stub scores on what a line shows, never its hidden part (matching.ts HIDDEN_LABEL), so hidden_only is never true here.
+        const s = W.scorer && cand ? W.scorer(askText, cand) : defaultScore(askText, l.split("hidden, to judge fit only")[0]);
+        return { index, score: s.score, reason: "internal", share_ask: s.share ? shareLabel(askText, l) : "", hidden_only: false, mutual: !!s.mutual };
       });
     return anthropicText(JSON.stringify({ results }));
   }

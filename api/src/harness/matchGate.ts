@@ -507,6 +507,23 @@ function shingles(words: string[], n: number): Set<string> {
   return out;
 }
 
+// ---------- the hidden part (Royce, 2026-10-18): see harness/hiddenEcho.ts. A share reason needs no echo check of its own: it is
+// one of the asks the member marked shareable, word for word (checkShareReason), so it can carry nothing of a private ask or a
+// blocker beyond what they chose to share, and a sensitive topic is refused even then. The texts drafted from it are checked
+// (introConsent.ts hiddenEchoCheck, roomMatching.ts checkValueLines, networkIntroNudge.ts introEmailHiddenCheck).
+
+// A member's hidden part as the checks read it: their private asks and blockers, and what they marked shareable. Throws on a
+// failed read, so a caller fails closed.
+export async function hiddenSideOf(userId: string): Promise<{ hidden: string[]; shared: string[] }> {
+  const { rows } = await pool.query(`SELECT goals, blockers, activity_preferences, long_term_direction, intent FROM co_profiles WHERE user_id = $1`, [userId]);
+  const p = rows[0] ?? {};
+  const open = Array.isArray(p.intent) ? (p.intent as any[]).filter((i) => isOpenAsk(i)) : [];
+  return {
+    hidden: [...open.filter((i) => i?.shareable !== true).map((i) => String(i.text)), ...(Array.isArray(p.blockers) ? p.blockers.map(String) : [])],
+    shared: open.filter((i) => i?.shareable === true).map((i) => String(i.text)),
+  };
+}
+
 export type NetworkFacts = {
   shareReason: string | null | undefined;
   // The candidate's open asks they marked shareable: the only allowed source, and the reason must be one of them.
