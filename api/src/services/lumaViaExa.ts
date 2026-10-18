@@ -34,7 +34,8 @@ export type ViaExaEvent = DiscoveredEvent & { online?: boolean };
 // those pages gave a start; notPublic: read but not listed as public by their host (dropped); kept: public, upcoming and inside the
 // window.
 // error: what failed and what to do about it, for the log (never the member: they get the feed's events as before).
-export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; notPublic: number; kept: number };
+// refused: pages Luma wouldn't serve (HTTP 429), left out unread.
+export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; notPublic: number; refused?: number; kept: number };
 
 // Pure: why a Luma search through Exa failed, said with its fix, from exaSearch's error (or what a call threw). Timed out, refused
 // with an HTTP status, unreachable, unreadable: each its own line. Every one ends the same way, because that's what the member got.
@@ -57,18 +58,75 @@ export function exaFailureReason(error: string | null): string | null {
   if (/isn't configured/i.test(error)) return EXA_OFF;
   return `the Luma search through Exa threw (${error.replace(/^threw:\s*/, "").slice(0, 120)}); ${FEED_ALONE}`;
 }
+// Luma refused this search's page reads (429): said with its count, and what happens next.
+export const lumaRefusedReason = (refused: number, pages: number, pauseMinutes: number) =>
+  `Luma refused ${refused} of ${pages} page reads (429): those events couldn't be checked, so they were left out; the Luma search through Exa pauses for ${pauseMinutes} minutes so the feed's own page reads go first`;
+// Luma refusing reads in the last few minutes: no Exa search at all (its results couldn't be read, so it would be paid for nothing).
+export const lumaRefusingReason = (pauseMinutes: number) =>
+  `Luma refused page reads (429) in the last ${pauseMinutes} minutes, so no Luma search through Exa (its results couldn't be read); ${FEED_ALONE}; it searches again once ${pauseMinutes} minutes pass without a refusal`;
+
+// ---------------------------------------------------------------- the daily budget (Royce, 2026-10-18: "60 a day, 20 held for member asks")
+// All members together: LUMA_EXA_DAILY_CAP Exa searches in any 24 hours, LUMA_EXA_REQUEST_RESERVE of them held for what a member
+// asked for (replies and tasks); the sweep stops at the cap minus the reserve. Limits, not switches. A cache hit makes no Exa call,
+// so it doesn't count. The same shape and lock as the web search budget (services/webOpportunitySearch.ts reserveWebSearch).
+const envLimit = (v: string | undefined, d: number) => (v !== undefined && v.trim() !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Math.floor(Number(v)) : d);
+export const LUMA_EXA_BUDGET = { dailyCap: envLimit(process.env.LUMA_EXA_DAILY_CAP, 60), requestReserve: envLimit(process.env.LUMA_EXA_REQUEST_RESERVE, 20) };
+export type LumaExaSource = "request" | "sweep";
+
+// Pure: whether one more Luma search through Exa fits today's budget, and why not, with what the member got.
+export function lumaExaBudget(usedToday: number, source: LumaExaSource, dailyCap: number = LUMA_EXA_BUDGET.dailyCap, requestReserve: number = LUMA_EXA_BUDGET.requestReserve): { ok: boolean; reason: string | null } {
+  const reserve = Math.max(0, Math.min(requestReserve, dailyCap));
+  if (usedToday >= dailyCap) return { ok: false, reason: `the daily cap of ${dailyCap} Luma searches through Exa is reached; ${FEED_ALONE}; it frees up as the 24-hour window rolls` };
+  if (source === "sweep" && usedToday >= dailyCap - reserve)
+    return { ok: false, reason: `the sweep's share of Luma searches through Exa is used (${dailyCap - reserve} of ${dailyCap}; the rest is held for member asks); ${FEED_ALONE}; it frees up as the 24-hour window rolls` };
+  return { ok: true, reason: null };
+}
+
+// Reserves one search against the budget, or says why not. The count and the insert happen under one transaction-scoped advisory
+// lock, so two searches can't both take the last slot. Fails closed: if the budget can't be checked, there's no Exa search. The log
+// keeps who, which share and when: never the query (it's the member's want).
+export async function reserveLumaExaSearch(userId: string | null, source: LumaExaSource, db?: { connect: () => Promise<any> }): Promise<{ ok: boolean; reason: string | null }> {
+  let client: any = null;
+  try {
+    client = await (db ?? (await import("../db/db.js")).default).connect();
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('luma_exa_search_budget'))");
+    const { rows } = await client.query(`SELECT COUNT(*)::int AS today FROM luma_exa_search_log WHERE created_at > NOW() - INTERVAL '1 day'`);
+    const decision = lumaExaBudget(Number(rows[0]?.today ?? 0), source);
+    if (!decision.ok) {
+      await client.query("ROLLBACK");
+      return decision;
+    }
+    await client.query(`INSERT INTO luma_exa_search_log (user_id, source) VALUES ($1, $2)`, [userId, source]);
+    await client.query("COMMIT");
+    return decision;
+  } catch (err: any) {
+    await client?.query("ROLLBACK").catch(() => {});
+    return { ok: false, reason: `the daily budget for Luma searches through Exa couldn't be checked (${String(err?.message ?? err).slice(0, 80)}), so no Exa search; ${FEED_ALONE}` };
+  } finally {
+    client?.release?.();
+  }
+}
+
 // Off, not failed: said once per start of the service (services/tieredRecommendation.ts), not on every search.
 export const EXA_OFF = "EXA_API_KEY isn't set on this service, so tier 2 is Luma's feed alone; set EXA_API_KEY to turn on the Luma search through Exa";
 
 export type LumaViaExaDeps = {
   exa: (query: string, o: { purpose: string; userId: string | null; pages: number; text: false; includeDomains: string[]; timeoutMs: number }) => Promise<ExaSearch>;
-  page: (url: string) => Promise<EventDetails | null>;
+  // A page's details, null when it has none, or "refused" when Luma wouldn't serve it (429).
+  page: (url: string) => Promise<EventDetails | null | "refused">;
   configured: () => boolean;
   now: () => Date;
+  // Luma refused a page read in the last LUMA_REFUSAL_PAUSE_MINUTES (services/eventDetails.ts).
+  refusing: () => boolean;
+  pauseMinutes: number;
+  reserve: (userId: string | null, source: LumaExaSource) => Promise<{ ok: boolean; reason: string | null }>;
 };
 
 type Found = { slug: string; title: string };
-const cache = new Map<string, { at: number; found: Promise<{ found: Found[]; error: string | null }> }>();
+// reason: a refusal already said in full (the budget), not an Exa error to explain.
+type Searched = { found: Found[]; error: string | null; reason?: string };
+const cache = new Map<string, { at: number; found: Promise<Searched> }>();
 export const clearLumaViaExaCache = () => cache.clear();
 
 // Luma events Exa finds for this want: upcoming, inside the window (inRange decides, the same test the feed's events get), with the
@@ -77,10 +135,12 @@ export const clearLumaViaExaCache = () => cache.clear();
 export async function lumaEventsViaExa(
   what: string,
   city: string | null,
-  o: { userId?: string | null; inRange: (startAt: string) => boolean; dates: string; deps?: Partial<LumaViaExaDeps> },
+  o: { userId?: string | null; source?: LumaExaSource; inRange: (startAt: string) => boolean; dates: string; deps?: Partial<LumaViaExaDeps> },
 ): Promise<{ events: ViaExaEvent[]; report: ViaExaReport } | null> {
   const deps = await realDeps(o.deps);
   if (!deps.configured() || !what.trim()) return null;
+  // Luma is refusing reads: no search, and no reads of a cached one either (each would add to what Luma is refusing).
+  if (deps.refusing()) return { events: [], report: { cached: false, error: lumaRefusingReason(deps.pauseMinutes), pages: 0, read: 0, notPublic: 0, refused: 0, kept: 0 } };
   const query = `${what.trim()}${city ? ` in ${city}` : ""}, ${o.dates}`;
   const key = query.toLowerCase();
   const now = deps.now();
@@ -88,19 +148,28 @@ export async function lumaEventsViaExa(
   const fresh = hit && now.getTime() - hit.at < LUMA_VIA_EXA.cacheHours * 3_600_000;
   let entry = fresh ? hit : null;
   if (!entry) {
-    entry = { at: now.getTime(), found: search(query, o.userId ?? null, deps) };
+    // Only a search that will call Exa takes a slot of the daily budget; the sweep is the default share (the stricter one).
+    const userId = o.userId ?? null;
+    entry = {
+      at: now.getTime(),
+      found: deps
+        .reserve(userId, o.source ?? "sweep")
+        .catch((err: any) => ({ ok: false, reason: `the daily budget for Luma searches through Exa couldn't be checked (${String(err?.message ?? err).slice(0, 80)}), so no Exa search; ${FEED_ALONE}` }))
+        .then((b): Promise<Searched> => (b.ok ? search(query, userId, deps) : Promise.resolve({ found: [], error: "budget", reason: b.reason ?? "no budget" }))),
+    };
     if (cache.size > 200) cache.clear();
     cache.set(key, entry);
   }
   const mine = entry;
-  const { found, error } = await mine.found;
+  const { found, error, reason } = await mine.found;
   // A failed search is never kept: the next ask searches again.
   if (error && cache.get(key) === mine) cache.delete(key);
   const read = await Promise.all(
-    found.map(async ({ slug, title }): Promise<ViaExaEvent | "not_public" | null> => {
+    found.map(async ({ slug, title }): Promise<ViaExaEvent | "not_public" | "refused" | null> => {
       // Read at the same url the feed uses, so the reads after this one (ranking, the gate) hit eventDetails' cache.
       const url = `https://lu.ma/${slug}`;
       const d = await deps.page(url).catch(() => null);
+      if (d === "refused") return "refused" as const;
       if (!d?.startAt) return null;
       // A host's private or unlisted event never goes to strangers: the public feed only lists public events, and an event Exa found
       // by its url goes out only when its own page says "public". Unknown is not public (fails closed).
@@ -109,9 +178,11 @@ export async function lumaEventsViaExa(
     }),
   );
   const notPublic = read.filter((e) => e === "not_public").length;
-  const listed = read.filter((e): e is ViaExaEvent => e !== null && e !== "not_public");
+  const refused = read.filter((e) => e === "refused").length;
+  const listed = read.filter((e): e is ViaExaEvent => e !== null && e !== "not_public" && e !== "refused");
   const events = listed.filter((e) => new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
-  return { events, report: { cached: !!fresh, error: exaFailureReason(error), pages: found.length, read: listed.length + notPublic, notPublic, kept: events.length } };
+  const why = reason ?? exaFailureReason(error) ?? (refused ? lumaRefusedReason(refused, found.length, deps.pauseMinutes) : null);
+  return { events, report: { cached: !!fresh, error: why, pages: found.length, read: listed.length + notPublic, notPublic, refused, kept: events.length } };
 }
 
 async function search(query: string, userId: string | null, deps: LumaViaExaDeps): Promise<{ found: Found[]; error: string | null }> {
@@ -134,9 +205,12 @@ async function realDeps(d: Partial<LumaViaExaDeps> = {}): Promise<LumaViaExaDeps
   const [X, E] = await Promise.all([import("./exaSearch.js"), import("./eventDetails.js")]);
   return {
     exa: d.exa ?? ((q, o) => X.exaSearch(q, o)),
-    page: d.page ?? ((url) => E.fetchLumaEventDetails(url)),
+    page: d.page ?? ((url) => E.readLumaEventPage(url).then((r) => (r.refused ? ("refused" as const) : r.details))),
     configured: d.configured ?? (() => X.exaConfigured()),
     now: d.now ?? (() => new Date()),
+    refusing: d.refusing ?? (() => E.lumaRefusedRecently()),
+    pauseMinutes: d.pauseMinutes ?? E.LUMA_REFUSAL_PAUSE_MINUTES,
+    reserve: d.reserve ?? ((userId, source) => reserveLumaExaSearch(userId, source)),
   };
 }
 

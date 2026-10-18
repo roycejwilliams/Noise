@@ -57,7 +57,7 @@ export type EnrichedMatch = TierMatch;
 
 const PAGE_TIMEOUT_MS = 6000;
 const DESCRIPTION_MAX = 900;
-const detailCache = new Map<string, { at: number; details: EventDetails | null }>();
+const detailCache = new Map<string, { at: number; details: EventDetails | null; refused?: boolean }>();
 
 export function lumaUrl(url: string): string {
   return /^https?:\/\//.test(url) ? url : `https://lu.ma/${url.replace(/^\//, "")}`;
@@ -137,20 +137,39 @@ export async function fetchCheckedHops(url: string, signal: AbortSignal, fetchIm
   return null;
 }
 
+// Luma refusing page reads (HTTP 429, seen 2026-10-18 after about 100 reads in a few minutes): the last time it did, so the Luma
+// search through Exa (services/lumaViaExa.ts), which reads up to 25 pages at once, pauses while Luma is refusing and leaves the
+// reads to the feed's own events. Nothing else changes: every read works exactly as before.
+export const LUMA_REFUSAL_PAUSE_MINUTES = 10;
+let lumaRefusedAt = 0;
+export const lumaRefusedRecently = (now: number = Date.now()): boolean => lumaRefusedAt > 0 && now - lumaRefusedAt < LUMA_REFUSAL_PAUSE_MINUTES * 60_000;
+export const noteLumaRefusal = (now: number = Date.now()) => {
+  lumaRefusedAt = now;
+};
+
 // maxAgeMs: how old a cached successful read may be. A cached search result
 // re-checks availability with a short one, since sold-out status changes.
 export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: number } = {}): Promise<EventDetails | null> {
+  return (await readLumaEventPage(url, opts)).details;
+}
+// The same read, saying when Luma refused it (429), so a caller reading many pages can tell "refused" from "no event here".
+export async function readLumaEventPage(url: string, opts: { maxAgeMs?: number; fetchImpl?: typeof fetch; isPublic?: (host: string) => Promise<boolean> } = {}): Promise<{ details: EventDetails | null; refused: boolean }> {
   const key = lumaUrl(url);
   const cached = detailCache.get(key);
   const ttl = cached?.details ? Math.min(opts.maxAgeMs ?? DETAIL_TTL_MS, DETAIL_TTL_MS) : FAILED_DETAIL_TTL_MS;
-  if (cached && Date.now() - cached.at < ttl) return cached.details;
+  if (cached && Date.now() - cached.at < ttl) return { details: cached.details, refused: !!cached.refused };
   let details: EventDetails | null = null;
+  let refused = false;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PAGE_TIMEOUT_MS);
     try {
-      const res = await fetchCheckedHops(key, controller.signal);
+      const res = await fetchCheckedHops(key, controller.signal, opts.fetchImpl, opts.isPublic);
       if (res?.ok) details = parseLumaEventPage(await res.text());
+      else if (res?.status === 429) {
+        refused = true;
+        noteLumaRefusal();
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -158,8 +177,8 @@ export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: numb
     console.error(`eventDetails: fetch failed for ${key} (non-fatal):`, err?.message ?? err);
   }
   if (detailCache.size > 500) detailCache.clear();
-  detailCache.set(key, { at: Date.now(), details });
-  return details;
+  detailCache.set(key, { at: Date.now(), details, ...(refused ? { refused } : {}) });
+  return { details, refused };
 }
 
 // Plain facts for any prompt, one per line. Only what's actually on record.

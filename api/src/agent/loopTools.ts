@@ -347,7 +347,7 @@ export function loopTools(
         const where = replySearchPlace({ kind: "events", words: what, toolCity: city, message: askWords(), home: ctx.turn?.profile?.city ?? null });
         const [r, earlier] = await Promise.all([
           // No Exa search on a call (ctx.isVoice: services/callTools.ts): a voice turn can't wait up to 10s for Exa plus the page reads.
-          eventCandidates(what, where.place, { when: when ?? null, userId: ctx.userId, limit: 8, viaExa: !ctx.isVoice }),
+          eventCandidates(what, where.place, { when: when ?? null, userId: ctx.userId, limit: 8, viaExa: !ctx.isVoice, source: "request" }),
           // Openings Co's daily search already found and checked for them (the
           // old reply search offered these too): programs, grants, open calls.
           import("../services/eventSurfacingSweep.js").then((m) => m.alreadyFoundOpenings(ctx.userId)).catch(() => [] as TierMatch[]),

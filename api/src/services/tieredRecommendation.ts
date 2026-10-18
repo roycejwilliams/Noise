@@ -236,11 +236,12 @@ let toldExaOff = false;
 export type ViaExaCounts = (ViaExaReport & { added: number; nearby: number; offered: number }) | null;
 
 // viaExa: false skips the Exa search (calls, services/voiceFinds.ts: a call can't wait ~6s for it). Replies, tasks and the sweep
-// leave it on.
+// leave it on. source: which share of the daily Exa budget it draws on (services/lumaViaExa.ts): "request" for what a member asked
+// (replies, tasks), "sweep" otherwise (the default, the stricter share).
 export async function eventCandidates(
   what: string,
   city: string | null,
-  opts: { when?: string | null; userId?: string | null; timezone?: string | null; limit?: number; viaExa?: boolean; sources?: Partial<EventSources> } = {},
+  opts: { when?: string | null; userId?: string | null; timezone?: string | null; limit?: number; viaExa?: boolean; source?: "request" | "sweep"; sources?: Partial<EventSources> } = {},
 ): Promise<{ candidates: EventCandidate[]; turnedAway: GatedOut[]; window: string | null; feedSize: number; inWindow: number; outOfRange: string | null; viaExa: ViaExaCounts }> {
   const src: EventSources = { ...realSources, ...opts.sources };
   const { zone } = searchZone(opts.timezone ?? null);
@@ -262,7 +263,7 @@ export async function eventCandidates(
     src.calendar().catch(() => [] as CoCalendarEvent[]),
     opts.viaExa === false
       ? Promise.resolve(null)
-      : src.viaExa(what, city, { userId: opts.userId ?? null, inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, notPublic: 0, kept: 0 } })),
+      : src.viaExa(what, city, { userId: opts.userId ?? null, source: opts.source ?? "sweep", inRange, dates }).catch((err: any) => ({ events: [], report: { cached: false, error: exaFailureReason(`threw: ${String(err?.message ?? err).slice(0, 80)}`), pages: 0, read: 0, notPublic: 0, kept: 0 } })),
   ]);
   if (!exa && opts.viaExa !== false && !toldExaOff && !src.exaOn()) {
     toldExaOff = true;

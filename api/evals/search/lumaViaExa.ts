@@ -46,7 +46,15 @@ const exaDep = async (query: string): Promise<any> => {
   return { pages: world.exa.map((p) => exaPage(p.url, p.title)), cost: 0.022, error: null };
 };
 const pageDep = async (url: string) => world.pages[V.lumaEventSlug(url) ?? ""] ?? null;
-const viaDeps = (configured = true) => ({ exa: exaDep, page: pageDep, configured: () => configured, now: () => new Date() });
+// The daily budget: every reservation, with its share; room unless a test says otherwise. Luma isn't refusing unless a test says so.
+let reserves: { userId: string | null; source: string }[] = [];
+let budgetSays: { ok: boolean; reason: string | null } = { ok: true, reason: null };
+let lumaRefusing = false;
+const reserveDep = async (userId: string | null, source: string) => {
+  reserves.push({ userId, source });
+  return budgetSays;
+};
+const viaDeps = (configured = true) => ({ exa: exaDep, page: pageDep, configured: () => configured, now: () => new Date(), refusing: () => lumaRefusing, pauseMinutes: 10, reserve: reserveDep });
 // eventCandidates with every outside source stubbed. Nearby: San Francisco and Oakland are near each other, nothing else is.
 const BAY = new Set(["san francisco", "oakland"]);
 const sources = (o: { configured?: boolean; viaExa?: any } = {}) => ({
@@ -66,6 +74,9 @@ const reset = (w: Partial<World>) => {
   world = { exa: [], pages: {}, feed: [], ...w };
   exaCalls = [];
   logs = [];
+  reserves = [];
+  budgetSays = { ok: true, reason: null };
+  lumaRefusing = false;
 };
 const search = (o: { configured?: boolean; viaExa?: any; exaOn?: boolean; city?: string } = {}) =>
   T.eventCandidates("founder dinners", o.city ?? "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, ...(o.exaOn === false ? { viaExa: false } : {}), sources: sources(o) });
@@ -259,6 +270,14 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
     throw new Error("no network in this test");
   }) as any;
   process.env.EXA_API_KEY = "test-key";
+  // The daily budget's lock and count, answered by a fake client: room for the search (nothing reaches a database).
+  const { default: pool } = await import("../../src/db/db.js");
+  const realConnect = (pool as any).connect;
+  // Only the awaited form (the budget's): pg's own pool.query connects with a callback, and that keeps the real (dead) database.
+  (pool as any).connect = function (cb?: any) {
+    if (typeof cb === "function") return realConnect.call(pool, cb);
+    return Promise.resolve({ query: async (sql: string) => ({ rows: /COUNT\(\*\)::int AS today/.test(sql) ? [{ today: 0 }] : [] }), release: () => {} });
+  };
   const turn = async (isVoice: boolean, what: string) => {
     const L2 = L.loopTools({ ...ctx, isVoice }, { sent: false, sentMessages: [] }, L.newLoopState(Date.now()), () => {}) as any;
     return L2.searchEvents.execute({ what, when: "this weekend" }, { toolCallId: what, messages: [] }).catch((e: any) => ({ threw: String(e) }));
@@ -268,6 +287,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   const text = await turn(false, "jazz by text");
   delete process.env.EXA_API_KEY;
   globalThis.fetch = realFetch;
+  (pool as any).connect = realConnect;
   check("a call's searchEvents (isVoice) makes no Exa call; a text turn's does", voice.ok === true && onCall === 0 && text.ok === true && exaCalls.length === 1 && /jazz by text/.test(exaCalls[0]), { onCall, exaCalls, voice: JSON.stringify(voice).slice(0, 120) });
   check("the sweep's note says 'Luma is thin' once Exa added any, 'the feed is thin' when it's the feed's alone (pinned)", /note: r\.inWindow < 4 \? `\$\{r\.viaExa\?\.nearby \? "Luma is" : "The feed is"\} thin here; webSearch may find more\.`/.test(src("services/sweepFind.ts")));
 }
@@ -338,9 +358,9 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("viaExa: false (a call): no Exa search, the feed's events only, nothing logged", exaCalls.length === 0 && links(r).join() === "https://lu.ma/feed1,https://lu.ma/feed2" && r.viaExa === null && logs.length === 0, { exaCalls, links: links(r) });
   check("calls (voiceFinds) pass viaExa: false; replies, tasks and the sweep leave it on (pinned)",
     /eventCandidates\(what, city, \{ when: brief\?\.when \?\? null, userId, limit: 5, viaExa: false \}\)/.test(src("services/voiceFinds.ts")) &&
-    /eventCandidates\(what, city \?\? ctx\.turn\?\.profile\?\.city \?\? null, \{ when: when \?\? null, userId: ctx\.userId, limit: 8, viaExa: !ctx\.isVoice \}\)/.test(src("agent/loopTools.ts")) &&
-    /eventCandidates\(what, person\.city \?\? null, \{ when: when \?\? null, userId, timezone: zone, limit: 6 \}\)/.test(src("services/taskTurn.ts")) &&
-    /eventCandidates\(what, c\.city, \{ when: when \?\? null, userId: c\.userId, timezone: opts\.timezone \?\? null, limit: 8 \}\)/.test(src("services/sweepFind.ts")));
+    /eventCandidates\(what, city \?\? ctx\.turn\?\.profile\?\.city \?\? null, \{ when: when \?\? null, userId: ctx\.userId, limit: 8, viaExa: !ctx\.isVoice, source: "request" \}\)/.test(src("agent/loopTools.ts")) &&
+    /eventCandidates\(what, person\.city \?\? null, \{ when: when \?\? null, userId, timezone: zone, limit: 6, source: "request" \}\)/.test(src("services/taskTurn.ts")) &&
+    /eventCandidates\(what, c\.city, \{ when: when \?\? null, userId: c\.userId, timezone: opts\.timezone \?\? null, limit: 8, source: "sweep" \}\)/.test(src("services/sweepFind.ts")));
 }
 
 check("the sweep's own log (sweep.find) carries what Exa added on each of its event searches (pinned)", /if \(r\.viaExa\) exaAdded\.push\(\{ added: r\.viaExa\.added, offered: r\.viaExa\.offered/.test(src("services/sweepFind.ts")) && /\.\.\.\(exaAdded\.length \? \{ exaAdded \} : \{\}\) \} \}\)/.test(src("services/sweepFind.ts")));
@@ -358,6 +378,86 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   const html = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-r6tazveGHPqyaFv", name: " ElevenLabs Funded Founders Three Course Private Dinner ", start_at: "2026-10-23T01:00:00.000Z", geo_address_info: { city: "San Francisco" } } } } } } })}</script></html>`;
   check("a Luma page gives its event id (the feed's evt- id), so the same event is one event however it was found", D.parseLumaEventPage(html)?.apiId === "evt-r6tazveGHPqyaFv");
   check("...and its own name, trimmed", D.parseLumaEventPage(html)?.name === "ElevenLabs Funded Founders Three Course Private Dinner");
+}
+
+// ================================================================ Luma refusing page reads (429): said, and the Exa search pauses
+{
+  reset({
+    feed: FEED,
+    exa: [1, 2, 3, 4, 5].map((n) => ({ url: `https://lu.ma/r${n}`, title: `Founder thing ${n}` })),
+    pages: { ...FEED_PAGES, r1: page({ startAt: at(40) }), r2: page({ startAt: at(41) }), r3: "refused", r4: "refused", r5: "refused" },
+  });
+  const r = await search();
+  check("Luma refused 3 of the 5 page reads: the log says exactly that, and what happens next", r.viaExa?.refused === 3 && /^Luma refused 3 of 5 page reads \(429\): those events couldn't be checked, so they were left out; the Luma search through Exa pauses for 10 minutes/.test(logs[0]?.reason ?? ""), { viaExa: r.viaExa, reason: logs[0]?.reason });
+  check("...the two it did serve still go out, and the feed's events are untouched", ["https://lu.ma/r1", "https://lu.ma/r2", "https://lu.ma/feed1", "https://lu.ma/feed2"].every((u) => links(r).includes(u)) && !links(r).includes("https://lu.ma/r3"), links(r));
+
+  reset({ feed: FEED, pages: FEED_PAGES });
+  const alone = links(await search({ exaOn: false }));
+  reset({ feed: FEED, pages: { ...FEED_PAGES, good1: page({ startAt: at(40) }) }, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
+  lumaRefusing = true;
+  let exaPageReads = 0;
+  const countingVia = (w: string, c: string | null, opt: any) => V.lumaEventsViaExa(w, c, { ...opt, deps: { ...viaDeps(), page: async (url: string) => { exaPageReads++; return pageDep(url); } } });
+  const s = await search({ viaExa: countingVia });
+  check("while Luma is refusing: no Exa search, no budget taken, no page reads of Exa's results", exaCalls.length === 0 && reserves.length === 0 && exaPageReads === 0, { exaCalls, reserves, exaPageReads });
+  check("...logged with why, and the member's results are exactly the feed's", /^Luma refused page reads \(429\) in the last 10 minutes, so no Luma search through Exa/.test(logs[0]?.reason ?? "") && JSON.stringify(links(s)) === JSON.stringify(alone), { reason: logs[0]?.reason, got: links(s), alone });
+}
+{
+  // The page read itself: a 429 is noted and said; any other read is exactly as before.
+  const E = D as any;
+  const ok = async () => true;
+  const html = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-ok", name: "OK", start_at: at(40), visibility: "public" } } } } } })}</script></html>`;
+  const f = (status: number) => (async () => new Response(status === 200 ? html : "", { status })) as any;
+  E.noteLumaRefusal(0);
+  const fine = await E.readLumaEventPage("https://lu.ma/t-ok-1", { fetchImpl: f(200), isPublic: ok });
+  check("a page Luma serves: its details, not refused, and no pause", fine.details?.apiId === "evt-ok" && fine.refused === false && E.lumaRefusedRecently() === false);
+  const no = await E.readLumaEventPage("https://lu.ma/t-429-1", { fetchImpl: f(429), isPublic: ok });
+  check("a 429: no details, said as refused, and Luma counts as refusing for 10 minutes", no.details === null && no.refused === true && E.lumaRefusedRecently() === true && E.lumaRefusedRecently(Date.now() + 11 * 60_000) === false && E.LUMA_REFUSAL_PAUSE_MINUTES === 10);
+  const again = await E.readLumaEventPage("https://lu.ma/t-429-1", { fetchImpl: f(200), isPublic: ok });
+  check("...a refused read, cached for its 2 minutes like any failed read, still says refused", again.refused === true && again.details === null);
+  const gone = await E.readLumaEventPage("https://lu.ma/t-404-1", { fetchImpl: f(404), isPublic: ok });
+  check("a 404 is a page with nothing on it, not a refusal", gone.details === null && gone.refused === false);
+  E.noteLumaRefusal(0);
+  check("the feed's own page reads are unchanged: fetchLumaEventDetails is the same read, details only (pinned)", /export async function fetchLumaEventDetails\(url: string, opts: \{ maxAgeMs\?: number \} = \{\}\): Promise<EventDetails \| null> \{\n  return \(await readLumaEventPage\(url, opts\)\)\.details;\n\}/.test(src("services/eventDetails.ts")));
+}
+
+// ================================================================ the daily budget: 60 a day, 20 held for member asks
+{
+  check("the limits default to 60 a day and 20 held for member asks", V.LUMA_EXA_BUDGET.dailyCap === 60 && V.LUMA_EXA_BUDGET.requestReserve === 20);
+  const b = (used: number, source: "request" | "sweep") => V.lumaExaBudget(used, source, 60, 20);
+  check("the sweep runs to 40, then stops, saying the rest is held for member asks", b(39, "sweep").ok && !b(40, "sweep").ok && /the sweep's share of Luma searches through Exa is used \(40 of 60; the rest is held for member asks\); tier 2 went out from Luma's feed alone/.test(b(40, "sweep").reason ?? ""));
+  check("member asks (replies, tasks) run to 60", b(40, "request").ok && b(59, "request").ok && !b(60, "request").ok && /^the daily cap of 60 Luma searches through Exa is reached; tier 2 went out from Luma's feed alone/.test(b(60, "request").reason ?? ""));
+  check("past the cap both are refused", !b(75, "sweep").ok && !b(75, "request").ok);
+
+  // The reservation itself, against a fake client: the lock, the count, the insert (who, which share; never the want).
+  const sql: { q: string; p?: any[] }[] = [];
+  const db = (today: number) => ({ connect: async () => ({ query: async (q: string, p?: any[]) => { sql.push({ q, p }); return { rows: /COUNT/.test(q) ? [{ today }] : [] }; }, release: () => {} }) });
+  const yes = await V.reserveLumaExaSearch("u1", "request", db(0));
+  const insert = sql.find((s) => /INSERT INTO luma_exa_search_log/.test(s.q));
+  check("a reservation: one lock, the day's count, and one row of who and which share, committed", yes.ok && sql.some((s) => /pg_advisory_xact_lock\(hashtext\('luma_exa_search_budget'\)\)/.test(s.q)) && /INSERT INTO luma_exa_search_log \(user_id, source\) VALUES \(\$1, \$2\)/.test(insert?.q ?? "") && JSON.stringify(insert?.p) === '["u1","request"]' && sql.some((s) => s.q === "COMMIT"), sql);
+  sql.length = 0;
+  const full = await V.reserveLumaExaSearch("u1", "sweep", db(40));
+  check("...the sweep at 40: refused, rolled back, nothing written", !full.ok && sql.some((s) => s.q === "ROLLBACK") && !sql.some((s) => /INSERT/.test(s.q)));
+  const broken = await V.reserveLumaExaSearch("u1", "request", { connect: async () => { throw new Error("connect ECONNREFUSED"); } });
+  check("the budget can't be checked: no Exa search (fails closed), saying why", !broken.ok && /^the daily budget for Luma searches through Exa couldn't be checked \(connect ECONNREFUSED\), so no Exa search; tier 2 went out from Luma's feed alone$/.test(broken.reason ?? ""), broken);
+  const mig = src("db/migrations.ts");
+  check("the table: id, user, share, time, and no query column (pinned)", /CREATE TABLE IF NOT EXISTS luma_exa_search_log \(\n\s+id BIGSERIAL PRIMARY KEY,\n\s+user_id UUID REFERENCES users\(id\) ON DELETE CASCADE,\n\s+source TEXT NOT NULL,\n\s+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW\(\)\n\s+\)/.test(mig) && /idx_luma_exa_search_log_created ON luma_exa_search_log \(created_at DESC\)/.test(mig));
+
+  // Through the search: a hit cap is the feed alone, logged; a cache hit takes no slot; the share is the caller's.
+  reset({ feed: FEED, pages: FEED_PAGES });
+  const alone = links(await search({ exaOn: false }));
+  reset({ feed: FEED, pages: { ...FEED_PAGES, good1: page({ startAt: at(40) }) }, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
+  budgetSays = V.lumaExaBudget(60, "request", 60, 20);
+  const capped = await search();
+  check("the cap reached: no Exa call, the feed's results exactly, and the log says the cap", exaCalls.length === 0 && reserves.length === 1 && JSON.stringify(links(capped)) === JSON.stringify(alone) && /^the daily cap of 60 Luma searches through Exa is reached/.test(logs[0]?.reason ?? ""), { exaCalls, got: links(capped), reason: logs[0]?.reason });
+  budgetSays = { ok: true, reason: null };
+  const after = await search();
+  check("...a refused search isn't kept: once there's room, the next ask searches", exaCalls.length === 1 && links(after).includes("https://lu.ma/good1"), links(after));
+  const hit = await search();
+  check("a cache hit makes no Exa call and takes no slot", exaCalls.length === 1 && reserves.length === 2 && hit.viaExa?.cached === true, { exaCalls, reserves });
+  reset({ feed: FEED, pages: FEED_PAGES, exa: [] });
+  await T.eventCandidates("supper clubs", "San Francisco", { userId: "u9", timezone: "America/Los_Angeles", limit: 8, source: "request", sources: sources() });
+  await T.eventCandidates("gallery openings", "San Francisco", { userId: "u9", timezone: "America/Los_Angeles", limit: 8, sources: sources() });
+  check("a member's ask draws on the request share; with none named, the sweep's (the stricter one)", reserves.map((x) => x.source).join() === "request,sweep" && reserves[0].userId === "u9", reserves);
 }
 
 console.log(`luma via exa: ${total - failed}/${total} passed`);
