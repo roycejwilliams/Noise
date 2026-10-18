@@ -30,8 +30,8 @@ for (const [line, theirs, missing] of [["30% off the cabin", cabin, "30% off"], 
 check("\"thousands\" is a figure: a stance-labelled fail stands", refused(await one("Thousands of founders already in", "a members dinner for founders", { lines: [fail(1, ["stance", "framing"])] })));
 for (const w of ["Hundreds on the waitlist", "A million reasons to come", "Dozens of hosts"]) check(`"${w}" carries a figure`, refused(await one(w, "a members dinner for founders", { lines: [fail(1, ["stance", "framing"])] })));
 check("a month is backed only by the month in their words, by case", refused(await one("Launch party in May", "you may want a launch party", { lines: [fail(1, ["stance", "framing"])] })) && passed(await one("Launch party in May", "a launch party in May", { lines: [fail(1, ["stance", "framing"])] })));
-check("a short month in their words backs the month (\"Nov the 14th\")", passed(await one("Nov 14", "Cabin, Nov the 14th", { lines: [fail(1, ["stance", "framing"])] })));
-check("\"May\" opening a line with no date is a verb, not a month", passed(await one("May every guest feel seen", "every guest should feel seen", { lines: [fail(1, ["stance", "framing"])] })));
+check("a short month backs the month only with a day after it", passed(await one("Nov 14", "Cabin, Nov 14 to 16", { lines: [fail(1, ["stance", "framing"])] })) && refused(await one("Nov 14", "Cabin, Nov the 14th", { lines: [fail(1, ["stance", "framing"])] })));
+for (const line of ["May launch party", "March opening night", "May: the first dinner"]) check(`a month opening a line is still a month: "${line}"`, refused(await one(line, "a founders dinner at mine", { lines: [fail(1, ["stance", "framing"])] })));
 check("a stance line whose figures are all theirs passes", passed(await one("Eight of us, Nov 14 to 16, nothing to prove", cabin, { lines: [fail(1, ["stance", "framing"])] })));
 // 2. a fact their words don't give still refuses, and the refusal names the line and what's missing
 {
@@ -50,6 +50,22 @@ check("a stance line whose figures are all theirs passes", passed(await one("Eig
 }
 // 4. their own name (the K before set: "Juno's cooking", "hosted by Odile" refused 5 of 5)
 check("their own first name is never a missing name", passed(await one("Juno's cooking tonight", cabin, { lines: [fail(1, ["named_person", "Juno"])] }, DC.knownFor({ firstName: "Juno" }))));
+{
+  const tw = "a dinner I'm hosting; I want to pitch Sequin AI and Acme";
+  const odile = DC.knownFor({ firstName: "Odile" });
+  const names = (l: string): [string, string][] => [["named_person", "Odile"], ...(/Sequin/.test(l) ? [["named_company", "Sequin AI"] as [string, string]] : []), ...(/Acme/.test(l) ? [["named_company", "Acme"] as [string, string]] : [])];
+  check("\"Hosted by Odile\" passes for Odile", passed(await one("Hosted by Odile", tw, { lines: [fail(1, ...names("Hosted by Odile"))] }, odile)));
+  for (const line of ["Hosted by Odile and Sequin AI", "Hosted by Odile & Sequin AI", "Hosted by Odile with Acme", "Hosted by Odile + Acme", "Hosted by Odile x Acme", "Hosted by Odile, Sequin AI and Acme", "Hosted with Odile and Acme", "Hosted by Odile, sponsored by Acme"]) {
+    const out = await one(line, tw, { lines: [fail(1, ...names(line))] }, odile);
+    check(`hosting is exempt only when every name is theirs: "${line}"`, refused(out), out);
+  }
+  check("\"sponsored by\" still counts beside their own hosting", refused(await one("Hosted by Odile, sponsored by Acme", tw, { lines: [fail(1, ["named_person", "Odile"])] }, odile)));
+  for (const line of ["Deal with Acme", "Acme joined", "Acme has joined the room", "Supper with Acme", "Drinks with Acme", "A night out with Acme", "Brunch with Acme", "Lunch with Acme", "Breakfast with Acme"]) {
+    const out = await one(line, tw, { lines: [fail(1, ["named_company", "Acme"])] });
+    check(`a relationship phrasing keeps a name they gave refused: "${line}"`, refused(out), out);
+  }
+  check("\"a big deal\" isn't a deal", passed(await one("Maya, a big deal in ceramics", "Maya is a ceramicist", { lines: [fail(1, ["named_person", "Maya"])] })));
+}
 check("hosted by their own name passes", passed(await one("A ceramics night at Heath Ceramics, hosted by Odile", "a ceramics night I'm hosting at Heath Ceramics", { lines: [fail(1, ["named_person", "Odile"])] }, DC.knownFor({ firstName: "Odile" }))));
 check("someone else's name they never gave still refuses", refused(await one("Chef Marco cooks Saturday", cabin, { lines: [fail(1, ["named_person", "Marco"])] }, DC.knownFor({ firstName: "Juno" }))));
 // 5. a name they gave never clears a claim about it (review of #240): relationship words, figures, other facts on the line

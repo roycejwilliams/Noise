@@ -149,8 +149,8 @@ export function nameIsTheirs(missing: string, hay: string, line?: string): boole
 
 // Pure: the figures in a line their words (or goals) don't give: numbers (with %, $, k), number words from two up, "thousands",
 // "hundreds", "a million", "dozens", months, weekdays and noon or midnight. Times and dates are put the same way on both sides first
-// (grounding.ts sameTimes), so "7pm" matches "7:00 PM". A month is matched by its case in their words ("you may want" never backs
-// "Launch party in May"); "May" or "March" opening a line with no date after it is a verb, not a month.
+// (grounding.ts sameTimes), so "7pm" matches "7:00 PM", and a short month followed by a day ("Nov 14") is the full month. A month is
+// matched by its case in their words ("you may want" never backs "Launch party in May").
 const MONTH_RE = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/g;
 const WEEKDAY_RE = /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)s?\b/gi;
 const CLOCK_WORDS = /\b(noon|midday|midnight)\b/gi;
@@ -162,8 +162,7 @@ export function unbackedFigures(line: string, theirWords: string): string[] {
   // "one" is how a stance talks ("one table", "one idea"); a digit 1 is still a figure.
   const digits = numbersOf(l);
   const nums = [...numbersOf(l, true)].filter((n) => (n !== "1" || digits.has("1")) && !theirNums.has(n));
-  const verbStart = /^\s*(May|March)\b(?!\s+\d)/.exec(l)?.[1];
-  const months = (l.match(MONTH_RE) ?? []).filter((m, i) => !(i === 0 && m === verbStart)).filter((m) => !new RegExp(`\\b(?:${m}|${m.slice(0, 3)})\\b`).test(t));
+  const months = (l.match(MONTH_RE) ?? []).filter((m) => !new RegExp(`\\b${m}\\b`).test(t));
   const other = [...(l.match(WEEKDAY_RE) ?? []).map((w) => w.replace(/s$/i, "")), ...(l.match(CLOCK_WORDS) ?? []), ...(l.match(AMOUNT_WORDS) ?? [])].filter((w) => !new RegExp(`\\b${w}`, "i").test(t));
   return [...new Set([...nums, ...months, ...other])];
 }
@@ -174,9 +173,9 @@ const CLAIM_WORDS = new RegExp(
   [
     "partner(?:s|ed|ing|ship|ships)?", "sponsor(?:s|ed|ing|ship|ships)?", "back(?:ed|ing|er|ers)", "co-?host(?:s|ed|ing)?", "team(?:ed|ing)? up",
     "invest(?:or|ors|ed|ing|ment|ments)?", "fund(?:ed|ing|er|ers)", "advis(?:or|ors|er|ers|ed|ing)", "mentor(?:s|ed|ing)?", "confirm(?:ed|s)?",
-    "signed", "approved", "committed", "(?:a|the|our|signed|closed) deals? with", "collaborat\\w*", "joins", "featur(?:ing|ed|es)", "alongside",
+    "signed", "approved", "committed", "deals? with", "(?:has )?joined", "collaborat\\w*", "joins", "featur(?:ing|ed|es)", "alongside",
     "on ?board", "clients?", "customers?", "members?", "official\\w*", "acquir\\w*", "lov(?:e|es|ed)", "is in", "says? yes",
-    "(?:party|launch|night|dinner|evening|event) with",
+    "(?:party|launch|night|night out|dinner|supper|drinks|brunch|lunch|breakfast|evening|event) with",
     "(?:hosted|presented|powered|supported|trusted|used|endorsed|joined|led|run|curated|organi[sz]ed|produced|built|chosen|loved|recommended|certified|verified|sponsored|backed|funded|mentored|advised) (?:by|with)",
   ].map((w) => `\\b${w}\\b`).join("|"),
   "i",
@@ -184,9 +183,10 @@ const CLAIM_WORDS = new RegExp(
 // What the name overrule reads besides their words: their own first name and the goals they're working toward (knownFor).
 export type Known = { text: string; firstName: string | null };
 const knownOf = (k: Known | string): Known => (typeof k === "string" ? { text: k, firstName: null } : k);
-// The one relationship form their own name may carry: "hosted by Odile", "hosted with Odile" is them hosting, not a claim about anyone.
-const withoutOwnHosting = (line: string, firstName: string | null) =>
-  firstName && firstName.trim().length >= 2 ? line.replace(new RegExp(`\\bhosted (?:by|with) ${firstName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi"), " ") : line;
+// The one relationship form their own name may carry: "Hosted by Odile" is them hosting. It's exempt only when every name the judge
+// listed on the line is their own first name (review of #240: a text rule cleared "Hosted by Odile and Sequin AI").
+const HOSTING = /^hosted (?:by|with)$/i;
+const isOwnName = (missing: string, firstName: string | null) => !!firstName && plain(missing) === plain(firstName);
 
 // Pure: what code makes of the verdicts. A failed line stands unless every fact listed on it is cleared: a stance (no unbacked figure
 // on the line), or a missing name that's theirs (in their words, own name or goals; in the line; no unbacked figure or relationship
@@ -200,7 +200,9 @@ export function standingFails(lines: string[], verdicts: LineVerdict[], theirWor
     const line = lines[v.n - 1];
     // Figures are backed by their words or their goals (both theirs); their own name backs no figure.
     const figures = unbackedFigures(line, hay);
-    const claimWord = withoutOwnHosting(line, k.firstName).match(CLAIM_WORDS)?.[0];
+    const names = v.facts.filter((f) => NAME_KINDS.has(f.kind));
+    const ownOnly = names.length > 0 && names.every((f) => isOwnName(f.missing, k.firstName));
+    const claimWord = [...line.matchAll(new RegExp(CLAIM_WORDS.source, "gi"))].map((m) => m[0]).find((w) => !(ownOnly && HOSTING.test(w)));
     const claimy = figures.length > 0 || !!claimWord;
     const standing = v.facts.filter((f) => {
       if (f.kind === "stance") return figures.length > 0;
