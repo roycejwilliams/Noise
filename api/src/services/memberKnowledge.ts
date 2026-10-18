@@ -681,15 +681,23 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   // The raw exchanges read through the live guards (services/whatCoKnows.ts guardText): a line saying something they removed is left
   // out; one still saying what they corrected away keeps its words with the correction inline. Every reader of exchanges (calls,
   // tasks, follow-ups, dispatch, the sweep) gets the same lines.
-  const guards = (on("exchanges") || on("corrections")) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId), []) : [];
+  // The removals (not the corrections: those stay with the readers that note them) over Cue's lessons, what it's carrying (open
+  // loops, promise results) and its record of what it sent: each is written from their words, so a thing they had Cue forget
+  // can't come back through one of them. A part that says it goes; a line that is only it goes.
+  const guards = (["exchanges", "corrections", "lessons", "carrying", "delivered"] as KnowledgeSection[]).some(on) && d.forgotten ? await safe("forgotten", () => d.forgotten!(userId), []) : [];
   const removed = guards.filter((r) => r.removed);
   const W = guards.length ? await import("./whatCoKnows.js") : null;
+  const g = (t: string): string | null => (W && removed.length ? W.guardText(t, removed) : t);
+  const keptLessons = lessons.flatMap((l) => { const text = g(l.text); return text === null ? [] : [{ ...l, text }]; });
+  const keptLoops = loops.flatMap((l) => { const title = g(l.title); return title === null ? [] : [{ ...l, title, detail: l.detail ? g(l.detail) : l.detail }]; });
+  const keptPromises = promises.flatMap((p) => { const content = g(p.content); return content === null ? [] : [{ ...p, content }]; });
+  const keptLedger = ledger.flatMap((s) => { const label = g(s.label); return label === null ? [] : [{ ...s, label }]; });
 
   if (on("goals")) k.goals = goalsOf(profile, states);
   if (on("asks")) k.asks = asks.filter((a) => a.text.trim()).map((a) => ({ id: a.id, text: a.text.trim(), kind: a.kind === "help" ? "help" : "find", verifiedAt: latest(a.createdAt, a.lastMentionedAt) }));
-  if (on("delivered")) k.delivered = mergeDelivered({ receipts, ledger, offers });
-  if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, receipts, ledger, loops, promises, now, zone });
-  if (on("lessons")) k.lessons = lessons.filter((l) => l.text.trim()).map((l) => ({ text: l.text.trim(), verifiedAt: l.at.toISOString() }));
+  if (on("delivered")) k.delivered = mergeDelivered({ receipts, ledger: keptLedger, offers });
+  if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, receipts, ledger: keptLedger, loops: keptLoops, promises: keptPromises, now, zone });
+  if (on("lessons")) k.lessons = keptLessons.filter((l) => l.text.trim()).map((l) => ({ text: l.text.trim(), verifiedAt: l.at.toISOString() }));
   if (on("corrections")) k.corrections = settleGoalCorrections(corrections.map((c) => ({ field: String(c.field), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), verifiedAt: latest(c.corrected_at) })), goalsOf(profile, states));
   if (on("preferences")) k.preferences = [
     ...stated.map((s) => ({ text: s.text, source: "stated" as const, verifiedAt: s.at.toISOString() })),

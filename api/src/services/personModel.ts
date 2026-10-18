@@ -34,7 +34,7 @@ export function renderPersonModel(p: PersonModelParts, opts: { maxDid?: number }
 export async function personModelParts(userId: string): Promise<PersonModelParts> {
   // Their zone (services/memberTime.ts): thread stamps, ledger days and loop "today" are theirs.
   const zone = await (await import("./memberTime.js")).memberZone(userId);
-  const [snap, threads, ledger, loops] = await Promise.all([
+  const [snap, threads, ledger, rawLoops] = await Promise.all([
     getPersonSnapshot(userId).catch(() => null),
     listThreads(userId).catch(() => []),
     ledgerFacts(userId, "", zone).catch(() => ({ lines: [] as string[], named: [] as string[] })),
@@ -43,6 +43,15 @@ export async function personModelParts(userId: string): Promise<PersonModelParts
       .then((r) => r.rows.map((x: any) => ({ title: x.title, status: x.status, detail: x.detail, source: x.source, lastConfirmedAt: x.last_confirmed_at ? new Date(x.last_confirmed_at) : null, decayAskedAt: x.decay_asked_at ? new Date(x.decay_asked_at) : null, closedAt: null, closedReason: null, dueDate: x.due_date ? String(x.due_date instanceof Date ? x.due_date.toISOString() : x.due_date).slice(0, 10) : null }) as Pick<LoopRow, "title" | "status" | "detail" | "dueDate" | "source" | "lastConfirmedAt" | "decayAskedAt" | "closedAt" | "closedReason">))
       .catch(() => []),
   ]);
+  // What Cue is carrying, through the removals (services/whatCoKnows.ts guardText): a loop whose title says something they had
+  // Cue forget is left out; its detail loses that part. A failed guard read leaves the loops as they were, as for the other readers.
+  const removed = rawLoops.length ? await import("./whatCoKnows.js").then(async (W) => ({ W, rows: (await W.forgottenRows(userId)).filter((r) => r.removed) })).catch(() => null) : null;
+  const loops = removed?.rows.length
+    ? rawLoops.flatMap((l) => {
+        const title = removed.W.guardText(String(l.title ?? ""), removed.rows);
+        return title === null ? [] : [{ ...l, title, detail: l.detail ? removed.W.guardText(String(l.detail), removed.rows) : l.detail }];
+      })
+    : rawLoops;
   return { who: renderSnapshot(snap), threads: renderThreads(threads.slice(0, 6), new Date(), zone), did: ledger.lines, loops: describeLoops(loops, { draftOnly: true, zone }), threadList: threads };
 }
 
