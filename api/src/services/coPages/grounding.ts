@@ -49,8 +49,15 @@ export function sameTimes(s: string, side: "page" | "theirs" = "page"): string {
 }
 // Pure: Co's own short labels before a colon ("Schedule: cocktails at 7") are labels, like a heading, not claims. Only these words:
 // anything else before a colon (a name, "Ellis Park:") is read as part of the line (review of PR 2).
-const LABELS = /^\s*(schedule|timing|time|when|where|details|notes|dress|dress code|address|getting there|cost|price|budget|plan|food|drinks|the plan|the night)\s*:\s+/i;
-const unlabeled = (s: string) => s.replace(LABELS, "");
+const LABELS = /^\s*(schedule|timing|time|when|where|date|details|notes|dress|dress code|address|getting there|cost|price|budget|plan|food|drinks|the plan|the night)\s*:\s+/i;
+// A plan's own structure (Royce, 2026-10-17: "time-of-day labels and itinerary verbs are fine as suggestions. Specific clock times
+// still need support"): a part of the day ("Morning:", "Early afternoon") and the plain moves of a day out ("Head home", "Breakfast")
+// are how Cue lays a plan out, not claims about it (S1-a: "Morning: Breakfast in Government Camp" and "Head home, early afternoon"
+// were refused for "morning" and "head"). Places and names on the same line are still checked, and so is every clock time (the
+// name/time check above runs on the whole line).
+const PART_OF_DAY = /\b(?:(?:early|late|mid)[\s-]+)?(?:morning|afternoon|evening|night|midday|noon)\b|\b(?:mid-?morning|mid-?afternoon|tonight)\b/gi;
+const ITINERARY = /\b(?:head(?:ing)?|drive|driving|walk|walking)(?:\s+(?:home|back|out|over|up|down))?\b|\b(?:check(?:ing)?[\s-]+(?:in|out)|wrap(?:ping)?\s+up|arrive|arrival|leave|depart|return|breakfast|brunch|lunch|dinner|supper)\b/gi;
+const unlabeled = (s: string) => s.replace(LABELS, "").replace(PART_OF_DAY, " ").replace(ITINERARY, " ").replace(/^[\s,:;–-]+/, "").replace(/\s{2,}/g, " ");
 
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
   // A bare time stands for am and pm only in their own words, never in a page Co read ("open until 11"): review of PR 2.
@@ -120,21 +127,45 @@ export function needsCasing(text: string): "title" | "lower" | null {
   return null;
 }
 
+// Common words a headline capitalizes that the deck's word list doesn't carry, and counts said as words (S1-a replay, 2026-10-17:
+// "The Evening", "What's Included", "9:30 PM: Choose a cup" and "Twelve seats" were refused as names). Used by the name check only,
+// so how a headline is cased (headlineCase, a page's headings) doesn't change.
+const NOT_NAMES_IN_HEADLINES = new Set(
+  "morning afternoon evening included includes choose one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety hundred thousand dozen".split(" "),
+);
+const commonWord = (w: string) => COMMON.has(w) || NOT_NAMES_IN_HEADLINES.has(w);
+// The first word of a headline's later sentence ("14 studios. Real revenue"), or of what follows a time label ("9:30 PM: Choose a cup"):
+// a capital there is the start of a sentence. Only after a time, not after any colon, so "Proof point: Acme" is still read as a name.
+function sentenceStarts(headline: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of headline.matchAll(/(?:[.!?]\s+|^\s*\d{1,2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?\s*:\s+)([A-Z][A-Za-z'’-]*)/g)) out.add(m[1].toLowerCase());
+  return out;
+}
+
 // Pure: the name check on a headline as the composer wrote it, before any casing (review of the design system PR: casing must never
 // hide a name). Every capitalized run after the first word, in their words or not: in sentence case each is a name the writer meant;
 // in Title Case a run counts as a name only when it holds a word that isn't a common word, so "Why Co Wins Against Parties" passes
 // and "Partnering With Founders Club And Signal" does not. Unlike the event check, this runs on every headline.
 export function headlineNameProblems(headline: string, theirWords: string, where: string): string | null {
   const { mentionsIn } = OG;
-  const casing = needsCasing(headline);
-  if (casing === "lower") return null;
+  const found = needsCasing(headline);
+  if (found === "lower") return null;
+  // Two words, the second a capitalized common word ("The Evening", "The Menu", "What's Included"): Title Case, not a name.
+  const ws = headline.split(/\s+/).map((w) => w.replace(/^[("'“]+|[)"'”.,!?;:]+$/g, "")).filter((w) => /^[A-Za-z]/.test(w));
+  const casing = found ?? (ws.length === 2 && /^[A-Z]/.test(ws[1]) && commonWord(ws[1].toLowerCase()) ? "title" : null);
+  const starts = sentenceStarts(headline);
   const hay = ` ${theirWords.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ")} `;
   const bad = mentionsIn(headline)
     .filter((m) => m.kind === "name")
     .filter((m) => {
-      const parts = m.text.toLowerCase().split(/\s+/).filter((p) => p.length > 1 && !JOINERS.has(p));
+      const parts = m.text
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((p) => p.length > 1 && !JOINERS.has(p))
+        // AM and PM are a time's, never a name; a common word opening a sentence is only its capital.
+        .filter((p) => !/^[ap]\.?m\.?$/.test(p) && !(starts.has(p) && commonWord(p)));
       if (!parts.length) return false;
-      if (casing === "title" && parts.every((p) => COMMON.has(p) || hay.includes(` ${p} `))) return false;
+      if (casing === "title" && parts.every((p) => commonWord(p) || hay.includes(` ${p} `))) return false;
       return !parts.every((p) => hay.includes(` ${p} `) || hay.includes(` ${p}s `) || (p.endsWith("s") && hay.includes(` ${p.slice(0, -1)} `)));
     });
   return bad.length ? `${where}: "${headline.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read` : null;

@@ -178,11 +178,16 @@ const isMonthWord = (w: string) => {
   return MONTHS.includes(head) || MONTHS.some((m) => m.slice(0, 3) === head) || head === "sept";
 };
 
-// A place phrase ends at a month: "in SF Jan-March" claims SF.
+// A place phrase ends at a month: "in SF Jan-March" claims SF. It also ends at a full stop: "in SF. Builders ship real apps" claims
+// SF, not "SF. Builders" (S1-a replay, 2026-10-17: seven find captions refused for "SF. Builders", "Medford. It's", "Coolidge
+// Corner. Greek"). St., Mt. and Ft. are part of a name, so "in St. Louis" is still one place.
+const NAME_ABBREVIATION = /^(?:st|mt|ft)\.$/i;
 export function placesClaimed(text: string): string[] {
   return [...text.matchAll(PLACE_PHRASE)]
     .map((m) => {
-      const words = m[1].split(" ");
+      const all = m[1].split(" ");
+      const end = all.findIndex((w) => w.endsWith(".") && !NAME_ABBREVIATION.test(w));
+      const words = end === -1 ? all : all.slice(0, end + 1);
       const cut = words.findIndex(isMonthWord);
       return (cut === -1 ? words : words.slice(0, cut)).join(" ");
     })

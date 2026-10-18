@@ -184,6 +184,7 @@
     "evals/calls/memory.ts",
     "evals/brain/binding.ts",
     "evals/checkins/rules.ts",
-    "evals/reply/usesItsFinds.ts"
+    "evals/reply/usesItsFinds.ts",
+    "evals/files/checkerBugs.ts"
   ]
 }

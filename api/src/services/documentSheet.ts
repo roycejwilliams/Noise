@@ -6,6 +6,7 @@
 // Pure: validation and the page. Nothing here guesses a fact: a sentence that names an event, a place or a time must be backed by
 // what the member said or what Co read (the same check a call's sentences get, services/offerGuard.ts).
 import { contrast, type DeckStyle } from "./coPages/style.js";
+import { inkFor } from "./designQa.js";
 import { fontLinks, fontStack } from "./designFonts.js";
 import { z } from "zod";
 import { EMAIL_COLORS as C, escapeHtml } from "./emailDesign.js";
@@ -207,6 +208,10 @@ export function documentHtml(doc: Doc, o: { firstName: string; date: string; loo
   const C = look
     ? { ...PAPER, paper, ink, body: ink, gold: contrast(look.accent, paper) >= 3 ? look.accent : ink, line: `${ink}26`, soft: `${ink}B3`, muted: `${ink}B3` }
     : PAPER;
+  // The small labels (the section numbers, "Cue's suggestions") read at 4.5:1 on the paper: the gold was 2.36:1 on Co's paper and a
+  // member's accent is allowed at 3:1, so design QA flagged every document and nothing fixed it (S1-a, 2026-10-17). The gold, deepened
+  // only as far as it has to go (#B79B74 becomes #77654B on Co's paper). The list markers and the suggestions rule stay gold.
+  const label = inkFor(C.gold, C.paper, 4.5);
   const SER = look?.display ? fontStack(look.display) : SERIF;
   const SAN = look?.body ? fontStack(look.body) : SANS;
   const fonts = look ? fontLinks([look.display, look.body].filter((x): x is NonNullable<typeof x> => !!x)).map((h) => `<link href="${e(h)}" rel="stylesheet">`).join("") : "";
@@ -238,7 +243,7 @@ h1 { font-family: ${SERIF}; font-weight: 300; font-size: var(--title); line-heig
 .sec { display: grid; grid-template-columns: 1.75in 1fr; column-gap: 0.4in; padding: var(--pad) 0; border-top: 1px solid ${C.line}; break-inside: avoid; counter-increment: sec; }
 .sec.bare { grid-template-columns: 1fr; }
 h2 { font-family: ${SERIF}; font-weight: 400; font-size: var(--h2); line-height: 1.22; color: ${C.ink}; margin: 0; }
-h2::before { content: counter(sec, decimal-leading-zero); display: block; font-family: ${SANS}; font-size: 8.5px; font-weight: 600; letter-spacing: 0.2em; color: ${C.gold}; margin-bottom: 7px; }
+h2::before { content: counter(sec, decimal-leading-zero); display: block; font-family: ${SANS}; font-size: 8.5px; font-weight: 600; letter-spacing: 0.2em; color: ${label}; margin-bottom: 7px; }
 .body p { margin: 0 0 0.6em 0; font-size: var(--text); line-height: 1.5; color: ${C.body}; }
 .body p:last-child { margin-bottom: 0; }
 ul { margin: 0; padding: 0 0 0 1.1em; }
@@ -247,7 +252,7 @@ li:last-child { margin-bottom: 0; }
 li::marker { color: ${C.gold}; font-size: 0.95em; }
 p + ul { margin-top: 0.35em; }
 .sug { margin-top: var(--pad); padding: calc(var(--pad) * 0.8) 0 calc(var(--pad) * 0.8) 0.22in; border-left: 2px solid ${C.gold}; break-inside: avoid; }
-h3 { margin: 0 0 8px 0; font-family: ${SANS}; font-size: 8.5px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; color: ${C.gold}; }
+h3 { margin: 0 0 8px 0; font-family: ${SANS}; font-size: 8.5px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase; color: ${label}; }
 .sug li { color: ${C.soft}; }
 .end { border-top: 1px solid ${C.line}; }
 </style></head><body class="${density}">
