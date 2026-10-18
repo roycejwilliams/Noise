@@ -38,6 +38,21 @@ const CASES: [kind: string, text: string][] = [
   ["review: the search for", "The search for a cofounder"],
   ["review: a verb-looking noun", "Date night spots"],
   ["review: one word over the cap", "Supercalifragilisticexpialidociousnesslyhyperextraordinarilylongword"],
+  // Third review of #236 (2026-10-17).
+  ["review 3: need to, no verb after", "Need to know: wine bars"],
+  ["review 3: going to, no verb after", "Going to the gym more"],
+  ["review 3: a name after to", "To Lisbon"],
+  ["review 3: a name after for", "For Tidewell"],
+  ["review 3: going to a place", "Going to Tokyo"],
+  ["review 3: two strip passes", "On the hunt for, ideally, a cofounder"],
+  ["review 3: only framing (opener)", "Of course,"],
+  ["review 3: only framing (looking for)", "Looking for"],
+  ["review 3: only framing (I want to)", "I want to"],
+  ["review 3: only framing (Honestly)", "Honestly"],
+  ["review 3: only framing (Find me)", "Find me"],
+  ["review 3: only framing (My search)", "My search"],
+  ["review 3: only prepositions", "for for"],
+  ["review 3: Cue named alone", "Find Cue"],
 ];
 // The exact label each review case must come out as.
 const EXPECT: Record<string, string> = {
@@ -50,6 +65,20 @@ const EXPECT: Record<string, string> = {
   "The search for a cofounder": "a cofounder",
   "Date night spots": "date night spots",
   "Supercalifragilisticexpialidociousnesslyhyperextraordinarilylongword": "supercalifragilisticexpialidociousnesslyhyperextraordinarilylongword".slice(0, 64),
+  "Need to know: wine bars": "need to know: wine bars",
+  "Going to the gym more": "going to the gym more",
+  "To Lisbon": "Lisbon",
+  "For Tidewell": "Tidewell",
+  "Going to Tokyo": "going to Tokyo",
+  "On the hunt for, ideally, a cofounder": "a cofounder",
+  "Of course,": "",
+  "Looking for": "",
+  "I want to": "",
+  "Honestly": "",
+  "Find me": "",
+  "My search": "",
+  "for for": "",
+  "Find Cue": "",
 };
 
 const PREP = "(?:for|on|of|to|in|at|with|about|into|from|by)";
@@ -65,7 +94,7 @@ for (const [kind, text] of CASES) {
   why(!/\bthings for\b/i.test(line), "no \"things for\"");
   why(!DOUBLE_PREP.test(line), "no two prepositions in a row");
   why(!/\n/.test(line) && !/\?/.test(line) && !/[—–!"]/.test(line), "one line, no question, no dash, quote or exclamation point");
-  why(!/\b(?:Cue|Co)\b/.test(line) && !/\b(?:I want|wants to|seeking|find me|looking for|can you)\b/i.test(label), "never names Cue, no request framing left in the label");
+  why(!/(?<![\w-])(?:cue|co)(?![\w-])/i.test(label) && !/\b(?:Cue|Co)\b/.test(line) && !/\b(?:I want|wants to|seeking|find me|looking for|can you)\b/i.test(label), "never names Cue, no request framing left in the label");
   why(A.noteKeepsRules(line), "keeps the note rules (the same check a written line gets)");
   why(label.length <= A.NOTE_LABEL_CHARS && !/\s$/.test(label), "label under the cap, cut on a word");
   why(!/^I've paused the search on (?:find|meet|move|to|for|of|about|course|the search|the hunt)\b/i.test(line), "no framing word left right after \"the search on\"");
