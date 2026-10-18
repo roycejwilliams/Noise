@@ -210,7 +210,14 @@ export async function ledgerFacts(userId: string, context: string, zoneIn?: stri
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  const all: LedgerRow[] = rows.map((r: any) => ({ relation: r.relation, label: String(r.label), url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null, source: r.source ?? null, provenance: r.provenance ?? null }));
+  // A row whose label says something they had Cue forget is left out, and a label of several parts loses only that part
+  // (services/whatCoKnows.ts guardText, removals only): Cue's record of what it did is written from their words too. A failed
+  // guard read leaves the rows as they were, as for the other readers of guarded rows.
+  const removed = await import("./whatCoKnows.js").then(async (W) => ({ W, rows: (await W.forgottenRows(userId)).filter((r) => r.removed) })).catch(() => null);
+  const all: LedgerRow[] = rows.flatMap((r: any) => {
+    const label = removed?.rows.length ? removed.W.guardText(String(r.label), removed.rows) : String(r.label);
+    return label === null ? [] : [{ relation: r.relation, label, url: r.url ?? null, at: new Date(r.at), when: r.when ?? null, whenEnd: r.when_end ?? null, source: r.source ?? null, provenance: r.provenance ?? null }];
+  });
   const message = context.split("\n")[0] ?? "";
   const today = localToday(zone);
   return { lines: ledgerLinesFrom(all, context, Date.now(), zone), named: sendsNamedIn(all, message).map((r) => ledgerLine(r, today, zone)) };

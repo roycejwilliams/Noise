@@ -491,6 +491,21 @@ export function renderLastCalls(calls: PastCall[], now = new Date(), zone = ZONE
 }
 // Pure: each stored call transcript (newest first) paired with the "[Call]"
 // summary written right after it.
+// Pure: past calls' rows through the removals (services/whatCoKnows.ts guardText): a transcript line by line and a [Call] note sentence
+// by sentence, so only what says the removed thing goes and the rest of the call still reads; a row left with nothing is dropped.
+// Corrections aren't applied here: the call summary names them as corrected already (withCorrectedNames, retiredBy).
+export function guardCallRows<R extends { memory_type: string; content: string }>(rows: R[], guards: import("./whatCoKnows.js").ForgottenRow[], W: Pick<typeof import("./whatCoKnows.js"), "guardText">): R[] {
+  const removed = guards.filter((g) => g.removed);
+  if (!removed.length) return rows;
+  return rows.flatMap((r) => {
+    const parts = r.memory_type === "call_transcript" ? String(r.content).split("\n") : String(r.content).split(/(?<=[.!?])\s+/);
+    const kept = parts.map((x) => W.guardText(x, removed)).filter((x): x is string => x !== null && x.trim() !== "" && x.trim() !== "[Call]");
+    if (!kept.length) return [];
+    const content = kept.join(r.memory_type === "call_transcript" ? "\n" : " ");
+    return [{ ...r, content: r.memory_type !== "call_transcript" && !content.startsWith("[Call]") ? `[Call] ${content}` : content }];
+  });
+}
+
 export function pairCalls(rows: { created_at: Date | string; memory_type: string; content: string }[], max = LAST_CALLS): PastCall[] {
   const transcripts = rows.filter((r) => r.memory_type === "call_transcript" && /^(assistant|user):/m.test(r.content)).sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
   const notes = rows.filter((r) => r.memory_type === "text_exchange" && r.content.startsWith("[Call]"));
@@ -631,6 +646,12 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
         [userId, LAST_CALLS_DAYS],
       )
       .then((r) => r.rows as { created_at: Date; memory_type: string; content: string }[])
+      // Through the removals before anything is built from them: this summary is registered with ElevenLabs before the call's first
+      // turn (services/elevenLabsCalls.ts), ahead of the per-turn guard on our own call brain (routes/callLlm.ts).
+      .then(async (rows) => {
+        const W = await import("./whatCoKnows.js");
+        return guardCallRows(rows, await W.forgottenRows(userId).catch(() => []), W);
+      })
       .catch(() => []),
   ]);
   const k = p.k;
