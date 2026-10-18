@@ -236,11 +236,16 @@ check("the window is a constant, never an env switch", !/process\.env/.test(src(
   pool.connect = real.connect;
 }
 const what = src("services/whatCoKnows.ts");
-check(
-  "whatCoKnows: any applied removal deletes their trace text, after the commit",
-  /if \(applied\.some\(\(a\) => a\.now == null\)\) await import\("\.\/llmTraceText\.js"\)\.then\(\(T\) => T\.forgetTraceText\(userId, "removal"\)\)\.catch\(\(\) => 0\);/.test(what) &&
-    what.indexOf('T.forgetTraceText(userId, "removal")') > what.indexOf('await client.query("COMMIT");', what.indexOf("export async function applyKnowledgeChanges")),
-);
+{
+  // Any applied change, a removal or a correction ("corrections delete the old value", Royce 2026-10-18), after the commit.
+  const hook = what.indexOf("if (applied.length) await import(\"./llmTraceText.js\").then((T) => T.forgetTraceText(userId,");
+  check("whatCoKnows: any applied removal or correction deletes their trace text", hook > 0);
+  check("whatCoKnows: ...only after the change committed", hook > what.indexOf('await client.query("COMMIT");', what.indexOf("export async function applyKnowledgeChanges")));
+  // A correction found in what they said (profileExtraction storeProfile): the old value goes from the trace text too.
+  const pe = src("services/profileExtraction.ts");
+  const block = pe.slice(pe.indexOf("  if (corrections.length) {"), pe.indexOf("  if (corrections.length) {") + 1400);
+  check("a correction in conversation deletes their trace text", /if \(corrections\.length\) \{[\s\S]*?await import\("\.\/llmTraceText\.js"\)\.then\(\(T\) => T\.forgetTraceText\(user_id, "correction"\)\)\.catch\(\(\) => 0\);\n  \}/.test(block));
+}
 const mig = src("db/migrations.ts");
 const block = mig.slice(mig.indexOf("CREATE TABLE IF NOT EXISTS llm_trace_text"), mig.indexOf('"llm_trace_text table init failed:"'));
 check("migration: one additive, idempotent table", block.length > 0 && !/\b(ALTER|DROP|TRUNCATE|DELETE|UPDATE)\b/.test(block.replace("ON DELETE CASCADE", "")) && (block.match(/IF NOT EXISTS/g) ?? []).length === 4);

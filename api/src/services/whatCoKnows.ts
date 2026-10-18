@@ -975,9 +975,10 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { ref: item.ref, was: `file ${n}`, now: null }, checks: [{ name: "removal_asked", pass: true }] });
   }
   for (const d of decisions) await recordDecision(d).catch(() => {});
-  // Something removed: all of their model prompt/answer text goes (services/llmTraceText.ts). A prompt holds many facts at
-  // once, so a row can't be matched to the one thing removed. Best-effort, after the change committed.
-  if (applied.some((a) => a.now == null)) await import("./llmTraceText.js").then((T) => T.forgetTraceText(userId, "removal")).catch(() => 0);
+  // Something removed or corrected: all of their model prompt/answer text goes (services/llmTraceText.ts; Royce, 2026-10-18:
+  // "corrections delete the old value" too). A prompt holds many facts at once, so a row can't be matched to the one thing
+  // changed. Best-effort, after the change committed.
+  if (applied.length) await import("./llmTraceText.js").then((T) => T.forgetTraceText(userId, applied.some((a) => a.now == null) ? "removal" : "correction")).catch(() => 0);
   // A commitment a removal closed (services/commitmentLog.ts): released, on their own words asking for the removal, so it never shows
   // as open forever on the team's promises view. Logged only after the change committed.
   for (const c of cancelled) {
