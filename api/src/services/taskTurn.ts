@@ -919,7 +919,11 @@ export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; overri
       // A Co look-out's document, PDF or Google Doc, is a Co-initiated find like its texts; a member look-out's is owed (Royce, 2026-10-09).
       const kind = lookoutKind(task);
       const r = await sendDocumentForTask(input, { userId, taskId: task.id, firstName: person.first_name ?? "", phone: person.phone_number, zone, taskTheirWords: task.theirWords, read, askedAt: task.createdAt ? new Date(task.createdAt) : null, ...(kind ? { coInitiated: { kind } } : {}) }, { ...realTaskDocDeps, now: clock });
-      await recordDecision({ layer: 7, decision: "task.writeDocument", userId, outcome: r.ok ? "act" : "skip", action: r.ok ? r.title : "not_sent", reason: r.ok ? null : r.why.slice(0, 300), proposal: { taskId: task.id, via: r.ok ? r.via : null, ...(!r.ok && r.problems?.length ? { input: (await import("./documentSheet.js")).resolveDocument(input) } : {}) } }).catch(() => {});
+      // A refusal is logged as the rules it broke and where, never the member's text (Royce, 2026-10-18: "Logs hold the rule and the
+      // kind of thing, never member text"). Holds (quiet hours, the ledger) keep their reason, which names no member text.
+      const DS = await import("./documentSheet.js");
+      const refused = !r.ok && r.problems?.length ? DS.refusalKinds(r.problems, DS.resolveDocument(input)) : null;
+      await recordDecision({ layer: 7, decision: "task.writeDocument", userId, outcome: r.ok ? "act" : "skip", action: r.ok ? r.title : "not_sent", reason: r.ok ? null : refused ? `Not sent: ${refused.join("; ")}`.slice(0, 300) : r.why.slice(0, 300), proposal: { taskId: task.id, via: r.ok ? r.via : null, ...(refused ? { refused } : {}) } }).catch(() => {});
       return r;
     },
     textsToday: () => taskTextsToday(userId),

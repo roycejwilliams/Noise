@@ -154,6 +154,41 @@ export function claimProblem(u: Unbacked): string {
   return `"${u.text.slice(0, 90)}" isn't something they said (their words never put ${u.missing.slice(0, 4).join(", ")} together): rewrite it from their own words, or move it to suggestions`;
 }
 
+// Pure: what a refusal was, for the decision log, with no member text (Royce, 2026-10-18: "Logs hold the rule and the kind of thing,
+// never member text"). Each problem becomes its place and the rule it broke ("section 2 line 3: a line their words don't back"); the
+// quoted line is used only to find its place and never leaves this function. The writer still gets the quoted problems.
+// (#241 has the shared helper for every checker, services/checkerRefusals.ts; this is the minimal one for the task-document row.)
+export function refusalKinds(problems: string[], doc: Doc): string[] {
+  const where = (p: string): string => {
+    const quoted = p.match(/"([^"]{8,})/)?.[1]?.slice(0, 40);
+    if (!quoted) return "the document";
+    for (const [i, x] of doc.sections.entries()) {
+      if ((x.heading ?? "").includes(quoted)) return `section ${i + 1} heading`;
+      const j = [...x.paragraphs, ...x.bullets].findIndex((t) => t.includes(quoted));
+      if (j >= 0) return `section ${i + 1} line ${j + 1}`;
+    }
+    const k = doc.suggestions.findIndex((t) => t.includes(quoted));
+    return k >= 0 ? `suggestion ${k + 1}` : doc.title.includes(quoted) ? "title" : "the document";
+  };
+  const kind = (p: string): string => {
+    if (/^the suggestion .* which they never said and you never read/.test(p)) return "a name or time they never gave";
+    if (/which they never gave/.test(p)) return "a name or number they never gave";
+    if (/which they never said/.test(p)) return "a name, place or time they never said";
+    if (/isn't something they said \(their words never put/.test(p)) return "a line their words don't back";
+    if (/isn't something they said/.test(p)) return "a line the judge read as not theirs";
+    if (/placeholder/.test(p)) return "a placeholder";
+    if (/needs a title/.test(p)) return "no title";
+    if (/has nothing in it/.test(p)) return "no sections";
+    if (/too thin/.test(p)) return "too thin";
+    if (/too long/.test(p)) return "too long";
+    if (/a paragraph runs/.test(p)) return "a paragraph too long";
+    if (/no bullets/.test(p)) return "no bullets";
+    if (/only repeat their headings/.test(p)) return "points that repeat their headings";
+    return "another document rule";
+  };
+  return problems.map((p) => `${where(p)}: ${kind(p)}`);
+}
+
 // ---------------------------------------------------------------- the file's name
 
 const SMALL = new Set(["a", "an", "and", "or", "of", "the", "to", "for", "in", "on", "at", "with", "vs"]);

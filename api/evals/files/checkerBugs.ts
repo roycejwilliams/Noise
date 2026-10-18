@@ -192,17 +192,34 @@ for (const [label, sunday] of [
   check("... and their accent still marks the list", theirs.marker.toUpperCase() === look.accent, theirs);
 }
 
-// ---------------------------------------------------------------- 5. a refused task document is logged with what it was
-// (Royce, 2026-10-17: "log the task document id so the 13 documents that couldn't be replayed can be checked next time"). S1-a
-// couldn't replay 13 task documents (9 real) because their decision row held only the task id. The row is written inside the task
-// runner's real wiring (a DB insert, no seam), so this reads the line itself.
+// ---------------------------------------------------------------- 5. a refused task document is logged as rules, never member text
+// Royce, 2026-10-18: "#239 task-document log: drop it. Logs hold the rule and the kind of thing, never member text." The refused
+// row carries where each problem sits and its kind ("section 1 line 1: a line their words don't back"), not the document; the reason
+// field too (it used to quote the refused lines). The row is
+// written inside the task runner's real wiring (a DB insert, no seam), so its line is read, and refusalKinds is run on a real refusal.
 {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../../src/services/taskTurn.ts", import.meta.url), "utf8");
   const row = src.split("\n").find((l) => l.includes('decision: "task.writeDocument"')) ?? "";
-  // Review of #239: the document as checked (resolveDocument, clipped to the document limits), and only on a content refusal (its
-  // problems), never on a quiet-hours or ledger hold.
-  check("a refused task document's decision row carries the checked document, on content refusals only", /\.\.\.\(!r\.ok && r\.problems\?\.length \? \{ input: \(await import\("\.\/documentSheet\.js"\)\)\.resolveDocument\(input\) \} : \{\}\)/.test(row), row.trim().slice(0, 400));
+  check("the task-document row no longer carries the document (no input, no resolveDocument in the row)", !!row && !/\binput\b/.test(row.replace(/refusalKinds\(r\.problems, DS\.resolveDocument\(input\)\)/, "")) && /\.\.\.\(refused \? \{ refused \} : \{\}\)/.test(row) && /refused \? `Not sent: \$\{refused\.join\("; "\)\}`/.test(row), row.trim().slice(0, 400));
+  // A real refusal (S1-a's wine-partner positioning document, a test member, names swapped), through the document check.
+  const doc = DS.resolveDocument({
+    title: "Fieldhouse x Wine Partner: Positioning",
+    sections: [
+      { heading: "What it is", bullets: ["Marlow hand-places every seat the night before, built from who should meet", "They pick the pairings together with Fieldhouse's chef."] },
+      { heading: "Open questions", bullets: ["[Example to drop in: who sat where at West Town, and why that pour landed]"] },
+    ],
+    suggestions: ["Lead with the seating, then the pour"],
+  });
+  const theirs = "We run Fieldhouse dinners, I seat people by hand. Talking to a wine importer about a partnership.";
+  const problems = DS.documentProblems(doc, { theirs, read: "" });
+  const kinds = DS.refusalKinds(problems, doc);
+  const VOCAB = /^(section \d+ (line \d+|heading)|suggestion \d+|title|the document): (a name or time they never gave|a name or number they never gave|a name, place or time they never said|a line their words don't back|a line the judge read as not theirs|a placeholder|no title|no sections|too thin|too long|a paragraph too long|no bullets|points that repeat their headings|another document rule)$/;
+  check("a real refusal is logged as kinds only: every entry is a rule and a place, no member text", problems.length > 0 && kinds.length === problems.length && kinds.every((k) => VOCAB.test(k)), { problems: problems.length, kinds });
+  check("... and where it sits, by section and line (found from the quoted line)", kinds.includes("section 1 line 1: a line their words don't back") && kinds.includes("section 2 line 1: a name or number they never gave"), kinds);
+  const words = new Set(`${doc.title} ${doc.sections.flatMap((x) => [x.heading ?? "", ...x.bullets]).join(" ")}`.toLowerCase().match(/[a-z']{5,}/g) ?? []);
+  const leaked = kinds.flatMap((k) => (k.toLowerCase().match(/[a-z']{5,}/g) ?? []).filter((w) => words.has(w) && !["section", "their", "words", "never"].includes(w)));
+  check("... with none of the document's own words in it", leaked.length === 0, leaked);
 }
 
 // ---------------------------------------------------------------- 6. made-up content the first version let through (review of #239)
