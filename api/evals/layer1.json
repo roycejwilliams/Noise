@@ -74,6 +74,7 @@
     "evals/search/rules.ts",
     "evals/search/startedEvents.ts",
     "evals/search/askPlace.ts",
+    "evals/search/lumaViaExa.ts",
     "evals/search/intent.ts",
     "evals/loop/rules.ts",
     "evals/loop/probes.ts",
