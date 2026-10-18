@@ -2007,6 +2007,27 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE voice_flag_runs ADD COLUMN IF NOT EXISTS raw JSONB`))
     .catch((err: Error) => console.error("voice_flags table init failed:", err));
 
+  // ElevenLabs deletes (2026-10-18) — see src/services/elevenLabsForget.ts. One row per conversation we stored: whether its copy
+  // at ElevenLabs is deleted yet, how many attempts it took, and the last reason it was kept. No transcript text: only a hash of
+  // what we received, so a later pass can check our stored copy is that transcript.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS elevenlabs_deletions (
+        conversation_id TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        transcript_sha256 TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INT NOT NULL DEFAULT 0,
+        last_error TEXT,
+        last_attempt_at TIMESTAMPTZ,
+        deleted_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_elevenlabs_deletions_due ON elevenlabs_deletions (status, last_attempt_at)`))
+    .catch((err: Error) => console.error("elevenlabs_deletions table init failed:", err));
+
   // Tier 3 (paid X search) budget log (2026-09-15) — tieredRecommendation.ts.
   await pool
     .query(
