@@ -17,6 +17,66 @@ import type { ExaSearch } from "./exaSearch.js";
 
 export const LUMA_VIA_EXA = { results: 25, timeoutMs: 10_000, cacheHours: 6 } as const;
 export const LUMA_DOMAINS = ["lu.ma", "luma.com"];
+
+// ---------------------------------------------------------------- what Exa is sent (Royce, 2026-10-18, option (d): "Send Exa only a
+// generic search, never the member's words.") Exa's API terms (1.2(c)) license Exa to keep and use whatever it's sent, forever. So
+// the query is built only from fixed parts: kinds of event from this list (matched in the want, never copied from it), the city,
+// the dates Cue worked out, and online or in person. No name, company, goal, plan or any other word of theirs. A want with no kind
+// on the list searches plain "events" for the city and dates.
+// Matches are narrow on purpose: a word that's also everyday talk ("talk about her raise", "book a table", "no energy") isn't one.
+export const EVENT_KINDS: readonly { kind: string; match: RegExp }[] = [
+  { kind: "startup founder", match: /\b(founders?|startups?|entrepreneurs?)\b/i },
+  { kind: "investor", match: /\b(investors?|vcs?|venture capital|angels? investors?|lps?)\b/i },
+  { kind: "climate tech", match: /\b(climate|clean ?tech|sustainab\w*|renewables?|clean energy)\b/i },
+  { kind: "hardware", match: /\b(hardware|robotics?|deep ?tech|hard ?tech)\b/i },
+  { kind: "AI", match: /\b(ai|a\.i\.|machine learning|llms?|artificial intelligence)\b/i },
+  { kind: "tech", match: /\b(tech|engineers?|developers?|devtools|software|coding)\b/i },
+  { kind: "design", match: /\b(design|designers?|ux)\b/i },
+  { kind: "hackathon", match: /\bhackathons?\b/i },
+  { kind: "demo day", match: /\b(demo days?|pitch (nights?|events?))\b/i },
+  { kind: "networking", match: /\b(networking|mixers?)\b/i },
+  { kind: "meetup", match: /\bmeet-?ups?\b/i },
+  { kind: "talk", match: /\b(talks|panels?|fireside chats?|lectures?|speaker series|speaker events?)\b/i },
+  { kind: "conference", match: /\b(conferences?|summits?)\b/i },
+  { kind: "workshop", match: /\b(workshops?|classes?)\b/i },
+  { kind: "supper club", match: /\bsupper clubs?\b/i },
+  { kind: "chef's table dinner", match: /\bchef'?s tables?\b/i },
+  { kind: "dinner", match: /\b(dinners?|dining)\b/i },
+  { kind: "wine tasting", match: /\b(wine|tastings?)\b/i },
+  { kind: "happy hour", match: /\b(happy hours?|drinks|cocktails?)\b/i },
+  { kind: "live music", match: /\b(live music|concerts?|gigs?|shows?)\b/i },
+  { kind: "jazz", match: /\bjazz\b/i },
+  { kind: "art gallery opening", match: /\b(galler(y|ies)|art openings?|art receptions?|exhibitions?|exhibits?)\b/i },
+  { kind: "art", match: /\b(art|artists?)\b/i },
+  { kind: "film screening", match: /\b(films?|screenings?|movies?|cinema)\b/i },
+  { kind: "comedy", match: /\b(comedy|stand-?up)\b/i },
+  { kind: "book club", match: /\b(book clubs?|author talks?|book readings?|poetry readings?|literary)\b/i },
+  { kind: "run club", match: /\b(run clubs?|running clubs?|group runs?|5k|10k)\b/i },
+  { kind: "hiking", match: /\b(hik(e|es|ing)|trails?|outdoors?)\b/i },
+  { kind: "yoga", match: /\byoga\b/i },
+  { kind: "wellness", match: /\b(wellness|meditation|breathwork|sound baths?)\b/i },
+  { kind: "dance", match: /\b(danc(e|es|ing)|club nights?|djs?)\b/i },
+  { kind: "party", match: /\bpart(y|ies)\b/i },
+  { kind: "community", match: /\bcommunity\b/i },
+  { kind: "fundraiser", match: /\b(fundraisers?|galas?|charity)\b/i },
+];
+const MAX_KINDS = 3;
+// A city is a place name only: letters, spaces and . ' - , at most 40 characters (anything else is left out of the search).
+const CITY = /^[A-Za-z][A-Za-z .'-]{1,39}$/;
+// The dates as eventCandidates writes them ("October 19 to October 25, 2026"); anything else is left out.
+const DATES = /^[A-Z][a-z]+ \d{1,2} to [A-Z][a-z]+ \d{1,2}, \d{4}$/;
+
+// Pure: the one Exa query for a Luma event search, from fixed parts only, and the kinds it used.
+export function lumaExaQuery(what: string, city: string | null, dates: string): { query: string; kinds: string[] } {
+  const text = String(what ?? "");
+  const kinds = EVENT_KINDS.filter((k) => k.match.test(text)).map((k) => k.kind);
+  // "supper club" and "chef's table dinner" already say dinner; "art gallery opening" already says art.
+  const shown = kinds.filter((k) => !(k === "dinner" && kinds.some((x) => /dinner|supper/.test(x) && x !== "dinner")) && !(k === "art" && kinds.includes("art gallery opening"))).slice(0, MAX_KINDS);
+  const how = /\b(online|virtual|zoom|remote)\b/i.test(text) ? " online" : /\bin[- ]person\b/i.test(text) ? " in person" : "";
+  const place = city && CITY.test(city.trim()) ? ` in ${city.trim()}` : "";
+  const when = DATES.test(dates.trim()) ? `, ${dates.trim()}` : "";
+  return { query: `${shown.length ? `${shown.join(", ")} ` : ""}events${how}${place}${when}`, kinds: shown };
+}
 // Luma paths that are never one event's page.
 const NOT_EVENTS = new Set(["discover", "home", "signin", "login", "create", "calendar", "explore", "pricing", "user", "u", "settings", "help"]);
 
@@ -35,7 +95,8 @@ export type ViaExaEvent = DiscoveredEvent & { online?: boolean };
 // window.
 // error: what failed and what to do about it, for the log (never the member: they get the feed's events as before).
 // refused: pages Luma wouldn't serve (HTTP 429), left out unread.
-export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; notPublic: number; refused?: number; kept: number };
+// kinds: the fixed kinds the search used (from EVENT_KINDS, never their words).
+export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; notPublic: number; refused?: number; kept: number; kinds?: string[] };
 
 // Pure: why a Luma search through Exa failed, said with its fix, from exaSearch's error (or what a call threw). Timed out, refused
 // with an HTTP status, unreachable, unreadable: each its own line. Every one ends the same way, because that's what the member got.
@@ -141,7 +202,8 @@ export async function lumaEventsViaExa(
   if (!deps.configured() || !what.trim()) return null;
   // Luma is refusing reads: no search, and no reads of a cached one either (each would add to what Luma is refusing).
   if (deps.refusing()) return { events: [], report: { cached: false, error: lumaRefusingReason(deps.pauseMinutes), pages: 0, read: 0, notPublic: 0, refused: 0, kept: 0 } };
-  const query = `${what.trim()}${city ? ` in ${city}` : ""}, ${o.dates}`;
+  // Never their words: the query (and so the cache key) is built from fixed parts only.
+  const { query, kinds } = lumaExaQuery(what, city, o.dates);
   const key = query.toLowerCase();
   const now = deps.now();
   const hit = cache.get(key);
@@ -182,7 +244,7 @@ export async function lumaEventsViaExa(
   const listed = read.filter((e): e is ViaExaEvent => e !== null && e !== "not_public" && e !== "refused");
   const events = listed.filter((e) => new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
   const why = reason ?? exaFailureReason(error) ?? (refused ? lumaRefusedReason(refused, found.length, deps.pauseMinutes) : null);
-  return { events, report: { cached: !!fresh, error: why, pages: found.length, read: listed.length + notPublic, notPublic, refused, kept: events.length } };
+  return { events, report: { cached: !!fresh, error: why, pages: found.length, read: listed.length + notPublic, notPublic, refused, kept: events.length, kinds } };
 }
 
 async function search(query: string, userId: string | null, deps: LumaViaExaDeps): Promise<{ found: Found[]; error: string | null }> {
