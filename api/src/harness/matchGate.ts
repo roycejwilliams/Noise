@@ -78,7 +78,9 @@ export function spelledNumbers(text: string): number[] {
 function sameCityName(a: string, b: string): boolean {
   const first = (s: string) => norm(s.split(",")[0]);
   if (placeForms(first(a)).includes(first(b))) return true;
-  return first(a) === first(b) || norm(a).includes(first(b)) || norm(b).includes(first(a));
+  // One or two letters ("W", "DC" are only real as whole words): never matched inside another word (review of #239).
+  const inside = (hay: string, x: string) => (x.length <= 2 ? ` ${hay} `.includes(` ${x} `) : hay.includes(x));
+  return first(a) === first(b) || inside(norm(a), first(b)) || inside(norm(b), first(a));
 }
 
 // ---------- Tier matches
@@ -180,8 +182,10 @@ const isMonthWord = (w: string) => {
 
 // A place phrase ends at a month: "in SF Jan-March" claims SF. It also ends at a full stop: "in SF. Builders ship real apps" claims
 // SF, not "SF. Builders" (S1-a replay, 2026-10-17: seven find captions refused for "SF. Builders", "Medford. It's", "Coolidge
-// Corner. Greek"). St., Mt. and Ft. are part of a name, so "in St. Louis" is still one place.
-const NAME_ABBREVIATION = /^(?:st|mt|ft)\.$/i;
+// Corner. Greek"). An abbreviation's point doesn't end a sentence: a single letter ("W. Oakland"), dotted initials ("U.S. Virgin
+// Islands", "D.C."), and the short forms names use ("St. Louis", "Mt. Hood", "Dr. Pelletier's") stay part of the place (review of
+// #239: cutting there left "W." or "Dr.", which then matched any text as a substring).
+const NAME_ABBREVIATION = /^(?:[A-Za-z]|(?:[A-Za-z]\.)+[A-Za-z]|st|mt|ft|pt|dr|ste|sta|mr|mrs|ms)\.$/i;
 export function placesClaimed(text: string): string[] {
   return [...text.matchAll(PLACE_PHRASE)]
     .map((m) => {

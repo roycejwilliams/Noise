@@ -200,7 +200,60 @@ for (const [label, sunday] of [
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../../src/services/taskTurn.ts", import.meta.url), "utf8");
   const row = src.split("\n").find((l) => l.includes('decision: "task.writeDocument"')) ?? "";
-  check("a refused task document's decision row carries its input (title, sections, suggestions)", /proposal: \{ taskId: task\.id, [^}]*\.\.\.\(r\.ok \? \{\} : \{ input \}\)/.test(row), row.trim().slice(0, 300));
+  // Review of #239: the document as checked (resolveDocument, clipped to the document limits), and only on a content refusal (its
+  // problems), never on a quiet-hours or ledger hold.
+  check("a refused task document's decision row carries the checked document, on content refusals only", /\.\.\.\(!r\.ok && r\.problems\?\.length \? \{ input: \(await import\("\.\/documentSheet\.js"\)\)\.resolveDocument\(input\) \} : \{\}\)/.test(row), row.trim().slice(0, 400));
+}
+
+// ---------------------------------------------------------------- 6. made-up content the first version let through (review of #239)
+// Each was refused on origin/co-test and must stay refused: the fixes above loosen casing, structure and joins, never a made-up
+// place, name or time.
+{
+  const MG = await import("../../src/harness/matchGate.js");
+  const VLAHA = "Bar Vlaha. Greek food and cocktails, dress smart. Brookline, near the T.";
+  for (const cap of ["Bar Vlaha, a cozy spot in W. Fakeville with Greek food and cocktails.", "Bar Vlaha, tucked in Dr. Pelletier's old building, Greek food and cocktails.", "Bar Vlaha, in N. Fakeborough, Greek food and cocktails.", "Bar Vlaha, in Pt. Fakeyes, Greek food and cocktails.", "Bar Vlaha, in Fakeville. Greek food and cocktails."]) {
+    const p = captionProblems(cap, VLAHA, "");
+    check(`still refused, caption: "${cap.slice(10, 60)}"`, p.length > 0, p);
+  }
+  check('"U.S. Virgin Islands" is one place, not "U.S."', JSON.stringify(MG.placesClaimed("Open studio in U.S. Virgin Islands this week.")) === JSON.stringify(["U.S. Virgin Islands"]), MG.placesClaimed("Open studio in U.S. Virgin Islands this week."));
+  check('"W. Fakeville" is one place, not "W."', JSON.stringify(MG.placesClaimed("Wine bar in W. Fakeville, cozy.")) === JSON.stringify(["W. Fakeville"]), MG.placesClaimed("Wine bar in W. Fakeville, cozy."));
+  const t3 = (reason: string, evidence: string) => MG.checkGrounding({ tier: 3, source: "x", name: "Builders Night", url: "https://x.com/i/status/1", reason } as any, { searchCity: null, distanceMiles: null, evidence } as any);
+  const t1 = (reason: string, city: string) => MG.checkGrounding({ tier: 1, name: "Builders Night", url: "https://x.com", reason, city } as any, { searchCity: null, distanceMiles: null } as any);
+  check("still refused, tier 3: a place the post never names (W. Fakeville)", !t3("Builders Night in W. Fakeville, open to all", "Builders Night, an open meetup for builders w/ pizza. San Francisco.").pass);
+  check("still refused, tier 3: Dr. Pelletier's office, not in the post", !t3("Builders Night in Dr. Pelletier's office", "Builders Night hosted by Dr. Lee, open meetup. San Francisco.").pass);
+  check("still refused, tier 1: W. Fakeville for an event in New York", !t1("Builders night in W. Fakeville", "New York").pass);
+  // Tightened (passed on co-test too): a one- or two-letter place is backed only as a whole word.
+  check('a two-letter place is not backed by a longer word ("LA" in "Atlanta")', captionProblems("A rooftop show in LA tonight.", "Rooftop show. Atlanta, Georgia.", "").some((x) => x.includes('"LA"')), captionProblems("A rooftop show in LA tonight.", "Rooftop show. Atlanta, Georgia.", ""));
+  check('... nor by a city name containing it (tier 1, "in LA" for Atlanta)', !t1("Rooftop night in LA", "Atlanta").pass);
+
+  const H: [string, string, string][] = [
+    ["Pelletier Evening", WREN, "Pelletier"],
+    ["Seats go fast. Open Room hosts", `${WREN} the room`, "Open Room"],
+    ["Doors at 6:30 PM. Open Room hosts", `${WREN} the room`, "Open Room"],
+    ["9:30 PM: Choose Pelletier", WREN, "Pelletier"],
+    ["9:30 PM: Choose a cup. Then Acme", WREN, "Acme"],
+  ];
+  for (const [h, theirs, name] of H) {
+    const p = headlineNameProblems(h, theirs, "slide 2 headline");
+    check(`still refused, headline: "${h}"`, !!p && p.includes(name.split(" ")[0]), p);
+  }
+
+  // One section only, so each case is refused (or not) for its own line.
+  const sunday = (items: { lead?: string; text: string }[]) => ({ why: "x", line: "Here's your weekend.", title: "Mt Hood Cabin Weekend", context: "Friday Oct 23 to Sunday Oct 25, four of you at Timberline Lodge", sections: [{ heading: "Sunday, Oct 25", blocks: [{ type: "bullets", items }] }], artDirection: "fieldguide", designContext: "personal" });
+  const FARM = "Make me a page for our cabin weekend on Mt Hood, Friday Oct 23 to Sunday Oct 25, four of us. We're staying at Timberline Lodge. Saturday coffee at 9 AM, then a guided wine tasting walk with pours at the farm at 11 AM. Sunday breakfast in Government Camp, home by early afternoon.";
+  for (const [label, items] of [
+    ['"Morning: Pelletier leads the guided wine tasting walk…"', [{ lead: "Morning", text: "Pelletier leads the guided wine tasting walk with pours at the farm" }]],
+    ['"Breakfast: Pelletier leads the guided wine tasting walk…"', [{ lead: "Breakfast", text: "Pelletier leads the guided wine tasting walk with pours at the farm" }]],
+    ['"Morning, Pelletier pours wine on the guided farm tasting walk"', [{ text: "Morning, Pelletier pours wine on the guided farm tasting walk" }]],
+    ['"Leave by noon" (noon is a clock time)', [{ text: "Leave by noon" }]],
+    ['"Noon: Head home" (noon is a clock time, never a label)', [{ lead: "Noon", text: "Head home" }]],
+    ['"Dinner at the lodge Sunday night" (a part of the day mid-sentence is read)', [{ text: "Dinner at the lodge Sunday night" }]],
+  ] as [string, { lead?: string; text: string }[]][]) {
+    const p = await pageCheck(sunday(items), FARM);
+    check(`still refused, page: ${label}`, p.length > 0 && p.every((x) => !/Mt Hood Cabin Weekend|Friday Oct 23/.test(x)), p);
+  }
+  const ok = await pageCheck(sunday([{ lead: "Morning", text: "Breakfast in Government Camp" }, { text: "Head home, early afternoon" }]), FARM);
+  check("... while the structure lines Royce named still pass on the same source", ok.length === 0, ok);
 }
 
 console.log(`checker bugs: ${total - failed}/${total} passed`);

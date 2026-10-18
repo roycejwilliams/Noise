@@ -378,7 +378,8 @@ export function placesBacked(text: string, facts: string): { ok: boolean; missin
   // A place that ends a sentence keeps its full stop in the match ("SF."); compare without it.
   const missing = placesClaimed(text)
     .map((p) => p.replace(/[.,;:!?)"'\u2019]+$/, ""))
-    .filter((p) => p && !have.includes(p.toLowerCase()) && !["san francisco", "sf", "the city"].includes(p.toLowerCase()));
+    // A one- or two-letter place is backed only as a whole word ("W" is inside nearly any text; review of #239).
+    .filter((p) => p && !(p.length <= 2 ? new RegExp(`(?:^|[^a-z0-9])${p.toLowerCase().replace(/[^a-z0-9]/g, "")}(?:$|[^a-z0-9])`).test(have) : have.includes(p.toLowerCase())) && !["san francisco", "sf", "the city"].includes(p.toLowerCase()));
   return { ok: missing.length === 0, missing };
 }
 

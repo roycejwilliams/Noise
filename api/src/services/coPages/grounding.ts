@@ -51,13 +51,22 @@ export function sameTimes(s: string, side: "page" | "theirs" = "page"): string {
 // anything else before a colon (a name, "Ellis Park:") is read as part of the line (review of PR 2).
 const LABELS = /^\s*(schedule|timing|time|when|where|date|details|notes|dress|dress code|address|getting there|cost|price|budget|plan|food|drinks|the plan|the night)\s*:\s+/i;
 // A plan's own structure (Royce, 2026-10-17: "time-of-day labels and itinerary verbs are fine as suggestions. Specific clock times
-// still need support"): a part of the day ("Morning:", "Early afternoon") and the plain moves of a day out ("Head home", "Breakfast")
-// are how Cue lays a plan out, not claims about it (S1-a: "Morning: Breakfast in Government Camp" and "Head home, early afternoon"
-// were refused for "morning" and "head"). Places and names on the same line are still checked, and so is every clock time (the
-// name/time check above runs on the whole line).
-const PART_OF_DAY = /\b(?:(?:early|late|mid)[\s-]+)?(?:morning|afternoon|evening|night|midday|noon)\b|\b(?:mid-?morning|mid-?afternoon|tonight)\b/gi;
-const ITINERARY = /\b(?:head(?:ing)?|drive|driving|walk|walking)(?:\s+(?:home|back|out|over|up|down))?\b|\b(?:check(?:ing)?[\s-]+(?:in|out)|wrap(?:ping)?\s+up|arrive|arrival|leave|depart|return|breakfast|brunch|lunch|dinner|supper)\b/gi;
-const unlabeled = (s: string) => s.replace(LABELS, "").replace(PART_OF_DAY, " ").replace(ITINERARY, " ").replace(/^[\s,:;–-]+/, "").replace(/\s{2,}/g, " ");
+// still need support"): a part of the day as a label ("Morning:", "Early afternoon,") and the plain move a line opens with ("Head
+// home", "Breakfast in…") are how Cue lays a plan out, not claims about it (S1-a: "Morning: Breakfast in Government Camp" and "Head
+// home, early afternoon" were refused for "morning" and "head"). Only as labels, at the start of the line: mid-sentence they're read
+// like any word ("Dinner at the lodge Sunday night" still needs "night"), and "noon" is a clock time, never a label. What's left is
+// read after "then", so a name opening it ("Morning: Pelletier leads…") is still a name, not the line's first capital (review of
+// #239). Places, names and every clock time on the line are still checked (the name/time check above runs on the whole line).
+const PART_OF_DAY = /^\s*(?:(?:(?:early|late|mid)[\s-]+)?(?:morning|afternoon|evening|night|midday)|mid-?morning|mid-?afternoon|tonight)\s*(?:[:,;–—-]\s*|$)/i;
+const ITINERARY = /^\s*(?:(?:head(?:ing)?|drive|driving|walk|walking)(?:\s+(?:home|back|out|over|up|down))?|check(?:ing)?[\s-]+(?:in|out)|wrap(?:ping)?\s+up|arrive|arrival|leave|depart|return|breakfast|brunch|lunch|dinner|supper)\b\s*(?:[:,;–—-]\s*)?/i;
+const unlabeled = (s: string) => {
+  let t = s;
+  for (let prev = ""; prev !== t; ) {
+    prev = t;
+    t = t.replace(LABELS, "").replace(PART_OF_DAY, "").replace(ITINERARY, "");
+  }
+  return t === s ? s : `then ${t}`;
+};
 
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
   // A bare time stands for am and pm only in their own words, never in a page Co read ("open until 11"): review of PR 2.
@@ -72,7 +81,8 @@ export function pageProblems(d: CoPageData, source: PageSource): string[] {
   // Headings and the title are Co's labels; the content lines are the claims.
   const claims = pageLines(d).filter((l) => !/heading$|^title$|place$/.test(l.where));
   for (const u of unbackedClaims(claims.map((l) => unlabeled(sameTimes(l.text))), corpus).slice(0, 4)) {
-    out.push(`"${u.text.slice(0, 90)}" isn't backed by what they said or what you read (nothing puts ${u.missing.slice(0, 4).join(", ")} together)`);
+    // The line as the writer can find it: without the "then" a stripped label leaves (unlabeled).
+    out.push(`"${u.text.replace(/^then /, "").slice(0, 90)}" isn't backed by what they said or what you read (nothing puts ${u.missing.slice(0, 4).join(", ")} together)`);
   }
   return out.slice(0, 7);
 }
@@ -135,11 +145,17 @@ const NOT_NAMES_IN_HEADLINES = new Set(
 );
 const commonWord = (w: string) => COMMON.has(w) || NOT_NAMES_IN_HEADLINES.has(w);
 // The first word of a headline's later sentence ("14 studios. Real revenue"), or of what follows a time label ("9:30 PM: Choose a cup"):
-// a capital there is the start of a sentence. Only after a time, not after any colon, so "Proof point: Acme" is still read as a name.
-function sentenceStarts(headline: string): Set<string> {
-  const out = new Set<string>();
-  for (const m of headline.matchAll(/(?:[.!?]\s+|^\s*\d{1,2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?\s*:\s+)([A-Z][A-Za-z'’-]*)/g)) out.add(m[1].toLowerCase());
-  return out;
+// a capital there is the start of a sentence, so a common word there is lowered before the name check reads it. Only there, and only
+// when the next word isn't capitalized too: "Seats go fast. Open Room hosts" still names Open Room, and a common word mid-sentence is
+// still read (review of #239). Only after a time, not after any colon, so "Proof point: Acme" is still read as a name.
+function lowerSentenceStarts(headline: string): string {
+  return headline.replace(
+    /([.!?]\s+|^\s*\d{1,2}(?::\d{2})?\s*(?:[AaPp]\.?[Mm]\.?)?\s*:\s+)([A-Z][A-Za-z'’-]*)/g,
+    (m: string, lead: string, w: string, at: number, all: string) => {
+      const after = all.slice(at + m.length).match(/^\s+(\S)/)?.[1] ?? "";
+      return commonWord(w.toLowerCase()) && !/[A-Z]/.test(after) ? `${lead}${w.toLowerCase()}` : m;
+    },
+  );
 }
 
 // Pure: the name check on a headline as the composer wrote it, before any casing (review of the design system PR: casing must never
@@ -151,19 +167,20 @@ export function headlineNameProblems(headline: string, theirWords: string, where
   const found = needsCasing(headline);
   if (found === "lower") return null;
   // Two words, the second a capitalized common word ("The Evening", "The Menu", "What's Included"): Title Case, not a name.
+  // Only when the first word is a common word too: "Pelletier Evening" is a name, read in sentence case (review of #239).
   const ws = headline.split(/\s+/).map((w) => w.replace(/^[("'“]+|[)"'”.,!?;:]+$/g, "")).filter((w) => /^[A-Za-z]/.test(w));
-  const casing = found ?? (ws.length === 2 && /^[A-Z]/.test(ws[1]) && commonWord(ws[1].toLowerCase()) ? "title" : null);
-  const starts = sentenceStarts(headline);
+  const lead = (ws[0] ?? "").toLowerCase().replace(/['’]s$/, "");
+  const casing = found ?? (ws.length === 2 && (commonWord(lead) || JOINERS.has(lead)) && /^[A-Z]/.test(ws[1]) && commonWord(ws[1].toLowerCase()) ? "title" : null);
   const hay = ` ${theirWords.toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ")} `;
-  const bad = mentionsIn(headline)
+  const bad = mentionsIn(lowerSentenceStarts(headline))
     .filter((m) => m.kind === "name")
     .filter((m) => {
       const parts = m.text
         .toLowerCase()
         .split(/\s+/)
         .filter((p) => p.length > 1 && !JOINERS.has(p))
-        // AM and PM are a time's, never a name; a common word opening a sentence is only its capital.
-        .filter((p) => !/^[ap]\.?m\.?$/.test(p) && !(starts.has(p) && commonWord(p)));
+        // AM and PM are a time's, never a name.
+        .filter((p) => !/^[ap]\.?m\.?$/.test(p));
       if (!parts.length) return false;
       if (casing === "title" && parts.every((p) => commonWord(p) || hay.includes(` ${p} `))) return false;
       return !parts.every((p) => hay.includes(` ${p} `) || hay.includes(` ${p}s `) || (p.endsWith("s") && hay.includes(` ${p.slice(0, -1)} `)));
