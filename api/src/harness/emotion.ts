@@ -257,6 +257,11 @@ export type EmotionalContext = {
   // their life in the last 24 hours with no positive signal after it. Shapes
   // how Co talks and which rooms it picks; never whether they get one.
   needsCare: boolean;
+  // When needsCare: the hard read that holds it (the latest medium/high negative one about their life), and when the hard stretch it
+  // belongs to began (the earliest hard read linked to it by gaps of at most a day, with no positive read between). Timestamps only.
+  // The holds that wait on a hard day read them (services/moodHold.ts: okay again, and the cap).
+  hardAt?: Date | null;
+  hardSince?: Date | null;
   // Frustrated with Co itself in the last 48 hours (what it has or hasn't
   // found, its replies). Makes Co search wider and try harder; not a hard day.
   withCo: { frustrated: boolean; about: string | null; count: number };
@@ -267,6 +272,8 @@ export type EmotionalContext = {
 };
 
 const HOUR = 3600_000;
+// How far back a text's feeling still counts as how they feel right now (current, below; services/moodHold.ts reads it too).
+export const RIGHT_NOW_HOURS = 6;
 
 export function summarizeSignals(allSignals: EmotionSignal[], now: Date): EmotionalContext {
   const all = [...allSignals].sort((a, b) => b.at.getTime() - a.at.getTime());
@@ -274,7 +281,7 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   const aboutCo = all.filter((s) => signalTarget(s) === "co");
   const age = (s: EmotionSignal) => now.getTime() - s.at.getTime();
 
-  const latestText = sorted.find((s) => s.source === "text" && age(s) <= 6 * HOUR) ?? null;
+  const latestText = sorted.find((s) => s.source === "text" && age(s) <= RIGHT_NOW_HOURS * HOUR) ?? null;
   const calls = sorted.filter((s) => s.source === "call" && age(s) <= 7 * 24 * HOUR);
   const lastCallAt = calls[0]?.at ?? null;
   const lastCallMoments = lastCallAt ? calls.filter((s) => Math.abs(s.at.getTime() - lastCallAt.getTime()) < 10 * 60_000) : [];
@@ -286,6 +293,16 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   // (review of #61). Co still sees it as a call moment, with their words.
   const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score" && age(s) <= 24 * HOUR);
   const positiveAfter = recentNeg ? sorted.some((s) => s.valence === "positive" && s.at > recentNeg.at) : false;
+  // The hard stretch recentNeg belongs to: back through hard reads at most a day apart, stopping at a positive read between two.
+  const hard = (s: EmotionSignal) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score";
+  let hardSince = recentNeg?.at ?? null;
+  if (recentNeg && !positiveAfter) {
+    for (const s of sorted.filter((x) => hard(x) && x.at < recentNeg.at)) {
+      const later = hardSince!;
+      if (later.getTime() - s.at.getTime() > 24 * HOUR || sorted.some((p) => p.valence === "positive" && p.at > s.at && p.at < later)) break;
+      hardSince = s.at;
+    }
+  }
 
   const byTopic = new Map<string, { about: string; emotions: Set<string>; count: number }>();
   for (const s of sorted.filter((x) => x.valence === "negative" && age(x) <= 14 * 24 * HOUR && x.about)) {
@@ -310,6 +327,8 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
     lastCall: lastCallAt ? { at: lastCallAt, moments: lastCallMoments } : null,
     recurring,
     needsCare: !!recentNeg && !positiveAfter,
+    hardAt: recentNeg && !positiveAfter ? recentNeg.at : null,
+    hardSince: recentNeg && !positiveAfter ? hardSince : null,
     withCo: { frustrated: coNeg.length > 0 && !coPositiveAfter, about: coNeg[0]?.about ?? null, count: coNeg.length },
   };
 }

@@ -49,6 +49,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext } from "./emotion.js";
+import { MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
@@ -282,6 +283,9 @@ export type PickState = {
   lastInboundAt: Date | null;
   // Emotion loop: struggling in the last day (harness/emotion.ts).
   needsCare?: boolean;
+  // Whether that hard day still holds what waits on it (services/moodHold.ts): it ends when they're okay again or at the cap. Missing
+  // (a state built without the emotion read's times): struggling holds, as before.
+  moodHold?: MoodHold;
   // They said yes to "want to hear who?" and no reveal followed
   // (networkIntroNudge.lastTeaseUndelivered): no new tease until it clears.
   undeliveredYes?: boolean;
@@ -300,7 +304,8 @@ export type PickState = {
 };
 
 // While someone is struggling, asks, check-ins on asks, and product updates
-// wait. Anything that brings them into a room or toward a person still goes
+// wait: timing only, never dropped for it, and never past the cap (services/moodHold.ts, Royce 2026-10-18: they go once they're okay
+// again, at the latest MOOD_HOLD_CAP_HOURS into the hard stretch). Anything that brings them into a room or toward a person still goes
 // out (Royce, 2026-09-18: "we can't isolate them until the perfect event is
 // right"). Holding event offers on bad days meant a member frustrated about
 // getting nothing kept getting nothing; the draft carries their feelings.
@@ -318,6 +323,22 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "goal_recheck",
   "name_change",
 ]);
+
+// Pure: whether a hard day holds what waits on it now (the emotional_timing check, the stopped-looking line riding a paced text, a find
+// the composer skipped while they were struggling).
+export function heldForMood(s: Pick<PickState, "needsCare" | "moodHold">): boolean {
+  return !!s.needsCare && (s.moodHold ? s.moodHold.hold : true);
+}
+// Pure: a find the composer skipped while they were struggling (payload.moodSkipAt, dispatch) waits while the hard day holds, and never
+// more than the cap after that skip; then it competes again like any find. Null: it wasn't skipped that way.
+export function moodWaitRead(c: Pick<Candidate, "payload">, s: Pick<PickState, "now" | "needsCare" | "moodHold">): MoodHold | null {
+  const at = Date.parse(String((c.payload as { moodSkipAt?: string } | null)?.moodSkipAt ?? ""));
+  if (!at) return null;
+  const heldHours = Math.max(0, (s.now.getTime() - at) / HOUR);
+  if (!heldForMood(s)) return { state: s.needsCare ? s.moodHold?.state ?? "none" : "none", hold: false, heldHours };
+  if (heldHours >= MOOD_HOLD_CAP_HOURS) return { state: "released_cap", hold: false, heldHours };
+  return { state: "held", hold: true, heldHours };
+}
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
 
@@ -615,7 +636,7 @@ export function watchOfferMatches(logged: string, lastCoLine: string): boolean {
 // (the first look, today or tomorrow, a task that texts them itself); a check-in before then talks over that promise. A safety
 // follow-up is never held by it.
 export const NEW_MEMBER_QUIET_HOURS = 24;
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away" | "joinedAt">, opts: { answering?: boolean } = {}): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "moodHold" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away" | "joinedAt">, opts: { answering?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -678,8 +699,11 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (state.away && awayHoldsCandidate(c)) {
     checks.push({ name: "away_hold", pass: false, reason: awayHoldReason(state.away) });
   }
-  if (state.needsCare && HOLD_WHILE_STRUGGLING.has(c.type)) {
-    checks.push({ name: "emotional_timing", pass: false, reason: "they've been struggling in the last day; this can wait" });
+  if (heldForMood(state) && HOLD_WHILE_STRUGGLING.has(c.type)) {
+    checks.push({ name: "emotional_timing", pass: false, reason: `they've been struggling in the last day; this waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
+  }
+  if (moodWaitRead(c, state)?.hold) {
+    checks.push({ name: "mood_wait", pass: false, reason: `skipped in a find text while they were struggling; it waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h` });
   }
   // Restraint with memory (services/kindRestraint.ts): a kind of text they let pass twice in a row isn't sent again until they answer
   // one. An answer to their own explicit ask (an event offer for an open ask) is never held back: they asked.
@@ -868,8 +892,10 @@ export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Ca
 
 // Pure: what a failed bundle does to its lead. A lead the composer skipped is dropped (a skipped tier pick also queues its tier's next
 // best); any other failure counts an attempt and drops it at the last one (as before the tier PR: review, the tier-next branch had
-// captured this else).
-export function failedBundleActions(res: { leadSkipped?: boolean; tierSkipped?: boolean }, attempts: number): ("drop_skipped" | "queue_tier_next" | "count_attempt" | "drop_failed")[] {
+// captured this else). moodHeld: the composer skipped it in the prompt that saw they've been struggling, while the hard day still
+// holds (heldForMood): it waits instead (mood_wait), never dropped for that, and no tier next is queued beside it (Royce, 2026-10-18).
+export function failedBundleActions(res: { leadSkipped?: boolean; tierSkipped?: boolean }, attempts: number, moodHeld = false): ("drop_skipped" | "queue_tier_next" | "count_attempt" | "drop_failed" | "mood_wait")[] {
+  if (res.leadSkipped && moodHeld) return ["mood_wait"];
   if (res.leadSkipped) return res.tierSkipped ? ["drop_skipped", "queue_tier_next"] : ["drop_skipped"];
   return attempts + 1 >= RULES.maxDraftAttempts ? ["count_attempt", "drop_failed"] : ["count_attempt"];
 }
@@ -2036,6 +2062,18 @@ export async function dropCandidate(registry: ProactiveRegistry, c: Candidate, s
   );
 }
 
+// A find the composer skipped while they were struggling waits (moodWaitRead, the mood_wait check): stamped with this skip's time, so
+// it isn't composed into the same hard day again; it competes again once they're okay, or MOOD_HOLD_CAP_HOURS after the skip. It stays
+// pending, so its own expiry still ends it. The hold is logged once, with no member text (services/moodHold.ts).
+export async function markMoodSkip(userId: string, cs: Candidate[], now: Date): Promise<void> {
+  if (!cs.length) return;
+  await pool.query(
+    `UPDATE proactive_candidates SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{moodSkipAt}', to_jsonb($2::text)), updated_at = NOW() WHERE id = ANY($1::bigint[]) AND status = 'pending'`,
+    [cs.map((c) => c.id), now.toISOString()],
+  ).catch((err: any) => console.error("proactive: marking a mood wait failed (non-fatal):", err?.message ?? err));
+  for (const c of cs) noteMoodHold("bundle_skip_wait", c.type, `${userId}:${c.id}`, { state: "held", hold: true, heldHours: 0 });
+}
+
 // Records a blocked/skip decision only when the blocking reason changed, so
 // an every-15-minutes tick outside someone's hours doesn't flood the log.
 async function recordSkipOnce(userId: string, reason: string, decision: Parameters<typeof recordDecision>[0]): Promise<void> {
@@ -2071,6 +2109,8 @@ export async function memberSendState(userId: string, person: { timezone: string
       sends,
       lastInboundAt: raw.lastInboundAt,
       needsCare: !!raw.emotional?.needsCare,
+      // Okay again (they've texted normally since the hard read) or the cap ends the hold (services/moodHold.ts).
+      moodHold: moodHold(raw.emotional, { now, lastInboundAt: raw.lastInboundAt }),
       safetyHold: raw.safetyHold,
       undeliveredYes,
       // Kinds they keep letting pass (services/kindRestraint.ts). A read that fails holds what's stored, never more than that.
@@ -2191,6 +2231,13 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // The learned preference is written when it flips, from the same read.
   if (member.raw.kinds && !opts.dryRun) await syncKindPreferences(userId, member.raw.kinds.verdicts, member.raw.kinds.stored).catch(() => 0);
   const ev = evaluateCandidates(state, opts);
+  // Each mood hold and release, once (services/moodHold.ts): the rule, the kind, the candidate's id; never member text.
+  if (!opts.dryRun) for (const p of ev.perCandidate) {
+    const ref = `${userId}:${p.candidate.id}`;
+    if (HOLD_WHILE_STRUGGLING.has(p.candidate.type)) noteMoodHold("checkin_hold", p.candidate.type, ref, state.needsCare ? state.moodHold ?? { state: "held", hold: true, heldHours: null } : { state: "none", hold: false, heldHours: null });
+    const waiting = moodWaitRead(p.candidate, state);
+    if (waiting) noteMoodHold("bundle_skip_wait", p.candidate.type, ref, waiting);
+  }
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
       id: p.candidate.id,
@@ -2395,7 +2442,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     }
     if ("fail" in res) {
       if (!opts.dryRun) {
-        for (const a of failedBundleActions(res, c.attempts)) {
+        for (const a of failedBundleActions(res, c.attempts, heldForMood(state))) {
+          if (a === "mood_wait") await markMoodSkip(userId, [c], state.now);
           if (a === "drop_skipped") await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
           // A morning tier pick is never left out for fit without its tier's next best going (review of the tier PR).
           if (a === "queue_tier_next") await import("../services/sweepShadow.js").then((S) => S.queueTierNext(userId, c, `the composer skipped the tier's pick: ${res.fail}`)).catch(() => null);
@@ -2404,7 +2452,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
         }
       }
       // Logged the way every failed draft is, so the proactive_blocked monitor counts composed bundles too (review of #135).
-      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `draft skipped: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `${res.leadSkipped && heldForMood(state) ? "draft skipped while they were struggling, so it waits (mood_wait)" : "draft skipped"}: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
       done(c.type);
       return;
     }
@@ -2429,8 +2477,10 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     for (const d of res.dropped) if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "composer", reason: d.why, proposal: { candidate: d.item.candidate.id } }).catch(() => {});
     // A morning tier pick left out after being told it goes: its tier's next best is queued (review of the tier PR).
     // The skipped pick itself comes out (skipped twice for fit), so its tier never sends two.
+    // While they're struggling, a find the composer left out waits instead (mood_wait): never dropped for it, no tier next beside it.
+    if (heldForMood(state) && res.dropped.length && !opts.dryRun) await markMoodSkip(userId, res.dropped.map((d) => d.item.candidate), state.now);
     for (const d of res.dropped) {
-      if (!d.tierSkipped || opts.dryRun) continue;
+      if (!d.tierSkipped || opts.dryRun || heldForMood(state)) continue;
       await dropCandidate(registry, d.item.candidate, "skipped", d.why).catch(() => {});
       await import("../services/sweepShadow.js").then((S) => S.queueTierNext(userId, d.item.candidate, d.why)).catch(() => null);
     }
@@ -2574,15 +2624,21 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   let sending = outgoing;
   if (!composed) {
     const A = await import("../services/askRetire.js");
-    // Never a heavy check-in, never while they're struggling; through the member fence, the first owed note that passes it whole.
-    // The dispatch's one restraint read (memberSendState): struggling now means no note.
-    if (A.noteMayRide(c, !!member.state.needsCare)) {
-      const { memberFence } = await import("../services/sourceFence.js");
-      const fence = await memberFence(userId).catch(() => null);
-      rideNote = fence && !fence.failed ? await A.pendingStopNotes(userId).then((n) => A.firstSurviving(A.notesToRide(n, state.now), fence.strip)).catch(() => null) : null;
-      if (rideNote) {
-        const { carryLaneNotes } = await import("../services/laneMoves.js");
-        sending = A.rideAlong(outgoing, rideNote.line, (d, p) => carryLaneNotes(d, p));
+    // Never a heavy check-in, never while a hard day holds it; through the member fence, the first owed note that passes it whole.
+    // The dispatch's one restraint read (memberSendState): a hard day waits until they're okay, at most the cap (services/moodHold.ts).
+    // noteMayRide(c, false): this text could carry one, a hard day aside. Each owed note's hold and release is logged once.
+    if (A.noteMayRide(c, false)) {
+      const owed = await A.pendingStopNotes(userId).then((n) => A.notesToRide(n, state.now)).catch(() => [] as import("../services/askRetire.js").StopNote[]);
+      const read: MoodHold = member.state.needsCare ? member.state.moodHold ?? { state: "held", hold: true, heldHours: null } : { state: "none", hold: false, heldHours: null };
+      for (const n of owed) noteMoodHold("stop_note_hold", n.kind, `${userId}:${n.kind}:${n.key}`, read);
+      if (A.noteMayRide(c, heldForMood(member.state))) {
+        const { memberFence } = await import("../services/sourceFence.js");
+        const fence = await memberFence(userId).catch(() => null);
+        rideNote = fence && !fence.failed ? (() => { try { return A.firstSurviving(owed, fence.strip); } catch { return null; } })() : null;
+        if (rideNote) {
+          const { carryLaneNotes } = await import("../services/laneMoves.js");
+          sending = A.rideAlong(outgoing, rideNote.line, (d, p) => carryLaneNotes(d, p));
+        }
       }
     }
   }
@@ -2591,7 +2647,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   if (!composed && !rideNote && nameNotice && c.type !== "name_change") {
     const A = await import("../services/askRetire.js");
     const N = await import("../services/nameChange.js");
-    if (A.noteMayRide(c, !!member.state.needsCare) && !N.carriesNameChange(sending.join("\n"))) {
+    if (A.noteMayRide(c, heldForMood(member.state)) && !N.carriesNameChange(sending.join("\n"))) {
       const { carryLaneNotes } = await import("../services/laneMoves.js");
       nameRide = { candidate: nameNotice, without: sending };
       sending = A.rideAlong(sending, N.NAME_CHANGE_RIDE, (d, p) => carryLaneNotes(d, p));

@@ -28,6 +28,7 @@ import { findSection } from "../services/deliveryReceipts.js";
 import { driftLine } from "../services/receiptDrift.js";
 import type { Doc } from "../services/documentSheet.js";
 import type { EmotionalContext } from "./emotion.js";
+import { moodHold, noteMoodHold } from "../services/moodHold.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
@@ -479,8 +480,12 @@ export async function gatherReplyFacts(
     addHint(rf, `You've been looking for "${retireAsk.text.slice(0, 140)}" for them, and it reads more like a plan of theirs than something to find. If it fits naturally in this reply and they aren't in a hard moment, ask once, in your own words and naming it plainly, whether they still want you looking for it. Never as a list or an announcement, never an offer, and never say how long it's been.`);
   }
   for (const a of opts.turn?.retire?.asked ?? []) addHint(rf, `You asked them whether they still want you looking for "${a.text.slice(0, 140)}". If this message answers that, take the answer in naturally; don't ask it again.`);
-  // The one stopped-looking line (services/askRetire.ts): code adds it to the reply word for word; don't say it again yourself.
-  if (opts.turn?.stopNote) {
+  // The one stopped-looking line (services/askRetire.ts): code adds it to the reply word for word; don't say it again yourself. A hard
+  // day makes it wait, read from this message's feeling (the turn's read is replaced with it before this runs): it goes once they're
+  // okay again, at the latest at the cap, and it's never dropped for it (services/moodHold.ts, Royce 2026-10-18). Logged once, ids only.
+  const noteMood = opts.turn?.stopNote ? moodHold(opts.turn.emotional, { now: new Date(), lastInboundAt: new Date() }) : null;
+  if (opts.turn?.stopNote && noteMood) noteMoodHold("stop_note_hold", opts.turn.stopNote.kind, `${userId}:${opts.turn.stopNote.kind}:${opts.turn.stopNote.key}`, noteMood);
+  if (opts.turn?.stopNote && !noteMood?.hold) {
     rf.stopNote = opts.turn.stopNote;
     addHint(rf, `Code adds this line to your reply, once: "${opts.turn.stopNote.line}." Don't repeat it or contradict it.`);
   }
