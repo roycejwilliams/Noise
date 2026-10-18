@@ -262,6 +262,25 @@ async function transcribeVoiceMemo(audioUrl: string): Promise<string> {
   return (result as { text: string }).text ?? "";
 }
 
+// A phone number as the logs may show it: the last four digits only.
+export const phoneTail = (n: unknown) => `…${String(n ?? "").replace(/\D/g, "").slice(-4)}`;
+
+// A voice memo's words. The log line says one came, whose (by user id), how
+// long it was and whether it worked, never the words or the phone number:
+// Railway logs are kept outside the member's record, so "forget by default"
+// could not reach them (Royce, 2026-10-18).
+export async function voiceMemoText(audioUrl: string, userId: string, transcribe: (url: string) => Promise<string> = transcribeVoiceMemo): Promise<string> {
+  try {
+    const text = await transcribe(audioUrl);
+    console.log(`sendblue: voice memo transcribed (user ${userId}, ${text.length} chars)`);
+    return text;
+  } catch (transcribeErr: any) {
+    console.error(`sendblue: voice memo transcription failed (user ${userId}): ${transcribeErr?.name ?? "Error"}: ${transcribeErr?.message ?? transcribeErr}`);
+    // Fall back to treating as a media message with no text content
+    return "[voice memo]";
+  }
+}
+
 // Numbers Sendblue refused an inline reply to (SMS, or a line without it);
 // Co stops trying for them until the next restart.
 const inlineRefused = new Set<string>();
@@ -683,7 +702,7 @@ export function sendblueRouter(io: Server): Router {
         if (is_outbound) {
           if (status === "ERROR") {
             console.error(
-              `Message to ${number} failed: ${error_code} — ${error_message}`,
+              `Message to ${phoneTail(number)} failed: ${error_code} — ${error_message}`,
             );
             const userResult = await pool.query(
               `SELECT id FROM users WHERE phone_number = $1`,
@@ -724,7 +743,7 @@ export function sendblueRouter(io: Server): Router {
         // this path validated shape before either creating a user row or
         // sending. Reject before either happens.
         if (!parsePhoneNumberFromString(number, "US")?.isValid()) {
-          console.error(`sendblue webhook: malformed inbound number "${number}" — ignoring`);
+          console.error(`sendblue webhook: malformed inbound number (${String(number ?? "").length} chars) — ignoring`);
           return res.status(200).send({ received: true });
         }
 
@@ -1120,14 +1139,7 @@ export function sendblueRouter(io: Server): Router {
         if (hasMedia) {
           isVoice = await isAudioUrl(media_url);
           if (isVoice) {
-            try {
-              resolvedContent = await transcribeVoiceMemo(media_url);
-              console.log(`Transcribed voice memo from ${number}: "${resolvedContent}"`);
-            } catch (transcribeErr: any) {
-              console.error("Voice memo transcription failed:", transcribeErr?.message ?? transcribeErr);
-              // Fall back to treating as a media message with no text content
-              resolvedContent = "[voice memo]";
-            }
+            resolvedContent = await voiceMemoText(media_url, user.id);
           } else {
             let fileKind: FileKind = "unknown";
             try {
@@ -2407,7 +2419,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 from_number: process.env.SENDBLUE_PHONE_NUMBER!,
               });
             } catch (smsErr: any) {
-              console.error(`Sendblue call-confirmation send failed for ${number} (non-fatal):`, smsErr?.message ?? smsErr);
+              console.error(`Sendblue call-confirmation send failed for user ${user.id} (non-fatal):`, smsErr?.message ?? smsErr);
             }
             return res.status(200).send({ received: true, action: "call_triggered", call_sid: callResult.call_sid });
           }

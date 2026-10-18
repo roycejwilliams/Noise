@@ -22,6 +22,7 @@
     "evals/jev/rules.ts",
     "evals/adaptable/rules.ts",
     "evals/llmUsage/rules.ts",
+    "evals/logs/voiceMemo.ts",
     "evals/silence/rules.ts",
     "evals/corrections/rules.ts",
     "evals/member/knowledge.ts",
