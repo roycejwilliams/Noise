@@ -12,6 +12,8 @@ import { deckTools } from "./deckTools.js";
 import { artifactTools } from "./artifactTools.js";
 import { owedAnswerNote } from "./linkAnswer.js";
 import { recordDecision } from "../harness/core.js";
+import { loadMemberRecord } from "../services/memberRecord.js";
+import { logRefusal } from "../services/checkerRefusals.js";
 import { recordRecommendationsSent } from "../services/recommendation.js";
 import { eventCandidates, type TierMatch } from "../services/tieredRecommendation.js";
 import { loadBrief, saveBrief, type SearchIntent } from "../services/searchIntent.js";
@@ -277,14 +279,16 @@ export function loopTools(
   };
 
   // Co pages (agent/pageTools.ts): grounded on the same source as a document, their words and what Co read this turn.
+  // member: their own record (services/memberRecord.ts), read the way their words are: the checks see their first name, never a goal.
   const pageSource = async () => {
     const { loadTheirWords } = await import("../services/documentDelivery.js");
     // An image read only for its look (readReference) says nothing they said (services/designSystem.ts withoutReferenceText).
     const D = await import("../services/designSystem.js");
     const refs = ctx.dryRun ? new Set<number>() : await D.referenceImageNumbers(ctx.userId).catch(() => new Set<number>());
-    const theirs = D.withoutReferenceText([await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n"), refs);
+    const [words, member] = await Promise.all([loadTheirWords(ctx.userId).catch(() => ""), loadMemberRecord(ctx.userId).catch(() => null)]);
+    const theirs = D.withoutReferenceText([words, theirWords()].join("\n"), refs);
     const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
-    return { theirs, read };
+    return { theirs, read, member };
   };
   // A page's or deck's link, or a share link, is the turn's answer (rule 2: one text, the line plus the link). Once one sends, the
   // turn counts as answered, so a model that rightly ends without sendReply isn't followed by its leftover text or the fallback line
@@ -880,13 +884,16 @@ export function loopTools(
         const doc = resolveDocument(input);
         // Their record is their words: two weeks of their texts and calls, and this message. What Co read this turn can back only
         // an event or place in Co's own marked suggestions, never a claim about them.
-        const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
+        const [words, member] = await Promise.all([loadTheirWords(ctx.userId).catch(() => ""), loadMemberRecord(ctx.userId).catch(() => null)]);
+        const theirs = [words, theirWords()].join("\n");
         const read = [...loop.pages.values(), ...[...loop.found.values()].map((f) => `${f.name} ${usableFacts(f)}`)].join("\n");
-        const source = { theirs, read };
+        // Their own record (services/memberRecord.ts): their name and goals for the judge, their first name for the word checks.
+        const source = { theirs, read, member };
         // The word check first; a line it can't place in their words goes to a judge, so their own facts said another way pass
         // (services/documentClaims.ts). Numbers and names they never gave are refused in code either way.
         const problems = await (await import("../services/documentClaims.js")).judgedDocumentProblems(doc, source, documentProblems(doc, source));
         if (problems.length) {
+          if (!ctx.dryRun) await logRefusal({ checker: "doc.grounding", userId: ctx.userId, problems, member, extra: { title: doc.title.slice(0, 120) } });
           // Plain in the turn's facts: no document exists, so nothing about one (its sections, what's in it, what was left open) is said
           // (2026-10-12: after every try was refused, Co texted "I left the example section open..." about a document that never existed).
           docRefusals++;
@@ -1006,6 +1013,7 @@ export function loopTools(
           return { ok: false, error: have.length ? `No file #${input.file} on file for them; their files are ${have.map((f) => `#${f.n} (sent ${f.sentOn})`).join(", ")}. Ask which one.` : "They have no file on file with you. Tell them to text you the PDF first." };
         }
         const theirs = [await loadTheirWords(ctx.userId).catch(() => ""), theirWords()].join("\n");
+        const member = ctx.dryRun ? null : await loadMemberRecord(ctx.userId).catch(() => null);
         if (ctx.dryRun) {
           ctx.facts?.add("did_this_turn", `Sent them a document made from their file #${file.n}.`);
           return { ok: true, note: "Test run: nothing was drafted or sent." };
@@ -1014,8 +1022,9 @@ export function loopTools(
         if (!draft) return { ok: false, error: "The document couldn't be drafted. Give them what you can from their file in a text now, and never ask them to try again." };
         const doc = resolveDocument(draft);
         // Rule 4: the same grounding as writeDocument, with their file as part of their own record. Nothing of either is shown to Co.
-        const problems = documentProblems(doc, { theirs: `${theirs}\n${file.text}` });
+        const problems = documentProblems(doc, { theirs: `${theirs}\n${file.text}`, member });
         if (problems.length) {
+          await logRefusal({ checker: "doc.fromFile", userId: ctx.userId, problems, member, extra: { file: file.n } });
           notDone(`No document sent from their file #${file.n}: it didn't hold to their file and words.`);
           return { ok: false, error: "The draft leaned on things that weren't in their file or their words, so it wasn't sent. Say you couldn't make it hold to what they gave you, and ask what they want it to cover." };
         }

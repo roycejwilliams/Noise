@@ -13,6 +13,7 @@ import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { documentProblems, memberParts, type Doc } from "./documentSheet.js";
 import { partlyBacked, unbackedClaims, unknownOpeners } from "./documentGrounding.js";
+import { MEMBER_RECORD_RULES, headerFirst, memberHeader, withOwnName, type MemberRecord } from "./memberRecord.js";
 
 export type Judge = (prompt: string) => Promise<string>;
 export const haikuJudge: Judge = async (prompt) =>
@@ -27,8 +28,9 @@ const recent = (t: string) => {
   return nl >= 0 && nl < 400 ? cut.slice(nl + 1) : cut;
 };
 
-// Pure: the prompt.
-export function documentClaimsPrompt(lines: string[], theirWords: string): string {
+// Pure: the prompt. header: their name and goals from their own record (services/memberRecord.ts memberHeader), read first, before
+// the newest of their words (recent), with its rules (MEMBER_RECORD_RULES, Royce 2026-10-18 A+H). With no header it is as it was.
+export function documentClaimsPrompt(lines: string[], theirWords: string, header = ""): string {
   return `A member asked Cue for a document. Its main sections are THEIR points: a record of what they told Cue. Cue's own ideas go in a separate, marked suggestions box, not here. Below is everything they said, oldest first, then the lines to judge from their sections.
 
 A line PASSES when it is what they said, in other words:
@@ -44,10 +46,10 @@ A line FAILS when it adds a fact they never gave:
 - a number, count, price, date, name, partner or deal, an event, a result or outcome, a metric;
 - something presented as true about them, their guests, partner, process or results that they never said ("guests rebook more", "the importer saw sales go up", "each pairing is planned for its table" when they never said how pairings are planned);
 - a missing piece written as if it were there (an example, a quote, a detail they said they don't have yet).
-
+${header ? `\n${MEMBER_RECORD_RULES}\n` : ""}
 What they said:
 """
-${recent(theirWords)}
+${headerFirst(header, recent(theirWords))}
 """
 
 Lines to judge:
@@ -58,11 +60,11 @@ Return ONLY JSON: {"backed": [<numbers of the lines that PASS>], "fails": [{"n":
 
 // The judge's read: the lines it read as theirs, and why each other line fails. Null when it couldn't run. Tried twice.
 export type Verdict = { backed: Set<string>; why: Map<string, string> };
-export async function judgeLines(lines: string[], theirWords: string, judge: Judge = haikuJudge): Promise<Verdict | null> {
+export async function judgeLines(lines: string[], theirWords: string, judge: Judge = haikuJudge, header = ""): Promise<Verdict | null> {
   if (!lines.length) return { backed: new Set(), why: new Map() };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const out = parseModelJson<{ backed?: unknown[]; fails?: { n?: number; why?: string }[] }>(await judge(documentClaimsPrompt(lines, theirWords)));
+      const out = parseModelJson<{ backed?: unknown[]; fails?: { n?: number; why?: string }[] }>(await judge(documentClaimsPrompt(lines, theirWords, header)));
       if (!Array.isArray(out?.backed)) continue;
       const ok = (n: unknown): n is number => typeof n === "number" && n >= 1 && n <= lines.length;
       const fails = (out.fails ?? []).filter((f) => ok(f?.n));
@@ -80,16 +82,19 @@ export async function judgeLines(lines: string[], theirWords: string, judge: Jud
 // the word check couldn't place, and for long lines it passed with some words not theirs (where a claim of Co's own can hide in their
 // vocabulary). Numbers and names they never gave are never sent to it. Fail safe: if the judge can't run, the word check's verdict
 // stands. problems: documentProblems(doc, source) already run by the caller.
-export async function judgedDocumentProblems(doc: Doc, source: { theirs: string; read?: string }, problems: string[] = documentProblems(doc, source), judge: Judge = haikuJudge): Promise<string[]> {
+// source.member (services/memberRecord.ts): the word checks here read their own first name with their words (withOwnName, ruling
+// iii: never a goal), and the judge reads their name and goals first (memberHeader). The judge's verdict is passed through as it is.
+export async function judgedDocumentProblems(doc: Doc, source: { theirs: string; read?: string; member?: MemberRecord | null }, problems: string[] = documentProblems(doc, source), judge: Judge = haikuJudge): Promise<string[]> {
   const parts = memberParts(doc);
-  const soft = unbackedClaims(parts, source.theirs, { strict: true }).filter((u) => !u.hard.length).map((u) => u.text);
-  const partial = partlyBacked(parts, source.theirs, { strict: true });
+  const theirs = withOwnName(source.theirs, source.member);
+  const soft = unbackedClaims(parts, theirs, { strict: true }).filter((u) => !u.hard.length).map((u) => u.text);
+  const partial = partlyBacked(parts, theirs, { strict: true });
   // A line opening on a capitalized word they never used may open on a name: the judge reads it, and without a judge it's held.
-  const openers = unknownOpeners(parts, source.theirs);
+  const openers = unknownOpeners(parts, theirs);
   const judged = [...new Set([...partial, ...openers.map((x) => x.line)])];
   const lines = [...new Set([...soft, ...judged])];
   if (!lines.length) return problems;
-  const v = await judgeLines(lines, source.theirs, judge);
+  const v = await judgeLines(lines, source.theirs, judge, memberHeader(source.member));
   if (!v) return [...problems, ...openers.filter((x) => !problems.some((p) => p.includes(x.line.slice(0, 60)))).map((x) => `"${x.line.slice(0, 90)}" opens on ${x.word}, which they never said: if it's a name, leave it out or ask them`)].slice(0, 7);
   const judgedOut = new Map(judged.filter((l) => !v.backed.has(l)).map((l) => [l, v.why.get(l) ?? "it adds something they never said"] as [string, string]));
   return documentProblems(doc, source, { backed: v.backed, judgedOut });

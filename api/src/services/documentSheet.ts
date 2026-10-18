@@ -12,6 +12,7 @@ import { z } from "zod";
 import { EMAIL_COLORS as C, escapeHtml } from "./emailDesign.js";
 import { unsourced } from "./offerGuard.js";
 import { unbackedClaims, type Unbacked } from "./documentGrounding.js";
+import { withOwnName, type MemberRecord } from "./memberRecord.js";
 
 export const DOC_LIMITS = { maxSections: 10, maxParagraphs: 6, maxBullets: 10, titleChars: 70, noteChars: 240, headingChars: 70, paragraphChars: 700, bulletChars: 220, totalChars: 6500, minChars: 80, maxParagraphWords: 60, bulletsExpectedAfterChars: 600, maxSuggestions: 5, suggestionChars: 220 };
 
@@ -105,8 +106,11 @@ const sentencesOf = (t: string) => (t.match(/[^.!?\n]+[.!?]*/g) ?? []).map((s) =
 //   o.backed: claims a judge read as their own words, rephrased (services/documentClaims.ts): not refused for wording. Their numbers
 //             and names are still checked here, whatever the judge said.
 //   o.judgedOut: lines the word check passed that a judge read as adding a claim, with why.
-export function documentProblems(doc: Doc, source: { theirs: string; read?: string }, o: { backed?: ReadonlySet<string>; judgedOut?: ReadonlyMap<string, string> } = {}): string[] {
+//   member: their own record (services/memberRecord.ts): the checks read their own first name with their words, and nothing else
+//           from it (ruling iii: a name in a goal is not one they gave; Royce 2026-10-18 A+H).
+export function documentProblems(doc: Doc, source: { theirs: string; read?: string; member?: MemberRecord | null }, o: { backed?: ReadonlySet<string>; judgedOut?: ReadonlyMap<string, string> } = {}): string[] {
   const L = DOC_LIMITS;
+  const theirs = withOwnName(source.theirs, source.member);
   const out: string[] = [];
   if (doc.title.length < 3) out.push("it needs a title");
   if (!doc.sections.length) out.push("it has nothing in it: give it sections with paragraphs or bullets");
@@ -125,15 +129,15 @@ export function documentProblems(doc: Doc, source: { theirs: string; read?: stri
   // Their record is their words: an event, place or time must be one they gave (or one of Co's marked suggestions, from what Co read).
   const mine = memberParts(doc).join("\n");
   for (const s of sentencesOf(mine)) {
-    const bad = unsourced(s, source.theirs);
+    const bad = unsourced(s, theirs);
     if (bad.length) out.push(`"${s.slice(0, 80)}" names ${bad.map((m) => m.text).join(", ")}, which they never said`);
   }
   for (const s of sentencesOf(doc.suggestions.join("\n"))) {
-    const bad = unsourced(s, `${source.theirs}\n${source.read ?? ""}`);
+    const bad = unsourced(s, `${theirs}\n${source.read ?? ""}`);
     if (bad.length) out.push(`the suggestion "${s.slice(0, 70)}" names ${bad.map((m) => m.text).join(", ")}, which they never said and you never read`);
   }
   // And every claim in their sections rests on their words, close together: Co's own reasoning is a suggestion, not their point.
-  for (const u of unbackedClaims(memberParts(doc), source.theirs, { strict: true }).filter((x) => x.hard.length || !o.backed?.has(x.text)).slice(0, 4)) {
+  for (const u of unbackedClaims(memberParts(doc), theirs, { strict: true }).filter((x) => x.hard.length || !o.backed?.has(x.text)).slice(0, 4)) {
     out.push(claimProblem(u));
   }
   // Lines the word check passed but a judge read as adding a claim (documentClaims.ts).

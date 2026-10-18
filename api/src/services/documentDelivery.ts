@@ -483,6 +483,9 @@ export async function recordDocumentSent(userId: string, doc: Pick<Doc, "title">
 export type TaskDocResult = { ok: true; title: string; via: string; line?: string; pdfPending?: boolean } | { ok: false; why: string; problems?: string[]; blocked?: boolean; nextAt?: Date; duplicate?: boolean };
 export type TaskDocDeps = {
   theirWords: (userId: string) => Promise<string>;
+  // Their own record for the checks (services/memberRecord.ts): name and goals for the judge, first name for the word checks.
+  // Optional, so stubs without it work (no record: the checks run as before).
+  member?: (userId: string) => Promise<import("./memberRecord.js").MemberRecord | null>;
   blocked: typeof documentSendBlocked;
   deliver: typeof deliverDocument;
   record: typeof recordDocumentSent;
@@ -493,7 +496,7 @@ export type TaskDocDeps = {
   release?: (userId: string, ledgerId: number) => Promise<void>;
 };
 export const realTaskDocDeps: TaskDocDeps = {
-  theirWords: loadTheirWords, blocked: documentSendBlocked, deliver: deliverDocument, record: recordDocumentSent, now: () => new Date(),
+  theirWords: loadTheirWords, member: async (userId) => (await import("./memberRecord.js")).loadMemberRecord(userId), blocked: documentSendBlocked, deliver: deliverDocument, record: recordDocumentSent, now: () => new Date(),
   claim: async (c) => (await import("../harness/proactive.js")).claimCoInitiatedSend({ userId: c.userId, type: "task_update", targetKey: c.targetKey, message: c.message, kind: c.kind, timezone: c.zone, now: c.now }),
   release: async (userId, id) => (await import("../harness/proactive.js")).releaseCoInitiatedClaim(userId, id),
 };
@@ -509,7 +512,8 @@ export async function sendDocumentForTask(
   const { resolveDocument, documentProblems } = await import("./documentSheet.js");
   const doc = resolveDocument(input);
   const theirs = [await deps.theirWords(o.userId).catch(() => ""), o.taskTheirWords].join("\n");
-  const problems = await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs, read: o.read }, documentProblems(doc, { theirs, read: o.read }));
+  const member = deps.member ? await deps.member(o.userId).catch(() => null) : null;
+  const problems = await (await import("./documentClaims.js")).judgedDocumentProblems(doc, { theirs, read: o.read, member }, documentProblems(doc, { theirs, read: o.read, member }));
   if (problems.length) return { ok: false, problems, why: `Not sent: ${problems.slice(0, 5).join(" | ")}. Fix these and try once more: their points only in their own words; your plan, ideas and recommendations go in suggestions.` };
   // Their quiet hours hold it to their 8am, unless they asked for it right away, in their own words.
   const { askedForImmediate, nextDeliveryTime } = await import("./memberTime.js");
@@ -552,6 +556,11 @@ export async function sendDocumentForTask(
 
 // What a document may rest on: what they said in the last two weeks (their texts and their side of calls). Never Co's own lines.
 export async function loadTheirWords(userId: string): Promise<string> {
+  return (await loadTheirLines(userId)).join("\n");
+}
+// The same words, one entry per text or call (oldest first), for a reader that orders them its own way (a deck's judge reads the
+// newest first: agent/deckTools.ts deckSource).
+export async function loadTheirLines(userId: string): Promise<string[]> {
   const { rows } = await pool
     .query(
       `SELECT memory_type, content FROM co_memories
@@ -568,6 +577,5 @@ export async function loadTheirWords(userId: string): Promise<string> {
       r.memory_type === "call_transcript"
         ? String(r.content).split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, "")).join(" ")
         : String(r.content).replace(/^User said:\s*/i, ""),
-    )
-    .join("\n");
+    );
 }

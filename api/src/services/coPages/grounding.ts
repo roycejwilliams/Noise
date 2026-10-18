@@ -8,8 +8,11 @@ import { placeholderIn } from "./art.js";
 import { unsourced } from "../offerGuard.js";
 import * as OG from "../offerGuard.js";
 import { unbackedClaims } from "../documentGrounding.js";
+import { withOwnName, type MemberRecord } from "../memberRecord.js";
 
-export type PageSource = { theirs: string; read: string };
+// member: their own record (services/memberRecord.ts, Royce 2026-10-18 A+H). The checks here read only their own first name from it,
+// with their words (withOwnName): a name in a goal is still one they never gave (ruling iii).
+export type PageSource = { theirs: string; read: string; member?: MemberRecord | null };
 
 // Pure: every line of text a page shows, with where it is (for the problem message).
 export function pageLines(d: CoPageData): { where: string; text: string }[] {
@@ -73,7 +76,7 @@ const unlabeled = (s: string) => {
 
 export function pageProblems(d: CoPageData, source: PageSource): string[] {
   // A bare time stands for am and pm only in their own words, never in a page Co read ("open until 11"): review of PR 2.
-  const corpus = `${sameTimes(source.theirs, "theirs")}\n${sameTimes(source.read)}`;
+  const corpus = `${sameTimes(withOwnName(source.theirs, source.member), "theirs")}\n${sameTimes(source.read)}`;
   const out: string[] = [];
   for (const l of pageLines(d)) {
     // A bracketed gap never ships on a page either (the deck rule below; review: "[Gallery]" in a title).
@@ -98,7 +101,7 @@ export function deckProblems(d: import("./deck.js").DeckData, source: PageSource
   // Times read the way pages read them (sameTimes, Royce 2026-10-17: "'8:00 PM' matches the member's '8 PM', the same as pages. Made-up
   // times stay refused"). S1-a: 15 decks were refused for "8:00 PM: Supper" when the member wrote "supper … 8 PM". Times only: dates
   // are compared as written, as before (sameTimes o.dates).
-  const corpus = `${sameTimes(source.theirs, "theirs", { dates: false })}\n${sameTimes(source.read, "page", { dates: false })}`;
+  const corpus = `${sameTimes(withOwnName(source.theirs, source.member), "theirs", { dates: false })}\n${sameTimes(source.read, "page", { dates: false })}`;
   const lines: { where: string; text: string }[] = [
     { where: "title", text: d.title },
     { where: "subtitle", text: d.subtitle },

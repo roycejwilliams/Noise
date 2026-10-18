@@ -12,16 +12,22 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import { MODELS } from "../../models.js";
 import { parseModelJson } from "../modelJson.js";
+import { MEMBER_RECORD_RULES, headerFirst } from "../memberRecord.js";
 
 export type Judge = (prompt: string) => Promise<string>;
 const haiku: Judge = async (prompt) =>
   (await generateText({ model: anthropic(MODELS.haiku), experimental_telemetry: { isEnabled: true, functionId: "deck.claims" }, prompt, abortSignal: AbortSignal.timeout(20_000) })).text;
 
+// How much of their words the judge reads: the first 6,000 characters. The header (services/memberRecord.ts memberHeader: their name
+// and goals, capped at 1,200) goes first, so it is always inside; their words, newest first, take the rest.
+export const JUDGE_WORDS_CHARS = 6000;
+
 // Pure: the prompt. self: what Co knows about itself, when the deck is about Co (else empty). thread: Co's text directly before
 // their latest message, and that message (approvalPair),
 // so a line Co proposed and they approved ("Ok create the doc", 2026-10-12 audit) is theirs; whether they approved it is the
-// judge's read, never a word list.
-export function claimsPrompt(lines: string[], theirWords: string, self = "", thread = ""): string {
+// judge's read, never a word list. header: their name and goals from their own record (memberHeader), read first, with its rules
+// (MEMBER_RECORD_RULES, Royce 2026-10-18 A+H); with no header the prompt is as it was.
+export function claimsPrompt(lines: string[], theirWords: string, self = "", thread = "", header = ""): string {
   return `A member asked for a slide deck. Below is everything they said for it${self ? ", what Cue knows about itself (the deck is about Cue)" : ""}${thread ? ", Cue's last text and their reply to it" : ""}, then every line on the deck.
 
 A pitch deck's job is rhetoric. A line PASSES when it is:
@@ -35,10 +41,10 @@ about the market, the industry or the world, with or without a number ("Most ret
 doubling", "No one recycles X at scale", a market size, a share, a trend stated as fact) that nothing in what they said or what
 was read for it backs: it fails even when it sounds like framing. A stance about the market ("The next wave of X needs Y") is still
 rhetoric and passes; a statement of what is true out there needs their words or a source.${thread ? " Their approval of Cue's last text never backs a hard fact: names of people, numbers, partners, counts, dates and events must still come from their own words, never from Cue's text. A Cue text they didn't clearly approve (a question back, a doubt, a change of subject) backs nothing." : ""}
-
+${header ? `\n${MEMBER_RECORD_RULES}\n` : ""}
 What they said (and what was read for this deck, when anything was):
 """
-${theirWords.slice(0, 6000)}
+${headerFirst(header, theirWords).slice(0, JUDGE_WORDS_CHARS)}
 """
 ${self ? `
 What Cue knows about itself (facts):
@@ -81,11 +87,13 @@ export function parseClaimFails(text: string, lineCount: number): { n: number; w
 // The lines that add a claim, or null when the check couldn't run.
 // Tried twice before giving up (PR 6: on a call the check timed out and, failing open, let "no free tier, no trials" onto a deck).
 // An answer that doesn't read (parseClaimFails) counts as the check not running: tried again, then null, and the caller makes nothing.
-export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = ""): Promise<{ line: string; why: string }[] | null> {
+// header: their name and goals (memberHeader), read first. The judge's fails are passed through as they are: nothing here clears a
+// line the judge refused, whatever is on file for them (A+H: a goal is context for the judge, never a pass in code).
+export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = "", header = ""): Promise<{ line: string; why: string }[] | null> {
   if (!lines.length) return [];
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const fails = parseClaimFails(await judge(claimsPrompt(lines, theirWords, self, thread)), lines.length);
+      const fails = parseClaimFails(await judge(claimsPrompt(lines, theirWords, self, thread, header)), lines.length);
       if (!fails) continue;
       return fails.map((f) => ({ line: lines[f.n - 1], why: f.why }));
     } catch {

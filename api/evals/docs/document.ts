@@ -269,7 +269,9 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("suggestions are capped at five", D.resolveDocument({ title: "T", sections: [{ bullets: ["x"] }], suggestions: Array.from({ length: 9 }, (_, i) => `idea ${i}`) }).suggestions.length === 5);
   // The input is one definition, shared by the reply and a task keeping a promise (services/documentSheet.ts WRITE_DOCUMENT_INPUT).
   check("the tool takes suggestions and says so", /suggestions: z\.array\(z\.string\(\)\)\.max\(5\)\.optional\(\)/.test(src("services/documentSheet.ts")) && /ONLY what they said, in their words/.test(src("services/documentSheet.ts")) && /inputSchema: WRITE_DOCUMENT_INPUT/.test(src("agent/loopTools.ts")));
-  check("their record rests on their words alone: what Cue read can back only a suggestion", /const source = \{ theirs, read \}/.test(src("agent/loopTools.ts")) && !/JSON\.stringify\(t\?\.profile/.test(src("agent/loopTools.ts")));
+  // A+H (Royce, 2026-10-18): their own record rides with their words (member: name and goals for the judge, first name for the word
+  // checks; evals/files/checkersKnowMember.ts), never the profile as text.
+  check("their record rests on their words alone: what Cue read can back only a suggestion", /const source = \{ theirs, read, member \}/.test(src("agent/loopTools.ts")) && !/JSON\.stringify\(t\?\.profile/.test(src("agent/loopTools.ts")));
   // The filename
   check("filename: a title starting 'Cue:' does not become Co-Co", D.docFilename("Cue: Product Positioning and Scaling Notes", "2026-10-07") === "Cue-Product-Positioning-and-Scaling-Notes-2026-10-07.pdf", D.docFilename("Cue: Product Positioning and Scaling Notes", "2026-10-07"));
   check("filename: 'Cue Capability and Sequin AI Launch Party Funnel' does not either", D.docFilename("Cue Capability and Sequin AI Launch Party Funnel", "2026-10-07") === "Cue-Capability-and-Sequin-AI-Launch-Party-Funnel-2026-10-07.pdf", D.docFilename("Cue Capability and Sequin AI Launch Party Funnel", "2026-10-07"));

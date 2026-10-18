@@ -167,9 +167,13 @@ export async function pageLook(ctx: ConversationToolContext, input: any, was: an
 
 export function pageTools(
   ctx: ConversationToolContext,
-  o: { say: (text: string, record: string) => Promise<boolean>; notDone: (what: string) => void; source: () => Promise<{ theirs: string; read: string }> },
+  o: { say: (text: string, record: string) => Promise<boolean>; notDone: (what: string) => void; source: () => Promise<{ theirs: string; read: string; member?: import("../services/memberRecord.js").MemberRecord | null }> },
 ) {
   const S = () => import("../services/coPages/store.js");
+  // Every refusal logged with its reason (services/checkerRefusals.ts, Royce 2026-10-18).
+  const refused = async (problems: string[], source: { member?: import("../services/memberRecord.js").MemberRecord | null }, extra: Record<string, unknown>) => {
+    if (!ctx.dryRun) await (await import("../services/checkerRefusals.js")).logRefusal({ checker: "page.grounding", userId: ctx.userId, problems, member: source.member, extra });
+  };
   // Their look and their images for a page (2026-10-11, PR 2), the same way a deck takes them: taste they describe now (their words,
   // saved) or their saved taste, else Co's own design (a page never asks); images only theirs, sent for it, already on it, or named.
   const lookFor = (input: any, was: any | null, theirs: string) => pageLook(ctx, input, was, theirs);
@@ -191,6 +195,7 @@ export function pageTools(
         if ("error" in look) return { ok: false, error: look.error };
         const checked = store.checkPage(pageDataFrom(input, look), source);
         if (!checked.ok) {
+          await refused(checked.problems, source, { title: String(input.title ?? "").slice(0, 120), event: "make" });
           o.notDone(`No page made: ${checked.problems.slice(0, 3).join("; ")}.`);
           return { ok: false, error: `Not made: ${checked.problems.slice(0, 6).join(" | ")}. Fix these and try once more, or give them the points in a text and say the page isn't there yet.` };
         }
@@ -214,6 +219,7 @@ export function pageTools(
         const shipped = qa ? (!qa.fixed.length || fixedOk?.ok ? qa.final : qa.first) : null;
         const made = await store.createCoPage(imaged, { ownerUserId: ctx.userId, source }).catch((err: any) => ({ ok: false as const, problems: [String(err?.message ?? err).slice(0, 160)] }));
         if (!made.ok) {
+          await refused(made.problems, source, { title: String(input.title ?? "").slice(0, 120), event: "store" });
           o.notDone("The page wasn't made.");
           return { ok: false, error: `Not made (${made.problems.slice(0, 2).join("; ")}). Give them the points in a text and say plainly the page isn't there.` };
         }
@@ -276,6 +282,7 @@ export function pageTools(
           return { ok: false, error: "Not changed: another change to this page landed after you read it. Open it again and make this change on the newest version, or tell them plainly it isn't changed yet." };
         }
         if (!r.ok) {
+          await refused(r.problems, source, { page: pick.id.slice(0, 4), event: "change" });
           o.notDone(`The page wasn't changed: ${r.problems.slice(0, 2).join("; ")}.`);
           return { ok: false, error: `Not changed: ${r.problems.slice(0, 5).join(" | ")}. Fix these and try once more, or tell them plainly it isn't changed yet.` };
         }
