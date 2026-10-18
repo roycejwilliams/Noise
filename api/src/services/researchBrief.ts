@@ -156,7 +156,10 @@ export async function findVenueOptions(userId: string, query: string, ask: Venue
     if (i > 0 && ownPlaces().length >= BRIEF_LIMITS.maxOptions) break;
     const seen = [...new Set(kept.map((k) => coreName(k.name)))].slice(0, 12).join("; ");
     const q = i === 0 ? `${query} ${ownPage}` : `${query} ${ownPage} ${angle}${seen ? ` ${seen}.` : ""}`;
-    const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4, ownPage: "private events or private dining page", readsPageItself: true });
+    // A brief is always one the member asked for (or said yes to), so its searches draw from the direct-ask share of the day's web
+    // search budget, never the sweep's (re-review of #235: it defaulted to "sweep", so a used-up sweep share blocked a member's brief
+    // while the direct-ask share sat unused).
+    const r = await taskWebSearch(userId, q, { city: ask.city, zone, background: true, max: BRIEF_LIMITS.maxOptions, searches: 4, ownPage: "private events or private dining page", readsPageItself: true, source: "request" });
     if (/^(?:Web search failed|No web search right now)/.test(r.note)) failures.push(r.note);
     for (const k of r.kept) if (!kept.some((x) => x.url === k.url || (own(x) && own(k) && (placeKey(x) === placeKey(k) || sameName(x.name, k.name))))) kept.push(k);
     log.push({ pass: i + 1, kept: r.kept.length, own: r.kept.filter(own).length, listicles: r.kept.filter((k) => !own(k)).map((k) => k.url).slice(0, 4) });
