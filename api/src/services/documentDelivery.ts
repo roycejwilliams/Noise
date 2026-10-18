@@ -571,11 +571,28 @@ export async function loadTheirLines(userId: string): Promise<string[]> {
     .catch(() => ({ rows: [] as any[] }));
   // Oldest first (the newest 120): one stable order, so a claim that spans two of their texts reads in the order they said it, and
   // the verdict doesn't turn on which messages sit next to which (2026-10-12).
+  return rows.reverse().map(theirLine);
+}
+// One row as their words: a call's lines that are theirs, or a text without its prefix.
+const theirLine = (r: any): string =>
+  r.memory_type === "call_transcript"
+    ? String(r.content).split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, "")).join(" ")
+    : String(r.content).replace(/^User said:\s*/i, "");
+// Everything they've said, with when (Royce, 2026-10-18: a fact said months ago must reach the deck judge; services/judgeWords.ts
+// picks the parts that match the deck's lines). The same rows as their 14 days, any age: their texts and their side of calls, their
+// user id only, teammate texts left out. Oldest first; the newest HISTORY_LIMIT rows.
+export const HISTORY_LIMIT = 3000;
+export async function loadTheirHistory(userId: string): Promise<{ at: string; text: string }[]> {
+  const { rows } = await pool
+    .query(
+      `SELECT memory_type, content, created_at FROM co_memories
+       WHERE user_id = $1 AND (memory_type = 'call_transcript' OR (memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()}))
+       ORDER BY created_at DESC LIMIT $2`,
+      [userId, HISTORY_LIMIT],
+    )
+    .catch(() => ({ rows: [] as any[] }));
   return rows
     .reverse()
-    .map((r: any) =>
-      r.memory_type === "call_transcript"
-        ? String(r.content).split("\n").filter((l) => /^\s*user\s*:/i.test(l)).map((l) => l.replace(/^\s*user\s*:\s*/i, "")).join(" ")
-        : String(r.content).replace(/^User said:\s*/i, ""),
-    );
+    .map((r: any) => ({ at: new Date(r.created_at).toISOString(), text: theirLine(r) }))
+    .filter((r) => r.text.trim());
 }

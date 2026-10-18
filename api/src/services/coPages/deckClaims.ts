@@ -13,6 +13,7 @@ import { generateText } from "ai";
 import { MODELS } from "../../models.js";
 import { parseModelJson } from "../modelJson.js";
 import { MEMBER_RECORD_RULES, headerFirst, sliceSafe } from "../memberRecord.js";
+import { CHANGEABLE, EXCERPTS_TITLE, OLD_FACT_DAYS } from "../judgeWords.js";
 
 export type Judge = (prompt: string) => Promise<string>;
 const haiku: Judge = async (prompt) =>
@@ -25,6 +26,15 @@ const haiku: Judge = async (prompt) =>
 export const JUDGE_WORDS_CHARS = 6000;
 export const JUDGE_READ_CHARS = 4000;
 export const READ_TITLE = "What Cue read for this deck (pages Cue read, not their words):";
+// The rules for their words when they come with matched excerpts from their whole history (services/judgeWords.ts), Royce
+// 2026-10-18: a recent match backs a line; an old match on something that changes is its own verdict, "stale", never a pass and never
+// "invented". Matching pulls in their lines on the same topic (judgeWords.ts), so a line said in other words reaches the judge; no
+// extra instruction to read for meaning (Royce, same day: not added until a miss shows it's needed). Code still guards names, numbers
+// and times (grounding.ts); nothing here clears a refusal.
+export const EXCERPT_RULES = `Their words come in two parts: first, things they said earlier that match these deck lines, each marked with how long ago they said it ("[said 4 months ago]"); then their newest words.
+- A line backed by something they said in the last ${OLD_FACT_DAYS} days, or in their newest words, is backed.
+- A line backed only by something they said more than ${OLD_FACT_DAYS} days ago, about something that changes (${Object.keys(CHANGEABLE).join("; ")}), is neither backed nor invented: put it under "stale", with what may have changed. It is not a fail.`;
+
 // Pure: the box the judge reads.
 export function judgeBox(header: string, theirWords: string, read = ""): string {
   const r = read.trim() ? `${READ_TITLE}\n${sliceSafe(read.trim(), JUDGE_READ_CHARS)}\n\n` : "";
@@ -51,7 +61,7 @@ about the market, the industry or the world, with or without a number ("Most ret
 doubling", "No one recycles X at scale", a market size, a share, a trend stated as fact) that nothing in what they said or what
 was read for it backs: it fails even when it sounds like framing. A stance about the market ("The next wave of X needs Y") is still
 rhetoric and passes; a statement of what is true out there needs their words or a source.${thread ? " Their approval of Cue's last text never backs a hard fact: names of people, numbers, partners, counts, dates and events must still come from their own words, never from Cue's text. A Cue text they didn't clearly approve (a question back, a doubt, a change of subject) backs nothing." : ""}
-${header ? `\n${MEMBER_RECORD_RULES}\n` : ""}
+${header ? `\n${MEMBER_RECORD_RULES}\n` : ""}${theirWords.startsWith(EXCERPTS_TITLE) ? `\n${EXCERPT_RULES}\n` : ""}
 What they said (and what was read for this deck, when anything was):
 """
 ${judgeBox(header, theirWords, read)}
@@ -70,13 +80,13 @@ ${thread.slice(-3000)}
 Deck lines:
 ${lines.map((l, i) => `${i + 1}. ${l}`).join("\n")}
 
-Return ONLY JSON: {"fails": [{"n": <line number>, "why": "<the hard fact they didn't give, in a few words>"}]}. Empty list when every line passes.`;
+${theirWords.startsWith(EXCERPTS_TITLE) ? `Return ONLY JSON: {"fails": [{"n": <line number>, "why": "<the hard fact they didn't give, in a few words>"}], "stale": [{"n": <line number>, "why": "<what may have changed since they said it, in a few words>"}]}. Empty lists when every line passes; a line is in one list at most.` : `Return ONLY JSON: {"fails": [{"n": <line number>, "why": "<the hard fact they didn't give, in a few words>"}]}. Empty list when every line passes.`}`;
 }
 
 // Pure: the judge's answer read strictly, or null when it isn't one. A "fails" list is required (a missing one is not "nothing
 // failed"), and every entry must name a real line by its whole number: an answer pointing past the deck, or at no line, is an
 // answer the check can't trust, so it isn't read as a pass for the lines it skipped.
-export function parseClaimFails(text: string, lineCount: number): { n: number; why: string }[] | null {
+export function parseClaimFails(text: string, lineCount: number): { n: number; why: string; old?: true }[] | null {
   let out: unknown;
   try {
     out = parseModelJson<unknown>(text);
@@ -85,11 +95,17 @@ export function parseClaimFails(text: string, lineCount: number): { n: number; w
   }
   const fails = (out as { fails?: unknown } | null)?.fails;
   if (!Array.isArray(fails)) return null;
-  const read: { n: number; why: string }[] = [];
-  for (const f of fails) {
-    const n = (f as { n?: unknown } | null)?.n;
-    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > lineCount) return null;
-    read.push({ n, why: String((f as { why?: unknown }).why ?? "").slice(0, 120) });
+  // "stale" (an old fact that may have changed, EXCERPT_RULES): optional, read as strictly as fails; a line in both is a fail.
+  const stale = (out as { stale?: unknown } | null)?.stale;
+  if (stale !== undefined && !Array.isArray(stale)) return null;
+  const read: { n: number; why: string; old?: true }[] = [];
+  for (const [list, old] of [[fails, false], [stale ?? [], true]] as [unknown[], boolean][]) {
+    for (const f of list) {
+      const n = (f as { n?: unknown } | null)?.n;
+      if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > lineCount) return null;
+      if (old && read.some((r) => r.n === n)) continue;
+      read.push({ n, why: String((f as { why?: unknown }).why ?? "").slice(0, 120), ...(old ? { old: true as const } : {}) });
+    }
   }
   return read;
 }
@@ -99,13 +115,14 @@ export function parseClaimFails(text: string, lineCount: number): { n: number; w
 // An answer that doesn't read (parseClaimFails) counts as the check not running: tried again, then null, and the caller makes nothing.
 // header: their name and goals (memberHeader), read first. The judge's fails are passed through as they are: nothing here clears a
 // line the judge refused, whatever is on file for them (A+H: a goal is context for the judge, never a pass in code).
-export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = "", header = "", read = ""): Promise<{ line: string; why: string }[] | null> {
+// old: the judge read the line as backed only by an old fact that may have changed ("stale"): not a pass, not invented; its own kind.
+export async function inventedLines(lines: string[], theirWords: string, judge: Judge = haiku, self = "", thread = "", header = "", read = ""): Promise<{ line: string; why: string; old?: true }[] | null> {
   if (!lines.length) return [];
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const fails = parseClaimFails(await judge(claimsPrompt(lines, theirWords, self, thread, header, read)), lines.length);
       if (!fails) continue;
-      return fails.map((f) => ({ line: lines[f.n - 1], why: f.why }));
+      return fails.map((f) => ({ line: lines[f.n - 1], why: f.why, ...(f.old ? { old: true as const } : {}) }));
     } catch {
       continue;
     }

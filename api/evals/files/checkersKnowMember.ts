@@ -103,10 +103,10 @@ const box = (prompt: string, open: string) => {
   check("order (deck judge): a page Cue read is in the prompt with 120 long texts of their words", pr.includes(page) && words14.length > DC.JUDGE_WORDS_CHARS, { words: words14.length });
   check("order (deck judge): header, then what Cue read, then their words", pb.startsWith(hA) && pb.indexOf(DC.READ_TITLE) > pb.indexOf(hA) && pb.indexOf("text 0:") > pb.indexOf(page), pb.slice(0, 400));
   check("order (deck judge): what Cue read is capped (4,000) and their words keep their 6,000", DC.JUDGE_READ_CHARS === 4000 && !box(DC.claimsPrompt(["x"], words14, "", "", "", "r".repeat(9000)), "What they said (and what was read for this deck, when anything was):").includes("r".repeat(4001)) && box(DC.claimsPrompt(["x"], words14, "", "", "", "r".repeat(9000)), "What they said (and what was read for this deck, when anything was):").includes(words14.slice(0, 5990)));
-  check("order (deck tool): what Cue read goes in its own block, not after their words", /C\.inventedLines\(lines, source\.judged, undefined, self, source\.thread \?\? "", header, source\.read\)/.test(src("agent/deckTools.ts")));
+  check("order (deck tool): what Cue read goes in its own block, not after their words", /C\.inventedLines\(lines, words, undefined, self, source\.thread \?\? "", header, source\.read\)/.test(src("agent/deckTools.ts")));
   const many = M.memberHeader({ firstName: "Ellis", lastName: "Hart", goals: Array.from({ length: 30 }, (_, i) => `goal ${i} ${"word ".repeat(120)}`) });
-  // The cap as proposed (1,200 characters, 6 goals, 200 a goal), pinned as numbers so a looser constant fails here.
-  check("cap: the header is at most 1,200 characters, 6 goals, 200 characters a goal", M.HEADER_LIMITS.chars === 1200 && M.HEADER_LIMITS.goals === 6 && M.HEADER_LIMITS.goalChars === 200 && many.length <= 1200 && (many.match(/^ {2}- "/gm) ?? []).length <= 6 && many.split("\n").every((l) => l.length <= 208), { len: many.length, goals: (many.match(/^ {2}- "/gm) ?? []).length });
+  // The cap (1,600 characters, 12 goals, 200 a goal; raised after the A+H re-measure), pinned as numbers so a looser constant fails.
+  check("cap: the header is at most 1,600 characters, 12 goals, 200 characters a goal", M.HEADER_LIMITS.chars === 1600 && M.HEADER_LIMITS.goals === 12 && M.HEADER_LIMITS.goalChars === 200 && many.length <= 1600 && (many.match(/^ {2}- "/gm) ?? []).length <= 12 && many.split("\n").every((l) => l.length <= 208), { len: many.length, goals: (many.match(/^ {2}- "/gm) ?? []).length });
   check("cap: a capped header leaves their words their whole 6,000", (() => {
     const b2 = box(DC.claimsPrompt(["x"], LONG, "", "", many), "What they said (and what was read for this deck, when anything was):");
     return b2.startsWith(M.HEADER_TITLE) && b2.length - many.length >= DC.JUDGE_WORDS_CHARS - 2;
@@ -184,7 +184,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capi
   check("code: their name is never added to the words the checks read", !/export function withOwnName/.test(src("services/memberRecord.ts")) && ![src("services/coPages/grounding.ts"), src("services/documentSheet.ts"), src("services/documentClaims.ts"), src("agent/deckTools.ts")].some((t) => /withOwnName/.test(t)));
   // Unicode: a cut never splits a character (review of #241).
   const uni = M.memberHeader({ firstName: "Zoë", lastName: "Ñúñez", goals: ["🚀".repeat(150), ...Array.from({ length: 8 }, (_, i) => `ゴール ${i} ` + "長い🎉".repeat(80))] });
-  check("header: cuts never split a character, and the cap holds", !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(uni) && uni.length <= 1200 && uni.includes("Their name: Zoë Ñúñez"), uni.length);
+  check("header: cuts never split a character, and the cap holds", !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(uni) && uni.length <= 1600 && uni.includes("Their name: Zoë Ñúñez"), uni.length);
   check("header: a whole name in first_name isn't said twice", M.memberHeader({ firstName: "Ellis Hart", lastName: "Hart", goals: [] }).includes("Their name: Ellis Hart\n") || M.memberHeader({ firstName: "Ellis Hart", lastName: "Hart", goals: [] }).endsWith("Their name: Ellis Hart"));
 }
 
@@ -203,7 +203,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capi
   check("stub (deck): a judge that passes every line passes every line (code adds no refusal)", Array.isArray(none) && none.length === 0, none);
   const all = await DC.inventedLines(lines, WORDS, judge(JSON.stringify({ fails: lines.map((_, i) => ({ n: i + 1, why: "x" })) })), "", "", hA);
   check("stub (deck): a judge that fails the member's own name and goal lines fails them (no code clearing from the record)", all?.length === 4, all);
-  check("stub (deck): the call passes the header through (deckTools inventedClaims)", /const header = M\.memberHeader\(source\.member\);/.test(src("agent/deckTools.ts")) && /C\.inventedLines\(lines, source\.judged, undefined, self, source\.thread \?\? "", header, source\.read\)/.test(src("agent/deckTools.ts")));
+  check("stub (deck): the call passes the header through (deckTools inventedClaims)", /const header = M\.memberHeader\(source\.member, lines\);/.test(src("agent/deckTools.ts")) && /C\.inventedLines\(lines, words, undefined, self, source\.thread \?\? "", header, source\.read\)/.test(src("agent/deckTools.ts")));
 
   // The document judge: a line the word check can't place goes to it; its verdict stands, and a goal's name is still refused in code.
   const docOf = (bullets: string[]) => DS.resolveDocument({ title: "Launch dinner plan", note: "What you told me.", sections: [{ heading: "The dinner", bullets }] });
@@ -215,7 +215,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capi
   };
   const d1 = docOf(["We're bootstrapped, pre-seed, no outside funding yet.", soft]);
   const passed = await DJ.judgedDocumentProblems(d1, { theirs: WORDS, member: A }, undefined, dj([1], []));
-  check("stub (doc): the document judge read the header first", box(dseen, "What they said:").startsWith(hA), dseen.slice(0, 200));
+  check("stub (doc): the document judge read the header first", box(dseen, "What they said:").startsWith(M.HEADER_TITLE) && box(dseen, "What they said:").includes("Their name: Ellis Hart"), dseen.slice(0, 200));
   check("stub (doc): a line the judge backs passes", !passed.some((p) => p.includes(soft.slice(0, 30))), passed);
   const refused = await DJ.judgedDocumentProblems(d1, { theirs: WORDS, member: A }, undefined, dj([], [{ n: 1, why: "adds a closing round" }]));
   check("stub (doc): a line the judge doesn't back stays refused", refused.some((p) => p.includes(soft.slice(0, 30))), refused);
@@ -268,7 +268,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capi
   check("log: written through the decision log; a failed write never throws", got.length === 1 && !threw);
   const deckT = src("agent/deckTools.ts"), pageT = src("agent/pageTools.ts"), loopT = src("agent/loopTools.ts"), brief = src("services/researchBrief.ts");
   check("log sites: deck headline names and deck grounding (make, store, change), each with the deck's places", (deckT.match(/deckRefused\(ctx, "deck\.names"/g) ?? []).length === 2 && (deckT.match(/deckRefused\(ctx, "deck\.grounding"/g) ?? []).length === 3 && /lines: R\.deckPositions\(deck\)/.test(deckT));
-  check("log sites: the deck claims judge's rows carry places and kinds only", /proposal: \{ refused, saw \}/.test(deckT) && /kind: R\.judgedKind\(f\.why\)/.test(deckT) && !/proposal: \{ fails/.test(deckT) && /action: "check_unavailable", reason: /.test(deckT));
+  check("log sites: the deck claims judge's rows carry places and kinds only", /proposal: \{ refused, saw \}/.test(deckT) && /kind: (?:f\.old \? R\.OLD_FACT : )?R\.judgedKind\(f\.why\)/.test(deckT) && !/proposal: \{ fails/.test(deckT) && /action: "check_unavailable", reason: /.test(deckT));
   check("log sites: pages (make, store, change), with the page's places", (pageT.match(/await refused\(/g) ?? []).length === 3 && /checker: "page\.grounding", userId: ctx\.userId, problems, lines,/.test(pageT));
   check("log sites: documents and documents from a file, with the document's places", (loopT.match(/lines: docPositions\(doc\)/g) ?? []).length === 2 && /checker: "doc\.grounding"/.test(loopT) && /checker: "doc\.fromFile"/.test(loopT));
   check("log sites: a research brief, with its places", /checker: "task\.brief", layer: 7, userId: task\.userId, problems, lines: R\.docPositions\(doc\)/.test(brief));
@@ -284,7 +284,7 @@ const WORDS = "We're bootstrapped, pre-seed, no outside funding yet. I need capi
   check("wired (page): their own record with their words", /loadMemberRecord\(ctx\.userId\)[\s\S]{0,300}return \{ theirs, read, member \};/.test(loopT));
   check("wired (document): their own record with their words", /const source = \{ theirs, read, member \};/.test(loopT) && /documentProblems\(doc, \{ theirs: `\$\{theirs\}\\n\$\{file\.text\}`, member \}\)/.test(loopT));
   check("wired (task documents): the research brief and a task's document", /loadMemberRecord\(task\.userId\)/.test(brief) && /judgedDocumentProblems\(doc, \{ theirs, member \}\)/.test(brief) && /deps\.member\(o\.userId\)/.test(del) && /member: async \(userId\) => \(await import\("\.\/memberRecord\.js"\)\)\.loadMemberRecord\(userId\)/.test(del));
-  check("wired: the document judge gets the header, its word checks the exact first name", /judgeLines\(lines, source\.theirs, judge, memberHeader\(source\.member\)\)/.test(src("services/documentClaims.ts")) && (src("services/documentClaims.ts").match(/\{ strict: true, own \}/g) ?? []).length === 2 && /unknownOpeners\(parts, theirs, own\)/.test(src("services/documentClaims.ts")));
+  check("wired: the document judge gets the header, its word checks the exact first name", /judgeLines\(lines, source\.theirs, judge, memberHeader\(source\.member, lines\)\)/.test(src("services/documentClaims.ts")) && (src("services/documentClaims.ts").match(/\{ strict: true, own \}/g) ?? []).length === 2 && /unknownOpeners\(parts, theirs, own\)/.test(src("services/documentClaims.ts")));
   check("wired: the page, deck and document code checks clear only the exact first name", (src("services/coPages/grounding.ts").match(/\.filter\(notOwnName\(own\)\)/g) ?? []).length === 2 && /unbackedClaims\(claims\.map[^\n]*corpus, \{ own \}\)/.test(src("services/coPages/grounding.ts")) && /\.filter\(\(m\) => !isOwnName\(m\.text, own\)\)/.test(src("services/coPages/grounding.ts")) && /\{ strict: true, own \}/.test(src("services/documentSheet.ts")) && /headlineNameProblems\(s\.headline, `\$\{theirs\}\\n\$\{read\}`, `slide \$\{i \+ 2\} headline`, ownName\(member\)\)/.test(src("agent/deckTools.ts")));
 }
 

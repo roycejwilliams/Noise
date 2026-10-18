@@ -186,6 +186,7 @@
     "evals/checkins/rules.ts",
     "evals/reply/usesItsFinds.ts",
     "evals/files/checkerBugs.ts",
-    "evals/files/checkersKnowMember.ts"
+    "evals/files/checkersKnowMember.ts",
+    "evals/files/judgeWords.ts"
   ]
 }

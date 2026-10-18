@@ -18,12 +18,15 @@
 // Pure parts first; the loader imports member knowledge and the database only when it runs, so the code checks that import this
 // stay pure.
 import type { KnowledgeDeps, MemberKnowledge } from "./memberKnowledge.js";
+import { byRelevance } from "./judgeWords.js";
 
 export type MemberRecord = { firstName: string | null; lastName: string | null; goals: string[] };
 
-// The header never crowds out their words: at most 1,200 characters (a fifth of the deck judge's 6,000), six goals, 200 characters
-// a goal. A goal cut short says so ("...").
-export const HEADER_LIMITS = { chars: 1200, goals: 6, goalChars: 200 } as const;
+// The header never crowds out their words (each has its own budget in the judge's box): at most 1,600 characters, twelve goals, 200
+// characters a goal (raised from 1,200 and six after the A+H re-measure: Royce had 11 goals on file and the cap dropped the one his
+// deck was about). With the deck's lines, the goals that share most with them come first (judgeWords.ts byRelevance), so the cap
+// keeps what matters for this deck. A goal cut short says so ("...").
+export const HEADER_LIMITS = { chars: 1600, goals: 12, goalChars: 200 } as const;
 export const HEADER_TITLE = "On file for them (their own record, from what they told Cue):";
 
 const oneLine = (s: string) => s.replace(/\s+/g, " ").replace(/"/g, "'").trim();
@@ -44,8 +47,9 @@ const cut = (s: string, n: number) => {
   return `${at || head}...`;
 };
 
-// Pure: the header, or "" when there's nothing on file. Name first, then goals as aims, in their own wording.
-export function memberHeader(r: MemberRecord | null | undefined): string {
+// Pure: the header, or "" when there's nothing on file. Name first, then goals as aims, in their own wording; judged: the lines being
+// judged, to put the goals that share most with it first.
+export function memberHeader(r: MemberRecord | null | undefined, judged: string[] = []): string {
   if (!r) return "";
   const first = oneLine(r.firstName ?? "");
   const last = oneLine(r.lastName ?? "");
@@ -53,7 +57,7 @@ export function memberHeader(r: MemberRecord | null | undefined): string {
   const name = sliceSafe([first, last && !first.toLowerCase().split(" ").includes(last.toLowerCase()) ? last : ""].filter(Boolean).join(" "), 120);
   const lines: string[] = [HEADER_TITLE];
   if (name) lines.push(`- Their name: ${name}`);
-  const goals = [...new Set(r.goals.map((g) => oneLine(g)).filter(Boolean))];
+  const goals = byRelevance([...new Set(r.goals.map((g) => oneLine(g)).filter(Boolean))], judged);
   if (goals.length) {
     lines.push("- Their goals (aims they are working toward, not things already done):");
     let used = lines.join("\n").length;
@@ -74,7 +78,7 @@ export function memberHeader(r: MemberRecord | null | undefined): string {
 // Pure: what a judge reads as their words, header first. The header is capped (HEADER_LIMITS), so it always lands inside the judge's
 // window and their words keep the rest.
 export const headerFirst = (header: string, words: string) => (header ? `${header}\n\n${words}` : words);
-export const withHeader = (r: MemberRecord | null | undefined, words: string) => headerFirst(memberHeader(r), words);
+export const withHeader = (r: MemberRecord | null | undefined, words: string, lines: string[] = []) => headerFirst(memberHeader(r, lines), words);
 
 // The judges' rules for the header (both judges, only when there is one): the record is what they told Cue; their own name and
 // company are not a third party (but back no fact about them); their own goal, said as an aim, is backed; another person's or

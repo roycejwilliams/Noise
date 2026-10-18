@@ -67,8 +67,11 @@ export type DeckSource = {
   read: string;
   // Only what they said in the 12-hour window (the logo ask, the reference-image check), never Co's lines.
   words: string;
-  // Only what they said, 14 days, newest first (for the claims judge, which reads the first 6,000 characters after the header).
+  // Only what they said, 14 days, newest first (for the claims judge: its newest words).
   judged: string;
+  // Everything they've said, oldest first, with when (documentDelivery.ts loadTheirHistory): the claims judge reads the parts that
+  // match the deck's lines first (services/judgeWords.ts).
+  history: { at: string; text: string }[];
   member: import("../services/memberRecord.js").MemberRecord | null;
   thread: string;
 };
@@ -97,7 +100,12 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
   // The checks' source (deckCheckWords) and their own record.
   const { loadTheirLines } = await import("../services/documentDelivery.js");
   const { loadMemberRecord } = await import("../services/memberRecord.js");
-  const [lines14, member] = ctx.dryRun ? [[] as string[], null] : await Promise.all([loadTheirLines(ctx.userId).catch(() => [] as string[]), loadMemberRecord(ctx.userId).catch(() => null)]);
+  const { loadTheirHistory } = await import("../services/documentDelivery.js");
+  const [lines14, member, history0] = ctx.dryRun
+    ? [[] as string[], null, [] as { at: string; text: string }[]]
+    : await Promise.all([loadTheirLines(ctx.userId).catch(() => [] as string[]), loadMemberRecord(ctx.userId).catch(() => null), loadTheirHistory(ctx.userId).catch(() => [] as { at: string; text: string }[])]);
+  // Reference images (their look, not their words) are taken out of the history the same way.
+  const history = history0.map((h) => ({ at: h.at, text: withoutReferenceText(h.text, refs) }));
   const judged = withoutReferenceText(deckCheckWords(now, rows, lines14), refs);
   const theirs = [judged, deck?.lines ?? ""].filter(Boolean).join("\n");
   // thread: only the Co text directly before their latest message, and that message (deckClaims.ts approvalPair), so a line Co
@@ -116,7 +124,7 @@ async function deckSource(ctx: ConversationToolContext, read: string, deck: { id
         .catch(() => [] as string[]);
   if (ctx.resolvedContent && recent[recent.length - 1] !== `Them: ${ctx.resolvedContent}`) recent.push(`Them: ${ctx.resolvedContent}`);
   const { approvalPair } = await import("../services/coPages/deckClaims.js");
-  return { theirs, forWriting, read, words, judged, member, thread: approvalPair(recent) };
+  return { theirs, forWriting, read, words, judged, history, member, thread: approvalPair(recent) };
 }
 
 // A line copied from a reference image's own words (what's written on an inspiration image or a site screenshot) is never deck
@@ -154,16 +162,20 @@ async function deckRefused(ctx: ConversationToolContext, checker: "deck.names" |
 // Punch is fine, invention is not (services/coPages/deckClaims.ts): every new or changed line, judged against their words for this
 // deck and what Co read. An error message when a line adds a claim; null when it passes or the check couldn't run (logged).
 // The judge reads their name and goals first (services/memberRecord.ts memberHeader), then what Co read, then their 14 days of words.
-async function inventedClaims(ctx: ConversationToolContext, data: any, source: Pick<DeckSource, "judged" | "read" | "member"> & { thread?: string }, before: any | null): Promise<string | null> {
+async function inventedClaims(ctx: ConversationToolContext, data: any, source: Pick<DeckSource, "judged" | "read" | "member"> & { history?: DeckSource["history"]; thread?: string }, before: any | null): Promise<string | null> {
   if (ctx.dryRun || ctx.stubSearch) return null;
   const C = await import("../services/coPages/deckClaims.js");
   const M = await import("../services/memberRecord.js");
   const had = new Set(before ? C.deckClaimLines(before) : []);
   const lines = C.deckClaimLines(data).filter((l) => !had.has(l));
   const self = await selfIfAboutCo(ctx, data);
-  const header = M.memberHeader(source.member);
+  // Goals that share most with these lines first; their words: what matches these lines from everything they've said, then their
+  // newest words, photos cut to a line (services/judgeWords.ts).
+  const header = M.memberHeader(source.member, lines);
+  const J = await import("../services/judgeWords.js");
+  const words = J.judgeWords(lines, source.judged, source.history ?? [], new Date());
   // What Co read gets its own block, before their words (deckClaims.ts judgeBox), so 14 days of words never push it out.
-  const fails = await C.inventedLines(lines, source.judged, undefined, self, source.thread ?? "", header, source.read);
+  const fails = await C.inventedLines(lines, words, undefined, self, source.thread ?? "", header, source.read);
   const { recordDecision } = await import("../harness/core.js");
   const saw = M.recordSeen(source.member);
   if (fails === null) {
@@ -174,9 +186,9 @@ async function inventedClaims(ctx: ConversationToolContext, data: any, source: P
   // Logged by place and kind only, never the line or the judge's words about it (forget by default; services/checkerRefusals.ts).
   const R = await import("../services/checkerRefusals.js");
   const at = R.deckPositions(data);
-  const refused = fails.map((f) => ({ at: at.find((x) => x.text === f.line)?.where ?? `line ${lines.indexOf(f.line) + 1} of ${lines.length} checked`, kind: R.judgedKind(f.why) }));
+  const refused = fails.map((f) => ({ at: at.find((x) => x.text === f.line)?.where ?? `line ${lines.indexOf(f.line) + 1} of ${lines.length} checked`, kind: f.old ? R.OLD_FACT : R.judgedKind(f.why) }));
   await recordDecision({ layer: 3, decision: "deck.claims", userId: ctx.userId, outcome: "skip", action: "invented", reason: R.refusalReason(refused), proposal: { refused, saw } }).catch(() => {});
-  return `These lines state a hard fact they never gave: ${fails.map((f) => `"${f.line}" (${f.why})`).join(" | ")}. Rewrite just those lines safer (the stance, not the fact: "Built for live rooms" instead of "Partnering with X") and keep every slide full; never strip the deck to bare lines. Then try once more. If it still can't be made, tell them plainly in one text that the deck isn't made, which fact you couldn't back, and ask them to confirm it.`;
+  return `These lines state a hard fact they never gave: ${fails.map((f) => `"${f.line}" (${f.old ? `an old fact that may have changed: ${f.why}` : f.why})`).join(" | ")}. Rewrite just those lines safer (the stance, not the fact: "Built for live rooms" instead of "Partnering with X") and keep every slide full; never strip the deck to bare lines. Then try once more. If it still can't be made, tell them plainly in one text that the deck isn't made, which fact you couldn't back, and ask them to confirm it.`;
 }
 
 // A deck the team makes about Co itself (Royce, 2026-10-11): what Co knows about itself counts as fact. The team only, and only when

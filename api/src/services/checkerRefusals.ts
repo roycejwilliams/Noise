@@ -60,6 +60,9 @@ const mentionKind = (list: string) => {
   if (items.some((x) => timeLike(x) || numberLike(x))) return "a name and a number or time not in their words";
   return "a name not in their words";
 };
+// The judge's own kind for a line backed only by something they said long ago, about something that changes (coPages/deckClaims.ts
+// EXCERPT_RULES "stale"): not a pass and not invented. G (#243) turns it into its one question to the member.
+export const OLD_FACT = "an old fact that may have changed";
 // The kind of hard fact a judge named, read from its own reason, which is never logged.
 export function judgedKind(why: string): string {
   const w = why.toLowerCase();

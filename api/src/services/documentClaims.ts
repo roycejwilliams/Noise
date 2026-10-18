@@ -96,7 +96,7 @@ export async function judgedDocumentProblems(doc: Doc, source: { theirs: string;
   const judged = [...new Set([...partial, ...openers.map((x) => x.line)])];
   const lines = [...new Set([...soft, ...judged])];
   if (!lines.length) return problems;
-  const v = await judgeLines(lines, source.theirs, judge, memberHeader(source.member));
+  const v = await judgeLines(lines, source.theirs, judge, memberHeader(source.member, lines));
   if (!v) return [...problems, ...openers.filter((x) => !problems.some((p) => p.includes(x.line.slice(0, 60)))).map((x) => `"${x.line.slice(0, 90)}" opens on ${x.word}, which they never said: if it's a name, leave it out or ask them`)].slice(0, 7);
   const judgedOut = new Map(judged.filter((l) => !v.backed.has(l)).map((l) => [l, v.why.get(l) ?? "it adds something they never said"] as [string, string]));
   return documentProblems(doc, source, { backed: v.backed, judgedOut });
