@@ -11,7 +11,8 @@
 // their details) is kept for CACHE_HOURS, so a sweep and a reply on the same want don't pay twice; a search that failed isn't kept, and
 // the pages are read again each time (eventDetails.ts keeps a read for an hour). Off without EXA_API_KEY, and skipped where a turn can't
 // wait for it (calls: services/voiceFinds.ts).
-import type { DiscoveredEvent } from "./lumaDiscovery.js";
+import { nearestPlace, type DiscoveredEvent, type DiscoverPlace } from "./lumaDiscovery.js";
+import type { GeoPoint } from "./geocoding.js";
 import type { EventDetails } from "./eventDetails.js";
 import type { ExaSearch } from "./exaSearch.js";
 
@@ -38,16 +39,16 @@ export const EVENT_KINDS: readonly { kind: string; match: RegExp }[] = [
   { kind: "meetup", match: /\bmeet-?ups?\b/i },
   { kind: "talk", match: /\b(talks|panels?|fireside chats?|lectures?|speaker series|speaker events?)\b/i },
   { kind: "conference", match: /\b(conferences?|summits?)\b/i },
-  { kind: "workshop", match: /\b(workshops?|classes?)\b/i },
+  { kind: "workshop", match: /(?<![-\w])(workshops?|class(?:es)?)(?![-\w])/i },
   { kind: "supper club", match: /\bsupper clubs?\b/i },
   { kind: "chef's table dinner", match: /\bchef'?s tables?\b/i },
   { kind: "dinner", match: /\b(dinners?|dining)\b/i },
   { kind: "wine tasting", match: /\b(wine|tastings?)\b/i },
   { kind: "happy hour", match: /\b(happy hours?|drinks|cocktails?)\b/i },
-  { kind: "live music", match: /\b(live music|concerts?|gigs?|shows?)\b/i },
+  { kind: "live music", match: /\b(live music|concerts?|gigs?|live shows?|music shows?)\b/i },
   { kind: "jazz", match: /\bjazz\b/i },
   { kind: "art gallery opening", match: /\b(galler(y|ies)|art openings?|art receptions?|exhibitions?|exhibits?)\b/i },
-  { kind: "art", match: /\b(art|artists?)\b/i },
+  { kind: "art", match: /(?<![-\w])(art|artists?)(?![-\w])/i },
   { kind: "film screening", match: /\b(films?|screenings?|movies?|cinema)\b/i },
   { kind: "comedy", match: /\b(comedy|stand-?up)\b/i },
   { kind: "book club", match: /\b(book clubs?|author talks?|book readings?|poetry readings?|literary)\b/i },
@@ -61,21 +62,32 @@ export const EVENT_KINDS: readonly { kind: string; match: RegExp }[] = [
   { kind: "fundraiser", match: /\b(fundraisers?|galas?|charity)\b/i },
 ];
 const MAX_KINDS = 3;
-// A city is a place name only: letters, spaces and . ' - , at most 40 characters (anything else is left out of the search).
+// The city is only ever a name from Luma's own catalog of discover cities (services/lumaDiscovery.ts discoverPlaceFor: the
+// catalog's place.name, matched by name or by distance), never the string it was given: "Jordan's place", "my ex's house" or
+// "Mount Sinai Hospital" become the catalog city they're near, or no city at all. The shape check stays as a last line.
 const CITY = /^[A-Za-z][A-Za-z .'-]{1,39}$/;
-// The dates as eventCandidates writes them ("October 19 to October 25, 2026"); anything else is left out.
-const DATES = /^[A-Z][a-z]+ \d{1,2} to [A-Z][a-z]+ \d{1,2}, \d{4}$/;
+// The dates as eventCandidates writes them ("October 19 to October 25, 2026"), with real month names; anything else is left out.
+const MONTH = "(?:January|February|March|April|May|June|July|August|September|October|November|December)";
+const DATES = new RegExp(`^${MONTH} \\d{1,2} to ${MONTH} \\d{1,2}, \\d{4}$`);
 
-// Pure: the one Exa query for a Luma event search, from fixed parts only, and the kinds it used.
-export function lumaExaQuery(what: string, city: string | null, dates: string): { query: string; kinds: string[] } {
+// Pure: the catalog place for a city, by the catalog's own rule (lumaDiscovery.ts nearestPlace): the name a search may use, or null.
+export function catalogCity(places: DiscoverPlace[], city: string | null, point: GeoPoint | null = null): { name: string } | null {
+  if (!city?.trim()) return null;
+  const p = nearestPlace(places, city, point);
+  return p ? { name: p.name } : null;
+}
+
+// Pure: the one Exa query for a Luma event search, from fixed parts only, and the kinds it used. place is a catalog place
+// (catalogCity / discoverPlaceFor), never a string the member or the model wrote.
+export function lumaExaQuery(what: string, place: { name: string } | null, dates: string): { query: string; kinds: string[] } {
   const text = String(what ?? "");
   const kinds = EVENT_KINDS.filter((k) => k.match.test(text)).map((k) => k.kind);
   // "supper club" and "chef's table dinner" already say dinner; "art gallery opening" already says art.
   const shown = kinds.filter((k) => !(k === "dinner" && kinds.some((x) => /dinner|supper/.test(x) && x !== "dinner")) && !(k === "art" && kinds.includes("art gallery opening"))).slice(0, MAX_KINDS);
   const how = /\b(online|virtual|zoom|remote)\b/i.test(text) ? " online" : /\bin[- ]person\b/i.test(text) ? " in person" : "";
-  const place = city && CITY.test(city.trim()) ? ` in ${city.trim()}` : "";
+  const where = place?.name && CITY.test(place.name.trim()) ? ` in ${place.name.trim()}` : "";
   const when = DATES.test(dates.trim()) ? `, ${dates.trim()}` : "";
-  return { query: `${shown.length ? `${shown.join(", ")} ` : ""}events${how}${place}${when}`, kinds: shown };
+  return { query: `${shown.length ? `${shown.join(", ")} ` : ""}events${how}${where}${when}`, kinds: shown };
 }
 // Luma paths that are never one event's page.
 const NOT_EVENTS = new Set(["discover", "home", "signin", "login", "create", "calendar", "explore", "pricing", "user", "u", "settings", "help"]);
@@ -182,6 +194,8 @@ export type LumaViaExaDeps = {
   refusing: () => boolean;
   pauseMinutes: number;
   reserve: (userId: string | null, source: LumaExaSource) => Promise<{ ok: boolean; reason: string | null }>;
+  // The catalog place for the city (lumaDiscovery.ts discoverPlaceFor), or null: the only city a query may name.
+  place: (city: string | null) => Promise<{ name: string } | null>;
 };
 
 type Found = { slug: string; title: string };
@@ -203,7 +217,8 @@ export async function lumaEventsViaExa(
   // Luma is refusing reads: no search, and no reads of a cached one either (each would add to what Luma is refusing).
   if (deps.refusing()) return { events: [], report: { cached: false, error: lumaRefusingReason(deps.pauseMinutes), pages: 0, read: 0, notPublic: 0, refused: 0, kept: 0 } };
   // Never their words: the query (and so the cache key) is built from fixed parts only.
-  const { query, kinds } = lumaExaQuery(what, city, o.dates);
+  const place = await deps.place(city).catch(() => null);
+  const { query, kinds } = lumaExaQuery(what, place, o.dates);
   const key = query.toLowerCase();
   const now = deps.now();
   const hit = cache.get(key);
@@ -264,7 +279,7 @@ async function search(query: string, userId: string | null, deps: LumaViaExaDeps
 }
 
 async function realDeps(d: Partial<LumaViaExaDeps> = {}): Promise<LumaViaExaDeps> {
-  const [X, E] = await Promise.all([import("./exaSearch.js"), import("./eventDetails.js")]);
+  const [X, E, L] = await Promise.all([import("./exaSearch.js"), import("./eventDetails.js"), import("./lumaDiscovery.js")]);
   return {
     exa: d.exa ?? ((q, o) => X.exaSearch(q, o)),
     page: d.page ?? ((url) => E.readLumaEventPage(url).then((r) => (r.refused ? ("refused" as const) : r.details))),
@@ -273,6 +288,7 @@ async function realDeps(d: Partial<LumaViaExaDeps> = {}): Promise<LumaViaExaDeps
     refusing: d.refusing ?? (() => E.lumaRefusedRecently()),
     pauseMinutes: d.pauseMinutes ?? E.LUMA_REFUSAL_PAUSE_MINUTES,
     reserve: d.reserve ?? ((userId, source) => reserveLumaExaSearch(userId, source)),
+    place: d.place ?? ((city) => L.discoverPlaceFor(city).then((p) => (p ? { name: p.name } : null))),
   };
 }
 
