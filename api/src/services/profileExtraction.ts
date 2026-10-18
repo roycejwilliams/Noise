@@ -1014,6 +1014,9 @@ export async function storeProfile(
       .catch((err: any) => console.error("profile_corrections write failed (non-fatal):", err?.message ?? err));
     // And the claims that still say what they corrected, now, not at the nightly refresh (services/claims.ts).
     await import("./claims.js").then((C) => C.retireCorrectedClaims(user_id, corrections)).catch(() => 0);
+    // A correction deletes the old value everywhere we keep it, so all of their model prompt/answer text goes too
+    // (services/llmTraceText.ts; Royce, 2026-10-18). Best-effort.
+    await import("./llmTraceText.js").then((T) => T.forgetTraceText(user_id, "correction")).catch(() => 0);
   }
 
   // Non-fatal like every other embedding call in this file (storeTranscriptMemory,
