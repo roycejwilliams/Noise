@@ -38,7 +38,8 @@ export async function exaSearch(
   const body: Record<string, unknown> = {
     query: scrubQuery(query).slice(0, 600),
     type: "auto",
-    numResults: Math.min(20, Math.max(1, o.pages ?? EXA.pages)),
+    // Up to 25: tier 2's Luma search (services/lumaViaExa.ts) asks for 25, the number measured on 10-17 at $0.022 a search.
+    numResults: Math.min(25, Math.max(1, o.pages ?? EXA.pages)),
     ...(o.country ? { userLocation: o.country } : {}),
     ...(o.includeDomains?.length ? { includeDomains: o.includeDomains.slice(0, 50) } : {}),
     ...(o.sinceHours ? { startPublishedDate: new Date((o.now ?? new Date()).getTime() - o.sinceHours * 3_600_000).toISOString() } : {}),

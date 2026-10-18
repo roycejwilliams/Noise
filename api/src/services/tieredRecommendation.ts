@@ -2,7 +2,9 @@ import { xSearchBudget } from "./searchRules.js";
 import { DateTime } from "luxon";
 import { MAX_ASK_DAYS_AHEAD, resolveAskWindow, whenForWindow, withinWindow } from "./askWindow.js";
 import { listCalendarEvents, resolveCoEventPlace } from "./luma.js";
-import { DEFAULT_FEED_DAYS, fetchPublicEvents } from "./lumaDiscovery.js";
+import { DEFAULT_FEED_DAYS, fetchPublicEvents, type DiscoveredEvent } from "./lumaDiscovery.js";
+import { lumaEventsViaExa, withExaEvents, type ViaExaReport } from "./lumaViaExa.js";
+import { recordDecision } from "../harness/core.js";
 import { rankEventsByDescription } from "./eventRanking.js";
 import { localDate, searchZone } from "./eventOrder.js";
 import { fetchLumaEventDetails, renderEventDetails as renderEventDetailsLines, type EventDetails, type OpportunityDetails } from "./eventDetails.js";
@@ -91,6 +93,7 @@ function isWithinLookaheadWindow(startAt: string, maxDays: number): boolean {
 async function filterByRadius<T extends { city?: string | null; online?: boolean }>(
   candidates: T[],
   userCity: string | null,
+  near: (a: string, b: string) => Promise<boolean> = withinRadius,
 ): Promise<T[]> {
   if (!userCity) return candidates;
   // Online events are reachable from anywhere (2026-09-17).
@@ -98,7 +101,7 @@ async function filterByRadius<T extends { city?: string | null; online?: boolean
   // a city-less Co event in SF passed this filter and got described to
   // someone asking about Fargo as "close to Fargo"). Only drop it when we
   // do know where the person wants to be; ungeocodable strings still pass.
-  const withinFlags = await Promise.all(candidates.map((c) => (c.online ? true : c.city ? withinRadius(userCity, c.city) : false)));
+  const withinFlags = await Promise.all(candidates.map((c) => (c.online ? true : c.city ? near(userCity, c.city) : false)));
   return candidates.filter((_, i) => withinFlags[i]);
 }
 
@@ -211,24 +214,61 @@ export function eventLine(name: string, date: string | null, city: string | null
   const when = d?.isValid ? `${d.toFormat("cccc, LLLL d")} (${d.toISODate()})` : (date ?? "");
   return `${name}, ${when}${city ? `, ${city}` : ""}`;
 }
+// Where an event search's events come from, replaceable in tests (evals/search/lumaViaExa.ts): the public feed, Noise's calendar, Exa
+// limited to Luma (services/lumaViaExa.ts), each event's own page, the nearby test, the ranking and the log.
+export type EventSources = {
+  feed: (city: string | null, until: Date) => Promise<DiscoveredEvent[]>;
+  calendar: () => Promise<CoCalendarEvent[]>;
+  viaExa: typeof lumaEventsViaExa;
+  page: (url: string) => Promise<EventDetails | null>;
+  near: (a: string, b: string) => Promise<boolean>;
+  rank: typeof rankEventsByDescription;
+  gate: typeof gateMatches;
+  record: typeof recordDecision;
+};
+const realSources: EventSources = { feed: cachedPublicEvents, calendar: cachedCalendarEvents, viaExa: lumaEventsViaExa, page: (url) => fetchLumaEventDetails(url), near: withinRadius, rank: rankEventsByDescription, gate: gateMatches, record: recordDecision };
+// What Exa added to one search, for the log and the caller: null when Exa didn't run (no key, or a call: viaExa false).
+// added: Exa's events the feed didn't have; offered: how many of those passed the nearby filter, the ranking and the gate.
+export type ViaExaCounts = (ViaExaReport & { added: number; nearby: number; offered: number }) | null;
+
+// viaExa: false skips the Exa search (calls, services/voiceFinds.ts: a call can't wait ~6s for it). Replies, tasks and the sweep
+// leave it on.
 export async function eventCandidates(
   what: string,
   city: string | null,
-  opts: { when?: string | null; userId?: string | null; timezone?: string | null; limit?: number } = {},
-): Promise<{ candidates: EventCandidate[]; turnedAway: GatedOut[]; window: string | null; feedSize: number; inWindow: number; outOfRange: string | null }> {
+  opts: { when?: string | null; userId?: string | null; timezone?: string | null; limit?: number; viaExa?: boolean; sources?: Partial<EventSources> } = {},
+): Promise<{ candidates: EventCandidate[]; turnedAway: GatedOut[]; window: string | null; feedSize: number; inWindow: number; outOfRange: string | null; viaExa: ViaExaCounts }> {
+  const src: EventSources = { ...realSources, ...opts.sources };
   const { zone } = searchZone(opts.timezone ?? null);
   const now = DateTime.now().setZone(zone);
   const when = whenForWindow(opts.when);
   const resolution = when ? resolveAskWindow(when, now) : { window: null, outOfRange: null };
-  if (resolution.outOfRange) return { candidates: [], turnedAway: [], window: null, feedSize: 0, inWindow: 0, outOfRange: `${resolution.outOfRange.label} is more than ${MAX_ASK_DAYS_AHEAD} days out` };
+  if (resolution.outOfRange) return { candidates: [], turnedAway: [], window: null, feedSize: 0, inWindow: 0, outOfRange: `${resolution.outOfRange.label} is more than ${MAX_ASK_DAYS_AHEAD} days out`, viaExa: null };
   const window = resolution.window;
   const until = window ? window.end.toJSDate() : new Date(Date.now() + DEFAULT_FEED_DAYS * 24 * 60 * 60 * 1000);
   const inRange = (startAt: string) => (window ? withinWindow(startAt, window) : isWithinLookaheadWindow(startAt, DEFAULT_FEED_DAYS));
-  const [feed, coEvents] = await Promise.all([cachedPublicEvents(city, until).catch(() => []), cachedCalendarEvents().catch(() => [] as CoCalendarEvent[])]);
+  // The asked dates in words for Exa ("October 19 to October 25, 2026"): its index is mostly past events, and the measured searches
+  // (2026-10-17) named the dates.
+  const from = window ? window.start : now;
+  const to = window ? window.end : DateTime.fromJSDate(until).setZone(zone);
+  const dates = `${from.toFormat("LLLL d")} to ${to.toFormat("LLLL d, yyyy")}`;
+  // Exa runs alongside the feed and the calendar, never after them; it failing (or timing out) leaves the feed's events as they were.
+  const [feed, coEvents, exa] = await Promise.all([
+    src.feed(city, until).catch(() => [] as DiscoveredEvent[]),
+    src.calendar().catch(() => [] as CoCalendarEvent[]),
+    opts.viaExa === false ? Promise.resolve(null) : src.viaExa(what, city, { userId: opts.userId ?? null, inRange, dates }).catch(() => null),
+  ]);
   const coIds = new Set(coEvents.map((e) => e.api_id).filter(Boolean));
-  const ours = await filterByRadius(coEvents.filter((e) => inRange(e.start_at)), city);
-  const theirs = await filterByRadius(feed.filter((e) => !coIds.has(e.api_id) && inRange(e.start_at)), city);
-  const ranking = await rankEventsByDescription(theirs, what, { limit: opts.limit ?? 8, bar: 0, zone, browse: false }).catch(() => ({ ranked: theirs.slice(0, opts.limit ?? 8).map((e) => ({ ...e, details: undefined as EventDetails | undefined })) }));
+  const ours = await filterByRadius(coEvents.filter((e) => inRange(e.start_at)), city, src.near);
+  // Exa's events join the feed's before anything else (deduped by Luma slug and event id, the feed's copy kept), so they get the same
+  // window, nearby filter, ranking, page read, gate and start check as a feed event.
+  const merged = withExaEvents<DiscoveredEvent & { online?: boolean }>(feed, exa?.events ?? []);
+  const fromExa = new Set(merged.slice(feed.length).map((e) => e.url));
+  const theirs = await filterByRadius(merged.filter((e) => !coIds.has(e.api_id) && inRange(e.start_at)), city, src.near);
+  // The ranking reads at most 40 (spread across the days), and a city's feed can hold more than that in a window (41 SF events for
+  // q5 on 10-17), so Exa's go in first: they were found for this want, and the ranking still orders everything by how well it fits.
+  const pool = [...theirs.filter((e) => fromExa.has(e.url)), ...theirs.filter((e) => !fromExa.has(e.url))];
+  const ranking = await src.rank(pool, what, { limit: opts.limit ?? 8, bar: 0, zone, browse: false }).catch(() => ({ ranked: pool.slice(0, opts.limit ?? 8).map((e) => ({ ...e, details: undefined as EventDetails | undefined })) }));
   const asMatch = (e: any, tier: 1 | 2): TierMatch => ({
     tier,
     kind: tier === 1 ? "co_event" : "public_event",
@@ -250,15 +290,21 @@ export async function eventCandidates(
   // is turned away and logged as a skip, never as offered (second review of #229: the morning review read those as offers).
   const read = await Promise.all(
     raw.map(async (m) => {
-      const details = "url" in m && m.url ? ((await fetchLumaEventDetails(m.url).catch(() => null)) ?? undefined) : undefined;
+      const details = "url" in m && m.url ? ((await src.page(m.url).catch(() => null)) ?? undefined) : undefined;
       return { ...m, ...(details?.startAt ? { startAt: details.startAt } : {}), details } as TierMatch;
     }),
   );
-  const gated = await gateMatches(read, { userId: opts.userId ?? null, searchCity: city, checkRepeat: true, gatedOut: turnedAway, askedUntil: window ? window.end.toISODate() : null, lookaheadDays: null, zone, leadMinutes: START_LEAD_MINUTES });
+  const gated = await src.gate(read, { userId: opts.userId ?? null, searchCity: city, checkRepeat: true, gatedOut: turnedAway, askedUntil: window ? window.end.toISODate() : null, lookaheadDays: null, zone, leadMinutes: START_LEAD_MINUTES });
   const candidates = gated.map((m) => {
     const e = m as { name: string; event_date?: string; city?: string | null; details?: EventDetails };
     const lines = e.details ? renderEventDetailsLines(m.name, e.details) : [eventLine(e.name, e.event_date ?? null, e.city ?? null)];
     return { match: m, lines };
   });
-  return { candidates, turnedAway, window: window?.label ?? null, feedSize: feed.length, inWindow: theirs.length + ours.length, outOfRange: null };
+  // What Exa added, logged once per search (counts only, never the want: it's the member's words), with Exa's cost already logged per
+  // search as exa.search.
+  const viaExa: ViaExaCounts = exa
+    ? { ...exa.report, added: fromExa.size, nearby: theirs.filter((e) => fromExa.has(e.url)).length, offered: candidates.filter(({ match }) => "url" in match && !!match.url && fromExa.has(match.url)).length }
+    : null;
+  if (viaExa) await src.record({ layer: 7, decision: "luma.via_exa", userId: opts.userId ?? null, outcome: viaExa.added ? "act" : "skip", action: `added ${viaExa.added}`, reason: viaExa.error, proposal: { ...viaExa, feed: feed.length } }).catch(() => {});
+  return { candidates, turnedAway, window: window?.label ?? null, feedSize: feed.length, inWindow: theirs.length + ours.length, outOfRange: null, viaExa };
 }

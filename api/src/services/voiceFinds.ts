@@ -53,7 +53,8 @@ export async function voiceFinds(userId: string, now: Date = new Date()): Promis
   if (!what) return { available: false, reason: "they haven't asked Cue to find anything yet" };
   const city = brief?.city ?? profile?.city ?? null;
   const [events, openings] = await Promise.all([
-    eventCandidates(what, city, { when: brief?.when ?? null, userId, limit: 5 }).catch(() => null),
+    // No Exa search on a call (services/lumaViaExa.ts): it takes about 6 seconds, and a call can't wait for it. The feed's events only.
+    eventCandidates(what, city, { when: brief?.when ?? null, userId, limit: 5, viaExa: false }).catch(() => null),
     alreadyFoundOpenings(userId).catch(() => [] as TierMatch[]),
   ]);
   const zone = await memberZoneOrFallback(userId);

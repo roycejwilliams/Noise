@@ -40,6 +40,9 @@ export type EventDetails = {
   soldOut: boolean | null;
   guestCount: number | null;
   description: string | null;
+  // Luma's own event id (evt-...), the same one the Discover feed gives, so an event found another way (services/lumaViaExa.ts) is
+  // the same event to the rest of Cue. Absent on records read before 2026-10-17.
+  apiId?: string | null;
 };
 
 // Tier 3: what the source post actually says.
@@ -94,6 +97,7 @@ export function parseLumaEventPage(html: string): EventDetails | null {
     soldOut: typeof data.sold_out === "boolean" ? data.sold_out : null,
     guestCount: typeof data.guest_count === "number" ? data.guest_count : null,
     description: description ? description.slice(0, DESCRIPTION_MAX) : null,
+    apiId: typeof ev.api_id === "string" ? ev.api_id : null,
   };
 }
 

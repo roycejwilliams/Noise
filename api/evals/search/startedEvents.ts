@@ -48,7 +48,7 @@ check("too soon only where the caller asks for the lead", G.checkTiming(SOON, fa
 }
 {
   const src = readFileSync(new URL("../../src/services/tieredRecommendation.ts", import.meta.url), "utf8");
-  check("the reply's search reads each page first, then the gate judges the start with the page's end and online flag, and logs a late one as turned away (pinned in the source)", /startAt: e\.start_at,/.test(src) && /\.\.\.\(details\?\.startAt \? \{ startAt: details\.startAt \} : \{\}\), details \} as TierMatch;/.test(src) && /const gated = await gateMatches\(read, \{ userId: opts\.userId \?\? null, searchCity: city, checkRepeat: true, gatedOut: turnedAway, .*leadMinutes: START_LEAD_MINUTES \}\);/.test(src));
+  check("the reply's search reads each page first, then the gate judges the start with the page's end and online flag, and logs a late one as turned away (pinned in the source)", /startAt: e\.start_at,/.test(src) && /\.\.\.\(details\?\.startAt \? \{ startAt: details\.startAt \} : \{\}\), details \} as TierMatch;/.test(src) && /const gated = await (?:src\.gate|gateMatches)\(read, \{ userId: opts\.userId \?\? null, searchCity: city, checkRepeat: true, gatedOut: turnedAway, .*leadMinutes: START_LEAD_MINUTES \}\);/.test(src));
 }
 
 // ---------------------------------------------------------------- and again as it goes out
@@ -148,7 +148,7 @@ check("too late to queue: the run (started) and the talk (30 minutes out); the 2
 }
 
 // ---------------------------------------------------------------- calls
-check("a call's events come from the reply's own search (so the lead applies), started ones filtered again (pinned)", /eventCandidates\(what, city, \{ when: brief\?\.when \?\? null, userId, limit: 5 \}\)/.test(src("services/voiceFinds.ts")) && /\.filter\(\(\{ match \}\) => stillAhead\(/.test(src("services/voiceFinds.ts")));
+check("a call's events come from the reply's own search (so the lead applies), started ones filtered again (pinned)", /eventCandidates\(what, city, \{ when: brief\?\.when \?\? null, userId, limit: 5(, viaExa: false)? \}\)/.test(src("services/voiceFinds.ts")) && /\.filter\(\(\{ match \}\) => stillAhead\(/.test(src("services/voiceFinds.ts")));
 
 // ---------------------------------------------------------------- Noise's own event announcements
 {
