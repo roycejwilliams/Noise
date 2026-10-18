@@ -162,3 +162,53 @@ async function loadFailures() {
 loadFailures().catch(() => {
   if (failuresStatus) failuresStatus.textContent = "Couldn't load the failures view.";
 });
+
+// ---------------------------------------------------------------- trace text (api/src/services/llmTraceText.ts)
+type TraceRow = { spanId: string; userId: string | null; functionId: string; createdAt: string; input: string | null; output: string | null };
+const traceForm = document.getElementById("trace-form") as HTMLFormElement | null;
+const traceInput = document.getElementById("trace-id") as HTMLInputElement | null;
+const traceStatus = document.getElementById("trace-status") as HTMLElement | null;
+const traceRows = document.getElementById("trace-rows") as HTMLElement | null;
+const pretty = (t: string | null) => {
+  if (t == null) return "(none)";
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return t;
+  }
+};
+async function loadTrace(id: string) {
+  if (!traceStatus || !traceRows) return;
+  traceRows.innerHTML = "";
+  traceStatus.textContent = "Loading…";
+  const res = await fetch(`/api/sweeps/trace/${encodeURIComponent(id)}`, { credentials: "same-origin" });
+  const body = (await res.json().catch(() => ({}))) as { rows?: TraceRow[]; error?: string; retentionDays?: number };
+  if (!res.ok) {
+    traceStatus.textContent = res.status === 404 ? "Not available." : body.error ?? "Couldn't read the trace text.";
+    return;
+  }
+  const rows = body.rows ?? [];
+  if (!rows.length) {
+    traceStatus.textContent = `Nothing stored for that trace: older than ${body.retentionDays ?? 14} days, removed with the member, or the call kept no text.`;
+    return;
+  }
+  traceStatus.textContent = `${rows.length} model request(s)`;
+  traceRows.innerHTML = rows
+    .map((r, i) => `<div class="trace-row"><h3>${i + 1}. ${esc(r.functionId)} · ${esc(new Date(r.createdAt).toLocaleString())} · span ${esc(r.spanId)}${r.userId ? ` · user ${esc(r.userId)}` : " · no user"}</h3><div>Prompt</div><pre>${esc(pretty(r.input))}</pre><div>Answer</div><pre>${esc(pretty(r.output))}</pre></div>`)
+    .join("");
+}
+traceForm?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const id = (traceInput?.value ?? "").trim();
+  if (id) {
+    history.replaceState(null, "", `?trace=${encodeURIComponent(id)}`);
+    loadTrace(id).catch(() => traceStatus && (traceStatus.textContent = "Couldn't read the trace text."));
+  }
+});
+{
+  const fromUrl = new URLSearchParams(location.search).get("trace");
+  if (fromUrl && traceInput) {
+    traceInput.value = fromUrl;
+    loadTrace(fromUrl).catch(() => traceStatus && (traceStatus.textContent = "Couldn't read the trace text."));
+  }
+}

@@ -1,6 +1,7 @@
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { langfuseWithoutText } from "./services/langfuseNoText.js";
 import { LlmUsageSpanProcessor } from "./services/llmUsage.js";
+import { TraceTextSpanProcessor } from "./services/llmTraceText.js";
 import { onShutdown } from "./services/shutdown.js";
 
 // Traces every Claude call the Vercel AI SDK makes (generateText across
@@ -22,6 +23,9 @@ import { onShutdown } from "./services/shutdown.js";
 export function initTelemetry(): void {
   // Cost per Claude request goes to llm_usage whether or not Langfuse is set.
   const spanProcessors: any[] = [new LlmUsageSpanProcessor()];
+  // Each request's prompt and answer, kept on our side for 14 days for debugging (services/llmTraceText.ts), read from the
+  // original span; Langfuse below gets the same trace id with no text.
+  spanProcessors.push(new TraceTextSpanProcessor());
   if (!process.env.LANGFUSE_SECRET_KEY || !process.env.LANGFUSE_PUBLIC_KEY) {
     console.warn("LANGFUSE_SECRET_KEY/LANGFUSE_PUBLIC_KEY not set — LLM call tracing is disabled.");
   } else {

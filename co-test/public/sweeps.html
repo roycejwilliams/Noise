@@ -20,6 +20,11 @@
     .detail { color: var(--text-muted, #8a8a8a); max-width: 420px; }
     .table-wrap { overflow-x: auto; }
     .sweeps-h2 { font-size: 15px; margin: 28px 0 6px; }
+    .trace-form { margin: 0 0 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .trace-form input { flex: 1 1 280px; max-width: 420px; padding: 6px 8px; font-family: ui-monospace, monospace; font-size: 13px; }
+    .trace-row { border: 1px solid rgba(127,127,127,0.25); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
+    .trace-row h3 { font-size: 13px; margin: 0 0 6px; font-weight: 600; }
+    .trace-row pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; max-height: 480px; overflow: auto; background: rgba(127,127,127,0.08); padding: 8px; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -34,6 +39,11 @@
       </header>
       <main class="scroll-area">
         <div class="sweeps-page">
+          <h2 class="sweeps-h2" style="margin-top:0">Trace text</h2>
+          <p class="sweeps-explainer">Paste a trace id from Langfuse to read that trace's exact prompts and answers, one per model request, in order. Langfuse keeps no text; this is our own copy, kept 14 days and deleted with the member (and when they remove something). Images show as a marker. Team only.</p>
+          <form id="trace-form" class="trace-form"><input id="trace-id" placeholder="trace id (32 hex characters)" autocomplete="off" spellcheck="false" /> <button type="submit">Look up</button></form>
+          <div id="trace-status" class="status-line"></div>
+          <div id="trace-rows"></div>
           <p class="sweeps-explainer">The 9am sweep, one row per member per day: whether it ran, what it searched and kept, and how many finds were texted that day. A red row is a day that needs a look: it failed, was missed, or left no record at all.</p>
           <div class="table-wrap"><table class="sweeps-table" id="sweeps"></table></div>
           <h2 class="sweeps-h2">Cue failures</h2>

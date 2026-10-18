@@ -72,4 +72,17 @@ router.get("/failures", requireTesterLoginApi, requireTeam, async (req, res) => 
     res.status(500).json({ success: false, error: "The failures view couldn't be read." });
   }
 });
+// One trace's exact prompt and answer (api/src/services/llmTraceText.ts): Langfuse shows the trace id with no text, and this
+// reads our own 14-day copy. Team only, read-only: it holds members' own words. An id that isn't a trace id answers 400.
+router.get("/trace/:traceId", requireTesterLoginApi, requireTeam, async (req, res) => {
+  try {
+    const T = await import("../../../api/src/services/llmTraceText.js");
+    const id = String(req.params.traceId ?? "").trim().toLowerCase();
+    if (!T.validTraceId(id)) return res.status(400).json({ success: false, error: "A trace id is 32 hex characters (copy it from Langfuse)." });
+    res.json({ success: true, retentionDays: T.TRACE_TEXT.retentionDays, rows: await T.traceTextFor(id) });
+  } catch (err: any) {
+    console.error("trace text lookup failed:", err?.name ?? "Error");
+    res.status(500).json({ success: false, error: "The trace text couldn't be read." });
+  }
+});
 export default router;
