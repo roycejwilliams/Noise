@@ -506,7 +506,7 @@ T.traceTextStore.db = async () => fakeDb;
   check("room scoring: each person's match nudge and additive offer under their mark", /withTraceUser\(person\.user_id, \(\) => maybeSendMatchNudge\(/.test(E) && /withTraceUser\(person\.user_id, \(\) => maybeSendAdditiveOffer\(/.test(E));
   check("weekly reflections: each member under their mark", /await withTraceUser\(r\.id, \(\) => reflectOnMember\(r\.id\)\)/.test(src("harness/memberReflection.ts")));
   check("askKind: the open-ask classifier reads each ask's member", /SELECT id, user_id, ask_text, kind, intent FROM ask_checkins/.test(src("services/askKind.ts")) && /await withTraceUser\(r\.user_id, \(\) => classify\(r\.ask_text\)\)/.test(src("services/askKind.ts")));
-  check("the end-of-night close: each person under their mark", /await withTraceUser\(person\.user_id, \(\) => sendClose\(eventId, eventName, person, \{\}\)\)/.test(src("services/eventUnmatchedFollowUp.ts")));
+  check("the end-of-night close: each person under their mark", /await withTraceUser\(person\.user_id, \(\) => sendClose\(eventId, eventName, person, \{\}\)\)\.catch/.test(src("services/eventUnmatchedFollowUp.ts")));
   check("dev review: each member's model reads under their mark", /await withTraceUser\(userId, async \(\) => \[\.\.\.\(await modelFlags\(data\)\)/.test(src("harness/devReview.ts")));
   check("scheduled call reminders: under the member's mark", /await withTraceUser\(row\.user_id, \(\) =>\n\s*generateText\(\{/.test(src("jobs/scheduledCall.ts")));
   check("network reveals run inside proactive dispatch (covered there)", /prepareReveal\(c\.userId/.test(src("harness/proactiveRegistry.ts")));

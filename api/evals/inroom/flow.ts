@@ -402,10 +402,13 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   check("close: a below-bar pair gets no nudge", !nudgeOf("evt-un", a) && !nudgeOf("evt-un", b));
   check("close: a real match still gets its nudge", !!nudgeOf("evt-un", n));
   check("close: everyone in the room is scheduled for the close", W.unmatchedFollowups.length === 4);
-  // Jordan and Noor arrived; Remy texted during the event; Ellis registered and never showed.
+  // Jordan and Noor arrived; Remy was checked in at Luma's door; Ellis registered, never showed, and texted Cue from home during the
+  // event (a text is no evidence they came: review of #208).
   W.presence.set(`evt-un|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
   W.presence.set(`evt-un|${n.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
-  W.memoriesWritten.push({ user_id: m.id, memory_type: "text_exchange", content: "User said: here now", created_at: new Date() });
+  const remyGuest = (W.events.get("evt-un")!.guests as any[]).find((g) => g.email === m.email);
+  remyGuest.checked_in_at = new Date().toISOString();
+  W.memoriesWritten.push({ user_id: b.id, memory_type: "text_exchange", content: "User said: long week, staying in tonight", created_at: new Date() });
   const before = new Map([a, b, n, m].map((x) => [x.id, sentTo(x).length]));
   await U.processDueUnmatchedFollowUps();
   await settle();
@@ -413,11 +416,47 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   check("close: no below-bar pairing is ever drafted", !W.llmCalls.some((c) => c.kind === "unmatchedPairDraft"));
   check("close: no 'nothing stood out' text is ever drafted", !W.llmCalls.some((c) => c.kind === "soloAck"));
   check("close: everyone who came gets exactly one close, matched or not", closes(a).length === 1 && closes(n).length === 1 && closes(m).length === 1, { a: closes(a), n: closes(n), m: closes(m) });
-  check("close: a registered no-show gets nothing (no 'glad you came' without evidence they came)", closes(b).length === 0);
+  check("close: a registered no-show gets nothing, even one who texted during the event (no 'glad you came' without evidence they came)", closes(b).length === 0);
   check("close: the same close for everyone, and it says nothing about matching", [a, n, m].every((x) => /glad you came/i.test(closes(x)[0]?.content ?? "") && !U.MATCH_TALK.test(closes(x)[0]?.content ?? "")), [a, n, m].map((x) => closes(x)[0]?.content));
   await U.processDueUnmatchedFollowUps();
   await settle();
   check("close: sent once (a second pass sends nothing)", closes(a).length === 1 && closes(n).length === 1 && closes(m).length === 1);
+}
+{
+  // Two passes at once (a slow pass overlapping the next */15 tick, or two containers during a deploy): each close goes once
+  // (review of #208/#218: both passes used to send to everyone).
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
+  const n = addMember({ first_name: "Noor", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  const end = new Date(Date.now() + 10 * 60_000).toISOString();
+  addEvent({ api_id: "evt-two", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }, { m: n }]);
+  await freshPass("evt-two");
+  for (const x of [a, n]) W.presence.set(`evt-two|${x.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  const before = new Map([a, n].map((x) => [x.id, sentTo(x).length]));
+  await Promise.all([U.processDueUnmatchedFollowUps(), U.processDueUnmatchedFollowUps()]);
+  await settle();
+  check("close: two passes at once send each close once", [a, n].every((x) => sentTo(x).length - before.get(x.id)! === 1), [a, n].map((x) => sentTo(x).slice(before.get(x.id))));
+}
+{
+  // A close the pause held is tried again by the next pass while the room is open, not dropped (review of #208).
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
+  const end = new Date(Date.now() + 10 * 60_000).toISOString();
+  addEvent({ api_id: "evt-held", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }]);
+  await freshPass("evt-held");
+  W.presence.set(`evt-held|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  const before = sentTo(a).length;
+  process.env.PROACTIVE_PAUSED = "true";
+  const callsBefore = W.llmCalls.length;
+  await U.processDueUnmatchedFollowUps();
+  await settle();
+  const whilePaused = sentTo(a).length - before;
+  const draftsWhilePaused = W.llmCalls.length - callsBefore;
+  delete process.env.PROACTIVE_PAUSED;
+  await U.processDueUnmatchedFollowUps();
+  await settle();
+  check("close: held by the pause, then sent once the pause lifts", whilePaused === 0 && sentTo(a).length - before === 1, { whilePaused, after: sentTo(a).slice(before) });
+  check("close: a close the pause holds costs no draft", draftsWhilePaused === 0, { draftsWhilePaused });
 }
 {
   // Past the in-room limit (Royce, 2026-10-14: "A cap that leaves the most engaged people in the room without a goodbye is

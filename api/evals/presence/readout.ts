@@ -31,6 +31,9 @@ const thin = { ...base, themes: { "Investors or funding": 6, "Hiring or talent":
 const thinLine = (x: any) => R.describe(x).lines.find((l) => /thin on/.test(l));
 check("thin on: named when most of the room has a known offer and nobody offered it", /thin on: investors or funding\./.test(thinLine({ ...thin, offerKnown: 15, offerPool: 18 }) ?? ""));
 check("thin on: silent when Cue doesn't know what most of the room can offer (101 asks vs 2 offers on dev, 2026-10-14)", !thinLine({ ...thin, offerKnown: 2, offerPool: 18 }) && !thinLine({ ...thin, offerKnown: 14, offerPool: 18 }) && !thinLine({ ...thin }) && !thinLine({ ...thin, offerKnown: 0, offerPool: 0 }));
+// Review of #208: 9 asks, all investors, offers known for 11 of 12: the themes line holds the pattern back, so "thin on" must too.
+const allOne = { ...base, askCount: 9, themes: { "Investors or funding": 9 }, offerThemes: { "Hiring or talent": 11 }, offerKnown: 11, offerPool: 12 };
+check("thin on: never says what the themes line held back (a room where nearly everyone sought the same thing)", !thinLine(allOne) && !thinLine({ ...allOne, themes: { "Investors or funding": 8, "Hiring or talent": 1 } }) && R.describe(allOne).lines.some((l) => /Too few members shared/.test(l)));
 check("thin on: never 'something else', never a category fewer than 3 looked for, never one somebody offered", R.thinOn({ "Something else": 9, "Venues or events": 2, "Hiring or talent": 5 }, { "Hiring or talent": 1 }).length === 0);
 const text = R.renderText(base);
 check("nothing in it names or quotes anyone", !/@|https?:\/\/|\b\d{3}[ .-]\d{3}[ .-]\d{4}\b|Maya|Jordan|Priya/.test(text) && !/Maya|Jordan|Priya/.test(R.renderHtml(base)));

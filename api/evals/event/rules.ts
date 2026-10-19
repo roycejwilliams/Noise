@@ -39,8 +39,9 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
 // Everyone who came gets the close once, matched or not; "glad you came" needs evidence they came.
 {
   const followUp = readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8");
-  c(/if \(await wasAlreadyNoticed\(eventId, person\.user_id\)\) continue;/.test(followUp), "the close goes once per person per event");
-  c(/if \(!\(await cameTonight\(eventId, person\.user_id/.test(followUp), "the close needs evidence they came (arrived, checked in, or texted during the event)");
+  // Wiring only; the behavior (once, even with two passes at once; held closes retried) is tested in evals/inroom/flow.ts.
+  c(/if \(!\(await claimClose\(eventId, person\.user_id\)/.test(followUp) && /ON CONFLICT \(event_id, person_id\) DO NOTHING RETURNING 1/.test(followUp), "the close goes once per person per event (claimed before it's drafted)");
+  c(/if \(!\(await cameTonight\(eventId, person, lumaIn\)\)\) continue;/.test(followUp) && !/User said:%/.test(followUp), "the close needs evidence they came (arrived, a walk-in check-in, or Luma's door check-in; never a text)");
 }
 
 // ---------------------------------------------------------------------------

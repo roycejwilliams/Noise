@@ -1015,10 +1015,3 @@ export function anonymousHeadsUpPrompt(p: { recipientFirstName: string; eventNam
 
 Draft a short, warm text (1-2 sentences, no em dashes, normal sentence capitalization) that says another member is also going, gives that reason in your own words without anything that would identify who it is (no name, company, or title), and asks if they'd like an intro. Say you'll share who it is once you've checked with them too. Never say the other person wants to meet them or said anything about them. Return ONLY the message text.${p.feedback ? `\n\n${p.feedback}` : ""}`;
 }
-
-// "No one should feel left out" (Royce, 2026-09-22): for the end-of-event
-// pass in services/eventUnmatchedFollowUp.ts, scoped to two people who each
-// didn't clear MATCH_NUDGE_MIN_SCORE with anyone. Deliberately NOT
-// matchNudgePrompt's confident "worth meeting" framing — that framing is
-// earned by the real score threshold it's built around, and this pool never
-// cleared it. Exported so evals/intro can check the honesty framing directly.
