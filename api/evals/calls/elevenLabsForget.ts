@@ -3,6 +3,7 @@
 //   npx tsx evals/calls/elevenLabsForget.ts
 import { readFileSync } from "fs";
 import {
+  CONVERSATION_LINK_PREFIX,
   FORGET,
   attemptDelete,
   backfillMode,
@@ -85,12 +86,16 @@ function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; t
       }
       if (/FROM co_memories m/.test(sql)) {
         const prefix = p[0] as string;
+        // Postgres reads substring(x from $2) with an untyped parameter as the regex form (substring(text from pattern)), which
+        // gives NULL here; only from $2::int is the 1-based position form. Every substring in the query must carry the cast.
+        const subs = [...sql.matchAll(/substring\(m\.audio_url from (\$2(?:::int)?)\)/g)];
+        const positional = subs.length === 3 && subs.every((m) => m[1] === "$2::int");
         return {
           rows: memories
             .filter((m) => m.memory_type === "call_transcript" && (m.audio_url ?? "").startsWith(prefix))
             .map((m) => {
-              const id = m.audio_url!.slice(prefix.length);
-              return { user_id: m.user_id, content: m.content, conversation_id: id, phone_number: o.users?.[m.user_id] ?? REAL_PHONE, deletion_status: rows.get(id)?.status ?? null, processing_status: processing.get(`el:${id}`) ?? null };
+              const id = positional ? m.audio_url!.slice(Number(p[1]) - 1) : null;
+              return { user_id: m.user_id, content: m.content, conversation_id: id, phone_number: o.users?.[m.user_id] ?? REAL_PHONE, deletion_status: id ? (rows.get(id)?.status ?? null) : null, processing_status: id ? (processing.get(`el:${id}`) ?? null) : null };
             }),
         };
       }
@@ -349,6 +354,12 @@ for (const status of ["processing", "failed", undefined]) {
   check("8g backfillReport reads 'to delete' on apply", /to delete \(stored, processing completed\)/.test(backfillReport(plan, "apply")));
   const again = await planBackfill(f2.deps);
   check("8h a second run finds nothing more to delete", again.wouldDelete === 0 && again.alreadyDeleted === 2);
+  // Review of #244: substring(... from $2) with an untyped parameter is Postgres' regex form, so every id came back NULL.
+  const svcSrc = readFileSync(new URL("../../src/services/elevenLabsForget.ts", import.meta.url), "utf8");
+  const subs = [...svcSrc.matchAll(/substring\(([^)]*)\)/g)].map((m) => m[1]);
+  check("8j every substring in the backfill query takes its position as $2::int (never the regex form)", subs.length === 3 && subs.every((x) => x === "m.audio_url from $2::int"));
+  const offset = CONVERSATION_LINK_PREFIX.length + 1;
+  check("8k the position passed is the prefix length + 1, and 1-based slicing there gives back the id", /\[CONVERSATION_LINK_PREFIX, CONVERSATION_LINK_PREFIX\.length \+ 1\]/.test(svcSrc) && linkFor("conv_a1b2").slice(offset - 1) === "conv_a1b2" && conversationLink("x9").slice(offset - 1) === "x9");
   const script = readFileSync(new URL("../../src/scripts/forgetElevenLabsBackfill.ts", import.meta.url), "utf8");
   check("8i the script takes its mode from the arguments only (dry run unless --apply)", /backfillMode\(process\.argv\.slice\(2\)\)/.test(script) && !/"apply"/.test(script));
 }

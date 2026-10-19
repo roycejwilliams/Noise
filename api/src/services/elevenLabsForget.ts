@@ -190,12 +190,12 @@ export function backfillMode(argv: string[]): "dry-run" | "apply" {
 // Read-only: every stored call transcript that points at an ElevenLabs conversation, sorted into what a run would do.
 export async function planBackfill(deps: Pick<ForgetDeps, "db" | "env">): Promise<BackfillPlan> {
   const { rows } = await deps.db.query(
-    `SELECT m.user_id, m.content, substring(m.audio_url from $2) AS conversation_id, u.phone_number,
+    `SELECT m.user_id, m.content, substring(m.audio_url from $2::int) AS conversation_id, u.phone_number,
             d.status AS deletion_status, cp.status AS processing_status
      FROM co_memories m
      LEFT JOIN users u ON u.id = m.user_id
-     LEFT JOIN elevenlabs_deletions d ON d.conversation_id = substring(m.audio_url from $2)
-     LEFT JOIN call_processing cp ON cp.chat_id = 'el:' || substring(m.audio_url from $2)
+     LEFT JOIN elevenlabs_deletions d ON d.conversation_id = substring(m.audio_url from $2::int)
+     LEFT JOIN call_processing cp ON cp.chat_id = 'el:' || substring(m.audio_url from $2::int)
      WHERE m.memory_type = 'call_transcript' AND m.audio_url LIKE $1 || '%'`,
     [CONVERSATION_LINK_PREFIX, CONVERSATION_LINK_PREFIX.length + 1],
   );
