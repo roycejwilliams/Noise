@@ -1,16 +1,24 @@
 // Forgetting residue audit, counts only (forget-delete-spec.md section 7; context-across-cue-plan.md 3b). READ ONLY.
 //
-// For every removal a member made (profile_corrections rows with removed = true), counts the rows in each store that still say the
-// removed text word for word. Output is counts by store and by kind of member (real, test, archived): never a member's text, id,
-// name or phone, and never the removed text. Exact-phrase matching is a floor: a paraphrase isn't counted.
+// For every removal a member made (profile_corrections rows with removed = true), counts the rows in each store that still contain
+// the removed text as a phrase, after the same normalization on both sides: lower case, punctuation and runs of spaces folded to one
+// space, and Cue's own lead-ins ("my read: ", "looking out for: ", ...) taken off the removed text. A paraphrase isn't counted: these
+// are exact-phrase counts (a floor). Output is counts by store and by kind of member (real, test, archived): never a member's text,
+// id, name or phone, never the removed text, and never a database error's text (its class only).
 //
-//   DATABASE_URL=postgres://...@localhost:<tunnel port>/railway npx tsx src/scripts/forgetResidueAudit.ts --confirm-db railway
+//   1. once, to read the dev server's identifier (reads only pg_control_system(); no member table):
+//      DATABASE_URL=postgres://...@127.0.0.1:55441/railway npx tsx src/scripts/forgetResidueAudit.ts --print-id
+//   2. the audit:
+//      DATABASE_URL=... npx tsx src/scripts/forgetResidueAudit.ts --confirm-db railway --expect-system-id <id from 1> [--expect-port 55441]
 //
-// Safety:
-//   - Refuses on production (NODE_ENV or RAILWAY_ENVIRONMENT_NAME), and unless --confirm-db names the database it's connected to.
-//   - Prints the host, port and database before reading anything.
-//   - Every read is inside BEGIN READ ONLY ... ROLLBACK, with a statement timeout. No write, no DDL, no temp table.
-//   - Each store's columns are checked in information_schema first; a store whose table or columns aren't there is reported n/a.
+// Safety (refuses, before any member table is read, unless every one holds):
+//   - not production (NODE_ENV or RAILWAY_ENVIRONMENT_NAME);
+//   - the connection is a local tunnel: host 127.0.0.1 or localhost, on the expected port (default 55441);
+//   - current_database() is --confirm-db, and the server's system identifier is --expect-system-id (both databases are named
+//     "railway", so the name alone can't tell dev from anything else);
+//   - the server holds test members (555-01xx numbers), which only dev/co-test ever creates (services/testNumbers.ts);
+//   - every read is inside BEGIN READ ONLY ... ROLLBACK (checked), with a statement timeout. No write, no DDL, no temp table.
+// Each store's columns are checked in information_schema first; a store whose table or columns aren't there is reported n/a.
 import pg from "pg";
 
 type Store = { name: string; table: string; owner: string; cols: string[]; where?: string; note?: string };
@@ -54,7 +62,12 @@ export const STORES: Store[] = [
 
 // The member groups: test (a 555-01xx number or simulated), archived (team/test resets since #214), real. Only the group leaves SQL.
 const GROUP = `CASE WHEN coalesce((to_jsonb(u)->>'is_simulated')::boolean, false) OR regexp_replace(coalesce(u.phone_number, ''), '\\D', '', 'g') ~ '^1?[0-9]{3}55501[0-9]{2}$' THEN 'test' WHEN u.archived_at IS NOT NULL THEN 'archived' ELSE 'real' END`;
-const REMOVED = `SELECT pc.id, pc.user_id, lower(btrim(pc.old_value)) AS p FROM profile_corrections pc WHERE (to_jsonb(pc)->>'removed') = 'true' AND length(btrim(pc.old_value)) >= 8`;
+// Normalized on both sides: lower case, anything but letters and digits folded to one space, trimmed. The removed text also loses
+// Cue's own lead-ins (whatCoKnows.ts plainOf), which are never in the member's words.
+// JSON escapes (\n, \t, \r in a jsonb column's text) become spaces first, so "\nThe custody" doesn't read as "nthe custody".
+export const NORM = (sql: string) => `btrim(regexp_replace(lower(regexp_replace(${sql}, '\\\\[nrt]', ' ', 'g')), '[^a-z0-9]+', ' ', 'g'))`;
+const LEAD_INS = `^(my read|looking out for|not for you|what your decks and pages take their look from):\\s*`;
+const REMOVED = `SELECT id, user_id, p FROM (SELECT pc.id, pc.user_id, ${NORM(`regexp_replace(btrim(pc.old_value), '${LEAD_INS}', '', 'i')`)} AS p FROM profile_corrections pc WHERE (to_jsonb(pc)->>'removed') = 'true') x WHERE length(p) >= 8`;
 const GROUPS = ["real", "test", "archived"] as const;
 type Counts = Record<(typeof GROUPS)[number], { rows: number; removals: number }>;
 const zero = (): Counts => ({ real: { rows: 0, removals: 0 }, test: { rows: 0, removals: 0 }, archived: { rows: 0, removals: 0 } });
@@ -63,24 +76,49 @@ const ident = (s: string) => {
   return s;
 };
 
+// Pure: whether the connection string is a local tunnel on the expected port.
+export function localTunnel(url: string, port: number): boolean {
+  const u = new URL(url);
+  return ["127.0.0.1", "localhost"].includes(u.hostname) && Number(u.port) === port;
+}
+const arg = (args: string[], k: string) => (args.indexOf(k) === -1 ? undefined : args[args.indexOf(k) + 1]);
+
 async function main() {
   const args = process.argv.slice(2);
-  const confirm = args[args.indexOf("--confirm-db") + 1];
+  const confirm = arg(args, "--confirm-db");
+  const expectId = arg(args, "--expect-system-id");
+  const port = Number(arg(args, "--expect-port") ?? 55441);
   if (process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT_NAME === "production") throw new Error("refusing: production");
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
-  if (args.indexOf("--confirm-db") === -1 || !confirm) throw new Error("pass --confirm-db <database name> (checked against current_database())");
   const url = new URL(process.env.DATABASE_URL);
+  if (!localTunnel(process.env.DATABASE_URL, port)) throw new Error(`refusing: not a local tunnel on port ${port} (host ${url.hostname}:${url.port || "5432"})`);
+  const printId = args.includes("--print-id");
+  if (!printId && (!confirm || !expectId)) throw new Error("pass --confirm-db <database name> and --expect-system-id <dev server id> (read it once with --print-id)");
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   try {
+    const sysId = await client
+      .query(`SELECT system_identifier::text AS id FROM pg_control_system()`)
+      .then((r) => String(r.rows[0]?.id ?? ""))
+      .catch(() => "");
+    if (!sysId) throw new Error("refusing: the server's system identifier couldn't be read");
+    if (printId) {
+      console.log(`system identifier: ${sysId}`);
+      return;
+    }
     const who = (await client.query(`SELECT current_database() AS db, inet_server_port() AS port, version() AS v`)).rows[0];
-    console.log(`connected: host ${url.hostname}:${url.port || "5432"} (server port ${who.port}), database ${who.db}, ${String(who.v).split(" ").slice(0, 2).join(" ")}`);
+    console.log(`connected: host ${url.hostname}:${url.port} (server port ${who.port}), database ${who.db}, system ${sysId}, ${String(who.v).split(" ").slice(0, 2).join(" ")}`);
     if (who.db !== confirm) throw new Error(`refusing: connected to "${who.db}", --confirm-db says "${confirm}"`);
+    if (sysId !== expectId) throw new Error(`refusing: server ${sysId} is not the expected dev server ${expectId}`);
     await client.query("BEGIN READ ONLY");
     await client.query("SET LOCAL statement_timeout = '60s'");
     const ro = (await client.query(`SELECT current_setting('transaction_read_only') AS ro`)).rows[0].ro;
     if (ro !== "on") throw new Error("refusing: the transaction is not read-only");
-    console.log("transaction: READ ONLY\n");
+    // Only dev/co-test ever creates 555-01xx test members (services/testNumbers.ts is off on production): none here, not dev.
+    const testMembers = (await client.query(`SELECT count(*)::int AS n FROM users WHERE regexp_replace(coalesce(phone_number, ''), '\\D', '', 'g') ~ '^1?[0-9]{3}55501[0-9]{2}$'`)).rows[0]?.n ?? 0;
+    if (!testMembers) throw new Error("refusing: no 555-01xx test members on this server, so it isn't the dev/co-test database");
+    console.log("transaction: READ ONLY; dev markers: system identifier matches, test members present\n");
+    console.log("Counts are exact-phrase matches after normalizing case, punctuation and spacing on both sides (a floor: a paraphrase isn't counted).\n");
 
     const totals = (await client.query(`WITH removed AS (${REMOVED}) SELECT ${GROUP} AS g, count(*)::int AS removals, count(DISTINCT r.user_id)::int AS members FROM removed r JOIN users u ON u.id = r.user_id GROUP BY 1`)).rows;
     const allRemovals = (await client.query(`SELECT ${GROUP} AS g, count(*)::int AS n FROM profile_corrections pc JOIN users u ON u.id = pc.user_id WHERE (to_jsonb(pc)->>'removed') = 'true' GROUP BY 1`)).rows;
@@ -104,7 +142,7 @@ async function main() {
       if (!cols.has(r.table_name)) cols.set(r.table_name, new Set());
       cols.get(r.table_name)!.add(r.column_name);
     }
-    console.log("\nRows that still say a removed text word for word (rows / removals with any), real | test | archived:");
+    console.log("\nRows that still hold a removed text as a phrase, normalized (rows / removals with any), real | test | archived:");
     for (const s of STORES) {
       const have = cols.get(s.table);
       const textCols = s.cols.filter((c) => have?.has(c));
@@ -117,7 +155,7 @@ async function main() {
       const sql = `WITH removed AS (${REMOVED})
         SELECT ${GROUP} AS g, count(*)::int AS rows, count(DISTINCT r.id)::int AS removals
         FROM removed r JOIN users u ON u.id = r.user_id
-        JOIN ${ident(s.table)} t ON t.${ident(s.owner)} = r.user_id ${s.where ? `AND ${s.where}` : ""} AND position(r.p IN lower(${text})) > 0
+        JOIN ${ident(s.table)} t ON t.${ident(s.owner)} = r.user_id ${s.where ? `AND ${s.where}` : ""} AND position(' ' || r.p || ' ' IN ' ' || ${NORM(text)} || ' ') > 0
         GROUP BY 1`;
       const c = zero();
       try {
@@ -126,7 +164,8 @@ async function main() {
         await client.query("RELEASE SAVEPOINT store");
       } catch (err: any) {
         await client.query("ROLLBACK TO SAVEPOINT store");
-        console.log(`  ${s.name.padEnd(58)} error (${String(err?.code ?? "")} ${String(err?.message ?? "").split("\n")[0].slice(0, 60)})`);
+        // The error's class only (its SQLSTATE), never its text: a message can quote a value.
+        console.log(`  ${s.name.padEnd(58)} error (class ${String(err?.code ?? "unknown").slice(0, 5)})`);
         continue;
       }
       console.log(`  ${s.name.padEnd(58)} ${GROUPS.map((g) => `${c[g].rows}/${c[g].removals}`).join(" | ")}`);
@@ -141,7 +180,9 @@ if (process.argv[1] && /forgetResidueAudit\.(ts|js)$/.test(process.argv[1])) {
   main().then(
     () => process.exit(0),
     (err) => {
-      console.error(String(err?.message ?? err));
+      // Our own refusals are printed; a database error only by its class.
+      const msg = String(err?.message ?? err);
+      console.error(/^(refusing|pass |DATABASE_URL)/.test(msg) ? msg : `failed (class ${String(err?.code ?? "unknown").slice(0, 5)})`);
       process.exit(1);
     },
   );
