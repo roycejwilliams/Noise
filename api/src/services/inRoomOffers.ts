@@ -134,6 +134,24 @@ export async function nextQueued(personId: string): Promise<Offer | null> {
   return (rows[0] as Offer) ?? null;
 }
 
+// Direct asks whose send never confirmed (the server died while drafting; SLOT_CLAIM_MINUTES on): each goes back in line, where it
+// was, and is returned so its person's queue is drained (review of #211: after a restart, the asks queued behind a dead one stayed
+// queued, and the dead one was never retried). One UPDATE, so two instances never take the same one. A room that's closed has none.
+export async function requeueStaleAsks(): Promise<string[]> {
+  const { rows } = await pool.query(
+    `UPDATE event_match_offers SET status = 'queued', opened_at = NULL
+      WHERE status = 'sending' AND opened_at <= NOW() - ($1 || ' minutes')::interval RETURNING person_id`,
+    [SLOT_CLAIM_MINUTES],
+  );
+  return [...new Set(rows.map((r: any) => String(r.person_id)))];
+}
+
+// A queued ask that won't go (blocked by the pair record, already asked another way, the room moved on): it leaves the line, so it
+// can't sit at its head and hold every ask behind it (review of #211).
+export async function dropQueued(eventId: string, personId: string, candidateKey: string): Promise<void> {
+  await pool.query(`UPDATE event_match_offers SET status = 'expired' WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'queued'`, [eventId, personId, candidateKey]);
+}
+
 // Co already asked (or they already answered) this member about this person at this event, or that ask is on its way. A queued
 // ask doesn't count.
 export async function offeredAbout(eventId: string, personId: string, candidateId: string): Promise<boolean> {

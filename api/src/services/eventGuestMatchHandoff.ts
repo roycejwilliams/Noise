@@ -539,13 +539,33 @@ export async function handleMatchNudgeReply(
 }
 
 // The next direct ask that waited while they had another question open (services/inRoomOffers.ts).
-async function sendNextQueued(personId: string): Promise<void> {
-  const next = await (await import("./inRoomOffers.js")).nextQueued(personId).catch(() => null);
-  if (!next?.asker_id) return;
-  const { rows } = await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[personId, next.asker_id]]);
-  const me = rows.find((r: any) => r.user_id === personId);
-  const asker = rows.find((r: any) => r.user_id === next.asker_id);
-  if (me && asker) await maybeAskCandidateDirectly(next.event_id, next.event_name ?? "the event", asker.first_name, me, asker);
+export async function sendNextQueued(personId: string): Promise<void> {
+  const O = await import("./inRoomOffers.js");
+  // The oldest waiting ask goes; one that won't go leaves the line so the next can (a few at most per call).
+  for (let tries = 0; tries < 5; tries++) {
+    const next = await O.nextQueued(personId).catch(() => null);
+    if (!next) return;
+    const { rows } = next.asker_id ? await pool.query(`SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])`, [[personId, next.asker_id]]) : { rows: [] as any[] };
+    const me = rows.find((r: any) => r.user_id === personId);
+    const asker = rows.find((r: any) => r.user_id === next.asker_id);
+    if (me && asker) await maybeAskCandidateDirectly(next.event_id, next.event_name ?? "the event", asker.first_name, me, asker);
+    // Still waiting in line after its turn came: it isn't going (a queued ask that's sent takes the slot, 'sending' then 'open').
+    const { rows: still } = await pool.query(`SELECT 1 FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'queued'`, [next.event_id, personId, next.candidate_key]);
+    if (!still.length) return;
+    if (await O.hasOpenOffer(personId)) return; // it went back in line behind a question that opened meanwhile: its turn comes again
+    // Another direct ask to them is held (their morning, or the matching pause; deferredSends.ts): this one waits behind it, it isn't
+    // dropped (review of #211: the waiting ask was expired, breaking "the asker was already told Co would check").
+    if (await (await import("./deferredSends.js")).hasQueuedWithPrefix(personId, "direct_ask:")) return;
+    await O.dropQueued(next.event_id, personId, next.candidate_key);
+  }
+}
+
+// After a restart cut a direct ask off mid-draft: the dead ask goes back in line and each person's line moves again (jobs/index.ts).
+export async function drainStaleAsks(): Promise<number> {
+  const O = await import("./inRoomOffers.js");
+  const people = await O.requeueStaleAsks();
+  for (const personId of people) await sendNextQueued(personId).catch((err: any) => console.error(`drainStaleAsks: ${personId} (non-fatal, next run tries again):`, err?.message ?? err));
+  return people.length;
 }
 
 // Their answer to "more people just got here, want to hear who?" (eventScoring.ts maybeSendAdditiveOffer). A no closes

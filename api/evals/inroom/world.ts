@@ -246,7 +246,9 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     if (i >= 0) W.offers.splice(i, 1);
     return R([]);
   }
-  if (has("SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ((status = 'open'")) {
+  // Only the exact one-slot predicate (inRoomOffers.ts SLOT_TAKEN) is answered: a changed query is unknown and fails the sim, so the
+  // real SQL is what's tested (review of #211).
+  if (has("SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ((status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval)) LIMIT 1")) {
     const days = Number(p[1]) * 86_400_000;
     const mins = Number(p[2]) * 60_000;
     return R(W.offers.filter((o) => o.person_id === p[0] && ((o.status === "open" && now() - +o.opened_at < days) || (o.status === "sending" && now() - +o.opened_at < mins))).slice(0, 1).map(() => ({ "?column?": 1 })));
@@ -263,6 +265,17 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     for (const o of W.offers) if (o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2]) Object.assign(o, { status: "answered", answer: p[3] });
     return R([]);
   }
+  if (has("UPDATE event_match_offers SET status = 'queued', opened_at = NULL") && has("WHERE status = 'sending' AND opened_at <= NOW() - ($1 || ' minutes')::interval RETURNING person_id")) {
+    const mins = Number(p[0]) * 60_000;
+    const out: Row[] = [];
+    for (const o of W.offers) if (o.status === "sending" && now() - +o.opened_at >= mins) { Object.assign(o, { status: "queued", opened_at: null }); out.push({ person_id: o.person_id }); }
+    return R(out);
+  }
+  if (has("UPDATE event_match_offers SET status = 'expired' WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'queued'")) {
+    for (const o of W.offers) if (o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2] && o.status === "queued") o.status = "expired";
+    return R([]);
+  }
+  if (has("SELECT 1 FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'queued'")) return R(W.offers.filter((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2] && o.status === "queued").map(() => ({ "?column?": 1 })));
   if (has("SELECT 1 FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status <> 'queued'")) return R(W.offers.filter((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2] && o.status !== "queued").map(() => ({ "?column?": 1 })));
   if (has("SELECT first_name, phone_number, email FROM users WHERE id = $1")) {
     const m = W.members.get(p[0]);
@@ -563,6 +576,8 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
   if (has("FROM event_room_closures")) return R([...W.roomClosures.values()].filter((r) => r.event_id === p[0] && r.closed_at));
   if (has("INSERT INTO member_connections") || has("INSERT INTO co_facts") || has("UPDATE co_facts SET retired_at") || has("UPDATE proactive_user_state SET hold_until = NULL")) return R([]);
+  // A direct ask held for their hours or the pause (deferredSends.ts hasQueuedWithPrefix): W.deferredAsks holds whose are waiting.
+  if (has("SELECT 1 FROM deferred_sends WHERE user_id = $1 AND starts_with(target_key, $2) AND status IN ('queued', 'sending') LIMIT 1")) return R((W as any).deferredAsks?.has(`${p[0]}|${p[1]}`) ? [{ x: 1 }] : []);
   if (has("FROM deferred_sends") || has("FROM person_snapshots") || has("FROM co_facts") || has("FROM ask_checkins")) return R([]);
   if (has("INSERT INTO event_checkin_followups")) {
     W.checkinFollowups.push({ user_id: p[0], event_api_id: p[1], event_name: p[2], send_at: p[3], created_at: new Date() });
