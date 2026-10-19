@@ -40,13 +40,10 @@ export type EventDetails = {
   soldOut: boolean | null;
   guestCount: number | null;
   description: string | null;
-  // Luma's own event id (evt-...), the same one the Discover feed gives, so an event found another way (services/lumaViaExa.ts) is
-  // the same event to the rest of Cue. Absent on records read before 2026-10-17.
+  // Set only for an event found through Exa and read from Luma's official API (services/luma.ts getPublicLumaEvent): its Luma id,
+  // its own name, and who the host listed it for ("public", "members-only", "private").
   apiId?: string | null;
-  // The event's own name on its page (an Exa-found event is named by this, not by Exa's page title).
   name?: string | null;
-  // Who the host listed it for, as the page says ("public", "private"; checked on real pages 2026-10-17: lu.ma/45r1tqno, found by
-  // Exa for an SF founders want, is "private"). An event found another way than the public feed goes out only when this is "public".
   visibility?: string | null;
 };
 
@@ -57,7 +54,7 @@ export type EnrichedMatch = TierMatch;
 
 const PAGE_TIMEOUT_MS = 6000;
 const DESCRIPTION_MAX = 900;
-const detailCache = new Map<string, { at: number; details: EventDetails | null; refused?: boolean }>();
+const detailCache = new Map<string, { at: number; details: EventDetails | null }>();
 
 export function lumaUrl(url: string): string {
   return /^https?:\/\//.test(url) ? url : `https://lu.ma/${url.replace(/^\//, "")}`;
@@ -102,9 +99,6 @@ export function parseLumaEventPage(html: string): EventDetails | null {
     soldOut: typeof data.sold_out === "boolean" ? data.sold_out : null,
     guestCount: typeof data.guest_count === "number" ? data.guest_count : null,
     description: description ? description.slice(0, DESCRIPTION_MAX) : null,
-    apiId: typeof ev.api_id === "string" ? ev.api_id : null,
-    name: typeof ev.name === "string" && ev.name.trim() ? ev.name.trim() : null,
-    visibility: typeof ev.visibility === "string" ? ev.visibility : null,
   };
 }
 
@@ -137,39 +131,20 @@ export async function fetchCheckedHops(url: string, signal: AbortSignal, fetchIm
   return null;
 }
 
-// Luma refusing page reads (HTTP 429, seen 2026-10-18 after about 100 reads in a few minutes): the last time it did, so the Luma
-// search through Exa (services/lumaViaExa.ts), which reads up to 25 pages at once, pauses while Luma is refusing and leaves the
-// reads to the feed's own events. Nothing else changes: every read works exactly as before.
-export const LUMA_REFUSAL_PAUSE_MINUTES = 10;
-let lumaRefusedAt = 0;
-export const lumaRefusedRecently = (now: number = Date.now()): boolean => lumaRefusedAt > 0 && now - lumaRefusedAt < LUMA_REFUSAL_PAUSE_MINUTES * 60_000;
-export const noteLumaRefusal = (now: number = Date.now()) => {
-  lumaRefusedAt = now;
-};
-
 // maxAgeMs: how old a cached successful read may be. A cached search result
 // re-checks availability with a short one, since sold-out status changes.
 export async function fetchLumaEventDetails(url: string, opts: { maxAgeMs?: number } = {}): Promise<EventDetails | null> {
-  return (await readLumaEventPage(url, opts)).details;
-}
-// The same read, saying when Luma refused it (429), so a caller reading many pages can tell "refused" from "no event here".
-export async function readLumaEventPage(url: string, opts: { maxAgeMs?: number; fetchImpl?: typeof fetch; isPublic?: (host: string) => Promise<boolean> } = {}): Promise<{ details: EventDetails | null; refused: boolean }> {
   const key = lumaUrl(url);
   const cached = detailCache.get(key);
   const ttl = cached?.details ? Math.min(opts.maxAgeMs ?? DETAIL_TTL_MS, DETAIL_TTL_MS) : FAILED_DETAIL_TTL_MS;
-  if (cached && Date.now() - cached.at < ttl) return { details: cached.details, refused: !!cached.refused };
+  if (cached && Date.now() - cached.at < ttl) return cached.details;
   let details: EventDetails | null = null;
-  let refused = false;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PAGE_TIMEOUT_MS);
     try {
-      const res = await fetchCheckedHops(key, controller.signal, opts.fetchImpl, opts.isPublic);
+      const res = await fetchCheckedHops(key, controller.signal);
       if (res?.ok) details = parseLumaEventPage(await res.text());
-      else if (res?.status === 429) {
-        refused = true;
-        noteLumaRefusal();
-      }
     } finally {
       clearTimeout(timer);
     }
@@ -177,8 +152,8 @@ export async function readLumaEventPage(url: string, opts: { maxAgeMs?: number; 
     console.error(`eventDetails: fetch failed for ${key} (non-fatal):`, err?.message ?? err);
   }
   if (detailCache.size > 500) detailCache.clear();
-  detailCache.set(key, { at: Date.now(), details, ...(refused ? { refused } : {}) });
-  return { details, refused };
+  detailCache.set(key, { at: Date.now(), details });
+  return details;
 }
 
 // Plain facts for any prompt, one per line. Only what's actually on record.

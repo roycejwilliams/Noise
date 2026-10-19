@@ -59,7 +59,8 @@ export async function rankEventsByDescription<T extends { name: string; url?: st
   const pool = spreadAcrossDays(candidates, MAX_CANDIDATES, opts.zone);
   const profileText = opts.profileText?.trim() || null;
   if ((!askText && !(opts.browse && profileText)) || !pool.length) return { ranked: [], closest: null };
-  const details = await Promise.all(pool.map((c) => (c.url ? fetchLumaEventDetails(c.url).catch(() => null) : Promise.resolve(null))));
+  // An event that already has its details (one Exa found, read from Luma's API: services/lumaViaExa.ts) isn't read again from its page.
+  const details = await Promise.all(pool.map((c) => ((c as { details?: EventDetails }).details ? Promise.resolve((c as { details?: EventDetails }).details!) : c.url ? fetchLumaEventDetails(c.url).catch(() => null) : Promise.resolve(null))));
   const texts = pool.map((c, i) => rankingText(c.name, details[i] ?? undefined));
 
   const now = Date.now();

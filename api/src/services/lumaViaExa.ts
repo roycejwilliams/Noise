@@ -3,17 +3,20 @@
 // every want. One Exa search limited to Luma's own pages, written from the want, the city and the asked dates, finds the rest: on 10-17
 // it found 7 SF founder events in the asked week that the feed didn't have (the feed's names fit 2), and 8 SF supper clubs in late
 // October (the feed: 0).
-// Each result is read from its own Luma page (free, no model) and kept only when that page says it's upcoming and inside the asked
-// window; it then joins the feed's events (services/tieredRecommendation.ts eventCandidates) and goes through the same nearby filter,
-// ranking, page read, gate and start check (#229) as a feed event, and goes out as a Luma link, tier 2. Exa's index keeps old pages
-// too, so most results are past (71 of 106 read on 10-17): the page read is what decides, never Exa's text.
-// Cost: one Exa search per want, city and dates, $0.022 measured (25 results, no page text). What Exa found (the event pages, not
-// their details) is kept for CACHE_HOURS, so a sweep and a reply on the same want don't pay twice; a search that failed isn't kept, and
-// the pages are read again each time (eventDetails.ts keeps a read for an hour). Off without EXA_API_KEY, and skipped where a turn can't
-// wait for it (calls: services/voiceFinds.ts).
+// Each Luma link Exa finds is checked through Luma's official API, never by reading its page (Royce, 2026-10-19: "tier 2 should use
+// the api"): GET /v1/entities/lookup turns its slug into an event id (calendars are skipped), and GET /v1/events/get gives what a
+// visitor could see (services/luma.ts). It's kept only when public, upcoming, inside the asked window and with a place (or online);
+// it then joins the feed's events (services/tieredRecommendation.ts eventCandidates) and goes through the same nearby filter, ranking,
+// gate and start check (#229) as a feed event, with the API's details in place of a page read, and goes out as a Luma link, tier 2.
+// Exa's index keeps old pages too, so most results are past (71 of 106 on 10-17): the lookup's start and end decide that first.
+// Cost: one Exa search per want, city and dates, $0.022 measured (25 results, no page text); the Luma API calls are free, cached
+// (a slug's id for days, an event an hour) and stopped at LUMA_PUBLIC_API.perMinute. What Exa found is kept for CACHE_HOURS, so a
+// sweep and a reply on the same want don't pay twice; a search that failed isn't kept. Off without EXA_API_KEY or LUMA_API_KEY, and
+// skipped where a turn can't wait for it (calls).
 import { nearestPlace, type DiscoveredEvent, type DiscoverPlace } from "./lumaDiscovery.js";
 import type { GeoPoint } from "./geocoding.js";
 import type { EventDetails } from "./eventDetails.js";
+import type { LumaApiMiss, LumaEntity, LumaPublicEvent } from "./luma.js";
 import type { ExaSearch } from "./exaSearch.js";
 
 export const LUMA_VIA_EXA = { results: 25, timeoutMs: 10_000, cacheHours: 6 } as const;
@@ -101,14 +104,32 @@ export function lumaEventSlug(url: string): string | null {
 // Pure: Exa's page title without Luma's own suffix.
 export const eventTitle = (title: string | null | undefined) => String(title ?? "").replace(/\s*[·|–—-]\s*Luma\s*$/i, "").trim();
 
-export type ViaExaEvent = DiscoveredEvent & { online?: boolean };
-// What one search did, for the log (counts only: the query is the member's want). pages: event pages Exa returned; read: how many of
-// those pages gave a start; notPublic: read but not listed as public by their host (dropped); kept: public, upcoming and inside the
-// window.
+// An event Exa found, as Luma's API describes it: details are the event's own (from /v1/events/get), so nothing after this reads its
+// page.
+export type ViaExaEvent = DiscoveredEvent & { online?: boolean; details: EventDetails };
+// What one search did, for the log (counts only: the query is the member's want).
+// pages: Luma links Exa returned. looked: links Luma's API resolved (lookup). calendars: links that were a calendar, not an event
+// (skipped). past: events the lookup already showed are over or outside the window (not read further). read: events read from the
+// API. notPublic: read but not listed as public by their host (dropped). noLocation: no place and not online (dropped). refused:
+// lookups or reads Luma answered 429. limited: left unread because our own per-minute stop was reached. kept: public, upcoming,
+// inside the window, with a place.
 // error: what failed and what to do about it, for the log (never the member: they get the feed's events as before).
-// refused: pages Luma wouldn't serve (HTTP 429), left out unread.
 // kinds: the fixed kinds the search used (from EVENT_KINDS, never their words).
-export type ViaExaReport = { cached: boolean; error: string | null; pages: number; read: number; notPublic: number; refused?: number; kept: number; kinds?: string[] };
+export type ViaExaReport = {
+  cached: boolean;
+  error: string | null;
+  pages: number;
+  looked?: number;
+  calendars?: number;
+  past?: number;
+  read: number;
+  notPublic: number;
+  noLocation?: number;
+  refused?: number;
+  limited?: number;
+  kept: number;
+  kinds?: string[];
+};
 
 // Pure: why a Luma search through Exa failed, said with its fix, from exaSearch's error (or what a call threw). Timed out, refused
 // with an HTTP status, unreachable, unreadable: each its own line. Every one ends the same way, because that's what the member got.
@@ -131,12 +152,14 @@ export function exaFailureReason(error: string | null): string | null {
   if (/isn't configured/i.test(error)) return EXA_OFF;
   return `the Luma search through Exa threw (${error.replace(/^threw:\s*/, "").slice(0, 120)}); ${FEED_ALONE}`;
 }
-// Luma refused this search's page reads (429): said with its count, and what happens next.
-export const lumaRefusedReason = (refused: number, pages: number, pauseMinutes: number) =>
-  `Luma refused ${refused} of ${pages} page reads (429): those events couldn't be checked, so they were left out; the Luma search through Exa pauses for ${pauseMinutes} minutes so the feed's own page reads go first`;
-// Luma refusing reads in the last few minutes: no Exa search at all (its results couldn't be read, so it would be paid for nothing).
+// Luma's API refused this search's checks (429), or our own per-minute stop was reached: said with the counts, and what happens next.
+export const lumaRefusedReason = (refused: number, limited: number, pages: number, pauseMinutes: number) =>
+  `${refused ? `Luma's API refused ${refused} of ${pages} checks (429)` : ""}${refused && limited ? "; " : ""}${limited ? `${limited} of ${pages} were left unchecked at the per-minute stop` : ""}: those events couldn't be checked, so they were left out${refused ? `; the Luma search through Exa pauses for ${pauseMinutes} minutes` : ""}`;
+// Luma's API refusing in the last few minutes: no Exa search at all (its results couldn't be checked, so it would be paid for nothing).
 export const lumaRefusingReason = (pauseMinutes: number) =>
-  `Luma refused page reads (429) in the last ${pauseMinutes} minutes, so no Luma search through Exa (its results couldn't be read); ${FEED_ALONE}; it searches again once ${pauseMinutes} minutes pass without a refusal`;
+  `Luma's API refused a request (429) in the last ${pauseMinutes} minutes, so no Luma search through Exa (its results couldn't be checked); ${FEED_ALONE}; it searches again once ${pauseMinutes} minutes pass without a refusal`;
+// No Luma API key: Exa's links can't be checked, so Exa isn't asked (it would be paid for nothing).
+export const LUMA_API_OFF = `LUMA_API_KEY isn't set on this service, so Exa's Luma links can't be checked and no Luma search through Exa runs; ${FEED_ALONE}; set LUMA_API_KEY to turn it on`;
 
 // ---------------------------------------------------------------- the daily budget (Royce, 2026-10-18: "60 a day, 20 held for member asks")
 // All members together: LUMA_EXA_DAILY_CAP Exa searches in any 24 hours, LUMA_EXA_REQUEST_RESERVE of them held for what a member
@@ -186,11 +209,14 @@ export const EXA_OFF = "EXA_API_KEY isn't set on this service, so tier 2 is Luma
 
 export type LumaViaExaDeps = {
   exa: (query: string, o: { purpose: string; userId: string | null; pages: number; text: false; includeDomains: string[]; timeoutMs: number }) => Promise<ExaSearch>;
-  // A page's details, null when it has none, or "refused" when Luma wouldn't serve it (429).
-  page: (url: string) => Promise<EventDetails | null | "refused">;
+  // Luma's official API (services/luma.ts): a slug to an event or calendar, and a public event's visitor-visible details. Never a page
+  // read.
+  lookup: (slug: string) => Promise<LumaEntity | null | LumaApiMiss>;
+  event: (id: string) => Promise<LumaPublicEvent | null | LumaApiMiss>;
+  lumaApi: () => boolean;
   configured: () => boolean;
   now: () => Date;
-  // Luma refused a page read in the last LUMA_REFUSAL_PAUSE_MINUTES (services/eventDetails.ts).
+  // Luma's API answered 429 in the last LUMA_PUBLIC_API.refusalPauseMinutes (services/luma.ts).
   refusing: () => boolean;
   pauseMinutes: number;
   reserve: (userId: string | null, source: LumaExaSource) => Promise<{ ok: boolean; reason: string | null }>;
@@ -204,9 +230,9 @@ type Searched = { found: Found[]; error: string | null; reason?: string };
 const cache = new Map<string, { at: number; found: Promise<Searched> }>();
 export const clearLumaViaExaCache = () => cache.clear();
 
-// Luma events Exa finds for this want: upcoming, inside the window (inRange decides, the same test the feed's events get), with the
-// start, city and online flag from each event's own page. null when Exa isn't configured or there's no want. Never throws: a failed
-// search or read is fewer events, and says so in the report.
+// Luma events Exa finds for this want, each checked through Luma's official API (never its page): public, upcoming, inside the window
+// (inRange decides, the same test the feed's events get), with a place or online, and with the start, end, city and details Luma's
+// API gives. null when Exa isn't configured or there's no want. Never throws: a failed search or check is fewer events, and says so.
 export async function lumaEventsViaExa(
   what: string,
   city: string | null,
@@ -214,7 +240,8 @@ export async function lumaEventsViaExa(
 ): Promise<{ events: ViaExaEvent[]; report: ViaExaReport } | null> {
   const deps = await realDeps(o.deps);
   if (!deps.configured() || !what.trim()) return null;
-  // Luma is refusing reads: no search, and no reads of a cached one either (each would add to what Luma is refusing).
+  if (!deps.lumaApi()) return { events: [], report: { cached: false, error: LUMA_API_OFF, pages: 0, read: 0, notPublic: 0, kept: 0 } };
+  // Luma's API is refusing: no search, and no checks of a cached one either (each would add to what Luma is refusing).
   if (deps.refusing()) return { events: [], report: { cached: false, error: lumaRefusingReason(deps.pauseMinutes), pages: 0, read: 0, notPublic: 0, refused: 0, kept: 0 } };
   // Never their words: the query (and so the cache key) is built from fixed parts only.
   const place = await deps.place(city).catch(() => null);
@@ -241,25 +268,57 @@ export async function lumaEventsViaExa(
   const { found, error, reason } = await mine.found;
   // A failed search is never kept: the next ask searches again.
   if (error && cache.get(key) === mine) cache.delete(key);
-  const read = await Promise.all(
-    found.map(async ({ slug, title }): Promise<ViaExaEvent | "not_public" | "refused" | null> => {
-      // Read at the same url the feed uses, so the reads after this one (ranking, the gate) hit eventDetails' cache.
-      const url = `https://lu.ma/${slug}`;
-      const d = await deps.page(url).catch(() => null);
-      if (d === "refused") return "refused" as const;
-      if (!d?.startAt) return null;
-      // A host's private or unlisted event never goes to strangers: the public feed only lists public events, and an event Exa found
-      // by its url goes out only when its own page says "public". Unknown is not public (fails closed).
-      if (d.visibility !== "public") return "not_public" as const;
-      return { api_id: d.apiId ?? `luma:${slug}`, name: d.name || title, start_at: d.startAt, city: d.city ?? null, url, ...(d.online ? { online: true } : {}) };
+  const n = { looked: 0, calendars: 0, past: 0, read: 0, notPublic: 0, noLocation: 0, refused: 0, limited: 0 };
+  const miss = (m: LumaApiMiss) => {
+    if (m === "refused") n.refused++;
+    else if (m === "limited") n.limited++;
+  };
+  const checked = await Promise.all(
+    found.map(async ({ slug, title }): Promise<ViaExaEvent | null> => {
+      const entity = await deps.lookup(slug).catch(() => null);
+      if (typeof entity === "string") return miss(entity), null;
+      if (!entity) return null;
+      n.looked++;
+      if (entity.type === "calendar") return n.calendars++, null;
+      // The lookup gives the start and end: one that's over or outside the window isn't read any further.
+      const over = entity.endAt ? new Date(entity.endAt).getTime() <= now.getTime() : false;
+      if (over || (entity.startAt && (new Date(entity.startAt).getTime() <= now.getTime() || !o.inRange(entity.startAt)))) return n.past++, null;
+      const e = await deps.event(entity.id).catch(() => null);
+      if (typeof e === "string") return miss(e), null;
+      if (!e) return null;
+      n.read++;
+      // A host's private or members-only event never goes to strangers; unknown is not public (fails closed).
+      if (e.visibility !== "public") return n.notPublic++, null;
+      const online = !!e.locationType && !["offline", "missing"].includes(e.locationType);
+      if (e.locationType === "missing" || (!online && !e.city)) return n.noLocation++, null;
+      const shown = e.locationVisibility === "public";
+      const details: EventDetails = {
+        startAt: e.startAt,
+        endAt: e.endAt,
+        timezone: e.timezone,
+        online,
+        // The address only when the host shows it to everyone; otherwise the city alone (as the event page does).
+        venue: shown ? e.address : null,
+        address: shown ? e.fullAddress : null,
+        city: e.city,
+        hosts: e.hosts,
+        price: null,
+        spotsRemaining: e.spotsRemaining,
+        requiresApproval: e.requireApproval,
+        // Closed to new registrations, or no spots left: the gate says no, as it does for a sold-out page.
+        soldOut: e.registrationOpen === false || e.spotsRemaining === 0 ? true : false,
+        guestCount: null,
+        description: e.description ? e.description.slice(0, 900) : null,
+        apiId: e.id,
+        name: e.name || title,
+        visibility: e.visibility,
+      };
+      return { api_id: e.id, name: e.name || title, start_at: e.startAt, city: e.city, url: `https://lu.ma/${e.slug ?? entity.slug ?? slug}`, ...(online ? { online: true } : {}), details };
     }),
   );
-  const notPublic = read.filter((e) => e === "not_public").length;
-  const refused = read.filter((e) => e === "refused").length;
-  const listed = read.filter((e): e is ViaExaEvent => e !== null && e !== "not_public" && e !== "refused");
-  const events = listed.filter((e) => new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
-  const why = reason ?? exaFailureReason(error) ?? (refused ? lumaRefusedReason(refused, found.length, deps.pauseMinutes) : null);
-  return { events, report: { cached: !!fresh, error: why, pages: found.length, read: listed.length + notPublic, notPublic, refused, kept: events.length, kinds } };
+  const events = checked.filter((e): e is ViaExaEvent => e !== null && new Date(e.start_at).getTime() > now.getTime() && o.inRange(e.start_at));
+  const why = reason ?? exaFailureReason(error) ?? (n.refused || n.limited ? lumaRefusedReason(n.refused, n.limited, found.length, deps.pauseMinutes) : null);
+  return { events, report: { cached: !!fresh, error: why, pages: found.length, ...n, kept: events.length, kinds } };
 }
 
 async function search(query: string, userId: string | null, deps: LumaViaExaDeps): Promise<{ found: Found[]; error: string | null }> {
@@ -279,14 +338,16 @@ async function search(query: string, userId: string | null, deps: LumaViaExaDeps
 }
 
 async function realDeps(d: Partial<LumaViaExaDeps> = {}): Promise<LumaViaExaDeps> {
-  const [X, E, L] = await Promise.all([import("./exaSearch.js"), import("./eventDetails.js"), import("./lumaDiscovery.js")]);
+  const [X, A, L] = await Promise.all([import("./exaSearch.js"), import("./luma.js"), import("./lumaDiscovery.js")]);
   return {
     exa: d.exa ?? ((q, o) => X.exaSearch(q, o)),
-    page: d.page ?? ((url) => E.readLumaEventPage(url).then((r) => (r.refused ? ("refused" as const) : r.details))),
+    lookup: d.lookup ?? ((slug) => A.lookupLumaEntity(slug)),
+    event: d.event ?? ((id) => A.getPublicLumaEvent(id)),
+    lumaApi: d.lumaApi ?? (() => A.lumaApiConfigured()),
     configured: d.configured ?? (() => X.exaConfigured()),
     now: d.now ?? (() => new Date()),
-    refusing: d.refusing ?? (() => E.lumaRefusedRecently()),
-    pauseMinutes: d.pauseMinutes ?? E.LUMA_REFUSAL_PAUSE_MINUTES,
+    refusing: d.refusing ?? (() => A.lumaApiRefusedRecently()),
+    pauseMinutes: d.pauseMinutes ?? A.LUMA_PUBLIC_API.refusalPauseMinutes,
     reserve: d.reserve ?? ((userId, source) => reserveLumaExaSearch(userId, source)),
     place: d.place ?? ((city) => L.discoverPlaceFor(city).then((p) => (p ? { name: p.name } : null))),
   };

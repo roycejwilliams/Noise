@@ -248,3 +248,143 @@ export function resolveCoEventPlace(
   const r = resolveCoEventCity(null, page.city, homeCity, page.address ?? page.venue);
   return { city: r.city, online: false, source: r.source };
 }
+
+// ---------------------------------------------------------------- public events we don't manage (Royce, 2026-10-19: "tier 2 should
+// use the api"). Tier 2 through Exa (services/lumaViaExa.ts) checks every Luma link Exa finds through Luma's official API, never by
+// reading the event's page: GET /v1/entities/lookup turns the link's slug into an event (or calendar) id, and GET /v1/events/get
+// returns what a visitor to that event could see (access "view": start, end, timezone, visibility, location type, city and
+// coordinates, hosts, description, registration). Both confirmed live 2026-10-19 on an event we don't manage (lu.ma/16nclyz5).
+// One key for all of it (LUMA_API_KEY, Noise's calendar key): Luma allows 200 requests a minute per calendar, so these two stop at
+// LUMA_PUBLIC_API.perMinute, leaving room for Noise's own calendar calls above. A 429 pauses the Exa search for refusalPauseMinutes.
+export const LUMA_PUBLIC_API = { perMinute: 150, lookupCacheDays: 7, missCacheHours: 24, eventCacheMinutes: 60, failedCacheMinutes: 2, refusalPauseMinutes: 10 } as const;
+
+export type LumaEntity = { type: "event"; id: string; slug: string; startAt: string | null; endAt: string | null } | { type: "calendar"; id: string };
+export type LumaPublicEvent = {
+  id: string;
+  name: string;
+  slug: string | null;
+  startAt: string;
+  endAt: string | null;
+  timezone: string | null;
+  visibility: string | null;
+  locationType: string | null;
+  locationVisibility: string | null;
+  city: string | null;
+  address: string | null;
+  fullAddress: string | null;
+  hosts: string[];
+  description: string | null;
+  registrationOpen: boolean | null;
+  requireApproval: boolean | null;
+  spotsRemaining: number | null;
+};
+// "refused": Luma said 429. "limited": our own per-minute stop. "off": no LUMA_API_KEY.
+export type LumaApiMiss = "refused" | "limited" | "off";
+
+export const lumaApiConfigured = (env: NodeJS.ProcessEnv = process.env): boolean => !!env.LUMA_API_KEY?.trim();
+let apiCalls: number[] = [];
+let apiRefusedAt = 0;
+export const lumaApiRefusedRecently = (now: number = Date.now()): boolean => apiRefusedAt > 0 && now - apiRefusedAt < LUMA_PUBLIC_API.refusalPauseMinutes * 60_000;
+// For tests: forget the minute's calls, the last refusal and both caches.
+export function resetLumaPublicApi(): void {
+  apiCalls = [];
+  apiRefusedAt = 0;
+  lookupCache.clear();
+  eventCache.clear();
+}
+function takeApiSlot(now: number): boolean {
+  apiCalls = apiCalls.filter((t) => now - t < 60_000);
+  if (apiCalls.length >= LUMA_PUBLIC_API.perMinute) return false;
+  apiCalls.push(now);
+  return true;
+}
+
+type ApiDeps = { fetchImpl?: typeof fetch; now?: () => number; env?: NodeJS.ProcessEnv };
+async function apiGet(path: string, params: Record<string, string>, d: ApiDeps): Promise<{ status: number; body: any } | LumaApiMiss> {
+  const env = d.env ?? process.env;
+  if (!lumaApiConfigured(env)) return "off";
+  const now = (d.now ?? Date.now)();
+  if (!takeApiSlot(now)) return "limited";
+  const url = new URL(`${LUMA_BASE_URL}${path}`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await (d.fetchImpl ?? fetch)(url, { headers: { "x-luma-api-key": String(env.LUMA_API_KEY).trim() }, signal: AbortSignal.timeout(6000) });
+  if (res.status === 429) {
+    apiRefusedAt = now;
+    return "refused";
+  }
+  return { status: res.status, body: res.ok ? await res.json().catch(() => null) : null };
+}
+
+const lookupCache = new Map<string, { at: number; ttl: number; v: Promise<LumaEntity | null | LumaApiMiss> }>();
+// The event or calendar a Luma slug (or link) names, or null when Luma knows none. A slug always names the same thing, so a found one
+// is kept for days; a miss for a day; a failure for minutes. One request per slug at a time.
+export async function lookupLumaEntity(slug: string, d: ApiDeps = {}): Promise<LumaEntity | null | LumaApiMiss> {
+  const now = (d.now ?? Date.now)();
+  const key = slug.toLowerCase();
+  const hit = lookupCache.get(key);
+  if (hit && now - hit.at < hit.ttl) return hit.v;
+  const entry = { at: now, ttl: LUMA_PUBLIC_API.failedCacheMinutes * 60_000, v: null as unknown as Promise<LumaEntity | null | LumaApiMiss> };
+  entry.v = (async (): Promise<LumaEntity | null | LumaApiMiss> => {
+    const r = await apiGet("/v1/entities/lookup", { slug }, d).catch(() => null);
+    if (r === null || typeof r === "string") return r;
+    const e = r.body?.entity;
+    if (r.status === 200 && e?.type === "event" && typeof e.event?.id === "string") {
+      entry.ttl = LUMA_PUBLIC_API.lookupCacheDays * 86_400_000;
+      return { type: "event", id: e.event.id, slug: String(e.event.slug ?? slug), startAt: e.event.start_at ?? null, endAt: e.event.end_at ?? null };
+    }
+    if (r.status === 200 && e?.type === "calendar" && typeof e.calendar?.id === "string") {
+      entry.ttl = LUMA_PUBLIC_API.lookupCacheDays * 86_400_000;
+      return { type: "calendar", id: e.calendar.id };
+    }
+    if (r.status === 200 || r.status === 404) entry.ttl = LUMA_PUBLIC_API.missCacheHours * 3_600_000;
+    return null;
+  })();
+  if (lookupCache.size > 2000) lookupCache.clear();
+  lookupCache.set(key, entry);
+  const v = await entry.v;
+  // A refusal or our own stop isn't an answer: not kept.
+  if (typeof v === "string" && lookupCache.get(key) === entry) lookupCache.delete(key);
+  return v;
+}
+
+const eventCache = new Map<string, { at: number; ttl: number; v: Promise<LumaPublicEvent | null | LumaApiMiss> }>();
+// What a visitor to a public event could see, from Luma's API, kept an hour (a failure two minutes). null when Luma won't show it.
+export async function getPublicLumaEvent(id: string, d: ApiDeps = {}): Promise<LumaPublicEvent | null | LumaApiMiss> {
+  const now = (d.now ?? Date.now)();
+  const hit = eventCache.get(id);
+  if (hit && now - hit.at < hit.ttl) return hit.v;
+  const entry = { at: now, ttl: LUMA_PUBLIC_API.failedCacheMinutes * 60_000, v: null as unknown as Promise<LumaPublicEvent | null | LumaApiMiss> };
+  entry.v = (async (): Promise<LumaPublicEvent | null | LumaApiMiss> => {
+    const r = await apiGet("/v1/events/get", { event_id: id }, d).catch(() => null);
+    if (r === null || typeof r === "string") return r;
+    const e = r.body?.event ?? r.body;
+    if (r.status !== 200 || typeof e?.id !== "string" || typeof e?.start_at !== "string") return null;
+    entry.ttl = LUMA_PUBLIC_API.eventCacheMinutes * 60_000;
+    const geo = e.geo_address_json ?? {};
+    const slug = typeof e.url === "string" ? (String(e.url).replace(/[?#].*$/, "").match(/^https?:\/\/(?:www\.)?(?:lu\.ma|luma\.com)\/([A-Za-z0-9_-]+)\/?$/i)?.[1] ?? null) : null;
+    return {
+      id: e.id,
+      name: String(e.name ?? "").trim(),
+      slug,
+      startAt: e.start_at,
+      endAt: typeof e.end_at === "string" ? e.end_at : null,
+      timezone: typeof e.timezone === "string" ? e.timezone : null,
+      visibility: typeof e.visibility === "string" ? e.visibility : null,
+      locationType: typeof e.location_type === "string" ? e.location_type : null,
+      locationVisibility: typeof e.location_visibility === "string" ? e.location_visibility : null,
+      city: typeof geo.city === "string" && geo.city.trim() ? geo.city.trim() : null,
+      address: typeof geo.address === "string" ? geo.address : null,
+      fullAddress: typeof geo.full_address === "string" ? geo.full_address : null,
+      hosts: Array.isArray(e.hosts) ? e.hosts.map((h: any) => h?.name).filter((n: unknown): n is string => typeof n === "string").slice(0, 4) : [],
+      description: typeof e.description === "string" && e.description.trim() ? e.description.trim() : null,
+      registrationOpen: typeof e.registration_open === "boolean" ? e.registration_open : null,
+      requireApproval: typeof e.require_approval === "boolean" ? e.require_approval : null,
+      spotsRemaining: typeof e.spots_remaining === "number" ? e.spots_remaining : null,
+    };
+  })();
+  if (eventCache.size > 2000) eventCache.clear();
+  eventCache.set(id, entry);
+  const v = await entry.v;
+  if (typeof v === "string" && eventCache.get(id) === entry) eventCache.delete(id);
+  return v;
+}
