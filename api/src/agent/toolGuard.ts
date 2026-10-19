@@ -17,6 +17,7 @@ import { recordDecision } from "../harness/core.js";
 import { abilityForTool } from "../services/capabilities.js";
 import { isSwitchedOff } from "../services/abilitySwitches.js";
 import { recordToolAction } from "../services/coFacts.js";
+import { logKind } from "../services/whatCoKnows.js";
 
 // Replies and bookkeeping aren't choices worth logging one by one.
 const UNGUARDED = new Set(["sendReply", "markTopicAsked"]);
@@ -41,6 +42,16 @@ type GuardCtx = {
 
 export type Receipt = "done" | "not_done" | "off" | "limited" | "needs_yes";
 
+// Pure: the receipt for a correctWhatCoKnows call that removes anything: how many changes of each action and the kinds of the refs
+// (whatCoKnows.ts logKind), nothing else. Null for any other tool or a call with no removal (logged as before).
+export function removalReceipt(name: string, input: any): { removal: true; changes: { remove: number; correct: number }; kinds: string[] } | null {
+  if (name !== "correctWhatCoKnows") return null;
+  const changes: any[] = Array.isArray(input?.changes) ? input.changes : [];
+  if (!changes.some((c) => c?.action === "remove")) return null;
+  const refs = changes.flatMap((c) => (Array.isArray(c?.refs) ? c.refs : []));
+  return { removal: true, changes: { remove: changes.filter((c) => c?.action === "remove").length, correct: changes.filter((c) => c?.action === "correct").length }, kinds: [...new Set(refs.map((r: unknown) => logKind(String(r))))].slice(0, 10) };
+}
+
 export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCtx): T {
   const usedThisTurn = new Map<string, number>();
   const retried = new Set<string>();
@@ -64,6 +75,9 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
 
     const run = t.execute;
     t.execute = async (input: any, options: any) => {
+      // A removal asked through correctWhatCoKnows: the receipt holds kinds and counts only (removalReceipt), never their message,
+      // their yes, the why, the refs (their hash part is made from the text) or a judge's words about it (forget-delete-spec.md §2.26).
+      const removal = removalReceipt(name, input);
       const log = (receipt: Receipt, detail: Record<string, unknown> = {}) =>
         ctx.dryRun
           ? Promise.resolve()
@@ -73,8 +87,10 @@ export function guardTools<T extends Record<string, any>>(tools: T, ctx: GuardCt
               userId: ctx.userId,
               outcome: receipt === "done" ? "act" : "skip",
               action: receipt,
-              reason: String(input?.why ?? "").slice(0, 300),
-              proposal: { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
+              reason: removal ? "" : String(input?.why ?? "").slice(0, 300),
+              proposal: removal
+                ? { ability: ability.id, ...removal, ...(typeof detail.yesCheck === "string" ? { yesCheck: detail.yesCheck } : {}), ...("error" in detail ? { error: "not done" } : {}) }
+                : { ability: ability.id, message: ctx.resolvedContent.slice(0, 300), input: Object.fromEntries(Object.entries(input ?? {}).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])), ...detail },
             }).catch(() => {});
       const refuse = async (receipt: Receipt, receiptText: string, tell: string, detail: Record<string, unknown> = {}) => {
         ctx.notDone(receiptText);
