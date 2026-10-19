@@ -340,6 +340,14 @@ export function moodWaitRead(c: Pick<Candidate, "payload">, s: Pick<PickState, "
   return { state: "held", hold: true, heldHours };
 }
 
+// Pure: a post-call recap offer held while they were struggling (payload.recapHeldAt, jobs/postCallFollowUp.ts holdRecapForMood) waits
+// the same way: while the hard day holds, never more than the cap after it was held; then it goes like any post-call text (Royce,
+// 2026-10-19: "feelings change timing and tone, never cancel"). Null: not a held recap.
+export function recapWaitRead(c: Pick<Candidate, "type" | "payload">, s: Pick<PickState, "now" | "needsCare" | "moodHold">): MoodHold | null {
+  const at = (c.payload as { recapHeldAt?: string } | null)?.recapHeldAt;
+  return c.type === "post_call" && at ? moodWaitRead({ payload: { moodSkipAt: at } }, s) : null;
+}
+
 // Pure: whether a composer skip of this find now is its one mood wait (review of #253): the hard day holds, and it hasn't had its wait.
 // A find that already waited (payload.moodSkipAt) and is skipped again, in this stretch or a later one, is a fit skip: as before.
 export function firstMoodWait(c: Pick<Candidate, "payload">, s: Pick<PickState, "needsCare" | "moodHold">): boolean {
@@ -710,6 +718,9 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   }
   if (moodWaitRead(c, state)?.hold) {
     checks.push({ name: "mood_wait", pass: false, reason: `skipped in a find text while they were struggling; it waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h` });
+  }
+  if (recapWaitRead(c, state)?.hold) {
+    checks.push({ name: "recap_mood_wait", pass: false, reason: `a call's recap offer held while they were struggling; it waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h` });
   }
   // Restraint with memory (services/kindRestraint.ts): a kind of text they let pass twice in a row isn't sent again until they answer
   // one. An answer to their own explicit ask (an event offer for an open ask) is never held back: they asked.
@@ -2244,6 +2255,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     if (HOLD_WHILE_STRUGGLING.has(p.candidate.type)) noteMoodHold("checkin_hold", p.candidate.type, ref, state.needsCare ? state.moodHold ?? { state: "held", hold: true, heldHours: null } : { state: "none", hold: false, heldHours: null });
     const waiting = moodWaitRead(p.candidate, state);
     if (waiting) noteMoodHold("bundle_skip_wait", p.candidate.type, ref, waiting);
+    const recapWait = recapWaitRead(p.candidate, state);
+    if (recapWait) noteMoodHold("recap_hold", "post_call_recap", `${userId}:${String((p.candidate.payload as { followUpId?: string } | null)?.followUpId ?? p.candidate.id)}`, recapWait);
   }
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({

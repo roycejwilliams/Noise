@@ -226,7 +226,7 @@ const daysAgo = (d: number) => hoursAgo(d * 24);
   const ok = { gate, localHour: 14, confirmationSent: false, coCommitted: false, deliveredSinceCall: false, callKey: PC.recapKey("abc") };
   check("A5: allowed when the facts check out", O.postCallRecapAllowed(ok).ok);
   check("A5: never at night", !O.postCallRecapAllowed({ ...ok, localHour: 22 }).ok && !O.postCallRecapAllowed({ ...ok, localHour: 6 }).ok);
-  check("A5: never when the call was heavy, or they're having a hard time", !O.postCallRecapAllowed({ ...ok, gate: { ...gate, heavyNow: true } }).ok && !O.postCallRecapAllowed({ ...ok, gate: { ...gate, needsCare: true } }).ok);
+  check("A5: the gate itself says not now for a heavy call or a hard time (recapOfferFor makes that a capped wait: evals/calls/recapMoodHold.ts)", !O.postCallRecapAllowed({ ...ok, gate: { ...gate, heavyNow: true } }).ok && !O.postCallRecapAllowed({ ...ok, gate: { ...gate, needsCare: true } }).ok);
   check("A5: never with the confirmation text, or when Cue committed to something on the call", !O.postCallRecapAllowed({ ...ok, confirmationSent: true }).ok && !O.postCallRecapAllowed({ ...ok, coCommitted: true }).ok);
   check("A5: never when a document already went since the call", !O.postCallRecapAllowed({ ...ok, deliveredSinceCall: true }).ok);
   check("A5: shares the fortnight cooldown", !O.postCallRecapAllowed({ ...ok, gate: { ...gate, history: [{ topic: "[brief] dinner", source: "offered", status: "offered", at: daysAgo(4) }] } }).ok);

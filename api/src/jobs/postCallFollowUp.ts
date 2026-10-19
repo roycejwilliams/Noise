@@ -1,6 +1,6 @@
 import pool from "../db/db.js";
 import { buildContextSummary } from "../services/callContext.js";
-import { enqueueCandidate, draftProactive, type OutputRules } from "../harness/proactive.js";
+import { enqueueCandidate, draftProactive, lastInboundAt, nextLocalHour, type DraftResult, type OutputRules } from "../harness/proactive.js";
 import { callKey } from "../services/callKey.js";
 import { RECAP_OFFER_RULE } from "../services/documentOffer.js";
 import { DateTime } from "luxon";
@@ -8,6 +8,7 @@ import { KINDS } from "../services/factLabels.js";
 import { memberKnowledge, memberRules, type MemberKnowledge } from "../services/memberKnowledge.js";
 import { localStamp } from "../services/memberTime.js";
 import { saidDay, uncorrectedClaims } from "../harness/callGrounding.js";
+import { MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 
 // Relationship text after a call: one real thought from what they said.
 //
@@ -84,8 +85,8 @@ export async function draftPostCall(userId: string, firstName: string, followUpI
   // The confirmation already sent the moment they hung up (services/callFollowThrough.ts): this text never says it again.
   const { confirmationSentFor } = await import("../services/callFollowThrough.js");
   const confirmed = await confirmationSentFor(userId, transcript).catch(() => null);
-  const recap = await recapOfferFor(userId, followUpId, { callAt, confirmed: !!confirmed, coCommitted: promised.length > 0 }, k).catch(() => false);
-  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, recap, k);
+  const recap = await recapOfferFor(userId, followUpId, { callAt, confirmed: !!confirmed, coCommitted: promised.length > 0 }, k).catch(() => null);
+  return draftPostCallText(firstName, transcript, contextSummary, promised.map((r: any) => String(r.content)), { theySaid: [...labelled.enduring, ...labelled.theySaid], coInferred: labelled.coInferred }, confirmed, !!recap?.offer, k, !!recap?.gentle);
 }
 
 // The sections the post-call text reads from the layer.
@@ -138,31 +139,44 @@ export function postCallKnowledgeSection(k: MemberKnowledge): string {
 }
 
 // May this post-call text carry one line offering a one-page recap (2026-10-08 review A5). Code checks the facts: the shared offer
-// cooldown and record (services/documentOffer.ts), a heavy call or a hard time, their night, a commitment Co made on the call or the
-// confirmation text that already went (services/callFollowThrough.ts), a document delivered since. Whether the call landed a decision
-// in their words is Co's read of the transcript. Member state (their zone, whether they're having a hard time, what they've been
-// delivered) is read from the shared layer (services/memberKnowledge.ts), the draft's own copy when it has one; how heavy the call
-// itself was is the call's, read from its emotion moments.
+// cooldown and record (services/documentOffer.ts), their night, a commitment Co made on the call or the confirmation text that
+// already went (services/callFollowThrough.ts), a document delivered since. Whether the call landed a decision in their words is Co's
+// read of the transcript. Member state (their zone, whether they're having a hard time, what they've been delivered) is read from the
+// shared layer (services/memberKnowledge.ts), the draft's own copy when it has one; how heavy the call itself was is the call's, read
+// from its emotion moments.
+// A hard time or a heavy call decides when, never whether (Royce, 2026-10-19: "feelings change timing and tone, never cancel"). It
+// used to block the recap for that call for good (the offer rode only this one text). Now, when it is the only thing in the way, the
+// recap is held for that call (held: holdRecapForMood queues it once the post-call text has gone without it) and goes once they're
+// okay again, or at the latest at the cap, gently (draftHeldRecap). Struggling but already released (okay again, or the cap): it rides
+// this text, with gentle tone guidance (gentle).
+export type RecapRead = { offer: boolean; held: boolean; gentle: boolean; heldHours: number | null; why: string | null };
 export async function recapOfferFor(
   userId: string,
   followUpId: string,
   o: { callAt: Date; confirmed: boolean; coCommitted: boolean; now?: Date },
   known: Pick<MemberKnowledge, "identity" | "restraint" | "delivered"> | null = null,
-): Promise<boolean> {
+): Promise<RecapRead> {
   const now = o.now ?? new Date();
   const [{ loadOfferHistory, postCallRecapAllowed }, { getEmotionalContext }, { localOf }] = await Promise.all([
     import("../services/documentOffer.js"),
     import("../harness/emotion.js"),
     import("../services/memberTime.js"),
   ]);
-  const [history, emo, k] = await Promise.all([
+  const [history, emo, k, inbound] = await Promise.all([
     loadOfferHistory(userId),
     getEmotionalContext(userId, now).catch(() => null),
     known ?? memberKnowledge(userId, { now, include: ["restraint", "delivered"] }),
+    // Their last text or call (a timestamp only): "okay again" is a normal text after the hard read (services/moodHold.ts).
+    lastInboundAt(userId).catch(() => null),
   ]);
   const heavyCall = (emo?.lastCall?.moments ?? []).some((m) => m.intensity === "high" && m.valence === "negative");
+  const care = k.restraint ? k.restraint.needsCare : !!emo?.needsCare;
+  // The hold, from the read with its times; a hard time read without them holds, as before (until the held recap's own cap).
+  const mood = care && emo?.needsCare ? moodHold(emo, { now, lastInboundAt: inbound }) : null;
+  const m = recapMoodRead({ care, mood, heavyCall });
+  // The facts, with how they feel out of the gate: that decides when (m), never whether.
   const r = postCallRecapAllowed({
-    gate: { now, needsCare: k.restraint ? k.restraint.needsCare : !!emo?.needsCare, heavyNow: heavyCall, history },
+    gate: { now, needsCare: false, heavyNow: false, history },
     localHour: localOf(now, k.identity.zone).hour,
     confirmationSent: o.confirmed,
     coCommitted: o.coCommitted,
@@ -170,9 +184,96 @@ export async function recapOfferFor(
     deliveredSinceCall: k.delivered.some((d) => d.via.includes("receipt") && Date.parse(d.at) >= o.callAt.getTime()),
     callKey: recapKey(followUpId),
   });
-  return r.ok;
+  return { offer: r.ok && !m.held, held: r.ok && m.held, gentle: r.ok && m.gentle, heldHours: mood?.heldHours ?? null, why: r.ok ? null : r.why };
 }
 export const recapKey = (followUpId: string) => `call ${followUpId}`;
+
+// ---------------------------------------------------------------- the recap waits out a hard time (Royce, 2026-10-19)
+
+// Pure: what a hard time means for this call's recap. held: it waits (a heavy call, or struggling while the mood hold is on; a read
+// without times holds, as before); gentle: it goes now, but they've been struggling.
+export function recapMoodRead(o: { care: boolean; mood: MoodHold | null; heavyCall: boolean }): { held: boolean; gentle: boolean } {
+  const held = o.heavyCall || (o.care && (o.mood ? o.mood.hold : true));
+  return { held, gentle: !held && o.care };
+}
+// The held recap: a post_call candidate for the same call (payload.followUpId, so it stays tied to that call, and payload.recapHeldAt,
+// when it was held). The dispatch holds it while the mood hold is on, never more than MOOD_HOLD_CAP_HOURS after recapHeldAt
+// (harness/proactive.ts recapWaitRead, the recap_mood_wait check). Everything else applies as to any post-call text: their hours, the
+// spacing and caps of an answer to their own call, opt-out, mid-conversation. It has a lifetime of its own: the cap plus a day for their
+// hours and spacing to let it through; past that it expires like anything else. Safety is not mood and is not read here.
+export const RECAP_HELD_EXPIRY_HOURS = MOOD_HOLD_CAP_HOURS + 24;
+export const recapHoldKey = (followUpId: string) => `post_call_recap:${followUpId}`;
+export const isHeldRecap = (c: { type: string; payload: unknown }) => c.type === "post_call" && !!(c.payload as { recapHeldAt?: string } | null)?.recapHeldAt;
+// Model-facing tone guidance (never a line the member reads as is).
+export const RECAP_GENTLE = "They've had a hard stretch, and this waited for it: if you offer the recap, keep it to one soft line that's easy to pass on, no pressure.";
+
+// What the recap reads about the call: when it was, its transcript, whether the confirmation text went, whether Co committed to
+// something on it (the same reads draftPostCall makes).
+async function recapCallFacts(userId: string, followUpId: string): Promise<{ transcript: string; callAt: Date; confirmed: boolean; coCommitted: boolean } | null> {
+  const { rows } = await pool.query(`SELECT transcript, created_at FROM post_call_follow_ups WHERE id = $1 AND user_id = $2`, [followUpId, userId]);
+  const transcript: string | undefined = rows[0]?.transcript;
+  if (!transcript) return null;
+  const { rows: promised } = await pool.query(`SELECT 1 FROM call_promise_results WHERE user_id = $1 AND call_key = $2 LIMIT 1`, [userId, callKey(transcript)]).catch(() => ({ rows: [] as any[] }));
+  const { confirmationSentFor } = await import("../services/callFollowThrough.js");
+  const confirmed = await confirmationSentFor(userId, transcript).catch(() => null);
+  return { transcript, callAt: rows[0]?.created_at ? new Date(rows[0].created_at) : new Date(), confirmed: !!confirmed, coCommitted: promised.length > 0 };
+}
+
+// After the post-call text went without the recap: if a hard time was the only thing in the way, hold the recap for that call. Once
+// per call (the candidate's target key; a later call to this keeps the first recapHeldAt). Logged once, rule and kind, ids only.
+export async function holdRecapForMood(userId: string, followUpId: string, now = new Date()): Promise<boolean> {
+  const f = await recapCallFacts(userId, followUpId);
+  if (!f) return false;
+  const r = await recapOfferFor(userId, followUpId, { callAt: f.callAt, confirmed: f.confirmed, coCommitted: f.coCommitted, now });
+  if (!r.held) return false;
+  const q = await enqueueCandidate({
+    userId,
+    type: "post_call",
+    targetKey: recapHoldKey(followUpId),
+    summary: "Offer once, gently, a one-page recap of what they settled on a recent call with Cue (it waited out a hard stretch)",
+    payload: { followUpId, recapHeldAt: now.toISOString() },
+    merge: (old: any, neu: any) => ({ ...neu, recapHeldAt: old?.recapHeldAt ?? neu.recapHeldAt }),
+    dueAt: now,
+    expiresAt: new Date(now.getTime() + RECAP_HELD_EXPIRY_HOURS * 3_600_000),
+  });
+  if (q.queued) noteMoodHold("recap_hold", "post_call_recap", `${userId}:${followUpId}`, { state: "held", hold: true, heldHours: r.heldHours });
+  return q.queued;
+}
+
+// The held recap, once the hold lets go: the facts re-checked (once per call, the fortnight cooldown, a waiting offer, a document since
+// the call, the confirmation, a commitment), then one or two gentle lines offering it, tied to that call. Night defers it (never
+// dropped for the hour); any other fact that no longer holds ends it. Whether the call settled anything is Co's read: SKIP if not.
+export const HELD_RECAP_TASK = "You already sent your follow-up after this call. The offer to put what they settled on a one-page recap waited, because they were having a hard time then. Only if they settled a decision or a plan in their own words on that call: write one or two short, gentle lines that name the call plainly (the day, and what it was about in a few words of theirs) and offer once to put what they decided on a one-page recap. Easy to pass on, no pressure. Never write the recap itself, never say the offer waited or why, and never bring up anything else from the call. If they settled nothing on that call, return SKIP.";
+export async function draftHeldRecap(userId: string, firstName: string, followUpId: string, now = new Date()): Promise<DraftResult> {
+  const f = await recapCallFacts(userId, followUpId);
+  if (!f) return { skip: "the call's record is gone" };
+  const [{ loadOfferHistory, postCallRecapAllowed }, { localOf }] = await Promise.all([import("../services/documentOffer.js"), import("../services/memberTime.js")]);
+  const [history, k] = await Promise.all([loadOfferHistory(userId), memberKnowledge(userId, { now, include: ["delivered"] })]);
+  // The dispatch already let the mood hold go (recap_mood_wait): only the facts are re-checked here.
+  const r = postCallRecapAllowed({
+    gate: { now, needsCare: false, heavyNow: false, history },
+    localHour: localOf(now, k.identity.zone).hour,
+    confirmationSent: f.confirmed,
+    coCommitted: f.coCommitted,
+    deliveredSinceCall: k.delivered.some((d) => d.via.includes("receipt") && Date.parse(d.at) >= f.callAt.getTime()),
+    callKey: recapKey(followUpId),
+  });
+  if (!r.ok) return r.why === "it's night for them" ? { defer: nextLocalHour(now, k.identity.zone, 9), reason: r.why } : { skip: `the recap no longer fits: ${r.why}` };
+  const text = await draftProactive({
+    functionId: "jobs.postCallFollowUp.heldRecap",
+    firstName,
+    facts: {
+      call_transcript: f.transcript.slice(-6000),
+      the_call_was_on: localOf(f.callAt, k.identity.zone).toFormat("cccc, LLL d"),
+      may_offer_a_one_page_recap: RECAP_OFFER_RULE,
+      recap_offer_tone: RECAP_GENTLE,
+    },
+    maxSentences: 2,
+    task: HELD_RECAP_TASK,
+  });
+  if (!text) return { skip: "model chose SKIP: nothing settled on the call" };
+  return { messages: [text], text, rules: { maxSentences: 2, maxChars: 280 } };
+}
 
 export async function draftPostCallText(
   firstName: string,
@@ -185,6 +286,8 @@ export async function draftPostCallText(
   recapOffer = false,
   // The shared picture and member rules (services/memberKnowledge.ts); null drafts from the summary and claims alone.
   knowledge: MemberKnowledge | null = null,
+  // The recap goes now though they've been struggling (the mood hold let go): tone guidance for that one line (RECAP_GENTLE).
+  recapGentle = false,
 ): Promise<{ text: string; rules: OutputRules } | null> {
   const text = await draftProactive({
     functionId: "jobs.postCallFollowUp",
@@ -199,6 +302,7 @@ export async function draftPostCallText(
       what_co_said_it_would_look_into: null,
       confirmation_you_already_sent_after_the_call: confirmationSent,
       may_offer_a_one_page_recap: recapOffer && !confirmationSent ? RECAP_OFFER_RULE : null,
+      recap_offer_tone: recapOffer && recapGentle && !confirmationSent ? RECAP_GENTLE : null,
     },
     maxSentences: 3,
     // The call that just ended is fresh: what THEY said in it can back a day. The background is only who they are.
