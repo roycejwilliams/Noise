@@ -87,7 +87,7 @@ export function doorDecision(o: { view: DoorView; now?: Date; heavy: boolean; fr
   const s = doorOpen(o.view, o.now ?? new Date());
   if (!s.open) return { offer: false, why: s.why };
   if (o.heavy) return { offer: false, why: "a heavy moment" };
-  if (o.frustrated) return { offer: false, why: "frustrated with Cue right now" };
+  if (o.frustrated) return { offer: false, why: "frustrated with Cue right now" }; // mood: the caller decides the hold (replyGrounding.ts)
   if (o.otherQuestion) return { offer: false, why: `this reply already has something else to offer (${o.otherQuestion})` };
   return { offer: true, why: s.why };
 }

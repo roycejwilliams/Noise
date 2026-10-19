@@ -293,16 +293,9 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   // (review of #61). Co still sees it as a call moment, with their words.
   const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score" && age(s) <= 24 * HOUR);
   const positiveAfter = recentNeg ? sorted.some((s) => s.valence === "positive" && s.at > recentNeg.at) : false;
-  // The hard stretch recentNeg belongs to: back through hard reads at most a day apart, stopping at a positive read between two.
-  const hard = (s: EmotionSignal) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score";
-  let hardSince = recentNeg?.at ?? null;
-  if (recentNeg && !positiveAfter) {
-    for (const s of sorted.filter((x) => hard(x) && x.at < recentNeg.at)) {
-      const later = hardSince!;
-      if (later.getTime() - s.at.getTime() > 24 * HOUR || sorted.some((p) => p.valence === "positive" && p.at > s.at && p.at < later)) break;
-      hardSince = s.at;
-    }
-  }
+  // The hard stretch recentNeg belongs to (hardStretchSince). getEmotionalContext reads it again from its own window, so a member with
+  // more than a hundred reads in it still reaches the cap.
+  const hardSince = recentNeg && !positiveAfter ? hardStretchSince(sorted, recentNeg.at) : null;
 
   const byTopic = new Map<string, { about: string; emotions: Set<string>; count: number }>();
   for (const s of sorted.filter((x) => x.valence === "negative" && age(x) <= 14 * 24 * HOUR && x.about)) {
@@ -333,6 +326,24 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   };
 }
 
+// A hard read: a medium or high negative feeling about their life (a frustration score alone never is one).
+const isHard = (s: Pick<EmotionSignal, "valence" | "intensity" | "basis">) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score";
+// Pure: when the hard stretch ending at hardAt began: back through hard reads at most a day apart, stopping at a positive read between
+// two. lifeSignals: their reads about their life, any order.
+export function hardStretchSince(lifeSignals: Pick<EmotionSignal, "valence" | "intensity" | "basis" | "at">[], hardAt: Date): Date {
+  const desc = [...lifeSignals].sort((a, b) => b.at.getTime() - a.at.getTime());
+  let since = hardAt;
+  for (const s of desc.filter((x) => isHard(x) && x.at < hardAt)) {
+    const later = since;
+    if (later.getTime() - s.at.getTime() > 24 * HOUR || desc.some((p) => p.valence === "positive" && p.at > s.at && p.at < later)) break;
+    since = s.at;
+  }
+  return since;
+}
+// How far back the stretch's own read looks: past the cap (48h, services/moodHold.ts) plus a day's gap, so a stretch that began before
+// it reads as at least the cap.
+export const STRETCH_LOOKBACK_HOURS = 96;
+
 function rank(i: Intensity): number {
   return i === "high" ? 3 : i === "medium" ? 2 : 1;
 }
@@ -346,13 +357,31 @@ export async function getEmotionalContext(userId: string, now = new Date()): Pro
       [userId],
     )
     .catch(() => ({ rows: [] as any[] }));
-  return {
-    ...summarizeSignals(
-      rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null, basis: r.basis ?? null })),
-      now,
-    ),
-    voice: await voice,
-  };
+  const summary = summarizeSignals(
+    rows.map((r: any) => ({ source: r.source, emotion: r.emotion, intensity: r.intensity, valence: r.valence, about: r.about, quote: r.quote, at: new Date(r.created_at), target: r.target ?? null, basis: r.basis ?? null })),
+    now,
+  );
+  // The stretch's start from its own read (review of #253: the newest hundred reads alone could hold a heavy texter's stretch under the
+  // cap forever): every hard or positive read in the lookback, timestamps and labels only, no words.
+  if (summary.hardAt) {
+    const { rows: stretch } = await pool
+      .query(
+        `SELECT source, intensity, valence, about, target, basis, created_at FROM emotion_signals
+         WHERE user_id = $1 AND created_at > $2::timestamptz - make_interval(hours => $3) AND created_at <= $2::timestamptz
+           AND (valence = 'positive' OR (valence = 'negative' AND intensity <> 'low' AND basis IS DISTINCT FROM 'frustration_score'))
+         ORDER BY created_at DESC LIMIT 5000`,
+        [userId, now.toISOString(), STRETCH_LOOKBACK_HOURS],
+      )
+      .catch(() => ({ rows: [] as any[] }));
+    const life = stretch
+      .map((r: any) => ({ source: r.source, intensity: r.intensity, valence: r.valence, about: r.about, target: r.target ?? null, basis: r.basis ?? null, at: new Date(r.created_at) }))
+      .filter((s: any) => signalTarget(s) === "life");
+    if (life.length) {
+      const since = hardStretchSince(life, summary.hardAt);
+      if (!summary.hardSince || since < summary.hardSince) summary.hardSince = since;
+    }
+  }
+  return { ...summary, voice: await voice };
 }
 
 function ago(at: Date, now: Date): string {

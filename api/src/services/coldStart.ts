@@ -98,7 +98,7 @@ export function steerDecision(o: { seeds: SeedCount; heavy: boolean; frustrated?
   if (o.seeds.seeded) return { steer: false, why: `seeded (${o.seeds.n} findable interests on file)` };
   if ((o.lifetimeSteers ?? 0) >= COLD_START.steerLifetime) return { steer: false, why: `stopped asking: ${COLD_START.steerLifetime} natural tries never brought a findable interest` };
   if (o.heavy) return { steer: false, why: "a heavy moment" };
-  if (o.frustrated) return { steer: false, why: "frustrated with Cue right now" };
+  if (o.frustrated) return { steer: false, why: "frustrated with Cue right now" }; // mood: the caller decides the hold (replyGrounding.ts)
   if (o.otherQuestion) return { steer: false, why: `this reply already has a question to ask (${o.otherQuestion})` };
   if (o.history[0]?.action === "steered") return { steer: false, why: "the last reply steered" };
   const weekAgo = o.now.getTime() - 7 * 86_400_000;

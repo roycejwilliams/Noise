@@ -2115,7 +2115,7 @@ export async function memberSendState(userId: string, person: { timezone: string
       optedOut: person.optedOut,
       sends,
       lastInboundAt: raw.lastInboundAt,
-      needsCare: !!raw.emotional?.needsCare,
+      needsCare: !!raw.emotional?.needsCare, // mood: carries the read; the gates read it through heldForMood
       // Okay again (they've texted normally since the hard read) or the cap ends the hold (services/moodHold.ts).
       moodHold: moodHold(raw.emotional, { now, lastInboundAt: raw.lastInboundAt }),
       safetyHold: raw.safetyHold,

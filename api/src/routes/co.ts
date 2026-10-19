@@ -889,8 +889,8 @@ async function processEndedCall(o: {
         const scoring = frustration ? frustration().catch(() => [] as ScoredLine[]) : Promise.resolve([] as ScoredLine[]);
         const moments = await callEmotionMoments(cleanTranscript);
         const scored = await scoring;
-        const frustrated = frustrationMoments(scored, moments);
-        await recordEmotionSignals(user_id, [...moments, ...frustrated].map((m) => ({ ...m, memoryId: transcriptMemoryId })));
+        const frustrated = frustrationMoments(scored, moments); // mood: records the read (call frustration moments)
+        await recordEmotionSignals(user_id, [...moments, ...frustrated].map((m) => ({ ...m, memoryId: transcriptMemoryId }))); // mood: records the read
       })().catch((err: any) => console.error("post-call: reading the call's feelings failed (non-fatal):", err?.message ?? err));
 
       // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against
