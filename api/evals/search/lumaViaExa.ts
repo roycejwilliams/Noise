@@ -72,7 +72,7 @@ const eventDep = async (id: string): Promise<any> => {
   if (!p || typeof p === "string") return null;
   return {
     id, name: p.name ?? "", slug, startAt: p.startAt, endAt: p.endAt, timezone: p.timezone, visibility: p.visibility ?? null,
-    locationType: p.online ? "zoom" : p.city ? "offline" : "missing", locationVisibility: p.addressHidden || !(p.venue || p.address) ? "guests-only" : "public",
+    locationType: p.locationType ?? (p.online ? "zoom" : p.city ? "offline" : "missing"), locationVisibility: p.addressHidden || !(p.venue || p.address) ? "guests-only" : "public",
     city: p.city ?? null, address: p.venue ?? null, fullAddress: p.address ?? null, hosts: p.hosts ?? [], description: p.description ?? null,
     registrationOpen: p.soldOut ? false : true, requireApproval: p.requiresApproval ?? null, spotsRemaining: p.spotsRemaining ?? null,
   };
@@ -194,6 +194,23 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("a start the event's own record moved into the past drops it, whatever the lookup said", !got.includes("https://lu.ma/moved1") && !got.includes("https://lu.ma/nodate1"), got);
   check("a calendar link is skipped (counted), and never read as an event", r?.report.calendars === 1 && !apiCalls.includes("event cal-abc"), { report: r?.report, apiCalls });
   check("no place and not online: dropped and counted; online with no city: kept", r?.report.noLocation === 1 && !got.includes("https://lu.ma/noplace1") && got.includes("https://lu.ma/online2"), { got, report: r?.report });
+}
+
+{
+  // Review of a0285221: a location type outside Luma's online platforms ("tba", "unknown") was read as online and said "is online".
+  reset({
+    exa: ["tba1", "unk1", "zoom1", "tbacity1"].map((s) => ({ url: `https://lu.ma/${s}`, title: s })),
+    pages: {
+      tba1: page({ startAt: at(40), city: null, locationType: "tba" }),
+      unk1: page({ startAt: at(41), city: null, locationType: "unknown" }),
+      zoom1: page({ startAt: at(42), city: null, locationType: "zoom" }),
+      tbacity1: page({ startAt: at(43), city: "San Francisco", locationType: "tba" }),
+    },
+  });
+  const r = await V.lumaEventsViaExa("founder dinners", "San Francisco", { inRange: () => true, dates: "October 20 to October 26, 2026", deps: viaDeps() });
+  const by = (u: string) => r?.events.find((e) => e.url === `https://lu.ma/${u}`);
+  check("a location type Luma doesn't name as an online platform ('tba', 'unknown') with no city: dropped and counted, never 'online'", !by("tba1") && !by("unk1") && r?.report.noLocation === 2, r?.report);
+  check("...zoom with no city is online; 'tba' with a city is in that city, not online", by("zoom1")?.online === true && by("zoom1")?.details.online === true && !!by("tbacity1") && !by("tbacity1")?.online && by("tbacity1")?.details.online === false, r?.events.map((e) => [e.url, e.online]));
 }
 
 // ================================================================ no key, no search
