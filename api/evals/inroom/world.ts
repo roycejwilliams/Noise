@@ -426,7 +426,13 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
   if (has("SELECT 1 FROM event_unmatched_notices")) return R(W.unmatchedNotices.filter((r) => r.event_id === p[0] && r.person_id === p[1]).map(() => ({ x: 1 })));
   if (has("INSERT INTO event_unmatched_notices")) {
-    W.unmatchedNotices.push({ event_id: p[0], person_id: p[1], paired_with_id: p[2] });
+    // ON CONFLICT (event_id, person_id) DO NOTHING RETURNING 1: the claim (services/eventUnmatchedFollowUp.ts claimClose).
+    if (W.unmatchedNotices.some((r) => r.event_id === p[0] && r.person_id === p[1])) return R([]);
+    W.unmatchedNotices.push({ event_id: p[0], person_id: p[1], paired_with_id: p[2] ?? null });
+    return R([{ x: 1 }]);
+  }
+  if (has("DELETE FROM event_unmatched_notices WHERE event_id = $1 AND person_id = $2")) {
+    W.unmatchedNotices = W.unmatchedNotices.filter((r) => !(r.event_id === p[0] && r.person_id === p[1]));
     return R([]);
   }
 
@@ -542,9 +548,6 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   // The end-of-night close's evidence that someone came (services/eventUnmatchedFollowUp.ts cameTonight).
   if (has("SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2 AND arrived_at IS NOT NULL")) return R(W.presence.get(`${p[0]}|${p[1]}`)?.arrived_at ? [{ x: 1 }] : []);
   if (has("SELECT 1 FROM event_walkin_checkins WHERE event_api_id = $1 AND person_id = $2")) return R(W.walkins.some((w) => w.event_api_id === p[0] && w.person_id === p[1]) ? [{ x: 1 }] : []);
-  if (has("FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%'") && has("AND created_at >= $2 LIMIT 1")) {
-    return R(W.memoriesWritten.filter((m) => m.user_id === p[0] && m.memory_type === "text_exchange" && String(m.content).startsWith("User said:") && +new Date(m.created_at ?? Date.now()) >= +new Date(p[1])).slice(0, 1));
-  }
 
   // Anything else is a query the fake world doesn't know: recorded (the room simulation fails on any), nothing returned.
   W.unknownSql.add(sql.slice(0, 120));
@@ -666,7 +669,7 @@ function luma(url: URL): Response {
   if (url.pathname === "/v1/events/guests/list") {
     const ev = W.events.get(url.searchParams.get("event_id") ?? "");
     if (!ev) return json({ message: "not found" }, 404);
-    return json({ entries: ev.guests.map((g, i) => ({ guest: { id: `gst-${i}`, user_email: g.email, user_name: g.name, phone_number: g.phone, approval_status: g.approval_status } })), has_more: false });
+    return json({ entries: ev.guests.map((g, i) => ({ guest: { id: `gst-${i}`, user_email: g.email, user_name: g.name, phone_number: g.phone, approval_status: g.approval_status, checked_in_at: (g as any).checked_in_at ?? null } })), has_more: false });
   }
   if (url.pathname === "/v1/event/get") {
     const ev = W.events.get(url.searchParams.get("api_id") ?? "");

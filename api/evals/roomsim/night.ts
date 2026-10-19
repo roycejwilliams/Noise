@@ -372,7 +372,7 @@ async function sparseNight(label: string, trueCount: number, seed: number) {
   // The same room when Cue doesn't know what most people there can offer: no claim at all.
   const unbacked = PR.describe({ eventName: "Noise Supper", registered: members.length, arrived: members.length, walkins: 0, briefs: 0, nudged: nudged.length, interested: 0, intros: 0, debriefReplies: 0, metSomeone: 0, conversationsTold: 0, followThroughMembers: 0, themes: sought as any, askCount: Object.values(sought).reduce((x, y) => x + y, 0), offerThemes: offered as any, offerKnown: 2, offerPool: members.length }).lines.filter((l) => l.startsWith("The room was thin on"));
   const thinLines = d.lines.filter((l) => l.startsWith("The room was thin on"));
-  return { nudged, truePair, thinLines, unbacked, sent: W.sent.length };
+  return { nudged, truePair, thinLines, unbacked, sent: W.sent.length, lines: d.lines, names: members.map((m) => m.first_name) };
 }
 {
   const z = await sparseNight("z", 0, 51);
@@ -380,7 +380,8 @@ async function sparseNight(label: string, trueCount: number, seed: number) {
   check("sparse: a room with zero good pairs sends zero member nudges (silence, never a forced match)", z.nudged.length === 0 && z.sent === 0, { nudged: z.nudged.length, sent: z.sent });
   check("sparse: ... and gives the host exactly one signal of what the room was thin on", z.thinLines.length === 1 && /investors or funding/.test(z.thinLines[0]), z.thinLines);
   check("sparse: ... and says nothing when Cue doesn't know what most of the room can offer (silence over false signal)", z.unbacked.length === 0, z.unbacked);
-  check("sparse: the host signal names no member", PR.describe({ eventName: "x", registered: 12, arrived: 12, walkins: 0, briefs: 0, nudged: 0, interested: 0, intros: 0, debriefReplies: 0, metSomeone: 0, conversationsTold: 0, followThroughMembers: 0, themes: { "Investors or funding": 8, "Something else": 4 }, askCount: 12, offerThemes: {} }).lines.every((l) => !/ z\b|Jordan|Noor/.test(l)));
+  // On the night's own host read, with the thin line in it (review of #208: the old check passed no offers, so no thin line existed).
+  check("sparse: the host signal names no member", z.thinLines.length === 1 && z.lines.every((l) => !z.names.some((n) => new RegExp(`\\b${n.split(" ")[0]}\\b`).test(l))), z.lines);
   const sp = await sparseNight("s", 2, 53);
   console.log(`sparse room, two good pairs: ${sp.nudged.length} nudges, all above the bar: ${sp.nudged.every((n) => sp.truePair(n.person_id, n.candidate_id))}`);
   check("sparse: a sparse room proposes only the pairs above the bar", sp.nudged.length > 0 && sp.nudged.every((n) => sp.truePair(n.person_id, n.candidate_id)), sp.nudged.map((n) => n.score));

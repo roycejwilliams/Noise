@@ -10,7 +10,6 @@ import { draftWithConsent, eventPromptLine } from "../harness/introConsent.js";
 import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
 import type { ScorableGuest } from "./eventScoring.js";
 import { withTraceUser } from "./llmTraceText.js";
-import { notToTeammate } from "./teamLines.js";
 
 // The end-of-night close (Royce, 2026-10-14). "Everyone gets the same end-of-night close, and it says nothing about matching. A real
 // host finds the person before they leave and says 'glad you came' - they don't add 'sorry nobody was right for you.' Same warmth for
@@ -60,19 +59,21 @@ export async function scheduleUnmatchedFollowUp(
   }
 }
 
-async function wasAlreadyNoticed(eventId: string, personId: string): Promise<boolean> {
-  const { rows } = await pool.query(`SELECT 1 FROM event_unmatched_notices WHERE event_id = $1 AND person_id = $2`, [eventId, personId]);
+// The close is claimed before it's drafted (review of #208/#218): two passes at once (a slow pass overlapping the next tick, two
+// containers during a deploy) can't both send it. A close that was held or failed gives its claim back, so a later pass sends it.
+async function claimClose(eventId: string, personId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `INSERT INTO event_unmatched_notices (event_id, person_id, paired_with_id) VALUES ($1, $2, NULL)
+     ON CONFLICT (event_id, person_id) DO NOTHING RETURNING 1`,
+    [eventId, personId],
+  );
   return rows.length > 0;
 }
 
-async function markNoticed(eventId: string, personId: string, pairedWithId: string | null): Promise<void> {
+async function releaseClose(eventId: string, personId: string): Promise<void> {
   await pool
-    .query(
-      `INSERT INTO event_unmatched_notices (event_id, person_id, paired_with_id) VALUES ($1, $2, $3)
-       ON CONFLICT (event_id, person_id) DO NOTHING`,
-      [eventId, personId, pairedWithId],
-    )
-    .catch((err: any) => console.error("markNoticed: insert failed (non-fatal):", err?.message ?? err));
+    .query(`DELETE FROM event_unmatched_notices WHERE event_id = $1 AND person_id = $2`, [eventId, personId])
+    .catch((err: any) => console.error("releaseClose: delete failed (the close won't be retried):", err?.message ?? err));
 }
 
 // What a close may never talk about: matching, introductions, who they met, how the night went for them.
@@ -84,25 +85,45 @@ export function closeText(draft: string | null): string {
   return t && !MATCH_TALK.test(t) ? t : CLOSE_FALLBACK;
 }
 
-// Evidence they came: arrived, checked in at the door, or texted Co during the event. Read fresh; a failed read is no evidence.
-export async function cameTonight(eventId: string, userId: string, startAt: string | null): Promise<boolean> {
-  const [presence, walkin, texted] = await Promise.all([
-    pool.query(`SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2 AND arrived_at IS NOT NULL`, [eventId, userId]).then((r) => r.rows.length > 0).catch(() => false),
-    pool.query(`SELECT 1 FROM event_walkin_checkins WHERE event_api_id = $1 AND person_id = $2`, [eventId, userId]).then((r) => r.rows.length > 0).catch(() => false),
-    startAt
-      ? pool
-          .query(`SELECT 1 FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at >= $2 LIMIT 1`, [userId, startAt])
-          .then((r) => r.rows.length > 0)
-          .catch(() => false)
-      : Promise.resolve(false),
+// Evidence they came: Co saw them arrive (their location, or "I'm here"), they checked in at the door as a walk-in, or Luma's door
+// check-in has them. A text during the event is not evidence: a guest at home texting about their week would be told "glad you came"
+// (review of #208). Read fresh; a failed read is no evidence.
+export type CheckedIn = { emails: Set<string>; phones: Set<string> };
+export async function cameTonight(eventId: string, person: Pick<ScorableGuest, "user_id" | "email" | "phone_number">, lumaIn: CheckedIn): Promise<boolean> {
+  if ((person.email && lumaIn.emails.has(person.email.toLowerCase())) || (person.phone_number && lumaIn.phones.has(person.phone_number))) return true;
+  const [presence, walkin] = await Promise.all([
+    pool.query(`SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2 AND arrived_at IS NOT NULL`, [eventId, person.user_id]).then((r) => r.rows.length > 0).catch(() => false),
+    pool.query(`SELECT 1 FROM event_walkin_checkins WHERE event_api_id = $1 AND person_id = $2`, [eventId, person.user_id]).then((r) => r.rows.length > 0).catch(() => false),
   ]);
-  return presence || walkin || texted;
+  return presence || walkin;
 }
 
-async function sendClose(eventId: string, eventName: string, person: ScorableGuest, opts: { dryRun?: boolean }): Promise<boolean> {
+// Who Luma's door check-in has, by email and phone (the stored E.164 form). A test event has no Luma list; a failed read has nobody.
+async function lumaCheckedIn(eventId: string): Promise<CheckedIn> {
+  const out: CheckedIn = { emails: new Set(), phones: new Set() };
+  const { isTestEvent } = await import("./roomMatching.js");
+  if (isTestEvent(eventId)) return out;
+  const [{ getEventGuestList }, { matchablePhone }] = await Promise.all([import("./luma.js"), import("../utils/phone.js")]);
+  const guests = await getEventGuestList(eventId).catch(() => []);
+  for (const g of guests.filter((x) => x.checked_in_at)) {
+    if (g.email) out.emails.add(g.email.toLowerCase());
+    const p = matchablePhone(g.phone);
+    if (p) out.phones.add(p);
+  }
+  return out;
+}
+
+// "held" (paused, matching stopped, or a dry run) and "failed" are tried again by a later pass while the room is open.
+async function sendClose(eventId: string, eventName: string, person: ScorableGuest, opts: { dryRun?: boolean }): Promise<"sent" | "held" | "failed"> {
   if (opts.dryRun) {
     console.log(`[eventUnmatchedFollowUp dryRun] would send the end-of-night close to ${person.user_id} at ${eventId}`);
-    return false;
+    return "held";
+  }
+  // Past the in-room text limit: one line, once, always. Only the pause and the matching kill switch hold it, read before drafting so
+  // a held close costs no draft (review of #208), and again right before it goes.
+  if (!(await inRoomSendAllowed(person.user_id, eventId, { close: true }))) {
+    console.log(`eventUnmatchedFollowUp: close held for ${person.user_id} (texts paused or matching stopped)`);
+    return "held";
   }
   // The event as it really is (harness/introConsent.ts checkInventedSpecifics): the only source of a day or time in the text.
   const info = await (await import("./roomMatching.js")).eventTiming(eventId).catch(() => null);
@@ -127,22 +148,21 @@ Write the goodbye a good host gives at the door: one short, warm line (no em das
     },
   );
   const message = closeText(draft);
-  // Past the in-room text limit: one line, once, always. Only the pause and the matching kill switch hold it.
   if (!(await inRoomSendAllowed(person.user_id, eventId, { close: true }))) {
     console.log(`eventUnmatchedFollowUp: close held for ${person.user_id} (texts paused or matching stopped)`);
-    return false;
+    return "held";
   }
   try {
     await sendblue.messages.send({ number: person.phone_number, content: message, from_number: process.env.SENDBLUE_PHONE_NUMBER! });
   } catch (err: any) {
-    console.error(`eventUnmatchedFollowUp: close send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
-    return false;
+    console.error(`eventUnmatchedFollowUp: close send failed for ${person.user_id} (non-fatal, tried again next pass):`, err?.message ?? err);
+    return "failed";
   }
   await recordInRoomSend(person.user_id, `in_room:close:${eventId}`, message);
   await writeMemory(person.user_id, "text_exchange", `Co replied: ${message}`).catch((err: any) =>
     console.error("eventUnmatchedFollowUp: close text_exchange log failed (non-fatal):", err?.message ?? err),
   );
-  return true;
+  return "sent";
 }
 
 // Cron entry point (jobs/index.ts, */15 * * * *, same lightweight-polling
@@ -179,15 +199,21 @@ async function processOneEvent(eventId: string, eventName: string): Promise<void
   const room = await RM.inRoomNow(eventId, { timing: eventTiming }).catch(() => ({ people: [] as ScorableGuest[] }));
   const matched = room.people.filter((p) => dueUserIds.has(p.user_id));
 
-  // Everyone in the room gets the same close, matched or not, once; "glad you came" only with evidence they came.
+  // Everyone in the room gets the same close, matched or not, once; "glad you came" only with evidence they came. Claimed first, so
+  // overlapping passes send it once; a held or failed close gives its claim back and stays due, tried again next pass while the room is
+  // open (once it closes, nobody is in it and the row is done).
+  const lumaIn = matched.length ? await lumaCheckedIn(eventId) : { emails: new Set<string>(), phones: new Set<string>() };
+  const retry = new Set<string>();
   for (const person of matched) {
-    if (await wasAlreadyNoticed(eventId, person.user_id)) continue;
-    if (!(await cameTonight(eventId, person.user_id, details?.start_at ?? null))) continue;
-    if (await withTraceUser(person.user_id, () => sendClose(eventId, eventName, person, {}))) await markNoticed(eventId, person.user_id, null); // under their own trace-text mark
+    if (!(await cameTonight(eventId, person, lumaIn))) continue;
+    if (!(await claimClose(eventId, person.user_id).catch(() => false))) continue;
+    const r = await withTraceUser(person.user_id, () => sendClose(eventId, eventName, person, {})).catch(() => "failed" as const); // under their own trace-text mark
+    if (r !== "sent") {
+      await releaseClose(eventId, person.user_id);
+      retry.add(person.user_id);
+    }
   }
 
-  await pool.query(`UPDATE event_unmatched_followups SET sent_at = NOW() WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [
-    eventId,
-    [...dueUserIds],
-  ]);
+  const done = [...dueUserIds].filter((id) => !retry.has(id));
+  if (done.length) await pool.query(`UPDATE event_unmatched_followups SET sent_at = NOW() WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, done]);
 }

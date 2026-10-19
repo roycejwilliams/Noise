@@ -104,7 +104,10 @@ export function describe(s: Stats): { headline: string; lines: string[]; note: s
   const themes = s.askCount >= READOUT.minForThemes ? foldThemes(s.themes) : [];
   if (themes.length) lines.push(`What the room was looking for, by category: ${themes.map((t) => `${t.theme.toLowerCase()} (${t.n})`).join(", ")}.`);
   else lines.push(`Too few members shared what they were looking for to show a pattern without pointing at anyone.`);
-  const thin = s.askCount >= READOUT.minForThemes && offerBacked(s.offerKnown ?? 0, s.offerPool ?? 0) ? thinOn(s.themes, s.offerThemes ?? {}) : [];
+  // Only a category the themes line itself may show (foldThemes): when the pattern would point at nearly everyone, "thin on" would
+  // say the same thing the line above just held back (review of #208).
+  const shown = new Set(themes.map((t) => t.theme));
+  const thin = s.askCount >= READOUT.minForThemes && offerBacked(s.offerKnown ?? 0, s.offerPool ?? 0) ? thinOn(s.themes, s.offerThemes ?? {}).filter((t) => shown.has(t)) : [];
   if (thin.length) lines.push(`The room was thin on: ${thin.map((t) => t.toLowerCase()).join(", ")}. Several members looked for it and nobody there offered it.`);
   return { headline: `How ${s.eventName} went`, lines, note };
 }
