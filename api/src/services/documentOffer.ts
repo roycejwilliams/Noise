@@ -3,9 +3,11 @@
 // member state, Co OFFERS once in its own words, and nothing is made until they say yes.
 //
 //   notice  documentOfferDue (pure): an open ask for guidance that has sat for days, a feeling about something that keeps coming up
-//           (uncertain, confused, overwhelmed, discouraged), or an open thread they feel unsure about. Never when they are having a
-//           hard time (needsCare: grief, exhaustion; their state comes first), never inside two weeks of an earlier offer, never the
-//           same topic twice, never right after a document, never while an offer is still waiting on an answer.
+//           (uncertain, confused, overwhelmed, discouraged), or an open thread they feel unsure about. While they are having a hard
+//           time (needsCare: grief, exhaustion) it waits, never cancelled: it stays owed and goes once they're okay again, at the
+//           latest at the mood cap (services/moodHold.ts; offerMoodHeld below, and in a reply the heavy-moment gate, replyGrounding.ts
+//           heavyHold). Never inside two weeks of an earlier offer, never the same topic twice, never right after a document, never
+//           while an offer is still waiting on an answer.
 //   offer   Co's tool offerDocument (agent/loopTools.ts) re-checks the same rules in code, records the offer, and Co writes the
 //           offer itself. The notice only hands Co a hint; Co decides whether this message is the moment.
 //   yes     writeDocument needs their own yes in the message (the registry's `confirm`, agent/toolGuard.ts), whether they are
@@ -16,6 +18,7 @@ import pool from "../db/db.js";
 import { getEmotionalContext } from "../harness/emotion.js";
 import { asksToResend } from "./documentDelivery.js";
 import { driftLine, type Drift } from "./receiptDrift.js";
+import { MOOD_HOLD_CAP_HOURS, moodHold, type MoodHold } from "./moodHold.js";
 
 export const OFFER = {
   helpAskDays: 2, // an ask for guidance open this long
@@ -52,6 +55,9 @@ export type OfferState = {
   threads: { text: string; feeling: string | null; ageDays: number }[];
   recurring: { about: string; emotions: string[]; count: number }[];
   needsCare: boolean;
+  // Whether that hard time still holds an offer now (services/moodHold.ts): it ends when they're okay again or at the cap. Missing (a
+  // state built without the read's times): struggling holds, as before.
+  moodHold?: MoodHold | null;
   // A heavy moment in this very message (a high-intensity hard feeling): no offer of any kind this turn.
   heavyNow?: boolean;
   history: OfferHistoryRow[];
@@ -69,11 +75,24 @@ export function sameTopic(a: string, b: string): boolean {
 }
 const days = (from: Date, to: Date) => (to.getTime() - from.getTime()) / 86_400_000;
 
-// Pure: the rules every offer shares, whatever it offers. Never in a hard time or a heavy moment; never while an offer waits on its
-// answer; one offer a fortnight (a stale document's fix is exempt: it's about something they already have, once per version).
-export function offerGate(s: Pick<OfferState, "now" | "needsCare" | "heavyNow" | "history">, kind: OfferKind = "document"): string | null {
-  if (s.needsCare) return "they are having a hard time; their state comes first";
-  if (s.heavyNow) return "this message is a heavy moment; their state comes first";
+// A hard time decides when, never whether (Royce, 2026-10-19: "feelings change timing and tone, never cancel"). While they're
+// struggling (needsCare) an offer waits: it isn't recorded, so it stays owed (the notice is read again every reply, from the same open
+// asks, threads and feelings), and it goes once they're okay again (the read clears, or they text normally) or at the latest
+// MOOD_HOLD_CAP_HOURS into the hard stretch, whatever the read says then. Only the offer waits: what it's about keeps its own clock
+// (an ask that closes, a plan that passes, the fortnight cooldown, once per topic). In a reply the heavy-moment gate (replyGrounding.ts
+// heavyHold, the same cap) decides instead, logs it (heavy_offer_hold) and adds the gentle tone at release; this gate holds the
+// offerDocument tool and any caller without that moment.
+export const OFFER_MOOD_WAIT = `they are having a hard time; the offer waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it`;
+export function offerMoodHeld(s: Pick<OfferState, "needsCare" | "moodHold">): boolean {
+  return !!s.needsCare && (s.moodHold ? s.moodHold.hold : true);
+}
+
+// Pure: the rules every offer shares, whatever it offers. A hard time makes it wait (offerMoodHeld, capped), never cancels it; a heavy
+// moment waits too (heavyNow); never while an offer waits on its answer; one offer a fortnight (a stale document's fix is exempt: it's
+// about something they already have, once per version).
+export function offerGate(s: Pick<OfferState, "now" | "needsCare" | "moodHold" | "heavyNow" | "history">, kind: OfferKind = "document"): string | null {
+  if (offerMoodHeld(s)) return OFFER_MOOD_WAIT;
+  if (s.heavyNow) return "this message is a heavy moment; the offer waits for a later reply"; // mood: heavyNow arrives as the capped heavyHold (replyGrounding.ts); the recap's heavy call is documented under postCallFollowUp.ts
   const recent = s.history.filter((h) => h.source === "offered");
   const waiting = recent.find((h) => h.status === "offered" && (s.now.getTime() - h.at.getTime()) / 3_600_000 < OFFER.waitingHours);
   if (waiting) return "an offer is still waiting on their answer";
@@ -277,7 +296,7 @@ export async function loadOfferHistory(userId: string): Promise<OfferHistoryRow[
 }
 
 export async function loadOfferState(userId: string, now = new Date()): Promise<OfferState> {
-  const [asks, threads, emo, history] = await Promise.all([
+  const [asks, threads, emo, history, inbound] = await Promise.all([
     pool
       .query(`SELECT ask_text, created_at FROM ask_checkins WHERE user_id = $1 AND kind = 'help' AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 6`, [userId])
       .then((r) => r.rows.map((x: any) => ({ text: String(x.ask_text), ageDays: days(new Date(x.created_at), now) })))
@@ -288,8 +307,10 @@ export async function loadOfferState(userId: string, now = new Date()): Promise<
       .catch(() => [] as OfferState["threads"]),
     getEmotionalContext(userId, now).catch(() => null),
     loadOfferHistory(userId),
+    // Their last text or call (a timestamp only): "okay again" is a normal text after the hard read (services/moodHold.ts).
+    import("../harness/proactive.js").then((p) => p.lastInboundAt(userId)).catch(() => null),
   ]);
-  return { now, helpAsks: asks, threads, recurring: emo?.recurring ?? [], needsCare: !!emo?.needsCare, history };
+  return { now, helpAsks: asks, threads, recurring: emo?.recurring ?? [], needsCare: !!emo?.needsCare, moodHold: moodHold(emo, { now, lastInboundAt: inbound }), history };
 }
 
 export async function recordOffer(userId: string, topic: string): Promise<void> {
@@ -313,6 +334,8 @@ export type DocOfferContext = {
   // For the other artifacts (plan sheet, venue brief, a stale document): the shared record and their state, decided per reply.
   history?: OfferHistoryRow[];
   needsCare?: boolean;
+  // The mood hold as read when the context loaded (loadOfferState), for a caller without the reply's moment.
+  moodHold?: MoodHold | null;
   signals?: ArtifactSignals | null;
   // This reply's moment, set by the reply (harness/replyGrounding.ts): a heavy message, and Co's last few lines.
   moment?: { heavyNow: boolean; coLines: string[] } | null;
@@ -343,9 +366,11 @@ export function documentAskIn(message: string, hasRecentDocument = false): { ask
 export async function loadDocOfferContext(userId: string, now = new Date()): Promise<DocOfferContext> {
   const state = await loadOfferState(userId, now);
   const pending = state.history.find((h) => h.source === "offered" && h.status === "offered" && (now.getTime() - h.at.getTime()) / 3_600_000 < OFFER.waitingHours);
-  const d = documentOfferDue(state);
+  // The notice as if no hard time held it: in a reply the heavy-moment gate (the moment, replyGrounding.ts heavyHold) decides whether it
+  // waits, from this message's own read, so an offer that waits stays owed instead of vanishing from the context.
+  const d = documentOfferDue({ ...state, needsCare: false });
   const last = state.history.find((h) => h.status === "accepted" && days(h.at, now) < 3);
-  return { due: d.due ? { topic: d.topic, why: d.why } : null, pending: pending ? { topic: pending.topic } : null, lastDocument: last ? { topic: last.topic } : null, history: state.history, needsCare: state.needsCare };
+  return { due: d.due ? { topic: d.topic, why: d.why } : null, pending: pending ? { topic: pending.topic } : null, lastDocument: last ? { topic: last.topic } : null, history: state.history, needsCare: state.needsCare, moodHold: state.moodHold ?? null };
 }
 
 // Pure: the lines for a reply. An offer waiting on its answer, or a moment Co may offer (once, if it fits this message). At most one
@@ -356,7 +381,7 @@ export function docOfferLines(
   message = "",
   turn: { heavyNow?: boolean; coLines?: string[]; now?: Date } = {},
 ): { pending: string | null; hint: string | null; ask: string | null; offer?: { kind: OfferKind; topic: string } | null } {
-  turn = { heavyNow: c?.moment?.heavyNow, coLines: c?.moment?.coLines, ...turn };
+  turn = { heavyNow: c?.moment?.heavyNow, coLines: c?.moment?.coLines, ...turn }; // mood: carries the reply's capped heavyHold (replyGrounding.ts)
   const a = documentAskIn(message, !!c?.lastDocument);
   // One rule (2026-10-08): asked for it again -> the same version again; asked for a change -> readDocument, then the next version;
   // never sent again on Co's own initiative.
@@ -372,9 +397,13 @@ export function docOfferLines(
   const now = turn.now ?? new Date();
   // Never an offer on top of an ask, or while one waits on its answer.
   const artifact = !a.ask && !c.pending && c.signals
-    ? nextArtifactOffer({ now, helpAsks: [], threads: [], recurring: [], needsCare: !!c.needsCare, heavyNow: !!turn.heavyNow, history: c.history ?? [], ...c.signals, message, coLines: turn.coLines ?? [] })
+    // In a reply the moment (heavyHold, capped) is the one mood gate: needsCare isn't applied a second time from the context's older
+    // read. Without a moment, the context's own capped hold (offerMoodHeld) decides.
+    ? nextArtifactOffer({ now, helpAsks: [], threads: [], recurring: [], needsCare: c.moment ? false : !!c.needsCare, moodHold: c.moodHold ?? null, heavyNow: !!turn.heavyNow, history: c.history ?? [], ...c.signals, message, coLines: turn.coLines ?? [] })
     : null;
-  const docHint = c.due && !turn.heavyNow
+  // Without the reply's moment (a caller that has none), the context's own capped hold makes the notice wait.
+  const ctxHeld = !c.moment && offerMoodHeld({ needsCare: !!c.needsCare, moodHold: c.moodHold ?? null });
+  const docHint = c.due && !turn.heavyNow && !ctxHeld // mood: the reply's capped heavyHold; the notice itself stays owed (loadDocOfferContext)
     ? `They seem to be looking for direction on "${c.due.topic}" (${c.due.why}). Only if it fits this message (they are not mid-feeling, and did not just ask for something else), you may offer once to put it together as a document for them: one light line in your own words, after calling offerDocument. If it doesn't fit, say nothing about it. Don't write the document until they say yes.`
     : null;
   return {
