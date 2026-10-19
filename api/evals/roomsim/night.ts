@@ -365,12 +365,17 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
   console.log(`  the night: ${c.walkIns} walk-in(s), ${c.walkInsProposed} of them in a proposed pair; ${c.stoppers} texted stop partway through`);
   // Must hold today.
   check(`room ${size}: nobody sharing their location is nudged before they arrive`, c.nudgedBeforeArrival === 0, c);
-  check(`room ${size}: a no-show (shared location, never came) is never nudged themselves`, c.nudgedBeforeArrival === 0, c);
-  // Open questions for Royce (2026-10-14), counted until ruled, never failing: a no-show who shares their location is still
-  // proposed to others as "also going" (only the asker side waits for arrival), and a walk-in who only scans the door QR is never
-  // in the room (inRoomPool counts walk-ins only once arrived, and their "I'm here" text only works for people on the RSVP list).
-  console.log(`  open (needs Royce): ${c.noShowsProposed} no-show(s) proposed to someone mid-night, ${c.noShowsTexted} texted; ${c.walkIns - c.walkInsProposed} of ${c.walkIns} QR-only walk-in(s) never matched`);
-  check(`room ${size}: nothing reaches someone after they text stop`, c.stoppers > 0 && c.textedAfterStop === 0, c);
+  // A no-show (shared their location, never came) is never texted (a direct ask or the goodbye) and never proposed to anyone: #215
+  // holds them out of matching until they arrive, and a text is no evidence they came (Royce, 2026-10-14 and 2026-10-19). The old
+  // check repeated the arrival check above, so it couldn't fail on its own (review of #213).
+  check(`room ${size}: a no-show is never texted (no direct ask, no goodbye)`, c.noShowsTexted === 0, c);
+  check(`room ${size}: a no-show is never proposed to someone mid-night`, c.noShowsProposed === 0, c);
+  // A walk-in who only scans the door QR is never in the room (inRoomPool counts walk-ins only once arrived). Ruled 10-14: the door
+  // code counts as arriving (P2, #212). This sim's walk-ins still check in the old way (no door code), so they're counted, not checked.
+  console.log(`  counted: ${c.walkIns - c.walkInsProposed} of ${c.walkIns} QR-only walk-in(s) (no door code) never matched`);
+  // What this covers: someone who texts stop leaves the room's roster at once, so no later pass texts them. A text already being
+  // drafted when they stop is not exercised here (the fake world drops opted-out members in its own roster reads; review of #213).
+  check(`room ${size}: after someone texts stop, no later pass texts them`, c.stoppers > 0 && c.textedAfterStop === 0, c);
 
   check(`room ${size}: nobody opted out of texts is texted`, c.optedOutTexted === 0, c);
   check(`room ${size}: no private (not shareable) ask is quoted to anyone else`, c.privateQuoted === 0, c);
