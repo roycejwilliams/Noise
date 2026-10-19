@@ -25,6 +25,7 @@
 // outside this harness.
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
 import { inventedFailure } from "../services/speakable.js";
+import { sentinelIn } from "../services/sentinelBody.js";
 import { proactivePaused, pausedTypes, heldTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
@@ -48,7 +49,6 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext } from "./emotion.js";
-import { sentinelIn } from "../services/sentinelBody.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
