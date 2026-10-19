@@ -44,8 +44,8 @@ const heldRecap = (over: Record<string, unknown> = {}) => ({ id: "c9", userId: "
 const postCallText = () => ({ ...heldRecap(), targetKey: `post_call:${FID}`, topicKey: `post_call:${FID}`, payload: { followUpId: FID } }) as any;
 
 // A fake store: the emotion read, their last inbound, the offer record, the call's row, and the candidate queue (captured writes).
-type Store = { sigs: Sig[]; inbound: Date | null; offers: any[]; writes: { sql: string; params: any[] }[]; transcript: string | null; confirmed: string | null };
-const store: Store = { sigs: [], inbound: null, offers: [], writes: [], transcript: TRANSCRIPT, confirmed: null };
+type Store = { sigs: Sig[]; inbound: Date | null; offers: any[]; writes: { sql: string; params: any[] }[]; transcript: string | null; confirmed: string | null; exchanges: { content: string; created_at: Date }[] };
+const store: Store = { sigs: [], inbound: null, offers: [], writes: [], transcript: TRANSCRIPT, confirmed: null, exchanges: [] };
 const realQuery = pool.query, realConnect = (pool as any).connect;
 const answer = async (sql: string, params: any[] = []) => {
   const q = String(sql).trim();
@@ -53,6 +53,7 @@ const answer = async (sql: string, params: any[] = []) => {
   if (/^(INSERT|UPDATE|DELETE)\b/i.test(q)) { store.writes.push({ sql: q, params }); return { rows: /RETURNING id/i.test(q) ? [{ id: 501 }] : [], rowCount: 1 }; }
   if (/FROM emotion_signals/i.test(q)) return { rows: store.sigs.map((s) => ({ ...s, created_at: s.at, basis: s.basis ?? null })) };
   if (/MAX\(created_at\) AS at FROM co_memories/i.test(q)) return { rows: [{ at: store.inbound }] };
+  if (/SELECT content, created_at FROM co_memories/i.test(q)) return { rows: [...store.exchanges].reverse() };
   if (/FROM document_offers/i.test(q)) return { rows: store.offers };
   if (/FROM post_call_follow_ups/i.test(q)) return { rows: store.transcript ? [{ transcript: store.transcript, created_at: ago(1) }] : [] };
   if (/FROM proactive_sends WHERE user_id = \$1 AND target_key = \$2 LIMIT 1/i.test(q)) return { rows: store.confirmed ? [{ message: store.confirmed }] : [] };
@@ -63,7 +64,7 @@ const fake = () => {
   (pool as any).connect = async () => ({ query: answer, release: () => {} });
 };
 const real = () => { (pool as any).query = realQuery; (pool as any).connect = realConnect; };
-const reset = (o: Partial<Store> = {}) => { Object.assign(store, { sigs: [], inbound: null, offers: [], writes: [], transcript: TRANSCRIPT, confirmed: null }, o); MH.resetMoodHoldLog(); };
+const reset = (o: Partial<Store> = {}) => { Object.assign(store, { sigs: [], inbound: null, offers: [], writes: [], transcript: TRANSCRIPT, confirmed: null, exchanges: [] }, o); MH.resetMoodHoldLog(); };
 const known = (needsCare: boolean) => ({ identity: { zone: "America/Los_Angeles", timeZone: "America/Los_Angeles" }, restraint: { needsCare }, delivered: [] }) as any;
 const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW };
 
@@ -222,41 +223,56 @@ const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW 
   check("released in the post-call text itself: the same gentle guidance rides with the permission", /recap_offer_tone: recapOffer && recapGentle && !confirmationSent \? RECAP_GENTLE : null,/.test(pc) && /!!recap\?\.offer, k, !!recap\?\.gentle\)/.test(pc));
 }
 
-// ================================================================ 5b. unwired until Royce reads the prompt (HELD_RECAP_APPROVED = false)
+// ================================================================ 5b. approved by Royce (2026-10-19, with his SKIP addition): wired
 {
-  check("the held recap's prompt is not approved: a code constant, false, no env switch", MH.HELD_RECAP_APPROVED === false && /export const HELD_RECAP_APPROVED: boolean = false;/.test(src("services/moodHold.ts")) && !/process\.env[^\n]*HELD_RECAP/.test(src("services/moodHold.ts") + src("harness/proactive.ts") + src("jobs/postCallFollowUp.ts")));
+  const ROYCE_SKIP = "If the member has since texted about something else, SKIP. A recap offer landing on top of a new conversation would feel off.";
+  check("approved: the constant is true, in code, no env switch", MH.HELD_RECAP_APPROVED === true && /export const HELD_RECAP_APPROVED: boolean = true;/.test(src("services/moodHold.ts")) && !/process\.env[^\n]*HELD_RECAP/.test(src("services/moodHold.ts") + src("harness/proactive.ts") + src("jobs/postCallFollowUp.ts")));
+  check("the prompt carries Royce's sentence exactly, right after the nothing-settled SKIP", PC.HELD_RECAP_TASK.includes(ROYCE_SKIP) && PC.HELD_RECAP_TASK.endsWith(`If they settled nothing on that call, return SKIP. ${ROYCE_SKIP}`));
   const released = [OKAY, CAPPED, { state: "none" as const, hold: false, heldHours: null }];
   const st = (mh: any) => baseState({ needsCare: mh.state !== "none", moodHold: mh });
-  check("still held while struggling, as before (the mood wait, not the approval)", failsOn(P.candidateChecks(heldRecap(), st(HELD)), "recap_mood_wait") && !P.candidateChecks(heldRecap(), st(HELD)).some((k) => k.name === "awaiting_prompt_approval"));
-  check("released (okay, the cap, the read cleared): it stays pending, awaiting approval", released.every((mh) => failsOn(P.candidateChecks(heldRecap(), st(mh)), "awaiting_prompt_approval") && !failsOn(P.candidateChecks(heldRecap(), st(mh)), "recap_mood_wait")));
-  check("released at 48h after it was held: still awaiting approval, never sent", failsOn(P.candidateChecks(heldRecap({ payload: { followUpId: FID, recapHeldAt: ago(50).toISOString() } }), st(HELD)), "awaiting_prompt_approval"));
+  check("still held while struggling (the mood wait)", failsOn(P.candidateChecks(heldRecap(), st(HELD)), "recap_mood_wait"));
+  check("the awaiting-approval path is unreachable: no state, held or released, adds it", [HELD, ...released].every((mh) => !P.candidateChecks(heldRecap(), st(mh)).some((k) => k.name === "awaiting_prompt_approval")));
   const lis = { timezone: "America/Los_Angeles", optedOut: false };
-  const elig = (c: any, mh: any, opts: any = {}) => P.evaluateCandidates({ ...baseState({ needsCare: mh.state !== "none", moodHold: mh, ...lis }), candidates: [c] } as any, opts).eligible.map((x: any) => x.id);
-  check("the dispatch never picks it while unapproved (not eligible), though the post-call text itself would be", elig(heldRecap(), OKAY).length === 0 && elig(postCallText(), OKAY).length === 1, [elig(heldRecap(), OKAY), elig(postCallText(), OKAY)]);
-  check("its own clock still ends it, unsent: expired is expired", failsOn(P.candidateChecks(heldRecap({ expiresAt: ago(0.5) }), st(OKAY)), "not_expired") && PC.RECAP_HELD_EXPIRY_HOURS === MH.MOOD_HOLD_CAP_HOURS + 24);
-  check("ending unsent leaves the call's record alone (onDropped returns for a held recap)", /if \(isHeldRecap\(c\)\) return;\s*await markPostCallDropped/.test(src("harness/proactiveRegistry.ts")));
-  // The draft path, if ever reached unapproved: no reads, no model, a defer (never a send).
+  const elig = (c: any, mh: any) => P.evaluateCandidates({ ...baseState({ needsCare: mh.state !== "none", moodHold: mh, ...lis }), candidates: [c] } as any).eligible.map((x: any) => x.id);
+  check("released: the dispatch can pick it, like the post-call text", elig(heldRecap(), OKAY).length === 1 && elig(heldRecap(), CAPPED).length === 1 && elig(heldRecap(), HELD).length === 0, [elig(heldRecap(), OKAY), elig(heldRecap(), HELD)]);
+  // The draft: it reaches the model with the approved prompt, and sees their texts since the call (theirs only, after the call).
+  const realFetch = globalThis.fetch;
+  const prompts: string[] = [];
+  globalThis.fetch = (async (input: any, init: any) => { const u = typeof input === "string" ? input : input?.url ?? ""; if (/api\.anthropic\.com/.test(u)) prompts.push(String(init?.body ?? "")); return realFetch(input, init); }) as any;
   fake();
+  const err = console.error;
+  console.error = () => {};
   try {
-    reset();
-    const d = await PC.draftHeldRecap("u-jordan", "Jordan", FID, NOW);
-    check("unapproved draft: defers, reads nothing, writes nothing, drafts nothing", "defer" in (d as any) && /approval/.test((d as any).reason) && !("messages" in (d as any)) && store.writes.length === 0, d);
+    reset({ exchanges: [
+      { content: "User said: before the call: the cofounder split is eating me", created_at: ago(3) },
+      { content: "Co replied: Talk soon.", created_at: ago(0.7) },
+      { content: "User said: different thing, any jazz bars Saturday?", created_at: ago(0.5) },
+    ] });
+    const d: any = await PC.draftHeldRecap("u-jordan", "Jordan", FID, NOW);
+    const p = prompts.join("\n");
+    check("approved: the draft runs (no defer, no code skip) and reaches the model", !("defer" in d) && !(d.skip && !/model chose SKIP/.test(d.skip)) && prompts.length >= 1, d);
+    check("the draft gets the approved task, Royce's sentence included", p.includes(JSON.stringify(PC.HELD_RECAP_TASK).slice(1, -1)) || p.includes(ROYCE_SKIP));
+    check("the draft context has their texts since the call: theirs after it, never before it, never Cue's", /their_texts_since_the_call: [^\n]*different thing, any jazz bars Saturday\?/.test(p.replace(/\\n/g, "\n")) && !p.includes("the cofounder split is eating me") && !/their_texts_since_the_call:[^\n]*Talk soon/.test(p.replace(/\\n/g, "\n")), p.slice(0, 400));
+    prompts.length = 0;
+    reset({ exchanges: [{ content: "User said: before the call: the cofounder split is eating me", created_at: ago(3) }] });
+    await PC.draftHeldRecap("u-jordan", "Jordan", FID, NOW);
+    check("no texts since the call: the draft is told so plainly", prompts.join("\n").includes(PC.NO_TEXTS_SINCE_CALL));
   } finally {
+    console.error = err;
+    globalThis.fetch = realFetch;
     real();
   }
-  // Flip the approval (the parameter the constant feeds): the path is ready.
-  check("approved: released, it is eligible again (the check lifts)", released.every((mh) => !failsOn(P.candidateChecks(heldRecap(), st(mh), { recapApproved: true }), "awaiting_prompt_approval")) && failsOn(P.candidateChecks(heldRecap(), st(HELD), { recapApproved: true }), "recap_mood_wait"));
-  check("approved: the dispatch would pick it", elig(heldRecap(), OKAY, { recapApproved: true }).length === 1);
-  check("approved: the draft path re-checks the facts and drafts with HELD_RECAP_TASK (see section 5)", /task: HELD_RECAP_TASK,/.test(src("jobs/postCallFollowUp.ts")) && /if \(!approved\) return \{ defer:/.test(src("jobs/postCallFollowUp.ts")));
-  // The log at release names the waiting kind, ids only.
+  const ex = (text: string, h: number, from: "member" | "co" = "member", call = false) => ({ from, text, call, verifiedAt: ago(h).toISOString() });
+  check("textsSinceCall: theirs, after the call, stamped; not Cue's, not call lines, not before", JSON.stringify(PC.textsSinceCall([ex("before", 3), ex("cue line", 0.5, "co"), ex("call line", 0.5, "co", true), ex("after", 0.5)], ago(1), "America/Los_Angeles")).includes("after") && PC.textsSinceCall([ex("before", 3), ex("cue line", 0.5, "co"), ex("call line", 0.5, "co", true), ex("after", 0.5)], ago(1), "America/Los_Angeles").length === 1);
+  check("the draft reads exchanges back to the call (the window reaches the call)", /include: \["delivered", "exchanges"\], exchanges: 40, exchangeDays: sinceDays/.test(src("jobs/postCallFollowUp.ts")) && /their_texts_since_the_call: since\.length \? since : NO_TEXTS_SINCE_CALL,/.test(src("jobs/postCallFollowUp.ts")));
+  // The release log names the normal kind now.
   MH.resetMoodHoldLog();
   const out: string[] = [];
   const ref = `u-jordan:${FID}`;
   MH.noteMoodHold("recap_hold", "post_call_recap", ref, P.recapWaitRead(heldRecap(), st(HELD))!, (l) => out.push(l));
   const rel = P.recapWaitRead(heldRecap(), st(OKAY))!;
   MH.noteMoodHold("recap_hold", rel.hold || MH.HELD_RECAP_APPROVED ? "post_call_recap" : "awaiting_prompt_approval", ref, rel, (l) => out.push(l));
-  check("release while unapproved is logged as kind=awaiting_prompt_approval, ids only", out.length === 2 && new RegExp(`^mood hold: rule=recap_hold kind=awaiting_prompt_approval ref=u-jordan:${FID} released`).test(out[1]) && out.every((l) => !/hospital|Jacqueline/.test(l)), out);
-  check("the dispatch logs it that way", /noteMoodHold\("recap_hold", recapWait\.hold \|\| HELD_RECAP_APPROVED \? "post_call_recap" : "awaiting_prompt_approval"/.test(src("harness/proactive.ts")));
+  check("release logged as kind=post_call_recap, ids only", out.length === 2 && new RegExp(`^mood hold: rule=recap_hold kind=post_call_recap ref=u-jordan:${FID} released`).test(out[1]) && out.every((l) => !/hospital|Jacqueline|jazz/.test(l)), out);
 }
 
 // ================================================================ 6. the pin: this place can't cancel on mood
