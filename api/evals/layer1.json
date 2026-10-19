@@ -20,6 +20,7 @@
     "evals/proactive/moodNeverCancels.ts",
     "evals/proactive/moodHeavyOffers.ts",
     "evals/calls/recapMoodHold.ts",
+    "evals/proactive/moodDraftSkips.ts",
     "evals/events/audience.ts",
     "evals/plan/rules.ts",
     "evals/rhythm/rules.ts",
