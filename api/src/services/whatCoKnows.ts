@@ -1002,8 +1002,8 @@ export type Cancelled = { kind: "candidate" | "task" | "deferred_send" | "backlo
 // Pure: whether a queued item's own text says what changed. A removal: the removed text's own words, specific removals only (two
 // or more real words, not a place, a role or a label), as every guard. A correction: any kind, since a re-check only sends the item
 // back to be judged again with what's true now, never drops it.
-// Pure: every word a held file carries (services/pendingFiles.ts), as one text the removal and correction checks read.
-export function heldText(held: unknown): string {
+// Pure: every line a held file carries (services/pendingFiles.ts), each on its own for the removal and correction checks.
+export function heldStrings(held: unknown): string[] {
   const out: string[] = [];
   const walk = (v: unknown) => {
     if (typeof v === "string") out.push(v);
@@ -1011,8 +1011,9 @@ export function heldText(held: unknown): string {
     else if (v && typeof v === "object") Object.values(v).forEach(walk);
   };
   walk((held as any)?.input ?? held);
-  return out.join("\n");
+  return out.filter((x) => x.trim());
 }
+export const heldText = (held: unknown): string => heldStrings(held).join(". ");
 export function queuedSays(text: string, a: Applied): boolean {
   const old = plainOf(a.was);
   if (!words(old).length) return false;
@@ -1071,8 +1072,8 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
       const k = `t${t.id}`;
       if (done.has(k)) continue;
       const byId = kind === "ask" && String(t.target_key ?? "").startsWith(`ask_checkin:${id}`);
-      const held = t.held ? heldText(t.held) : "";
-      const inHeld = !!held && queuedSays(held, a);
+      // Each held line on its own, so a one-word correction ("Oakland" to "Berkeley") reads "A loft in Oakland" as the line it is.
+      const inHeld = !!t.held && heldStrings(t.held).some((x) => queuedSays(x, a));
       const goalSays = queuedSays(String(t.goal), a);
       if (!byId && !inHeld && !goalSays) continue;
       done.add(k);

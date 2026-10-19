@@ -416,7 +416,7 @@ const BAD_DOC = docIn(["Seasonal, family style", "Supper at 7:30 PM", "One new f
 {
   const at = new Date("2026-10-18T19:00:00Z");
   const held = { type: "page" as const, word: "page" as const, mode: "answer" as const, input: {}, at: at.toISOString() };
-  const fdeps = (o: { lines?: string[]; hours?: boolean; claimOk?: boolean; now?: Date; person?: any; outcome?: string; safety?: boolean; tellOk?: boolean } = {}) => {
+  const fdeps = (o: { lines?: string[]; hours?: boolean; claimOk?: boolean; now?: Date; person?: any; outcome?: string; safety?: boolean; tellOk?: boolean; paused?: boolean; task?: any } = {}) => {
     const log: { a: string; x: any }[] = []; const runs: string[] = []; const waits: Date[] = []; const closes: string[] = []; const tells: string[] = []; const retries: string[] = []; const releases: number[] = [];
     let running = false;
     return {
@@ -428,7 +428,9 @@ const BAD_DOC = docIn(["Seasonal, family style", "Supper at 7:30 PM", "One new f
         hoursOk: () => o.hours !== false,
         nextOpen: () => new Date(at.getTime() + 12 * 3600_000),
         safetyHold: async () => !!o.safety,
-        claim: async () => { if (running || o.claimOk === false) return false; running = true; return true; },
+        paused: () => !!o.paused,
+        // As claimPending does: marked running, and the try counted on the row.
+        claim: async () => { if (running || o.claimOk === false) return false; running = true; if (o.task) o.task.followup.pendingFile.tries = (o.task.followup.pendingFile.tries ?? 0) + 1; return true; },
         release: async () => { running = false; releases.push(1); },
         run: async (_p: any, answer: string) => { runs.push(answer); return { outcome: (o.outcome ?? "sent") as any }; },
         tellDown: async (w: string) => { tells.push(R.downLine(w as any)); return o.tellOk !== false; },
@@ -466,6 +468,29 @@ const BAD_DOC = docIn(["Seasonal, family style", "Supper at 7:30 PM", "One new f
   check("review: the logs carry kinds only, never a tool's error text", [a, sf, te, ter].every((x) => x.log.every((l) => Object.keys(l.x ?? {}).every((k) => k === "type" || k === "mode"))));
   check("review: a run's outcome is read by kind: a tool error never passes as sent", PF.toolOutcome({ ok: false, error: "That deck is gone (taken down or expired)." }, { sent: false, sendFailed: false }) === "tool_error" && PF.toolOutcome({ ok: false, made: "x" }, { sent: false, sendFailed: true }) === "send_failed" && PF.toolOutcome({ ok: false, error: "The check still couldn't run, so nothing was sent." }, { sent: false, sendFailed: false }) === "nothing_more" && PF.toolOutcome({ ok: true }, { sent: true, sendFailed: false }) === "sent");
   check("review: a held doc's outcome too", PF.docOutcome({ ok: true }) === "sent" && PF.docOutcome({ ok: false, told: "down" }) === "sent" && PF.docOutcome({ ok: false, blocked: true }) === "send_failed" && PF.docOutcome({ ok: false, why: "Not sent: the check still couldn't run." }) === "nothing_more" && PF.docOutcome({ ok: false, why: "Not sent: it's not a document." }) === "tool_error");
+  // Review 2 of #243: retries after their answer are bounded, by count and by the hold's days, and checked for a pause first.
+  {
+    const t: any = { ...replied, followup: { pendingFile: { ...held } } };
+    const x = fdeps({ outcome: "send_failed", task: t });
+    const acts: string[] = [];
+    for (let i = 0; i < 50; i++) acts.push((await PF.finishPendingFile(t, { ...x.deps, claim: async () => { t.followup.pendingFile.tries = (t.followup.pendingFile.tries ?? 0) + 1; return true; } } as any)).action);
+    check("review 2: sends that keep failing run the tool at most MAX_FINISH_TRIES times, then it closes, wiped, without a message", x.runs.length === PF.MAX_FINISH_TRIES && acts.includes("tries_used") && x.tells.length === 0 && x.closes.some((c) => c.startsWith("expired")), { runs: x.runs.length, acts: [...new Set(acts)] });
+    const old = { ...replied, followup: { pendingFile: { ...held, at: new Date(at.getTime() - 40 * 86_400_000).toISOString() } }, theirReplyAt: new Date(at.getTime() - 39 * 86_400_000).toISOString() };
+    const y = fdeps({ outcome: "send_failed" });
+    const ry = await PF.finishPendingFile(old as any, y.deps as any);
+    check("review 2: past its days from the hold, even after their reply: closed and wiped, nothing runs", ry.action === "expired_after_reply" && y.runs.length === 0 && y.closes[0].startsWith("expired"), ry);
+    const z = fdeps({ paused: true });
+    const rz = await PF.finishPendingFile(replied, z.deps as any);
+    check("review 2: paused: checked before the tool runs (nothing stored, no try spent), it waits an hour", rz.action === "held_paused" && z.runs.length === 0 && z.closes.length === 0 && z.waits.length === 1, rz);
+    const te2: any = { ...replied, followup: { pendingFile: { ...held } } };
+    const w2 = fdeps({ outcome: "tool_error", tellOk: false, task: te2 });
+    let n2 = 0;
+    for (let i = 0; i < 10; i++) { await PF.finishPendingFile(te2, { ...w2.deps, claim: async () => { te2.followup.pendingFile.tries = (te2.followup.pendingFile.tries ?? 0) + 1; return true; } } as any); }
+    n2 = w2.runs.length;
+    check("review 2: a tool error whose line can't go either is bounded the same way", n2 === PF.MAX_FINISH_TRIES, n2);
+    check("review 2: a deck or page made for a text that didn't go is taken down at once (no orphan left by a retry)", PF.orphanId({ ok: false, made: "the deck", url: `https://co.example/d/${"B".repeat(24)}` }) === "B".repeat(24) && PF.orphanId({ ok: true, url: `https://co.example/d/${"B".repeat(24)}` }) === null && /if \(orphan\) await \(await import\("\.\/coPages\/store\.js"\)\)\.takeDownCoPage\(orphan, task\.userId\)/.test(src("services/pendingFiles.ts")));
+    check("review 2: the real finish reads the pause", /paused: \(\) => P\.proactivePaused\(\),/.test(src("services/pendingFiles.ts")) && /'\{pendingFile,tries\}'/.test(src("services/pendingFiles.ts")));
+  }
   const b = fdeps();
   const rb = await PF.finishPendingFile({ ...replied, theirReplyAt: null }, b.deps as any);
   check("no answer yet: it waits, to its days' end, nothing sent", rb.action === "waiting" && b.runs.length === 0 && b.waits[0].getTime() === at.getTime() + PF.PENDING_DAYS * 86_400_000);
@@ -488,7 +513,7 @@ const BAD_DOC = docIn(["Seasonal, family style", "Supper at 7:30 PM", "One new f
   await PF.rememberPending({ userId: "jordan-1", type: "deck", word: "deck", mode: "answer", input: { slides: [{ bullets: ["Supper at 7:30 PM"] }] }, theirWords: "make the deck", now: at });
   check("remembering supersedes an older held file of the same kind, then holds this one, waiting on their reply", /UPDATE co_tasks SET status = \$3/.test(pendingSql[0]?.sql ?? "") && /followup = COALESCE\(followup, '\{\}'::jsonb\) - 'pendingFile'/.test(pendingSql[0]?.sql ?? "") && /'pending_file'/.test(pendingSql[1]?.sql ?? "") && !MADE_UP.test(String(pendingSql[1]?.params[1])) && !MADE_UP.test(String(pendingSql[1]?.params[3])));
   pendingSql.length = 0;
-  check("review: a run is claimed by marking it running, never by closing it first", (await PF.claimPending("jordan-1", 501)) === false && /SET followup = jsonb_set\(followup, '\{pendingFile,runningAt\}'/.test(pendingSql[0]?.sql ?? "") && !/status = 'done'/.test(pendingSql[0]?.sql ?? ""));
+  check("review: a run is claimed by marking it running, never by closing it first", (await PF.claimPending("jordan-1", 501)) === false && /jsonb_set\(followup, '\{pendingFile,runningAt\}'/.test(pendingSql[0]?.sql ?? "") && !/status = 'done'/.test(pendingSql[0]?.sql ?? ""));
   const pf = src("services/pendingFiles.ts");
   check("review: the real finish reads the safety hold, failing closed", /safetyHold: async \(\) => \(await import\("\.\/safety\.js"\)\)\.safetyHoldActive\(task\.userId\)\.catch\(\(\) => true\)/.test(pf));
 }
@@ -519,7 +544,47 @@ const BAD_DOC = docIn(["Seasonal, family style", "Supper at 7:30 PM", "One new f
   const wipes = sql.filter((x) => /UPDATE co_tasks/.test(x.sql));
   check("review: a removed fact in a held file cancels its row and wipes the file (matched by what it holds)", wipes.some((x) => x.params[0] === 501 && /status = 'dropped'/.test(x.sql) && /- 'pendingFile'/.test(x.sql)) && out.some((o: any) => o.id === "501"), { wipes, out });
   check("review: …a task's held document is wiped and the task goes on", wipes.some((x) => x.params[0] === 77 && /- 'pendingFile'/.test(x.sql) && !/status = 'dropped'/.test(x.sql)), wipes);
+  // Review 2: each held line on its own, so a one-word correction reaches it.
+  check("review 2: held lines are read one by one", W.heldStrings({ input: { title: "Supper", slides: [{ headline: "Where", bullets: ["A loft in Oakland"] }] } }).includes("A loft in Oakland"));
+  sql.length = 0;
+  const fake2 = { query: async (q: string, params: unknown[] = []) => {
+    sql.push({ sql: q.replace(/\s+/g, " "), params });
+    if (/FROM proactive_candidates|FROM deferred_sends/.test(q)) return { rows: [] };
+    if (/AS held FROM co_tasks/.test(q)) return { rows: [{ id: 601, goal: PF.pendingGoal("deck", "answer"), target_key: null, kind: "pending_file", held: { input: { title: "Supper", slides: [{ headline: "Where", bullets: ["A loft in Oakland", "Drinks first"] }] } } }] };
+    return { rows: [{ kind: "x" }], rowCount: 1 };
+  } };
+  await W.cancelQueued(fake2 as any, "jordan-1", [{ ref: "profile:city", source: "text" as any, was: "Oakland", now: "Berkeley" }]);
+  check("review 2: a one-word correction (Oakland to Berkeley) cancels and wipes the held file that says it", sql.some((x) => /UPDATE co_tasks/.test(x.sql) && x.params[0] === 601 && /- 'pendingFile'/.test(x.sql)), sql.map((x) => x.sql.slice(0, 80)));
+  // Review 2: a doc and a document are one kind of file.
+  check("review 2: a task's \"Before I send the document\" blocks a reply turn's doc question, and the other way round", RT.noAskHere({ lastCoMessage: R.askLine("document", "how many guests are coming") } as any, "doc") && RT.noAskHere({ lastCoMessage: R.askLine("doc", "how many guests are coming") } as any, "document") && !RT.noAskHere({ lastCoMessage: R.askLine("document", "q") } as any, "deck"));
 }
+
+// ---------------------------------------------------------------- 9c. review 2: one retry for a slot whose words were blocked
+{
+  const T = "I'm hosting a supper club in the Mission for founders. Small tables, good wine.";
+  const d0 = deckIn([BASE[1], { headline: "The night", bullets: ["Doors open at 7:30 PM", "Drinks first, then supper"] }, { headline: "The feel", bullets: ["One new friend each", "Seasonal, family style"] }]);
+  const ps = [{ text: '"Doors open at 7:30 PM" (an unbacked time)', at: "slide 3 bullet 1", kind: "an unbacked time" }];
+  const prompts: string[] = [];
+  let k = 0;
+  const flow = (answers: string[], whats: string[] = []) => R.afterRefusal(d0, ps as any, { word: "deck", theirs: T, check: async (f: any) => (JSON.stringify(f).includes("7:30") ? { ok: false, problems: ps as any } : { ok: true, file: f, data: f }), fix: null, drop: (f: any, a: string[]) => R.dropDeckLines(f, a), size: (f: any) => R.deckSize(f), slots: { ask: async (p) => { prompts.push(p); return JSON.stringify({ question: answers[k++] ?? null }); }, what: async (p) => { prompts.push(p); return JSON.stringify({ what: whats.shift() ?? null }); } } });
+  const e1: any = await flow(["what time do doors open", "what time does it start"]);
+  check("review 2: a question blocked only for its words gets one retry naming them, and the retry goes", e1.case === "ask" && e1.line === R.askLine("deck", "what time does it start") && prompts.length === 2 && /These words can't be in it: doors, open/.test(prompts[1]) && !/7:30/.test(e1.line), { e1, p: prompts[1]?.slice(-160) });
+  prompts.length = 0; k = 0;
+  const e2: any = await flow(["is it at 7:30", "is supper at seven thirty"], ["the doors line", "the start time line"]);
+  check("review 2: a retry that still leaks is refused too (only one retry); the file falls through with an approved line", e2.case !== "ask" && !MADE_UP.test(e2.line) && !/seven/.test(e2.line), e2);
+  check("review 2: …the kind of line gets the same one retry", e2.case === "dropped" && e2.line === R.droppedLine("deck", "the start time line") && /These words can't be in it: doors/.test(prompts[prompts.length - 1]), { e2, last: prompts[prompts.length - 1]?.slice(-120) });
+  // The six leak cases are still refused by the guards themselves.
+  const L = (problems: string[], q: string | null, w: string | null) => (q ? R.cleanQuestion(q, R.factTokens(problems, T), T) : R.cleanWhat(w, R.factTokens(problems, T), T));
+  check("review 2: the six leaks are still refused", [
+    L([`"Twelve guests a night" (an unbacked count)`], "are twelve guests coming each night", null),
+    L([`"Twelve guests a night" (an unbacked count)`], null, "the twelve guests line"),
+    L([`"Sequin AI is sponsoring the night" (a sponsor they never named)`], null, "the sequin sponsorship line"),
+    L([`"Sequin AI is sponsoring the night" (a sponsor they never named)`], "is sequin still sponsoring the night", null),
+    L([`"Bootstrapped, pre-seed" (an old fact that may have changed: funding stage may have changed)`], "are you still bootstrapped and pre-seed", null),
+    L([`"Based in austin" (an old fact that may have changed: city may have changed)`], "are you still based in austin", null),
+  ].every((x) => x === null));
+}
+
 
 // ---------------------------------------------------------------- 10. the wiring
 {

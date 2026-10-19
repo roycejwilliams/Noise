@@ -222,6 +222,23 @@ export function cleanWhat(raw: unknown, tokens: string[], theirs = ""): string |
   if (!/^the [a-z][a-z' -]{0,40} line$/.test(w) || w.split(/\s+/).length > 6) return null;
   return carries(w, tokens, theirs) ? null : w;
 }
+// Pure: the words in a slot that the guards block (a refused fact, any digit, a number spelled out that isn't theirs).
+export function blockedIn(s: string, tokens: string[], theirs = ""): string[] {
+  const out = tokens.filter((t) => wordIn(t, s));
+  if (/\d/.test(s)) out.push("any digit");
+  for (const n of s.match(NUMBER_WORDS) ?? []) if (!wordIn(n, theirs)) out.push(n.toLowerCase());
+  return [...new Set(out)];
+}
+// The slot, written once and, when only its words were blocked, once more with those words named (review of #243: "what time do
+// doors open" was blocked for "doors"; the retry writes it around them). Still held by the same guards: a refused fact never rides.
+async function slotTwice(write: (p: string) => Promise<string>, prompt: string, key: "question" | "what", clean: (raw: unknown) => string | null, tokens: string[], theirs: string): Promise<string | null> {
+  const raw = await slotFrom(write, prompt, key);
+  const first = clean(raw);
+  if (first || typeof raw !== "string") return first;
+  const blocked = blockedIn(raw, tokens, theirs);
+  if (!blocked.length) return null;
+  return clean(await slotFrom(write, `${prompt}\n\nThese words can't be in it: ${blocked.join(", ")}. Write it again without them, naming what the line is about in other words.`, key));
+}
 async function slotFrom(write: (p: string) => Promise<string>, prompt: string, key: "question" | "what"): Promise<unknown> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -329,7 +346,7 @@ export async function afterRefusal<F, D>(file: F, first: Problem[], d: FlowDeps<
   const ask = async (): Promise<FlowEnd<F, D> | null> => {
     const mine = problems.filter(askable);
     if (d.noAsk || !mine.length) return null;
-    asked ??= slotFrom(slots.ask, askPrompt(d.word, mine.map((p) => p.text)), "question").then((raw) => cleanQuestion(raw, tokens, d.theirs));
+    asked ??= slotTwice(slots.ask, askPrompt(d.word, mine.map((p) => p.text)), "question", (raw) => cleanQuestion(raw, tokens, d.theirs), tokens, d.theirs);
     const q = await asked;
     return q ? { case: "ask", line: askLine(d.word, q), file: cur, problems, trace: trace({ why: problems.every(askable) ? "their fact" : "their fact, the rest not droppable" }) } : null;
   };
@@ -345,7 +362,7 @@ export async function afterRefusal<F, D>(file: F, first: Problem[], d: FlowDeps<
   if (again && !again.ok && again.problems.some((p) => p.down)) return down(cur, again.problems, fixed, "check down on the dropped version");
   const sendDropped = async (why: string): Promise<FlowEnd<F, D> | null> => {
     if (!dropped || !again?.ok) return null;
-    const what = cleanWhat(await slotFrom(slots.what, whatPrompt(d.word, refusedTexts), "what"), tokens, d.theirs);
+    const what = await slotTwice(slots.what, whatPrompt(d.word, refusedTexts), "what", (raw) => cleanWhat(raw, tokens, d.theirs), tokens, d.theirs);
     return what ? { case: "dropped", file: again.file, data: again.data, line: droppedLine(d.word, what), dropped: at, trace: trace({ dropped: at, why }) } : null;
   };
   const useful = !!dropped && d.size(dropped) >= KEEP_SHARE * d.size(cur);

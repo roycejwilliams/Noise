@@ -12,7 +12,11 @@ export type Finishing = { mode: "answer" | "retry"; taskId: number };
 export const finishingOf = (ctx: ConversationToolContext): Finishing | null => ((ctx as any).finishing as Finishing | undefined) ?? null;
 // One question only, ever (review of #243): Cue's last text was already the question for this kind of file, so this turn (their reply,
 // whatever it says) never asks another. Finishing in the background never asks either.
-export const askedLast = (ctx: Pick<ConversationToolContext, "lastCoMessage">, word: string): boolean => new RegExp(`^Before I send the ${word}, there's one thing I want to get right: `).test(String(ctx.lastCoMessage ?? "").trim());
+// A doc and a document are one kind of file (a reply's doc, a task's document), so either question counts for both.
+export const askedLast = (ctx: Pick<ConversationToolContext, "lastCoMessage">, word: string): boolean => {
+  const kind = word === "doc" || word === "document" ? "(?:doc|document)" : word;
+  return new RegExp(`^Before I send the ${kind}, there's one thing I want to get right: `).test(String(ctx.lastCoMessage ?? "").trim());
+};
 export const noAskHere = (ctx: ConversationToolContext, word: string): boolean => !!finishingOf(ctx) || askedLast(ctx, word);
 
 // Pure: whether code settles this refusal itself (the three lines), or hands it back to the agent as before: on a call (spoken), in a

@@ -15,7 +15,8 @@ import { notToTeammate } from "./teamLines.js";
 
 export type PendingType = "deck" | "deck_update" | "page" | "page_update" | "doc";
 export type PendingMode = "answer" | "retry";
-export type PendingFile = { type: PendingType; word: FileWord; mode: PendingMode; input: unknown; at: string };
+// tries: background runs after their reply (claimPending counts them); capped at MAX_FINISH_TRIES.
+export type PendingFile = { type: PendingType; word: FileWord; mode: PendingMode; input: unknown; at: string; tries?: number };
 // No answer in this many days: expired and wiped (an open loop's decay ask comes at 7, services/loopLifecycle.ts ASK_AFTER_DAYS).
 export const PENDING_DAYS = 6;
 const DAY = 86_400_000;
@@ -117,6 +118,8 @@ export type FinishDeps = {
   theirLinesSince: (since: Date) => Promise<string[]>;
   hoursOk: (at: Date, zone: string | null) => boolean;
   nextOpen: (at: Date, zone: string | null) => Date;
+  // Texts Cue starts are paused (harness/proactivePause.ts PROACTIVE_PAUSED): nothing runs, nothing is stored, it waits.
+  paused: () => boolean;
   // A safety concern in the last few days (services/safety.ts safetyHoldActive): nothing is asked of them or sent for it; it waits.
   safetyHold: () => Promise<boolean>;
   // The row, marked as running so two runs never finish it at once; false when it's settled or already running.
@@ -134,6 +137,9 @@ export type FinishDeps = {
   log: (action: string, extra?: Record<string, string | number | boolean | null>) => Promise<void>;
 };
 export const RETRY_AFTER_MS = 3_600_000;
+// Background runs after their reply, at most (each is the whole tool: the fix, the judge, the slots). Whichever comes first, this or
+// PENDING_DAYS from the hold, ends it: the held file is wiped and it closes without a message (listed for Royce).
+export const MAX_FINISH_TRIES = 3;
 export const SAFETY_WAIT_MS = 24 * 3_600_000;
 
 // The wake of a held file: their reply came (or its time ran out).
@@ -150,11 +156,13 @@ export async function finishPendingFile(task: Pick<CoTask, "id" | "userId" | "cr
   const now = deps.now();
   const askedAt = new Date(p.at || task.createdAt);
   const replied = !!task.theirReplyAt && new Date(task.theirReplyAt).getTime() > askedAt.getTime();
+  // Its days run from the hold, answered or not: a finish that keeps failing never retries past them.
+  if (now.getTime() - askedAt.getTime() >= PENDING_DAYS * DAY) return end("expired", replied ? "its days ran out before it could go" : "no answer", replied ? "expired_after_reply" : "expired");
   if (!replied) {
-    if (now.getTime() - askedAt.getTime() >= PENDING_DAYS * DAY) return end("expired", "no answer", "expired");
     await deps.wait(new Date(askedAt.getTime() + PENDING_DAYS * DAY));
     return { action: "waiting" };
   }
+  if ((p.tries ?? 0) >= MAX_FINISH_TRIES) return end("expired", `tried ${MAX_FINISH_TRIES} times`, "tries_used");
   const lines = await deps.theirLinesSince(askedAt).catch(() => [] as string[]);
   if (!lines.length) return { action: "reply_unread" };
   if (p.mode === "retry" && !TRY_AGAIN_YES.test(lines[0].trim())) return end("dropped", "they didn't ask for it again", "declined");
@@ -163,6 +171,12 @@ export async function finishPendingFile(task: Pick<CoTask, "id" | "userId" | "cr
     await deps.wait(deps.nextOpen(now, deps.person.zone));
     await deps.log("held_hours", kinds);
     return { action: "held_hours" };
+  }
+  // Paused: checked before anything runs or is stored; not a try.
+  if (deps.paused()) {
+    await deps.wait(new Date(now.getTime() + RETRY_AFTER_MS));
+    await deps.log("held_paused", kinds);
+    return { action: "held_paused" };
   }
   // A safety hold: nothing goes for it; it waits a day (the same hold a task's document line waits on).
   if (await deps.safetyHold().catch(() => true)) {
@@ -212,6 +226,7 @@ export async function realFinish(task: CoTask): Promise<{ action: string }> {
       (await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > $2 ORDER BY created_at ASC LIMIT 6`, [task.userId, since])).rows.map((r: any) => String(r.content).replace(/^User said:\s*/i, "")),
     hoursOk: (at, z) => P.localHourOk(at, z),
     nextOpen: (at, z) => nextSendable(at, z),
+    paused: () => P.proactivePaused(),
     // Fails closed: a hold that can't be read is a hold.
     safetyHold: async () => (await import("./safety.js")).safetyHoldActive(task.userId).catch(() => true),
     claim: () => claimPending(task.userId, task.id),
@@ -234,7 +249,7 @@ export async function realFinish(task: CoTask): Promise<{ action: string }> {
 export async function claimPending(userId: string, id: number): Promise<boolean> {
   const r = await db()
     .query(
-      `UPDATE co_tasks SET followup = jsonb_set(followup, '{pendingFile,runningAt}', to_jsonb(NOW()), true), updated_at = NOW()
+      `UPDATE co_tasks SET followup = jsonb_set(jsonb_set(followup, '{pendingFile,runningAt}', to_jsonb(NOW()), true), '{pendingFile,tries}', to_jsonb(COALESCE((followup->'pendingFile'->>'tries')::int, 0) + 1), true), updated_at = NOW()
        WHERE user_id = $1 AND id = $2 AND kind = 'pending_file' AND status = 'open' AND followup ? 'pendingFile'
          AND (followup->'pendingFile'->>'runningAt' IS NULL OR (followup->'pendingFile'->>'runningAt')::timestamptz < NOW() - INTERVAL '15 minutes') RETURNING id`,
       [userId, id],
@@ -303,7 +318,14 @@ async function runHeld(task: CoTask, p: PendingFile, answer: string, who: { phon
   const tools: any = p.type === "deck" || p.type === "deck_update" ? (await import("../agent/deckTools.js")).deckTools(ctx, o) : (await import("../agent/pageTools.js")).pageTools(ctx, o);
   const name = p.type === "deck" ? "makeDeck" : p.type === "deck_update" ? "updateDeck" : p.type === "page" ? "makePage" : "updatePage";
   const r = await tools[name].execute(p.input, { toolCallId: `pending-${task.id}`, messages: [] });
+  // A new deck or page stored for a text that didn't go is taken down at once: a retry never leaves one behind.
+  const orphan = !sent && sendFailed && (p.type === "deck" || p.type === "page") ? orphanId(r) : null;
+  if (orphan) await (await import("./coPages/store.js")).takeDownCoPage(orphan, task.userId).catch(() => false);
   return { outcome: toolOutcome(r, { sent, sendFailed }) };
+}
+// Pure: the id of a new deck or page that was made but whose text didn't go (agent/linkAnswer.ts unsentLink), else null.
+export function orphanId(r: any): string | null {
+  return r?.ok === false && typeof r?.made === "string" ? String(r?.url ?? "").match(/\/d\/(?:v\/)?([A-Za-z0-9_-]{24})\b/)?.[1] ?? null : null;
 }
 // Pure: a held deck's or page's run, as how it ended.
 export function toolOutcome(r: any, s: { sent: boolean; sendFailed: boolean }): RunOutcome {
