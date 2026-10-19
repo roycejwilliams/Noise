@@ -53,10 +53,10 @@ import {
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import { coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
-import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
+import { detectCheckinPhrase, recordCheckin, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
 import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
-import { walkinAskDue, noteWalkinAsked } from "../services/eventWalkinCheckin.js";
+import { walkinAskDue, noteWalkinAsked, walkinAskWentOut } from "../services/eventWalkinCheckin.js";
 import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
@@ -1480,6 +1480,8 @@ export function sendblueRouter(io: Server): Router {
 
         const pendingWalkinCheckin = pendingWalkinCheckinResult.rows[0] ?? null;
         let walkinAskInstruction = "";
+        // The walk-in ask is noted (noteWalkinAsked) only once a reply that asks it has been delivered, after the reply below.
+        let walkinAskEvent: { id: string; name: string } | null = null;
         if (pendingWalkinCheckin && walkinCheckinEventName && walkinCheckinEventId) {
           // One ask per member per event (services/eventWalkinCheckin.ts walkinAskDue): not when they have an ask, or the scoring pass's
           // ask for this event already went out.
@@ -1488,8 +1490,7 @@ export function sendblueRouter(io: Server): Router {
             return false; // fail toward not re-asking rather than risk a duplicate ask on error
           });
           if (due) {
-            // A pending ask for this event is dropped and the event marked asked, so the scoring pass doesn't queue another.
-            await noteWalkinAsked(walkinCheckinEventId, walkinCheckinEventName, user.id).catch((err: any) => console.error("sendblue: noteWalkinAsked failed (non-fatal):", err?.message ?? err));
+            walkinAskEvent = { id: walkinCheckinEventId, name: walkinCheckinEventName };
             walkinAskInstruction = `They just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
           }
         }
@@ -1779,10 +1780,17 @@ export function sendblueRouter(io: Server): Router {
           if (why) recordDecision({ layer: 7, decision: "reply.inline", userId: user.id, outcome: "act", action: why, proposal: why === "about_sent" ? { about: about?.name } : undefined }).catch(() => {});
           return why === "about_sent" ? aboutSentHandle : why ? ownHandle : null;
         };
+        // What actually went out this turn on the reply's sends (the walk-in ask is noted from it, below).
+        const deliveredThisTurn: string[] = [];
         const threadedSend: typeof sendCoReply = async (p) => {
-          if (!threadNextSend || p.asVoice) return sendCoReply(p);
-          threadNextSend = false;
-          return sendCoReply({ ...p, replyTo: await threadHandle() });
+          let ok: boolean;
+          if (!threadNextSend || p.asVoice) ok = await sendCoReply(p);
+          else {
+            threadNextSend = false;
+            ok = await sendCoReply({ ...p, replyTo: await threadHandle() });
+          }
+          if (ok) deliveredThisTurn.push(p.message);
+          return ok;
         };
         // hold: the line sent while a search runs, logged as "Co is looking:"
         // so it never counts as a real answer (the checks below exclude it by
@@ -1965,10 +1973,8 @@ export function sendblueRouter(io: Server): Router {
           }
         }
 
-        // Walk-in check-in answer. Captured directly rather than checking
-        // hasActiveAsk: profile extraction only runs AFTER a reply is sent,
-        // so hasActiveAsk would still read false for this exact message and
-        // Co would ask the same question a second time.
+        // Walk-in check-in answer, captured directly: profile extraction only
+        // runs after the reply, too late for this exact message.
         const walkinAnswer = resolvedAs("walkin_ask");
         if (walkinAnswer?.item.ref?.kind === "walkin_ask") {
           await recordWalkinAsk(walkinAnswer.item.ref.eventApiId, user.id, content).catch((err: any) =>
@@ -2681,6 +2687,13 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
               proposal: { ms: turnMs, firstSentMs: firsts.firstSentMs, firstAnswerMs: firsts.firstAnswerMs, routerMs: routerLatencyMs, factsMs, replyMs, groundingMs, debounceMs: debounceWaitMs, contextSinceStartMs: replyContextWaitMs },
             }).catch(() => {});
           }
+        }
+
+        // The walk-in ask went out (a delivered reply asked it): a pending ask for this event is dropped and the event marked
+        // asked, so the scoring pass doesn't queue another. Not before: a reply that was held, failed or didn't ask leaves the
+        // event unasked, and the scoring pass may still ask (review of #254).
+        if (walkinAskEvent && walkinAskWentOut(deliveredThisTurn)) {
+          await noteWalkinAsked(walkinAskEvent.id, walkinAskEvent.name, user.id).catch((err: any) => console.error("sendblue: noteWalkinAsked failed (non-fatal):", err?.message ?? err));
         }
 
         // Fire-and-forget, the same writes a call's pipeline makes (profile,
