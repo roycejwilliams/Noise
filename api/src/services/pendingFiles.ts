@@ -325,7 +325,7 @@ async function runHeld(task: CoTask, p: PendingFile, answer: string, who: { phon
 }
 // Pure: the id of a new deck or page that was made but whose text didn't go (agent/linkAnswer.ts unsentLink), else null.
 export function orphanId(r: any): string | null {
-  return r?.ok === false && typeof r?.made === "string" ? String(r?.url ?? "").match(/\/d\/(?:v\/)?([A-Za-z0-9_-]{24})\b/)?.[1] ?? null : null;
+  return r?.ok === false && typeof r?.made === "string" ? String(r?.url ?? "").match(/\/d\/(?:v\/)?([A-Za-z0-9_-]{24})(?![A-Za-z0-9_-])/)?.[1] ?? null : null;
 }
 // Pure: a held deck's or page's run, as how it ended.
 export function toolOutcome(r: any, s: { sent: boolean; sendFailed: boolean }): RunOutcome {
