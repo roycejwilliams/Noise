@@ -948,6 +948,14 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // Fixed, approved wording, not a draft (services/announcements.ts): one update announcement, its own text, on a day nothing else
+  // goes. Re-read at send time: already told means nothing goes; a member the name notice hasn't reached gets it in the same text.
+  announcement: {
+    async draft(c) {
+      return (await import("../services/announcements.js")).draftAnnouncement(c);
+    },
+  },
+
   // Fixed wording, not a draft: it names the date a page or deck expires, which has to be exactly right (services/coPages/expiry.ts).
   // Re-read at send time: kept, renewed, taken down or already past since it was queued means nothing goes.
   artifact_expiry: {

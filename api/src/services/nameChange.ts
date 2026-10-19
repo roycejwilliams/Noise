@@ -7,7 +7,6 @@
 // It never adds a second text: when another paced text goes first, the line rides in that one (like a stopped-looking note,
 // services/askRetire.ts) and is ledgered with it; on its own it is the lowest priority, so it waits for a day nothing else goes.
 // Either way one ledger row (proactive_sends, unique per member and NAME_CHANGE_KEY, claimed inside the send lock) means once.
-import pool from "../db/db.js";
 import { CO_ALIAS_UNTIL } from "./agentName.js";
 
 export const NAME_CHANGE_KEY = "name_change:cue";
@@ -26,33 +25,8 @@ export function carriesNameChange(text: string): boolean {
 // Who should hear it: members who knew it as Co. The first time this runs fixes the cutoff (the earliest queued notice), so a
 // member who joins after the rename, and only ever heard "Cue", is never told about a name they never knew. A member with no
 // phone, an archived account, an opted-out member, or one who never finished joining is left out.
+// The rename is the first entry in the update announcements (services/announcements.ts RENAME); the queue is that one, unchanged.
 export async function queueNameChange(now: Date = new Date()): Promise<number> {
-  const { enqueueCandidate } = await import("../harness/proactive.js");
-  const { rows: first } = await pool.query(`SELECT MIN(created_at) AS at FROM proactive_candidates WHERE type = 'name_change'`);
-  const cutoff: Date = first[0]?.at ? new Date(first[0].at) : now;
-  const { rows } = await pool.query(
-    `SELECT u.id FROM users u
-      WHERE u.created_at < $1 AND u.archived_at IS NULL AND COALESCE(u.sms_opted_out, false) = false
-        AND u.phone_number IS NOT NULL AND u.identity_captured = true
-        AND NOT EXISTS (SELECT 1 FROM proactive_sends s WHERE s.user_id = u.id AND s.target_key = $2)
-        AND NOT EXISTS (SELECT 1 FROM proactive_candidates c WHERE c.user_id = u.id AND c.target_key = $2)`,
-    [cutoff, NAME_CHANGE_KEY],
-  );
-  let queued = 0;
-  for (const r of rows) {
-    const q = await enqueueCandidate({
-      userId: r.id,
-      type: "name_change",
-      targetKey: NAME_CHANGE_KEY,
-      summary: "Tell them, once, that it goes by Cue now",
-      payload: {},
-      dueAt: now,
-      expiresAt: NAME_CHANGE_EXPIRES,
-    }).catch((err: any) => {
-      console.error("nameChange: queueing failed (non-fatal):", err?.message ?? err);
-      return { queued: false };
-    });
-    if (q.queued) queued++;
-  }
-  return queued;
+  const A = await import("./announcements.js");
+  return A.queueAnnouncement(A.RENAME, now);
 }
