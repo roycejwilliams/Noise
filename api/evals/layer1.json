@@ -203,6 +203,8 @@
     "evals/reply/usesItsFinds.ts",
     "evals/forget/readers.ts",
     "evals/forget/removalLog.ts",
-    "evals/forget/residueAudit.ts"
+    "evals/forget/residueAudit.ts",
+    "evals/forget/stores.ts",
+    "evals/forget/guardedReaders.ts"
   ]
 }
