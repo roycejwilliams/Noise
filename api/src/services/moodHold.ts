@@ -28,12 +28,21 @@ export const MOOD_HOLD_CAP_HOURS = 48;
 export const OKAY_AFTER_HOURS = RIGHT_NOW_HOURS;
 
 export type MoodRule = "checkin_hold" | "stop_note_hold" | "bundle_skip_wait";
-// The places where a feeling read used to pick whether a helper ran, and Royce's ruling on each (pinned in evals/proactive/moodHolds.ts).
+// The three feeling-based holds this module rules on, and Royce's ruling on each (pinned in evals/proactive/moodHolds.ts). Not every
+// place a feeling read decides whether something runs: FEELING_PICKS_NOT_CHANGED lists the others found, documented, not changed.
 export const MOOD_RULES: Record<MoodRule, { where: string; ruling: string }> = {
   checkin_hold: { where: "harness/proactive.ts HOLD_WHILE_STRUGGLING (emotional_timing)", ruling: "timing only, capped (Royce 2026-10-18, option a)" },
   stop_note_hold: { where: "harness/replyGrounding.ts stopNote, proactive.ts noteMayRide", ruling: "timing only, capped (Royce 2026-10-18, option a)" },
   bundle_skip_wait: { where: "harness/proactive.ts composer skips (moodSkipAt, mood_wait)", ruling: "timing only, capped (Royce 2026-10-18, option a)" },
 };
+
+// Other places a feeling read decides whether something runs (review of #253). Documented only, not changed here: each needs Royce.
+export const FEELING_PICKS_NOT_CHANGED: { where: string; what: string; status: string }[] = [
+  { where: "services/documentOffer.ts offerGate", what: "no document offer while needsCare", status: "documented, not changed: needs Royce" },
+  { where: "jobs/postCallFollowUp.ts post-call recap", what: "the recap offer is gated on needsCare (documentOffer postCallRecapAllowed)", status: "documented, not changed: needs Royce" },
+  { where: "harness/replyGrounding.ts heavyMoment", what: "no offer, door or cold-start steer in a heavy moment (needsCare, or a strong hard feeling now)", status: "documented, not changed: needs Royce" },
+  { where: "harness/proactive.ts drafting (feelingForDraft)", what: "a draft sees 'struggling in the last day' and can return SKIP, which drops the item (dropCandidate), released hold or not", status: "documented, not changed: needs Royce" },
+];
 
 // none: not struggling; held: it waits; released_okay: struggling by the read, but they've texted normally since; released_cap: the
 // hard stretch reached the cap.
