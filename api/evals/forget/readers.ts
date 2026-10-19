@@ -231,6 +231,46 @@ const all = (k: unknown) => JSON.stringify(k);
   (pool as any).query = prevQuery;
 }
 
+// ---------------------------------------------------------------- 4c. the sync never reopens a loop closed as removed while the guard matches it
+// Review of #255 (2026-10-19): planLoop reopened a 'removed' tombstone whenever its source had a newer version (an ask they
+// mentioned again), so a loop whose subject they had Cue forget came back on the next sync.
+{
+  const OL = await import("../../src/services/openLoops.js");
+  const tomb = { id: 81, user_id: U, source: "ask", source_ref: "a1", title: "Find a family lawyer before the custody hearing in May", detail: null, status: "dropped", status_by: "code", closed_at: ago(48), closed_reason: "removed" };
+  const d = { source: "ask" as const, sourceRef: "a1", title: tomb.title, status: "open" as const, detail: null, dueDate: null, taskId: null, signalAt: ago(1) };
+  check("planLoop: a removed loop with a newer source stays closed when the guard still matches (or wasn't read)", OL.planLoop(d, tomb, ago(1), { stillRemoved: true }).kind === "keep_closed" && OL.planLoop(d, tomb, ago(1)).kind === "keep_closed");
+  check("planLoop: ... and reopens only once the guard no longer matches it", OL.planLoop(d, tomb, ago(1), { stillRemoved: false }).kind === "upsert");
+  check("planLoop: another tombstone ('co') still reopens for a newer source, as before", OL.planLoop(d, { ...tomb, closed_reason: "co" }, ago(1)).kind === "upsert");
+  let failGuards = false;
+  const inserts: string[] = [];
+  const prevQuery = (pool as any).query;
+  const prevConnect = (pool as any).connect;
+  const sync = async (sql: string, p: any[] = []) => {
+    if (/FROM profile_corrections pc WHERE pc\.user_id = \$1/.test(sql)) { if (failGuards) throw new Error("guard read failed"); return { rows: corrections }; }
+    if (/FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NULL/.test(sql)) return { rows: [{ ask_id: "a1", ask_text: tomb.title, awaiting_response_since: null, last_mentioned_at: ago(1) }] };
+    if (/^SELECT \* FROM open_loops WHERE user_id = \$1 AND \(closed_at IS NULL OR closed_reason IN/.test(sql.trim())) return { rows: [tomb] };
+    if (/^\s*INSERT INTO open_loops/.test(sql)) { inserts.push(String(p[2])); return { rows: [{ ...tomb, closed_at: null, closed_reason: null }] }; }
+    if (/FROM open_loops o LEFT JOIN co_tasks/.test(sql)) return { rows: [] };
+    if (/FROM (co_tasks|search_briefs|proactive_candidates)/.test(sql)) return { rows: [] };
+    return { rows: [], rowCount: 0 };
+  };
+  (pool as any).query = sync;
+  (pool as any).connect = async () => ({ query: sync, release: () => {} });
+  await OL.syncOpenLoops(U);
+  check("sync: the ask they mentioned again (newer source) doesn't reopen the loop they had Cue forget", inserts.length === 0);
+  failGuards = true;
+  await OL.syncOpenLoops(U);
+  check("sync: their removals unreadable, it stays closed (fails closed)", inserts.length === 0);
+  failGuards = false;
+  const kept = corrections;
+  corrections = [];
+  await OL.syncOpenLoops(U);
+  check("sync: once nothing removed matches it (the removal undone), the newer source reopens it as before", inserts.includes("a1"));
+  corrections = kept;
+  (pool as any).query = prevQuery;
+  (pool as any).connect = prevConnect;
+}
+
 // ---------------------------------------------------------------- 5. the wiring (each reader reads the guards; a mutation that drops it fails above)
 check("wiring: memberKnowledge reads the guards for lessons, carrying and delivered too", /\["exchanges", "corrections", "lessons", "carrying", "delivered"\]/.test(src("services/memberKnowledge.ts")));
 check("wiring: the reply's sent list goes through withoutRemovedSent", /M\.withoutRemovedSent\(items, await W\.forgottenRows\(userId\), W\)/.test(src("services/turnContext.ts")));

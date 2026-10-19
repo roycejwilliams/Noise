@@ -154,14 +154,18 @@ async function readSourceRow(userId: string, source: DerivedLoop["source"], ref:
 //   - a row Co closed (closed_reason 'co') stays closed: a tombstone, so the
 //     next sync doesn't reopen what Co finished (2026-10-01 code review),
 //     unless its source has a newer version than the close (new notes)
+//   - a row closed as removed (they had Cue forget its subject) stays closed while the forget guard still matches it, however
+//     new its source (review of #255): stillRemoved false (the guard no longer matches) is the only way it reopens
 //   - no row: a new loop
 export type SyncPlan =
   | { kind: "upsert"; d: DerivedLoop; status: LoopStatus; detail: string | null; moved: boolean; isNew: boolean }
   | { kind: "keep_closed"; d: DerivedLoop };
-export function planLoop(d: DerivedLoop, ex: any | undefined, sourceUpdatedAt: Date | null): SyncPlan {
+export function planLoop(d: DerivedLoop, ex: any | undefined, sourceUpdatedAt: Date | null, opts: { stillRemoved?: boolean } = {}): SyncPlan {
   if (ex?.closed_at) {
     const newer = !!sourceUpdatedAt && sourceUpdatedAt.getTime() > new Date(ex.closed_at).getTime();
     if (!newer) return { kind: "keep_closed", d };
+    // Not known to be clear of the removal (unread, or unreadable): kept closed (fails closed).
+    if (ex.closed_reason === "removed" && opts.stillRemoved !== false) return { kind: "keep_closed", d };
     return { kind: "upsert", d, status: d.status, detail: d.detail, moved: true, isNew: false };
   }
   const status = ex?.status_by === "co" ? ex.status : d.status;
@@ -185,11 +189,19 @@ export async function syncOpenLoops(userId: string, now = new Date()): Promise<{
     // 'removed': a loop whose subject they had Cue forget (closeRemovedLoop); kept closed the same way.
     const { rows: existing } = await client.query(`SELECT * FROM open_loops WHERE user_id = $1 AND (closed_at IS NULL OR closed_reason IN ('co', 'expired', 'date_passed', 'answered', 'removed'))`, [userId]);
     const byKey = new Map(existing.map((r: any) => [`${r.source}:${r.source_ref}`, r]));
+    // Their removals, read once and only for a loop closed as removed (null when they can't be read: it stays closed).
+    let removals: ForgottenRow[] | null | undefined;
     for (const d of derived) {
       const key = `${d.source}:${d.sourceRef}`;
       const ex: any = byKey.get(key);
       byKey.delete(key);
-      const plan = planLoop(d, ex, d.source === "notes" ? src.briefUpdatedAt : d.signalAt ?? null);
+      let stillRemoved: boolean | undefined;
+      if (ex?.closed_at && ex.closed_reason === "removed") {
+        if (removals === undefined) removals = await loopRemovals(userId);
+        const rows = removals;
+        stillRemoved = rows === null ? true : await import("./whatCoKnows.js").then((W) => loopSaysRemoved(ex, rows, W) || loopSaysRemoved(d, rows, W)).catch(() => true);
+      }
+      const plan = planLoop(d, ex, d.source === "notes" ? src.briefUpdatedAt : d.signalAt ?? null, { stillRemoved });
       if (plan.kind === "keep_closed") continue;
       // A new loop is news to no one (seen_at = now); a change after it is
       // pending until a wake handles it (runLoopSync). A row this sync reopens
