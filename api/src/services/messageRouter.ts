@@ -7,7 +7,7 @@ import { CALL_OFFER_EXPIRY_DAYS } from "../agent/conversationReply.js";
 import { EVENT_OFFER_EXPIRY_DAYS } from "./eventSurfacingSweep.js";
 import { findPendingOutcomeFollowUp, type PendingOutcomeFollowUp } from "./recommendationOutcome.js";
 import { findPendingEventCheckinFollowUp, type PendingEventCheckinFollowUp } from "./eventCheckinFollowUp.js";
-import { findPendingMatchNudge, type PendingMatchNudge } from "./eventGuestMatchHandoff.js";
+import { findPendingMatchNudges, type PendingMatchNudge } from "./eventGuestMatchHandoff.js";
 import {
   findPendingNetworkTease,
   findPendingNetworkIntroOffer,
@@ -104,6 +104,29 @@ export function describeOpenItem(kind: OpenItemKind, detail: string | null): str
   }
 }
 
+// One open item per question about a person they have open (eventGuestMatchHandoff.ts findPendingMatchNudges), so the reply path
+// sees every one a "yes" could answer. Each carries only the first name this member was already told (none when anonymous).
+export async function matchNudgeItems(userId: string, pendings: PendingMatchNudge[]): Promise<OpenItem[]> {
+  const items: OpenItem[] = [];
+  for (const matchNudge of pendings) {
+    const at =
+      matchNudge.asked_at ??
+      (await safe("match nudge sent_at", async () =>
+        (await pool.query(`SELECT MAX(sent_at) AS at FROM event_guest_match_nudges WHERE person_id = $1 AND event_id = $2 AND candidate_id = $3`, [userId, matchNudge.event_id, matchNudge.candidate_id])).rows[0]?.at,
+      ));
+    items.push({
+      id: `match_nudge:${matchNudge.event_id}:${matchNudge.kind === "additive" ? "additive" : matchNudge.candidate_id}`,
+      kind: "match_nudge",
+      // Never the name for an anonymous heads-up: this text reaches the reply.
+      description: describeOpenItem("match_nudge", matchNudge.anonymous ? null : matchNudge.candidate_first_name),
+      detail: matchNudge.anonymous ? null : matchNudge.candidate_first_name,
+      askedAt: at ? new Date(at) : null,
+      ref: { kind: "match_nudge", pending: matchNudge },
+    });
+  }
+  return items;
+}
+
 async function safe<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
   try {
     return await fn();
@@ -119,7 +142,7 @@ async function safe<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
 export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: boolean } = {}): Promise<OpenItem[]> {
   const items: OpenItem[] = [];
 
-  const [callOffer, eventTease, outcome, checkin, matchNudge, tease, intro, walkin, offerReactions] = await Promise.all([
+  const [callOffer, eventTease, outcome, checkin, matchNudges, tease, intro, walkin, offerReactions] = await Promise.all([
     safe("call_offer", async () => {
       const { rows } = await pool.query(
         `SELECT p.id, p.content, p.created_at FROM co_memories p
@@ -150,7 +173,7 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
     }),
     safe("outcome_followup", () => findPendingOutcomeFollowUp(userId)),
     safe("event_checkin", () => findPendingEventCheckinFollowUp(userId)),
-    safe("match_nudge", () => findPendingMatchNudge(userId)),
+    safe("match_nudge", () => findPendingMatchNudges(userId)),
     safe("network_tease", () => findPendingNetworkTease(userId)),
     safe("network_intro", () => findPendingNetworkIntroOffer(userId)),
     opts.skipWalkinAsk
@@ -209,22 +232,7 @@ export async function gatherOpenItems(userId: string, opts: { skipWalkinAsk?: bo
       ref: { kind: "event_checkin", pending: checkin },
     });
   }
-  if (matchNudge) {
-    const at =
-      matchNudge.asked_at ??
-      (await safe("match nudge sent_at", async () =>
-        (await pool.query(`SELECT MAX(sent_at) AS at FROM event_guest_match_nudges WHERE person_id = $1 AND event_id = $2 AND candidate_id = $3`, [userId, matchNudge.event_id, matchNudge.candidate_id])).rows[0]?.at,
-      ));
-    items.push({
-      id: `match_nudge:${matchNudge.event_id}:${matchNudge.kind === "additive" ? "additive" : matchNudge.candidate_id}`,
-      kind: "match_nudge",
-      // Never the name for an anonymous heads-up: this text reaches the reply.
-      description: describeOpenItem("match_nudge", matchNudge.anonymous ? null : matchNudge.candidate_first_name),
-      detail: matchNudge.anonymous ? null : matchNudge.candidate_first_name,
-      askedAt: at ? new Date(at) : null,
-      ref: { kind: "match_nudge", pending: matchNudge },
-    });
-  }
+  items.push(...(await matchNudgeItems(userId, matchNudges ?? [])));
   if (tease) {
     const at = await safe("network tease created_at", async () =>
       (await pool.query(`SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'network_offer_pending'`, [userId])).rows[0]?.at,
@@ -504,6 +512,21 @@ export function coAskedSeveralThings(openItems: Pick<OpenItem, "detail">[], turn
   return !namesOne;
 }
 
+// Two or more questions about people open at once (services/inRoomOffers.ts MAX_OPEN_QUESTIONS): a reply binds to one only when it
+// names that person and no other open one. The name is the one signal the code has; a bare "yes" identifies nobody (review of #211: it
+// bound to the newer question and the intro email went to the wrong person). An additive offer names nobody, so with another question
+// open its bare yes asks which too. One question open: unchanged.
+export function namesOneOpenIntro(item: Pick<OpenItem, "id" | "kind" | "detail">, openItems: Pick<OpenItem, "id" | "kind" | "detail">[], message: string): boolean {
+  if (item.kind !== "match_nudge") return true;
+  const intros = openItems.filter((i) => i.kind === "match_nudge");
+  if (intros.length < 2) return true;
+  if (!item.detail) return false;
+  const named = (name: string | null) => !!name && new RegExp(`(^|[^\\p{L}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^\\p{L}])`, "iu").test(message);
+  // Naming another open question's person too (or two people with the same first name) identifies neither.
+  const others = intros.filter((i) => i.id !== item.id);
+  return named(item.detail) && !others.some((i) => named(i.detail));
+}
+
 // A follow-up question ("how did X go?", "who did you meet?") only counts as
 // answered if Co's most recent turn isn't a different question. Eval c098:
 // "not much really, just busy" answered Co's greeting question, but an older
@@ -545,7 +568,14 @@ export function decideActions<T extends RoutableItem>(
   } else if (out.answers) {
     const item = byId.get(out.answers.itemId);
     const valueOk = item && ANSWER_VALUES[item.kind].includes(out.answers.value);
-    if (item && valueOk) {
+    const intros = openItems.filter((i) => i.kind === "match_nudge");
+    if (item && valueOk && !namesOneOpenIntro(item, openItems, turn.message)) {
+      // Nothing binds, nothing is recorded: Cue asks which person they meant, by the first names it already told them.
+      d.clarifyContext = `\nTheir message could be answering more than one thing you asked: ${intros
+        .map(plainOption)
+        .join(", or ")}. Don't assume. Ask them briefly and naturally which one they meant, in one short line. Don't act on either yet.`;
+      d.clarifyAbout = "items";
+    } else if (item && valueOk) {
       const irreversible = isIrreversible(item.kind, out.answers.value);
       // What they did is theirs to say (services/provenance.ts, 2026-10-12): "already did it" is recorded only on an unambiguous read.
       const saysTheyDid = item.kind === "offer_reaction" && out.answers.value === "already_did_it";

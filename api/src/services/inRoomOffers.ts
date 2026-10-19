@@ -5,8 +5,10 @@
 // hear who?") is about no one yet: its key is 'additive' and it carries who arrived, which the member is only told after
 // their yes, through the same share gate as a nudge (eventGuestMatchHandoff.ts handleAdditiveReply).
 //
-// A reply binds to the member's most recent OPEN offer. A member is never asked a second yes-or-no about another person
-// while one is still open: a direct ask for them waits ('queued') until they answer, so "yes" can only mean one person.
+// A reply binds to the member's open offer. While a question is fresh (OPEN_SLOT_MINUTES), a direct ask for them waits ('queued')
+// until they answer. Past that, the next ask may go, so two questions can be open at once, never more (MAX_OPEN_QUESTIONS); with
+// two open, a reply binds only if it names one of them (services/messageRouter.ts namesOneOpenIntro), and otherwise Cue asks which
+// (review of #211: a bare "yes" bound to the newer question and sent the intro email to the wrong person).
 // A direct ask takes that one slot ('sending') before it is drafted, under a lock (claimAskSlot), and opens it once it reaches
 // them: the slot used to be taken only after the send, so asks drafted at the same moment all went (room simulation, 2026-10-14:
 // three yeses to one person at once sent all three asks back to back, and their next "yes" bound to whichever was newest).
@@ -33,6 +35,9 @@ export const SLOT_CLAIM_MINUTES = 10;
 // intro behind it all night). After that the next waiting ask goes; the earlier question isn't expired and stays answerable for
 // REPLY_EXPIRY_DAYS (a bare "yes" binds to their most recent open question, as always).
 export const OPEN_SLOT_MINUTES = 20;
+// At most this many questions about people open at once (review of #211). With this many open, no new one goes, however long they
+// have waited: the next waits for an answer (or for the room to close), so the 20-minute release can't pile them up.
+export const MAX_OPEN_QUESTIONS = 2;
 // The one slot: a question opened in the last OPEN_SLOT_MINUTES, or a direct ask on its way.
 const SLOT_TAKEN = `((status = 'open' AND opened_at > NOW() - ($2 || ' minutes')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval))`;
 const keyOf = (kind: OfferKind, candidateId: string | null) => (kind === "additive" ? "additive" : String(candidateId));
@@ -56,10 +61,28 @@ export async function queueOffer(o: { eventId: string; eventName?: string | null
   );
 }
 
-// Their one slot is taken: an open question, or a direct ask on its way to them.
+// Their one slot is taken: a fresh open question, a direct ask on its way to them, or MAX_OPEN_QUESTIONS already open.
 export async function hasOpenOffer(personId: string): Promise<boolean> {
   const { rows } = await pool.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [personId, OPEN_SLOT_MINUTES, SLOT_CLAIM_MINUTES]);
-  return rows.length > 0;
+  return rows.length > 0 || (await openQuestionCount(personId)) >= MAX_OPEN_QUESTIONS;
+}
+
+// How many questions about people they have open, answerable (REPLY_EXPIRY_DAYS), however old.
+const OPEN_COUNT_SQL = `SELECT count(*)::int AS n FROM event_match_offers WHERE person_id = $1 AND status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval`;
+export async function openQuestionCount(personId: string, q: { query: typeof pool.query } = pool): Promise<number> {
+  const { rows } = await q.query(OPEN_COUNT_SQL, [personId, REPLY_EXPIRY_DAYS]);
+  return Number(rows[0]?.n ?? 0);
+}
+
+// Every question they have open, newest first: what a reply could be answering (services/messageRouter.ts gatherOpenItems).
+export async function openOffers(personId: string): Promise<Offer[]> {
+  const { rows } = await pool.query(
+    `SELECT event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, asker_id, status, opened_at, event_name FROM event_match_offers
+     WHERE person_id = $1 AND status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval
+     ORDER BY opened_at DESC LIMIT 10`,
+    [personId, REPLY_EXPIRY_DAYS],
+  );
+  return rows as Offer[];
 }
 
 // Take their one slot for a direct ask, or queue the ask when it's taken. One at a time per person (a transaction lock on them),
@@ -70,7 +93,7 @@ export async function claimAskSlot(o: { eventId: string; eventName?: string | nu
     await client.query("BEGIN");
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`offer-slot:${o.personId}`]);
     const { rows } = await client.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [o.personId, OPEN_SLOT_MINUTES, SLOT_CLAIM_MINUTES]);
-    if (rows.length) {
+    if (rows.length || (await openQuestionCount(o.personId, client as any)) >= MAX_OPEN_QUESTIONS) {
       await client.query(
         `INSERT INTO event_match_offers (event_id, person_id, candidate_key, kind, candidate_id, asker_id, event_name, status)
          VALUES ($1, $2, $3, 'direct_ask', $4, $5, $6, 'queued')
