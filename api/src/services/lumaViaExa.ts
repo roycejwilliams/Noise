@@ -107,6 +107,9 @@ export const eventTitle = (title: string | null | undefined) => String(title ?? 
 // An event Exa found, as Luma's API describes it: details are the event's own (from /v1/events/get), so nothing after this reads its
 // page.
 export type ViaExaEvent = DiscoveredEvent & { online?: boolean; details: EventDetails };
+// Luma's location types that are a known online platform (its spec's enum: discord, meet, twitch, twitter, youtube, zoom; plus "online"
+// should Luma send it). Everything else is treated as not online.
+export const ONLINE_LOCATION_TYPES: ReadonlySet<string> = new Set(["online", "zoom", "meet", "google_meet", "discord", "twitch", "twitter", "youtube"]);
 // What one search did, for the log (counts only: the query is the member's want).
 // pages: Luma links Exa returned. looked: links Luma's API resolved (lookup). calendars: links that were a calendar, not an event
 // (skipped). past: events the lookup already showed are over or outside the window (not read further). read: events read from the
@@ -289,7 +292,9 @@ export async function lumaEventsViaExa(
       n.read++;
       // A host's private or members-only event never goes to strangers; unknown is not public (fails closed).
       if (e.visibility !== "public") return n.notPublic++, null;
-      const online = !!e.locationType && !["offline", "missing"].includes(e.locationType);
+      // Online only for a meeting platform Luma's spec names (location_type enum, docs.luma.com Get Event). Anything else, "unknown"
+      // (an online link Luma doesn't recognize) and values outside the spec included, needs a city or is dropped: fails closed.
+      const online = !!e.locationType && ONLINE_LOCATION_TYPES.has(e.locationType);
       if (e.locationType === "missing" || (!online && !e.city)) return n.noLocation++, null;
       const shown = e.locationVisibility === "public";
       const details: EventDetails = {
