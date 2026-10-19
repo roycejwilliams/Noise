@@ -354,6 +354,29 @@ export function firstMoodWait(c: Pick<Candidate, "payload">, s: Pick<PickState, 
   return heldForMood(s) && !(c.payload as { moodSkipAt?: string } | null)?.moodSkipAt;
 }
 
+// A draft that saw how they've been feeling (draftProactive's feeling block) and chose SKIP while they're struggling (Royce, 2026-10-19:
+// "feelings change timing and tone, never cancel"): it waits once instead of being dropped (payload.moodDraftSkipAt, the
+// mood_draft_wait check), then is written again, the feeling as tone only (the block already says it's never a reason to SKIP). It
+// waits while the read still says struggling, including after a hard day's hold was released at the cap (a check-in released at the cap
+// and skipped gets its one wait too); it goes once they're okay again, or MOOD_HOLD_CAP_HOURS after the skip. Only the model's own SKIP
+// waits: a skip code decided (the state changed, Cue owns the thread, a guard) is never a mood. A second SKIP is a normal skip.
+const MODEL_SKIP = /^model chose SKIP/;
+// Pure: whether this skip is the draft's one mood wait.
+export function firstDraftMoodWait(c: Pick<Candidate, "payload">, skip: string, s: Pick<PickState, "needsCare" | "moodHold">): boolean {
+  return MODEL_SKIP.test(skip) && !!s.needsCare && s.moodHold?.state !== "released_okay" && !(c.payload as { moodDraftSkipAt?: string } | null)?.moodDraftSkipAt;
+}
+// Pure: a draft-skip wait (null: none). Held while they're struggling and the wait is under the cap; released when they're okay again,
+// the read clears, or the cap after the skip.
+export function draftWaitRead(c: Pick<Candidate, "payload">, s: Pick<PickState, "now" | "needsCare" | "moodHold">): MoodHold | null {
+  const at = Date.parse(String((c.payload as { moodDraftSkipAt?: string } | null)?.moodDraftSkipAt ?? ""));
+  if (!at) return null;
+  const heldHours = Math.max(0, (s.now.getTime() - at) / HOUR);
+  if (!s.needsCare) return { state: "none", hold: false, heldHours };
+  if (s.moodHold?.state === "released_okay") return { state: "released_okay", hold: false, heldHours };
+  if (heldHours >= MOOD_HOLD_CAP_HOURS) return { state: "released_cap", hold: false, heldHours };
+  return { state: "held", hold: true, heldHours };
+}
+
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
 
 export type Evaluation = {
@@ -715,6 +738,9 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   }
   if (heldForMood(state) && HOLD_WHILE_STRUGGLING.has(c.type)) {
     checks.push({ name: "emotional_timing", pass: false, reason: `they've been struggling in the last day; this waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h into it` });
+  }
+  if (draftWaitRead(c, state)?.hold) {
+    checks.push({ name: "mood_draft_wait", pass: false, reason: `its draft was skipped while they were struggling; it's written again once they're okay, at most ${MOOD_HOLD_CAP_HOURS}h after` });
   }
   if (moodWaitRead(c, state)?.hold) {
     checks.push({ name: "mood_wait", pass: false, reason: `skipped in a find text while they were struggling; it waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h` });
@@ -2097,6 +2123,16 @@ export async function markMoodSkip(userId: string, cs: Candidate[], now: Date): 
   for (const c of cs) noteMoodHold("bundle_skip_wait", c.type, `${userId}:${c.id}`, { state: "held", hold: true, heldHours: 0 });
 }
 
+// A draft skipped while they were struggling waits once (firstDraftMoodWait, draftWaitRead): stamped on the payload of the pending row,
+// its status and expiry untouched, so its own expiry still ends it. Logged once, ids only.
+export async function markDraftMoodSkip(userId: string, c: Candidate, now: Date): Promise<void> {
+  await pool.query(
+    `UPDATE proactive_candidates SET payload = jsonb_set(COALESCE(payload, '{}'::jsonb), '{moodDraftSkipAt}', to_jsonb($2::text)), updated_at = NOW() WHERE id = $1 AND status = 'pending'`,
+    [c.id, now.toISOString()],
+  ).catch((err: any) => console.error("proactive: marking a draft's mood wait failed (non-fatal):", err?.message ?? err));
+  noteMoodHold("draft_skip_wait", c.type, `${userId}:${c.id}`, { state: "held", hold: true, heldHours: 0 });
+}
+
 // Records a blocked/skip decision only when the blocking reason changed, so
 // an every-15-minutes tick outside someone's hours doesn't flood the log.
 async function recordSkipOnce(userId: string, reason: string, decision: Parameters<typeof recordDecision>[0]): Promise<void> {
@@ -2263,6 +2299,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     const recapWait = recapWaitRead(p.candidate, state);
     // Released while its prompt waits on approval: logged under that kind, so the release reads as "still not sent".
     if (recapWait) noteMoodHold("recap_hold", recapWait.hold || HELD_RECAP_APPROVED ? "post_call_recap" : "awaiting_prompt_approval", `${userId}:${String((p.candidate.payload as { followUpId?: string } | null)?.followUpId ?? p.candidate.id)}`, recapWait);
+    const drafted = draftWaitRead(p.candidate, state);
+    if (drafted) noteMoodHold("draft_skip_wait", p.candidate.type, ref, drafted);
   }
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
@@ -2564,6 +2602,13 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
 
   if ("skip" in draft) {
+    // The draft saw how they've been feeling and chose SKIP while they're struggling: its one wait, never a drop (firstDraftMoodWait).
+    if (firstDraftMoodWait(c, draft.skip, state)) {
+      if (!opts.dryRun) await markDraftMoodSkip(userId, c, state.now);
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `mood_wait:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: "the draft skipped while they were struggling; it waits and is written again (mood_draft_wait)" });
+      done(c.type);
+      return;
+    }
     if (!opts.dryRun) await dropCandidate(registry, c, "skipped", draft.skip);
     if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: `draft skipped: ${draft.skip}` });
     done(c.type);
