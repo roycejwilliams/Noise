@@ -28,7 +28,7 @@ import { findSection } from "../services/deliveryReceipts.js";
 import { driftLine } from "../services/receiptDrift.js";
 import type { Doc } from "../services/documentSheet.js";
 import type { EmotionalContext } from "./emotion.js";
-import { moodHold, noteMoodHold } from "../services/moodHold.js";
+import { moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
@@ -133,7 +133,7 @@ export type DoorFacts = { offered: boolean; why: string; instruction: string | n
 // Pure: the first-read moment on this reply's facts (services/theDoor.ts doorDecision), with its instruction when it's on offer.
 // Nothing at all once the door has closed for them (given, or no longer new).
 export function addDoorMoment(rf: ReplyFacts, view: DoorView, o: { firstName?: string | null; emotional: EmotionalContext | null | undefined; otherQuestion?: string | null; now?: Date }): DoorFacts | null {
-  const d = doorDecision({ view, now: o.now, heavy: heavyMoment(o.emotional), frustrated: !!o.emotional?.withCo?.frustrated, otherQuestion: o.otherQuestion ?? null });
+  const d = doorDecision({ view, now: o.now, heavy: heavyHold(o.emotional, o.now ?? new Date()).hold, frustrated: !!o.emotional?.withCo?.frustrated, otherQuestion: o.otherQuestion ?? null });
   if (!d.offer && !doorOpen(view, o.now).open) return null;
   const instruction = d.offer ? doorInstruction(o.firstName) : null;
   if (instruction) addInstruction(rf, instruction);
@@ -161,7 +161,7 @@ export function withdrawDoorMoment(rf: ReplyFacts, why: string): void {
 // Nothing at all for a seeded member: steering stops once two findable interests are on file.
 export function addColdStartSteer(rf: ReplyFacts, cs: ColdStartView, o: { emotional: EmotionalContext | null | undefined; otherQuestion?: string | null; now?: Date }): ColdStartFacts | null {
   if (cs.seeds.seeded) return null;
-  const d = steerDecision({ seeds: cs.seeds, heavy: heavyMoment(o.emotional), frustrated: !!o.emotional?.withCo?.frustrated, history: cs.history, lifetimeSteers: cs.lifetimeSteers, now: o.now ?? new Date(), otherQuestion: o.otherQuestion ?? null });
+  const d = steerDecision({ seeds: cs.seeds, heavy: heavyHold(o.emotional, o.now ?? new Date()).hold, frustrated: !!o.emotional?.withCo?.frustrated, history: cs.history, lifetimeSteers: cs.lifetimeSteers, now: o.now ?? new Date(), otherQuestion: o.otherQuestion ?? null });
   const asked = cs.history.filter((h) => h.action === "steered" && h.question).map((h) => h.question!);
   const instruction = d.steer ? steerInstruction(cs.seeds, asked) : null;
   if (instruction) addInstruction(rf, instruction);
@@ -416,7 +416,7 @@ export async function gatherReplyFacts(
   // moment (this message's feeling, recorded before the reply drafts).
   let docQuestion: string | null = null;
   {
-    if (opts.turn?.docOffer) opts.turn.docOffer.moment = { heavyNow: heavyMoment(opts.turn.emotional), coLines: coLinesIn(opts.context) };
+    if (opts.turn?.docOffer) opts.turn.docOffer.moment = { heavyNow: heavyHold(opts.turn.emotional, new Date()).hold, coLines: coLinesIn(opts.context) };
     const doc = docOfferLines(opts.turn?.docOffer, opts.turn?.message ?? "");
     if (doc.ask || doc.hint) docQuestion = "a document offer";
     if (doc.ask) addInstruction(rf, doc.ask);
@@ -500,6 +500,13 @@ export async function gatherReplyFacts(
   }
   // The door (services/theDoor.ts): a new member's first read, once, when Co has heard enough to say it back.
   if (opts.turn?.door) addDoorMoment(rf, opts.turn.door, { firstName: opts.turn.knowledge?.identity.firstName ?? null, emotional: opts.turn.emotional, otherQuestion: aside ? "a set-aside goal to ask about" : docQuestion });
+  // A heavy moment holds these back for a later reply, never cancels them (heavyHold): each hold and release logged once, rule and kind.
+  if (opts.turn) {
+    const heavy = heavyHold(opts.turn.emotional, new Date());
+    if (rf.door) noteMoodHold("heavy_offer_hold", "door", `${userId}:door`, heavy);
+    if (rf.coldStart) noteMoodHold("heavy_offer_hold", "cold_start", `${userId}:cold_start`, heavy);
+    if (opts.turn.docOffer) noteMoodHold("heavy_offer_hold", "document_offer", `${userId}:document_offer`, heavy);
+  }
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
   // answers, whatever earlier messages said (2026-09-27: after two earlier
@@ -610,10 +617,20 @@ export function todayFact(zone: string | null | undefined, now: Date = new Date(
   return `Today is ${DateTime.fromJSDate(now).setZone(wordsZone(z)).toFormat("cccc, LLLL d, yyyy")} (their local time, ${z ?? `${wordsZone(null)}; their own zone isn't known`}).`;
 }
 
-// Pure: a heavy moment in this message: they're struggling, or a strong hard feeling right now. No offers then (documentOffer.ts).
+// Pure: a heavy moment in this message: they're struggling, or a strong hard feeling right now.
 export function heavyMoment(e: EmotionalContext | null | undefined): boolean {
   if (!e) return false;
   return !!e.needsCare || (!!e.current && e.current.intensity === "high" && e.current.valence === "negative");
+}
+// Pure: whether a heavy moment holds an offer back this reply (the door, the cold-start question, a document offer): timing only, never
+// cancelled (Royce, 2026-10-19: "feelings change timing and tone, never cancel"). Each stays owed and comes up in a later reply once
+// they're okay again or the hard stretch reaches the cap (services/moodHold.ts, read on this message, which is them texting now); what
+// goes then is drafted with the feeling block as tone. A strong hard call moment without a hard day holds while it is their current
+// feeling (48 hours at most, emotion.ts current).
+export function heavyHold(e: EmotionalContext | null | undefined, now: Date): MoodHold {
+  if (!heavyMoment(e)) return { state: "none", hold: false, heldHours: null };
+  const m = moodHold(e, { now, lastInboundAt: now });
+  return m.state === "none" ? { state: "held", hold: true, heldHours: null } : m;
 }
 // Pure: Co's recent lines from the reply's context (their message, then Co's last few "Co replied:" lines).
 export function coLinesIn(context: string | undefined): string[] {
