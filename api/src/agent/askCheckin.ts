@@ -43,14 +43,17 @@ export function askCheckinTask(p: Pick<AskCheckinPayload, "checkinCount">, recen
 }
 
 // Cue's last 3 ask check-ins to this member, newest first, through the forget guards (services/whatCoKnows.ts guardText, removals
-// only): a line saying something they had Cue forget isn't shown again. A failed read is none (the task reads as it always did).
+// only): a line saying something they had Cue forget isn't shown again. A failed read, of the sends or of the guards, is none (fails
+// closed: the task then reads as it always did, never with unguarded lines).
 export async function recentAskCheckins(userId: string, q: { query: (sql: string, args: unknown[]) => Promise<{ rows: any[] }> } = pool): Promise<string[]> {
   const rows = await q
     .query(`SELECT message FROM proactive_sends WHERE user_id = $1 AND type = 'ask_checkin' AND message IS NOT NULL AND message <> '' ORDER BY sent_at DESC LIMIT 3`, [userId])
     .then((r) => r.rows.map((x: any) => String(x.message)))
     .catch(() => [] as string[]);
   if (!rows.length) return rows;
-  const W = await import("../services/whatCoKnows.js");
-  const removed = (await W.forgottenRows(userId, q).catch(() => [])).filter((r) => r.removed);
+  const W = await import("../services/whatCoKnows.js").catch(() => null);
+  const guards = W ? await W.forgottenRows(userId, q).catch(() => null) : null;
+  if (!W || !guards) return [];
+  const removed = guards.filter((r) => r.removed);
   return removed.length ? rows.map((m) => W.guardText(m, removed)).filter((m): m is string => m !== null && m.trim() !== "") : rows;
 }
