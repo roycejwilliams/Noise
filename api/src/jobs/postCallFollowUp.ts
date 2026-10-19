@@ -170,7 +170,7 @@ export async function recapOfferFor(
     lastInboundAt(userId).catch(() => null),
   ]);
   const heavyCall = (emo?.lastCall?.moments ?? []).some((m) => m.intensity === "high" && m.valence === "negative");
-  const care = k.restraint ? k.restraint.needsCare : !!emo?.needsCare;
+  const care = k.restraint ? k.restraint.needsCare : !!emo?.needsCare; // mood: carries the read into recapMoodRead, which waits on the capped moodHold
   // The hold, from the read with its times; a hard time read without them holds, as before (until the held recap's own cap).
   const mood = care && emo?.needsCare ? moodHold(emo, { now, lastInboundAt: inbound }) : null;
   const m = recapMoodRead({ care, mood, heavyCall });
