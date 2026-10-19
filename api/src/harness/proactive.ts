@@ -1654,6 +1654,17 @@ Return ONLY JSON: {"relevant": true|false, "why": "one short line"}`,
 // every message after that is sent outside the transaction: a later failure
 // can only ever mean a missed message, never a duplicate one. Returns which
 // messages actually went out so the caller only remembers/acts on those.
+// Pure: whose draft the placeholder at this index (over messages, then each batched extra's) came from.
+export function placeholderCandidate(index: number, c: Candidate, messages: string[], extras: { candidate: Candidate; messages: string[] }[]): Candidate {
+  let at = messages.length;
+  if (index < at) return c;
+  for (const e of extras) {
+    at += e.messages.length;
+    if (index < at) return e.candidate;
+  }
+  return c;
+}
+
 async function sendWithLedger(
   c: Candidate,
   person: Person,
@@ -1662,12 +1673,12 @@ async function sendWithLedger(
   extras: { candidate: Candidate; messages: string[] }[] = [],
   // A note riding in this text with its own once-only key (the name notice): claimed here, inside the lock, or the text goes without it.
   ride: { candidate: Candidate; without: string[] } | null = null,
-): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[] }> {
+): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[]; placeholderOf?: Candidate }> {
   // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused before anything is claimed, and logged.
   const placeholder = sentinelIn([...messages, ...extras.flatMap((e) => e.messages)]);
   if (placeholder) {
     await recordDecision({ layer: 7, decision: "proactive.sentinelBody", userId: person.userId, outcome: "skip", action: c.type, reason: placeholder.rule, proposal: { kind: c.type, targetKey: c.targetKey, rule: placeholder.rule, message: placeholder.index + 1 } }).catch(() => {});
-    return { sent: false, failed: [{ name: "sentinel_body", pass: false, reason: `message ${placeholder.index + 1} is ${placeholder.rule}, not a text` }] };
+    return { sent: false, failed: [{ name: "sentinel_body", pass: false, reason: `message ${placeholder.index + 1} is ${placeholder.rule}, not a text` }], placeholderOf: placeholderCandidate(placeholder.index, c, messages, extras) };
   }
   const client = await pool.connect();
   const delivered: string[] = [];
@@ -2006,6 +2017,12 @@ export async function recordInRoomSend(userId: string, targetKey: string, messag
 }
 
 // ---------- dispatch
+
+// A candidate whose draft came back a placeholder: skipped for good, with the reason logged (ids only, no words).
+export async function dropPlaceholder(registry: ProactiveRegistry, userId: string, c: Candidate): Promise<void> {
+  await dropCandidate(registry, c, "skipped", "sentinel_body");
+  await recordDecision({ layer: 7, decision: "proactive.sentinelBody.dropped", userId, outcome: "skip", action: c.type, reason: "sentinel_body", proposal: { candidateId: c.id, kind: c.type } }).catch(() => {});
+}
 
 export async function dropCandidate(registry: ProactiveRegistry, c: Candidate, status: "skipped" | "expired", reason: string): Promise<void> {
   await pool.query(
@@ -2606,6 +2623,9 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   }
   if (!result.sent) {
     await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks, ...result.failed], reason: `blocked at send: ${describeFailed(result.failed)}` });
+    // A placeholder draft ("SKIP", empty) is dropped, not left pending: otherwise it's drafted again every tick (a model call each)
+    // until it expires (review of #265). Logged with ids only.
+    if (result.placeholderOf) await dropPlaceholder(registry, userId, result.placeholderOf);
     return;
   }
 

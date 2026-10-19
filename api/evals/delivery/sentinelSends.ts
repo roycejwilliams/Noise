@@ -37,10 +37,11 @@ const H = await import("../../src/services/eventGuestMatchHandoff.js");
 const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
 
 // ================================================================ 1. what a placeholder is (pure)
-for (const body of ["SKIP", "skip", "Skip.", "**SKIP**", "\"SKIP\"", "SKIP: nothing specific to say", "SKIP - no reason", "", "   ", "\n\t", "\u200B", "NONE", "null", "undefined", "[object Object]", "N/A", "{}"]) {
+for (const body of ["SKIP", "skip", "Skip.", "**SKIP**", "\"SKIP\"", "SKIP: nothing specific to say", "SKIP - no reason", "SKIP (no news)", "**SKIP**: nothing to add", "", "   ", "\n\t", "\u200B", "NONE", "None.", "null", "undefined", "[object Object]", "N/A", "N/A.", "{}"]) {
   check(`placeholder: ${JSON.stringify(body)}`, B.sentinelRule(body) !== null, B.sentinelRule(body));
 }
-for (const body of ["Skip the line at Tartine tonight?", "None of these fit? I can look again.", "Nothing much on Friday. Want me to look at Saturday?", "Null hypothesis night at the Exploratorium, Thursday.", "Ok", "Yes!"]) {
+// Review of #265 (2026-10-19): real advice that starts "Skip" and a reason is a text; only SKIP in capitals is the model's skip.
+for (const body of ["Skip the line at Tartine tonight?", "None of these fit? I can look again.", "Nothing much on Friday. Want me to look at Saturday?", "Null hypothesis night at the Exploratorium, Thursday.", "Ok", "Yes!", "Skip: the 7pm is sold out, the 9pm still has room.", "Skip - it's a bargain-bin crowd.", "Skip (honestly) and go to Thursday's instead.", "skip: the line's an hour long", "Skip \u2014 it moved to next week."]) {
   check(`a real text: ${JSON.stringify(body)}`, B.sentinelRule(body) === null, B.sentinelRule(body));
 }
 check("not a string, or no messages at all: refused", B.sentinelRule(undefined) === "not text" && B.sentinelRule(null) === "not text" && B.sentinelIn([])?.rule === "no messages");
@@ -106,7 +107,43 @@ check("a send with one placeholder among real messages is refused, naming which"
   check("4b. ... a media-only send (a card, a voice note) may have no words", ok === true, ok);
   const real = await realSend({ number: TEST, content: "Skip the line at Tartine tonight?", from_number: "+10000000000" } as any).then(() => true, (e: any) => String(e?.message));
   check("4c. ... and a real text that starts with 'Skip' goes", real === true, real);
+  const err = await realSend({ number: TEST, content: "SKIP", from_number: "+10000000000" }).then(() => null, (e: any) => e);
+  check("4e. ... its refusal carries a stable code, not just a message", err?.code === B.SENTINEL_REFUSAL && B.SENTINEL_REFUSAL === "sentinel_body", err?.code);
+  const SB = await import("../../src/services/sendblue.js");
+  check("4f. the inline reply gives up on it (the send layer refused it), like the breaker and the meta-commentary guard", SB.refusedBySendLayer(err) && SB.refusedBySendLayer(new Error("sendblue: send breaker open for ...0123, refusing to send")) && SB.refusedBySendLayer(new Error("sendblue: outbound content looked like leaked model meta-commentary, refusing to send: x")));
+  check("4g. ... but not on Sendblue refusing the inline reply itself (that one goes again plain)", !SB.refusedBySendLayer(Object.assign(new Error("reply_to not supported on this line"), { status: 400 })) && !SB.refusedBySendLayer(null));
+  const route = src("routes/sendblue.ts");
+  const inlineCatch = route.slice(route.indexOf("await sendblue.messages.send({ ...body, reply_to:"), route.indexOf("inlineRefused.add(phone);"));
+  check("4h. sendCoReply's inline catch gives up on a send-layer refusal before it turns inline replies off or retries plain", /if \(refusedBySendLayer\(err\)\) \{\n\s+console\.error\(`sendCoReply failed for \$\{phone\}:`, err\?\.message \?\? err\);\n\s+return false;\n\s+\}/.test(inlineCatch));
   check("4d. the guard runs before the meta-commentary check and the number check", src("services/sendblue.ts").indexOf("const placeholder = sentinelRule(content") < src("services/sendblue.ts").indexOf("if (content && isLeakedMetaCommentary(content))"));
+}
+
+// ================================================================ 5. a placeholder draft is dropped, not re-drafted every tick (review of #265)
+{
+  const c: any = { id: "c1", type: "companion" };
+  const e1: any = { id: "e1", type: "event_offer" };
+  const e2: any = { id: "e2", type: "event_offer" };
+  check("5a. the placeholder is traced to whose draft it came from", P.placeholderCandidate(0, c, ["SKIP"], []) === c && P.placeholderCandidate(1, c, ["Hi."], [{ candidate: e1, messages: ["SKIP"] }]) === e1 && P.placeholderCandidate(2, c, ["Hi."], [{ candidate: e1, messages: ["One."] }, { candidate: e2, messages: ["SKIP"] }]) === e2);
+  reset();
+  const m = addMember({ first_name: "Noor" });
+  const now = new Date();
+  const cand: any = { id: "c9", userId: m.id, type: "companion", targetKey: "companion:week", topicKey: "companion:week", summary: "", priority: 50, dueAt: now, expiresAt: null, payload: {}, attempts: 0, createdAt: now };
+  const person: any = { userId: m.id, firstName: "Noor", phoneNumber: m.phone_number, timezone: "America/Los_Angeles" };
+  const r: any = await P.sendWithLedgerForTests(cand, person, ["SKIP"]);
+  check("5b. sendWithLedger names the candidate whose draft was the placeholder", r.sent === false && r.placeholderOf?.id === "c9", r);
+  // The drop itself: skipped with the reason, logged with ids only.
+  const { default: pool } = await import("../../src/db/db.js");
+  const real = (pool as any).query;
+  const updates: any[][] = [];
+  (pool as any).query = async (sql: string, p: any[] = []) => (/^\s*UPDATE proactive_candidates SET status = \$2, skip_reason = \$3/.test(sql) ? (updates.push(p), { rows: [], rowCount: 1 }) : real(sql, p));
+  const dropped: string[] = [];
+  const reg: any = { companion: { onDropped: async (x: any, status: string, why: string) => void dropped.push(`${x.id}:${status}:${why}`) } };
+  await P.dropPlaceholder(reg, m.id, cand);
+  (pool as any).query = real;
+  check("5c. the candidate is skipped for good with the reason sentinel_body", updates.some((u) => u[0] === "c9" && u[1] === "skipped" && u[2] === "sentinel_body") && dropped.includes("c9:skipped:sentinel_body"), updates);
+  const log = W.decisions.find((d) => d.decision === "proactive.sentinelBody.dropped");
+  check("5d. ... logged with ids only (the candidate's id and kind, no words)", !!log && log.reason === "sentinel_body" && JSON.stringify(typeof log.proposal === "string" ? JSON.parse(log.proposal) : log.proposal) === JSON.stringify({ candidateId: "c9", kind: "companion" }), log);
+  check("5e. the dispatch drops it when the send refused a placeholder (no re-draft next tick)", /if \(result\.placeholderOf\) await dropPlaceholder\(registry, userId, result\.placeholderOf\);/.test(src("harness/proactive.ts")));
 }
 
 console.log(`\nsentinel sends: ${results.total - results.failed}/${results.total} passed`);

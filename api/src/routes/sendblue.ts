@@ -88,6 +88,7 @@ import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/outcomes.js";
 import { isShuttingDown, track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
+import { refusedBySendLayer } from "../services/sendblue.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -332,7 +333,9 @@ export async function sendCoReply(params: {
       await sendblue.messages.send({ ...body, reply_to: { message_handle: params.replyTo } } as typeof body);
       return true;
     } catch (err: any) {
-      if (/send breaker|meta-commentary/.test(String(err?.message))) {
+      // Refused by the send layer itself (the breaker, the meta-commentary guard, a placeholder body): a plain retry would be refused
+      // the same way, and the inline path isn't at fault, so it gives up here: no plain retry, inline replies stay on for them.
+      if (refusedBySendLayer(err)) {
         console.error(`sendCoReply failed for ${phoneTail(phone)}:`, withoutPhones(err?.message ?? err));
         return false;
       }

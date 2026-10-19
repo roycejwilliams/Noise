@@ -5,7 +5,7 @@ import { claimReaction, confirmReaction, releaseReaction } from "./tapbacks.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
 import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "./textStyle.js";
-import { sentinelRule } from "./sentinelBody.js";
+import { sentinelRule, SENTINEL_REFUSAL } from "./sentinelBody.js";
 
 const client = new SendblueAPI({
   apiKey: process.env.SENDBLUE_API_KEY!,
@@ -158,6 +158,13 @@ export function sendableNumber(number: unknown): boolean {
   return /^\+\d{10,15}$/.test(n) && (!n.startsWith("+1") || n.length === 12);
 }
 
+// Pure: whether this send error is the wrapper's own refusal (a placeholder body by its code; the breaker and the meta-commentary
+// guard by their message, as before), which a retry of the same text can't get past. Not a refusal by Sendblue itself.
+export function refusedBySendLayer(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null;
+  return e?.code === SENTINEL_REFUSAL || /send breaker|meta-commentary/.test(String(e?.message ?? ""));
+}
+
 // Every message send goes through this one wrapper so cleanup and the
 // meta-commentary guard apply uniformly, regardless of which prompt or call
 // site generated the content.
@@ -171,7 +178,7 @@ const sendblue = {
       // send (a voice note, a card) may have no words.
       const placeholder = sentinelRule(content ?? "");
       if (placeholder && !(placeholder === "empty" && (body as { media_url?: string }).media_url)) {
-        return Promise.reject(new Error(`sendblue: outbound content is ${placeholder}, not a text, refusing to send`));
+        return Promise.reject(Object.assign(new Error(`sendblue: outbound content is ${placeholder}, not a text, refusing to send`), { code: SENTINEL_REFUSAL }));
       }
       if (content && isLeakedMetaCommentary(content)) {
         return Promise.reject(
