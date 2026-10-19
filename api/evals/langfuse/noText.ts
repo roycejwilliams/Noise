@@ -12,7 +12,7 @@ import { JsonTraceSerializer } from "@opentelemetry/otlp-transformer";
 import { generateText, streamText, stepCountIs, tool } from "ai";
 import { MockLanguageModelV3, simulateReadableStream } from "ai/test";
 import { z } from "zod";
-import { langfuseWithoutText } from "../../src/services/langfuseNoText.js";
+import { langfuseWithoutText, withoutText, withoutTextAttributes } from "../../src/services/langfuseNoText.js";
 import { usageFromSpan } from "../../src/services/llmUsage.js";
 
 let failed = 0;
@@ -175,6 +175,28 @@ check("its exception event keeps only the type", errSpans.some((s: any) => s.eve
 // The cost log reads the same spans and still gets its numbers.
 const rows = local.map((s) => usageFromSpan(s.name, s.attributes as any, s.spanContext().traceId)).filter(Boolean);
 check("llm_usage rows still come from the same spans", rows.some((r) => r!.functionId === "eval.toolLoop" && r!.inputUncached === 100));
+
+// ---------------------------------------------------------------- hardening (review, 2026-10-18)
+{
+  // Number-only prefixes keep numbers and booleans, never a string (a stop sequence, a note).
+  const kept = withoutTextAttributes({ "ai.settings.stopSequences": SECRET, "ai.settings.note": SECRET, "ai.usage.note": SECRET, "gen_ai.request.stop": SECRET, "gen_ai.usage.note": SECRET, "ai.usage.inputTokens": 5, "ai.settings.maxRetries": 2, "gen_ai.request.temperature": 0.3 });
+  check("strings under number-only prefixes are dropped", !JSON.stringify(kept).includes(SECRET));
+  check("numbers under them are kept", kept["ai.usage.inputTokens"] === 5 && kept["ai.settings.maxRetries"] === 2 && kept["gen_ai.request.temperature"] === 0.3);
+  // A span with a link and an event nobody listed: neither reaches Langfuse.
+  const fake: any = {
+    name: "ai.generateText",
+    attributes: { "ai.telemetry.functionId": "eval.fake", "ai.prompt": SECRET },
+    events: [{ name: `custom ${SECRET}`, time: [0, 0], attributes: { note: SECRET } }, { name: "ai.stream.firstChunk", time: [0, 0], attributes: { "ai.response.msToFirstChunk": 12, "ai.response.text": SECRET } }],
+    links: [{ context: { traceId: "a".repeat(32), spanId: "b".repeat(16), traceFlags: 1 }, attributes: { note: SECRET } }],
+    status: { code: 0 },
+    spanContext: () => ({ traceId: "c".repeat(32), spanId: "d".repeat(16), traceFlags: 1 }),
+  };
+  const v = withoutText(fake) as any;
+  check("links are never sent", Array.isArray(v.links) && v.links.length === 0);
+  check("an event that isn't on the known list is dropped", !v.events.some((e: any) => e.name.includes("custom")) && v.events.length === 1);
+  check("a known event keeps only allowlisted keys", v.events[0].name === "ai.stream.firstChunk" && v.events[0].attributes["ai.response.msToFirstChunk"] === 12 && !JSON.stringify(v.events).includes(SECRET));
+  check("the view of a hand-built span has no text at all", !JSON.stringify({ a: v.attributes, e: v.events, l: v.links, s: v.status }).includes(SECRET));
+}
 
 // ---------------------------------------------------------------- one place, every call site
 const srcRoot = new URL("../../src/", import.meta.url).pathname;

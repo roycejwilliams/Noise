@@ -4,7 +4,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { captureIssueReport } from "../services/issueReports.js";
 import { generateText } from "ai";
 import { propagateAttributes } from "@langfuse/tracing";
-import { noteTraceUser } from "../services/llmTraceText.js";
+import { noteTraceUser, traceTurn, withTraceUser } from "../services/llmTraceText.js";
 import { randomInt } from "crypto";
 import { NextFunction, Request, Response, Router } from "express";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
@@ -1262,7 +1262,8 @@ export function sendblueRouter(io: Server): Router {
           import("../services/coTasks.js")
             .then(async (T) => {
               const woke = await T.wakeOnReply(user.id);
-              if (woke) setTimeout(() => import("../services/taskTurn.js").then((t) => t.runDueTasks()).catch(() => {}), (T.TASK_LIMITS.wakeAfterReplyMinutes * 60 + 15) * 1000);
+              // Under nobody's mark: the due tasks are every member's, never this turn's member (services/llmTraceText.ts).
+              if (woke) setTimeout(() => withTraceUser(null, () => import("../services/taskTurn.js").then((t) => t.runDueTasks())).catch(() => {}), (T.TASK_LIMITS.wakeAfterReplyMinutes * 60 + 15) * 1000);
             })
             .catch(() => {});
         if (hasText && linksIn(resolvedContent).length) import("../services/linkReader.js").then((l) => l.readLinksLater(resolvedContent, { ownerUserId: user.id })).catch(() => {});
@@ -2720,7 +2721,8 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
 
       try {
         // Tracked so a restart waits for a reply mid-draft (services/shutdown.ts).
-        await track(lockKey ? withPhoneLock(lockKey, run) : run());
+        // One trace-text turn (services/llmTraceText.ts traceTurn): a removal or correction in it deletes again when it ends.
+        await track(lockKey ? withPhoneLock(lockKey, () => traceTurn(run)) : traceTurn(run));
       } catch (err) {
         // The phone's lock never came free (concurrency audit, 2026-10-12): the turn never ran, and it never runs unlocked. It's
         // re-queued from what was saved: the replay re-checks that no newer text took it over and that Co hasn't answered since. A

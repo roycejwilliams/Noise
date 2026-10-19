@@ -973,6 +973,7 @@ export async function runDueTasks(): Promise<void> {
   const { claimDueTasks } = await import("./coTasks.js");
   const L = await import("./commitmentLog.js");
   for (const t of await claimDueTasks()) {
+    (await import("./llmTraceText.js")).markTraceUser(t.userId); // each task's model calls under its own member, never the caller's
     // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
     if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
     // A goal's check-in or reminder (services/goalOwnership.ts): real state first, then one text through the task-update path.

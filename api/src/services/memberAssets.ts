@@ -116,6 +116,8 @@ export async function deleteAssets(userId: string, numbers: number[] | null): Pr
     `UPDATE member_assets SET bytes = NULL, description = NULL, wiped_at = NOW() WHERE owner_user_id = $1 AND wiped_at IS NULL AND ($2::int[] IS NULL OR n = ANY($2::int[]) OR -n = ANY($2::int[]))`,
     [userId, numbers && numbers.length ? numbers : null],
   );
+  // A removal: all of their model prompt/answer text goes with it, the photo descriptions included (services/llmTraceText.ts).
+  if (rowCount) await import("./llmTraceText.js").then((T) => T.forgetTraceText(userId, "images removed")).catch(() => 0);
   return rowCount ?? 0;
 }
 
