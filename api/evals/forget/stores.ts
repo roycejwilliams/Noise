@@ -33,13 +33,15 @@ const U = "00000000-0000-4000-8000-0000000e1117";
 const FACT = "the custody hearing in May";
 const said: { sql: string; p: any[] }[] = [];
 let profileIntent: any[] = [];
+let askRows: any[] = [];
 const handle = async (sql: string, p: any[] = []) => {
   said.push({ sql, p });
   if (/^\s*(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [], rowCount: 0 };
   if (/INSERT INTO profile_corrections/.test(sql)) return { rows: [{ id: "1" }], rowCount: 1 };
   if (/FROM co_profiles WHERE user_id = \$1/.test(sql) && /intent/.test(sql)) return { rows: [{ city: "Oakland", long_term_direction: null, availability_pattern: null, goals: [], life_chapters: [], blockers: [], activity_preferences: [], avoid: [], intent: profileIntent }] };
   if (/FROM member_claims WHERE user_id = \$1 ORDER BY said_on/.test(sql)) return { rows: [{ id: "c1", text: `They have ${FACT}.`, provenance: "user_said", kind: "deadline", quote: "custody hearing in May", expires_on: null }, { id: "c2", text: "They want to meet climate founders.", provenance: "user_said", kind: "plan", quote: "climate founders", expires_on: null }] };
-  if (/DELETE FROM member_claims|UPDATE co_profiles SET intent|DELETE FROM goal_states/.test(sql)) return { rows: [], rowCount: 1 };
+  if (/DELETE FROM member_claims|UPDATE co_profiles SET intent|DELETE FROM goal_states|UPDATE ask_checkins SET resolved_at/.test(sql)) return { rows: [], rowCount: 1 };
+  if (/SELECT ask_id, ask_text FROM ask_checkins WHERE user_id = \$1 AND resolved_at IS NULL/.test(sql)) return { rows: askRows };
   if (/FROM proactive_candidates WHERE user_id = \$1 AND status = 'pending'/.test(sql)) return { rows: [{ id: 3, type: "followup", target_key: "x", summary: `Check in about ${FACT}`, payload: "{}" }] };
   if (/SELECT id, goal, target_key FROM co_tasks WHERE user_id = \$1 AND status = 'open'/.test(sql)) return { rows: [{ id: 9, goal: `Prep notes for ${FACT}`, target_key: null }] };
   if (/FROM deferred_sends WHERE user_id = \$1 AND status = 'queued'/.test(sql)) return { rows: [{ id: 5, type: "followup", target_key: "y", messages: JSON.stringify([`Thinking of you before ${FACT}`]), after: "{}" }] };
@@ -50,6 +52,7 @@ const handle = async (sql: string, p: any[] = []) => {
 (pool as any).connect = async () => ({ query: handle, release: () => {} });
 
 const theirWords = "please forget the custody hearing thing";
+let askClose: { sql: string; p: any[] } | null = null;
 const r = await W.applyKnowledgeChanges(U, [{ action: "remove", refs: ["claim:c1"] } as any], { message: theirWords, theirWords });
 check("the removal ran (the fixture reaches every store below)", r.ok && r.applied.length === 1);
 
@@ -73,6 +76,14 @@ check("harness_decisions: a knowledge.remove row is written", said.some((s) => /
   const upd = said.find((s) => /UPDATE co_profiles SET intent/.test(s.sql));
   check("co_profiles intent (spec 9): a removed goal leaves the list, the canary goal stays", g.ok && !!upd && !/custody/i.test(String(upd.p[1])) && /climate founders/.test(String(upd.p[1])));
   check("goal_states (spec 10): the goal's state row is deleted", said.some((s) => /DELETE FROM goal_states/.test(s.sql) && s.p[1] === goalHash("get through the custody hearing in May")));
+  // An ask removal (spec 3, 16): the ask is closed; what it stores as the closing evidence is checked as a gap below.
+  said.length = 0;
+  askRows = [{ ask_id: "a1", ask_text: `family lawyers for ${FACT}` }];
+  profileIntent = [{ id: "a1", kind: "ask", text: `family lawyers for ${FACT}`, status: "active", created_at: new Date().toISOString() }];
+  const ask = await W.applyKnowledgeChanges(U, [{ action: "remove", refs: ["ask:a1"] } as any], { message: theirWords, theirWords });
+  check("ask_checkins: a removed ask is closed (the removal reached it)", ask.ok && said.some((s) => /UPDATE ask_checkins SET resolved_at/.test(s.sql)));
+  askClose = said.find((s) => /UPDATE ask_checkins SET resolved_at/.test(s.sql)) ?? null;
+  askRows = [];
   // Back to the claim removal's statements for the gaps below.
   said.length = 0;
   profileIntent = [];
@@ -104,6 +115,7 @@ knownGap("document_deliveries.content / co_pages.data (spec 22)", "the line reda
 knownGap("research_finds / search_briefs / link_reads (spec 23)", "rows that say it are deleted", deleted("research_finds") && deleted("search_briefs") && deleted("link_reads"));
 knownGap("emotion_signals / member_advice / member_milestones (spec 24)", "rows that say it are deleted", deleted("emotion_signals") && deleted("member_advice") && deleted("member_milestones"));
 knownGap("harness_decisions, the member's text in other rows (spec 26)", "the member's text redacted in their rows (the removal's own row: draft #256)", rewrote("harness_decisions", ["proposal"]));
+knownGap("ask_checkins.closed_evidence (spec 3: the removal message)", "a removed ask's closing evidence doesn't store their removal words (today: up to 300 characters of them, whatCoKnows.ts ask case)", !!askClose && !sayingIt(askClose.p));
 knownGap("profile_corrections, the marker (spec 29)", "kind + date + ref id only: old_value, quote and the hash in item_ref not stored", said.some((s) => /INSERT INTO profile_corrections/.test(s.sql) && !sayingIt(s.p) && !/[0-9a-f]{8}/.test(String(s.p[5]))));
 
 console.log(`forget stores: ${total - failed}/${total} passed (${gaps} known gaps, ${PENDING})`);
