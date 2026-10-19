@@ -1820,18 +1820,18 @@ export async function sendExempt(opts: {
   coInitiated?: { kind: ProactiveKind | null };
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date }> {
   if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
-  // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused before anything is claimed, and logged.
-  const placeholder = sentinelIn(opts.messages);
-  if (placeholder) {
-    await recordDecision({ layer: 7, decision: "proactive.sentinelBody", userId: opts.userId, outcome: "skip", action: opts.type, reason: placeholder.rule, proposal: { kind: opts.type, targetKey: opts.targetKey, rule: placeholder.rule, message: placeholder.index + 1 } }).catch(() => {});
-    return { sent: false, reason: `sentinel body: message ${placeholder.index + 1} is ${placeholder.rule}` };
-  }
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
   // all, so harness/monitor.ts had no signal that could ever see them.
   const record = (outcome: "act" | "skip", action: string, reason?: string) =>
     recordDecision({ layer: 7, decision: "proactive.exemptSend", userId: opts.userId, outcome, action, reason, proposal: { type: opts.type, targetKey: opts.targetKey } }).catch(() => {});
 
+  // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused before anything is claimed, and logged.
+  const placeholder = sentinelIn(opts.messages);
+  if (placeholder) {
+    await recordDecision({ layer: 7, decision: "proactive.sentinelBody", userId: opts.userId, outcome: "skip", action: opts.type, reason: placeholder.rule, proposal: { kind: opts.type, targetKey: opts.targetKey, rule: placeholder.rule, message: placeholder.index + 1 } }).catch(() => {});
+    return { sent: false, reason: `sentinel body: message ${placeholder.index + 1} is ${placeholder.rule}` };
+  }
   if (opts.respectHours && !localHourOk(opts.now ?? new Date(), opts.timezone ?? null)) {
     await record("skip", "blocked_hours", "outside local hours");
     return { sent: false, reason: "outside local hours" };
