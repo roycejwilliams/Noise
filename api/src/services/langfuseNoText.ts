@@ -88,8 +88,10 @@ export function errorClass(name: unknown): string | undefined {
   return typeof name === "string" && /^[A-Za-z0-9_.$-]{1,80}$/.test(name) ? name : name == null ? undefined : "Error";
 }
 
+// Only events the AI SDK sends with no text: any other event (its name could be anything) is dropped.
+const KNOWN_EVENTS = new Set(["exception", "ai.stream.firstChunk", "ai.stream.finish"]);
 function withoutTextEvents(events: TimedEvent[]): TimedEvent[] {
-  return (events ?? []).map((e) =>
+  return (events ?? []).filter((e) => KNOWN_EVENTS.has(e.name)).map((e) =>
     e.name === "exception"
       ? { name: e.name, time: e.time, droppedAttributesCount: 0, attributes: { "exception.type": errorClass(e.attributes?.["exception.type"]) ?? "Error" } }
       : { name: e.name, time: e.time, droppedAttributesCount: 0, attributes: withoutTextAttributes((e.attributes ?? {}) as Record<string, unknown>) },
@@ -104,6 +106,8 @@ export function withoutText(span: ReadableSpan): ReadableSpan {
   Object.defineProperties(view, {
     attributes: { value: withoutTextAttributes(span.attributes as Record<string, unknown>), enumerable: true, writable: true },
     events: { value: withoutTextEvents(span.events as TimedEvent[]), enumerable: true },
+    // A link carries another span's attributes; none is sent.
+    links: { value: [], enumerable: true },
     status: {
       value: { code: span.status?.code, message: exception ? errorClass(exception.attributes?.["exception.type"]) : undefined },
       enumerable: true,

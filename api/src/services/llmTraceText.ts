@@ -22,8 +22,13 @@ export const TRACE_TEXT = {
   maxChars: 64_000,
   batchRows: 25,
   flushMs: 5_000,
-  // If the database is down, the oldest unwritten rows are dropped rather than held in memory.
+  // If the database is down, the oldest unwritten rows are dropped rather than held in memory: at most this many rows and
+  // this many characters (~8 MB) wait at once.
   maxBuffered: 400,
+  maxBufferedChars: 4_000_000,
+  // After a member's trace text is deleted, any row of theirs made before that moment and still on its way is dropped at
+  // write time for this long (a write already in flight when the delete ran, a span that ended late).
+  forgottenHoldMs: 10 * 60_000,
 } as const;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -33,12 +38,44 @@ const REQUEST_SPAN = /^ai\.(generateText|streamText|generateObject|streamObject)
 // Entry points that know the member mark it once (the text turn, post-call processing, the live call); every model call
 // after that in the same async flow carries it. A user on the span itself wins: AI SDK metadata, or propagateAttributes
 // (which reaches the span through the Langfuse processor, so only while Langfuse keys are set; the marks don't need them).
-const traceUser = new AsyncLocalStorage<string>();
+// The mark is one object shared by the whole flow: a forget in the flow sets `forgotten`, and every span from that flow that
+// ends after it is dropped (a removal inside the reply's tool loop, then the loop's next step re-reading the old profile).
+type Mark = { userId: string | null; forgotten: boolean; turn: boolean };
+const traceUser = new AsyncLocalStorage<Mark>();
+const validUser = (u: unknown): string | null => (typeof u === "string" && UUID.test(u) ? u : null);
+
+// The member an entry point found. Inside a text turn (traceTurn) it fills the turn's own mark; elsewhere it marks the rest
+// of this async flow.
 export function noteTraceUser(userId: string | null | undefined): void {
-  if (typeof userId === "string" && UUID.test(userId)) traceUser.enterWith(userId);
+  const m = traceUser.getStore();
+  if (m?.turn && m.userId == null) {
+    m.userId = validUser(userId);
+    return;
+  }
+  traceUser.enterWith({ userId: validUser(userId), forgotten: false, turn: false });
+}
+// A fresh mark for one member's work inside a loop over many (runDueTasks): never the mark of whoever started the loop.
+export function markTraceUser(userId: string | null | undefined): void {
+  traceUser.enterWith({ userId: validUser(userId), forgotten: false, turn: false });
+}
+// Runs fn under its own mark (null: nobody's), never inheriting the caller's: a timer a turn starts for other members' work.
+export function withTraceUser<T>(userId: string | null, fn: () => T): T {
+  return traceUser.run({ userId: validUser(userId), forgotten: false, turn: false }, fn);
+}
+// One text turn. When it ends, if anything in it deleted the member's trace text, it's deleted again: rows from calls that
+// were already running when the delete happened are gone too.
+export async function traceTurn<T>(fn: () => Promise<T>): Promise<T> {
+  const mark: Mark = { userId: null, forgotten: false, turn: true };
+  return traceUser.run(mark, async () => {
+    try {
+      return await fn();
+    } finally {
+      if (mark.forgotten && mark.userId) await forgetTraceText(mark.userId, "turn end");
+    }
+  });
 }
 export function currentTraceUser(): string | null {
-  return traceUser.getStore() ?? null;
+  return traceUser.getStore()?.userId ?? null;
 }
 
 export function userIdFor(attrs: Record<string, unknown>, fromContext: string | null): string | null {
@@ -75,6 +112,9 @@ export function withoutImages(text: string): string {
     .replace(/[A-Za-z0-9+/]{2000,}={0,2}/g, (m) => (/[0-9]/.test(m) && /[A-Z]/.test(m) && /[a-z]/.test(m) ? imageMarker("binary", m) : m));
 }
 
+// Postgres TEXT can't hold a NUL character; one would fail the whole batch.
+export const noNul = (t: string) => t.replace(/\u0000/g, "");
+
 export function capped(text: string, max: number = TRACE_TEXT.maxChars): string {
   if (text.length <= max) return text;
   const head = Math.floor(max * 0.75);
@@ -104,9 +144,9 @@ export function traceTextFromSpan(
     traceId: ids.traceId,
     spanId: ids.spanId,
     userId: o.userId ?? null,
-    functionId: String(attrs["ai.telemetry.functionId"] ?? "unnamed"),
-    input: input ? capped(withoutImages(input)) : null,
-    output: output ? capped(withoutImages(output)) : null,
+    functionId: noNul(String(attrs["ai.telemetry.functionId"] ?? "unnamed")),
+    input: input ? capped(noNul(withoutImages(input))) : null,
+    output: output ? capped(noNul(withoutImages(output))) : null,
     at: o.at ?? new Date(),
   };
 }
@@ -118,13 +158,30 @@ const defaultDb = async (): Promise<Db> => (await import("../db/db.js")).default
 export const traceTextStore: { db: () => Promise<Db> } = { db: defaultDb };
 
 const buffer: TraceTextRow[] = [];
+let bufferedChars = 0;
 let timer: ReturnType<typeof setTimeout> | null = null;
+const rowChars = (r: TraceTextRow) => (r.input?.length ?? 0) + (r.output?.length ?? 0);
+// Members whose trace text was just deleted, and when: a row of theirs made before then is dropped at write time.
+const forgottenAt = new Map<string, number>();
+const wasForgotten = (r: TraceTextRow) => {
+  if (!r.userId) return false;
+  const t = forgottenAt.get(r.userId);
+  return t != null && r.at.getTime() <= t;
+};
+function takeRows(n: number): TraceTextRow[] {
+  const rows = buffer.splice(0, n);
+  for (const r of rows) bufferedChars -= rowChars(r);
+  return rows;
+}
 
-export async function flushTraceText(): Promise<void> {
+async function writeBuffered(): Promise<void> {
   if (timer) clearTimeout(timer);
   timer = null;
+  const now = Date.now();
+  for (const [u, t] of forgottenAt) if (now - t > TRACE_TEXT.forgottenHoldMs) forgottenAt.delete(u);
   while (buffer.length) {
-    const rows = buffer.splice(0, TRACE_TEXT.batchRows);
+    const rows = takeRows(TRACE_TEXT.batchRows).filter((r) => !wasForgotten(r));
+    if (!rows.length) continue;
     try {
       const db = await traceTextStore.db();
       // A user id with no users row (a test id, a member just deleted) is stored as no user, never a failed batch.
@@ -143,30 +200,46 @@ export async function flushTraceText(): Promise<void> {
   }
 }
 
+// Writes run one after another, and a forget waits for the one in flight (a batch already taken from the buffer but not yet
+// committed would otherwise land after the delete). Never rejects.
+let writing: Promise<void> = Promise.resolve();
+export function flushTraceText(): Promise<void> {
+  writing = writing.then(writeBuffered, writeBuffered);
+  return writing;
+}
+
 export function recordTraceText(row: TraceTextRow): void {
   buffer.push(row);
-  if (buffer.length > TRACE_TEXT.maxBuffered) buffer.splice(0, buffer.length - TRACE_TEXT.maxBuffered);
+  bufferedChars += rowChars(row);
+  while (buffer.length > TRACE_TEXT.maxBuffered || (bufferedChars > TRACE_TEXT.maxBufferedChars && buffer.length > 1)) takeRows(1);
   if (buffer.length >= TRACE_TEXT.batchRows) void flushTraceText();
   else if (!timer) {
     timer = setTimeout(() => void flushTraceText(), TRACE_TEXT.flushMs);
     timer.unref?.();
   }
 }
+// For tests: what is waiting in memory.
+export function traceTextBuffered(): { rows: number; chars: number } {
+  return { rows: buffer.length, chars: bufferedChars };
+}
 
 // Reads the original span (before the Langfuse filter). Never throws.
 export class TraceTextSpanProcessor implements SpanProcessor {
-  private users = new WeakMap<object, string>();
+  private marks = new WeakMap<object, Mark>();
   onStart(span: Span, _ctx: Context): void {
     try {
-      const u = currentTraceUser();
-      if (u) this.users.set(span, u);
+      const m = traceUser.getStore();
+      if (m) this.marks.set(span, m);
     } catch {}
   }
   onEnd(span: ReadableSpan): void {
     try {
+      const mark = this.marks.get(span);
+      // Its flow deleted this member's trace text: nothing from it after that is kept.
+      if (mark?.forgotten) return;
       const exception = (span.events ?? []).find((e) => e.name === "exception");
       const row = traceTextFromSpan(span.name, span.attributes as Record<string, unknown>, { traceId: span.spanContext().traceId, spanId: span.spanContext().spanId }, {
-        userId: userIdFor(span.attributes as Record<string, unknown>, this.users.get(span) ?? null),
+        userId: userIdFor(span.attributes as Record<string, unknown>, mark?.userId ?? null),
         status: span.status,
         errorType: typeof exception?.attributes?.["exception.type"] === "string" ? (exception.attributes["exception.type"] as string) : null,
       });
@@ -192,11 +265,16 @@ export async function expireTraceText(now: Date = new Date()): Promise<number> {
   return r.rowCount ?? 0;
 }
 
-// All of one member's trace text: on archive, and on any removal they ask for. Best-effort; never throws.
-// Rows still waiting in memory go too, so none is written after the delete.
+// All of one member's trace text: on archive, and on any removal or correction. Best-effort; never throws.
+// Nothing of theirs made before now is written after the delete: rows waiting in memory are dropped, a write in flight is
+// waited for (then deleted with the rest), a late row is dropped at write time, and the rest of this flow keeps nothing.
 export async function forgetTraceText(userId: string, why: string): Promise<number> {
-  for (let i = buffer.length - 1; i >= 0; i--) if (buffer[i].userId === userId) buffer.splice(i, 1);
+  forgottenAt.set(userId, Date.now());
+  const m = traceUser.getStore();
+  if (m && m.userId === userId) m.forgotten = true;
+  for (let i = buffer.length - 1; i >= 0; i--) if (buffer[i].userId === userId) bufferedChars -= rowChars(buffer.splice(i, 1)[0]);
   try {
+    await writing;
     const db = await traceTextStore.db();
     const r = await db.query(`DELETE FROM llm_trace_text WHERE user_id = $1`, [userId]);
     return r.rowCount ?? 0;
@@ -213,9 +291,11 @@ export function validTraceId(id: unknown): id is string {
 export async function traceTextFor(traceId: string): Promise<{ spanId: string; userId: string | null; functionId: string; createdAt: string; input: string | null; output: string | null }[]> {
   if (!validTraceId(traceId)) return [];
   const db = await traceTextStore.db();
+  // Only what's inside the 14 days, even before the daily job has run.
+  const cutoff = new Date(Date.now() - TRACE_TEXT.retentionDays * 86_400_000).toISOString();
   const { rows } = await db.query(
-    `SELECT span_id, user_id, function_id, created_at, input, output FROM llm_trace_text WHERE trace_id = $1 ORDER BY created_at, id LIMIT 200`,
-    [traceId],
+    `SELECT span_id, user_id, function_id, created_at, input, output FROM llm_trace_text WHERE trace_id = $1 AND created_at >= $2 ORDER BY created_at, id LIMIT 200`,
+    [traceId, cutoff],
   );
   return rows.map((r) => ({ spanId: r.span_id, userId: r.user_id ?? null, functionId: r.function_id, createdAt: new Date(r.created_at).toISOString(), input: r.input ?? null, output: r.output ?? null }));
 }

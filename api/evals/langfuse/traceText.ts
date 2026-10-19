@@ -52,7 +52,7 @@ const fakeDb = {
       for (let i = table.length - 1; i >= 0; i--) if (table[i].user_id === args[0]) table.splice(i, 1);
       return { rows: [], rowCount: before - table.length };
     }
-    if (/FROM llm_trace_text WHERE trace_id = \$1/.test(sql)) return { rows: table.filter((r) => r.trace_id === args[0]).map((r, id) => ({ ...r, id })) };
+    if (/FROM llm_trace_text WHERE trace_id = \$1 AND created_at >= \$2/.test(sql)) return { rows: table.filter((r) => r.trace_id === args[0] && r.created_at >= new Date(args[1])).map((r, id) => ({ ...r, id })) };
     throw new Error(`fake trace-text table: unexpected SQL ${sql.slice(0, 80)}`);
   },
 };
@@ -74,6 +74,7 @@ sdk.start();
 const SECRET = "MAPLE-ORCHID-7731";
 const USER = "00000000-0000-4000-8000-00000000c0de";
 const USER_B = "00000000-0000-4000-8000-00000000b0b0";
+const USER_C = "00000000-0000-4000-8000-00000000c0c0";
 const IMAGE = Buffer.from(`\x89PNG\r\n\x1a\n${"PHOTO-BYTES-".repeat(400)}`);
 const IMAGE_B64 = IMAGE.toString("base64").slice(0, 60);
 const usage = { inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 3, text: 3, reasoning: 0 } };
@@ -294,6 +295,161 @@ check("the live call marks its member", /noteTraceUser\(userId\);/.test(src("rou
   pool.query = realQuery;
 }
 check("the dashboard page shows the lookup", /id="trace-form"/.test(readFileSync(new URL("../../../co-test/public/sweeps.html", import.meta.url), "utf8")) && /\/api\/sweeps\/trace\//.test(readFileSync(new URL("../../../co-test/src/client/sweeps.ts", import.meta.url), "utf8")));
+
+// ---------------------------------------------------------------- review fixes (2026-10-18)
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const call = (fn: string, text = "ok", delayMs = 0) =>
+  generateText({
+    model: new MockLanguageModelV3({ modelId: "claude-mock", doGenerate: async () => { if (delayMs) await sleep(delayMs); return { content: [{ type: "text", text }], finishReason: { unified: "stop", raw: "stop" }, usage, warnings: [] } as any; } }),
+    experimental_telemetry: { isEnabled: true, functionId: fn },
+    prompt: `prompt for ${fn} ${SECRET}`,
+  });
+T.traceTextStore.db = async () => fakeDb;
+
+// 1. A's turn starts a timer that runs every member's due tasks (routes/sendblue.ts -> taskTurn.runDueTasks): each task's rows
+//    are its own member's, never A's, and A's turn keeps A.
+{
+  table.length = 0;
+  await T.traceTurn(async () => {
+    T.noteTraceUser(USER);
+    await new Promise<void>((done) =>
+      setTimeout(
+        () =>
+          void T.withTraceUser(null, async () => {
+            await call("eval.task.beforeMark");
+            for (const u of [USER_B, USER_C, "not-a-uuid"]) {
+              T.markTraceUser(u);
+              await call(`eval.task.${u.slice(-4)}`);
+            }
+          }).then(done),
+        1,
+      ),
+    );
+    await call("eval.turnAfterTimer");
+  });
+  await T.flushTraceText();
+  const u = (fn: string) => byFn(fn)[0]?.user_id;
+  check("a timer started in A's turn carries nobody's mark, not A's", byFn("eval.task.beforeMark").length === 1 && u("eval.task.beforeMark") === null);
+  check("each due task's model calls are filed under its own member", u("eval.task.b0b0") === USER_B && u("eval.task.c0c0") === USER_C);
+  check("a task with no valid member is nobody's, never the previous task's", byFn("eval.task.uuid").length === 1 && u("eval.task.uuid") === null);
+  check("A's turn keeps A after the timer", u("eval.turnAfterTimer") === USER);
+  check("the reply turn's timer runs due tasks under nobody's mark", /setTimeout\(\(\) => withTraceUser\(null, \(\) => import\("\.\.\/services\/taskTurn\.js"\)\.then\(\(t\) => t\.runDueTasks\(\)\)\)/.test(src("routes/sendblue.ts")));
+  check("runDueTasks marks each task's own member first", /for \(const t of await claimDueTasks\(\)\) \{\n\s*\(await import\("\.\/llmTraceText\.js"\)\)\.markTraceUser\(t\.userId\);/.test(src("services/taskTurn.ts")));
+  check("every text turn runs inside traceTurn", /withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)/.test(src("routes/sendblue.ts")));
+}
+
+// 2. A removal inside the turn (the reply's tool loop): nothing from that turn is written after it. A later step, a call already
+//    running, a learning call that ends after the turn; and the turn deletes again when it ends. Another member's turn running
+//    at the same time keeps its rows.
+{
+  table.length = 0;
+  const other = T.traceTurn(async () => {
+    T.noteTraceUser(USER_B);
+    await sleep(15);
+    await call("eval.otherTurn");
+  });
+  let lateDone: Promise<unknown> = Promise.resolve();
+  await T.traceTurn(async () => {
+    T.noteTraceUser(USER);
+    await call("eval.beforeForget");
+    await T.flushTraceText();
+    const running = call("eval.inFlight", "old answer", 30);
+    await sleep(5);
+    await T.forgetTraceText(USER, "removal");
+    await call("eval.afterForget", "the next step re-read the old profile");
+    await running;
+    lateDone = (async () => {
+      await sleep(25);
+      await call("eval.lateLearning");
+    })();
+    // A row that reached the table some other way after the delete: the turn's end deletes again.
+    table.push({ trace_id: "b".repeat(32), span_id: "c".repeat(16), user_id: USER, function_id: "eval.slippedIn", input: "old", output: null, created_at: new Date() });
+  });
+  check("the turn's end deletes again", !byFn("eval.slippedIn").length);
+  await other;
+  await lateDone;
+  await T.flushTraceText();
+  check("a removal deletes what was already written", !byFn("eval.beforeForget").length);
+  check("a call running during the removal is not written after it", !byFn("eval.inFlight").length);
+  check("a later step in the same turn is not written", !byFn("eval.afterForget").length);
+  check("a learning call that ends after the turn is not written", !byFn("eval.lateLearning").length);
+  check("nothing of the member is left from that turn", !table.some((r) => r.user_id === USER));
+  check("another member's turn at the same time keeps its rows", byFn("eval.otherTurn")[0]?.user_id === USER_B);
+  await T.traceTurn(async () => {
+    T.noteTraceUser(USER);
+    await call("eval.nextTurn");
+  });
+  await T.flushTraceText();
+  check("their next turn is kept again", byFn("eval.nextTurn")[0]?.user_id === USER);
+}
+
+// 3. A write in flight when the forget runs (taken from the buffer, not yet committed): it lands, then is deleted. A row made
+//    before the forget that arrives after it is dropped at write time; one made after it is kept.
+{
+  table.length = 0;
+  const slowDb = { query: async (sql: string, args: any[] = []) => { if (/^INSERT/.test(sql.trim())) await sleep(40); return fakeDb.query(sql, args); } };
+  T.traceTextStore.db = async () => slowDb;
+  const row = (fn: string, at = new Date()) => ({ traceId: "d".repeat(32), spanId: "e".repeat(16), userId: USER_C, functionId: fn, input: "old", output: null, at });
+  T.recordTraceText(row("eval.raceInFlight"));
+  const writing = T.flushTraceText();
+  await sleep(5);
+  await T.forgetTraceText(USER_C, "removal");
+  await writing;
+  check("a write in flight during the forget is deleted with the rest", !byFn("eval.raceInFlight").length);
+  T.traceTextStore.db = async () => fakeDb;
+  T.recordTraceText(row("eval.lateOld", new Date(Date.now() - 1_000)));
+  T.recordTraceText(row("eval.afterForgetNew", new Date(Date.now() + 1_000)));
+  await T.flushTraceText();
+  check("a row made before the forget, arriving after it, is dropped at write time", !byFn("eval.lateOld").length);
+  check("a row made after the forget is kept", byFn("eval.afterForgetNew").length === 1);
+}
+{
+  // Their rows still waiting in memory are dropped at the forget itself (not only at write time).
+  await T.flushTraceText();
+  T.recordTraceText({ traceId: "7".repeat(32), spanId: "8".repeat(16), userId: USER_B, functionId: "eval.waiting", input: "old", output: null, at: new Date() });
+  const before = T.traceTextBuffered().rows;
+  await T.forgetTraceText(USER_B, "removal");
+  check("a forget drops their rows waiting in memory right away", before === 1 && T.traceTextBuffered().rows === 0);
+}
+
+// 4. "Delete the photos I sent you" (memberAssets.deleteAssets): their trace text goes, the photo descriptions included.
+{
+  const A = await import("../../src/services/memberAssets.js");
+  A.useAssetDb({ query: async () => ({ rows: [], rowCount: 1 }) });
+  table.length = 0;
+  table.push({ trace_id: "f".repeat(32), span_id: "1".repeat(16), user_id: USER_B, function_id: "sendblue.describeImage", input: "[image not stored]", output: "a photo of their storefront", created_at: new Date() });
+  await A.deleteAssets(USER_B, [1]);
+  A.useAssetDb(null);
+  check("deleting their images deletes their trace text", !table.some((r) => r.user_id === USER_B));
+}
+
+// Smaller ones.
+{
+  table.length = 0;
+  const id = "2".repeat(32);
+  table.push({ trace_id: id, span_id: "3".repeat(16), user_id: null, function_id: "old", input: "i", output: "o", created_at: new Date(Date.now() - 15 * 86_400_000) });
+  table.push({ trace_id: id, span_id: "4".repeat(16), user_id: null, function_id: "fresh", input: "i", output: "o", created_at: new Date() });
+  const got = await T.traceTextFor(id);
+  check("the lookup only reads inside the 14 days, even before the daily job runs", got.length === 1 && got[0].functionId === "fresh");
+}
+{
+  failWrites = true;
+  console.error = () => {};
+  for (let i = 0; i < 20; i++) T.recordTraceText({ traceId: "5".repeat(32), spanId: "6".repeat(16), userId: null, functionId: "eval.big", input: "x".repeat(300_000), output: null, at: new Date() });
+  const b = T.traceTextBuffered();
+  check("the memory buffer is capped by size, not just rows", b.chars <= T.TRACE_TEXT.maxBufferedChars && b.rows < 20);
+  await T.flushTraceText();
+  console.error = origErr;
+  failWrites = false;
+}
+{
+  table.length = 0;
+  // In its own flow: the top level of this file carries marks from the checks above.
+  await T.withTraceUser(null, () => call("eval.nul", "an answer with a \u0000 in it"));
+  await T.flushTraceText();
+  const r = byFn("eval.nul")[0];
+  check("a NUL character is stripped before the insert", !!r && !r.output!.includes("\u0000") && r.output!.includes("an answer with a"));
+}
 
 await sdk.shutdown().catch(() => {});
 console.log(`\ntrace text: ${total - failed}/${total} passed`);
