@@ -62,7 +62,8 @@ export const GENTLE_AFTER_HARD = "They've had a hard stretch lately and this wai
 // moodFallbackDecision): an item that used its one wait and whose draft says SKIP again while they're still struggling. Approved by Royce
 // 2026-10-19 (option A, PR #261). Word for word; never changed without his yes.
 export const MOOD_FALLBACK_LINE = "No rush on anything. I'm around whenever you want to pick things back up.";
-// The ledger key prefix: one fallback a hard stretch a member (the stretch's start is the rest of the key).
+// The ledger key prefix (the stretch's start is the rest of the key). Once a stretch is read from the ledger, not the key: no second
+// fallback while they haven't been okay since the last one (harness/proactive.ts okaySinceFallback).
 export const MOOD_FALLBACK_KEY = "mood_fallback:";
 // Pure: the log line for a fallback sent in an item's place. The rule, the kind, ids; never member text.
 export function moodFallbackLogLine(o: { kind: string; ref: string }): string {
