@@ -720,7 +720,8 @@ function fakeAnthropic(init: any): Response {
     W.llmCalls.push({ kind: "soloAck", prompt });
     return anthropicText("Nothing jumped out as a strong pull tonight, and I'm still glad you came.");
   }
-  const d = prompt.match(/You're texting ([^ ]+) about "([^"]*)\." ([^,]+), who's also going, said they'd like to be introduced/);
+  // The recipient's first name can have a space ("Remy 2" once a room has more people than NAMES): it runs up to ' about "'.
+  const d = prompt.match(/You're texting (.+?) about "([^"]*)\." ([^,]+), who's also going, said they'd like to be introduced/);
   if (d) {
     W.llmCalls.push({ kind: "directAsk", prompt });
     return anthropicText(`${d[3]} from ${d[2]} would like an intro. Open to it?`);
