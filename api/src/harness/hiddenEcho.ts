@@ -13,6 +13,9 @@ const GENERIC = new Set([
 ]);
 const fold = (s: string) =>
   String(s ?? "").normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase().replace(/[\u2019\u2018]/g, "'").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+// Hyphenated words joined ("trans-pacific" -> "transpacific", "anti-abuse" -> "antiabuse"), for the sensitive-topic test only: a
+// prefix is never read as the word.
+export const joinHyphens = (s: string) => String(s ?? "").replace(/(\p{L})[-\u2010\u2011](?=\p{L})/gu, "$1");
 const words = (s: string) => fold(s).split(" ").filter((w) => w && !STOP.has(w));
 // "move", "moving" and "moved" are one word; "divorce" and "divorced" too.
 const stem = (w: string) => w.replace(/ies$/, "y").replace(/(?:ing|edly|ed|ly|es|s)$/, "").replace(/e$/, "");
@@ -35,17 +38,19 @@ function shingles(ws: string[], n: number): Set<string> {
 export function hiddenEcho(text: string, hidden: string[], allowedTexts: string[] = [], allow: string[] = [], sensitive: RegExp[] = []): string | null {
   let t = ` ${fold(text)} `;
   for (const a of allow.map(fold).filter((x) => x.length > 1).sort((x, y) => y.length - x.length)) t = t.split(` ${a} `).join(" zzsep ");
-  const allowedNorm = allowedTexts.map((x) => ` ${fold(x)} `);
   const allowedStems = new Set(allowedTexts.flatMap((x) => [...stemsOf(x)]));
   const allowedShingles = shingles(words(allowedTexts.join(" . ")), 3);
   const textStems = stemsOf(t);
   const textShingles = shingles(words(t), 3);
+  let tj = ` ${fold(joinHyphens(text))} `;
+  for (const a of allow.map((x) => fold(joinHyphens(x))).filter((x) => x.length > 1).sort((x, y) => y.length - x.length)) tj = tj.split(` ${a} `).join(" zzsep ");
+  const allowedJoined = allowedTexts.map((x) => ` ${fold(joinHyphens(x))} `);
   for (const h of hidden.map(String).filter((x) => x.trim())) {
-    const hn = ` ${fold(h)} `;
+    const hn = ` ${fold(joinHyphens(h))} `;
     for (const re of sensitive) {
       // Quoted as the text has it: the redraft feedback names only words the draft itself already carried.
-      const said = re.test(hn) ? t.match(re)?.[0] : undefined;
-      if (said && !allowedNorm.some((x) => re.test(x))) return `touches something they keep private ("${said.trim()}")`;
+      const said = re.test(hn) ? tj.match(re)?.[0] : undefined;
+      if (said && !allowedJoined.some((x) => re.test(x))) return `touches something they keep private ("${said.trim()}")`;
     }
     for (const sh of shingles(words(h), 3)) if (!sh.includes("zzsep") && textShingles.has(sh) && !allowedShingles.has(sh)) return `quotes something they keep private ("${sh}")`;
     const distinct = [...stemsOf(h)].filter((w) => !allowedStems.has(w));

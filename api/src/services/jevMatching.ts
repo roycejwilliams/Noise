@@ -28,13 +28,14 @@ type Cand = { user_id: string; goals?: string[]; blockers?: string[]; activity_p
 // (2026-09-25: one request per candidate hit the gateway's rate limit even
 // two at a time; 40 in one request came back in about 260ms).
 export const PRUNE_CHUNK = 40;
-export async function jevMatchScores(askText: string, candidates: Cand[]): Promise<(number | null)[]> {
+// askerFirstName: the member the prune is for; their name is left out of every candidate's line, as in Claude's (matching.ts).
+export async function jevMatchScores(askText: string, candidates: Cand[], askerFirstName?: string): Promise<(number | null)[]> {
   const out: (number | null)[] = new Array(candidates.length).fill(null);
   const chunks: number[][] = [];
   for (let i = 0; i < candidates.length; i += PRUNE_CHUNK) chunks.push(Array.from({ length: Math.min(PRUNE_CHUNK, candidates.length - i) }, (_, j) => i + j));
   // The same member-safe, capped lines Claude reads (matching.ts candidateLines) without their hidden part: no private ask, no
   // blocker, no memory row. A fit only the hidden part supports is never proposed, so the prune has no use for it.
-  const lines = candidateLines(candidates, undefined, undefined, { withHidden: false });
+  const lines = candidateLines(candidates, undefined, undefined, { withHidden: false, askerFirstName });
   await Promise.all(
     chunks.map(async (idx) => {
       const listed: Record<string, string> = {};

@@ -138,7 +138,7 @@ export function privateAskTexts(intent: unknown): string[] {
 }
 
 // Pure: one candidate's line, within budget.
-function candidateLine(c: ScorableCandidate, budget: number, named: (item: string) => boolean, hint: string | null | undefined, extraHidden: string[], withHidden: boolean): string {
+function candidateLine(c: ScorableCandidate, budget: number, named: (item: string) => boolean, hint: string | null | undefined, extraHidden: string[], withHidden: boolean): { line: string; labels: Set<string> } {
   const safe = (xs: unknown, max = DIGEST_ITEM_CHARS) => (Array.isArray(xs) ? xs : []).map((x) => clipItem(x, max)).filter((x) => x && !named(x));
   // A shared ask that names someone else in the prompt is left off the line too; its label then can't be a share reason
   // (runAskScoring reads only labels the line showed).
@@ -172,7 +172,9 @@ function candidateLine(c: ScorableCandidate, budget: number, named: (item: strin
   for (const g of safe(c.goals)) tryAdd(() => facts.push(g), () => facts.pop());
   for (const h of hiddenItems) tryAdd(() => hidden.push(h), () => hidden.pop(), () => (hiddenPart() ?? "").length <= DIGEST_HIDDEN_CHARS + HIDDEN_LABEL.length + 1);
   for (const l of safe(c.activity_preferences)) tryAdd(() => likes.push(l), () => likes.pop());
-  return render() || "(nothing on file)";
+  // The labels a share reason may rest on: the shared asks actually kept on the line (never read back from the rendered text,
+  // where a goal saying "[S1] " would look like one).
+  return { line: render() || "(nothing on file)", labels: new Set(keptShared.map((x) => `S${x.k + 1}`)) };
 }
 
 // Pure: each candidate's line, in order, without its list number.
@@ -181,6 +183,11 @@ function candidateLine(c: ScorableCandidate, budget: number, named: (item: strin
 // askerFirstName: the member the prompt is made for. Their name is left out of every candidate's items (another member's
 // "dating Jordan from the club" never reaches Jordan's prompt).
 export function candidateLines<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>, opts: { withHidden?: boolean; askerFirstName?: string } = {}): string[] {
+  return candidateLinesWithLabels(candidates, hints, hidden, opts).map((x) => x.line);
+}
+
+// Pure: each candidate's line and the shared-ask labels it shows.
+export function candidateLinesWithLabels<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>, opts: { withHidden?: boolean; askerFirstName?: string } = {}): { line: string; labels: Set<string> }[] {
   const budget = Math.max(DIGEST_MIN_CANDIDATE_CHARS, Math.min(DIGEST_CANDIDATE_CHARS, Math.floor(DIGEST_PROMPT_CHARS / Math.max(1, candidates.length))));
   // Everyone in this call with a first name (the room, partner and network paths carry one). One pattern screens every item;
   // an item naming anyone but the candidate themself is left out.
@@ -237,12 +244,6 @@ export function shareReasonFor(intent: unknown, r: { reason?: unknown; share_ask
 // room's ranked reasons). Never member text.
 export const REASON_WITHHELD = "[withheld]";
 
-// Pure: the labels ("S1"...) a line actually showed, so a share reason can rest only on what the scorer saw.
-export function shownLabels(line: string): Set<string> {
-  const visible = line.split(HIDDEN_LABEL)[0];
-  return new Set([...visible.matchAll(/\[(S\d+)\] /g)].map((m) => m[1]));
-}
-
 // Pure: a candidate's hidden texts (private asks in their intent or handed in, and blockers).
 export function hiddenTextsOf(c: ScorableCandidate, hidden?: Map<string, string[]>): string[] {
   return [...new Set([...privateAskTexts(c.intent), ...(hidden?.get(c.user_id) ?? []), ...(Array.isArray(c.blockers) ? c.blockers.map(String) : [])])];
@@ -252,7 +253,7 @@ async function runAskScoring<T extends ScorableCandidate>(
   functionId: string,
   prompt: string,
   candidates: T[],
-  lines: string[],
+  shown: { labels: Set<string> }[],
   hidden?: Map<string, string[]>,
 ): Promise<AskScore<T>[]> {
   try {
@@ -283,7 +284,8 @@ async function runAskScoring<T extends ScorableCandidate>(
           // The model only names WHICH shared ask the match rests on; the words shown to people are that ask, in their own
           // words, and only if they marked it shareable. Nothing private or inferred (e.g. "actively fundraising") can leak.
           // A fit resting on the hidden part alone, or with no reason at all, gets no share reason: nothing is proposed.
-          shareReason: shownLabels(lines[r.index] ?? "").has(label) ? shareReasonFor(c.intent, { ...r, reason: said }) : "",
+          // Only a label the line showed (a shared ask actually kept on it) can be a share reason.
+          shareReason: shown[r.index]?.labels.has(label) ? shareReasonFor(c.intent, { ...r, reason: said }) : "",
           mutual: Boolean(r.mutual),
         };
       });
@@ -328,7 +330,7 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
     try {
       const started = Date.now();
       const { jevMatchScores, keepAfterPrune } = await import("./jevMatching.js");
-      const ps = await jevMatchScores(ask.text, candidates);
+      const ps = await jevMatchScores(ask.text, candidates, opts.askerFirstName);
       const keep = new Set(keepAfterPrune(ps));
       toScore = candidates.filter((_, i) => keep.has(i));
       dropped = candidates.filter((_, i) => !keep.has(i));
@@ -348,8 +350,8 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
     }
   }
   if (!toScore.length) return dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
-  const lines = candidateLines(toScore, hints, undefined, { askerFirstName: opts.askerFirstName });
-  const digest = lines.map((l, i) => `${i}. ${l}`).join("\n");
+  const lines = candidateLinesWithLabels(toScore, hints, undefined, { askerFirstName: opts.askerFirstName });
+  const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
   const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore, lines);
   return [...scored, ...dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>)];
 }
@@ -386,8 +388,8 @@ export async function scoreOfferingAgainstCandidates<T extends ScorableCandidate
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || !offering.text) return [];
 
-  const lines = candidateLines(candidates, undefined, undefined, { askerFirstName: opts.askerFirstName });
-  const digest = lines.map((l, i) => `${i}. ${l}`).join("\n");
+  const lines = candidateLinesWithLabels(candidates, undefined, undefined, { askerFirstName: opts.askerFirstName });
+  const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
 
   const prompt = `Someone has this to offer others: "${offering.text}"
 
@@ -475,7 +477,7 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   if (candidates.length >= PRUNE_MIN_CANDIDATES && pruneEnabled()) {
     try {
       const { jevMatchScores, keepAfterPrune } = await import("./jevMatching.js");
-      const keep = new Set(keepAfterPrune(await jevMatchScores(line, candidates)));
+      const keep = new Set(keepAfterPrune(await jevMatchScores(line, candidates, opts.askerFirstName)));
       toScore = candidates.filter((_, i) => keep.has(i));
       dropped = candidates.filter((_, i) => !keep.has(i));
     } catch (err: any) {
@@ -486,8 +488,8 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   }
   const zero = dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
   if (!toScore.length) return zero;
-  const lines = candidateLines(toScore, hints, hidden, { askerFirstName: opts.askerFirstName });
-  const digest = lines.map((l, i) => `${i}. ${l}`).join("\n");
+  const lines = candidateLinesWithLabels(toScore, hints, hidden, { askerFirstName: opts.askerFirstName });
+  const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
   const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden);
   return [...scored, ...zero];
 }
