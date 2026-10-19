@@ -317,10 +317,8 @@ T.traceTextStore.db = async () => fakeDb;
         () =>
           void T.withTraceUser(null, async () => {
             await call("eval.task.beforeMark");
-            for (const u of [USER_B, USER_C, "not-a-uuid"]) {
-              T.markTraceUser(u);
-              await call(`eval.task.${u.slice(-4)}`);
-            }
+            for (const u of [USER_B, USER_C, "not-a-uuid"]) await T.withTraceUser(u, () => call(`eval.task.${u.slice(-4)}`));
+            await call("eval.task.afterLoop");
           }).then(done),
         1,
       ),
@@ -332,9 +330,10 @@ T.traceTextStore.db = async () => fakeDb;
   check("a timer started in A's turn carries nobody's mark, not A's", byFn("eval.task.beforeMark").length === 1 && u("eval.task.beforeMark") === null);
   check("each due task's model calls are filed under its own member", u("eval.task.b0b0") === USER_B && u("eval.task.c0c0") === USER_C);
   check("a task with no valid member is nobody's, never the previous task's", byFn("eval.task.uuid").length === 1 && u("eval.task.uuid") === null);
+  check("each task's mark is scoped: after the loop the timer is nobody's again", byFn("eval.task.afterLoop").length === 1 && u("eval.task.afterLoop") === null);
   check("A's turn keeps A after the timer", u("eval.turnAfterTimer") === USER);
   check("the reply turn's timer runs due tasks under nobody's mark", /setTimeout\(\(\) => withTraceUser\(null, \(\) => import\("\.\.\/services\/taskTurn\.js"\)\.then\(\(t\) => t\.runDueTasks\(\)\)\)/.test(src("routes/sendblue.ts")));
-  check("runDueTasks marks each task's own member first", /for \(const t of await claimDueTasks\(\)\) \{\n\s*\(await import\("\.\/llmTraceText\.js"\)\)\.markTraceUser\(t\.userId\);/.test(src("services/taskTurn.ts")));
+  check("runDueTasks runs each task under its own member, scoped", /for \(const t of await claimDueTasks\(\)\) await withTraceUser\(t\.userId, async \(\) => \{/.test(src("services/taskTurn.ts")));
   check("every text turn runs inside traceTurn", /withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)/.test(src("routes/sendblue.ts")));
 }
 
@@ -421,6 +420,97 @@ T.traceTextStore.db = async () => fakeDb;
   await A.deleteAssets(USER_B, [1]);
   A.useAssetDb(null);
   check("deleting their images deletes their trace text", !table.some((r) => r.user_id === USER_B));
+}
+
+// ---------------------------------------------------------------- background jobs carry their member (Q3, decided 2026-10-19)
+{
+  // The jobs' own runner (jobs/index.ts runWithConcurrency, same code), wrapped the way the jobs wrap it.
+  async function runWithConcurrency<X>(items: X[], limit: number, fn: (item: X) => Promise<void>): Promise<void> {
+    let cursor = 0;
+    async function worker() {
+      while (cursor < items.length) {
+        const item = items[cursor++];
+        await fn(item);
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  }
+  table.length = 0;
+  const members = [USER, USER_B, USER_C];
+  const items = [0, 1, 2, 3, 4, 5].map((i) => ({ user_id: members[i % 3], i }));
+  // Started from inside A's own turn: no job item may inherit A.
+  await T.traceTurn(async () => {
+    T.noteTraceUser(USER);
+    await T.perMember(runWithConcurrency)(items, 3, async (it: any) => {
+      await sleep(3 * ((it.i * 7) % 5));
+      await call(`eval.job.${it.i}.a`);
+      await sleep(3 * ((it.i * 3) % 4));
+      await call(`eval.job.${it.i}.b`, "ok", 2);
+    });
+    // The hourly sweep's items are arrays of one member's rows.
+    await T.perMember(runWithConcurrency, (rows: any[]) => rows[0]?.user_id)([[{ user_id: USER_B }], [{ user_id: USER_C }]], 2, async (rows: any[]) => {
+      await call(`eval.jobRows.${rows[0].user_id.slice(-4)}`);
+    });
+  });
+  await T.flushTraceText();
+  const wrong = items.flatMap((it) => ["a", "b"].map((k) => ({ it, r: byFn(`eval.job.${it.i}.${k}`)[0] }))).filter(({ it, r }) => !r || r.user_id !== it.user_id);
+  check(`concurrent job items: every row under its own member, none crossed${wrong.length ? `: ${wrong.map(({ it }) => it.i).join(",")}` : ""}`, wrong.length === 0);
+  check("a job item keyed by its rows carries that member", byFn("eval.jobRows.b0b0")[0]?.user_id === USER_B && byFn("eval.jobRows.c0c0")[0]?.user_id === USER_C);
+}
+{
+  // Inside a member's own turn after a forget, a unit of work for the same member keeps the turn's mark (still dropped); one
+  // for another member gets its own mark (kept).
+  table.length = 0;
+  await T.traceTurn(async () => {
+    T.noteTraceUser(USER);
+    await T.forgetTraceText(USER, "removal");
+    await sleep(5); // a later moment than the forget, so only the flow's flag (not the write-time check) can drop it
+    await T.withTraceUser(USER, () => call("eval.sameMemberAfterForget"));
+    await T.withTraceUser(USER_B, () => call("eval.otherMemberInside"));
+    // Before the turn's own end-of-turn delete: the drop alone must hold.
+    await T.flushTraceText();
+    check("the same member's work after the forget is dropped at once, not only by the turn-end delete", !byFn("eval.sameMemberAfterForget").length);
+  });
+  await T.flushTraceText();
+  check("the same member's work inside their forgetting turn is still dropped", !byFn("eval.sameMemberAfterForget").length);
+  check("another member's work inside that turn is kept under them", byFn("eval.otherMemberInside")[0]?.user_id === USER_B);
+}
+{
+  // askKind.classifyOpenAsks, for real (its database injected): each ask's classification under that ask's member.
+  table.length = 0;
+  const K = await import("../../src/services/askKind.js");
+  const asks = [
+    { id: "k1", user_id: USER_B, ask_text: "find me a climbing partner in Oakland", kind: null, intent: null },
+    { id: "k2", user_id: USER_C, ask_text: "intro to a seed investor in climate", kind: null, intent: null },
+  ];
+  const db = { query: async (sql: string) => (/FROM ask_checkins/.test(sql) && /SELECT/.test(sql) ? { rows: asks, rowCount: asks.length } : { rows: [], rowCount: 0 }) };
+  await T.traceTurn(async () => {
+    T.noteTraceUser(USER);
+    await K.classifyOpenAsks(25, { db: db as any });
+  });
+  await T.flushTraceText();
+  const rows = byFn("askKind.classify");
+  check("askKind: each ask's model call is filed under that ask's member, not the caller's", rows.length === 2 && rows.some((r) => r.user_id === USER_B) && rows.some((r) => r.user_id === USER_C));
+}
+{
+  // Every job named in the ruling runs each member's unit of work under a scoped withTraceUser (never enterWith).
+  const J = src("jobs/index.ts");
+  check("jobs: the hourly ask sweep runs each member's rows under their mark", /await perMember\(runWithConcurrency, \(userRows: any\[\]\) => userRows\[0\]\?\.user_id\)\(Array\.from\(rowsByUser\.values\(\)\), 5,/.test(J));
+  check("jobs: the 9am daily sweep runs each member under their mark", /D\.runDailySweepAll\(perMember\(runWithConcurrency\)\)/.test(J));
+  check("jobs: the goal sweep runs each member under their mark", /runGoalSweep\(perMember\(runWithConcurrency\)\)/.test(J));
+  check("jobs: the nightly memory recap runs each member under their mark", /await withTraceUser\(userId, \(\) => buildRecap\(userId\)\);/.test(J));
+  check("proactive dispatch: each member's drafts under their mark", /await withTraceUser\(id, \(\) => dispatchForUser\(registry, id\)\);/.test(src("harness/proactive.ts")));
+  check("3 AM relevance sweep: each member under their mark", /for \(const row of rows\)\n\s*await withTraceUser\(row\.user_id, async \(\) => \{\n\s*await sweepAskAgainstNetwork\(row\.user_id/.test(src("services/relevance.ts")));
+  const E = src("services/eventScoring.ts");
+  check("room scoring: each person's scoring under their mark", /const scored = await withTraceUser\(person\.user_id, \(\) =>\n\s*scoreAgainstRoomFrame\(/.test(E));
+  check("room scoring: each person's match nudge and additive offer under their mark", /withTraceUser\(person\.user_id, \(\) => maybeSendMatchNudge\(/.test(E) && /withTraceUser\(person\.user_id, \(\) => maybeSendAdditiveOffer\(/.test(E));
+  check("weekly reflections: each member under their mark", /await withTraceUser\(r\.id, \(\) => reflectOnMember\(r\.id\)\)/.test(src("harness/memberReflection.ts")));
+  check("askKind: the open-ask classifier reads each ask's member", /SELECT id, user_id, ask_text, kind, intent FROM ask_checkins/.test(src("services/askKind.ts")) && /await withTraceUser\(r\.user_id, \(\) => classify\(r\.ask_text\)\)/.test(src("services/askKind.ts")));
+  check("event solo acknowledgments: each person under their mark", /await withTraceUser\(person\.user_id, \(\) => sendSoloAcknowledgment\(eventId, eventName, person, \{\}\)\)/.test(src("services/eventUnmatchedFollowUp.ts")));
+  check("dev review: each member's model reads under their mark", /await withTraceUser\(userId, async \(\) => \[\.\.\.\(await modelFlags\(data\)\)/.test(src("harness/devReview.ts")));
+  check("scheduled call reminders: under the member's mark", /await withTraceUser\(row\.user_id, \(\) =>\n\s*generateText\(\{/.test(src("jobs/scheduledCall.ts")));
+  check("network reveals run inside proactive dispatch (covered there)", /prepareReveal\(c\.userId/.test(src("harness/proactiveRegistry.ts")));
+  check("no job uses enterWith: the only enterWith calls are the entry-point marks", (src("services/llmTraceText.ts").match(/enterWith\(/g) ?? []).length === 1);
 }
 
 // Smaller ones.

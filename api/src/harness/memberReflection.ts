@@ -21,6 +21,7 @@ import { PROACTIVE_PURPOSE } from "./proactivePurpose.js";
 import { listThreads, renderThreads, type MemberThread } from "./memberThreads.js";
 import { localStamp, memberZone } from "../services/memberTime.js";
 import type { KnowledgeSection, MemberKnowledge } from "../services/memberKnowledge.js";
+import { withTraceUser } from "../services/llmTraceText.js";
 
 export type WeekFacts = {
   sends: { type: string; purpose: string; at: string; message: string }[];
@@ -263,5 +264,5 @@ export async function runWeeklyReflections(): Promise<void> {
        AND EXISTS (SELECT 1 FROM member_threads t WHERE t.user_id = u.id AND t.status IN ('open', 'waiting'))
      LIMIT 200`,
   );
-  for (const r of rows) if (!marked.has(r.id)) await reflectOnMember(r.id);
+  for (const r of rows) if (!marked.has(r.id)) await withTraceUser(r.id, () => reflectOnMember(r.id)); // under their own trace-text mark
 }

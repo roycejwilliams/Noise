@@ -54,13 +54,18 @@ export function noteTraceUser(userId: string | null | undefined): void {
   }
   traceUser.enterWith({ userId: validUser(userId), forgotten: false, turn: false });
 }
-// A fresh mark for one member's work inside a loop over many (runDueTasks): never the mark of whoever started the loop.
-export function markTraceUser(userId: string | null | undefined): void {
-  traceUser.enterWith({ userId: validUser(userId), forgotten: false, turn: false });
+// One member's unit of work (a due task, one member's sweep, a draft for them): fn runs under that member's own mark, scoped
+// to fn, never the mark of whoever started it (a turn's timer, a job looping over everyone). null: nobody's. Already inside
+// the same member's mark (their own turn), it keeps that one, so a forget there still holds for the rest of the turn.
+export function withTraceUser<T>(userId: unknown, fn: () => T): T {
+  const u = validUser(userId);
+  const cur = traceUser.getStore();
+  if (u && cur && cur.userId === u) return fn();
+  return traceUser.run({ userId: u, forgotten: false, turn: false }, fn);
 }
-// Runs fn under its own mark (null: nobody's), never inheriting the caller's: a timer a turn starts for other members' work.
-export function withTraceUser<T>(userId: string | null, fn: () => T): T {
-  return traceUser.run({ userId: validUser(userId), forgotten: false, turn: false }, fn);
+// A job's per-item runner (runWithConcurrency) with each item run under its member's mark: item.user_id, or userOf(item).
+export function perMember<R extends (items: any[], limit: number, fn: (i: any) => Promise<void>) => Promise<void>>(run: R, userOf: (item: any) => unknown = (i) => i?.user_id): R {
+  return ((items: any[], limit: number, fn: (i: any) => Promise<void>) => run(items, limit, (i) => withTraceUser(userOf(i), () => fn(i)))) as R;
 }
 // One text turn. When it ends, if anything in it deleted the member's trace text, it's deleted again: rows from calls that
 // were already running when the delete happened are gone too.

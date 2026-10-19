@@ -1,5 +1,6 @@
 import pool from "../db/db.js";
 import { getActiveOfferingAsk, getActiveSeekingAsk, getOpenAsksOfType, scoreAgainstStatedAsk, scoreOfferingAgainstCandidates, type StatedIntent } from "./matching.js";
+import { withTraceUser } from "./llmTraceText.js";
 
 // Co Loop Stage 3 — "identify relevance." Runs scoreAgainstStatedAsk
 // standalone against the whole network — no eligibility gating of any kind,
@@ -232,8 +233,10 @@ export async function sweepAllOpenAsks(): Promise<void> {
        WHERE e->>'status' = 'active' AND COALESCE(btrim(e->>'text'), '') <> ''
      )`,
   );
-  for (const row of rows) {
-    await sweepAskAgainstNetwork(row.user_id, { all: true });
-    await sweepOfferingAgainstNetwork(row.user_id, { all: true });
-  }
+  // Each member's sweep (and the matching prompts it makes) under their own trace-text mark (services/llmTraceText.ts).
+  for (const row of rows)
+    await withTraceUser(row.user_id, async () => {
+      await sweepAskAgainstNetwork(row.user_id, { all: true });
+      await sweepOfferingAgainstNetwork(row.user_id, { all: true });
+    });
 }

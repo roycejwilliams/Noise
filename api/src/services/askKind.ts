@@ -8,6 +8,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
+import { withTraceUser } from "./llmTraceText.js";
 
 // "person": someone to meet or talk to ("a founder who's done a pre-seed raise to talk to"), which only an intro can meet, never a
 // search of events and pages (Royce, 2026-10-09: that ask came back empty five mornings running). Routed to intros, not swept.
@@ -83,12 +84,12 @@ export async function classifyOpenAsks(limit = 25, deps: { db?: KindDb; classify
   const classify = deps.classify ?? classifyAsk;
   const { setAskKind } = await import("./laneMoves.js");
   const { rows } = await db.query(
-    `SELECT id, ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR (kind = 'find' AND COALESCE(kind_version, 1) < $2)) LIMIT $1`,
+    `SELECT id, user_id, ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND (kind_checked_at IS NULL OR (kind = 'find' AND COALESCE(kind_version, 1) < $2)) LIMIT $1`,
     [limit, ASK_KIND_VERSION],
   );
   for (const r of rows) {
     // A lookout keeps its kind; it's only marked checked (or given find, if it never had one), so it isn't read again every run.
-    const kind = r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : await classify(r.ask_text);
+    const kind = r.intent === "lookout" ? ((r.kind as AskKind | null) ?? "find") : await withTraceUser(r.user_id, () => classify(r.ask_text)); // under the ask's member
     await setAskKind(db, { id: r.id, read: { kind: r.kind ?? null, intent: r.intent ?? null }, kind, version: ASK_KIND_VERSION }).catch(() => {});
   }
   // Open "find" asks that read as Co's own promise or deliverable are NOT switched off here any more (Royce, 2026-10-13: a member

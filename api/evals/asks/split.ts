@@ -119,7 +119,7 @@ check("an ask can reference the goal it serves: ask_checkins.serves_goal_id exis
   // 2026-10-08: the search is each active goal's findable edge (services/goalEdges.ts), never a goal's own words or an ask's text.
   check("what it searches is the plan's findable edges, never a goal's own words or an ask's text", /programs and cohorts for pre-seed founders/.test(ctx) && /founder dinners/.test(ctx) && !/raise a pre-seed/.test(ctx) && !/Get Cue in front of users/.test(ctx) && !/Find me weekend events/.test(ctx));
   check("the budget is per member and independent of asks: due again 20 hours after the last attempt, not before", GS.goalSweepDue({ last_attempted_at: null }) && !GS.goalSweepDue({ last_attempted_at: new Date(Date.now() - 19 * 3_600_000) }) && GS.goalSweepDue({ last_attempted_at: new Date(Date.now() - 21 * 3_600_000) }) && /INTERVAL '20 hours'/.test(sql) && /INTERVAL '3 days'/.test(sql));
-  check("the cron hands the whole sweep to services/goalSweep.ts and still dispatches after", /await runGoalSweep\(runWithConcurrency\);\s*await runDispatch\(\);/.test(src("jobs/index.ts")) && !/NOT EXISTS \(SELECT 1 FROM ask_checkins ac WHERE ac\.user_id = u\.id AND ac\.resolved_at IS NULL\)/.test(src("jobs/index.ts")));
+  check("the cron hands the whole sweep to services/goalSweep.ts and still dispatches after", /await runGoalSweep\((?:perMember\()?runWithConcurrency\)?\);(?: *\/\/[^\n]*)?\s*await runDispatch\(\);/.test(src("jobs/index.ts")) && !/NOT EXISTS \(SELECT 1 FROM ask_checkins ac WHERE ac\.user_id = u\.id AND ac\.resolved_at IS NULL\)/.test(src("jobs/index.ts")));
 }
 
 console.log(`asks and goals split: ${total - failed}/${total} passed`);

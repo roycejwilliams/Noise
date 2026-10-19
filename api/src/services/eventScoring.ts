@@ -20,6 +20,7 @@ import { recordDecision } from "../harness/core.js";
 import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
 import { isOpenAsk } from "../harness/profileWrite.js";
+import { withTraceUser } from "./llmTraceText.js";
 
 // Model policy (Royce, 2026-09-14): a draft that names another person is
 // Sonnet 5; the additive offer names no one (checked in code) and stays Haiku.
@@ -847,13 +848,16 @@ export async function scoreMatchedGroup(
       const h = edgeHint(e);
       if (h) hints.set(id, h);
     }
-    const scored = await scoreAgainstRoomFrame(
-      frame,
-      others,
-      askerContextParts.length ? askerContextParts.join("; ") : undefined,
-      hints,
-      hiddenAsks,
-      { askerFirstName: person.first_name },
+    // This person's scoring and drafts under their own trace-text mark (services/llmTraceText.ts).
+    const scored = await withTraceUser(person.user_id, () =>
+      scoreAgainstRoomFrame(
+        frame,
+        others,
+        askerContextParts.length ? askerContextParts.join("; ") : undefined,
+        hints,
+        hiddenAsks,
+        { askerFirstName: person.first_name },
+      ),
     );
     const ranked: RankedCandidate[] = scored
       .map((s) => {
@@ -888,7 +892,7 @@ export async function scoreMatchedGroup(
       for (const r of tries) {
         const cand = others.find((o) => o.user_id === r.candidate_id);
         if (!cand || (live && !r.shareReason)) continue;
-            const sent = await maybeSendMatchNudge(eventId, eventName, person, r, cand, eventTiming, opts).catch((err: any) => {
+            const sent = await withTraceUser(person.user_id, () => maybeSendMatchNudge(eventId, eventName, person, r, cand, eventTiming, opts)).catch((err: any) => {
           console.error(`eventScoring: maybeSendMatchNudge failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
           return false;
         });
@@ -904,7 +908,7 @@ export async function scoreMatchedGroup(
         .map((r) => others.find((o) => o.user_id === r.candidate_id))
         .filter((c): c is ScorableGuest => Boolean(c));
       if (newCandidates.length) {
-        await maybeSendAdditiveOffer(eventId, eventName, person, newCandidates, eventTiming, opts).catch((err: any) =>
+        await withTraceUser(person.user_id, () => maybeSendAdditiveOffer(eventId, eventName, person, newCandidates, eventTiming, opts)).catch((err: any) =>
           console.error(`eventScoring: maybeSendAdditiveOffer failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
         );
       }
