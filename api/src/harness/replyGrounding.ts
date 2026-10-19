@@ -28,7 +28,7 @@ import { findSection } from "../services/deliveryReceipts.js";
 import { driftLine } from "../services/receiptDrift.js";
 import type { Doc } from "../services/documentSheet.js";
 import type { EmotionalContext } from "./emotion.js";
-import { GENTLE_AFTER_HARD, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
+import { GENTLE_AFTER_HARD, MOOD_HOLD_CAP_HOURS, OKAY_AFTER_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
@@ -133,7 +133,7 @@ export type DoorFacts = { offered: boolean; why: string; instruction: string | n
 // Pure: the first-read moment on this reply's facts (services/theDoor.ts doorDecision), with its instruction when it's on offer.
 // Nothing at all once the door has closed for them (given, or no longer new).
 export function addDoorMoment(rf: ReplyFacts, view: DoorView, o: { firstName?: string | null; emotional: EmotionalContext | null | undefined; otherQuestion?: string | null; now?: Date }): DoorFacts | null {
-  const d = doorDecision({ view, now: o.now, heavy: heavyHold(o.emotional, o.now ?? new Date()).hold, frustrated: !!o.emotional?.withCo?.frustrated, otherQuestion: o.otherQuestion ?? null });
+  const d = doorDecision({ view, now: o.now, heavy: heavyHold(o.emotional, o.now ?? new Date()).hold, frustrated: frustrationHold(o.emotional, view.joinedAt, o.now ?? new Date()).hold, otherQuestion: o.otherQuestion ?? null });
   if (!d.offer && !doorOpen(view, o.now).open) return null;
   const instruction = d.offer ? doorInstruction(o.firstName) : null;
   if (instruction) addInstruction(rf, instruction);
@@ -161,7 +161,7 @@ export function withdrawDoorMoment(rf: ReplyFacts, why: string): void {
 // Nothing at all for a seeded member: steering stops once two findable interests are on file.
 export function addColdStartSteer(rf: ReplyFacts, cs: ColdStartView, o: { emotional: EmotionalContext | null | undefined; otherQuestion?: string | null; now?: Date }): ColdStartFacts | null {
   if (cs.seeds.seeded) return null;
-  const d = steerDecision({ seeds: cs.seeds, heavy: heavyHold(o.emotional, o.now ?? new Date()).hold, frustrated: !!o.emotional?.withCo?.frustrated, history: cs.history, lifetimeSteers: cs.lifetimeSteers, now: o.now ?? new Date(), otherQuestion: o.otherQuestion ?? null });
+  const d = steerDecision({ seeds: cs.seeds, heavy: heavyHold(o.emotional, o.now ?? new Date()).hold, frustrated: frustrationHold(o.emotional, steerOwedSince(cs), o.now ?? new Date()).hold, history: cs.history, lifetimeSteers: cs.lifetimeSteers, now: o.now ?? new Date(), otherQuestion: o.otherQuestion ?? null });
   const asked = cs.history.filter((h) => h.action === "steered" && h.question).map((h) => h.question!);
   const instruction = d.steer ? steerInstruction(cs.seeds, asked) : null;
   if (instruction) addInstruction(rf, instruction);
@@ -507,6 +507,10 @@ export async function gatherReplyFacts(
     if (rf.door) noteMoodHold("heavy_offer_hold", "door", `${userId}:door`, heavy);
     if (rf.coldStart) noteMoodHold("heavy_offer_hold", "cold_start", `${userId}:cold_start`, heavy);
     if (opts.turn.docOffer) noteMoodHold("heavy_offer_hold", "document_offer", `${userId}:document_offer`, heavy);
+    // Frustration with Cue holds the door and the question the same way (frustrationHold): logged once, rule and kind.
+    const now = new Date();
+    if (rf.door && opts.turn.door) noteMoodHold("frustration_hold", "door", `${userId}:door`, frustrationHold(opts.turn.emotional, opts.turn.door.joinedAt, now));
+    if (rf.coldStart && opts.turn.coldStart) noteMoodHold("frustration_hold", "cold_start", `${userId}:cold_start`, frustrationHold(opts.turn.emotional, steerOwedSince(opts.turn.coldStart), now));
     // Released (they're okay again, or the cap): what waited goes gently (model-facing tone guidance, never a line of its own).
     if ((heavy.state === "released_okay" || heavy.state === "released_cap") && (rf.door?.offered || rf.coldStart?.offered || docOffered)) addInstruction(rf, GENTLE_AFTER_HARD);
   }
@@ -634,6 +638,25 @@ export function heavyHold(e: EmotionalContext | null | undefined, now: Date): Mo
   if (!heavyMoment(e)) return { state: "none", hold: false, heldHours: null }; // mood: the capped hold itself
   const m = moodHold(e, { now, lastInboundAt: now });
   return m.state === "none" ? { state: "held", hold: true, heldHours: null } : m;
+}
+// Pure: whether frustration with Cue holds the door or the cold-start question back this reply: timing only, one capped wait per item
+// (Royce, 2026-10-19: "feelings change timing and tone, never cancel"). The wait is measured from the first frustration read since the
+// item was owed (owedSince), so a later stretch of frustration never starts a second one; it ends early once they're okay (this message,
+// them texting now, comes 6h or more after the last frustration read, or the read clears), and at MOOD_HOLD_CAP_HOURS after it began
+// even if they're still frustrated. A read without times (an older state) holds as before.
+export function frustrationHold(e: EmotionalContext | null | undefined, owedSince: Date | null, now: Date): MoodHold {
+  const w = e?.withCo; // mood: the capped hold itself
+  if (!w?.frustrated) return { state: "none", hold: false, heldHours: null }; // mood: the capped hold itself
+  const since = (w.reads ?? []).filter((t) => !owedSince || t.getTime() >= owedSince.getTime()).reduce<Date | null>((m, t) => (!m || t < m ? t : m), null);
+  const heldHours = since ? Math.max(0, (now.getTime() - since.getTime()) / 3_600_000) : null;
+  if (w.at && now.getTime() - w.at.getTime() >= OKAY_AFTER_HOURS * 3_600_000) return { state: "released_okay", hold: false, heldHours };
+  if (heldHours !== null && heldHours >= MOOD_HOLD_CAP_HOURS) return { state: "released_cap", hold: false, heldHours };
+  return { state: "held", hold: true, heldHours };
+}
+// Pure: since when the cold-start question has been owed: their last steer record (any outcome), or when they joined.
+export function steerOwedSince(cs: Pick<ColdStartView, "history" | "joinedAt">): Date | null {
+  const last = cs.history.reduce<Date | null>((m, h) => (!m || h.at > m ? h.at : m), null);
+  return last ?? cs.joinedAt ?? null;
 }
 // Pure: Co's recent lines from the reply's context (their message, then Co's last few "Co replied:" lines).
 export function coLinesIn(context: string | undefined): string[] {
