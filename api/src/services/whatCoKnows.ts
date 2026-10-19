@@ -947,14 +947,20 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
         const done = { ...r, was };
         applied.push(done);
         changedRefs.add(ref);
-        await client.query(`INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote, item_ref, removed) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, fieldFor(ref), was, r.now, clean(o.theirWords).slice(0, 300), ref, r.now == null]);
-        decisions.push({ layer: 3, decision: r.now == null ? "knowledge.remove" : "knowledge.correct", userId, outcome: "act", action: r.source, proposal: { ref, was: was.slice(0, 240), now: r.now, theirWords: clean(o.theirWords).slice(0, 300) }, checks: [{ name: "their_words_in_message", pass: true }, ...(removing ? [{ name: "removal_asked", pass: true }] : []), ...(now ? [{ name: "new_value_backed", pass: true }] : [])] });
+        const row = await client.query(`INSERT INTO profile_corrections (user_id, field, old_value, new_value, quote, item_ref, removed) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, [userId, fieldFor(ref), was, r.now, clean(o.theirWords).slice(0, 300), ref, r.now == null]);
+        const checks = [{ name: "their_words_in_message", pass: true }, ...(removing ? [{ name: "removal_asked", pass: true }] : []), ...(now ? [{ name: "new_value_backed", pass: true }] : [])];
+        // A removal's own log row holds what kind of thing went, the day, and the corrections row id: never the removed text, their
+        // words asking for it, or the item ref (its hash part is made from the text). It is a log, so it must not be a copy.
+        if (r.now == null) decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: r.source, proposal: removalLog(logKind(ref), row?.rows?.[0]?.id), checks });
+        // A correction keeps its log as before, except their words when the same message also removed something (they name it).
+        else decisions.push({ layer: 3, decision: "knowledge.correct", userId, outcome: "act", action: r.source, proposal: { ref, was: was.slice(0, 240), now: r.now, ...(removing ? {} : { theirWords: clean(o.theirWords).slice(0, 300) }) }, checks });
       }
     }
     // What was queued on what changed, on the same transaction (logged below, each one).
     for (const c of await cancelQueued(client, userId, applied)) {
       cancelled.push(c);
-      decisions.push({ layer: 3, decision: "knowledge.cancel_queued", userId, outcome: "act", action: `${c.kind}:${c.action}`, proposal: { id: c.id, what: clean(c.what).slice(0, 160), because: c.because } });
+      // What a removal took out of line is logged by kind and id: its text says the removed thing too.
+      decisions.push({ layer: 3, decision: "knowledge.cancel_queued", userId, outcome: "act", action: `${c.kind}:${c.action}`, proposal: byRemoval(c) ? { id: c.id, because: c.because } : { id: c.id, what: clean(c.what).slice(0, 160), because: c.because } });
     }
     await client.query("COMMIT");
   } catch (err) {
@@ -972,7 +978,7 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     }
     applied.push({ ref: item.ref, source: "file", was: `file ${n}`, now: null });
     changedRefs.add(item.ref);
-    decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { ref: item.ref, was: `file ${n}`, now: null }, checks: [{ name: "removal_asked", pass: true }] });
+    decisions.push({ layer: 3, decision: "knowledge.remove", userId, outcome: "act", action: "file", proposal: { kind: "file", on: new Date().toISOString().slice(0, 10), id: n }, checks: [{ name: "removal_asked", pass: true }] });
   }
   for (const d of decisions) await recordDecision(d).catch(() => {});
   // Something removed or corrected: all of their model prompt/answer text goes (services/llmTraceText.ts; Royce, 2026-10-18:
@@ -984,18 +990,39 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
   for (const c of cancelled) {
     if (c.kind !== "task" || c.action !== "cancelled" || !c.task) continue;
     const L = await import("./commitmentLog.js");
-    if (L.isCommitment(c.task)) await L.logCommitment("outcome", { userId, taskId: Number(c.id), goalId: c.task.followup?.goalId ?? null, outcome: "released", why: c.because, what: c.task.goal, source: c.task.source, theirWord: clean(o.theirWords).slice(0, 200) });
+    // Released by a removal: the task's words and theirs say the removed thing, so neither is logged (the task id is).
+    if (L.isCommitment(c.task)) await L.logCommitment("outcome", { userId, taskId: Number(c.id), goalId: c.task.followup?.goalId ?? null, outcome: "released", why: c.because, what: byRemoval(c) ? null : c.task.goal, source: c.task.source, theirWord: byRemoval(c) ? null : clean(o.theirWords).slice(0, 200) });
     // Its goal, settled if that was the last thing open on it (goalOwnership.ts closeGoalIfSettled).
     if (c.task.followup?.goalId != null) await import("./goalOwnership.js").then((G) => G.closeGoalIfSettled(userId, Number(c.task!.followup.goalId))).catch(() => false);
   }
   if (refused.length) {
-    await recordDecision({ layer: 3, decision: "knowledge.change_refused", userId, outcome: "skip", action: "refused", proposal: { refused, theirWords: clean(o.theirWords).slice(0, 300) }, checks: refused.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.ref}: ${r.why}` })) }).catch(() => {});
+    // A removal asked for, refused: their words name the thing and a ref's hash is made from it, so only the kinds and the reasons.
+    const kinds = refused.map((r) => ({ kind: logKind(r.ref), why: r.why }));
+    await recordDecision({ layer: 3, decision: "knowledge.change_refused", userId, outcome: "skip", action: "refused", proposal: removing ? { refused: kinds, on: new Date().toISOString().slice(0, 10) } : { refused, theirWords: clean(o.theirWords).slice(0, 300) }, checks: removing ? kinds.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.kind}: ${r.why}` })) : refused.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.ref}: ${r.why}` })) }).catch(() => {});
   }
   if (applied.length) void refreshDerived(userId, applied).catch((err: any) => console.error("whatCoKnows: refreshing derived copies failed (non-fatal):", err?.message ?? err));
   // What else still says it, from the fresh read (stripped like the view).
   const after = await whatCoKnows(userId).catch(() => null);
   return { ok: applied.length > 0, applied, refused, alsoSays: after ? stillSaying(after.view, applied, changedRefs) : [], cancelled: cancelled.map((c) => ({ ...c, what: clean(c.what) })) };
 }
+
+// Pure: the decision-log proposal for one removal: the kind of thing, the day, and its profile_corrections row id. Nothing that
+// can be turned back into what was removed (forget-delete-spec.md section 4, option D): no text, no quote, no hash.
+export function removalLog(kind: string, correctionId: unknown, at: Date = new Date()): { kind: string; on: string; id: number | null } {
+  const id = correctionId == null ? null : Number(correctionId);
+  return { kind, on: at.toISOString().slice(0, 10), id: Number.isFinite(id) ? id : null };
+}
+// Pure: the kind a log names for a ref. Only a ref of a known kind gets its kind's words (fieldFor); anything else (a ref the model
+// made up, which could be the thing itself) is logged as "an item", never as given.
+const LOG_KINDS = new Set(["profile", "goal", "snapshot", "kit", "place", "window", "free", "grant", "claim", "thread", "taste", "inspo", "design", "designfont", "designref", "ask", "avoid", "file"]);
+export function logKind(ref: string): string {
+  const [kind, a = ""] = String(ref ?? "").split(":");
+  if (!LOG_KINDS.has(kind)) return "an item";
+  if (kind === "profile" && !/^[a-z_]{1,40}$/.test(a)) return "a profile field";
+  return fieldFor(`${kind}:${a}`);
+}
+// Whether a queued thing was taken out of line by a removal (cancelQueued's reason says so), not by a correction.
+const byRemoval = (c: Pick<Cancelled, "because">) => c.because.startsWith("removed ");
 
 // ---------------------------------------------------------------- what's queued on what changed
 
