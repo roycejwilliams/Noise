@@ -151,6 +151,11 @@ export async function walkinAskDue(eventName: string, personId: string, deps: Wa
   if (await deps.hasAsk(personId)) return false;
   return !(await deps.solicitationSent(personId, solicitationKey(eventName)));
 }
+// Pure: whether the reply delivered this turn asked the walk-in question (a delivered text with a question in it). Only then
+// is the ask noted (routes/sendblue.ts, after the reply): one that was held, failed or only acknowledged them never counts.
+export function walkinAskWentOut(delivered: string[]): boolean {
+  return delivered.some((t) => /\?/.test(String(t ?? "")));
+}
 export async function noteWalkinAsked(eventApiId: string, eventName: string, personId: string, deps: WalkinAskDeps = realWalkinAskDeps): Promise<void> {
   await Promise.all([deps.dropPending(personId, solicitationKey(eventName)), deps.markAsked(eventApiId, personId)]);
 }

@@ -57,7 +57,15 @@ const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.ur
   await WK.noteWalkinAsked("evt-1", "Cue Night", "u1", deps());
   check("2d. when the walk-in asks: a pending ask for this event is dropped and the event is marked asked", calls.includes("drop u1 ask_solicitation:cue night") && calls.includes("mark evt-1 u1"), calls);
   check("2e. the key is the one the scoring pass queues under", A.solicitationKey("Cue Night") === "ask_solicitation:cue night" && /targetKey: solicitationKey\(eventName\),/.test(src("agent/eventAskSolicitation.ts")));
-  check("2f. the reply path asks at walk-in only when walkinAskDue says so, then notes it", /const due = await walkinAskDue\(walkinCheckinEventName, user\.id\)/.test(src("routes/sendblue.ts")) && /if \(due\) \{\n\s+\/\/[^\n]*\n\s+await noteWalkinAsked\(walkinCheckinEventId, walkinCheckinEventName, user\.id\)/.test(src("routes/sendblue.ts")));
+  // Review of #254 (2026-10-19): the ask is noted only after a reply that asks it is delivered, never when it's only planned.
+  const sb = src("routes/sendblue.ts");
+  check("2f. the reply path asks at walk-in only when walkinAskDue says so", /const due = await walkinAskDue\(walkinCheckinEventName, user\.id\)/.test(sb) && /if \(due\) \{\n\s+walkinAskEvent = \{ id: walkinCheckinEventId, name: walkinCheckinEventName \};\n\s+walkinAskInstruction = /.test(sb));
+  const replyAt = sb.indexOf("runConversationReplyAgent({");
+  const noteAt = sb.indexOf("await noteWalkinAsked(");
+  check("2g. ... and notes it only after the reply, once a delivered text asked it", sb.split("await noteWalkinAsked(").length === 2 && replyAt > 0 && noteAt > replyAt && /if \(walkinAskEvent && walkinAskWentOut\(deliveredThisTurn\)\) \{\n\s+await noteWalkinAsked\(walkinAskEvent\.id, walkinAskEvent\.name, user\.id\)/.test(sb));
+  check("2h. delivered means the send went out: only a send that returned true is counted", /if \(ok\) deliveredThisTurn\.push\(p\.message\);\n\s+return ok;/.test(sb) && /sendCoReply: threadedSend,/.test(sb));
+  check("2i. a delivered reply that asked counts; nothing delivered, or only an acknowledgment, doesn't", WK.walkinAskWentOut(["Welcome in. What are you hoping to find here tonight?"]) && !WK.walkinAskWentOut([]) && !WK.walkinAskWentOut(["Glad you made it, enjoy the night."]));
+  check("2j. the unused hasActiveAsk import is gone from the reply path", !/hasActiveAsk/.test(sb));
 
   // The scoring pass after a walk-in ask: the event is marked asked, so it doesn't queue a second one.
   reset();
