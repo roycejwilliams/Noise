@@ -403,7 +403,8 @@ export async function introEmailHiddenCheck(reason: string, userIds: string[]): 
     const sides = await Promise.all(userIds.map((id) => hiddenSideOf(id)));
     const shared = sides.flatMap((x) => x.shared);
     for (const side of sides) {
-      const why = hiddenEcho(String(reason ?? "").replace(/^what they(?:'|\u2019)ve said they(?:(?:'|\u2019)re looking for| can offer):\s*/i, ""), side.hidden, shared, [], SENSITIVE);
+      // A sensitive word in this member's hidden part gets through only from their own shareable asks, never the other's.
+      const why = hiddenEcho(String(reason ?? "").replace(/^what they(?:'|\u2019)ve said they(?:(?:'|\u2019)re looking for| can offer):\s*/i, ""), side.hidden, shared, [], SENSITIVE, side.shared);
       if (why) return { name: "email_no_hidden_echo", pass: false, reason: why };
     }
     return { name: "email_no_hidden_echo", pass: true };

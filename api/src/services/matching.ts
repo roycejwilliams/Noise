@@ -276,7 +276,7 @@ async function runAskScoring<T extends ScorableCandidate>(
         const said = typeof r.reason === "string" ? r.reason.trim() : "";
         // The internal reason is stored (relevance_edges, the room's rankings): one that echoes the candidate's hidden part is
         // stored as REASON_WITHHELD instead.
-        const reason = said && hiddenEcho(said, hiddenTextsOf(c, hidden), shareableAsks(c.intent).map((a) => String(a.text)), [], SENSITIVE) ? REASON_WITHHELD : said;
+        const reason = said && hiddenEcho(said, hiddenTextsOf(c, hidden), [], [], SENSITIVE, shareableAsks(c.intent).map((a) => String(a.text))) ? REASON_WITHHELD : said;
         const num = typeof r.share_ask === "string" ? Number(r.share_ask.trim().replace(/^\[?S/i, "").replace(/\]$/, "")) : NaN;
         const label = Number.isInteger(num) && num > 0 ? `S${num}` : "";
         return {

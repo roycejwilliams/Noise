@@ -111,7 +111,18 @@ const BLOCKER = "my divorce is dragging on";
   // Decided 2026-10-19: their own shareable ask is consented.
   check("sensitive: \"a gay founders dinner\" and \"a severance lawyer\" as the member's own shareable ask are allowed", G.checkShareReason(reasonFacts("a gay founders dinner")).pass && G.checkShareReason(reasonFacts("a severance lawyer")).pass);
   check("sensitive: the same words only in someone's hidden part are still refused in a text another member reads", !!E.hiddenEcho("Noor is going to a gay founders dinner", ["a gay founders dinner"], [], ["Noor"], G.SENSITIVE) && !!E.hiddenEcho("He needs a severance lawyer", ["a severance lawyer"], [], [], G.SENSITIVE));
-  check("sensitive: ... and when it is their shared ask, a draft quoting it passes the echo check", E.hiddenEcho("Noor is hosting a gay founders dinner", ["coming out to my family"], ["a gay founders dinner"], ["Noor"], G.SENSITIVE) === null);
+  check("sensitive: ... and when it is their shared ask, a draft quoting it passes the echo check", E.hiddenEcho("Noor is hosting a gay founders dinner", ["coming out to my family"], [], ["Noor"], G.SENSITIVE, ["a gay founders dinner"]) === null);
+  // Review of #245 (2026-10-19): only the member's OWN shareable text lets a sensitive word through, never anyone else's words.
+  check("sensitive (whose words): another person's text never lets a word through (hidden \"I'm gay, not out\", allowed \"a gay founders dinner\")", E.hiddenEcho("he is gay", ["I'm gay, not out"], ["a gay founders dinner"], [], G.SENSITIVE) === 'touches something they keep private ("gay")', E.hiddenEcho("he is gay", ["I'm gay, not out"], ["a gay founders dinner"], [], G.SENSITIVE));
+  check("sensitive (whose words): ... even when the text quotes that other person's words exactly", !!E.hiddenEcho("Ellis would love a gay founders dinner", ["I'm gay, not out"], ["a gay founders dinner"], ["Ellis"], G.SENSITIVE));
+  check("sensitive (whose words): ... nor a word of the same family from someone else (\"a severance lawyer\" never clears \"gay\")", !!E.hiddenEcho("he is gay", ["I'm gay, not out"], [], [], G.SENSITIVE, ["a severance lawyer"]));
+  check("sensitive (whose words): their own shareable ask carries it, but their hidden part does too: only a word-for-word quote passes", !!E.hiddenEcho("he is gay", ["I'm gay, not out"], [], [], G.SENSITIVE, ["a gay founders dinner"]) && E.hiddenEcho("He's hosting a gay founders dinner", ["I'm gay, not out"], [], [], G.SENSITIVE, ["a gay founders dinner"]) === null);
+  check("sensitive (whose words): a quote plus the bare word again is still refused", !!E.hiddenEcho("He's hosting a gay founders dinner because he is gay", ["I'm gay, not out"], [], [], G.SENSITIVE, ["a gay founders dinner"]));
+  // Joined forms (review of #245, 2026-10-19): "depress\w*" missed "antidepressants".
+  for (const w of ["antidepressants", "antidepressant", "antianxiety meds", "a psychotherapist", "a neuropsychiatrist", "she was misdiagnosed"]) {
+    check(`sensitive (joined): "${w}" is refused as a share reason`, !G.checkShareReason(reasonFacts(`someone who gets ${w}`)).pass, G.checkShareReason(reasonFacts(`someone who gets ${w}`)));
+    check(`sensitive (joined): "${w}" is refused against a hidden text carrying it`, !!E.hiddenEcho(`she's into ${w}`, [`dealing with ${w}`], [], [], G.SENSITIVE));
+  }
   check("sensitive: the narrowed words still catch the private ones", ["he came out to his parents", "she was let go in May", "I was laid off", "abused as a kid", "she is trans"].every((t) => !!E.hiddenEcho(t, [t], [], [], G.SENSITIVE)));
 }
 
@@ -176,6 +187,24 @@ const BLOCKER = "my divorce is dragging on";
   // The network intro email's reason, against both members' hidden parts.
   check("email: a shared-ask reason passes", (await N.introEmailHiddenCheck(`what they've said they can offer: "backing climate hardware founders at seed"`, [jordan.id, noor.id])).pass);
   check("email: a reason echoing either member's hidden part is held", !(await N.introEmailHiddenCheck("backing climate hardware founders, before a quiet move to Lisbon", [jordan.id, noor.id])).pass);
+  // Review of #245 (2026-10-19): the exact case, through every reader. Ellis keeps "I'm gay, not out" private; Sam's own words
+  // (ctx.said, his shared ask, his goals) carry "gay"; none of them lets the word through about Ellis.
+  const ellis = addMember({ first_name: "Ellis", blockers: ["I'm gay, not out"], intent: [ask("backing climate hardware founders at seed", "offering")] });
+  const sam = addMember({ first_name: "Sam", intent: [ask("a gay founders dinner")] });
+  const ectx = { otherUserIds: [ellis.id], said: ["a gay founders dinner"], facts: { otherFirstName: "Ellis", recipientFirstName: "Sam", otherStatedAsks: ["a gay founders dinner"] } as any };
+  const gayDraft = await C.hiddenEchoCheck("Ellis is here tonight and he is gay too.", ectx);
+  check("draft (whose words): ctx.said and the facts never let \"gay\" through about Ellis", gayDraft?.pass === false && /gay/.test(gayDraft?.reason ?? ""), gayDraft);
+  check("draft (whose words): a clean nudge about Ellis still passes", (await C.hiddenEchoCheck("Ellis is here tonight and backs climate hardware founders at seed.", ectx))?.pass === true);
+  const gayEmail = await N.introEmailHiddenCheck(`what they've said they're looking for: "a gay founders dinner"`, [sam.id, ellis.id]);
+  check("email (whose words): Sam's own shared ask never clears the word in Ellis's hidden part", gayEmail.pass === false, gayEmail);
+  const [vs, ve] = await Promise.all([RM.gatherValueSide(sam.id), RM.gatherValueSide(ellis.id)]);
+  const samReads = (line: string) => {
+    const j = { forFirst: line, forSecond: "Sam is putting together a founders dinner and would value your climate hardware view.", verdict: "strong" as const, why: "fit", judged: { first: true, second: true } };
+    return RM.checkValueLines(j, { ...vs, goals: ["host a gay founders dinner"] }, { ...ve, privateTexts: [...ve.privateTexts, "I'm gay, not out"] }, G.SENSITIVE, ["Noise Supper", "Sam", "Ellis"]);
+  };
+  const vlGay = samReads("Ellis backs climate hardware founders at seed, and he's gay too, so he'd get your dinner.");
+  check("value line (whose words): the reader's own goal and ask never clear a word the other keeps private", !vlGay.ok && vlGay.checks.some((c) => !c.pass && /^(?:hidden|sensitive)_first$/.test(c.name)), vlGay.checks.filter((c) => !c.pass));
+  check("value line (whose words): the sensitive backstop alone refuses it too (privateTexts)", vlGay.checks.some((c) => c.name === "sensitive_first" && !c.pass), vlGay.checks);
 }
 
 // ---------------------------------------------------------------- 4. pins: the checks sit on every path, and no path proposes without a share reason

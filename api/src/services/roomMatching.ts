@@ -107,7 +107,7 @@
 //     other side's answer or outcome.
 //   - Value lines: the line for one side is stored under that side and drafted only into that side's text.
 import { anthropic } from "@ai-sdk/anthropic";
-import { checkNoHiddenEcho, joinHyphens, sensitiveForm } from "../harness/hiddenEcho.js";
+import { checkNoHiddenEcho, unconsentedSensitive } from "../harness/hiddenEcho.js";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
@@ -591,16 +591,13 @@ export function checkValueLines(j: ValueJudgment | null, x: ValueSide, y: ValueS
     // Backstops: the other member's data never enters this side's prompt; these catch it anyway if it did.
     checks.push(checkNoPrivateQuote(line, other.privateTexts, other.shared, `private_${label}`, allow));
     // What the other member keeps private or is going through: never echoed, even in other words that share its distinctive ones.
-    checks.push(checkNoHiddenEcho(line, other.hiddenTexts ?? [], [...other.shared, ...reader.ownAsks.map((a) => a.text), ...reader.goals], allow, `hidden_${label}`, sensitive));
+    // A sensitive word gets through only from the other member's own shareable asks, never the reader's words (decided 2026-10-19).
+    checks.push(checkNoHiddenEcho(line, other.hiddenTexts ?? [], [...reader.ownAsks.map((a) => a.text), ...reader.goals], allow, `hidden_${label}`, sensitive, other.shared));
     checks.push(checkNoPrivateQuote(line, reader.privateAsks, reader.shared, `own_private_ask_${label}`, allow));
-    const n = ` ${norm(line)} `;
-    const nj = ` ${norm(joinHyphens(line))} `;
-    const hit = sensitive.map((re) => sensitiveForm(re, n, nj).match(re)?.[0]).find(Boolean);
-    if (hit) {
-      const theirs = other.privateTexts.some((t) => norm(t).includes(hit));
-      const own = [...reader.ownAsks.map((a) => a.text), ...reader.goals].some((t) => norm(t).includes(hit));
-      checks.push(theirs && !own ? { name: `sensitive_${label}`, pass: false, reason: `leans on "${hit}", which is ${other.firstName}'s private matter` } : { name: `sensitive_${label}`, pass: true });
-    }
+    // A sensitive word the other member's private material carries: only their own shareable ask, quoted word for word, lets it
+    // through; the reader's own asks and goals never do (decided 2026-10-19: words in another person's text never whitelist).
+    const hit = unconsentedSensitive(line, other.privateTexts, other.shared, sensitive, false, allow);
+    if (hit) checks.push({ name: `sensitive_${label}`, pass: false, reason: `leans on "${hit}", which is ${other.firstName}'s private matter` });
   }
   return { ok: checks.every((c) => c.pass), checks };
 }
