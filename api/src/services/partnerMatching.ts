@@ -34,6 +34,9 @@ import type { ValueSide } from "./roomMatching.js";
 export const PARTNER_MATCH = {
   // A pass runs only when the room changed, and not more often than this.
   minGapMinutes: 10,
+  // Someone whose read failed (the scorer, or a value read) is tried again on this many later passes, then left until they change:
+  // a read that keeps failing would otherwise re-score them every pass until close (review of #216).
+  maxRetries: 2,
   // In a value line a partner night names nobody, on either side.
   noName: "this person",
 } as const;
@@ -187,10 +190,16 @@ export async function runPartnerMatchPass(eventId: string, deps: PassDeps = {}):
     return sideCache.get(id)!;
   };
   const judged = new Set<string>();
+  // Whoever a read failed for this pass: left out of the record below, so the next pass reads them again instead of finding "the room
+  // hasn't changed" (review of #216: one transient error lost that pair for the rest of the night).
+  const failed = new Set<string>();
   for (const person of room) {
     const others = room.filter((o) => o.user_id !== person.user_id && (changed.has(person.user_id) || changed.has(o.user_id)));
     if (!others.length) continue;
-    const scored = await (deps.score ?? realScore)(person, others).catch(() => []);
+    const scored = await (deps.score ?? realScore)(person, others).catch(() => {
+      failed.add(person.user_id);
+      return [];
+    });
     for (const s of scored) {
       const other = s.candidate.user_id;
       const key = [person.user_id, other].sort().join(":");
@@ -203,10 +212,26 @@ export async function runPartnerMatchPass(eventId: string, deps: PassDeps = {}):
       judged.add(key);
       const block = RM.pairBlockReason(await RM.pairRows(person.user_id, other), eventId, person.user_id, other);
       if (block) continue;
-      const verdict = await valuePair(eventId, found.event.name, await sideOf(person.user_id), await sideOf(other), deps);
+      const verdict = await valuePair(eventId, found.event.name, await sideOf(person.user_id), await sideOf(other), deps).catch(() => "failed" as const);
       if (verdict === "strong") out.suggested++;
       else if (verdict === "weak") out.blocked++;
+      else {
+        failed.add(person.user_id);
+        failed.add(other);
+      }
     }
+  }
+  if (failed.size) {
+    // The record written above said everyone was read. Rewrite it without whoever failed (and with a signature that isn't the room's,
+    // so the next pass is due), counting each person's failures; once they're out of retries they're recorded as read.
+    const before: Record<string, number> = (lastRows[0]?.seen?.__retries as Record<string, number> | undefined) ?? {};
+    const retries: Record<string, number> = { ...before };
+    for (const id of failed) retries[id] = (before[id] ?? 0) + 1;
+    const retry = new Set([...failed].filter((id) => retries[id] <= PARTNER_MATCH.maxRetries));
+    const seen = { ...Object.fromEntries(room.filter((p) => !retry.has(p.user_id)).map((p) => [p.user_id, personSignature(p)])), __retries: retries };
+    await pool
+      .query(`UPDATE partner_match_passes SET signature = $2, seen = $3::jsonb WHERE event_api_id = $1`, [eventId, retry.size ? `retry:${signature}` : signature, JSON.stringify(seen)])
+      .catch((err: any) => console.error("partnerMatching: marking the pass for a retry failed (non-fatal):", err?.message ?? err));
   }
   await recordDecision({ layer: 6, decision: "partner.matchPass", userId: null, outcome: "act", action: "pass", proposal: { ...out } }).catch(() => {});
   return out;

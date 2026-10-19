@@ -64,6 +64,10 @@ pool.query = async (q: string, p: any[] = []) => {
   if (/FROM partner_events e JOIN partners p/.test(q)) return { rows: night ? [night] : [] };
   if (/FROM matching_pauses/.test(q)) return { rows: paused ? [{ scope: "all", reason: "" }] : [] };
   if (/SELECT signature, ran_at, seen FROM partner_match_passes/.test(q)) return { rows: lastPass ? [lastPass] : [] };
+  if (/UPDATE partner_match_passes SET signature = \$2, seen = \$3::jsonb WHERE event_api_id = \$1/.test(q)) {
+    if (lastPass) Object.assign(lastPass, { signature: p[1], seen: JSON.parse(p[2]) });
+    return { rows: [] };
+  }
   if (/INSERT INTO partner_match_passes/.test(q)) {
     lastPass = { signature: p[1], ran_at: p[2], seen: JSON.parse(p[3]) };
     return { rows: [] };
@@ -134,6 +138,28 @@ try {
   lastPass = null;
   r = await M.runPartnerMatchPass("partner-aa", deps({ judge: async () => "failed" }));
   check("value gate: a failed read stores no verdict", r.suggested === 0 && r.blocked === 0 && pairs.every((p) => !p.value_verdict));
+  // ... and the next pass reads that pair again though nobody new arrived (review of #216: it used to rest as "the room hasn't
+  // changed", so one transient error lost the pair for the night).
+  r = await M.runPartnerMatchPass("partner-aa", deps({ now: new Date(during.getTime() + 20 * 60_000) }));
+  check("value gate: after a failed read, the next pass tries the pair again and can suggest it", r.ran && r.suggested === 2 && pairs.filter((p) => p.event_id === "partner-aa").every((p) => p.value_verdict === "strong"), { r, pairs });
+  r = await M.runPartnerMatchPass("partner-aa", deps({ now: new Date(during.getTime() + 40 * 60_000) }));
+  check("... and once it's read, an unchanged room rests again", !r.ran && /hasn't changed/.test(r.why), r);
+  // A scorer that throws is the same: the next pass scores that person again.
+  pairs = [];
+  lastPass = null;
+  let throwOnce = true;
+  r = await M.runPartnerMatchPass("partner-aa", deps({ score: async (person: any, others: any[]) => { if (throwOnce && person.user_id === "g-noor") { throwOnce = false; throw new Error("scorer down"); } return score(person, others); } }));
+  const afterThrow = r.suggested;
+  const scoredNext: string[] = [];
+  r = await M.runPartnerMatchPass("partner-aa", deps({ now: new Date(during.getTime() + 20 * 60_000), score: async (person: any, others: any[]) => (scoredNext.push(person.user_id), score(person, others)) }));
+  check("scorer: a person the scorer failed for is scored again next pass", afterThrow >= 0 && r.ran && scoredNext.includes("g-noor") && pairs.filter((p) => p.event_id === "partner-aa" && p.value_verdict === "strong").length === 2);
+  // A read that keeps failing is retried on two later passes, then left (it never re-scores the room every pass until close).
+  pairs = [];
+  lastPass = null;
+  const alwaysFails = deps({ judge: async () => "failed" });
+  const ran: boolean[] = [];
+  for (let k = 0; k < 6; k++) ran.push((await M.runPartnerMatchPass("partner-aa", { ...alwaysFails, now: new Date(during.getTime() + k * 20 * 60_000) })).ran);
+  check("a read that keeps failing is retried on two later passes, then rests", JSON.stringify(ran) === JSON.stringify([true, true, true, false, false, false]), ran);
 
   // Not an open room, the pause, too few people.
   lastPass = null;
