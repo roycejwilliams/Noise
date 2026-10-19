@@ -53,9 +53,10 @@ import {
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import { coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
-import { detectCheckinPhrase, recordCheckin, recordWalkinAsk, walkinAskDue, noteWalkinAsked } from "../services/eventWalkinCheckin.js";
+import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
 import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
+import { walkinAskDue, noteWalkinAsked } from "../services/eventWalkinCheckin.js";
 import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
 import { resolveNetworkTeaseReply, resolveNetworkIntroReply } from "../services/networkIntroNudge.js";
 import { NO_ROUTE, decideActions, gatherOpenItems, routeMessage, type RouterOutput } from "../services/messageRouter.js";
