@@ -1,0 +1,92 @@
+// The readers that already go through the forget guards on co-test (whatCoKnows.ts guardText / guardRows / guardBlock /
+// guardCallMessages / forgets / forgetInSnapshot), pinned: a removed fact never comes back from them, a kept fact still does.
+// forget-delete-spec.md section 7.5; context-across-cue-plan.md 3b. Layer 1: fake database and injected loaders, zero tokens.
+//   npx tsx evals/forget/guardedReaders.ts
+// (The readers that had no guard are draft #255's evals/forget/readers.ts; the deck sources are #251's.)
+process.env.OPENAI_API_KEY ||= "unused-in-tests";
+process.env.ANTHROPIC_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
+process.env.SENDBLUE_API_API_SECRET ||= "unused-in-tests";
+import { readFileSync } from "node:fs";
+const { default: pool } = await import("../../src/db/db.js");
+const W = await import("../../src/services/whatCoKnows.js");
+const MK = await import("../../src/services/memberKnowledge.js");
+
+let total = 0, failed = 0;
+const check = (label: string, ok: boolean) => { total++; if (!ok) { failed++; console.log(`FAIL ${label}`); } };
+const src = (p: string) => readFileSync(new URL(`../../src/${p}`, import.meta.url), "utf8");
+
+const U = "00000000-0000-4000-8000-0000000e1118";
+const NOW = new Date();
+const ago = (h: number) => new Date(NOW.getTime() - h * 3_600_000);
+const GONE = /custody|hearing/i;
+const CANARY = /climate founders/i;
+const REMOVAL = { field: "claim", old_value: "the custody hearing in May", new_value: null, item_ref: "claim:1a2b3c4d", removed: "true" };
+const removed = () => W.liveGuards([{ field: "claim", old: REMOVAL.old_value, now: null, ref: REMOVAL.item_ref, removed: true }]);
+let corrections: any[] = [REMOVAL];
+const handle = async (sql: string, p: any[] = []) => {
+  if (/FROM profile_corrections pc WHERE pc\.user_id = \$1/.test(sql)) return { rows: p[0] === U ? corrections : [] };
+  if (/FROM member_claims WHERE user_id = \$1 ORDER BY said_on/.test(sql)) return { rows: [
+    { id: "c1", text: "They have the custody hearing in May.", provenance: "user_said", kind: "deadline", quote: "custody hearing in May", said_on: "2026-10-10", confirmed_on: "2026-10-10", expires_on: null },
+    { id: "c2", text: "They want to meet climate founders.", provenance: "user_said", kind: "plan", quote: "climate founders", said_on: "2026-10-10", confirmed_on: "2026-10-10", expires_on: null },
+  ] };
+  return { rows: [] };
+};
+(pool as any).query = handle;
+(pool as any).connect = async () => ({ query: handle, release: () => {} });
+const texts = [
+  { content: "User said: The custody hearing is in May, so things are heavy.", at: ago(5) },
+  { content: "User said: I really want to meet climate founders.", at: ago(4) },
+  { content: "User said: please forget the custody hearing stuff", at: ago(3) },
+];
+
+// 1. guardRows: the reply's last 20 texts (routes/sendblue.ts), and every reader of raw co_memories rows that uses it
+{
+  const g = await W.guardRows(U, texts);
+  check("guardRows: the text that says it is gone, the canary stays", !g.some((r) => GONE.test(r.content)) && g.some((r) => CANARY.test(r.content)));
+  check("guardRows: their ask to forget keeps only that it was asked", g.some((r) => /asked Cue to forget something/.test(r.content)));
+  corrections = [];
+  check("guardRows, no removals: the same rows, untouched", (await W.guardRows(U, texts)) === texts);
+  corrections = [REMOVAL];
+  check("wiring: the reply's thread and memory search read through the guards", /W\.guardRows\(user\.id, chronological\)/.test(src("routes/sendblue.ts")) && /removedRows\.W\.guardText\(c, removedRows\.rows\)/.test(src("routes/sendblue.ts")));
+}
+
+// 2. memberKnowledge exchanges (calls' last two days, tasks, follow-ups, dispatch, the sweep)
+{
+  const base: any = { profile: async () => ({ firstName: "Ellis", city: "Oakland", goals: [], intent: [], updatedAt: ago(10) }), zone: async () => "America/Los_Angeles", linkedNames: async () => [] };
+  const k = await MK.memberKnowledge(U, { now: NOW, include: ["exchanges"], exchanges: 10, exchangeDays: 3 }, { ...base, exchanges: async () => texts, forgotten: async () => removed() });
+  const ex = JSON.stringify(k.exchanges);
+  check("memberKnowledge exchanges: nothing says it, the canary stays", !GONE.test(ex) && CANARY.test(ex));
+  const none = await MK.memberKnowledge(U, { now: NOW, include: ["exchanges"], exchanges: 10, exchangeDays: 3 }, { ...base, exchanges: async () => texts, forgotten: async () => [] });
+  check("memberKnowledge exchanges, no removals: the fixture reaches the record", GONE.test(JSON.stringify(none.exchanges)));
+  // 3. the claims backstop (a claim row still in the table is never read)
+  const claims = await MK.realKnowledgeDeps.claims(U, NOW, "America/Los_Angeles");
+  check("memberKnowledge claims: the removed claim isn't read even while its row is still there; the canary claim is", !claims.some((c) => GONE.test(c.text)) && claims.some((c) => CANARY.test(c.text)));
+}
+
+// 4. guardBlock: the call's recap (callContext.ts) and 5. guardCallMessages: every turn of a live call (routes/callLlm.ts)
+{
+  const recap = "Ellis lives in Oakland.\nHe has the custody hearing in May.\nHe wants climate founders.";
+  const b = W.guardBlock(recap, removed());
+  check("guardBlock (the call recap): the line that says it is gone, the rest kept", !GONE.test(b) && CANARY.test(b) && /Oakland/.test(b));
+  check("wiring: the call recap goes through guardBlock", /W\.guardBlock\(String\(safeRecap\[0\]\), await W\.forgottenRows\(userId\)\)/.test(src("services/callContext.ts")));
+  const msgs = W.guardCallMessages([{ role: "system", content: recap }, { role: "user", content: "the custody hearing again" }], removed());
+  check("guardCallMessages: the call's instructions lose it; the turn being spoken is left as said", !GONE.test(String(msgs[0].content)) && CANARY.test(String(msgs[0].content)) && GONE.test(String(msgs[1].content)));
+  check("wiring: the call brain applies guardCallMessages every turn", /guardCallMessages\(body\.messages, rows\)/.test(src("routes/callLlm.ts")));
+}
+
+// 6. forgetInSnapshot: the snapshot rebuild (personSnapshot.ts)
+{
+  const s = W.forgetInSnapshot({ work: "Designer", place: "Oakland", wantsNow: ["get through the custody hearing in May", "meet climate founders"], weighingOn: ["the custody hearing in May"], valuesInPeople: [] }, removed());
+  check("forgetInSnapshot: lists lose it, the canary want stays, place and work untouched", !GONE.test(JSON.stringify(s)) && CANARY.test(s.wantsNow.join()) && s.place === "Oakland" && s.work === "Designer");
+}
+
+// 7. safety: a line with a crisis signal is never cut, whatever was removed
+{
+  const line = "User said: the custody hearing in May makes me want to kill myself";
+  check("guardText: a safety line is kept whole", W.guardText(line, removed()) === line);
+}
+
+console.log(`forget guarded readers: ${total - failed}/${total} passed`);
+if (failed) process.exitCode = 1;
+process.exit();
