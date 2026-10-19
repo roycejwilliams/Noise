@@ -7,7 +7,9 @@ import sendblue, { cleanCoMessage } from "./sendblue.js";
 import { writeMemory } from "./memory.js";
 import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { draftWithConsent, eventPromptLine } from "../harness/introConsent.js";
-import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
+import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd, roomPhase, type RoomPhase } from "../harness/introConsent.js";
+import { getEventGuestList, type LumaGuest } from "./luma.js";
+import { matchablePhone } from "../utils/phone.js";
 import type { ScorableGuest } from "./eventScoring.js";
 import { withTraceUser } from "./llmTraceText.js";
 
@@ -18,7 +20,9 @@ import { withTraceUser } from "./llmTraceText.js";
 //   - Every guest in the room near the end gets the same short, warm close, matched or not. It never mentions matches, introductions,
 //     who they met or how the night went for them.
 //   - "Glad you came" is a fact, so it only goes to someone with evidence they came: arrived (event_presence.arrived_at), checked in
-//     at the door, or texted during the event. A registered no-show gets nothing.
+//     by the QR phrase as a walk-in, or checked in at Luma's door. A text is not evidence. A registered no-show gets nothing (Royce's
+//     ruling: a registered guest with no arrival, check-in or door scan gets silence).
+//   - Its copy waits on Royce: CLOSE_APPROVED (below) is false until he approves it, and nothing drafts or sends until then.
 //   - The below-the-bar pairing ("worth a quick hello") and the "nothing stood out" text are gone. What the room was thin on goes to
 //     the host readout instead (services/partnerReadout.ts thinOn), as a category, never a member.
 // (The file keeps its name and tables: event_unmatched_followups schedules the close, event_unmatched_notices records it once.)
@@ -98,14 +102,10 @@ export async function cameTonight(eventId: string, person: Pick<ScorableGuest, "
   return presence || walkin;
 }
 
-// Who Luma's door check-in has, by email and phone (the stored E.164 form). A test event has no Luma list; a failed read has nobody.
-async function lumaCheckedIn(eventId: string): Promise<CheckedIn> {
+// Who Luma's door check-in has, by email and phone (the stored E.164 form), from the guest list this pass already read.
+function lumaCheckedIn(guests: LumaGuest[] | undefined): CheckedIn {
   const out: CheckedIn = { emails: new Set(), phones: new Set() };
-  const { isTestEvent } = await import("./roomMatching.js");
-  if (isTestEvent(eventId)) return out;
-  const [{ getEventGuestList }, { matchablePhone }] = await Promise.all([import("./luma.js"), import("../utils/phone.js")]);
-  const guests = await getEventGuestList(eventId).catch(() => []);
-  for (const g of guests.filter((x) => x.checked_in_at)) {
+  for (const g of (guests ?? []).filter((x) => x.checked_in_at)) {
     if (g.email) out.emails.add(g.email.toLowerCase());
     const p = matchablePhone(g.phone);
     if (p) out.phones.add(p);
@@ -165,11 +165,21 @@ Write the goodbye a good host gives at the door: one short, warm line (no em das
   return "sent";
 }
 
-// Cron entry point (jobs/index.ts, */15 * * * *, same lightweight-polling
-// cadence as eventCheckinFollowUp.ts's own due-queue). Groups by event since
-// the pairing pass needs the whole due pool for one event at once, not one
-// person at a time.
-export async function processDueUnmatchedFollowUps(): Promise<void> {
+// The close's own text (CLOSE_FALLBACK and the goodbye brief in sendClose) waits on Royce's approval (review of #208, 2026-10-19), the
+// same way the held recap's did (services/moodHold.ts HELD_RECAP_APPROVED). While false nothing is drafted or sent and nothing is
+// marked done, so the closes still due go once it's approved; one whose room is over by then simply expires (no late goodbye). A code
+// constant: no env switch.
+export const CLOSE_APPROVED: boolean = false;
+let awaitingApprovalNoted = false;
+
+// Cron entry point (jobs/index.ts, */15 * * * *, same lightweight-polling cadence as eventCheckinFollowUp.ts's own due-queue). Grouped
+// by event: one guest-list read covers everyone due there.
+export async function processDueUnmatchedFollowUps(opts: { approved?: boolean } = {}): Promise<void> {
+  if (!(opts.approved ?? CLOSE_APPROVED)) {
+    if (!awaitingApprovalNoted) console.log("eventUnmatchedFollowUp: the end-of-night close waits on its copy's approval (CLOSE_APPROVED); nothing drafted, sent or marked done");
+    awaitingApprovalNoted = true;
+    return;
+  }
   const { rows: due } = await pool.query(
     `SELECT DISTINCT event_api_id, event_name FROM event_unmatched_followups
      WHERE sent_at IS NULL AND send_at <= NOW() LIMIT 25`,
@@ -181,30 +191,88 @@ export async function processDueUnmatchedFollowUps(): Promise<void> {
   }
 }
 
+// A walk-in who checks in by the QR phrase is owed the close like anyone who came (a check-in counts as attendance, Royce 2026-10-19),
+// though matching keeps them out until Cue sees them arrive (eventScoring.ts inRoomPool). The scoring pass schedules only its roster,
+// so the check-in schedules their own close (routes/sendblue.ts). Idempotent; a failed read schedules nothing (a later pass backfills
+// it while the event has other closes due).
+export async function scheduleWalkinClose(eventId: string, eventName: string, userId: string): Promise<void> {
+  const info = await (await import("./roomMatching.js")).eventTiming(eventId).catch(() => null);
+  if (!info) return;
+  const sendAt = new Date(new Date(withEnd({ start_at: info.start_at, end_at: info.end_at, timezone: info.timezone ?? null }).end_at).getTime() - UNMATCHED_SEND_BEFORE_END_MINUTES * 60_000);
+  await pool.query(
+    `INSERT INTO event_unmatched_followups (user_id, event_api_id, event_name, send_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (event_api_id, user_id) DO NOTHING`,
+    [userId, eventId, eventName, sendAt.toISOString()],
+  );
+}
+
+// Pure: which due closes are past their window. The window is the room being on (open or closing): once it's over, a close still due
+// expires unsent. With no event timing to read, the end it was scheduled against bounds it (send_at + UNMATCHED_SEND_BEFORE_END_MINUTES).
+export function closeExpired(phase: RoomPhase | null, sendAt: Date, now: Date): boolean {
+  if (phase) return phase === "over";
+  return sendAt.getTime() + UNMATCHED_SEND_BEFORE_END_MINUTES * 60_000 <= now.getTime();
+}
+
 async function processOneEvent(eventId: string, eventName: string): Promise<void> {
   const { rows: dueRows } = await pool.query(
-    `SELECT user_id FROM event_unmatched_followups WHERE event_api_id = $1 AND sent_at IS NULL AND send_at <= NOW()`,
+    `SELECT user_id, send_at FROM event_unmatched_followups WHERE event_api_id = $1 AND sent_at IS NULL AND send_at <= NOW()`,
     [eventId],
   );
-  const dueUserIds = new Set<string>(dueRows.map((r) => r.user_id));
-  if (!dueUserIds.size) return;
+  if (!dueRows.length) return;
+  const now = new Date();
+  const markDone = async (ids: string[]) => {
+    if (ids.length) await pool.query(`UPDATE event_unmatched_followups SET sent_at = NOW() WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, ids]);
+  };
 
   const RM = await import("./roomMatching.js");
   const details = await RM.eventTiming(eventId).catch(() => null);
   const eventTiming = details ? withEnd({ start_at: details.start_at, end_at: details.end_at, timezone: details.timezone ?? null }) : null;
+  const phase = eventTiming ? roomPhase(eventTiming, now, await RM.roomClosedAt(eventId)) : null;
+  // Bounded: past its window a close expires unsent. Inside it, an unreadable event (or a room not on yet, its start moved) is tried
+  // again next pass, never marked done (review of #208: a Luma blip used to end everyone's close).
+  const expired = dueRows.filter((r) => closeExpired(phase, new Date(r.send_at), now)).map((r) => String(r.user_id));
+  await markDone(expired);
+  if (phase !== "open" && phase !== "closing") return;
+  const dueUserIds = new Set<string>(dueRows.map((r) => String(r.user_id)).filter((id) => !expired.includes(id)));
 
-  // Who is in the room right now (services/roomMatching.ts inRoomNow): the current roster (it can have grown since this
-  // was scheduled), minus anyone who left; nobody at all once the room is closed. A person due here may already have a
-  // real match from a scoring pass that ran after scheduling but before now.
-  const room = await RM.inRoomNow(eventId, { timing: eventTiming }).catch(() => ({ people: [] as ScorableGuest[] }));
-  const matched = room.people.filter((p) => dueUserIds.has(p.user_id));
+  // One read of Luma's guest list: the roster (approved guests) and its door check-ins. A failed read is no roster and no door
+  // check-ins, so nobody who could only be known from it is marked done: they're tried again next pass, inside the window (review
+  // of #208). A test event has no Luma list.
+  let lumaOk = true;
+  const guests = RM.isTestEvent(eventId) ? undefined : await getEventGuestList(eventId).catch((err: any) => {
+    lumaOk = false;
+    console.error(`eventUnmatchedFollowUp: Luma guest list read failed for ${eventId} (tried again next pass):`, err?.message ?? err);
+    return undefined;
+  });
+  const roster = lumaOk ? await (await import("./eventScoring.js")).inRoomPool(eventId, guests).catch(() => null) : null;
+  // Who is in the room right now (services/roomMatching.ts inRoomNow): the roster minus anyone who left.
+  const room = roster ? await RM.inRoomNow(eventId, { timing: eventTiming, now, roster }) : { people: [] as ScorableGuest[] };
+  // Plus the walk-ins who checked in by the QR phrase, whether or not Cue has seen them arrive (review of #208: the check-in counts as
+  // attendance for the goodbye; matching still waits for arrival). Not anyone who left or said they can't make it.
+  const walkins = await walkinsInRoom(eventId);
+  const candidates = [...room.people];
+  for (const w of walkins) if (!candidates.some((c) => c.user_id === w.user_id)) candidates.push(w);
+  // A walk-in who checked in after the scoring pass scheduled the rest has no row yet: give them one, due now.
+  for (const w of walkins) {
+    if (dueUserIds.has(w.user_id)) continue;
+    const { rows } = await pool
+      .query(
+        `INSERT INTO event_unmatched_followups (user_id, event_api_id, event_name, send_at) VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (event_api_id, user_id) DO NOTHING RETURNING user_id`,
+        [w.user_id, eventId, eventName],
+      )
+      .catch(() => ({ rows: [] as any[] }));
+    if (rows.length) dueUserIds.add(w.user_id);
+  }
 
   // Everyone in the room gets the same close, matched or not, once; "glad you came" only with evidence they came. Claimed first, so
-  // overlapping passes send it once; a held or failed close gives its claim back and stays due, tried again next pass while the room is
-  // open (once it closes, nobody is in it and the row is done).
-  const lumaIn = matched.length ? await lumaCheckedIn(eventId) : { emails: new Set<string>(), phones: new Set<string>() };
+  // overlapping passes send it once; a held or failed close gives its claim back and stays due, tried again next pass inside the window.
+  const lumaIn = lumaCheckedIn(guests);
   const retry = new Set<string>();
-  for (const person of matched) {
+  // Without the guest list, everyone due who isn't a walk-in is unknown this pass, not done.
+  if (!roster) for (const id of dueUserIds) if (!walkins.some((w) => w.user_id === id)) retry.add(id);
+  for (const person of candidates.filter((p) => dueUserIds.has(p.user_id))) {
     if (!(await cameTonight(eventId, person, lumaIn))) continue;
     if (!(await claimClose(eventId, person.user_id).catch(() => false))) continue;
     const r = await withTraceUser(person.user_id, () => sendClose(eventId, eventName, person, {})).catch(() => "failed" as const); // under their own trace-text mark
@@ -213,7 +281,17 @@ async function processOneEvent(eventId: string, eventName: string): Promise<void
       retry.add(person.user_id);
     }
   }
+  await markDone([...dueUserIds].filter((id) => !retry.has(id)));
+}
 
-  const done = [...dueUserIds].filter((id) => !retry.has(id));
-  if (done.length) await pool.query(`UPDATE event_unmatched_followups SET sent_at = NOW() WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, done]);
+// The QR walk-ins still in the room: checked in, not left, not "can't make it".
+async function walkinsInRoom(eventId: string): Promise<ScorableGuest[]> {
+  const { mergeWalkinsIntoGuestPool } = await import("./eventWalkinCheckin.js");
+  const all = await mergeWalkinsIntoGuestPool(eventId).catch(() => [] as ScorableGuest[]);
+  if (!all.length) return [];
+  const { rows } = await pool
+    .query(`SELECT user_id, not_going_at, left_at FROM event_presence WHERE event_api_id = $1 AND user_id = ANY($2::uuid[])`, [eventId, all.map((w) => w.user_id)])
+    .catch(() => ({ rows: [] as any[] }));
+  const out = new Set(rows.filter((r: any) => r.not_going_at || r.left_at).map((r: any) => String(r.user_id)));
+  return all.filter((w) => !out.has(w.user_id));
 }

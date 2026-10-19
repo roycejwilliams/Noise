@@ -827,9 +827,16 @@ export function sendblueRouter(io: Server): Router {
             return null;
           });
           if (checkin) {
-            await recordCheckin(checkin.eventApiId, user.id).catch((err: any) =>
-              console.error("sendblue: recordCheckin failed (non-fatal):", err?.message ?? err),
-            );
+            const recorded = await recordCheckin(checkin.eventApiId, user.id).catch((err: any) => {
+              console.error("sendblue: recordCheckin failed (non-fatal):", err?.message ?? err);
+              return null;
+            });
+            // A check-in counts as attendance for the end-of-night close (services/eventUnmatchedFollowUp.ts scheduleWalkinClose).
+            if (recorded) {
+              import("../services/eventUnmatchedFollowUp.js")
+                .then((u) => u.scheduleWalkinClose(checkin.eventApiId, checkin.eventName, user.id))
+                .catch((err: any) => console.error("sendblue: scheduleWalkinClose failed (non-fatal):", err?.message ?? err));
+            }
             walkinCheckinEventName = checkin.eventName;
             walkinCheckinEventId = checkin.eventApiId;
           }

@@ -42,6 +42,9 @@ const c = (ok: boolean, label: string) => cases.push([ok, label]);
   // Wiring only; the behavior (once, even with two passes at once; held closes retried) is tested in evals/inroom/flow.ts.
   c(/if \(!\(await claimClose\(eventId, person\.user_id\)/.test(followUp) && /ON CONFLICT \(event_id, person_id\) DO NOTHING RETURNING 1/.test(followUp), "the close goes once per person per event (claimed before it's drafted)");
   c(/if \(!\(await cameTonight\(eventId, person, lumaIn\)\)\) continue;/.test(followUp) && !/User said:%/.test(followUp), "the close needs evidence they came (arrived, a walk-in check-in, or Luma's door check-in; never a text)");
+  // A QR walk-in's check-in schedules their own close (behavior in evals/inroom/flow.ts "walk-in close").
+  const route = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
+  c(/const recorded = await recordCheckin\(checkin\.eventApiId, user\.id\)[\s\S]{0,400}if \(recorded\) \{[\s\S]{0,200}scheduleWalkinClose\(checkin\.eventApiId, checkin\.eventName, user\.id\)/.test(route), "a walk-in's check-in schedules their end-of-night close");
 }
 
 // ---------------------------------------------------------------------------
