@@ -223,6 +223,17 @@ export function registerJobs(io: Server) {
     }
   });
 
+  // In-room direct asks a restart cut off mid-draft (services/eventGuestMatchHandoff.ts drainStaleAsks): back in line, and each
+  // person's line moves again. Nothing is due unless a send died.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const { drainStaleAsks } = await import("../services/eventGuestMatchHandoff.js");
+      await drainStaleAsks();
+    } catch (err: any) {
+      console.error("stale in-room ask drain error (non-fatal):", err?.message ?? err);
+    }
+  });
+
   // Reminders members asked for ("remind me Thursday to follow up with…"),
   // sent to them only (services/relay.ts). Every 5 minutes; nothing's due unless asked.
   cron.schedule("*/5 * * * *", async () => {

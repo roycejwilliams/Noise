@@ -120,6 +120,64 @@ async function threeYeses(seed: number, blockFirst = false) {
   check("... and is queued, not sent", (await O.claimAskSlot({ eventId: "ev", personId: b.id, candidateId: a.id, askerId: a.id })) === "queued" && W.offers.some((o) => o.person_id === b.id && o.candidate_key === a.id && o.status === "queued"));
 }
 
+// A restart cut a direct ask off mid-draft (review of #211): the dead ask goes back in line, and the line moves again.
+{
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a seed investor for climate hardware (1)")] });
+  const c = addMember({ first_name: "Ellis", intent: [ask("a seed investor for climate hardware (2)")] });
+  const b = addMember({ first_name: "Noor", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  W.scorer = () => ({ score: 20, share: true });
+  addEvent({ api_id: "ev", name: "Noise Supper" }, [{ m: a }, { m: b }, { m: c }]);
+  const old = new Date(Date.now() - (O.SLOT_CLAIM_MINUTES + 1) * 60_000);
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: b.id, candidate_key: c.id, kind: "direct_ask", candidate_id: c.id, candidate_ids: [], asker_id: c.id, status: "sending", opened_at: old, created_at: new Date(+old - 1000) });
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: b.id, candidate_key: a.id, kind: "direct_ask", candidate_id: a.id, candidate_ids: [], asker_id: a.id, status: "queued", opened_at: null, created_at: new Date(+old) });
+  for (const x of [a, c]) W.optIns.push({ event_id: "ev", person_id: x.id, candidate_id: b.id, status: "interested" }); // both said yes to Noor
+  const before = W.sent.filter((x) => x.to === b.phone_number).length;
+  const toB = () => askedBy(W.sent.filter((x) => x.to === b.phone_number).slice(before).map((x) => x.content));
+  const drained = await H.drainStaleAsks();
+  await settle();
+  check("after a restart: the ask cut off mid-draft is retried first, and only it goes now", drained === 1 && JSON.stringify(toB()) === JSON.stringify(["Ellis"]), { drained, asked: toB(), offers: W.offers.map((o) => [o.candidate_key === a.id ? "Jordan" : "Ellis", o.status]) });
+  await memberTurn(b.id, () => H.handleMatchNudgeReply("ev", "Noise Supper", "not_interested", asM(b), asM(c)));
+  await settle();
+  check("... and once they answer, the ask that was waiting behind it goes", JSON.stringify(toB()) === JSON.stringify(["Ellis", "Jordan"]), toB());
+  check("... and a second drain finds nothing to do", (await H.drainStaleAsks()) === 0);
+}
+// A queued ask that won't go never holds the line (review of #211): the next one goes.
+{
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a seed investor for climate hardware (1)")] });
+  const c = addMember({ first_name: "Ellis", intent: [ask("a seed investor for climate hardware (2)")] });
+  const b = addMember({ first_name: "Noor", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  W.scorer = () => ({ score: 20, share: true });
+  addEvent({ api_id: "ev", name: "Noise Supper" }, [{ m: a }, { m: b }, { m: c }]);
+  // Ellis's ask waits first, but Noor already said no to Ellis tonight: it can never go.
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: b.id, candidate_key: c.id, kind: "direct_ask", candidate_id: c.id, candidate_ids: [], asker_id: c.id, status: "queued", opened_at: null, created_at: new Date(Date.now() - 2000) });
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: b.id, candidate_key: a.id, kind: "direct_ask", candidate_id: a.id, candidate_ids: [], asker_id: a.id, status: "queued", opened_at: null, created_at: new Date(Date.now() - 1000) });
+  W.nudges.push({ event_id: "ev", person_id: b.id, candidate_id: c.id, status: "not_interested", score: 80, created_at: new Date() } as any);
+  for (const x of [a, c]) W.optIns.push({ event_id: "ev", person_id: x.id, candidate_id: b.id, status: "interested" });
+  const before = W.sent.filter((x) => x.to === b.phone_number).length;
+  await H.sendNextQueued(b.id);
+  await settle();
+  const asked = askedBy(W.sent.filter((x) => x.to === b.phone_number).slice(before).map((x) => x.content));
+  check("an ask at the head of the line that can't go leaves it, and the next one goes", JSON.stringify(asked) === JSON.stringify(["Jordan"]) && W.offers.find((o) => o.candidate_key === c.id)?.status === "expired", { asked, offers: W.offers.map((o) => [o.candidate_key === a.id ? "Jordan" : "Ellis", o.status]) });
+}
+// A waiting ask while another ask to the same person is held for their morning or the pause (review of #211): it waits, never dropped.
+{
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a seed investor for climate hardware (1)")] });
+  const b = addMember({ first_name: "Noor", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  W.scorer = () => ({ score: 20, share: true });
+  addEvent({ api_id: "ev", name: "Noise Supper" }, [{ m: a }, { m: b }]);
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: b.id, candidate_key: a.id, kind: "direct_ask", candidate_id: a.id, candidate_ids: [], asker_id: a.id, status: "queued", opened_at: null, created_at: new Date() });
+  W.optIns.push({ event_id: "ev", person_id: a.id, candidate_id: b.id, status: "interested" });
+  (W as any).deferredAsks = new Set([`${b.id}|direct_ask:`]);
+  await H.sendNextQueued(b.id);
+  await settle();
+  check("an ask waiting behind one held for their morning or the pause stays in line (never dropped)", W.offers.find((o) => o.candidate_key === a.id)?.status === "queued", W.offers.map((o) => o.status));
+  (W as any).deferredAsks = new Set();
+}
+check("every query the cases ran is one the fake world knows exactly (a changed slot query fails here)", W.unknownSql.size === 0, [...W.unknownSql].slice(0, 5));
+
 const { total, failed } = results;
 console.log(`in-room collisions: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
