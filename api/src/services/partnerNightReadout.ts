@@ -140,9 +140,9 @@ async function memberNames(): Promise<string[]> {
   return rows.flatMap((r: any) => [r.first_name, r.last_name]).filter((n: any) => typeof n === "string" && n.trim().length >= 3);
 }
 
-// Hourly with the readout drafts (jobs/index.ts): each partner night that closed 12 hours to a week ago gets its draft. The team
-// hears it's ready; nothing reaches the host.
-export async function runNightReadoutDrafts(now = new Date(), deps: NightDraftDeps & { notify?: (subject: string, text: string) => Promise<unknown> } = {}): Promise<number> {
+// Hourly with the readout drafts (jobs/index.ts): each partner night that closed 12 hours to a week ago gets its draft. A draft is a
+// decision-log entry (the dashboard's) and a log line, never an email (Royce: no new emails); nothing reaches the host.
+export async function runNightReadoutDrafts(now = new Date(), deps: NightDraftDeps = {}): Promise<number> {
   const { readoutDue } = await import("./partnerReadoutSend.js");
   const { rows } = await pool.query(`SELECT e.api_id, e.name, e.start_at, e.end_at FROM partner_events e JOIN partner_night_stats s ON s.event_api_id = e.api_id LEFT JOIN partner_readouts r ON r.event_id = e.api_id WHERE r.id IS NULL`);
   let drafted = 0;
@@ -151,8 +151,9 @@ export async function runNightReadoutDrafts(now = new Date(), deps: NightDraftDe
     const r = await draftNightReadout(e.api_id, { ...deps, now }).catch((err: any) => ({ status: "error" as const, why: String(err?.message ?? err).slice(0, 160) }));
     if (r.status === "drafted") {
       drafted++;
-      const notify = deps.notify ?? (async (subject: string, text: string) => (await import("./reportEmail.js")).sendReportEmail(subject, `<pre>${text.replace(/[<&>]/g, (c) => ({ "<": "&lt;", "&": "&amp;", ">": "&gt;" })[c]!)}</pre>`, text));
-      await Promise.resolve(notify(`Host read drafted: ${e.name}`, `Nothing has gone to the host. To approve it: npx tsx src/scripts/partners.ts readout-approve ${e.api_id} --by <your name>`)).catch(() => {});
+      console.log(`partnerNightReadout: host read drafted for ${e.api_id}; nothing has gone to the host. To approve it: npx tsx src/scripts/partners.ts readout-approve ${e.api_id} --by <your name>`);
+      const { recordDecision } = await import("../harness/core.js");
+      await recordDecision({ layer: 6, decision: "partner.hostReadDrafted", userId: null, outcome: "act", action: "drafted", proposal: { eventId: e.api_id } }).catch(() => {});
     } else if (r.status === "leak" || r.status === "error") {
       console.error(`partnerNightReadout: no draft for ${e.api_id} (${r.status}: ${"why" in r ? r.why : ""})`);
     }

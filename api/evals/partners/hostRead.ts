@@ -59,6 +59,7 @@ const NIGHT = { api_id: "partner-aa", partner_id: "p1", name: "Demo Night", star
 const writes: { q: string; p: any[] }[] = [];
 let statsRow: any = null;
 let readoutRow: any = null;
+let draftsDue = false;
 pool.query = async (q: string, p: any[] = []) => {
   if (/FROM partner_events e JOIN partners p/.test(q)) return { rows: [NIGHT] };
   if (/COUNT\(\*\)::int AS n FROM partner_guests WHERE event_api_id = \$1 AND arrived_at/.test(q)) return { rows: [{ n: 14 }] };
@@ -87,6 +88,11 @@ pool.query = async (q: string, p: any[] = []) => {
     return { rows: [{ id: "r1" }] };
   }
   if (/FROM users$/.test(q.trim()) || /SELECT first_name, last_name FROM users/.test(q)) return { rows: [{ first_name: "Jordan", last_name: "Lee" }] };
+  if (/INSERT INTO harness_decisions/.test(q)) {
+    writes.push({ q, p });
+    return { rows: [] };
+  }
+  if (/SELECT e\.api_id, e\.name, e\.start_at, e\.end_at FROM partner_events e JOIN partner_night_stats/.test(q)) return { rows: draftsDue ? [{ api_id: "partner-aa", name: "Demo Night", start_at: "2026-11-07T02:00:00Z", end_at: "2026-11-07T06:00:00Z" }] : [] };
   return { rows: [] };
 };
 try {
@@ -105,10 +111,14 @@ try {
   check("draft: copy approved -> drafted into the readout table, with its own frozen lines", r.status === "drafted" && readoutRow?.stats?.kind === "partner" && readoutRow?.stats?.shown?.headline === "Demo Night, the room");
   check("draft: once (a second run finds it)", (await H.draftNightReadout("partner-aa")).status === "exists");
   readoutRow = null;
-  // (A name right before a period slips past readoutLeak today; reported on the PR, not changed here.)
   setCopy({ ...APPROVED, host_note: "Thanks to Ellis and the team" });
   r = await H.draftNightReadout("partner-aa", { names: async () => ["Ellis"] });
   check("draft: a page carrying a member's name stores nothing", r.status === "leak" && readoutRow === null);
+  // A name right before a period (review of #217: the fold kept the ".", so "Thanks, Ellis." passed the name check).
+  setCopy({ ...APPROVED, host_note: "Thanks, Ellis." });
+  r = await H.draftNightReadout("partner-aa", { names: async () => ["Ellis"] });
+  check("draft: a member's name right before a period stores nothing", r.status === "leak" && readoutRow === null);
+  check("leak check: a name before a period, a comma or the end is caught; an email address still reads as one", !!S.readoutLeak("Thanks, Ellis.", "", ["Ellis"]) && !!S.readoutLeak("Thanks Ellis, and team", "", ["Ellis"]) && !!S.readoutLeak("With thanks to Ellis", "", ["Ellis"]) && S.readoutLeak("Write to host.team@example.com.", "", []) === "an email address" && S.readoutLeak("Thanks, everyone.", "", ["Ellis"]) === null);
   setCopy(APPROVED);
   statsRow = { ...statsRow, room: 3 };
   r = await H.draftNightReadout("partner-aa", { names: async () => [] });
@@ -143,6 +153,24 @@ try {
     check("close: the snapshot is taken, and before the guests are forgotten", order.join() === "snapshot,forget");
   }
 
+  // The hourly drafts job: a draft is a decision-log entry and a log line, never an email (Royce: no new emails).
+  {
+    statsRow = { ...STATS };
+    readoutRow = null;
+    setCopy(APPROVED);
+    draftsDue = true;
+    const fetched: string[] = [];
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (u: unknown) => (fetched.push(String(u)), new Response("{}", { status: 200 }));
+    const n = await H.runNightReadoutDrafts(new Date("2026-11-07T20:00:00Z"), { names: async () => [] });
+    (globalThis as any).fetch = realFetch;
+    draftsDue = false;
+    const logged = writes.filter((w) => /INSERT INTO harness_decisions/.test(w.q) && w.p.includes("partner.hostReadDrafted"));
+    check("drafts job: a draft is recorded in the decision log (counts no words: the event id only)", n === 1 && logged.length === 1 && !JSON.stringify(logged[0].p).includes("Demo Night"), { n, logged: logged.map((w) => w.p) });
+    check("drafts job: no email, nothing sent anywhere", fetched.length === 0, fetched);
+    readoutRow = null;
+  }
+
   // Approval: the partner's own host address by default; never an email on its own.
   const savedUrl = process.env.API_URL;
   process.env.API_URL = "https://api.example.com";
@@ -164,6 +192,7 @@ try {
   check("close: a failed snapshot never holds the forgetting", /snapshotNight\(r\.api_id\)\.catch\(/.test(close));
   const svc = src("src/services/partnerNightReadout.ts").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
   check("never sends to a host: drafts only (no email or text path)", !/sendReadout|resend|sendblue|deps\.email/i.test(svc));
+  check("no team email for a draft (Royce: no new emails)", !/reportEmail|sendReportEmail|notify\(/.test(svc));
   check("the readout's floors are the readout's (cell, approx, foldThemes, READOUT)", /approx\(s\.room\)/.test(svc) && /cell\(s\.intros\)/.test(svc) && /foldThemes\(s\.themes\)/.test(svc) && /s\.room < READOUT\.minRoom/.test(svc));
   check("the leak check runs before anything is stored", svc.indexOf("readoutLeak(text") > 0 && svc.indexOf("readoutLeak(text") < svc.indexOf("INSERT INTO partner_readouts"));
   const send = src("src/services/partnerReadoutSend.ts");

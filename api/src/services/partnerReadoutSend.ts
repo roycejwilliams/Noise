@@ -34,7 +34,9 @@ export function readoutDue(event: { start_at: string; end_at: string | null }, n
 // The last check before anything is stored: no member's name (first or last, three letters or more), no email, phone number or link
 // anywhere in what the host reads. The event's own name is left out of the check (it's the host's, and on the page by design), and so
 // are the readout's own fixed words (a member called Hope can't be leaked by a sentence the template always has).
-const fold = (s: string) => ` ${s.toLowerCase().replace(/[^\p{L}\d@.+]+/gu, " ").replace(/\s+/g, " ").trim()} `;
+// A dot ending a word goes ("Thanks, Ellis." folds to "thanks ellis": a name right before a period is caught, review of #217); a dot
+// inside a word stays, so an email address still reads as one.
+const fold = (s: string) => ` ${s.toLowerCase().replace(/[^\p{L}\d@.+]+/gu, " ").replace(/\.+(?= |$)/g, "").replace(/\s+/g, " ").trim()} `;
 const SAMPLE: Stats = { eventName: "", registered: 30, arrived: 20, walkins: 3, briefs: 10, nudged: 10, interested: 5, intros: 4, debriefReplies: 9, metSomeone: 6, conversationsTold: 12, followThroughMembers: 4, askCount: 20, themes: { "Investors or funding": 4, "Hiring or talent": 4, "Cofounders or partners": 3, "Customers or clients": 3, "Advice or mentors": 3, "Community or friends": 3, "Venues or events": 3, "Something else": 3 } };
 const TEMPLATE_WORDS = new Set(fold([renderText(SAMPLE), renderText({ ...SAMPLE, registered: 1 }), renderText({ ...SAMPLE, askCount: 0, intros: 1, interested: 1 })].join(" ")).trim().split(" "));
 export function readoutLeak(text: string, eventName: string, memberNames: string[]): string | null {
