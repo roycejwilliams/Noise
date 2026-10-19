@@ -58,6 +58,16 @@ export const FEELING_PICKS_NOT_CHANGED: { where: string; what: string; status: s
 // the cap). The door, the cold-start question and a document offer in a reply (harness/replyGrounding.ts); the same idea as the document
 // offer's own line (#260).
 export const GENTLE_AFTER_HARD = "They've had a hard stretch lately and this waited for it: bring it up gently, in one soft line that's easy to pass on, never a push, and only if this message feels okay for it.";
+// The one fixed line for the last path where a SKIP beside a hard day could still drop something (harness/proactive.ts
+// moodFallbackDecision): an item that used its one wait and whose draft says SKIP again while they're still struggling. Approved by Royce
+// 2026-10-19 (option A, PR #261). Word for word; never changed without his yes.
+export const MOOD_FALLBACK_LINE = "No rush on anything. I'm around whenever you want to pick things back up.";
+// The ledger key prefix: one fallback a hard stretch a member (the stretch's start is the rest of the key).
+export const MOOD_FALLBACK_KEY = "mood_fallback:";
+// Pure: the log line for a fallback sent in an item's place. The rule, the kind, ids; never member text.
+export function moodFallbackLogLine(o: { kind: string; ref: string }): string {
+  return `mood hold: rule=draft_skip_wait kind=${o.kind} ref=${o.ref} the approved fallback line went in its place`;
+}
 
 // none: not struggling; held: it waits; released_okay: struggling by the read, but they've texted normally since; released_cap: the
 // hard stretch reached the cap.
