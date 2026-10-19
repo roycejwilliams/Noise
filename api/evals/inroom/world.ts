@@ -243,6 +243,12 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     const m = W.members.get(p[0]);
     return R(m ? [{ first_name: m.first_name, phone_number: m.phone_number, email: m.email }] : []);
   }
+  // The partner-guest cutoff read at every proactive send (services/partnerGuests.ts proactiveCutoff). This world has no partner
+  // guests: a member is a member with no guest nights, so the cutoff passes as it would in the room.
+  if (has("SELECT coalesce(u.invite_verified, false) AS member, g.resolved_at, e.start_at, e.end_at, e.timezone, e.closed_at")) {
+    const m = W.members.get(p[0]);
+    return R(m ? [{ member: m.invite_verified !== false, resolved_at: null, start_at: null, end_at: null, timezone: null, closed_at: null }] : []);
+  }
   if (has("SELECT id AS user_id, last_name FROM users WHERE id = ANY($1::uuid[])")) return R((p[0] as string[]).map((id) => W.members.get(id)).filter((m): m is Member => !!m).map((m) => ({ user_id: m.id, last_name: m.last_name ?? null })));
   if (has("SELECT id AS user_id, first_name, phone_number, email FROM users WHERE id = ANY($1::uuid[])")) return R((p[0] as string[]).map((id) => W.members.get(id)).filter((m): m is Member => !!m).map((m) => ({ user_id: m.id, first_name: m.first_name, phone_number: m.phone_number, email: m.email })));
   if (has("SELECT ranked_candidates FROM event_guest_rankings")) {
