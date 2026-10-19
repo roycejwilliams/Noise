@@ -2,24 +2,38 @@
 // about a member shapes how, never which helper."). The sweep already looks where the want is (eventSurfacingSweep.ts searchPlace,
 // #219); this is the same for the reply path's webSearch and searchEvents (agent/loopTools.ts). Pure: no model, no database.
 //
-// The place comes from the ask, in this order:
-//   1. a place the search's own words name (the web query, or the event search's "what"): "in Lisbon", "near Oakland", SF, NYC; or a
-//      place their message this turn names ("any founder dinners in Lisbon?") that the search's words repeat ("Lisbon founder
-//      dinners"). The words carry it: the web search adds nothing on top, the event search looks there;
-//   2. else the place the tool call carries from the ask (searchEvents' city, webSearch's theirs.city);
-//   3. else, when the ask names no place, their home city (the profile city) stands in, as the sweep does for a want with no place,
-//      and only when the search needs a place: an event search always does (the feed is by city); a web search does unless its words
-//      say it has none (online, remote, virtual, anywhere). A search with no place of its own and no home city looks with none.
-// So the profile city never decides where to look when the ask names a place, and it never adds or removes a search or picks a tool:
-// it only fills in "where" for an ask that left it empty.
+// What counts as "the search's words name a place" (placesNamed), and nothing else: a capitalized phrase after in / near / around /
+// close to / nearby (the grounding gate's detector, harness/matchGate.ts placesClaimed; "in Lisbon", "near Union Square") whose first
+// word isn't a topic (NOT_A_PLACE: "in AI", "in Venture", "in Real Estate"), and the cities in wantPlace.ts ALIASES (short names like
+// SF, NYC, LA only in capitals; full names like San Francisco, New York in any case). Also a place their message this turn names that
+// way and the search's words repeat. Not seen: a place without one of those words ("visiting Lisbon", "Lisbon founder dinners" when
+// their message doesn't name it), or in lowercase ("in lisbon"); those searches get the home city, as before.
+//
+// webSearch (each query):
+//   1. the query names a place: nothing is added on top (the query carries it);
+//   2. else the place the tool call carries (theirs.city);
+//   3. else their home city (the profile city), unless the query says it's for no place (online, remote, virtual, anywhere).
+// searchEvents:
+//   1. the city the model passed (its argument is the place for this search), unless that city is their home city and the search's
+//      words name another place (the fix: the model fell back to the home city while the ask named somewhere else);
+//   2. else a place the words name;
+//   3. else their home city (an event feed is by city).
+// A search with no place of its own and no home city looks with none. The profile city never adds or removes a search or picks a tool.
 import { placesClaimed } from "../harness/matchGate.js";
-import { ALIASES } from "./wantPlace.js";
+import { ALIASES, samePlace } from "./wantPlace.js";
 
 export type AskPlaceFrom = "words" | "tool" | "home" | "none";
 export type AskPlace = { place: string | null; from: AskPlaceFrom };
 
-// Words a capitalized phrase after "in"/"near" can start with that make it not a place ("founders in AI", "talks in Spanish").
-const NOT_A_PLACE = new Set(["ai", "tech", "vc", "vcs", "yc", "web3", "crypto", "fintech", "climate", "health", "product", "design", "person", "english", "spanish", "french", "portuguese", "german", "mandarin", "q1", "q2", "q3", "q4"]);
+// Words a capitalized phrase after "in"/"near" can start with that make it a topic, not a place ("founders in AI", "talks in Spanish",
+// "women in Venture", "talks in Real Estate").
+const NOT_A_PLACE = new Set([
+  "ai", "ml", "tech", "vc", "vcs", "yc", "venture", "ventures", "web3", "crypto", "blockchain", "fintech", "climate", "health", "healthcare", "biotech",
+  "medtech", "edtech", "robotics", "hardware", "software", "saas", "data", "security", "product", "design", "marketing", "sales", "finance",
+  "real", "law", "policy", "education", "media", "music", "art", "arts", "fashion", "film", "gaming", "sports", "science", "research",
+  "engineering", "python", "javascript", "typescript", "rust", "java", "love", "life", "business", "startups", "consumer", "enterprise",
+  "person", "english", "spanish", "french", "portuguese", "german", "mandarin", "q1", "q2", "q3", "q4",
+]);
 // Words a place phrase ends before ("in Lisbon Saturday" is Lisbon).
 const TIME_WORDS = new Set(["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "today", "tonight", "tomorrow", "this", "next", "weekend", "morning", "afternoon", "evening", "night", "nights", "mornings"]);
 // A search that is for no place.
@@ -60,8 +74,11 @@ export function searchNamesPlace(words: string, message?: string | null): string
 // Pure: where one reply search looks (the rule above). kind: "events" always needs a place; "web" needs one unless its words say none.
 export function replySearchPlace(o: { kind: "web" | "events"; words: string; toolCity?: string | null; message?: string | null; home?: string | null }): AskPlace {
   const named = searchNamesPlace(o.words, o.message);
-  if (named) return { place: named, from: "words" };
   const tool = String(o.toolCity ?? "").trim();
+  // The event search: the model's city first; the words win only over a city that is just their home city (review of #252: a topic
+  // after "in" read as a place, "women in Venture", must never override the city the model passed).
+  if (o.kind === "events" && tool && !(named && samePlace(tool, o.home))) return { place: tool, from: "tool" };
+  if (named) return { place: named, from: "words" };
   if (tool) return { place: tool, from: "tool" };
   const needsPlace = o.kind === "events" || !NO_PLACE_WORDS.test(o.words);
   const home = String(o.home ?? "").trim();
