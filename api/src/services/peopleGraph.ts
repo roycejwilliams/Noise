@@ -16,6 +16,7 @@ import pool from "../db/db.js";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import { generateEmbeddings } from "./embeddings.js";
+import { withTraceUser } from "./llmTraceText.js";
 import { getPersonSnapshot } from "../harness/personSnapshot.js";
 import { askEntries } from "../harness/profileWrite.js";
 
@@ -183,7 +184,8 @@ export async function refreshRoom(userIds: string[]): Promise<void> {
     Array.from({ length: Math.min(4, queue.length) }, async () => {
       while (queue.length) {
         const id = queue.shift()!;
-        await refreshPeopleFacts(id).catch(() => null);
+        // Under that member's own trace-text mark, never the mark of whoever's turn started the room pass.
+        await withTraceUser(id, () => refreshPeopleFacts(id)).catch(() => null);
       }
     }),
   );

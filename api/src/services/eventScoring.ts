@@ -797,11 +797,12 @@ export async function scoreMatchedGroup(
   const room = matched.map((g) => ({ ...g, intent: matchableIntent(g.intent) }));
   matched = room;
   // Co's read of which asks are about people (services/peopleAsks.ts), for the whole room in one call; each person's frame
-  // below reads it from the cache.
+  // below reads it from the cache. It holds every guest's asks, so it runs under nobody's trace-text mark, never the mark of
+  // whoever's turn started the pass (a mention in their message, profileExtraction -> eventMatching).
   {
     const { readPeopleAsks, askLine } = await import("./peopleAsks.js");
     const texts = [...new Set(matched.flatMap((g) => (Array.isArray(g.intent) ? (g.intent as any[]) : []).filter((e) => isOpenAsk(e)).map(askLine)))];
-    if (texts.length) await readPeopleAsks(texts).catch(() => []);
+    if (texts.length) await withTraceUser(null, () => readPeopleAsks(texts)).catch(() => []);
   }
   for (const person of matched) {
     const others = matched.filter((m) => m.user_id !== person.user_id);
@@ -812,17 +813,20 @@ export async function scoreMatchedGroup(
     // What they're scored on (services/matching.ts roomFrame, 2026-10-12 audit): every open people-shaped ask, both
     // directions, de-duplicated, errands left out, the goal as the frame when no ask is about people. Only errands on file
     // and no goal: nothing to judge a room by, so they're asked what they'd like from it, like someone with no ask.
-    const frame: RoomFrame | null = ask?.text ? await roomFrame(person.intent) : null;
+    // Under this person's mark: on a cache miss it reads their own asks again.
+    const frame: RoomFrame | null = ask?.text ? await withTraceUser(person.user_id, () => roomFrame(person.intent)) : null;
 
     if (!frame) {
       if (await wasRecentlySolicited(eventId, person.user_id)) {
         continue; // already asked within the cooldown window — wait for a reply or the next window
       }
-      const { sent: solicitationSent } = await runEventAskSolicitationAgent(
-        { userId: person.user_id, firstName: person.first_name, phoneNumber: person.phone_number },
-        eventName,
-        opts,
-        eventTiming?.end_at ?? null,
+      const { sent: solicitationSent } = await withTraceUser(person.user_id, () =>
+        runEventAskSolicitationAgent(
+          { userId: person.user_id, firstName: person.first_name, phoneNumber: person.phone_number },
+          eventName,
+          opts,
+          eventTiming?.end_at ?? null,
+        ),
       ).catch((err: any) => {
         console.error(`eventScoring: ask solicitation failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
         return { sent: false };
