@@ -6,20 +6,27 @@
 // are exact-phrase counts (a floor). Output is counts by store and by kind of member (real, test, archived): never a member's text,
 // id, name or phone, never the removed text, and never a database error's text (its class only).
 //
-//   1. once, to read the dev server's identifier (reads only pg_control_system(); no member table):
-//      DATABASE_URL=postgres://...@127.0.0.1:55441/railway npx tsx src/scripts/forgetResidueAudit.ts --print-id
-//   2. the audit:
-//      DATABASE_URL=... npx tsx src/scripts/forgetResidueAudit.ts --confirm-db railway --expect-system-id <id from 1> [--expect-port 55441]
+//   DATABASE_URL=postgres://...@127.0.0.1:55441/railway npx tsx src/scripts/forgetResidueAudit.ts --confirm-db railway [--expect-port 55441]
 //
-// Safety (refuses, before any member table is read, unless every one holds):
-//   - not production (NODE_ENV or RAILWAY_ENVIRONMENT_NAME);
-//   - the connection is a local tunnel: host 127.0.0.1 or localhost, on the expected port (default 55441);
-//   - current_database() is --confirm-db, and the server's system identifier is --expect-system-id (both databases are named
-//     "railway", so the name alone can't tell dev from anything else);
-//   - the server holds test members (555-01xx numbers), which only dev/co-test ever creates (services/testNumbers.ts);
-//   - every read is inside BEGIN READ ONLY ... ROLLBACK (checked), with a statement timeout. No write, no DDL, no temp table.
+// It only ever runs against the dev server: DEV_SYSTEM_ID below is that server's identifier, set in the code, and every other server
+// is refused (an operator can't pass another one in, so a tunnel pointed anywhere else fails). --print-id reads only
+// pg_control_system() and prints the identifier; it's there to set DEV_SYSTEM_ID up again if the dev server is ever rebuilt.
+//
+// Safety, in this order:
+//   - not production (NODE_ENV or RAILWAY_ENVIRONMENT_NAME), and a local tunnel: host 127.0.0.1 or localhost, on the expected port
+//     (default 55441). Both are checked before connecting.
+//   - the server's system identifier is DEV_SYSTEM_ID, and current_database() is --confirm-db (both databases are named "railway",
+//     so the name alone can't tell dev from anything else). Checked before any table is read.
+//   - inside BEGIN READ ONLY (checked), the server holds test members (555-01xx numbers), which only dev/co-test ever creates
+//     (services/testNumbers.ts). This is one count of the users table, read before refusing; it runs only after the identifier
+//     check passed, and nothing but the count leaves it.
+//   - every read is inside BEGIN READ ONLY ... ROLLBACK, with a statement timeout. No write, no DDL, no temp table.
 // Each store's columns are checked in information_schema first; a store whose table or columns aren't there is reported n/a.
 import pg from "pg";
+
+// The dev server's identifier (Railway helpful-stillness, environment dev, service Postgres-J3wd; pg_control_system()), read
+// 2026-10-19 over a read-only tunnel. The audit refuses every other server.
+export const DEV_SYSTEM_ID = "7676947357376430135";
 
 type Store = { name: string; table: string; owner: string; cols: string[]; where?: string; note?: string };
 // The stores in forget-delete-spec.md section 2 that hold text. Each row is matched on its owner (the member who removed it).
@@ -86,14 +93,13 @@ const arg = (args: string[], k: string) => (args.indexOf(k) === -1 ? undefined :
 async function main() {
   const args = process.argv.slice(2);
   const confirm = arg(args, "--confirm-db");
-  const expectId = arg(args, "--expect-system-id");
   const port = Number(arg(args, "--expect-port") ?? 55441);
   if (process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT_NAME === "production") throw new Error("refusing: production");
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
   const url = new URL(process.env.DATABASE_URL);
   if (!localTunnel(process.env.DATABASE_URL, port)) throw new Error(`refusing: not a local tunnel on port ${port} (host ${url.hostname}:${url.port || "5432"})`);
   const printId = args.includes("--print-id");
-  if (!printId && (!confirm || !expectId)) throw new Error("pass --confirm-db <database name> and --expect-system-id <dev server id> (read it once with --print-id)");
+  if (!printId && !confirm) throw new Error("pass --confirm-db <database name>");
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   try {
@@ -109,12 +115,13 @@ async function main() {
     const who = (await client.query(`SELECT current_database() AS db, inet_server_port() AS port, version() AS v`)).rows[0];
     console.log(`connected: host ${url.hostname}:${url.port} (server port ${who.port}), database ${who.db}, system ${sysId}, ${String(who.v).split(" ").slice(0, 2).join(" ")}`);
     if (who.db !== confirm) throw new Error(`refusing: connected to "${who.db}", --confirm-db says "${confirm}"`);
-    if (sysId !== expectId) throw new Error(`refusing: server ${sysId} is not the expected dev server ${expectId}`);
+    if (sysId !== DEV_SYSTEM_ID) throw new Error(`refusing: server ${sysId} is not the dev server ${DEV_SYSTEM_ID}`);
     await client.query("BEGIN READ ONLY");
     await client.query("SET LOCAL statement_timeout = '60s'");
     const ro = (await client.query(`SELECT current_setting('transaction_read_only') AS ro`)).rows[0].ro;
     if (ro !== "on") throw new Error("refusing: the transaction is not read-only");
-    // Only dev/co-test ever creates 555-01xx test members (services/testNumbers.ts is off on production): none here, not dev.
+    // A second dev marker, after the identifier check passed: only dev/co-test ever creates 555-01xx test members
+    // (services/testNumbers.ts is off on production). This count is read first and refused on after: none here, not dev.
     const testMembers = (await client.query(`SELECT count(*)::int AS n FROM users WHERE regexp_replace(coalesce(phone_number, ''), '\\D', '', 'g') ~ '^1?[0-9]{3}55501[0-9]{2}$'`)).rows[0]?.n ?? 0;
     if (!testMembers) throw new Error("refusing: no 555-01xx test members on this server, so it isn't the dev/co-test database");
     console.log("transaction: READ ONLY; dev markers: system identifier matches, test members present\n");

@@ -5,7 +5,7 @@ pg.Client.prototype.connect = async function () {};
 pg.Client.prototype.end = async function () {};
 pg.Client.prototype.query = async function (sql) {
   asked.push(sql);
-  if (/pg_control_system/.test(sql)) return { rows: [{ id: process.env.FAKE_SYSID ?? "7000000000000000001" }] };
+  if (/pg_control_system/.test(sql)) return { rows: [{ id: process.env.FAKE_SYSID ?? "7676947357376430135" }] };
   if (/FROM users WHERE regexp_replace/.test(sql)) return { rows: [{ n: Number(process.env.FAKE_TEST_MEMBERS ?? 2) }] };
   if (/^\s*SELECT broken/.test(sql)) throw Object.assign(new Error("value 'Ellis custody' is bad"), { code: "22P02" });
   if (/JOIN co_memories t/.test(sql)) throw Object.assign(new Error("invalid input syntax: \"the custody hearing in May\""), { code: "22P02" });
