@@ -258,6 +258,13 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     if (!W.offers.some((o) => o.event_id === event_id && o.person_id === person_id && o.candidate_key === candidate_key)) W.offers.push({ event_id, person_id, candidate_key, kind: "direct_ask", candidate_id, candidate_ids: [], asker_id, event_name, status: "queued", opened_at: null, created_at: new Date(Date.now() + W.offers.length) });
     return R([]);
   }
+  // The open-question cap (inRoomOffers.ts MAX_OPEN_QUESTIONS) and every open question (openOffers), exact queries only.
+  if (has("SELECT count(*)::int AS n FROM event_match_offers WHERE person_id = $1 AND status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval")) {
+    return R([{ n: W.offers.filter((o) => o.person_id === p[0] && o.status === "open" && now() - +o.opened_at < Number(p[1]) * 86_400_000).length }]);
+  }
+  if (has("FROM event_match_offers") && has("WHERE person_id = $1 AND status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval") && has("ORDER BY opened_at DESC LIMIT 10")) {
+    return R(W.offers.filter((o) => o.person_id === p[0] && o.status === "open" && now() - +o.opened_at < Number(p[1]) * 86_400_000).sort((a, b) => +b.opened_at - +a.opened_at).slice(0, 10));
+  }
   if (has("SELECT 1 FROM event_match_offers WHERE person_id = $1 AND status = 'open'")) return R(W.offers.filter((o) => o.person_id === p[0] && o.status === "open").slice(0, 1).map(() => ({ "?column?": 1 })));
   if (has("FROM event_match_offers WHERE person_id = $1 AND status = 'open'")) return R(W.offers.filter((o) => o.person_id === p[0] && o.status === "open").sort((a, b) => +b.opened_at - +a.opened_at).slice(0, 1));
   if (has("FROM event_match_offers WHERE person_id = $1 AND status = 'queued'")) return R(W.offers.filter((o) => o.person_id === p[0] && o.status === "queued").sort((a, b) => +a.created_at - +b.created_at).slice(0, 1));

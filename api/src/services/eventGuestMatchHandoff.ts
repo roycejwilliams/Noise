@@ -81,6 +81,28 @@ const MATCH_NUDGE_REPLY_EXPIRY_DAYS = 7;
 // above (code review, 2026-09-17), so ORDER BY sent_at DESC LIMIT 1 here
 // always resolves a reply against the candidate they were MOST RECENTLY
 // actually asked about, never a stale one from an earlier match.
+// Every question about a person they have open, newest first (services/inRoomOffers.ts openOffers): with two open, the reply path
+// sees both and binds a reply only to the one it names (messageRouter.ts namesOneOpenIntro). Only the people this member was
+// already told about (a first name per question; none for an additive offer, whose arrivals they haven't been told). Without any
+// open offer row: the old per-person nudge, as findPendingMatchNudge reads it.
+export async function findPendingMatchNudges(userId: string): Promise<PendingMatchNudge[]> {
+  const offers = await (await import("./inRoomOffers.js")).openOffers(userId).catch(() => null);
+  if (!offers?.length) {
+    const one = await findPendingMatchNudge(userId);
+    return one ? [one] : [];
+  }
+  const out: PendingMatchNudge[] = [];
+  for (const offer of offers) {
+    if (offer.kind === "additive") {
+      out.push({ event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: "", candidate_first_name: "", candidate_phone: "", candidate_email: "", anonymous: true, kind: "additive", candidate_ids: offer.candidate_ids ?? [], asked_at: offer.opened_at });
+    } else if (offer.candidate_id) {
+      const { rows: who } = await pool.query(`SELECT first_name, phone_number, email FROM users WHERE id = $1`, [offer.candidate_id]);
+      if (who[0]) out.push({ event_id: offer.event_id, event_name: offer.event_name ?? "the event", candidate_id: offer.candidate_id, candidate_first_name: who[0].first_name, candidate_phone: who[0].phone_number, candidate_email: who[0].email, anonymous: false, kind: offer.kind, asked_at: offer.opened_at });
+    }
+  }
+  return out;
+}
+
 export async function findPendingMatchNudge(userId: string): Promise<PendingMatchNudge | null> {
   // The offer they were asked most recently and haven't answered, per pair (services/inRoomOffers.ts).
   const offer = await (await import("./inRoomOffers.js")).latestOpenOffer(userId).catch(() => null);

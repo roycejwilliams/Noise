@@ -477,6 +477,13 @@ async function maybeSendMatchNudge(
       return false;
     }
     if (!(await passValueGate())) return false;
+    // At most two questions about people open for them at once (services/inRoomOffers.ts MAX_OPEN_QUESTIONS): with two open, this
+    // nudge waits for a later pass.
+    const O = await import("./inRoomOffers.js");
+    if ((await O.openQuestionCount(person.user_id)) >= O.MAX_OPEN_QUESTIONS) {
+      console.log(`eventScoring: match nudge for ${person.user_id} at ${eventId} waits (${O.MAX_OPEN_QUESTIONS} questions already open)`);
+      return false;
+    }
 
     // Claim atomically before drafting (code review, 2026-09-17): the
     // scoring debounce only coalesces webhooks that arrive within its 15s
@@ -660,6 +667,9 @@ async function maybeSendAdditiveOffer(
     );
     return false;
   }
+  // At most two questions about people open for them at once (services/inRoomOffers.ts MAX_OPEN_QUESTIONS).
+  const O = await import("./inRoomOffers.js");
+  if ((await O.openQuestionCount(person.user_id)) >= O.MAX_OPEN_QUESTIONS) return false;
   if (!(await tryClaimAdditiveOfferDebounce(eventId, person.user_id))) {
     console.log(
       `eventScoring: additive offer debounced for ${person.user_id} at ${eventId} (sent one within the last ${ADDITIVE_OFFER_DEBOUNCE_MINUTES}m)`,

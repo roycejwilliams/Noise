@@ -7,6 +7,7 @@ import {
   coAskedSeveralThings,
   followUpStillCurrent,
   isIrreversible,
+  namesOneOpenIntro,
   type Decision,
   type OpenItem,
   type RouterOutput,
@@ -37,6 +38,10 @@ export function routerGateChecks(
     if (item) {
       const valueOk = ANSWER_VALUES[item.kind].includes(out.answers.value);
       checks.push({ name: "answer_value_valid", pass: valueOk, reason: valueOk ? undefined : `"${out.answers.value}" isn't a valid answer to ${item.kind}` });
+      if (item.kind === "match_nudge" && openItems.filter((i) => i.kind === "match_nudge").length >= 2) {
+        const names = namesOneOpenIntro(item, openItems, turn.message);
+        checks.push({ name: "names_one_open_intro", pass: names, reason: names ? undefined : "two questions about people are open and the reply didn't name one; asked which" });
+      }
       if (valueOk && isIrreversible(item.kind, out.answers.value)) {
         checks.push({
           name: "irreversible_high_confidence",

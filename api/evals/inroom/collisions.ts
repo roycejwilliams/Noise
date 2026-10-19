@@ -203,6 +203,113 @@ async function threeYeses(seed: number, blockFirst = false) {
   check("an ask waiting behind one held for their morning or the pause stays in line (never dropped)", W.offers.find((o) => o.candidate_key === a.id)?.status === "queued", W.offers.map((o) => o.status));
   (W as any).deferredAsks = new Set();
 }
+// Two questions open for one person (review of #211, the probe): Tess's question about Remy is 21 minutes unanswered, Kai's ask goes,
+// and her bare "yes" bound to Kai, the newest, and sent Kai's intro email. Now a reply binds only if it names one; a bare yes records
+// nothing and sends nothing, and Cue asks which, by the two first names it already told her. At most two open at once.
+const MR = await import("../../src/services/messageRouter.js");
+const routed = (itemId: string): any => ({ answers: { itemId, value: "yes" }, ambiguousBetween: [], call: "none", wantsRecommendation: false, confidence: "high", reason: "a yes" });
+async function twoOpen() {
+  reset();
+  const tess = addMember({ first_name: "Tess", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  const kai = addMember({ first_name: "Kai", intent: [ask("a seed investor for climate hardware")] });
+  const remy = addMember({ first_name: "Remy", intent: [ask("a sailing crew")] });
+  const noor = addMember({ first_name: "Noor", intent: [ask("a seed investor for climate hardware too")] });
+  W.scorer = () => ({ score: 20, share: true });
+  addEvent({ api_id: "ev", name: "Noise Supper" }, [{ m: tess }, { m: kai }, { m: remy }, { m: noor }]);
+  const ago = (mins: number) => new Date(Date.now() - mins * 60_000);
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: tess.id, candidate_key: remy.id, kind: "nudge", candidate_id: remy.id, candidate_ids: [], asker_id: null, status: "open", opened_at: ago(21), created_at: ago(21) });
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: tess.id, candidate_key: kai.id, kind: "direct_ask", candidate_id: kai.id, candidate_ids: [], asker_id: kai.id, status: "queued", opened_at: null, created_at: ago(9) });
+  W.optIns.push({ event_id: "ev", person_id: kai.id, candidate_id: tess.id, status: "interested" });
+  await H.drainStaleAsks();
+  await settle();
+  const pendings = await H.findPendingMatchNudges(tess.id);
+  const items = await MR.matchNudgeItems(tess.id, pendings);
+  // As in the probe: Remy's question went 21 minutes ago, she said something else since, and Cue's last message is Kai's ask alone
+  // (so the older "Cue asked two things at once" check doesn't apply).
+  const convo = `Co replied: Remy is here tonight and worth meeting. Want an intro?\nUser said: one sec, grabbing a drink\nCo replied: Ha, enjoy.\nCo replied: Kai from Noise Supper would like an intro. Open to it?`;
+  const itemFor = (m: Member) => items.find((i) => i.detail === m.first_name)!;
+  // The route's own step (routes/sendblue.ts): only a resolved match_nudge reaches handleMatchNudgeReply.
+  const reply = async (message: string, out: any) => {
+    const d = MR.decideActions(out, items, { message, recentConversation: convo });
+    if (d.resolve?.item.kind === "match_nudge" && d.resolve.item.ref?.kind === "match_nudge") {
+      const p = d.resolve.item.ref.pending;
+      await memberTurn(tess.id, () => H.handleMatchNudgeReply(p.event_id, p.event_name, d.resolve!.value === "yes" ? "interested" : "not_interested", asM(tess), { user_id: p.candidate_id, first_name: p.candidate_first_name, phone_number: p.candidate_phone, email: p.candidate_email }));
+      await settle();
+    }
+    return d;
+  };
+  const emails = () => W.memoriesWritten.filter((m) => m.memory_type === "event_intro_email_sent").length;
+  const tessYes = () => W.optIns.filter((o) => o.person_id === tess.id && o.status === "interested").map((o) => W.members.get(o.candidate_id)?.first_name);
+  return { tess, kai, remy, noor, pendings, items, itemFor, reply, emails, tessYes };
+}
+{
+  const t = await twoOpen();
+  check("two open: Kai's ask went after 21 minutes, so Tess has two questions open, and the reply path sees both", t.items.length === 2 && JSON.stringify(t.items.map((i) => i.detail).sort()) === JSON.stringify(["Kai", "Remy"]), t.items.map((i) => i.detail));
+  const d = await t.reply("yes", routed(t.itemFor(t.kai).id));
+  check("the probe: Tess's bare 'yes' (read as Kai's, the newest) binds to nothing: no intro email, no yes recorded", !d.resolve && t.emails() === 0 && t.tessYes().length === 0, { resolve: d.resolve?.item.id, emails: t.emails(), yes: t.tessYes() });
+  check("... both questions stay open", W.offers.filter((o) => o.person_id === t.tess.id && o.status === "open").length === 2);
+  check("... and Cue is told to ask which, by the two first names it already told her", d.clarifyAbout === "items" && /\bRemy\b/.test(d.clarifyContext) && /\bKai\b/.test(d.clarifyContext), d.clarifyContext);
+  const leak = [t.noor.first_name, t.kai.email, t.kai.phone_number, t.remy.email, t.remy.phone_number, "seed investor", "sailing"].filter((x) => x && d.clarifyContext.includes(String(x)));
+  check("... and nothing about anyone else reaches it: no other member's name, no contact details, no one's asks", leak.length === 0, leak);
+  const d2 = await t.reply("yes!", routed(t.itemFor(t.remy).id));
+  check("a bare yes read as the older question binds to nothing either", !d2.resolve && t.emails() === 0 && t.tessYes().length === 0);
+  const d3 = await t.reply("yes to Remy and Kai", routed(t.itemFor(t.kai).id));
+  check("a yes naming both binds to nothing (it doesn't identify one)", !d3.resolve && t.emails() === 0 && t.tessYes().length === 0);
+}
+{
+  const t = await twoOpen();
+  const d = await t.reply("yes, Kai sounds great", routed(t.itemFor(t.kai).id));
+  check("a yes naming Kai binds to Kai: the intro goes (Kai already said yes; one introduction, a line on each side)", d.resolve?.item.detail === "Kai" && t.emails() === 2 && W.memoriesWritten.filter((m) => m.memory_type === "event_intro_email_sent").every((m) => [t.tess.id, t.kai.id].includes(m.user_id)) && JSON.stringify(t.tessYes()) === JSON.stringify(["Kai"]), { resolve: d.resolve?.item.detail, emails: t.emails(), yes: t.tessYes() });
+  check("... and Remy's question stays open", W.offers.find((o) => o.person_id === t.tess.id && o.candidate_key === t.remy.id)?.status === "open");
+}
+{
+  const t = await twoOpen();
+  const d = await t.reply("remy yes", routed(t.itemFor(t.kai).id));
+  check("a yes naming Remy never binds to Kai, even when the reader picked Kai", !d.resolve && t.emails() === 0 && t.tessYes().length === 0);
+  const d2 = await t.reply("remy yes", routed(t.itemFor(t.remy).id));
+  check("... and read as Remy's, it binds to Remy: her yes is recorded, no email (Remy hasn't said yes)", d2.resolve?.item.detail === "Remy" && t.emails() === 0 && JSON.stringify(t.tessYes()) === JSON.stringify(["Remy"]));
+}
+{
+  // Two open questions about two people who share a first name: the name can't tell them apart.
+  const items = [{ id: "match_nudge:ev:a", kind: "match_nudge" as const, detail: "Remy", description: "", askedAt: null }, { id: "match_nudge:ev:b", kind: "match_nudge" as const, detail: "Remy", description: "", askedAt: null }];
+  check("two open questions about two Remys: 'yes Remy' binds to neither", !MR.namesOneOpenIntro(items[0], items, "yes Remy") && !MR.namesOneOpenIntro(items[1], items, "yes Remy"));
+  const additive = [{ id: "match_nudge:ev:additive", kind: "match_nudge" as const, detail: null, description: "", askedAt: null }, items[0]];
+  check("an additive offer (names nobody) with another question open: a bare yes binds to neither", !MR.namesOneOpenIntro(additive[0], additive, "yes") && !MR.namesOneOpenIntro(additive[1], additive, "yes"));
+  check("a name inside another word isn't the name ('Kaitlyn' isn't Kai)", !MR.namesOneOpenIntro({ id: "k", kind: "match_nudge", detail: "Kai" }, [{ id: "k", kind: "match_nudge", detail: "Kai" }, { id: "r", kind: "match_nudge", detail: "Remy" }], "Kaitlyn said hi, yes"));
+}
+{
+  // One question open: unchanged (the bare yes binds, as before).
+  reset();
+  const tess = addMember({ first_name: "Tess", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  const kai = addMember({ first_name: "Kai", intent: [ask("a seed investor for climate hardware")] });
+  W.scorer = () => ({ score: 20, share: true });
+  addEvent({ api_id: "ev", name: "Noise Supper" }, [{ m: tess }, { m: kai }]);
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: tess.id, candidate_key: kai.id, kind: "direct_ask", candidate_id: kai.id, candidate_ids: [], asker_id: kai.id, status: "open", opened_at: new Date(Date.now() - 60_000), created_at: new Date() });
+  W.optIns.push({ event_id: "ev", person_id: kai.id, candidate_id: tess.id, status: "interested" });
+  const items = await MR.matchNudgeItems(tess.id, await H.findPendingMatchNudges(tess.id));
+  const d = MR.decideActions(routed(items[0]?.id ?? ""), items, { message: "yes", recentConversation: "Co replied: Kai from Noise Supper would like an intro. Open to it?" });
+  check("one question open: a bare yes binds to it, as before", items.length === 1 && d.resolve?.item.detail === "Kai" && !d.clarifyContext, { items: items.map((i) => i.detail), resolve: d.resolve?.item.detail });
+}
+{
+  // The pileup: two questions open, both past OPEN_SLOT_MINUTES; a third ask waits, the 5-minute drain never sends it, and no nudge
+  // or additive offer opens a third.
+  const t = await twoOpen();
+  const ellis = addMember({ first_name: "Ellis", intent: [ask("a seed investor for climate hardware (3)")] });
+  W.optIns.push({ event_id: "ev", person_id: ellis.id, candidate_id: t.tess.id, status: "interested" });
+  for (const o of W.offers.filter((x) => x.person_id === t.tess.id && x.status === "open")) o.opened_at = new Date(Date.now() - 45 * 60_000);
+  check("two open past the 20 minutes: the slot stays taken", await O.hasOpenOffer(t.tess.id));
+  check("... a new ask is queued, not sent", (await O.claimAskSlot({ eventId: "ev", personId: t.tess.id, candidateId: ellis.id, askerId: ellis.id })) === "queued");
+  const before = W.sent.filter((x) => x.to === t.tess.phone_number).length;
+  for (let k = 0; k < 3; k++) await H.drainStaleAsks();
+  await settle();
+  check("... and the drain never sends it while two are open", W.sent.filter((x) => x.to === t.tess.phone_number).length === before && W.offers.filter((o) => o.person_id === t.tess.id && o.status === "open").length === 2 && W.offers.find((o) => o.candidate_key === ellis.id)?.status === "queued");
+  const src = (await import("node:fs")).readFileSync(new URL("../../src/services/eventScoring.ts", import.meta.url), "utf8");
+  check("... and a match nudge or an additive offer waits too (the same cap, read before it's claimed)", (src.match(/if \(\(await O\.openQuestionCount\(person\.user_id\)\) >= O\.MAX_OPEN_QUESTIONS\)/g) ?? []).length === 2);
+  // Tess answers one by name: the slot frees and Ellis's ask goes.
+  await memberTurn(t.tess.id, () => H.handleMatchNudgeReply("ev", "Noise Supper", "not_interested", asM(t.tess), asM(t.remy)));
+  await settle();
+  check("... once she answers one, the waiting ask goes", W.sent.filter((x) => x.to === t.tess.phone_number).length === before + 1 && W.offers.find((o) => o.candidate_key === ellis.id)?.status === "open");
+}
 check("every query the cases ran is one the fake world knows exactly (a changed slot query fails here)", W.unknownSql.size === 0, [...W.unknownSql].slice(0, 5));
 
 const { total, failed } = results;
