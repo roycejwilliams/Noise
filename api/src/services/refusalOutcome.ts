@@ -150,7 +150,7 @@ export function askPrompt(word: FileWord, problems: string[]): string {
 ${problems.map((p, i) => `${i + 1}. ${p}`).join("\n")}
 
 Write the ONE question Cue asks the member so it can finish the ${word}: the one fact of their own these lines need (a time, a number, a date, a count, a detail they own, like when supper starts or how many guests are coming).
-${problems.some((p) => /an old fact that may have changed/.test(p)) ? `A line marked "an old fact that may have changed" rests on something they told Cue long ago: ask whether it still holds, naming what it's about but never the old value (like "is the supper still every month" or "are you still raising this round").
+${problems.some((p) => /an old fact that may have changed/.test(p)) ? `A line marked "an old fact that may have changed" rests on something they told Cue long ago: ask whether it still holds, naming what it's about but never the old value or any word of it (like "is the supper still on the same schedule" or "is the funding still where it was").
 ` : ""}Rules:
 - One question about one fact. If these lines need more than one fact, or the fact isn't theirs to give (a partner, a sponsor, a customer, an award, a result, something about the market, unless it's an old fact of theirs to confirm), return null.
 - Never state or guess the answer: no numbers, times, dates or names from the refused lines, and no either/or choices.
@@ -167,39 +167,60 @@ Never repeat what the lines claim: no names, numbers, times or dates from them.
 Return ONLY JSON: {"what": "..."}`;
 }
 
-// Pure: what a slot may never carry: any digit, and every name, number or time a refused line has that isn't in their words.
+// Pure: what a slot may never carry (review of #243: a refused fact must never ride in the question or the kind of line, whatever its
+// case or place). From each refused line (the quoted line itself): every word that isn't in their words, wherever it sits (a name
+// opening the line is still a name), and for an old fact that may have changed, every word of its value even if they said it once
+// (the question asks whether it still holds, never restates it). From the judge's reason: every capitalized word they never used,
+// after "(" too. From the code checks' own wording: what they "never said" or "never gave". Plus, in carries: any digit, and any
+// number spelled out that isn't in their words.
+const STOP = new Set(["the", "and", "for", "with", "from", "into", "onto", "this", "that", "these", "those", "our", "your", "their", "they", "you", "are", "was", "were", "has", "have", "had", "its", "it's", "not", "but", "all", "any", "each", "every", "per", "via", "line", "lines", "slide", "section", "still"]);
+const NUMBER_WORDS = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|billion|dozen|dozens|half|double|twice|triple)\b/gi;
+const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const wordIn = (w: string, text: string) => new RegExp(`(?<![A-Za-z0-9'-])${esc(w)}(?![A-Za-z0-9'-])`, "i").test(text);
+const wordsOf = (t: string) => (t.match(/[A-Za-z][A-Za-z0-9'&-]*|\d[\d:.,]*/g) ?? []).map((w) => w.replace(/['-]+$/, ""));
 export function factTokens(refused: string[], theirs: string): string[] {
-  const has = (w: string) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(theirs);
   const out = new Set<string>();
+  const add = (w: string, always = false) => {
+    const k = w.toLowerCase();
+    if (k.length < 3 || STOP.has(k)) return;
+    if (always || !wordIn(k, theirs)) out.add(k);
+  };
   for (const t of refused) {
-    for (const m of t.matchAll(/\bnames (.+?), which they never|it has (.+?), which they never gave/g)) for (const x of (m[1] ?? m[2]).split(/,\s*|\s+and\s+/)) if (x.trim()) out.add(x.trim().toLowerCase());
-    // A capitalized word inside a line (not the one a sentence or a quote opens on) reads as a name.
-    for (const m of t.matchAll(/\b[A-Z][A-Za-z'&-]+\b/g)) {
-      const before = t.slice(Math.max(0, (m.index ?? 0) - 2), m.index ?? 0);
-      if ((m.index ?? 0) === 0 || /(?:^|[".:!?(]\s?|"|\| )$/.test(before)) continue;
-      if (!has(m[0])) out.add(m[0].toLowerCase());
+    const old = /an old fact that may have changed/.test(t);
+    // The refused line itself: what's in quotes.
+    for (const m of t.matchAll(/"([^"]{2,})"?/g)) for (const w of wordsOf(m[1])) add(w, old);
+    // The judge's reason: a capitalized word they never used is a name, wherever it sits (after "(" too).
+    for (const m of t.matchAll(/\(([^)]*)\)/g)) for (const w of m[1].match(/\b[A-Z][A-Za-z0-9'&-]+\b/g) ?? []) add(w);
+    // The code checks' own wording: the names, numbers and times they named.
+    for (const m of t.matchAll(/\bnames (.+?), which they never|it has (.+?), which they never gave/g)) for (const x of (m[1] ?? m[2]).split(/,\s*|\s+and\s+/)) {
+      if (!x.trim()) continue;
+      if (!wordIn(x.trim(), theirs)) out.add(x.trim().toLowerCase());
+      for (const w of wordsOf(x)) add(w);
     }
   }
-  return [...out].filter((w) => w.length >= 2 && !/^(?:i|the|a|an|this|these|that|those|slide|section|it|they|their|built|our|we|rewrite|leave|fix)$/.test(w));
+  return [...out];
 }
-const carries = (s: string, tokens: string[]) => /\d/.test(s) || tokens.some((t) => new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(s));
+const carries = (s: string, tokens: string[], theirs = "") =>
+  /\d/.test(s) || tokens.some((t) => wordIn(t, s)) || (s.match(NUMBER_WORDS) ?? []).some((n) => !wordIn(n, theirs));
 const QUESTION_START = /^(?:what|what's|which|when|where|who|whose|how|is|are|do|does|did|will|would|can|could|should|has|have)\b/;
 // Pure: the question as it goes in askLine, or null when it isn't one plain question about one fact, or carries a refused fact.
 export function cleanQuestion(raw: unknown, tokens: string[], theirs: string): string | null {
   if (typeof raw !== "string") return null;
   const q = raw.trim().replace(/[?.\s]+$/, "");
   if (!q || q.length > 140 || q.split(/\s+/).length > 18) return null;
-  if (!QUESTION_START.test(q) || /[?!;:"“”—–\n]/.test(q) || /\b(?:and|also)\s+(?:what|when|where|who|how|which|is|are|do|does)\b/.test(q)) return null;
+  if (!QUESTION_START.test(q) || /[?!;:"“”—–\n]/.test(q)) return null;
+  // One fact: never "X and Y", never "X or Y".
+  if (/\b(?:and|or|also|plus)\b|&/i.test(q)) return null;
   // A capitalized word is only one of theirs (a name they gave); a refused fact never rides in it.
-  if ((q.match(/\b[A-Z][A-Za-z'-]*\b/g) ?? []).some((w) => w !== "I" && !new RegExp(`\\b${w}\\b`).test(theirs))) return null;
-  return carries(q, tokens) ? null : q;
+  if ((q.match(/\b[A-Z][A-Za-z'-]*\b/g) ?? []).some((w) => w !== "I" && !new RegExp(`\\b${esc(w)}\\b`).test(theirs))) return null;
+  return carries(q, tokens, theirs) ? null : q;
 }
 // Pure: the kind of line as it goes in droppedLine, or null.
-export function cleanWhat(raw: unknown, tokens: string[]): string | null {
+export function cleanWhat(raw: unknown, tokens: string[], theirs = ""): string | null {
   if (typeof raw !== "string") return null;
   const w = raw.trim().replace(/[.\s]+$/, "");
   if (!/^the [a-z][a-z' -]{0,40} line$/.test(w) || w.split(/\s+/).length > 6) return null;
-  return carries(w, tokens) ? null : w;
+  return carries(w, tokens, theirs) ? null : w;
 }
 async function slotFrom(write: (p: string) => Promise<string>, prompt: string, key: "question" | "what"): Promise<unknown> {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -324,7 +345,7 @@ export async function afterRefusal<F, D>(file: F, first: Problem[], d: FlowDeps<
   if (again && !again.ok && again.problems.some((p) => p.down)) return down(cur, again.problems, fixed, "check down on the dropped version");
   const sendDropped = async (why: string): Promise<FlowEnd<F, D> | null> => {
     if (!dropped || !again?.ok) return null;
-    const what = cleanWhat(await slotFrom(slots.what, whatPrompt(d.word, refusedTexts), "what"), tokens);
+    const what = cleanWhat(await slotFrom(slots.what, whatPrompt(d.word, refusedTexts), "what"), tokens, d.theirs);
     return what ? { case: "dropped", file: again.file, data: again.data, line: droppedLine(d.word, what), dropped: at, trace: trace({ dropped: at, why }) } : null;
   };
   const useful = !!dropped && d.size(dropped) >= KEEP_SHARE * d.size(cur);

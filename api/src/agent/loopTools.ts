@@ -11,7 +11,7 @@ import { pageTools } from "./pageTools.js";
 import { deckTools } from "./deckTools.js";
 import { artifactTools } from "./artifactTools.js";
 import { owedAnswerNote } from "./linkAnswer.js";
-import { ALREADY_TOLD, afterFileSent, finishingOf, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
+import { ALREADY_TOLD, afterFileSent, finishingOf, noAskHere, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
 import { recordDecision } from "../harness/core.js";
 import { loadMemberRecord } from "../services/memberRecord.js";
 import { docPositions, logRefusal } from "../services/checkerRefusals.js";
@@ -902,7 +902,7 @@ export function loopTools(
         if (problems.length && settlesHere(ctx)) {
           await logRefusal({ checker: "doc.grounding", userId: ctx.userId, problems, lines: docPositions(doc), member, extra: { refusal: docRefusals + 1 } });
           const { docFlow } = await import("../services/documentDelivery.js");
-          const end = await docFlow(input, problems, { theirs, read, member, word: "doc", noAsk: !!finishingOf(ctx), firstDown: judgeDown });
+          const end = await docFlow(input, problems, { theirs, read, member, word: "doc", noAsk: noAskHere(ctx, "doc"), firstDown: judgeDown });
           if (end.case === "ask" || end.case === "down") return tellRefusal(ctx, { say }, end, { type: "doc", word: "doc", input, place: "doc.reply" });
           doc = end.data;
           flowEnd = end;

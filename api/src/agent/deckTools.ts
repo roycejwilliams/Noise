@@ -14,7 +14,7 @@ import { pickPage } from "./pageTools.js";
 import { ART_DIRECTION, COVER_MOOD, PLACE, TASTE_INPUT, imageN } from "./artifactInputs.js";
 export { TASTE_INPUT } from "./artifactInputs.js";
 import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
-import { ALREADY_TOLD, afterFileSent, finishingOf, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
+import { ALREADY_TOLD, afterFileSent, finishingOf, noAskHere, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
 import type { Problem } from "../services/refusalOutcome.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
@@ -788,7 +788,7 @@ export function deckTools(
             const end = await R.afterRefusal<any, Pass>(deckIn, c.problems, {
               word: "deck",
               theirs: source.judged,
-              noAsk: !!fin,
+              noAsk: noAskHere(ctx, "deck"),
               check: async (f) => {
                 const r = await checkDeck(f, attempt + 1);
                 return "imageError" in r ? { ok: false, problems: [{ text: r.imageError, at: "the file", kind: "the file's shape" }] } : r.ok ? r : { ok: false, problems: r.problems };
@@ -1019,7 +1019,7 @@ export function deckTools(
             const end = await R.afterRefusal<any, Change>(input, cc.problems, {
               word: "deck",
               theirs: source.judged,
-              noAsk: !!finishingOf(ctx),
+              noAsk: noAskHere(ctx, "deck"),
               check: async (f) => {
                 const x = await checkChange(f, attempt + 1);
                 return "imageError" in x ? { ok: false, problems: [{ text: x.imageError, at: "the file", kind: "the file's shape" }] } : x.ok ? x : { ok: false, problems: x.problems };

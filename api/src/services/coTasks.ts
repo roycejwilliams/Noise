@@ -386,7 +386,8 @@ export async function wakeOnReply(userId: string): Promise<number> {
   return (rowCount ?? 0) + (held.rowCount ?? 0);
 }
 
-// Closing a task closes its window too (followup.window.closedAt), so nothing warns about a commitment that's finished.
+// Closing a task closes its window too (followup.window.closedAt), so nothing warns about a commitment that's finished, and wipes a
+// file it held on a refusal (followup.pendingFile, services/pendingFiles.ts): forget by default, on every close.
 // A commitment's close is its outcome in the ledger (services/commitmentLog.ts): kept, partial, missed, released or withdrawn.
 // theirWord: the member's own words that closed it ("we booked it", "don't need it anymore"), quoted and checked by the caller. Only
 // that makes a drop "released"; without it a drop counts against Co (commitmentLog.ts outcomeOf).
@@ -401,7 +402,7 @@ export async function closeTask(userId: string, id: number, status: "done" | "dr
   opts = { theirWord: opts.theirWord ?? held };
   const { rowCount, rows } = await pool.query(
     `UPDATE co_tasks SET status = $3, outcome = $4, closed_at = NOW(), next_check_at = NULL, updated_at = NOW(),
-       followup = CASE WHEN kind = 'work' AND followup ? 'window' THEN jsonb_set(followup, '{window,closedAt}', to_jsonb(NOW())) ELSE followup END
+       followup = (CASE WHEN kind = 'work' AND followup ? 'window' THEN jsonb_set(followup, '{window,closedAt}', to_jsonb(NOW())) ELSE followup END) - 'pendingFile'
      WHERE user_id = $1 AND id = $2 AND status = 'open' RETURNING id, kind, source, followup, steps, goal, texts_sent`,
     [userId, id, status, outcome.trim().slice(0, 300)],
   );

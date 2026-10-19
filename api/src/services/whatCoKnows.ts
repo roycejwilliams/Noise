@@ -1002,6 +1002,17 @@ export type Cancelled = { kind: "candidate" | "task" | "deferred_send" | "backlo
 // Pure: whether a queued item's own text says what changed. A removal: the removed text's own words, specific removals only (two
 // or more real words, not a place, a role or a label), as every guard. A correction: any kind, since a re-check only sends the item
 // back to be judged again with what's true now, never drops it.
+// Pure: every word a held file carries (services/pendingFiles.ts), as one text the removal and correction checks read.
+export function heldText(held: unknown): string {
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string") out.push(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  walk((held as any)?.input ?? held);
+  return out.join("\n");
+}
 export function queuedSays(text: string, a: Applied): boolean {
   const old = plainOf(a.was);
   if (!words(old).length) return false;
@@ -1034,7 +1045,9 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
   if (!applied.length) return out;
   // One after another: this runs on the change's transaction client.
   const cands = (await db.query(`SELECT id, type, target_key, summary, payload::text AS payload FROM proactive_candidates WHERE user_id = $1 AND status = 'pending'`, [userId])).rows;
-  const tasks = (await db.query(`SELECT id, goal, target_key FROM co_tasks WHERE user_id = $1 AND status = 'open'`, [userId])).rows;
+  // A file held on a refusal (services/pendingFiles.ts) is read by its own content, never by its row's generic goal: a held file
+  // that carries a removed or corrected fact is cancelled and wiped (review of #243).
+  const tasks = (await db.query(`SELECT id, goal, target_key, kind, followup->'pendingFile' AS held FROM co_tasks WHERE user_id = $1 AND status = 'open'`, [userId])).rows;
   const sends = (await db.query(`SELECT id, type, target_key, messages::text AS messages, after_payload::text AS after FROM deferred_sends WHERE user_id = $1 AND status = 'queued'`, [userId])).rows;
   const done = new Set<string>();
   for (const a of applied) {
@@ -1058,10 +1071,25 @@ export async function cancelQueued(db: Db, userId: string, applied: Applied[]): 
       const k = `t${t.id}`;
       if (done.has(k)) continue;
       const byId = kind === "ask" && String(t.target_key ?? "").startsWith(`ask_checkin:${id}`);
-      if (!byId && !queuedSays(String(t.goal), a)) continue;
+      const held = t.held ? heldText(t.held) : "";
+      const inHeld = !!held && queuedSays(held, a);
+      const goalSays = queuedSays(String(t.goal), a);
+      if (!byId && !inHeld && !goalSays) continue;
       done.add(k);
+      // A held file that says it: wiped, on a removal or a correction. Its own row (pending_file) is cancelled; a task's held document
+      // leaves the task, which goes on (unless the task itself rests on it: then the branch below drops it, held file and all).
+      if (inHeld && (t.kind === "pending_file" || (!byId && !goalSays))) {
+        const r = await db.query(
+          t.kind === "pending_file"
+            ? `UPDATE co_tasks SET status = 'dropped', outcome = $3, closed_at = NOW(), next_check_at = NULL, updated_at = NOW(), followup = COALESCE(followup, '{}'::jsonb) - 'pendingFile' WHERE id = $1 AND user_id = $2 AND status = 'open'`
+            : `UPDATE co_tasks SET followup = COALESCE(followup, '{}'::jsonb) - 'pendingFile', notes = COALESCE(notes, '[]'::jsonb) || $4::jsonb, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'open'`,
+          t.kind === "pending_file" ? [t.id, userId, because] : [t.id, userId, because, JSON.stringify([{ at: new Date().toISOString(), text: removing ? `They removed ${fieldFor(a.ref)}: the document held for their answer was wiped. Write it again without it if it's still wanted.` : `They corrected ${fieldFor(a.ref)}: now "${String(a.now).slice(0, 120)}". Work from that.` }])],
+        );
+        if (r.rowCount) out.push({ kind: "task", id: String(t.id), what: String(t.goal).slice(0, 120), action: t.kind === "pending_file" ? "cancelled" : "recheck", because });
+        continue;
+      }
       if (removing) {
-        const r = await db.query(`UPDATE co_tasks SET status = 'dropped', outcome = $3, closed_at = NOW(), next_check_at = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'open' RETURNING kind, source, followup, goal`, [t.id, userId, because.slice(0, 300)]);
+        const r = await db.query(`UPDATE co_tasks SET status = 'dropped', outcome = $3, closed_at = NOW(), next_check_at = NULL, updated_at = NOW(), followup = COALESCE(followup, '{}'::jsonb) - 'pendingFile' WHERE id = $1 AND user_id = $2 AND status = 'open' RETURNING kind, source, followup, goal`, [t.id, userId, because.slice(0, 300)]);
         if (r.rowCount) out.push({ kind: "task", id: String(t.id), what: String(t.goal).slice(0, 120), action: "cancelled", because, task: r.rows?.[0] ? { kind: String(r.rows[0].kind), source: String(r.rows[0].source), followup: r.rows[0].followup ?? null, goal: String(r.rows[0].goal) } : undefined });
       } else {
         // A task keeps going, with what's true now written on it, so its next step works from that.

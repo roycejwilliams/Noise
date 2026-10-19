@@ -106,6 +106,10 @@ export async function waitForAnswer(t: Pick<CoTask, "id" | "userId" | "followup"
 // its answer in the reply.
 export const TRY_AGAIN_YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|please|do it|go ahead|try again|try it again|yes please|please do|go for it|absolutely|definitely)\b/i;
 
+// How a background run ended (review of #243): a line went; a send wasn't made (paused, held, failed: kept for a retry); the tool
+// couldn't make it at all (the deck is gone, a picture was deleted, another change landed); or nothing more is said by design (their
+// yes found the check still down: never "try again?" twice).
+export type RunOutcome = "sent" | "send_failed" | "tool_error" | "nothing_more";
 export type FinishDeps = {
   now: () => Date;
   person: { phone: string; firstName: string; zone: string | null; optedOut: boolean; archived: boolean } | null;
@@ -113,19 +117,32 @@ export type FinishDeps = {
   theirLinesSince: (since: Date) => Promise<string[]>;
   hoursOk: (at: Date, zone: string | null) => boolean;
   nextOpen: (at: Date, zone: string | null) => Date;
+  // A safety concern in the last few days (services/safety.ts safetyHoldActive): nothing is asked of them or sent for it; it waits.
+  safetyHold: () => Promise<boolean>;
+  // The row, marked as running so two runs never finish it at once; false when it's settled or already running.
+  claim: () => Promise<boolean>;
+  release: () => Promise<void>;
   // The same tool it came from, run again with the held file and their answer (finishing: never a second question).
-  run: (p: PendingFile, answer: string) => Promise<{ sent: boolean; what: string }>;
+  run: (p: PendingFile, answer: string) => Promise<{ outcome: RunOutcome }>;
+  // Case 3, the approved line, when the tool couldn't make it at all: sent on the task path; true when it went.
+  tellDown: (word: FileWord) => Promise<boolean>;
+  // After case 3 went: the row waits for their yes.
+  toRetry: (word: FileWord) => Promise<void>;
   close: (status: "done" | "dropped" | "expired", why: string) => Promise<boolean>;
   wait: (at: Date) => Promise<void>;
+  // Kinds only (forget by default): never the file, the question, their answer or a tool's error text.
   log: (action: string, extra?: Record<string, string | number | boolean | null>) => Promise<void>;
 };
+export const RETRY_AFTER_MS = 3_600_000;
+export const SAFETY_WAIT_MS = 24 * 3_600_000;
 
 // The wake of a held file: their reply came (or its time ran out).
 export async function finishPendingFile(task: Pick<CoTask, "id" | "userId" | "createdAt" | "theirReplyAt" | "followup">, deps: FinishDeps): Promise<{ action: string }> {
   const p: PendingFile | undefined = task.followup?.pendingFile;
+  const kinds: Record<string, string> = p ? { type: p.type, mode: p.mode } : {};
   const end = async (status: "done" | "dropped" | "expired", why: string, action: string) => {
     await deps.close(status, why);
-    await deps.log(action, p ? { type: p.type, mode: p.mode } : {});
+    await deps.log(action, kinds);
     return { action };
   };
   if (!p?.type) return end("dropped", "nothing held", "nothing_held");
@@ -143,16 +160,39 @@ export async function finishPendingFile(task: Pick<CoTask, "id" | "userId" | "cr
   if (p.mode === "retry" && !TRY_AGAIN_YES.test(lines[0].trim())) return end("dropped", "they didn't ask for it again", "declined");
   // Inside their hours only: their answer at 11pm is finished at their 8am.
   if (!deps.hoursOk(now, deps.person.zone)) {
-    const at = deps.nextOpen(now, deps.person.zone);
-    await deps.wait(at);
-    await deps.log("held_hours", { type: p.type, mode: p.mode });
+    await deps.wait(deps.nextOpen(now, deps.person.zone));
+    await deps.log("held_hours", kinds);
     return { action: "held_hours" };
   }
-  // Claimed before it runs: whatever happens next, it runs once.
-  if (!(await deps.close("done", "finished from their answer"))) return { action: "already_settled" };
-  const r = await deps.run(p, lines.join("\n")).catch((err: any) => ({ sent: false, what: `threw: ${String(err?.message ?? err).slice(0, 80)}` }));
-  await deps.log(r.sent ? "finished" : "not_sent", { type: p.type, mode: p.mode, what: r.what.slice(0, 120) });
-  return { action: r.sent ? "finished" : "not_sent" };
+  // A safety hold: nothing goes for it; it waits a day (the same hold a task's document line waits on).
+  if (await deps.safetyHold().catch(() => true)) {
+    await deps.wait(new Date(now.getTime() + SAFETY_WAIT_MS));
+    await deps.log("held_safety", kinds);
+    return { action: "held_safety" };
+  }
+  // Marked as running, never closed before it has gone: a run that sends nothing keeps the row.
+  if (!(await deps.claim())) return { action: "already_settled" };
+  const r = await deps.run(p, lines.join("\n")).catch(() => ({ outcome: "tool_error" as RunOutcome }));
+  if (r.outcome === "sent") return end("done", "finished from their answer", "finished");
+  if (r.outcome === "nothing_more") return end("dropped", "their yes found the check still down", "nothing_more");
+  if (r.outcome === "send_failed") {
+    await deps.release();
+    await deps.wait(new Date(now.getTime() + RETRY_AFTER_MS));
+    await deps.log("send_failed_kept", kinds);
+    return { action: "send_failed_kept" };
+  }
+  // The tool couldn't make it at all. On their answer, they still get one useful text: case 3, the approved line, and their yes tries
+  // again. On their yes, nothing more (never "try again?" twice; listed for Royce).
+  if (p.mode === "retry") return end("dropped", "the file still couldn't be made on their yes", "tool_error_on_yes");
+  if (await deps.tellDown(p.word).catch(() => false)) {
+    await deps.toRetry(p.word);
+    await deps.log("tool_error_told", kinds);
+    return { action: "tool_error_told" };
+  }
+  await deps.release();
+  await deps.wait(new Date(now.getTime() + RETRY_AFTER_MS));
+  await deps.log("tool_error_kept", kinds);
+  return { action: "tool_error_kept" };
 }
 
 // ---------------------------------------------------------------- the real run
@@ -164,6 +204,7 @@ export async function realFinish(task: CoTask): Promise<{ action: string }> {
   const zone = u ? await memberZone(task.userId).catch(() => null) : null;
   const P = await import("../harness/proactive.js");
   const { recordDecision } = await import("../harness/core.js");
+  const { downLine } = await import("./refusalOutcome.js");
   return finishPendingFile(task, {
     now: () => new Date(),
     person: u ? { phone: String(u.phone_number), firstName: String(u.first_name ?? ""), zone, optedOut: !!u.sms_opted_out, archived: !!u.archived_at } : null,
@@ -171,23 +212,64 @@ export async function realFinish(task: CoTask): Promise<{ action: string }> {
       (await pool.query(`SELECT content FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User said:%' AND ${notToTeammate()} AND created_at > $2 ORDER BY created_at ASC LIMIT 6`, [task.userId, since])).rows.map((r: any) => String(r.content).replace(/^User said:\s*/i, "")),
     hoursOk: (at, z) => P.localHourOk(at, z),
     nextOpen: (at, z) => nextSendable(at, z),
+    // Fails closed: a hold that can't be read is a hold.
+    safetyHold: async () => (await import("./safety.js")).safetyHoldActive(task.userId).catch(() => true),
+    claim: () => claimPending(task.userId, task.id),
+    release: () => releasePending(task.userId, task.id),
     run: (p, answer) => runHeld(task, p, answer, { phone: String(u.phone_number), firstName: String(u.first_name ?? ""), zone }),
+    tellDown: async (word) => {
+      const text = downLine(word);
+      const r = await P.sendExempt({ userId: task.userId, phoneNumber: String(u.phone_number), type: "task_update", targetKey: `pending_file:${task.id}:down`, messages: [text], timezone: zone, respectHours: true }).catch(() => ({ sent: false }));
+      if (r.sent) await import("./memory.js").then((m) => m.writeMemory(task.userId, "text_exchange", `Co replied: ${text}`)).catch(() => {});
+      return r.sent;
+    },
+    toRetry: (word) => toRetryPending(task.userId, task.id, word),
     close: (status, why) => closePending(task.userId, task.id, status, why),
     wait: (at) => waitUntil(task.userId, task.id, at),
-    // Kind and mode only: never the file, the question or their answer.
     log: (action, extra) => recordDecision({ layer: 7, decision: "file.pending", userId: task.userId, outcome: action === "finished" ? "act" : "skip", action, proposal: { taskId: task.id, ...(extra ?? {}) } }).then(() => {}).catch(() => {}),
   });
 }
 
-async function runHeld(task: CoTask, p: PendingFile, answer: string, who: { phone: string; firstName: string; zone: string | null }): Promise<{ sent: boolean; what: string }> {
+// The row marked as running (a run that died frees it after 15 minutes); false when it's settled or another run has it.
+export async function claimPending(userId: string, id: number): Promise<boolean> {
+  const r = await db()
+    .query(
+      `UPDATE co_tasks SET followup = jsonb_set(followup, '{pendingFile,runningAt}', to_jsonb(NOW()), true), updated_at = NOW()
+       WHERE user_id = $1 AND id = $2 AND kind = 'pending_file' AND status = 'open' AND followup ? 'pendingFile'
+         AND (followup->'pendingFile'->>'runningAt' IS NULL OR (followup->'pendingFile'->>'runningAt')::timestamptz < NOW() - INTERVAL '15 minutes') RETURNING id`,
+      [userId, id],
+    )
+    .catch(() => ({ rows: [] as any[] }));
+  return r.rows.length > 0;
+}
+async function releasePending(userId: string, id: number): Promise<void> {
+  await db().query(`UPDATE co_tasks SET followup = followup #- '{pendingFile,runningAt}', updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, id]).catch(() => {});
+}
+// Case 3 went after the tool couldn't make it: the row now waits for their yes, from now.
+async function toRetryPending(userId: string, id: number, word: FileWord): Promise<void> {
+  await db()
+    .query(
+      `UPDATE co_tasks SET followup = jsonb_set(jsonb_set(followup #- '{pendingFile,runningAt}', '{pendingFile,mode}', '"retry"'), '{pendingFile,at}', to_jsonb(NOW())),
+         goal = $3, awaiting_reply = true, last_texted_at = NOW(), next_check_at = NOW() + make_interval(days => $4), updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`,
+      [userId, id, pendingGoal(word, "retry"), PENDING_DAYS],
+    )
+    .catch(() => {});
+}
+
+async function runHeld(task: CoTask, p: PendingFile, answer: string, who: { phone: string; firstName: string; zone: string | null }): Promise<{ outcome: RunOutcome }> {
   const { sendExempt } = await import("../harness/proactive.js");
   const { writeMemory } = await import("./memory.js");
   let n = 0;
   let sent = false;
-  // One line at a time on the task path, owed (they asked), each with its own key so nothing goes twice.
+  let sendFailed = false;
+  // One line at a time on the task path, owed (they asked), each with its own key so nothing goes twice. A send that isn't made
+  // (paused, held, failed) is remembered: the row is kept for a retry.
   const say = async (text: string, record: string): Promise<boolean> => {
     const r = await sendExempt({ userId: task.userId, phoneNumber: who.phone, type: "task_update", targetKey: `pending_file:${task.id}:${n++}`, messages: [text], timezone: who.zone, respectHours: true }).catch(() => ({ sent: false }));
-    if (!r.sent) return false;
+    if (!r.sent) {
+      sendFailed = true;
+      return false;
+    }
     sent = true;
     await writeMemory(task.userId, "text_exchange", record).catch(() => {});
     return true;
@@ -215,11 +297,26 @@ async function runHeld(task: CoTask, p: PendingFile, answer: string, who: { phon
   if (p.type === "doc") {
     const D = await import("./documentDelivery.js");
     // A reply's held doc is still a "doc"; a check still down on their answer holds it again here, as its own held file.
-    const r = await D.sendDocumentForTask(p.input as any, { userId: task.userId, taskId: task.id, firstName: who.firstName, phone: who.phone, zone: who.zone, taskTheirWords: answer, read: "", finishing: { mode: p.mode }, word: p.word, onHold: async (h) => void (await rememberPending({ userId: task.userId, type: "doc", word: h.word, mode: h.mode, input: h.input, theirWords: answer })) }, D.realTaskDocDeps);
-    return { sent: r.ok || !!(r as any).told, what: r.ok ? `sent (${r.via})` : (r as any).told ? `told: ${(r as any).told}` : "not sent" };
+    const r: any = await D.sendDocumentForTask(p.input as any, { userId: task.userId, taskId: task.id, firstName: who.firstName, phone: who.phone, zone: who.zone, taskTheirWords: answer, read: "", finishing: { mode: p.mode }, word: p.word, onHold: async (h) => void (await rememberPending({ userId: task.userId, type: "doc", word: h.word, mode: h.mode, input: h.input, theirWords: answer })) }, D.realTaskDocDeps);
+    return { outcome: docOutcome(r) };
   }
   const tools: any = p.type === "deck" || p.type === "deck_update" ? (await import("../agent/deckTools.js")).deckTools(ctx, o) : (await import("../agent/pageTools.js")).pageTools(ctx, o);
   const name = p.type === "deck" ? "makeDeck" : p.type === "deck_update" ? "updateDeck" : p.type === "page" ? "makePage" : "updatePage";
   const r = await tools[name].execute(p.input, { toolCallId: `pending-${task.id}`, messages: [] });
-  return { sent, what: r?.ok ? "sent" : String(r?.error ?? "not sent").slice(0, 80) };
+  return { outcome: toolOutcome(r, { sent, sendFailed }) };
+}
+// Pure: a held deck's or page's run, as how it ended.
+export function toolOutcome(r: any, s: { sent: boolean; sendFailed: boolean }): RunOutcome {
+  if (s.sent) return "sent";
+  if (s.sendFailed) return "send_failed";
+  if (r?.ok === false && /still couldn't run, so nothing was sent/.test(String(r?.error ?? ""))) return "nothing_more";
+  return "tool_error";
+}
+// Pure: a held doc's run, as how it ended.
+export function docOutcome(r: any): RunOutcome {
+  if (r?.ok || r?.told) return "sent";
+  if (r?.duplicate) return "sent";
+  if (/the check still couldn't run/.test(String(r?.why ?? ""))) return "nothing_more";
+  if (r?.blocked || /didn't go|didn't send|text telling them so/.test(String(r?.why ?? ""))) return "send_failed";
+  return "tool_error";
 }

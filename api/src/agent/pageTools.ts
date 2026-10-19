@@ -10,7 +10,7 @@ import { toolUse } from "../services/capabilities.js";
 import type { ConversationToolContext } from "./conversationTools.js";
 import { ALSO_ANSWER, unsentLink, withAnswer } from "./linkAnswer.js";
 import { ART_DIRECTION, COVER_MOOD, PLACE, TASTE_INPUT, imageN } from "./artifactInputs.js";
-import { ALREADY_TOLD, afterFileSent, finishingOf, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
+import { ALREADY_TOLD, afterFileSent, finishingOf, noAskHere, settlesHere, tellRefusal, toldThisTurn } from "./refusalTell.js";
 
 const line = (what: string) => z.string().describe(`${what} Plain words: no markdown, HTML, links, em dashes or exclamation points.`);
 const url = z.string().nullable().optional().describe("Its own https link, only one you read or they gave you. Leave it out otherwise.");
@@ -215,7 +215,7 @@ export function pageTools(
     return R.afterRefusal<any, any>(input, R.asProblems(problems, at(pageData)), {
       word: "page",
       theirs: source.theirs,
-      noAsk: !!finishingOf(ctx),
+      noAsk: noAskHere(ctx, "page"),
       check: async (inp) => {
         const { i2, d } = await build(inp);
         const c = store.checkPage(d, source);
