@@ -8,7 +8,7 @@ import { writeMemory } from "../services/memory.js";
 import { MODELS } from "../models.js";
 import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candidate, type DraftResult, type Person, type ProactiveRegistry } from "./proactive.js";
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
-import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
+import { draftAskCheckin, recentAskCheckins, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
 import { solicitationGoals } from "../agent/eventAskSolicitation.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
@@ -339,7 +339,7 @@ export const proactiveRegistry: ProactiveRegistry = {
       // (services/askLifecycle.ts): the check-in is re-checked at send time, not only when it was queued.
       const gate = await (await import("../services/askLifecycle.js")).checkinGate(c.userId, (c.payload as AskCheckinPayload).askCheckinId);
       if (!gate.ok) return skip(gate.why);
-      const r = await draftAskCheckin(person.firstName, c.payload as AskCheckinPayload);
+      const r = await draftAskCheckin(person.firstName, c.payload as AskCheckinPayload, await recentAskCheckins(c.userId));
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP");
     },
     async onSent(c) {

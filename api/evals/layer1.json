@@ -210,6 +210,7 @@
     "evals/forget/removalLog.ts",
     "evals/forget/residueAudit.ts",
     "evals/forget/stores.ts",
-    "evals/forget/guardedReaders.ts"
+    "evals/forget/guardedReaders.ts",
+    "evals/checkins/askFrame.ts"
   ]
 }
