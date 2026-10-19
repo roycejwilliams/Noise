@@ -853,6 +853,7 @@ export async function scoreMatchedGroup(
       askerContextParts.length ? askerContextParts.join("; ") : undefined,
       hints,
       hiddenAsks,
+      { askerFirstName: person.first_name },
     );
     const ranked: RankedCandidate[] = scored
       .map((s) => {
@@ -898,7 +899,8 @@ export async function scoreMatchedGroup(
       // — anyone newly qualifying who wasn't in the previous pass's ranking
       // gets offered as a separate, additive heads-up instead.
       const newCandidates = ranked
-        .filter((r) => r.score >= MATCH_NUDGE_MIN_SCORE && !previouslyRankedIds.has(r.candidate_id))
+        // Only someone Cue could name if they say yes: an offer whose reveal has no share reason is never made (review of #245).
+        .filter((r) => r.score >= MATCH_NUDGE_MIN_SCORE && !!r.shareReason && !previouslyRankedIds.has(r.candidate_id))
         .map((r) => others.find((o) => o.user_id === r.candidate_id))
         .filter((c): c is ScorableGuest => Boolean(c));
       if (newCandidates.length) {

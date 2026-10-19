@@ -463,9 +463,10 @@ export function registerJobs(io: Server) {
          FROM ask_checkins ac
          JOIN users u ON u.id = ac.user_id
          LEFT JOIN (
+           -- Only edges with a share reason count as "possible leads": an edge Cue could never name proposes nothing (review of #245).
            SELECT person_id, ask_id, COUNT(*) AS match_count, MAX(created_at) AS newest
            FROM relevance_edges
-           WHERE status = 'open'
+           WHERE status = 'open' AND share_reason IS NOT NULL AND share_reason <> ''
            GROUP BY person_id, ask_id
          ) re ON re.person_id = ac.user_id AND re.ask_id = ac.ask_id
          WHERE ac.resolved_at IS NULL AND u.sms_opted_out = false

@@ -61,6 +61,41 @@ const BLOCKER = "my divorce is dragging on";
   check("room: the frame is still shareable asks only (a private ask is never anyone's frame)", scorePrompts.every((p) => !(p.split("one per line:")[0] ?? "").includes("Lisbon")));
 }
 
+// ---------------------------------------------------------------- 1b. review of #245: no additive offer that could never be revealed
+{
+  reset();
+  const jordan = addMember({ first_name: "Jordan", intent: [ask("a growth marketer")] });
+  const ellis = addMember({ first_name: "Ellis", intent: [ask("growth marketing roles", "offering")] });
+  // Kai fits only through a private ask: high score, nothing shareable, so no share reason.
+  const kai = addMember({ first_name: "Kai", intent: [ask("growth marketing for B2B, kept private", "offering", false)] });
+  const ev = addEvent({ api_id: "ev-add", name: "Noise Supper" }, [{ m: jordan }, { m: ellis }]);
+  W.scorer = (_a, cand) => (cand.id === ellis.id ? { score: 80, share: true } : cand.id === kai.id ? { score: 95, share: false } : { score: 0, share: false });
+  W.scoringDebounce.clear();
+  await S.scoreGuestListForEvent("ev-add");
+  await settle();
+  const first = W.sent.filter((t) => t.to === jordan.phone_number).length;
+  ev.guests.push({ email: kai.email, phone: null, name: kai.first_name, approval_status: "approved" });
+  W.scoringDebounce.clear();
+  W.additiveDebounce.clear();
+  await S.scoreGuestListForEvent("ev-add");
+  await settle();
+  check("additive: Jordan was nudged about Ellis first", first === 1 && W.nudges.some((n) => n.person_id === jordan.id && n.candidate_id === ellis.id), W.nudges);
+  check("additive: a late arrival with no share reason triggers no additive offer (it could never be revealed)", W.sent.filter((t) => t.to === jordan.phone_number).length === 1 && !W.llmCalls.some((c) => c.kind === "additiveDraft"), W.sent);
+}
+
+// ---------------------------------------------------------------- 1c. review of #245: the sensitive-topic backstop's new words
+{
+  const words: [string, string][] = [
+    ["He's HIV positive", "recently diagnosed HIV positive"], ["She got a DUI", "dealing with a DUI charge"], ["He just came out as gay", "coming out to my family as gay"],
+    ["She's transitioning", "I'm trans and transitioning"], ["He's trans", "I'm trans"], ["Her layoff hit hard", "after the layoffs at my company"], ["He was let go", "I was let go in May"],
+    ["Living on severance", "living on my severance"], ["She's between jobs", "between jobs right now"], ["He lost a friend to suicide", "my brother's suicide"],
+    ["She left an abusive marriage", "getting out of an abusive marriage"], ["Her abortion", "I had an abortion"], ["His affair", "my husband's affair"],
+  ];
+  for (const [text, hidden] of words) check(`sensitive: "${text}" is refused against "${hidden}"`, !!E.hiddenEcho(text, [hidden], [], [], G.SENSITIVE));
+  const f = { shareReason: `what they've said they're looking for: "a new start after the layoffs"`, candidateStatedAsks: ["a new start after the layoffs"], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true };
+  check("sensitive: a share reason carrying one of them is refused even when they shared it", !G.checkShareReason(f).pass, G.checkShareReason(f));
+}
+
 // ---------------------------------------------------------------- 2. the echo check itself (pure)
 {
   const hidden = [PRIVATE_ASK, BLOCKER];
@@ -131,7 +166,7 @@ const BLOCKER = "my divorce is dragging on";
   check("value lines run it for each side", /checkNoHiddenEcho\(line, other\.hiddenTexts \?\? \[\]/.test(src("src/services/roomMatching.ts")));
   check("share reasons stay pinned to a shared ask, word for word", /if \(!f\.candidateStatedAsks\.some\(\(a\) => norm\(a\) === norm\(quoted\)\)\) return \{ name, pass: false, reason: "not an ask they marked shareable" \};/.test(src("src/harness/matchGate.ts")));
   check("the network intro email runs it before sending", /checkBothYes\(aYes, bYes\), await introEmailHiddenCheck\(matchReason, \[a\.user_id, b\.user_id\]\)/.test(src("src/services/networkIntroNudge.ts")));
-  check("the room path hands its private asks to the scorer as hidden, kept apart from the guests", /const hiddenAsks = new Map\(matched\.map\(\(g\) => \[g\.user_id, privateAskTexts\(g\.intent\)\] as const\)\);/.test(src("src/services/eventScoring.ts")) && /hints,\n\s*hiddenAsks,\n\s*\);/.test(src("src/services/eventScoring.ts")));
+  check("the room path hands its private asks to the scorer as hidden, kept apart from the guests", /const hiddenAsks = new Map\(matched\.map\(\(g\) => \[g\.user_id, privateAskTexts\(g\.intent\)\] as const\)\);/.test(src("src/services/eventScoring.ts")) && /hints,\n\s*hiddenAsks,\n\s*\{ askerFirstName: person\.first_name \},\n\s*\);/.test(src("src/services/eventScoring.ts")));
   check("the network sweep loads first names, so the name strip works there", /SELECT user_id, first_name, goals, blockers, activity_preferences, intent FROM \(\n\s*SELECT cp\.user_id, u\.first_name,/.test(src("src/services/relevance.ts")) && /first_name: r\.first_name \?\? undefined,/.test(src("src/services/relevance.ts")));
   check("no reason, no intro: the in-room nudge needs a share reason", /if \(!top\.shareReason\) return false;/.test(src("src/services/eventScoring.ts")));
   check("... the additive reveal too", /r\.shareReason && r\.score >= MATCH_NUDGE_MIN_SCORE/.test(src("src/services/eventGuestMatchHandoff.ts")));

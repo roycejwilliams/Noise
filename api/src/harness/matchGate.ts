@@ -492,6 +492,8 @@ export const SENSITIVE: RegExp[] = [
   /\b(?:divorc\w*|breakup|broke up|separation|custody|couples?)\b/,
   /\b(?:immigration|h ?1 ?b|green card|visa (?:status|sponsorship|issue|issues)|deport\w*|asylum|lawsuit|sued|arrest\w*|criminal)\b/,
   /\b(?:new job|job search|interviewing|quietly|secretly|while still employed|without my (?:boss|employer) knowing)\b/,
+  // Review of #245 (2026-10-18), a backstop only: health, identity, work loss, harm, relationships.
+  /\b(?:hiv|dui|gay|trans|transitioning|coming out|came out|layoffs?|laid off|let go|severance|between jobs|suicid\w*|abuse\w*|abusive|abortion|affair)\b/,
 ];
 
 
