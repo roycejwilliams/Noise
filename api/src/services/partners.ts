@@ -86,8 +86,24 @@ const ZONED = /(?:Z|[+-]\d{2}:?\d{2})$/;
 const PLACEHOLDERS = new Set(["link", "event", "partner"]);
 // The agent is only ever "Cue" to people (brand voice): never a matchmaker, or someone's AI.
 const OFF_BRAND: { pattern: RegExp; why: string }[] = [
-  { pattern: /\bmatch-?mak/i, why: 'calls Cue a "matchmaker"' },
-  { pattern: /\b(Noise|CoPatible|Co)'s AI\b|\bAI behind\b/i, why: "describes Cue as a company's AI" },
+  { pattern: /\bmatch[\s-]?mak/i, why: 'calls Cue a "matchmaker"' },
+  { pattern: /\bconci[e]rges?\b/i, why: "gives Cue a staff title" },
+  { pattern: /\b(Noise|CoPatible|Co)['\u2019]s A\.?I\b|\bA\.?I\.? behind\b|\bA\.?I\.? assistant\b/i, why: "describes Cue as a company's AI" },
+];
+// Its own link, in any form: a URL, a bare domain ("noise.club/join", "lu.ma/noise", "linktr.ee/x"), an sms: or tel: link, a phone
+// number. A domain's ending counts when it's all lowercase or all caps ("noise.club", "NOISE.CLUB"), so a missing space before a
+// capitalized word ("So excited.So ready") isn't one; any ending followed by a path ("noise.nyc/join") is one (review of #210).
+const TLD = "com|co|io|ai|app|club|net|org|me|so|xyz|ly|link|events?|event|dev|page|tv|vip|nyc|la|sf|at|us|to|gg|social|site|online|live|fm";
+const OWN_LINK = [
+  /https?:\/\/|www\.|\b(?:sms|tel):/i,
+  new RegExp(`\\b[A-Za-z0-9-]+\\.(?:${TLD})\\b`),
+  new RegExp(`\\b[A-Za-z0-9-]+\\.(?:${TLD.toUpperCase()})\\b`),
+  /\b[A-Za-z0-9-]+\.[A-Za-z]{2,}\/\S/,
+  /\b[A-Za-z0-9-]+\s+dot\s+(?:com|club|co|io|app|org|net)\b/i,
+  /\b(?:lu\.ma|linktr\.ee|posh\.vip|bit\.ly|shorturl\.at|tinyurl\.com)\b/i,
+  // A phone number: a US one, or an international one written with its + (a bare 10-digit ID with no separators isn't one).
+  /(?:^|[^\d])(?:\+?1[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]?\d{4}(?!\d)/,
+  /\+\d{1,3}[\s.-]?\(?\d{1,4}\)?(?:[\s.-]?\d{2,4}){2,4}(?!\d)/,
 ];
 
 const clean = (s: unknown) => (typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "");
@@ -105,8 +121,12 @@ export function blurbProblem(blurb: string): string | null {
   if (unknown !== undefined) return `the RSVP blurb has {${unknown}}, and only {link}, {event} and {partner} are filled in`;
   const links = names.filter((n) => n === "link").length;
   if (links !== 1) return links ? "the RSVP blurb has {link} more than once" : "the RSVP blurb needs {link}, where the link to text Cue goes";
-  if (/https?:\/\/|www\.|sms:/i.test(b)) return "the RSVP blurb has its own link; only {link} goes in it";
-  for (const r of OFF_BRAND) if (r.pattern.test(b)) return `the RSVP blurb ${r.why}`;
+  if (OWN_LINK.some((r) => r.test(b))) return "the RSVP blurb has its own link; only {link} goes in it";
+  // "{partner}'s concierge team" is the partner's own staff, not Cue, unless it's said of Cue ("Cue, {partner}'s concierge, will...",
+  // "Meet Cue, {partner}'s concierge"): then the exemption doesn't hold (review of #210).
+  const calledCue = /\bCue\b[\s,]+(?:\w+\s+){0,2}\{partner\}['\u2019]s conci[e]rges?/i.test(b);
+  const aboutCue = calledCue ? b : b.replace(/\{partner\}['\u2019]s conci[e]rges?/gi, "");
+  for (const r of OFF_BRAND) if (r.pattern.test(aboutCue)) return `the RSVP blurb ${r.why}`;
   return null;
 }
 

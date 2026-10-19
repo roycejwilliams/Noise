@@ -42,6 +42,14 @@ const BLURB = "Cue is making introductions at {event}. Say you're coming: {link}
   check("blurb: an sms: link of its own fails", !!P.blurbProblem("{link} sms:+15550100"));
   check("blurb: 'matchmaker' fails (brand voice)", /matchmaker/.test(P.blurbProblem("Cue, our matchmaker: {link}") ?? ""));
   check("blurb: 'Noise's AI' fails", !!P.blurbProblem("Noise's AI will help: {link}"));
+  check("blurb: 'match maker', 'concierge' and a curly 'Noise\u2019s AI' fail too", !!P.blurbProblem("Cue, our match maker: {link}") && !!P.blurbProblem("your concierge for the night: {link}") && !!P.blurbProblem("Noise\u2019s AI will help: {link}"));
+  check("blurb: a bare domain is its own link and fails", !!P.blurbProblem("{link} or noise.club/join") && P.blurbProblem("Text Cue at {link}. See you at 8.") === null);
+  check("blurb: Luma's short link, Linktree, posh.vip, .dev/.page/.tv, tel: and a bare phone number are links too", ["{link} or lu.ma/noise", "{link} linktr.ee/noise", "{link} posh.vip/e/x", "{link} noise.dev", "{link} tel:+14155550100", "{link} or call 415-555-0100", "{link} (415) 555 0100"].every((t) => /its own link/.test(P.blurbProblem(t) ?? "")));
+  check("blurb: no false link on a missing space, times, initials or abbreviations", ["So excited.So ready: {link}", "Doors at 8.30. {link}", "St. Louis, Dr. Smith, a.m., U.S. and No.1: {link}", "See you there.Me too: {link}"].every((t) => P.blurbProblem(t) === null));
+  check("blurb: 'concierges', 'AI assistant' and 'Noise's A.I.' fail; the partner's own concierge team doesn't", !!P.blurbProblem("our concierges will help: {link}") && !!P.blurbProblem("Cue, your AI assistant: {link}") && !!P.blurbProblem("Noise's A.I. is here: {link}") && P.blurbProblem("Ask {partner}'s concierge team at the door, or text Cue: {link}") === null);
+  check("blurb: caps domains, more endings, a path on any ending, 'dot club', short links and international numbers are links too", ["{link} or NOISE.CLUB/JOIN", "{link} Noise.club", "{link} noise.nyc", "{link} noise.wtf/join", "{link} noise dot club", "{link} shorturl.at/x", "{link} +44 20 7946 0958"].every((t) => /its own link/.test(P.blurbProblem(t) ?? "")), ["{link} or NOISE.CLUB/JOIN", "{link} Noise.club", "{link} noise.nyc", "{link} noise.wtf/join", "{link} noise dot club", "{link} shorturl.at/x", "{link} +44 20 7946 0958"].map((t) => [t, P.blurbProblem(t)]));
+  check("blurb: an event ID, dates, times, prices and suites aren't links", ["Event ID 4155550123. {link}", "RSVP by 10/22, doors 7-10pm, $25, 2-for-1, Suite 200, 2026: {link}"].every((t) => P.blurbProblem(t) === null), ["Event ID 4155550123. {link}", "RSVP by 10/22, doors 7-10pm, $25, 2-for-1, Suite 200, 2026: {link}"].map((t) => [t, P.blurbProblem(t)]));
+  check("blurb: 'Cue, {partner}'s concierge' still fails (the partner's-staff exemption never covers Cue)", !!P.blurbProblem("Cue, {partner}'s concierge, will introduce you: {link}") && !!P.blurbProblem("Meet Cue, {partner}'s concierge for the night: {link}"));
   check("blurb: over the length fails", !!P.blurbProblem(`${"x".repeat(P.PARTNER.maxBlurb)} {link}`));
 }
 {
@@ -140,6 +148,8 @@ const BLURB = "Cue is making introductions at {event}. Say you're coming: {link}
   check("page: not a code -> 404", v.status === 404 && v.button === null);
   v = await Page.partnerPageView("K7Q2MX", opts(ev(), { resolve: async () => null }));
   check("page: an unknown code -> 404", v.status === 404);
+  v = await Page.partnerPageView("K7Q2MX", opts(ev(), { resolve: async () => { throw new Error("db down"); } }));
+  check("page: a failed read -> 503 with no line (never 'mistyped')", v.status === 503 && v.line === null && v.button === null);
   v = await Page.partnerPageView("K7Q2MX", opts(ev(), { phone: "" }));
   check("page: no Cue number configured -> 500, no button", v.status === 500 && v.button === null);
   v = await Page.partnerPageView("K7Q2MX", opts(ev({ intake_opened_at: null })));

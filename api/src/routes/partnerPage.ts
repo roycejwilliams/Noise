@@ -64,7 +64,11 @@ export async function partnerPageView(
     const hit = await eventForDoorCode(c);
     return hit ? partnerEvent(hit.eventId) : null;
   });
-  const found = isEntryCode(code) ? await (o.resolve ?? resolveEntryCode)(code).catch(() => null) : door ? await resolveDoor(code).catch(() => null) : null;
+  // A failed read is not a mistyped code: it says nothing rather than tell a real guest their code is wrong (review of #210).
+  let failed = false;
+  const miss = () => ((failed = true), null);
+  const found = isEntryCode(code) ? await (o.resolve ?? resolveEntryCode)(code).catch(miss) : door ? await resolveDoor(code).catch(miss) : null;
+  if (failed) return { status: 503, title: null, line: null, button: null };
   if (!found) return { status: 404, title: null, line: copyFor("page_invalid", { agent: AGENT }), button: null };
   const vars = { agent: AGENT, event: found.event.name, partner: found.partner.name, code };
   const state = entryState(found.partner, found.event, now);
