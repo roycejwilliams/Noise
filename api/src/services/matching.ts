@@ -87,8 +87,10 @@ type ScorableCandidate = {
 //   - the people graph's internal hint (short wants/offers labels, no names), when the caller passes one
 //   - a HIDDEN part: their private asks and their blockers (Royce, 2026-10-18: "It should never be mentioned to another user
 //     what that person is going through"). The scorer may use it to judge fit and is told never to mention or cite it; code
-//     makes sure it is never the basis of a match (runAskScoring: hidden_only or no reason means no share reason, so nothing is
-//     proposed) and that no intro text echoes it (harness/matchGate.ts hiddenEcho, on share reasons, value lines, drafts and
+//     acts on the scorer's own report that it isn't the only basis (shareReasonFor: hidden_only must be false and a reason
+//     given, or there is no share reason and nothing is proposed). That is the scorer's word, not an independent check: on the
+//     network path nothing else checks it yet (rooms add the value gate, which sees only the other member's shared asks). Code
+//     does make sure no intro text echoes the hidden part (harness/matchGate.ts hiddenEcho, on share reasons, value lines, drafts and
 //     the network intro email). On every path, rooms included: the room path passes its private asks in `hidden`, since it
 //     scores on intent with private asks taken out (roomMatching.ts matchableIntent). The Jev prune reads lines without the
 //     hidden part: a fit only the hidden part supports can never be proposed, so the prune needs nothing of it.
@@ -138,13 +140,17 @@ export function privateAskTexts(intent: unknown): string[] {
 // Pure: one candidate's line, within budget.
 function candidateLine(c: ScorableCandidate, budget: number, named: (item: string) => boolean, hint: string | null | undefined, extraHidden: string[], withHidden: boolean): string {
   const safe = (xs: unknown, max = DIGEST_ITEM_CHARS) => (Array.isArray(xs) ? xs : []).map((x) => clipItem(x, max)).filter((x) => x && !named(x));
-  const shared = shareableAsks(c.intent).map((a, k) => ({ k, text: `[S${k + 1}] ${a.type ?? "seeking"} "${clipItem(a.text)}"` }));
+  // A shared ask that names someone else in the prompt is left off the line too; its label then can't be a share reason
+  // (runAskScoring reads only labels the line showed).
+  const shared = shareableAsks(c.intent)
+    .map((a, k) => ({ k, ask: clipItem(a.text), text: `[S${k + 1}] ${a.type ?? "seeking"} "${clipItem(a.text)}"` }))
+    .filter((x) => x.ask && !named(x.ask));
   const privateAsks = [...new Set([...privateAskTexts(c.intent), ...extraHidden])].reverse();
   const hiddenItems = withHidden ? [...safe(privateAsks).map((x) => `private ask "${x}"`), ...safe(c.blockers).map((x) => `going through "${x}"`)] : [];
   const facts: string[] = [];
   const likes: string[] = [];
   const hidden: string[] = [];
-  const keptShared: { k: number; text: string }[] = [];
+  const keptShared: { k: number; ask: string; text: string }[] = [];
   let keptHint: string | null = null;
   const hiddenPart = () => (hidden.length ? `${HIDDEN_LABEL} ${hidden.join("; ")}` : null);
   const render = () =>
@@ -172,22 +178,25 @@ function candidateLine(c: ScorableCandidate, budget: number, named: (item: strin
 // Pure: each candidate's line, in order, without its list number.
 // hidden: private asks the caller took out of a candidate's intent (the room path), put back in the hidden part.
 // withHidden false: no hidden part at all (the Jev prune).
-export function candidateLines<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>, opts: { withHidden?: boolean } = {}): string[] {
+// askerFirstName: the member the prompt is made for. Their name is left out of every candidate's items (another member's
+// "dating Jordan from the club" never reaches Jordan's prompt).
+export function candidateLines<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>, opts: { withHidden?: boolean; askerFirstName?: string } = {}): string[] {
   const budget = Math.max(DIGEST_MIN_CANDIDATE_CHARS, Math.min(DIGEST_CANDIDATE_CHARS, Math.floor(DIGEST_PROMPT_CHARS / Math.max(1, candidates.length))));
   // Everyone in this call with a first name (the room, partner and network paths carry one). One pattern screens every item;
   // an item naming anyone but the candidate themself is left out.
-  const find = nameFinder(candidates.map(firstNameOf));
+  const asker = fold(String(opts.askerFirstName ?? "").trim());
+  const find = nameFinder([...candidates.map(firstNameOf), ...(asker.length >= 2 ? [String(opts.askerFirstName)] : [])]);
   return candidates.map((c) => {
     const own = fold(firstNameOf(c));
-    const named = (item: string) => find(item).some((n) => n !== own);
+    const named = (item: string) => find(item).some((n) => n !== own || n === asker);
     return candidateLine(c, budget, named, hints?.get(c.user_id), hidden?.get(c.user_id) ?? [], opts.withHidden !== false);
   });
 }
 
 // Pure: the numbered list the scorer reads, exported for evals/matching.
 // hints: the people graph's internal read of an overlap (peopleGraph.ts edgeHint), for the scorer only.
-export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>): string {
-  return candidateLines(candidates, hints, hidden)
+export function formatCandidateDigest<T extends ScorableCandidate>(candidates: T[], hints?: Map<string, string>, hidden?: Map<string, string[]>, askerFirstName?: string): string {
+  return candidateLines(candidates, hints, hidden, { askerFirstName })
     .map((l, i) => `${i}. ${l}`)
     .join("\n");
 }
@@ -224,12 +233,31 @@ export function shareReasonFor(intent: unknown, r: { reason?: unknown; share_ask
   return shareReasonFromOwnAsk(intent, r.share_ask);
 }
 
+// The words stored in place of an internal reason that echoes a candidate's hidden part (relevance_edges.match_reason, the
+// room's ranked reasons). Never member text.
+export const REASON_WITHHELD = "[withheld]";
+
+// Pure: the labels ("S1"...) a line actually showed, so a share reason can rest only on what the scorer saw.
+export function shownLabels(line: string): Set<string> {
+  const visible = line.split(HIDDEN_LABEL)[0];
+  return new Set([...visible.matchAll(/\[(S\d+)\] /g)].map((m) => m[1]));
+}
+
+// Pure: a candidate's hidden texts (private asks in their intent or handed in, and blockers).
+export function hiddenTextsOf(c: ScorableCandidate, hidden?: Map<string, string[]>): string[] {
+  return [...new Set([...privateAskTexts(c.intent), ...(hidden?.get(c.user_id) ?? []), ...(Array.isArray(c.blockers) ? c.blockers.map(String) : [])])];
+}
+
 async function runAskScoring<T extends ScorableCandidate>(
   functionId: string,
   prompt: string,
   candidates: T[],
+  lines: string[],
+  hidden?: Map<string, string[]>,
 ): Promise<AskScore<T>[]> {
   try {
+    const { hiddenEcho } = await import("../harness/hiddenEcho.js");
+    const { SENSITIVE } = await import("../harness/matchGate.js");
     const { text: raw } = await generateText({
       model: anthropic(SCORING_MODEL),
       experimental_telemetry: { isEnabled: true, functionId },
@@ -241,15 +269,21 @@ async function runAskScoring<T extends ScorableCandidate>(
     return results
       .filter((r: any) => Number.isInteger(r.index) && r.index >= 0 && r.index < candidates.length)
       .map((r: any) => {
-        const reason = typeof r.reason === "string" ? r.reason.trim() : "";
+        const c = candidates[r.index];
+        const said = typeof r.reason === "string" ? r.reason.trim() : "";
+        // The internal reason is stored (relevance_edges, the room's rankings): one that echoes the candidate's hidden part is
+        // stored as REASON_WITHHELD instead.
+        const reason = said && hiddenEcho(said, hiddenTextsOf(c, hidden), shareableAsks(c.intent).map((a) => String(a.text)), [], SENSITIVE) ? REASON_WITHHELD : said;
+        const num = typeof r.share_ask === "string" ? Number(r.share_ask.trim().replace(/^\[?S/i, "").replace(/\]$/, "")) : NaN;
+        const label = Number.isInteger(num) && num > 0 ? `S${num}` : "";
         return {
-          candidate: candidates[r.index],
+          candidate: c,
           score: typeof r.score === "number" ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
           reason,
           // The model only names WHICH shared ask the match rests on; the words shown to people are that ask, in their own
           // words, and only if they marked it shareable. Nothing private or inferred (e.g. "actively fundraising") can leak.
           // A fit resting on the hidden part alone, or with no reason at all, gets no share reason: nothing is proposed.
-          shareReason: shareReasonFor(candidates[r.index].intent, r),
+          shareReason: shownLabels(lines[r.index] ?? "").has(label) ? shareReasonFor(c.intent, { ...r, reason: said }) : "",
           mutual: Boolean(r.mutual),
         };
       });
@@ -280,6 +314,7 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
   candidates: T[],
   askerContext?: string,
   hints?: Map<string, string>,
+  opts: { askerFirstName?: string } = {},
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || !ask.text) return [];
 
@@ -313,8 +348,9 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
     }
   }
   if (!toScore.length) return dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
-  const digest = formatCandidateDigest(toScore, hints);
-  const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore);
+  const lines = candidateLines(toScore, hints, undefined, { askerFirstName: opts.askerFirstName });
+  const digest = lines.map((l, i) => `${i}. ${l}`).join("\n");
+  const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore, lines);
   return [...scored, ...dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>)];
 }
 
@@ -346,10 +382,12 @@ ${HIDDEN_FIELDS}`;
 export async function scoreOfferingAgainstCandidates<T extends ScorableCandidate>(
   offering: StatedIntent,
   candidates: T[],
+  opts: { askerFirstName?: string } = {},
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || !offering.text) return [];
 
-  const digest = formatCandidateDigest(candidates);
+  const lines = candidateLines(candidates, undefined, undefined, { askerFirstName: opts.askerFirstName });
+  const digest = lines.map((l, i) => `${i}. ${l}`).join("\n");
 
   const prompt = `Someone has this to offer others: "${offering.text}"
 
@@ -367,7 +405,7 @@ share_ask: the label (like "S1") of the ONE ask listed under "asks they agreed t
 mutual: true only if one of the candidate's own asks (if listed) is a "seeking" ask that plausibly wants this specific offering. false if the candidate has no stated ask listed, or it doesn't plausibly connect.
 ${HIDDEN_FIELDS}`;
 
-  return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates);
+  return runAskScoring("matching.scoreOfferingAgainstCandidates", prompt, candidates, lines);
 }
 
 // ---------------------------------------------------------------- the room frame (2026-10-12 intelligence audit)
@@ -427,6 +465,7 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   askerContext?: string,
   hints?: Map<string, string>,
   hidden?: Map<string, string[]>,
+  opts: { askerFirstName?: string } = {},
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || (!f.asks.length && !f.goal?.text)) return [];
   const line = frameLine(f);
@@ -447,8 +486,9 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   }
   const zero = dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
   if (!toScore.length) return zero;
-  const digest = formatCandidateDigest(toScore, hints, hidden);
-  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore);
+  const lines = candidateLines(toScore, hints, hidden, { askerFirstName: opts.askerFirstName });
+  const digest = lines.map((l, i) => `${i}. ${l}`).join("\n");
+  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden);
   return [...scored, ...zero];
 }
 

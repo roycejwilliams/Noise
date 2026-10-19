@@ -78,6 +78,13 @@ async function prefilterCandidates(personId: string, askEmbedding: number[]): Pr
   }));
 }
 
+// The asker's first name, so no candidate's items carrying it reach the asker's prompt (matching.ts candidateLines). A failed
+// read throws: the sweep for this ask skips (it runs again tomorrow) rather than scoring without the strip.
+async function firstNameOf(userId: string): Promise<string> {
+  const { rows } = await pool.query(`SELECT first_name FROM users WHERE id = $1`, [userId]);
+  return String(rows[0]?.first_name ?? "");
+}
+
 // ON CONFLICT ... DO UPDATE (not DO NOTHING) so a re-sweep refreshes the
 // score/reason/mutual as the network's context changes — but only while the
 // edge is still 'open'; a retired or acted_on row keeps whatever it looked
@@ -150,7 +157,7 @@ async function sweepOneSeekingAsk(userId: string, ask: StatedIntent, profile: an
     ].filter((p): p is string => Boolean(p));
     const askerContext = askerContextParts.length ? askerContextParts.join("; ") : undefined;
 
-    const scored = await scoreAgainstStatedAsk(ask, candidates, askerContext);
+    const scored = await scoreAgainstStatedAsk(ask, candidates, askerContext, undefined, { askerFirstName: await firstNameOf(userId) });
     await logRelevanceEdges(
       userId,
       ask.id,
@@ -189,7 +196,7 @@ async function sweepOneOffering(userId: string, offering: StatedIntent): Promise
     const candidates = await prefilterCandidates(userId, offering.embedding);
     if (!candidates.length) return;
 
-    const scored = await scoreOfferingAgainstCandidates(offering, candidates);
+    const scored = await scoreOfferingAgainstCandidates(offering, candidates, { askerFirstName: await firstNameOf(userId) });
     await logRelevanceEdges(
       userId,
       offering.id,
