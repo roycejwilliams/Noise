@@ -48,6 +48,11 @@ export const FEELING_PICKS_NOT_CHANGED: { where: string; what: string; status: s
   { where: "harness/proactive.ts drafting (feelingForDraft)", what: "a draft sees 'struggling in the last day' and can return SKIP, which drops the item (dropCandidate), released hold or not", status: "documented, not changed: needs Royce" },
 ];
 
+// Model-facing guidance, never a line handed to the member: what waited for a hard stretch goes gently when it's released (early or at
+// the cap). The door, the cold-start question and a document offer in a reply (harness/replyGrounding.ts); the same idea as the document
+// offer's own line (#260).
+export const GENTLE_AFTER_HARD = "They've had a hard stretch lately and this waited for it: bring it up gently, in one soft line that's easy to pass on, never a push, and only if this message feels okay for it.";
+
 // none: not struggling; held: it waits; released_okay: struggling by the read, but they've texted normally since; released_cap: the
 // hard stretch reached the cap.
 export type MoodHoldState = "none" | "held" | "released_okay" | "released_cap";

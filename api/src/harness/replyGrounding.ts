@@ -28,7 +28,7 @@ import { findSection } from "../services/deliveryReceipts.js";
 import { driftLine } from "../services/receiptDrift.js";
 import type { Doc } from "../services/documentSheet.js";
 import type { EmotionalContext } from "./emotion.js";
-import { moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
+import { GENTLE_AFTER_HARD, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { attributedWithoutSource } from "./proactiveSpecifics.js";
 import { loadMilestones, storyLines } from "../services/milestones.js";
 import { ABILITIES, capabilitySheet } from "../services/capabilities.js";
@@ -415,10 +415,11 @@ export async function gatherReplyFacts(
   // The same notice covers a plan sheet, a venue brief and a stale delivered document, at most one offer a reply, never in a heavy
   // moment (this message's feeling, recorded before the reply drafts).
   let docQuestion: string | null = null;
+  let docOffered = false;
   {
     if (opts.turn?.docOffer) opts.turn.docOffer.moment = { heavyNow: heavyHold(opts.turn.emotional, new Date()).hold, coLines: coLinesIn(opts.context) };
     const doc = docOfferLines(opts.turn?.docOffer, opts.turn?.message ?? "");
-    if (doc.ask || doc.hint) docQuestion = "a document offer";
+    if (doc.ask || doc.hint) { docQuestion = "a document offer"; docOffered = true; }
     if (doc.ask) addInstruction(rf, doc.ask);
     if (doc.pending) addFact(rf, "pending", doc.pending);
     if (doc.hint) addInstruction(rf, doc.hint);
@@ -506,6 +507,8 @@ export async function gatherReplyFacts(
     if (rf.door) noteMoodHold("heavy_offer_hold", "door", `${userId}:door`, heavy);
     if (rf.coldStart) noteMoodHold("heavy_offer_hold", "cold_start", `${userId}:cold_start`, heavy);
     if (opts.turn.docOffer) noteMoodHold("heavy_offer_hold", "document_offer", `${userId}:document_offer`, heavy);
+    // Released (they're okay again, or the cap): what waited goes gently (model-facing tone guidance, never a line of its own).
+    if ((heavy.state === "released_okay" || heavy.state === "released_cap") && (rf.door?.offered || rf.coldStart?.offered || docOffered)) addInstruction(rf, GENTLE_AFTER_HARD);
   }
   for (const line of ledger.lines) addFact(rf, "did_before", line);
   // They're asking about something the record shows Co sent: the record
@@ -567,7 +570,7 @@ export function addMemberKnowledge(rf: ReplyFacts, k: MemberKnowledge | null | u
 
 // Pure: whether any restraint is on for them right now (otherwise its rule is only "nothing is on", and left out).
 export function restraintOn(r: Restraint | null): boolean {
-  return !!r && (r.safetyHold || !!r.holdUntil || !!r.spaceUntil || r.unanswered.count > 0 || r.suppressedKinds.length > 0 || r.needsCare || r.frustratedWithCo);
+  return !!r && (r.safetyHold || !!r.holdUntil || !!r.spaceUntil || r.unanswered.count > 0 || r.suppressedKinds.length > 0 || r.needsCare || r.frustratedWithCo); // mood: whether the restraint rule text is shown (wording)
 }
 
 // Pure: where they're headed, from goals WITH their state: only active goals are direction (a goal they closed, or one Co set aside,
@@ -618,9 +621,9 @@ export function todayFact(zone: string | null | undefined, now: Date = new Date(
 }
 
 // Pure: a heavy moment in this message: they're struggling, or a strong hard feeling right now.
-export function heavyMoment(e: EmotionalContext | null | undefined): boolean {
+export function heavyMoment(e: EmotionalContext | null | undefined): boolean { // mood: the read; decisions take it only through heavyHold
   if (!e) return false;
-  return !!e.needsCare || (!!e.current && e.current.intensity === "high" && e.current.valence === "negative");
+  return !!e.needsCare || (!!e.current && e.current.intensity === "high" && e.current.valence === "negative"); // mood: the read; decisions take it only through heavyHold
 }
 // Pure: whether a heavy moment holds an offer back this reply (the door, the cold-start question, a document offer): timing only, never
 // cancelled (Royce, 2026-10-19: "feelings change timing and tone, never cancel"). Each stays owed and comes up in a later reply once
@@ -628,7 +631,7 @@ export function heavyMoment(e: EmotionalContext | null | undefined): boolean {
 // goes then is drafted with the feeling block as tone. A strong hard call moment without a hard day holds while it is their current
 // feeling (48 hours at most, emotion.ts current).
 export function heavyHold(e: EmotionalContext | null | undefined, now: Date): MoodHold {
-  if (!heavyMoment(e)) return { state: "none", hold: false, heldHours: null };
+  if (!heavyMoment(e)) return { state: "none", hold: false, heldHours: null }; // mood: the capped hold itself
   const m = moodHold(e, { now, lastInboundAt: now });
   return m.state === "none" ? { state: "held", hold: true, heldHours: null } : m;
 }
