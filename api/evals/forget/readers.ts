@@ -173,6 +173,64 @@ const all = (k: unknown) => JSON.stringify(k);
   corrections = [REMOVAL];
 }
 
+// ---------------------------------------------------------------- 4b. the loop decay job and the loop_check draft (they can text a member)
+{
+  const OL = await import("../../src/services/openLoops.js");
+  const R = await import("../../src/harness/proactiveRegistry.js");
+  const P = await import("../../src/harness/proactive.js");
+  const day = (iso: string) => new Date(`${iso}T18:00:00Z`);
+  const stale = { status: "open", dueDate: null, source: "member", closedAt: null, closedReason: null, decayAskedAt: null, lastConfirmedAt: day("2026-10-11"), changedAt: day("2026-10-11"), userId: U, zone: "America/Los_Angeles" };
+  const loopsNow = [
+    { id: 71, title: "Send Ellis notes for the custody hearing in May", detail: null, ...stale },
+    { id: 72, title: "Shortlist climate founders dinners", detail: null, ...stale },
+  ] as any[];
+  const closed: { id: number; reason: string }[] = [];
+  const asked: number[] = [];
+  const deps = { live: async () => loopsNow, close: async (id: number, reason: any) => { closed.push({ id, reason }); }, expire: async () => {}, ask: async (l: any) => { asked.push(l.id); return true; } };
+  const out = await OL.runLoopDecay(day("2026-10-19"), { ...deps, removals: async () => removedRows() });
+  check("decay: a stale loop whose subject they removed is closed as removed, never asked about; the canary loop is asked", closed.some((c) => c.id === 71 && c.reason === "removed") && !asked.includes(71) && asked.includes(72) && out.removed === 1);
+  closed.length = 0; asked.length = 0;
+  await OL.runLoopDecay(day("2026-10-19"), { ...deps, removals: async () => null });
+  check("decay: when their removals can't be read, nothing is asked (fails closed) and nothing is closed as removed", asked.length === 0 && !closed.some((c) => c.reason === "removed"));
+  closed.length = 0; asked.length = 0;
+  await OL.runLoopDecay(day("2026-10-19"), { ...deps, removals: async () => [] });
+  check("decay, no removals: both loops asked about as before", asked.includes(71) && asked.includes(72) && closed.length === 0);
+  check("decay: a loop closed as removed is a tombstone the sync keeps closed", /closed_reason IN \('co', 'expired', 'date_passed', 'answered', 'removed'\)/.test(src("services/openLoops.ts")));
+  check("decay: the real job reads the removals", /removals: \(userId\) => loopRemovals\(userId\)/.test(src("services/openLoops.ts")));
+
+  // The loop_check draft: the loop row and the payload it drafts from, both checked.
+  let loopRow: any = { closed_at: null, last_confirmed_at: day("2026-09-01"), title: "Send Ellis notes for the custody hearing in May", detail: null };
+  let failGuards = false;
+  const updates: string[] = [];
+  const prevQuery = (pool as any).query;
+  (pool as any).query = async (sql: string, p: any[] = []) => {
+    if (/SELECT closed_at, last_confirmed_at, title, detail FROM open_loops/.test(sql)) return { rows: [loopRow] };
+    if (/FROM profile_corrections pc WHERE pc\.user_id = \$1/.test(sql)) { if (failGuards) throw new Error("guard read failed"); return { rows: corrections }; }
+    if (/^\s*UPDATE open_loops SET status = 'dropped'/.test(sql)) { updates.push(`${sql.match(/closed_reason = '([a-z_]+)'/)?.[1]}:${p[0]}`); return { rows: [], rowCount: 1 }; }
+    return prevQuery(sql, p);
+  };
+  let drafted = 0;
+  P.setProactiveModelForTests(async () => { drafted++; return "Is the climate dinners shortlist still on your plate?"; });
+  const cand = (title: string, note?: string) => ({ userId: U, type: "loop_check", payload: { loopId: 71, title, ...(note ? { note } : {}) } }) as any;
+  const person = { firstName: "Ellis" } as any;
+  // The queued payload's title is clean (renamed since), the loop row itself says it: the row is checked too.
+  const d1: any = await (R.proactiveRegistry as any).loop_check.draft(cand("Notes Ellis asked for"), person);
+  check("loop_check: a loop whose subject they removed (in its row) is not drafted, and is closed as removed (no text)", drafted === 0 && !d1?.messages && updates.includes("removed:71"));
+  updates.length = 0;
+  loopRow = { ...loopRow, title: "Shortlist climate founders dinners" };
+  const d2: any = await (R.proactiveRegistry as any).loop_check.draft(cand("Shortlist climate founders dinners", "Prep for the custody hearing in May first"), person);
+  check("loop_check: the payload's note saying it also stops the draft", drafted === 0 && !d2?.messages && updates.includes("removed:71"));
+  updates.length = 0;
+  failGuards = true;
+  const d3: any = await (R.proactiveRegistry as any).loop_check.draft(cand("Shortlist climate founders dinners"), person);
+  check("loop_check: removals unreadable, nothing drafted (fails closed), the loop left open", drafted === 0 && !d3?.messages && updates.length === 0);
+  failGuards = false;
+  const d4: any = await (R.proactiveRegistry as any).loop_check.draft(cand("Shortlist climate founders dinners"), person);
+  check("loop_check: the canary loop is still drafted", drafted === 1 && Array.isArray(d4?.messages) && updates.length === 0);
+  P.setProactiveModelForTests(null as any);
+  (pool as any).query = prevQuery;
+}
+
 // ---------------------------------------------------------------- 5. the wiring (each reader reads the guards; a mutation that drops it fails above)
 check("wiring: memberKnowledge reads the guards for lessons, carrying and delivered too", /\["exchanges", "corrections", "lessons", "carrying", "delivered"\]/.test(src("services/memberKnowledge.ts")));
 check("wiring: the reply's sent list goes through withoutRemovedSent", /M\.withoutRemovedSent\(items, await W\.forgottenRows\(userId\), W\)/.test(src("services/turnContext.ts")));

@@ -213,7 +213,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   const settled = await L.settleOfferLoop("u1", "SF Social Club", "interested", "interested but traveling, wants to look into it once back in SF", fakeDb as any);
   const up = log.find((l) => /UPDATE open_loops SET status = 'done'/.test(l.sql));
   check("it settles: done, with her answer as the detail, closed as 'answered', scoped to her", settled.join() === "53372" && !!up && up.p[0] === "u1" && /closed_reason = 'answered'/.test(up.sql) && /interested/.test(up.p[2]) && /once back in SF/.test(up.p[2]));
-  check("the sync keeps an answered loop closed (the derived offer can't reopen it)", /closed_reason IN \('co', 'expired', 'date_passed', 'answered'\)/.test(src("services/openLoops.ts")) && L.planLoop({ source: "offer", sourceRef: "k", title: "t", status: "waiting_on_reply", detail: null, dueDate: null, taskId: null }, { closed_at: new Date(), status: "done" }, null).kind === "keep_closed");
+  check("the sync keeps an answered loop closed (the derived offer can't reopen it)", /closed_reason IN \('co', 'expired', 'date_passed', 'answered', 'removed'\)/.test(src("services/openLoops.ts")) && L.planLoop({ source: "offer", sourceRef: "k", title: "t", status: "waiting_on_reply", detail: null, dueDate: null, taskId: null }, { closed_at: new Date(), status: "done" }, null).kind === "keep_closed");
   check("every way a reaction is recorded settles it: noteReaction, the catch-up, the router", /settleSentOffer\(ctx\.userId, match\.name, reaction/.test(src("agent/conversationTools.ts")) && /settleSentOffer\(userId, match\.name, reaction/.test(src("services/reactionCatchup.ts")) && /settleOfferLoop\(userId, pending\.itemName/.test(src("services/offerReactions.ts")));
 }
 

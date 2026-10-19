@@ -580,8 +580,18 @@ export const proactiveRegistry: ProactiveRegistry = {
   // A question only; the loop may not be stated as current (services/loopLifecycle.ts).
   loop_check: {
     async draft(c, person) {
-      const { rows } = await pool.query(`SELECT closed_at, last_confirmed_at FROM open_loops WHERE id = $1 AND user_id = $2`, [c.payload.loopId, c.userId]);
+      const { rows } = await pool.query(`SELECT closed_at, last_confirmed_at, title, detail FROM open_loops WHERE id = $1 AND user_id = $2`, [c.payload.loopId, c.userId]);
       if (!rows[0] || rows[0].closed_at) return skip("the loop has closed since");
+      // A loop whose subject they had Cue forget is closed as removed, with no text: their choice, not a cancel. Its row and what the
+      // draft would read (the payload's title and note) are both checked; if their removals can't be read, nothing is drafted.
+      const L = await import("../services/openLoops.js");
+      const removed = await L.loopRemovals(c.userId);
+      if (removed === null) return skip("their removals couldn't be read: not drafted");
+      const W = await import("../services/whatCoKnows.js");
+      if (L.loopSaysRemoved({ title: String(rows[0].title ?? ""), detail: rows[0].detail ?? null }, removed, W) || L.loopSaysRemoved({ title: String(c.payload.title ?? ""), note: typeof c.payload.note === "string" ? c.payload.note : null }, removed, W)) {
+        await L.closeRemovedLoop(c.userId, Number(c.payload.loopId));
+        return skip("removed at their request: the loop is closed, no text");
+      }
       const text = await draftProactive({
         functionId: "loopLifecycle.check.draft",
         firstName: person.firstName,
