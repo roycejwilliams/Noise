@@ -397,8 +397,12 @@ export async function assembleContext(
     pool.query(`SELECT * FROM co_profiles WHERE user_id = $1`, [userId]).then((r) => r.rows[0] ?? null).catch(() => null),
     getPersonSnapshot(userId).catch(() => null),
     loadSentItems(userId).then(async (items) => {
-      await fillDetails(items).catch(() => {});
-      return items;
+      // Through the removals (memberKnowledge.ts withoutRemovedSent): a find they had Cue forget isn't in the reply's sent list.
+      const kept = await Promise.all([import("./whatCoKnows.js"), import("./memberKnowledge.js")])
+        .then(async ([W, M]) => M.withoutRemovedSent(items, await W.forgottenRows(userId), W))
+        .catch(() => items);
+      await fillDetails(kept).catch(() => {});
+      return kept;
     }),
     knowledgeP,
     pool

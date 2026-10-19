@@ -372,6 +372,16 @@ export const realKnowledgeDeps: KnowledgeDeps = {
 
 // ---------------------------------------------------------------- pure builders
 
+// Pure: sent items (turnContext.ts loadSentItems) without the ones whose name or the post they came from says something the member
+// had Cue forget (rows: removals; W: whatCoKnows' guardText). Every prompt reader of the list uses it: the layer's delivered and
+// carrying, the reply's sent list, the call's "what you sent them lately". The reaction matcher reads the list unfiltered.
+export function withoutRemovedSent<T extends { name: string; postText?: string | null }>(items: T[], rows: import("./whatCoKnows.js").ForgottenRow[], W: Pick<typeof import("./whatCoKnows.js"), "guardText">): T[] {
+  const removed = rows.filter((r) => r.removed);
+  if (!removed.length) return items;
+  const same = (t: string | null | undefined) => !t || W.guardText(t, removed) === t;
+  return items.filter((i) => same(i.name) && same(i.postText));
+}
+
 const DAY = 86_400_000;
 const iso = (d: Date | string | null | undefined): string | null => {
   if (!d) return null;
@@ -688,15 +698,20 @@ export async function memberKnowledge(userId: string, opts: KnowledgeOptions = {
   const removed = guards.filter((r) => r.removed);
   const W = guards.length ? await import("./whatCoKnows.js") : null;
   const g = (t: string): string | null => (W && removed.length ? W.guardText(t, removed) : t);
-  const keptLessons = lessons.flatMap((l) => { const text = g(l.text); return text === null ? [] : [{ ...l, text }]; });
+  // A lesson goes whole when any part of it says the removed thing: a lesson is one instruction, and cutting a part ("never joke
+  // about X; keep it light" -> "keep it light") can widen what it tells Cue to do.
+  const keptLessons = lessons.filter((l) => g(l.text) === l.text);
   const keptLoops = loops.flatMap((l) => { const title = g(l.title); return title === null ? [] : [{ ...l, title, detail: l.detail ? g(l.detail) : l.detail }]; });
   const keptPromises = promises.flatMap((p) => { const content = g(p.content); return content === null ? [] : [{ ...p, content }]; });
   const keptLedger = ledger.flatMap((s) => { const label = g(s.label); return label === null ? [] : [{ ...s, label }]; });
+  // What they have (document receipts) and what Cue sent first (offers): a document or a find named by the removed thing is left out.
+  const keptReceipts = W && removed.length ? receipts.filter((r) => g(String(r.title ?? "")) === String(r.title ?? "")) : receipts;
+  const keptOffers = W && removed.length ? withoutRemovedSent(offers, removed, W) : offers;
 
   if (on("goals")) k.goals = goalsOf(profile, states);
   if (on("asks")) k.asks = asks.filter((a) => a.text.trim()).map((a) => ({ id: a.id, text: a.text.trim(), kind: a.kind === "help" ? "help" : "find", verifiedAt: latest(a.createdAt, a.lastMentionedAt) }));
-  if (on("delivered")) k.delivered = mergeDelivered({ receipts, ledger: keptLedger, offers });
-  if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, receipts, ledger: keptLedger, loops: keptLoops, promises: keptPromises, now, zone });
+  if (on("delivered")) k.delivered = mergeDelivered({ receipts: keptReceipts, ledger: keptLedger, offers: keptOffers });
+  if (on("carrying")) k.carrying = carryingOf({ tasks, briefs, receipts: keptReceipts, ledger: keptLedger, loops: keptLoops, promises: keptPromises, now, zone });
   if (on("lessons")) k.lessons = keptLessons.filter((l) => l.text.trim()).map((l) => ({ text: l.text.trim(), verifiedAt: l.at.toISOString() }));
   if (on("corrections")) k.corrections = settleGoalCorrections(corrections.map((c) => ({ field: String(c.field), was: String(c.old_value ?? ""), now: c.new_value == null ? null : String(c.new_value), verifiedAt: latest(c.corrected_at) })), goalsOf(profile, states));
   if (on("preferences")) k.preferences = [

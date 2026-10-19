@@ -53,6 +53,10 @@ const handle = async (sql: string, p: any[] = []) => {
   if (/FROM co_memories/.test(sql) && /call_transcript/.test(sql) && /\[Call\]%/.test(sql)) return { rows: db.callRows };
   if (/FROM open_loops/.test(sql) && /closed_at IS NULL/.test(sql)) return { rows: db.loops };
   if (/FROM co_facts/.test(sql) && /subject = 'co'/.test(sql) && /relation <> 'exited'/.test(sql)) return { rows: db.ledger };
+  if (/FROM revealed_offers/.test(sql)) return { rows: [
+    { item_key: "o1", item_name: "Family law clinic for the custody hearing in May", kind: "opportunity", url: null, sent_at: ago(6), reaction: null },
+    { item_key: "o2", item_name: "Bay Area Climate Founders Breakfast", kind: "event", url: "https://lu.ma/cfb", sent_at: ago(5), reaction: null },
+  ] };
   if (/FROM users WHERE id = \$1/.test(sql)) return { rows: [{ phone_number: "+15550000000", first_name: "Ellis" }] };
   return { rows: [] };
 };
@@ -66,12 +70,19 @@ const deps = (): Partial<Deps> => ({
   linkedNames: async () => [],
   goalStates: async () => [],
   asks: async () => [],
-  receipts: async () => [],
+  receipts: async () => [
+    { id: 1, userId: U, docKey: "prep", version: 1, title: "Prep notes for the custody hearing in May", kind: "plan", doc: { sections: [] }, contentHash: "x", channel: "text", status: "delivered", line: null, link: "https://docs.example/prep", driveFileId: null, deliveredAt: ago(8) },
+    { id: 2, userId: U, docKey: "climate", version: 1, title: "Climate founders dinner plan", kind: "plan", doc: { sections: [] }, contentHash: "y", channel: "text", status: "delivered", line: null, link: "https://docs.example/climate", driveFileId: null, deliveredAt: ago(7) },
+  ] as any,
   ledgerSent: async () => [
     { label: "Family lawyers for the custody hearing in May", url: null, kind: "opportunity", at: ago(10) },
     { label: "Climate founders supper, Thursday", url: "https://lu.ma/climate-supper", kind: "event", at: ago(9) },
   ],
-  offers: async () => [],
+  offers: async () => [
+    { key: "o1", name: "Family law clinic for the custody hearing in May", kind: "opportunity", url: null, sentAt: ago(6), reaction: null, details: null, postText: null },
+    { key: "o2", name: "Bay Area Climate Founders Breakfast", kind: "event", url: "https://lu.ma/cfb", sentAt: ago(5), reaction: null, details: null, postText: null },
+    { key: "o3", name: "Weekend legal aid fair", kind: "opportunity", url: null, sentAt: ago(5), reaction: null, details: null, postText: "Free help before the custody hearing in May" },
+  ],
   tasks: async () => [],
   briefs: async () => [],
   loops: async () => [
@@ -83,7 +94,7 @@ const deps = (): Partial<Deps> => ({
     { at: ago(1), content: "Kept: sent the climate founders shortlist" },
   ],
   lessons: async () => [
-    { text: "Ellis gets tense about the custody hearing in May; keep it light", at: ago(20) },
+    { text: "Never joke about the custody hearing in May; keep it light", at: ago(20) },
     { text: "He wants climate founders, small rooms, never mixers", at: ago(19) },
   ],
   corrections: async () => [],
@@ -99,17 +110,19 @@ const deps = (): Partial<Deps> => ({
 const all = (k: unknown) => JSON.stringify(k);
 {
   const k = await MK.memberKnowledge(U, { now: NOW }, { ...deps(), forgotten: async () => removedRows() });
-  check("layer: the part of a lesson that says the removed thing is gone (\"keep it light\" stays); the other lesson stays whole", !GONE.test(all(k.lessons)) && k.lessons.some((l) => l.text === "keep it light") && k.lessons.some((l) => l.text === "He wants climate founders, small rooms, never mixers"));
+  check("layer: a lesson with any part saying the removed thing goes whole (no \"keep it light\" left to widen); the other stays", !GONE.test(all(k.lessons)) && k.lessons.length === 1 && k.lessons[0].text === "He wants climate founders, small rooms, never mixers");
+  check("layer: a document they have, named by the removed thing, is gone from delivered and carrying; the canary doc stays", !/Prep notes/.test(all(k.delivered)) && !/Prep notes/.test(all(k.carrying)) && /Climate founders dinner plan/.test(all(k.delivered)));
+  check("layer: a find Cue sent first, named by it or from a post saying it, is gone; the canary find stays", !/Family law clinic|legal aid fair/.test(all(k.delivered)) && /Climate Founders Breakfast/.test(all(k.delivered)));
   check("layer: a loop titled with the removed thing is gone; the canary loop stays, its detail without that part", !GONE.test(all(k.carrying)) && CANARY.test(all(k.carrying)) && /small rooms/.test(all(k.carrying)));
   check("layer: a promise result saying it is gone; the other stays", !/checklist/.test(all(k.carrying)) && /climate founders shortlist/.test(all(k.carrying)));
   check("layer: Cue's record of what it sent: the removed item is gone, the canary send stays", !GONE.test(all(k.delivered)) && CANARY.test(all(k.delivered)));
   check("layer: nothing anywhere in the record says it", !GONE.test(all(k)));
   // Only lessons asked for: the guards are still read (they used to be read only with exchanges or corrections).
   const only = await MK.memberKnowledge(U, { now: NOW, include: ["lessons"] }, { ...deps(), forgotten: async () => removedRows() });
-  check("layer: lessons alone still go through the removals", only.lessons.length === 2 && !GONE.test(all(only.lessons)));
+  check("layer: lessons alone still go through the removals", only.lessons.length === 1 && !GONE.test(all(only.lessons)));
   // No removals: everything as before, word for word.
   const none = await MK.memberKnowledge(U, { now: NOW }, { ...deps(), forgotten: async () => [] });
-  check("layer, no removals: both lessons, both loops, both sends, as they were", none.lessons.length === 2 && GONE.test(all(none.lessons)) && GONE.test(all(none.carrying)) && GONE.test(all(none.delivered)));
+  check("layer, no removals: both lessons, both loops, both sends, docs and finds, as they were", none.lessons.length === 2 && GONE.test(all(none.lessons)) && GONE.test(all(none.carrying)) && GONE.test(all(none.delivered)) && /Prep notes/.test(all(none.delivered)) && /Family law clinic/.test(all(none.delivered)) && /legal aid fair/.test(all(none.delivered)));
   // A correction (not a removal) never cuts these sources: "Oakland" corrected to "Berkeley" leaves a lesson naming Oakland as it is.
   const corr = await MK.memberKnowledge(U, { now: NOW, include: ["lessons"] }, { ...deps(), lessons: async () => [{ text: "Lives in Oakland, likes small dinners", at: ago(3) }], forgotten: async () => W.liveGuards([{ field: "city", old: "Oakland", now: "Berkeley", ref: "profile:city", removed: false }]) });
   check("layer: a correction leaves a lesson's words as they are (only removals cut)", corr.lessons[0]?.text === "Lives in Oakland, likes small dinners");
@@ -121,15 +134,20 @@ const all = (k: unknown) => JSON.stringify(k);
   const t = g.find((r) => r.memory_type === "call_transcript")?.content ?? "";
   const n = g.find((r) => r.memory_type === "text_exchange")?.content ?? "";
   check("call rows: the transcript loses the line that says it, keeps the rest line by line", !GONE.test(t) && CANARY.test(t) && /^assistant: Hey Ellis/.test(t) && t.split("\n").length === 3);
-  check("call rows: the [Call] note loses the sentence that says it, keeps the other, still a [Call] note", !GONE.test(n) && CANARY.test(n) && n.startsWith("[Call] "));
+  check("call rows: a [Call] note the guard drops as a whole is dropped whole (not rebuilt from its other sentences)", n === "");
+  const multi = CC.guardCallRows([{ created_at: ago(1), memory_type: "text_exchange", content: "[Call] He wants climate founders; he mentioned the custody hearing in May." }], removedRows(), W)[0]?.content ?? "";
+  check("call rows: a [Call] note of several parts keeps the parts that don't say it", !GONE.test(multi) && CANARY.test(multi) && multi.startsWith("[Call] "));
+  const split = CC.guardCallRows([{ created_at: ago(1), memory_type: "text_exchange", content: "[Call] Ellis has a hearing in May. It's about custody of his kids, and he wants to meet climate founders." }], removedRows(), W);
+  check("call rows: the reviewer's split note (the fact across two sentences) is dropped, not half-kept", split.length === 0 || !GONE.test(split[0].content));
   check("call rows: no removals, rows untouched (same objects)", CC.guardCallRows(db.callRows, [], W) === db.callRows);
   check("call rows: a row that is only the removed thing is dropped", CC.guardCallRows([{ created_at: ago(1), memory_type: "text_exchange", content: "[Call] The custody hearing in May." }], removedRows(), W).length === 0);
   const k = await CC.buildCallKnowledge(U);
   check("call summary (what elevenLabsCalls registers): nothing says the removed thing", !GONE.test(k.summary) && !GONE.test(k.facts) && !GONE.test(k.impressions));
   check("call summary: the canary from the same call is still there", CANARY.test(k.summary));
+  check("call summary: what Cue sent lately never names the removed find; the canary find is there", !/Family law clinic/.test(k.summary + k.facts) && /Climate Founders Breakfast/.test(k.summary + k.facts));
   corrections = [];
   const before = await CC.buildCallKnowledge(U);
-  check("call summary, no removals: the call's words are there (the fixture reaches the summary)", GONE.test(before.summary));
+  check("call summary, no removals: the call's words and the find are there (the fixture reaches the summary)", GONE.test(before.summary) && /Family law clinic/.test(before.summary + before.facts));
   corrections = [REMOVAL];
 }
 
@@ -157,6 +175,11 @@ const all = (k: unknown) => JSON.stringify(k);
 
 // ---------------------------------------------------------------- 5. the wiring (each reader reads the guards; a mutation that drops it fails above)
 check("wiring: memberKnowledge reads the guards for lessons, carrying and delivered too", /\["exchanges", "corrections", "lessons", "carrying", "delivered"\]/.test(src("services/memberKnowledge.ts")));
+check("wiring: the reply's sent list goes through withoutRemovedSent", /M\.withoutRemovedSent\(items, await W\.forgottenRows\(userId\), W\)/.test(src("services/turnContext.ts")));
+{
+  const MKs = MK.withoutRemovedSent([{ name: "Family law clinic for the custody hearing in May", postText: null }, { name: "Climate founders supper", postText: null }], removedRows(), W);
+  check("withoutRemovedSent: the removed find goes, the canary stays; no removals is the same list", MKs.length === 1 && CANARY.test(MKs[0].name) && MK.withoutRemovedSent(db.ledger as any, [], W) === (db.ledger as any));
+}
 check("wiring: buildCallKnowledge guards the past calls before pairing them", /guardCallRows\(rows, await W\.forgottenRows\(userId\)/.test(src("services/callContext.ts")));
 
 console.log(`forget readers: ${total - failed}/${total} passed`);

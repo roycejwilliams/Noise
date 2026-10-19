@@ -498,6 +498,8 @@ export function guardCallRows<R extends { memory_type: string; content: string }
   const removed = guards.filter((g) => g.removed);
   if (!removed.length) return rows;
   return rows.flatMap((r) => {
+    // A [Call] note the guard drops as a whole (it says the removed thing across its sentences) is dropped whole.
+    if (r.memory_type !== "call_transcript" && W.guardText(String(r.content), removed) === null) return [];
     const parts = r.memory_type === "call_transcript" ? String(r.content).split("\n") : String(r.content).split(/(?<=[.!?])\s+/);
     const kept = parts.map((x) => W.guardText(x, removed)).filter((x): x is string => x !== null && x.trim() !== "" && x.trim() !== "[Call]");
     if (!kept.length) return [];
@@ -620,7 +622,13 @@ export async function buildCallKnowledge(userId: string): Promise<CallKnowledge>
   // member-knowledge read already registered.
   // What was sent, with whatever details are on file by the wait (slow page reads never hold the call). One read: the layer's
   // delivered merge takes the same list (its offers loader is loadSentItems over the same 45 days).
-  const sentItems = import("./turnContext.js").then((T) => T.loadSentItems(userId)).catch(() => [] as SentItem[]);
+  // Through the removals (memberKnowledge.ts withoutRemovedSent): "what you sent them lately" never names a thing they had Cue forget.
+  const sentItems = import("./turnContext.js")
+    .then(async (T) => {
+      const [items, W, M] = await Promise.all([T.loadSentItems(userId), import("./whatCoKnows.js"), import("./memberKnowledge.js")]);
+      return M.withoutRemovedSent(items, await W.forgottenRows(userId).catch(() => []), W);
+    })
+    .catch(() => [] as SentItem[]);
   // One member-knowledge read for the whole build (services/memberKnowledge.ts): stamped, member-stripped inside. Restraint (new on
   // this path) is held to the call's wait like every other slow read.
   const knowledge = import("./memberKnowledge.js").then((M) => M.memberKnowledge(userId, { include: CALL_KNOWLEDGE, ...CONTEXT_EXCHANGES }, { offers: () => sentItems, restraint: (u, at) => withinWait(M.realKnowledgeDeps.restraint(u, at), "the restraint read") }));
