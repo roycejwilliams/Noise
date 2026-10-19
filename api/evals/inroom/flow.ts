@@ -410,7 +410,7 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   remyGuest.checked_in_at = new Date().toISOString();
   W.memoriesWritten.push({ user_id: b.id, memory_type: "text_exchange", content: "User said: long week, staying in tonight", created_at: new Date() });
   const before = new Map([a, b, n, m].map((x) => [x.id, sentTo(x).length]));
-  await U.processDueUnmatchedFollowUps();
+  await U.processDueUnmatchedFollowUps({ approved: true });
   await settle();
   const closes = (x: Member) => sentTo(x).slice(before.get(x.id));
   check("close: no below-bar pairing is ever drafted", !W.llmCalls.some((c) => c.kind === "unmatchedPairDraft"));
@@ -418,7 +418,7 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   check("close: everyone who came gets exactly one close, matched or not", closes(a).length === 1 && closes(n).length === 1 && closes(m).length === 1, { a: closes(a), n: closes(n), m: closes(m) });
   check("close: a registered no-show gets nothing, even one who texted during the event (no 'glad you came' without evidence they came)", closes(b).length === 0);
   check("close: the same close for everyone, and it says nothing about matching", [a, n, m].every((x) => /glad you came/i.test(closes(x)[0]?.content ?? "") && !U.MATCH_TALK.test(closes(x)[0]?.content ?? "")), [a, n, m].map((x) => closes(x)[0]?.content));
-  await U.processDueUnmatchedFollowUps();
+  await U.processDueUnmatchedFollowUps({ approved: true });
   await settle();
   check("close: sent once (a second pass sends nothing)", closes(a).length === 1 && closes(n).length === 1 && closes(m).length === 1);
 }
@@ -433,7 +433,7 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   await freshPass("evt-two");
   for (const x of [a, n]) W.presence.set(`evt-two|${x.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
   const before = new Map([a, n].map((x) => [x.id, sentTo(x).length]));
-  await Promise.all([U.processDueUnmatchedFollowUps(), U.processDueUnmatchedFollowUps()]);
+  await Promise.all([U.processDueUnmatchedFollowUps({ approved: true }), U.processDueUnmatchedFollowUps({ approved: true })]);
   await settle();
   check("close: two passes at once send each close once", [a, n].every((x) => sentTo(x).length - before.get(x.id)! === 1), [a, n].map((x) => sentTo(x).slice(before.get(x.id))));
 }
@@ -448,12 +448,12 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   const before = sentTo(a).length;
   process.env.PROACTIVE_PAUSED = "true";
   const callsBefore = W.llmCalls.length;
-  await U.processDueUnmatchedFollowUps();
+  await U.processDueUnmatchedFollowUps({ approved: true });
   await settle();
   const whilePaused = sentTo(a).length - before;
   const draftsWhilePaused = W.llmCalls.length - callsBefore;
   delete process.env.PROACTIVE_PAUSED;
-  await U.processDueUnmatchedFollowUps();
+  await U.processDueUnmatchedFollowUps({ approved: true });
   await settle();
   check("close: held by the pause, then sent once the pause lifts", whilePaused === 0 && sentTo(a).length - before === 1, { whilePaused, after: sentTo(a).slice(before) });
   check("close: a close the pause holds costs no draft", draftsWhilePaused === 0, { draftsWhilePaused });
@@ -472,7 +472,7 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   W.presence.set(`evt-cap|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
   W.unmatchedFollowups.push({ user_id: a.id, event_api_id: "evt-cap", event_name: "Co Night", send_at: Date.now() - 60_000, sent_at: null });
   const before = sentTo(a).length;
-  await U.processDueUnmatchedFollowUps();
+  await U.processDueUnmatchedFollowUps({ approved: true });
   await settle();
   check("close: someone past the in-room text limit still gets the close", sentTo(a).slice(before).length === 1 && /glad you came/i.test(sentTo(a).slice(before)[0]?.content ?? ""), sentTo(a).slice(before));
   W.proactiveSends.splice(0, W.proactiveSends.length, { user_id: a.id, type: "in_room", target_key: "in_room:match:evt-cap", message: "m" }, { user_id: a.id, type: "in_room", target_key: "in_room:close:evt-cap", message: "c" }, { user_id: a.id, type: "in_room", target_key: "in_room:additive:evt-cap:1", message: "x" });
@@ -483,6 +483,117 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
 {
   // A draft that slips into matching talk never goes out as written: the plain close does.
   check("close: match talk in a draft is replaced by the plain close", U.closeText("So glad you came. Sorry nobody was right for you tonight.") === U.CLOSE_FALLBACK && U.closeText("Glad you came, hope you met some good people") === U.CLOSE_FALLBACK && U.closeText("Really glad you came tonight.") === "Really glad you came tonight." && U.closeText("") === U.CLOSE_FALLBACK);
+}
+
+{
+  // The close's copy waits on Royce (review of #208, 2026-10-19): while CLOSE_APPROVED is false nothing is drafted, sent or marked
+  // done; approved inside the window it goes; a close whose room is over by then expires unsent (no late goodbye).
+  check("close approval: the constant is false, in code, no env switch", U.CLOSE_APPROVED === false && /export const CLOSE_APPROVED: boolean = false;/.test((await import("node:fs")).readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8")) && !/process\.env[^\n]*CLOSE_APPROVED/.test((await import("node:fs")).readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8")));
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
+  const end = new Date(Date.now() + 10 * 60_000).toISOString();
+  addEvent({ api_id: "evt-appr", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }]);
+  await freshPass("evt-appr");
+  W.presence.set(`evt-appr|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  const before = sentTo(a).length;
+  const callsBefore = W.llmCalls.length;
+  await U.processDueUnmatchedFollowUps();
+  await settle();
+  const row = () => W.unmatchedFollowups.find((r) => r.event_api_id === "evt-appr" && r.user_id === a.id);
+  check("close approval: unapproved, nothing is drafted or sent", sentTo(a).length === before && W.llmCalls.length === callsBefore, { sent: sentTo(a).slice(before), calls: W.llmCalls.slice(callsBefore).map((c) => c.kind) });
+  check("close approval: unapproved, nothing is marked done or claimed", !!row() && !row()!.sent_at && !W.unmatchedNotices.some((n) => n.event_id === "evt-appr"));
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("close approval: approved inside the window, it goes once", sentTo(a).length - before === 1 && !!row()?.sent_at, sentTo(a).slice(before));
+
+  // Approved only after the room is over: expired, never sent late.
+  reset();
+  const b = addMember({ first_name: "Ellis", intent: [ask("a sailing crew")] });
+  addEvent({ api_id: "evt-late", name: "Co Night", start_at: new Date(Date.now() - 4 * 3_600_000).toISOString(), end_at: new Date(Date.now() - 30 * 60_000).toISOString() }, [{ m: b }]);
+  W.presence.set(`evt-late|${b.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  W.unmatchedFollowups.push({ user_id: b.id, event_api_id: "evt-late", event_name: "Co Night", send_at: Date.now() - 80 * 60_000, sent_at: null });
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("close approval: a close whose room is over expires unsent (no late goodbye)", sentTo(b).length === 0 && !!W.unmatchedFollowups.find((r) => r.user_id === b.id)?.sent_at && !W.llmCalls.some((c) => c.kind === "closeDraft"));
+  // Unreadable event: bounded by the end it was scheduled against.
+  const now = new Date();
+  check("close window: no timing, inside the scheduled end, not expired; past it, expired", !U.closeExpired(null, new Date(now.getTime() - 10 * 60_000), now) && U.closeExpired(null, new Date(now.getTime() - (U.UNMATCHED_SEND_BEFORE_END_MINUTES + 1) * 60_000), now) && U.closeExpired("over", now, now) && !U.closeExpired("closing", new Date(0), now));
+}
+{
+  // A walk-in who texted the check-in phrase but Cue never saw arrive is outside the matching roster (inRoomPool), but the check-in
+  // counts as attendance: they get the close (review of #208), and they're still not matched.
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
+  const w = addMember({ first_name: "Remy", intent: [ask("people to sail with on weekends", "offering")] });
+  const end = new Date(Date.now() + 10 * 60_000).toISOString();
+  addEvent({ api_id: "evt-walk", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }]);
+  W.walkins.push({ event_api_id: "evt-walk", person_id: w.id });
+  scores({ "sailing crew": { Remy: 90 }, "sail with": { Jordan: 90 } });
+  await freshPass("evt-walk");
+  check("walk-in close: the unarrived walk-in is not in the matching roster (no nudge either way)", !nudgeOf("evt-walk", w) && !nudgeOf("evt-walk", a) && !(await S.inRoomPool("evt-walk")).some((g) => g.user_id === w.id));
+  check("walk-in close: the scoring pass doesn't schedule them", !W.unmatchedFollowups.some((r) => r.user_id === w.id));
+  W.presence.set(`evt-walk|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("walk-in close: the walk-in who checked in gets the close once", sentTo(w).length === 1 && /glad you came/i.test(sentTo(w)[0]?.content ?? ""), sentTo(w));
+  check("walk-in close: the arrived guest gets it too", sentTo(a).length === 1);
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("walk-in close: once", sentTo(w).length === 1);
+  // The check-in schedules their close on its own (no other close due at that event yet).
+  reset();
+  const v = addMember({ first_name: "Noor", intent: [ask("a sailing crew")] });
+  addEvent({ api_id: "evt-walk2", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, []);
+  W.walkins.push({ event_api_id: "evt-walk2", person_id: v.id });
+  await U.scheduleWalkinClose("evt-walk2", "Co Night", v.id);
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("walk-in close: a check-in at an event with nobody else scheduled still gets its close", sentTo(v).length === 1, sentTo(v));
+  // A walk-in who left gets no goodbye (same as anyone who left).
+  reset();
+  const x = addMember({ first_name: "Ellis", intent: [ask("a sailing crew")] });
+  const y = addMember({ first_name: "Kai", intent: [ask("a sailing crew")] });
+  addEvent({ api_id: "evt-walk3", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: y }]);
+  W.walkins.push({ event_api_id: "evt-walk3", person_id: x.id });
+  W.presence.set(`evt-walk3|${x.id}`, { left_at: new Date() });
+  W.presence.set(`evt-walk3|${y.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
+  await freshPass("evt-walk3");
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("walk-in close: a walk-in who left gets nothing", sentTo(x).length === 0 && sentTo(y).length === 1);
+}
+{
+  // Luma's guest list read fails at close time: a guest known only from Luma's door check-in isn't marked done; the next pass, inside
+  // the window, sends it (review of #208). Past the window it expires.
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
+  const end = new Date(Date.now() + 10 * 60_000).toISOString();
+  addEvent({ api_id: "evt-lf", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end }, [{ m: a }]);
+  await freshPass("evt-lf");
+  (W.events.get("evt-lf")!.guests as any[])[0].checked_in_at = new Date().toISOString();
+  W.lumaGuestListFail = true;
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  const row = () => W.unmatchedFollowups.find((r) => r.event_api_id === "evt-lf" && r.user_id === a.id);
+  check("luma fail: the door-checked-in guest isn't marked done and gets nothing yet", sentTo(a).length === 0 && !row()!.sent_at);
+  W.lumaGuestListFail = false;
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("luma fail: the next pass, Luma back, sends it once", sentTo(a).length === 1 && !!row()!.sent_at, sentTo(a));
+  // Still failing when the room is over: expired, nothing late.
+  reset();
+  const b = addMember({ first_name: "Ellis", intent: [ask("a sailing crew")] });
+  const end2 = new Date(Date.now() + 10 * 60_000).toISOString();
+  addEvent({ api_id: "evt-lf2", name: "Co Night", start_at: new Date(Date.now() - 2 * 3_600_000).toISOString(), end_at: end2 }, [{ m: b }]);
+  await freshPass("evt-lf2");
+  W.lumaGuestListFail = true;
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  W.events.get("evt-lf2")!.end_at = new Date(Date.now() - 60_000).toISOString();
+  W.lumaGuestListFail = false;
+  (W.events.get("evt-lf2")!.guests as any[])[0].checked_in_at = new Date().toISOString();
+  await U.processDueUnmatchedFollowUps({ approved: true });
+  await settle();
+  check("luma fail: past the window it expires unsent", sentTo(b).length === 0 && !!W.unmatchedFollowups.find((r) => r.user_id === b.id)?.sent_at);
 }
 
 // ============================================================ 11. PROACTIVE_PAUSED

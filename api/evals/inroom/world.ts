@@ -77,6 +77,8 @@ export const W = {
   consentViolation: (_msg: string) => false,
   // The end-of-night close drafter (null: a warm default naming them).
   closeDraft: null as null | ((name: string) => string),
+  // Luma's guest list read fails (a 500) while true.
+  lumaGuestListFail: false,
   llmCalls: [] as { kind: string; prompt: string }[],
 };
 
@@ -95,6 +97,7 @@ export function reset(): void {
   W.scorer = null;
   W.consentViolation = () => false;
   W.closeDraft = null;
+  W.lumaGuestListFail = false;
 }
 
 let seq = 0;
@@ -410,15 +413,17 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
 
   // unmatched follow-up
   if (has("INSERT INTO event_unmatched_followups")) {
-    if (!W.unmatchedFollowups.some((r) => r.event_api_id === p[1] && r.user_id === p[0])) W.unmatchedFollowups.push({ user_id: p[0], event_api_id: p[1], event_name: p[2], send_at: new Date(p[3]).getTime(), sent_at: null });
-    return R([]);
+    if (W.unmatchedFollowups.some((r) => r.event_api_id === p[1] && r.user_id === p[0])) return R([]);
+    // send_at is $4, or NOW() (a walk-in's close backfilled at close time: services/eventUnmatchedFollowUp.ts).
+    W.unmatchedFollowups.push({ user_id: p[0], event_api_id: p[1], event_name: p[2], send_at: p.length > 3 ? new Date(p[3]).getTime() : now(), sent_at: null });
+    return R(/RETURNING user_id/.test(sql) ? [{ user_id: p[0] }] : []);
   }
   if (has("SELECT DISTINCT event_api_id, event_name FROM event_unmatched_followups")) {
     const seen = new Set<string>();
     return R(W.unmatchedFollowups.filter((r) => !r.sent_at && r.send_at <= now() && !seen.has(r.event_api_id) && seen.add(r.event_api_id)).map((r) => ({ event_api_id: r.event_api_id, event_name: r.event_name })));
   }
-  if (has("SELECT user_id FROM event_unmatched_followups WHERE event_api_id = $1")) {
-    return R(W.unmatchedFollowups.filter((r) => r.event_api_id === p[0] && !r.sent_at && r.send_at <= now()).map((r) => ({ user_id: r.user_id })));
+  if (has("SELECT user_id, send_at FROM event_unmatched_followups WHERE event_api_id = $1")) {
+    return R(W.unmatchedFollowups.filter((r) => r.event_api_id === p[0] && !r.sent_at && r.send_at <= now()).map((r) => ({ user_id: r.user_id, send_at: new Date(r.send_at) })));
   }
   if (has("UPDATE event_unmatched_followups SET sent_at = NOW()")) {
     for (const r of W.unmatchedFollowups) if (r.event_api_id === p[0] && (p[1] as string[]).includes(r.user_id)) r.sent_at = now();
@@ -667,6 +672,7 @@ function fakeAnthropic(init: any): Response {
 
 function luma(url: URL): Response {
   if (url.pathname === "/v1/events/guests/list") {
+    if (W.lumaGuestListFail) return json({ message: "upstream error" }, 500);
     const ev = W.events.get(url.searchParams.get("event_id") ?? "");
     if (!ev) return json({ message: "not found" }, 404);
     return json({ entries: ev.guests.map((g, i) => ({ guest: { id: `gst-${i}`, user_email: g.email, user_name: g.name, phone_number: g.phone, approval_status: g.approval_status, checked_in_at: (g as any).checked_in_at ?? null } })), has_more: false });
