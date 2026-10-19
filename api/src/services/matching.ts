@@ -483,7 +483,8 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   hidden?: Map<string, string[]>,
   opts: { askerFirstName?: string } = {},
 ): Promise<AskScore<T>[]> {
-  if (!candidates.length || (!f.asks.length && !f.goal?.text)) return [];
+  // A frame is its asks (roomFrame never makes one without): none, nothing to score.
+  if (!candidates.length || !f.asks.length) return [];
   const line = frameLine(f);
   let toScore = candidates;
   let dropped: T[] = [];
@@ -524,8 +525,8 @@ function getOpenAsksOfType(intent: unknown, type: "seeking" | "offering"): State
   return (intent as StatedIntent[]).filter((i) => isOpenAsk(i) && i?.type === type);
 }
 
-// When someone has no open ask, who is worth meeting is judged against where they are headed instead: the newest active goal is the frame
-// (services/goalJourney.ts). A goal is only ever judged against here, never searched: it is never written to an ask list.
+// Their newest active goal (services/goalJourney.ts), as it rides along with an ask in the room frame ("headed toward"). It is never
+// the frame on its own (roomFrame: no ask about people, no frame) and never searched: it is never written to an ask list.
 function getGoalFrame(intent: unknown): StatedIntent | null {
   const g = goalEntries(intent);
   return g.length ? ({ ...g[g.length - 1], type: "seeking" } as StatedIntent) : null;
