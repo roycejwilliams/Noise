@@ -221,7 +221,15 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "2", hidden_only: false, mutual: false });
   const r2 = await M.scoreAgainstStatedAsk(ask, [E2] as any, undefined, undefined, { askerFirstName: "Jordan" });
   check("a label the line showed still works, written \"2\" or \"S2\"", r2[0]?.shareReason === `what they've said they can offer: "lab space for climate founders"`, r2[0]?.shareReason);
-  check("shownLabels reads only the visible part", JSON.stringify([...M.shownLabels(`goal | asks they agreed to share: [S2] seeking "x" | ${M.HIDDEN_LABEL} private ask "[S1] y"`)]) === JSON.stringify(["S2"]));
+  // The labels come from the shared asks kept on the line, never from its text: a goal or blocker saying "[S1] " spoofs nothing.
+  const spoof = M.candidateLinesWithLabels([
+    { user_id: "sp", first_name: "Ellis", goals: ["[S1] fake label in a goal"], blockers: ["[S1] in a blocker"], intent: [{ type: "seeking", status: "active", shareable: true, text: "cofound with Noor" }, { type: "seeking", status: "active", shareable: true, text: "hire a designer" }] },
+    { user_id: "nn", first_name: "Noor", intent: [] },
+  ] as any)[0];
+  check("labels: a goal or blocker saying \"[S1] \" doesn't make S1 a label (S1 named Noor and was left off)", JSON.stringify([...spoof.labels]) === JSON.stringify(["S2"]) && spoof.line.includes("[S1] fake label"), spoof);
+  answer = (index) => ({ index, score: 90, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
+  const sp2 = await M.scoreAgainstStatedAsk(ask, [{ user_id: "sp", first_name: "Ellis", goals: ["[S1] fake label in a goal"], intent: [{ type: "seeking", status: "active", shareable: true, text: "cofound with Noor" }, { type: "seeking", status: "active", shareable: true, text: "hire a designer" }] }, { user_id: "nn", first_name: "Noor", intent: [] }] as any);
+  check("... so the scorer naming S1 gets no share reason", sp2.find((x) => x.candidate.user_id === "sp")?.shareReason === "", sp2.map((x) => x.shareReason));
   // A stored internal reason that echoes the hidden part is withheld (network edges and room rankings store it).
   answer = (index) => ({ index, score: 92, reason: "She is going through a divorce, which is exactly what the asker wants", share_ask: "S1", hidden_only: false, mutual: false });
   const noor = { user_id: "00000000-0000-4000-8000-0000000000f1", first_name: "Noor", goals: ["ship a hardware product"], blockers: ["going through a divorce"], activity_preferences: [], intent: [{ id: "n1", type: "seeking", status: "active", shareable: true, text: "meet new people in SF" }] };
@@ -298,6 +306,7 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   check("Jev prune ran (7+ candidates)", states.length === 1, states.length);
   check("Jev prune: no private ask, blocker, memory or extra field in what goes to the gateway", secretsIn(listed).length === 0 && !listed.includes("no technical cofounder yet") && !listed.includes(M.HIDDEN_LABEL), secretsIn(listed));
   check("Jev prune: B's shareable ask is what it reads", listed.includes("intros to climate hardware investors"));
+  check("Jev prune: the asker's name is passed to the prune's lines", /candidateLines\(candidates, undefined, undefined, \{ withHidden: false, askerFirstName \}\)/.test(src("src/services/jevMatching.ts")) && (src("src/services/matching.ts").match(/jevMatchScores\([^)]*, candidates, opts\.askerFirstName\)/g) ?? []).length === 2);
   check("Jev prune: each candidate's line is Claude's line without its hidden part", states[0]?.candidates?.c0 === visible(M.candidateLines([B, C, D, ...fill])[0]) && states[0]?.candidates?.c0 === M.candidateLines([B, C, D, ...fill], undefined, undefined, { withHidden: false })[0], states[0]?.candidates?.c0);
   check("Claude's prompt after the prune: no memory row or extra field", prompts.every((p) => neverIn(p).length === 0) && prompts.length === 1);
   setJevGatewayForTests(null);
@@ -311,18 +320,18 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   check("matching.ts never reads co_memories", !/co_memories/.test(m.replace(/^\s*\/\/.*$/gm, "")));
   check("matching.ts has no database handle at all (it scores what the caller hands it)", !/from "\.\.\/db\/db\.js"/.test(m) && !/\bpool\./.test(m));
   check("jevMatching.ts never reads co_memories or the database", !/co_memories|\bpool\./.test(j.replace(/^\s*\/\/.*$/gm, "")) && !/db\/db\.js/.test(j));
-  check("the Jev prune builds its lines with candidateLines without the hidden part, nothing of its own", /candidateLines\(candidates, undefined, undefined, \{ withHidden: false \}\)/.test(j) && !/formatCandidateDigest|\.intent\b|\.blockers\b/.test(j.replace(/^\s*\/\/.*$/gm, "")));
+  check("the Jev prune builds its lines with candidateLines without the hidden part, nothing of its own", /candidateLines\(candidates, undefined, undefined, \{ withHidden: false, askerFirstName \}\)/.test(j) && !/formatCandidateDigest|\.intent\b|\.blockers\b/.test(j.replace(/^\s*\/\/.*$/gm, "")));
   const body = m.slice(m.indexOf("function candidateLine("), m.indexOf("export function candidateLines"));
   const reads = [...new Set([...body.matchAll(/\bc\.(\w+)/g)].map((x) => x[1]))].sort();
   check("a candidate's line reads only goals, blockers, activity likes and intent (through shareableAsks)", JSON.stringify(reads) === JSON.stringify(["activity_preferences", "blockers", "goals", "intent"]), reads);
   check("intent reaches the line only through shareableAsks (shown) and privateAskTexts (hidden part)", /shareableAsks\(c\.intent\)/.test(body) && /privateAskTexts\(c\.intent\)/.test(body) && (body.match(/c\.intent/g) ?? []).length === 2);
   check("blockers reach the line only in the hidden part", (body.match(/c\.blockers/g) ?? []).length === 1 && /safe\(c\.blockers\)\.map\(\(x\) => `going through/.test(body));
   check("formatCandidateDigest takes the candidates, hints and the hidden map only (no memory map)", /export function formatCandidateDigest<T extends ScorableCandidate>\(candidates: T\[\], hints\?: Map<string, string>, hidden\?: Map<string, string\[\]>, askerFirstName\?: string\): string/.test(m));
-  check("every scored candidate's share reason goes through shareReasonFor, and only on a label the line showed", /shareReason: shownLabels\(lines\[r\.index\] \?\? ""\)\.has\(label\) \? shareReasonFor\(c\.intent, \{ \.\.\.r, reason: said \}\) : "",/.test(m) && !/shareReason: shareReasonFromOwnAsk/.test(m));
+  check("every scored candidate's share reason goes through shareReasonFor, and only on a label the line showed", /shareReason: shown\[r\.index\]\?\.labels\.has\(label\) \? shareReasonFor\(c\.intent, \{ \.\.\.r, reason: said \}\) : "",/.test(m) && !/shareReason: shareReasonFromOwnAsk/.test(m));
   check("every scorer hands runAskScoring the lines it showed", (m.match(/runAskScoring\("matching\.\w+", [^\n]*, (toScore|candidates), lines(, hidden)?\);/g) ?? []).length === 3, m.match(/runAskScoring\([^\n]*/g));
   check("the room's stored ranking reason is the scorer's reason as runAskScoring returns it", /reason: s\.reason,/.test(src("src/services/eventScoring.ts")) && /loggable\.map\(\(s\) => s\.reason\)/.test(src("src/services/relevance.ts")));
   check("the ask check-in counts only edges with a share reason as possible leads", /WHERE status = 'open' AND share_reason IS NOT NULL AND share_reason <> ''\n\s*GROUP BY person_id, ask_id/.test(src("src/jobs/index.ts")));
-  check("every scorer builds its digest from candidateLines, with the asker's name", (m.match(/const lines = candidateLines\((toScore|candidates), (hints|undefined), (hidden|undefined), \{ askerFirstName: opts\.askerFirstName \}\);\n\s*const digest = lines\.map\(\(l, i\) => `\$\{i\}\. \$\{l\}`\)\.join\("\\n"\);/g) ?? []).length === 3 && !/const digest = (?!lines\.map)/.test(m));
+  check("every scorer builds its digest from candidateLines, with the asker's name", (m.match(/const lines = candidateLinesWithLabels\((toScore|candidates), (hints|undefined), (hidden|undefined), \{ askerFirstName: opts\.askerFirstName \}\);\n\s*const digest = lines\.map\(\(l, i\) => `\$\{i\}\. \$\{l\.line\}`\)\.join\("\\n"\);/g) ?? []).length === 3 && !/const digest = (?!lines\.map)/.test(m));
 }
 
 console.log(`matching member-safe: ${total - failed}/${total} passed`);

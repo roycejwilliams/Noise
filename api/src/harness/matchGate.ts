@@ -11,6 +11,7 @@ import { geocodeCity, haversineMiles, SAME_METRO_MAX_MILES } from "../services/g
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
 import { isOpenAsk } from "./profileWrite.js";
+import { joinHyphens } from "./hiddenEcho.js";
 import { localToday } from "../services/eventOrder.js";
 
 export const TIER_LOOKAHEAD_DAYS: Record<1 | 2, number> = { 1: 30, 2: 14 };
@@ -492,8 +493,11 @@ export const SENSITIVE: RegExp[] = [
   /\b(?:divorc\w*|breakup|broke up|separation|custody|couples?)\b/,
   /\b(?:immigration|h ?1 ?b|green card|visa (?:status|sponsorship|issue|issues)|deport\w*|asylum|lawsuit|sued|arrest\w*|criminal)\b/,
   /\b(?:new job|job search|interviewing|quietly|secretly|while still employed|without my (?:boss|employer) knowing)\b/,
-  // Review of #245 (2026-10-18), a backstop only: health, identity, work loss, harm, relationships.
-  /\b(?:hiv|dui|gay|trans|transitioning|coming out|came out|layoffs?|laid off|let go|severance|between jobs|suicid\w*|abuse\w*|abusive|abortion|affair)\b/,
+  // Review of #245 (2026-10-18), a backstop only: health, identity, work loss, harm, relationships. Narrowed on re-review so a
+  // shared ask isn't refused for "coming out of stealth", "came out last month", "trans-pacific", "anti-abuse tooling", "let go
+  // of perfectionism" or "after layoffs at big tech". Read with hyphens joined (hiddenEcho.ts joinHyphens), so a prefix is
+  // never the word. "gay" and "severance" stay as they are ("when in doubt, don't share"), Royce's call.
+  /\b(?:hiv|dui|gay|trans|transgender|transitioning|(?:coming|came) out (?:as|to)|laid off|(?:got|was|been|being|get|getting) let go|severance|between jobs|suicid\w*|abus(?:e|ed|es|ing|ive)|abortion|affair)\b/,
 ];
 
 
@@ -552,7 +556,7 @@ export function checkShareReason(f: NetworkFacts): GateCheck {
   const quoted = reason.replace(TEMPLATE_PREFIX, "").replace(/^"|"$/g, "").trim();
   if (!f.candidateStatedAsks.some((a) => norm(a) === norm(quoted))) return { name, pass: false, reason: "not an ask they marked shareable" };
   // The backstop: a private topic in an ask they marked anyway.
-  const n = norm(reason);
+  const n = norm(joinHyphens(reason));
   const sensitive = SENSITIVE.map((re) => n.match(re)?.[0]).find(Boolean);
   if (sensitive) return { name, pass: false, reason: `mentions "${sensitive}", which is too personal to share in an intro` };
 

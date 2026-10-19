@@ -107,7 +107,7 @@
 //     other side's answer or outcome.
 //   - Value lines: the line for one side is stored under that side and drafted only into that side's text.
 import { anthropic } from "@ai-sdk/anthropic";
-import { checkNoHiddenEcho } from "../harness/hiddenEcho.js";
+import { checkNoHiddenEcho, joinHyphens } from "../harness/hiddenEcho.js";
 import { generateText } from "ai";
 import pool from "../db/db.js";
 import { MODELS } from "../models.js";
@@ -593,7 +593,7 @@ export function checkValueLines(j: ValueJudgment | null, x: ValueSide, y: ValueS
     // What the other member keeps private or is going through: never echoed, even in other words that share its distinctive ones.
     checks.push(checkNoHiddenEcho(line, other.hiddenTexts ?? [], [...other.shared, ...reader.ownAsks.map((a) => a.text), ...reader.goals], allow, `hidden_${label}`, sensitive));
     checks.push(checkNoPrivateQuote(line, reader.privateAsks, reader.shared, `own_private_ask_${label}`, allow));
-    const n = ` ${norm(line)} `;
+    const n = ` ${norm(joinHyphens(line))} `;
     const hit = sensitive.map((re) => n.match(re)?.[0]).find(Boolean);
     if (hit) {
       const theirs = other.privateTexts.some((t) => norm(t).includes(hit));

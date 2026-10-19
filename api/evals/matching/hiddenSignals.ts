@@ -87,13 +87,22 @@ const BLOCKER = "my divorce is dragging on";
 {
   const words: [string, string][] = [
     ["He's HIV positive", "recently diagnosed HIV positive"], ["She got a DUI", "dealing with a DUI charge"], ["He just came out as gay", "coming out to my family as gay"],
-    ["She's transitioning", "I'm trans and transitioning"], ["He's trans", "I'm trans"], ["Her layoff hit hard", "after the layoffs at my company"], ["He was let go", "I was let go in May"],
+    ["She's transitioning", "I'm trans and transitioning"], ["He's trans", "I'm trans"], ["She got laid off", "I was laid off in March"], ["He was let go", "I was let go in May"],
     ["Living on severance", "living on my severance"], ["She's between jobs", "between jobs right now"], ["He lost a friend to suicide", "my brother's suicide"],
     ["She left an abusive marriage", "getting out of an abusive marriage"], ["Her abortion", "I had an abortion"], ["His affair", "my husband's affair"],
   ];
   for (const [text, hidden] of words) check(`sensitive: "${text}" is refused against "${hidden}"`, !!E.hiddenEcho(text, [hidden], [], [], G.SENSITIVE));
-  const f = { shareReason: `what they've said they're looking for: "a new start after the layoffs"`, candidateStatedAsks: ["a new start after the layoffs"], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true };
+  const reasonFacts = (a: string) => ({ shareReason: `what they've said they're looking for: "${a}"`, candidateStatedAsks: [a], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true });
+  const f = reasonFacts("a fresh start after I was let go");
   check("sensitive: a share reason carrying one of them is refused even when they shared it", !G.checkShareReason(f).pass, G.checkShareReason(f));
+  // Re-review of #245: shared asks that only look like those words must still pass (a refusal here is a lost connection).
+  for (const a of ["investors for a startup coming out of stealth", "our app came out last month, want beta users", "trans-pacific shipping founders", "an engineer for anti-abuse tooling", "let go of perfectionism and ship", "hiring after layoffs at big tech", "a podcast guest on current affairs"]) {
+    check(`sensitive: the shared ask "${a}" is not refused`, G.checkShareReason(reasonFacts(a)).pass, G.checkShareReason(reasonFacts(a)));
+    check(`sensitive: "${a}" isn't read as a private topic in a draft either`, E.hiddenEcho(a, ["something else entirely private"], [], [], G.SENSITIVE) === null);
+  }
+  // Left as they are, for Royce ("when in doubt, don't share"): these shared asks are still refused.
+  check("sensitive (Royce's call): \"a gay founders dinner\" and \"a severance lawyer\" are still refused as share reasons", !G.checkShareReason(reasonFacts("a gay founders dinner")).pass && !G.checkShareReason(reasonFacts("a severance lawyer")).pass);
+  check("sensitive: the narrowed words still catch the private ones", ["he came out to his parents", "she was let go in May", "I was laid off", "abused as a kid", "she is trans"].every((t) => !!E.hiddenEcho(t, [t], [], [], G.SENSITIVE)));
 }
 
 // ---------------------------------------------------------------- 2. the echo check itself (pure)
