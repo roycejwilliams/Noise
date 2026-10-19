@@ -67,10 +67,15 @@ export function followUpStillWaiting(o: { waitedAt: string | null | undefined; r
   if (heldHours >= MOOD_HOLD_CAP_HOURS) return { state: "released_cap", hold: false, heldHours };
   return { state: "held", hold: true, heldHours };
 }
-// Pure: when a waiting follow-up looks again: the okay window, never past the cap after the skip.
-export function followUpWakeHours(o: { waitedAt: string; now: Date }): number {
+// Pure: when a waiting follow-up looks again: the okay window, never past the cap after the skip, and never past the last moment of a
+// window that ends (until: the pre-arrival text's hour before the start; atWindowEnd's 10 minutes before it), where it goes as it
+// always has. Already at that moment: now, no extra wait (review of #266).
+export function followUpWakeHours(o: { waitedAt: string; now: Date; until?: string | null }): number {
   const left = MOOD_HOLD_CAP_HOURS - (o.now.getTime() - Date.parse(o.waitedAt)) / 3_600_000;
-  return Math.max(FOLLOWUP_LIMITS.minHours, Math.min(OKAY_AFTER_HOURS, Math.ceil(left)));
+  const hours = Math.max(FOLLOWUP_LIMITS.minHours, Math.min(OKAY_AFTER_HOURS, Math.ceil(left)));
+  if (!o.until) return hours;
+  const toLastMoment = (Date.parse(o.until) - 10 * 60_000 - o.now.getTime()) / 3_600_000;
+  return Math.max(0, Math.min(hours, toLastMoment));
 }
 // Model-facing: the decider's look after a wait (never a line for the member).
 export const FOLLOWUP_GENTLE = "This waited for a hard stretch of theirs: if you check in, keep it soft and easy to pass on, never a push.";
@@ -320,10 +325,12 @@ async function followUpMoodRead(userId: string, now: Date): Promise<MoodHold> {
   const [e, last] = await Promise.all([E.getEmotionalContext(userId, now).catch(() => null), P.lastInboundAt(userId).catch(() => null)]);
   return moodHold(e, { now, lastInboundAt: last });
 }
-// The wait's sleep: the next look in the okay window, never past the cap; the plan line stays as it was, and the wake isn't spent.
+// The wait's sleep: the next look in the okay window, never past the cap or its window's last moment; the plan line stays as it was,
+// and the wake isn't spent.
 async function sleepThroughHardDay(userId: string, task: CoTask, waitedAt: string, now: Date): Promise<void> {
   const { scheduleTaskAt, unspendWake } = await import("./coTasks.js");
-  await scheduleTaskAt(userId, task.id, new Date(now.getTime() + followUpWakeHours({ waitedAt, now }) * 3_600_000), task.planNext ?? "");
+  const until = (task.followup as Stored | null)?.payload?.until ?? null;
+  await scheduleTaskAt(userId, task.id, new Date(now.getTime() + followUpWakeHours({ waitedAt, now, until }) * 3_600_000), task.planNext ?? "");
   await unspendWake(userId, task.id);
 }
 

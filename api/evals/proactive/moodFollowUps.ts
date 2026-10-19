@@ -46,6 +46,12 @@ const CALM = read([], null);
   check("not waiting: nothing", F.followUpStillWaiting({ waitedAt: null, read: HELD, now: NOW }) === null);
   const hours = F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW });
   check("it looks again within the okay window, never past the cap", hours <= MH.OKAY_AFTER_HOURS && hours >= F.FOLLOWUP_LIMITS.minHours && F.followUpWakeHours({ waitedAt: ago(46).toISOString(), now: NOW }) <= 2);
+  // A window that ends (review of #266): a skip at 0h with the window ending at +2h slept 6h and checked in after the window.
+  const inH = (h: number) => new Date(NOW.getTime() + h * HOUR).toISOString();
+  const w0 = F.followUpWakeHours({ waitedAt: NOW.toISOString(), now: NOW, until: inH(2) });
+  check("a window ending in 2h: a skip at 0h wakes at its last moment (10 minutes before), never past it", Math.abs(w0 - (2 - 10 / 60)) < 1e-9, w0);
+  check("its last moment already here or past: it looks now, no extra wait", F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: inH(5 / 60) }) === 0 && F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: ago(1).toISOString() }) === 0);
+  check("a window far off, or none: the okay window as before", F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: inH(72) }) === hours && F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: null }) === hours);
 }
 
 // ================================================================ 3. the decider is told: tone, never a reason to skip
@@ -84,6 +90,9 @@ const CALM = read([], null);
   const e = await run(() => F.followUpWaitGate("u-jordan", task({ moodWaitAt: ago(1).toISOString() }), HELD, NOW));
   const g = await run(() => F.followUpWaitGate("u-jordan", task({ moodWaitAt: ago(1).toISOString() }), OKAY, NOW));
   const h = await run(() => F.followUpWaitGate("u-jordan", task({ moodWaitAt: ago(49).toISOString() }), HELD, NOW));
+  const untilAt = new Date(NOW.getTime() + 2 * HOUR);
+  const win = await run(() => F.handleFollowUpSkip("u-jordan", task({ payload: { until: untilAt.toISOString() } }), "no_longer_matters", null, HELD, NOW));
+  const winGate = await run(() => F.followUpWaitGate("u-jordan", task({ moodWaitAt: ago(1).toISOString(), payload: { until: untilAt.toISOString() } }), HELD, NOW));
   console.log = log; console.error = err;
   (pool as any).query = realQuery;
   const stamped = (w: { sql: string }[]) => w.some((x) => /'\{moodWaitAt\}'/.test(x.sql) && !/SET status/.test(x.sql));
@@ -96,6 +105,11 @@ const CALM = read([], null);
   check("waiting at the next look: it sleeps again with no model call, its look not spent", e.r === true && unspent(e.w) && !stamped(e.w));
   check("released when they're okay: the decider looks again", g.r === false);
   check("released at the cap after the skip even if still struggling: the decider looks again", h.r === false);
+  const wokenAt = (w: { sql: string; params: any[] }[]) => w.filter((x) => /SET next_check_at = \$3, plan_next = \$4/.test(x.sql)).map((x) => new Date(x.params[2]).getTime());
+  const lastMoment = untilAt.getTime() - 10 * 60_000;
+  check("a skip inside a window that ends: it waits, waking by the window's last moment, where it goes", win.r === "waits" && wokenAt(win.w).length === 1 && wokenAt(win.w)[0] <= lastMoment && wokenAt(win.w)[0] > NOW.getTime(), wokenAt(win.w).map((t) => (t - NOW.getTime()) / HOUR));
+  check("still waiting, inside that window: it sleeps again only to its last moment", winGate.r === true && wokenAt(winGate.w).every((t) => t <= lastMoment) && wokenAt(winGate.w).length === 1);
+  check("runFollowUpTurn: the window's last moment goes before any mood wait", src("services/followUps.ts").indexOf("if (atWindowEnd(new Date(), until)) {") > 0 && src("services/followUps.ts").indexOf("if (atWindowEnd(new Date(), until)) {") < src("services/followUps.ts").indexOf("await followUpWaitGate(userId, task, mood)"));
   const lines = printed.filter((l) => l.startsWith("mood hold:"));
   check("the wait is logged with the rule and the kind", lines.some((l) => /rule=followup_skip_wait kind=followup:companion ref=u-jordan:71 held/.test(l)), lines);
   check("logs carry no member text", lines.length > 0 && lines.every((l) => !l.includes("hospital") && !l.includes("pitch") && !l.includes("Jordan")), lines);
