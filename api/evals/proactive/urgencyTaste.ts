@@ -40,6 +40,7 @@ const sendRec = (type: string, iso: string, exempt = false) => ({ type, targetKe
   // At 7pm the next slot (10pm) is past their hours: tomorrow 8am, after Fleet Week ends.
   const late = P.expiringFind([debrief, fleet, pitch], { now: at("2026-10-10T02:00:00Z"), zone: SF, sends: [] });
   check("at 7pm, Fleet Week on its last day goes ahead of the debrief", late?.pick.id === "278", late);
+  check("an ask to an event guest can wait like any text Cue starts (2026-10-19, review of #254): Fleet Week on its last day goes ahead of it", P.expiringFind([cand("x", "ask_solicitation"), fleet], { now: at("2026-10-10T02:00:00Z"), zone: SF, sends: [] })?.pick.id === "278");
   check("its end is before the next realistic slot (tomorrow 8am)", !!late && late.endsAt.getTime() <= late.nextSlot.getTime() && late.nextSlot.toISOString() === "2026-10-10T15:00:00.000Z");
   // A counted find (from their profile) whose lane already used today's slot: its next slot is tomorrow, at 2:45.
   const profileFind = withPayload(cand("281", "event_offer", { expiresAt: "2026-10-10T06:59:59Z" }), fleetPayload({ fromProfile: true }));
@@ -63,7 +64,7 @@ const sendRec = (type: string, iso: string, exempt = false) => ({ type, targetKe
   check("a find with days left doesn't jump the queue", P.expiringFind([debrief, picked("f", { lastDay: "2026-10-12" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("a find ending tomorrow night doesn't jump (tomorrow 8am is still a slot for it)", P.expiringFind([debrief, picked("f", { lastDay: "2026-10-10" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("a find with no end date doesn't jump", P.expiringFind([debrief, picked("f", {})], { now: SEVEN, zone: SF, sends: [] }) === null);
-  for (const t of ["post_call", "pre_arrival", "event_brief", "brief_name_ask", "ask_solicitation"]) check(`never past a ${t}`, P.expiringFind([cand("x", t), picked("f", { lastDay: "2026-10-09" })], { now: SEVEN, zone: SF, sends: [] }) === null);
+  for (const t of ["post_call", "pre_arrival", "event_brief", "brief_name_ask"]) check(`never past a ${t}`, P.expiringFind([cand("x", t), picked("f", { lastDay: "2026-10-09" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("never past something else that ends first", P.expiringFind([cand("w", "window_followup", { expiresAt: "2026-10-10T04:00:00Z" }), picked("f", { lastDay: "2026-10-09" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("a find the daily picker didn't choose doesn't jump (taste was never weighed)", P.expiringFind([debrief, withPayload(cand("f", "event_offer"), { lastDay: "2026-10-09", askId: "a" })], { now: SEVEN, zone: SF, sends: [] }) === null);
   check("only finds ready: nothing to jump (Cue picks, the bundle forms)", P.expiringFind([picked("f", { lastDay: "2026-10-09" }), picked("g", {})], { now: SEVEN, zone: SF, sends: [] }) === null);

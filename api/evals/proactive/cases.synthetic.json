@@ -521,7 +521,7 @@
     },
     {
       "id": "s18",
-      "about": "a struggling guest at a live event still gets asked what they want from it; their ask check-in waits (2026-09-18: holding the question cut them out of in-room matching)",
+      "about": "a struggling guest's event question waits like any text Cue starts, and so does their ask check-in (2026-10-19, review of #254: the 2026-09-18 exemption is gone; with #253 the wait is capped)",
       "timezone": "America/Los_Angeles",
       "start": "2026-09-18T16:00:00Z",
       "end": "2026-09-19T06:00:00Z",
@@ -540,9 +540,9 @@
         }
       ],
       "expect": {
-        "sends": 1,
-        "firstType": "ask_solicitation",
+        "sends": 0,
         "neverTypes": [
+          "ask_solicitation",
           "ask_checkin"
         ]
       }

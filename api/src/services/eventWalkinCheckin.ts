@@ -4,6 +4,7 @@ import { listCalendarEvents } from "./luma.js";
 import { captureIntent } from "./profileExtraction.js";
 import { getActiveSeekingAsk } from "./matching.js";
 import type { ScorableGuest } from "./eventScoring.js";
+import { solicitationKey } from "../agent/eventAskSolicitation.js";
 
 // Day-of QR check-in flow (Royce, 2026-09-10) — a venue QR pre-fills a text
 // like "I'm currently at a Co sponsored event — SF Founders Meetup", and
@@ -114,6 +115,44 @@ export async function hasActiveAsk(personId: string): Promise<boolean> {
   const { rows } = await pool.query(`SELECT intent FROM co_profiles WHERE user_id = $1`, [personId]);
   if (!rows.length) return false;
   return getActiveSeekingAsk(rows[0].intent) !== null;
+}
+
+// One ask per member per event (decided 2026-10-19 on Royce's delegation, review of #254): the walk-in check-in asks "what are you
+// hoping to find here" only when they have no ask and the scoring pass's ask for this event (ask_solicitation) hasn't gone out. When
+// it asks, a still-pending ask for this event is dropped, and the event is marked asked (event_ask_solicitations), so the scoring pass
+// doesn't queue one after it (eventScoring.ts wasRecentlySolicited).
+export type WalkinAskDeps = {
+  hasAsk: (personId: string) => Promise<boolean>;
+  solicitationSent: (personId: string, key: string) => Promise<boolean>;
+  dropPending: (personId: string, key: string) => Promise<void>;
+  markAsked: (eventApiId: string, personId: string) => Promise<void>;
+};
+export const realWalkinAskDeps: WalkinAskDeps = {
+  hasAsk: hasActiveAsk,
+  solicitationSent: async (personId, key) =>
+    (await pool.query(`SELECT 1 FROM proactive_candidates WHERE user_id = $1 AND target_key = $2 AND status = 'sent' LIMIT 1`, [personId, key])).rows.length > 0,
+  dropPending: async (personId, key) => {
+    await pool.query(
+      `UPDATE proactive_candidates SET status = 'skipped', skip_reason = 'asked at the walk-in check-in', decided_at = NOW(), updated_at = NOW()
+       WHERE user_id = $1 AND target_key = $2 AND status = 'pending'`,
+      [personId, key],
+    );
+  },
+  markAsked: async (eventApiId, personId) => {
+    await pool.query(
+      `INSERT INTO event_ask_solicitations (event_id, person_id, solicited_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (event_id, person_id) DO UPDATE SET solicited_at = NOW()`,
+      [eventApiId, personId],
+    );
+  },
+};
+export async function walkinAskDue(eventName: string, personId: string, deps: WalkinAskDeps = realWalkinAskDeps): Promise<boolean> {
+  if (await deps.hasAsk(personId)) return false;
+  return !(await deps.solicitationSent(personId, solicitationKey(eventName)));
+}
+export async function noteWalkinAsked(eventApiId: string, eventName: string, personId: string, deps: WalkinAskDeps = realWalkinAskDeps): Promise<void> {
+  await Promise.all([deps.dropPending(personId, solicitationKey(eventName)), deps.markAsked(eventApiId, personId)]);
 }
 
 // Routes the check-in ask through captureIntent (profileExtraction.ts) —

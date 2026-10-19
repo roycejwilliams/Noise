@@ -72,8 +72,8 @@ const failedOf = (state: any, c: any) => evalFor(state, c).checks.filter((k: any
 const dormant = st([send(100, "event_offer"), send(80, "post_call")], days(20));
 check("a safety follow-up is not held by the engagement pace or the longer pause", !failedOf(dormant, cand("companion", { safetyFollowUp: true })).some((n: string) => ["engagement_pace", "weekly_cap"].includes(n)));
 check("the same dormant member's ordinary check-in is held by the pace", failedOf(dormant, cand("companion")).includes("engagement_pace"));
-check("an ask to an event guest is not held by the pace", !failedOf(dormant, cand("ask_solicitation")).includes("engagement_pace"));
-check("only those two are exempt", pacedByEngagement(cand("companion")) === true && pacedByEngagement(cand("event_offer", { askId: "profile", fromProfile: true })) === true && pacedByEngagement(cand("ask_solicitation")) === false && pacedByEngagement(cand("companion", { safetyFollowUp: true })) === false);
+check("an ask to an event guest is held by the pace like any text Cue starts (2026-10-19, review of #254)", failedOf(dormant, cand("ask_solicitation")).includes("engagement_pace"));
+check("only the safety follow-up is exempt", pacedByEngagement(cand("companion")) === true && pacedByEngagement(cand("event_offer", { askId: "profile", fromProfile: true })) === true && pacedByEngagement(cand("ask_solicitation")) === true && pacedByEngagement(cand("companion", { safetyFollowUp: true })) === false);
 check("the safety follow-up keeps the OLD pause (72h at most), not a week", (() => {
   const state = st([send(100, "post_call"), send(90, "post_call"), send(80, "post_call"), send(75, "post_call")], days(40));
   return !failedOf(state, cand("companion", { safetyFollowUp: true })).includes("unanswered_pause") && failedOf(state, cand("companion")).includes("unanswered_pause");

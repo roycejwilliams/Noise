@@ -102,7 +102,7 @@ check("a non-numeric timestamp is rejected, not treated as valid", !lumaTimestam
 const hardDay = { now: new Date("2026-09-18T20:00:00Z"), sends: [] as SendRecord[], lastInboundAt: null, needsCare: true };
 const cand = (type: Candidate["type"]): Candidate => ({ id: "1", userId: "u", type, targetKey: `${type}:x`, topicKey: `${type}:x`, summary: "", priority: 50, dueAt: new Date("2026-09-18T19:00:00Z"), expiresAt: null, payload: {}, attempts: 0, createdAt: new Date("2026-09-18T19:00:00Z") });
 const heldFor = (type: Candidate["type"]) => candidateChecks(cand(type), hardDay).some((c) => c.name === "emotional_timing" && !c.pass);
-check("a struggling guest's event question (ask_solicitation) is not held", !heldFor("ask_solicitation"));
+check("a struggling guest's event question (ask_solicitation) waits like any text Cue starts (2026-10-19, review of #254)", heldFor("ask_solicitation"));
 check("a struggling member's event offer is not held", !heldFor("event_offer"));
 check("a struggling member's ask check-in still waits", heldFor("ask_checkin"));
 check("a struggling member's product update still waits", heldFor("product_update"));
