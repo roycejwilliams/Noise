@@ -243,15 +243,27 @@ export async function holdRecapForMood(userId: string, followUpId: string, now =
 // The held recap, once the hold lets go: the facts re-checked (once per call, the fortnight cooldown, a waiting offer, a document since
 // the call, the confirmation, a commitment), then one or two gentle lines offering it, tied to that call. Night defers it (never
 // dropped for the hour); any other fact that no longer holds ends it. Whether the call settled anything is Co's read: SKIP if not.
-// Not wired yet: HELD_RECAP_TASK waits on Royce reading it (services/moodHold.ts HELD_RECAP_APPROVED). Until then the dispatch never
-// picks a released held recap (awaiting_prompt_approval), and this draft, if reached, reads nothing, calls no model and defers.
-export const HELD_RECAP_TASK = "You already sent your follow-up after this call. The offer to put what they settled on a one-page recap waited, because they were having a hard time then. Only if they settled a decision or a plan in their own words on that call: write one or two short, gentle lines that name the call plainly (the day, and what it was about in a few words of theirs) and offer once to put what they decided on a one-page recap. Easy to pass on, no pressure. Never write the recap itself, never say the offer waited or why, and never bring up anything else from the call. If they settled nothing on that call, return SKIP.";
+// Approved by Royce, 2026-10-19, with his SKIP addition (services/moodHold.ts HELD_RECAP_APPROVED). The draft sees their texts since the
+// call ended (their_texts_since_the_call), so it can tell a recap offer would land on top of a new conversation.
+export const HELD_RECAP_TASK = "You already sent your follow-up after this call. The offer to put what they settled on a one-page recap waited, because they were having a hard time then. Only if they settled a decision or a plan in their own words on that call: write one or two short, gentle lines that name the call plainly (the day, and what it was about in a few words of theirs) and offer once to put what they decided on a one-page recap. Easy to pass on, no pressure. Never write the recap itself, never say the offer waited or why, and never bring up anything else from the call. If they settled nothing on that call, return SKIP. If the member has since texted about something else, SKIP. A recap offer landing on top of a new conversation would feel off.";
+
+// Pure: their own texts since the call ended (when its transcript arrived), stamped in their zone, for the held recap's draft. Theirs
+// only, never Cue's lines or a call; already through the member-safe and forget guards of the shared layer (services/memberKnowledge.ts).
+export const NO_TEXTS_SINCE_CALL = "none: they haven't texted since the call";
+export function textsSinceCall(exchanges: Pick<MemberKnowledge, "exchanges">["exchanges"], callAt: Date, zone: string | null | undefined): string[] {
+  return exchanges
+    .filter((x) => x.from === "member" && !x.call && Date.parse(x.verifiedAt) > callAt.getTime())
+    .slice(-8)
+    .map((x) => `${localStamp(x.verifiedAt, zone)}: ${x.text.replace(/\s*\n+\s*/g, " ").slice(0, 220)}`);
+}
 export async function draftHeldRecap(userId: string, firstName: string, followUpId: string, now = new Date(), approved: boolean = HELD_RECAP_APPROVED): Promise<DraftResult> {
   if (!approved) return { defer: new Date(now.getTime() + 24 * 3_600_000), reason: "the held recap's prompt is waiting on Royce's approval" };
   const f = await recapCallFacts(userId, followUpId);
   if (!f) return { skip: "the call's record is gone" };
   const [{ loadOfferHistory, postCallRecapAllowed }, { localOf }] = await Promise.all([import("../services/documentOffer.js"), import("../services/memberTime.js")]);
-  const [history, k] = await Promise.all([loadOfferHistory(userId), memberKnowledge(userId, { now, include: ["delivered"] })]);
+  // Their texts since the call: the window reaches back to the call (at least a day), so none is missed.
+  const sinceDays = Math.max(1, Math.ceil((now.getTime() - f.callAt.getTime()) / 86_400_000) + 1);
+  const [history, k] = await Promise.all([loadOfferHistory(userId), memberKnowledge(userId, { now, include: ["delivered", "exchanges"], exchanges: 40, exchangeDays: sinceDays })]);
   // The dispatch already let the mood hold go (recap_mood_wait): only the facts are re-checked here.
   const r = postCallRecapAllowed({
     gate: { now, needsCare: false, heavyNow: false, history },
@@ -262,19 +274,22 @@ export async function draftHeldRecap(userId: string, firstName: string, followUp
     callKey: recapKey(followUpId),
   });
   if (!r.ok) return r.why === "it's night for them" ? { defer: nextLocalHour(now, k.identity.zone, 9), reason: r.why } : { skip: `the recap no longer fits: ${r.why}` };
+  const since = textsSinceCall(k.exchanges, f.callAt, k.identity.zone);
   const text = await draftProactive({
     functionId: "jobs.postCallFollowUp.heldRecap",
     firstName,
     facts: {
       call_transcript: f.transcript.slice(-6000),
       the_call_was_on: localOf(f.callAt, k.identity.zone).toFormat("cccc, LLL d"),
+      // Royce's SKIP rule reads this: a recap offer never lands on top of a new conversation.
+      their_texts_since_the_call: since.length ? since : NO_TEXTS_SINCE_CALL,
       may_offer_a_one_page_recap: RECAP_OFFER_RULE,
       recap_offer_tone: RECAP_GENTLE,
     },
     maxSentences: 2,
     task: HELD_RECAP_TASK,
   });
-  if (!text) return { skip: "model chose SKIP: nothing settled on the call" };
+  if (!text) return { skip: "model chose SKIP: nothing settled on the call, or they have moved on to something else" };
   return { messages: [text], text, rules: { maxSentences: 2, maxChars: 280 } };
 }
 
