@@ -93,15 +93,25 @@ const BLOCKER = "my divorce is dragging on";
   ];
   for (const [text, hidden] of words) check(`sensitive: "${text}" is refused against "${hidden}"`, !!E.hiddenEcho(text, [hidden], [], [], G.SENSITIVE));
   const reasonFacts = (a: string) => ({ shareReason: `what they've said they're looking for: "${a}"`, candidateStatedAsks: [a], candidatePrivateTexts: [], alreadySuggestedOrDeclined: false, askerActive: true, candidateActive: true });
-  const f = reasonFacts("a fresh start after I was let go");
-  check("sensitive: a share reason carrying one of them is refused even when they shared it", !G.checkShareReason(f).pass, G.checkShareReason(f));
+  // Decided 2026-10-19: a member's own shareable ask, quoted word for word, is consented, even with one of these words.
+  check("sensitive: their own shareable ask, word for word, may carry one of the new words (consented)", G.checkShareReason(reasonFacts("a fresh start after I was let go")).pass, G.checkShareReason(reasonFacts("a fresh start after I was let go")));
+  check("sensitive: the older words stay refused even in their own ask (the 2026-09-15 rule)", !G.checkShareReason(reasonFacts("help with my anxiety before pitches")).pass && !G.checkShareReason(reasonFacts("a therapist who works with founders")).pass);
+  check("sensitive: a non-verbatim reason with one of the new words is refused", !G.checkShareReason({ ...reasonFacts("a fresh start"), shareReason: `what they've said they're looking for: "a fresh start after I was let go"` }).pass);
   // Re-review of #245: shared asks that only look like those words must still pass (a refusal here is a lost connection).
   for (const a of ["investors for a startup coming out of stealth", "our app came out last month, want beta users", "trans-pacific shipping founders", "an engineer for anti-abuse tooling", "let go of perfectionism and ship", "hiring after layoffs at big tech", "a podcast guest on current affairs"]) {
     check(`sensitive: the shared ask "${a}" is not refused`, G.checkShareReason(reasonFacts(a)).pass, G.checkShareReason(reasonFacts(a)));
     check(`sensitive: "${a}" isn't read as a private topic in a draft either`, E.hiddenEcho(a, ["something else entirely private"], [], [], G.SENSITIVE) === null);
   }
-  // Left as they are, for Royce ("when in doubt, don't share"): these shared asks are still refused.
-  check("sensitive (Royce's call): \"a gay founders dinner\" and \"a severance lawyer\" are still refused as share reasons", !G.checkShareReason(reasonFacts("a gay founders dinner")).pass && !G.checkShareReason(reasonFacts("a severance lawyer")).pass);
+  // The narrowed forms and the hyphen rule matter for echoes too: hidden texts that really are sensitive, drafts that only look it.
+  check("sensitive (echo): \"coming out of stealth\" doesn't echo \"coming out to my parents\"", E.hiddenEcho("her startup is coming out of stealth", ["I'm coming out to my parents soon"], [], [], G.SENSITIVE) === null);
+  check("sensitive (echo): \"let go of perfectionism\" doesn't echo \"I was let go\"", E.hiddenEcho("she said to let go of perfectionism", ["I was let go in May"], [], [], G.SENSITIVE) === null);
+  check("sensitive (echo): \"trans-pacific\" doesn't echo \"I'm trans\" (a prefix is never the word)", E.hiddenEcho("trans-pacific shipping founders", ["I'm trans and transitioning"], [], [], G.SENSITIVE) === null);
+  check("sensitive (echo): the older words still read through a hyphen (\"anti-anxiety\" carries anxiety)", !!E.hiddenEcho("she's on anti-anxiety meds", ["dealing with anxiety"], [], [], G.SENSITIVE));
+  check("sensitive (share reason): the older words still read through a hyphen in their own ask (\"anti-depressants\")", !G.checkShareReason(reasonFacts("someone to talk anti-depressants with")).pass);
+  // Decided 2026-10-19: their own shareable ask is consented.
+  check("sensitive: \"a gay founders dinner\" and \"a severance lawyer\" as the member's own shareable ask are allowed", G.checkShareReason(reasonFacts("a gay founders dinner")).pass && G.checkShareReason(reasonFacts("a severance lawyer")).pass);
+  check("sensitive: the same words only in someone's hidden part are still refused in a text another member reads", !!E.hiddenEcho("Noor is going to a gay founders dinner", ["a gay founders dinner"], [], ["Noor"], G.SENSITIVE) && !!E.hiddenEcho("He needs a severance lawyer", ["a severance lawyer"], [], [], G.SENSITIVE));
+  check("sensitive: ... and when it is their shared ask, a draft quoting it passes the echo check", E.hiddenEcho("Noor is hosting a gay founders dinner", ["coming out to my family"], ["a gay founders dinner"], ["Noor"], G.SENSITIVE) === null);
   check("sensitive: the narrowed words still catch the private ones", ["he came out to his parents", "she was let go in May", "I was laid off", "abused as a kid", "she is trans"].every((t) => !!E.hiddenEcho(t, [t], [], [], G.SENSITIVE)));
 }
 

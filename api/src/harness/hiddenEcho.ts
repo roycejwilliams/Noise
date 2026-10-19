@@ -16,6 +16,11 @@ const fold = (s: string) =>
 // Hyphenated words joined ("trans-pacific" -> "transpacific", "anti-abuse" -> "antiabuse"), for the sensitive-topic test only: a
 // prefix is never read as the word.
 export const joinHyphens = (s: string) => String(s ?? "").replace(/(\p{L})[-\u2010\u2011](?=\p{L})/gu, "$1");
+// The sensitive patterns read with hyphens joined (matchGate.ts marks its 2026-10-18 words). The older ones are read as before,
+// so "anti-anxiety" still carries "anxiety" for them.
+export const PREFIX_SAFE = new WeakSet<RegExp>();
+// Pure: the text a sensitive pattern reads, plain (folded) or with hyphens joined.
+export const sensitiveForm = (re: RegExp, plain: string, joined: string) => (PREFIX_SAFE.has(re) ? joined : plain);
 const words = (s: string) => fold(s).split(" ").filter((w) => w && !STOP.has(w));
 // "move", "moving" and "moved" are one word; "divorce" and "divorced" too.
 const stem = (w: string) => w.replace(/ies$/, "y").replace(/(?:ing|edly|ed|ly|es|s)$/, "").replace(/e$/, "");
@@ -45,12 +50,14 @@ export function hiddenEcho(text: string, hidden: string[], allowedTexts: string[
   let tj = ` ${fold(joinHyphens(text))} `;
   for (const a of allow.map((x) => fold(joinHyphens(x))).filter((x) => x.length > 1).sort((x, y) => y.length - x.length)) tj = tj.split(` ${a} `).join(" zzsep ");
   const allowedJoined = allowedTexts.map((x) => ` ${fold(joinHyphens(x))} `);
+  const allowedPlain = allowedTexts.map((x) => ` ${fold(x)} `);
   for (const h of hidden.map(String).filter((x) => x.trim())) {
-    const hn = ` ${fold(joinHyphens(h))} `;
+    const hn = ` ${fold(h)} `;
+    const hj = ` ${fold(joinHyphens(h))} `;
     for (const re of sensitive) {
       // Quoted as the text has it: the redraft feedback names only words the draft itself already carried.
-      const said = re.test(hn) ? tj.match(re)?.[0] : undefined;
-      if (said && !allowedJoined.some((x) => re.test(x))) return `touches something they keep private ("${said.trim()}")`;
+      const said = re.test(sensitiveForm(re, hn, hj)) ? sensitiveForm(re, t, tj).match(re)?.[0] : undefined;
+      if (said && !(PREFIX_SAFE.has(re) ? allowedJoined : allowedPlain).some((x) => re.test(x))) return `touches something they keep private ("${said.trim()}")`;
     }
     for (const sh of shingles(words(h), 3)) if (!sh.includes("zzsep") && textShingles.has(sh) && !allowedShingles.has(sh)) return `quotes something they keep private ("${sh}")`;
     const distinct = [...stemsOf(h)].filter((w) => !allowedStems.has(w));

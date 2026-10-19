@@ -87,7 +87,7 @@ const { default: pool } = await import("../../src/db/db.js");
 // ---------------------------------------------------------------- the fake scorer
 const prompts: string[] = [];
 // What the fake scorer answers for each listed candidate; a test may replace it.
-let answer = (index: number): Record<string, unknown> => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
+let answer = (index: number, _line?: string): Record<string, unknown> => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
 const promptOf = (init: any): string => {
   try {
     const b = JSON.parse(init?.body ?? "{}");
@@ -102,7 +102,8 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const prompt = promptOf(init);
   prompts.push(prompt);
   const n = (digestOf(prompt).match(/^\d+\. /gm) ?? []).length;
-  const results = Array.from({ length: n }, (_, index) => answer(index));
+  const shownLines = linesOf(prompt);
+  const results = Array.from({ length: n }, (_, index) => answer(index, shownLines[index] ?? ""));
   const body = { id: "msg_stub", type: "message", role: "assistant", model: "stub", content: [{ type: "text", text: JSON.stringify({ results }) }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } };
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
 }) as typeof fetch;
@@ -145,8 +146,13 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
     check(`${label}: B's shareable ask is on B's line`, visible(lines[0]).includes('[S1] offering "intros to climate hardware investors"'), lines[0]);
     check(`${label}: B's goal is on B's line`, visible(lines[0]).includes("raise a seed round for a grid storage startup"), lines[0]);
     check(`${label}: private asks and blockers appear only inside the marked hidden part`, secretsIn(lines.map(visible).join("\n")).length === 0 && !visible(lines[0]).includes("no technical cofounder yet"), lines.map(visible));
-    check(`${label}: B's private ask and blocker are in B's hidden part`, hiddenOf(lines[0]).includes(`private ask "${SECRET.privateAskB}"`) && hiddenOf(lines[0]).includes('going through "no technical cofounder yet"'), lines[0]);
-    check(`${label}: C's private ask is in C's hidden part`, hiddenOf(lines[1]).includes(SECRET.privateAskC), lines[1]);
+    if (i < 2) {
+      // The network path (decided 2026-10-19, interim): no hidden part at all.
+      check(`${label} (network path): no hidden part, no private ask, no blocker anywhere in the prompt`, !p.includes(`${M.HIDDEN_LABEL} `) && secretsIn(p).length === 0 && !p.includes("no technical cofounder yet"), lines);
+    } else {
+      check(`${label}: B's private ask and blocker are in B's hidden part`, hiddenOf(lines[0]).includes(`private ask "${SECRET.privateAskB}"`) && hiddenOf(lines[0]).includes('going through "no technical cofounder yet"'), lines[0]);
+      check(`${label}: C's private ask is in C's hidden part`, hiddenOf(lines[1]).includes(SECRET.privateAskC), lines[1]);
+    }
     check(`${label}: the hidden part is capped (${M.DIGEST_HIDDEN_CHARS})`, lines.every((l) => hiddenOf(l).length <= M.DIGEST_HIDDEN_CHARS + 1), lines.map((l) => hiddenOf(l).length));
     check(`${label}: C's shareable ask is on C's line as S1 (numbered over shareable asks only)`, lines[1].includes('[S1] seeking "a seed investor for a ceramics studio"'), lines[1]);
     check(`${label}: C's long goal is clipped to ${M.DIGEST_ITEM_CHARS} chars`, lines[1].includes("open a ceramics studio with a kiln") && lines[1].includes("…") && !lines[1].includes("members' wall ".repeat(3)), lines[1]);
@@ -257,6 +263,25 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   (pool as any).query = realQ;
   check("network sweep: the stored match_reason is [withheld], not the echo", inserts[0]?.[5]?.[0] === M.REASON_WITHHELD, inserts[0]?.[5]);
   check("network sweep: the asker's name never reaches their own prompt", prompts.length === 1 && !/jordan/i.test(digestOf(prompts[0])), digestOf(prompts[0] ?? ""));
+  // The reviewer's case, with a scorer that matches on what it is shown: A wants someone who has been through a divorce; Noor's
+  // only shared ask is "meet new people in SF" and her blocker is the divorce. The network path shows no hidden part, so nothing
+  // the scorer sees fits, and no edge with a share reason forms: no intro.
+  const overlap = (a: string, b: string) => { const w = (s: string) => new Set(s.toLowerCase().replace(/[^a-z\s]/g, " ").split(/\s+/).filter((x) => x.length > 3)); const A = w(a); return [...w(b)].filter((x) => A.has(x)).length; };
+  const ASK = "someone who has been through a divorce and come out the other side";
+  answer = (index, l) => { const hit = overlap(ASK, l ?? ""); return { index, score: Math.min(100, hit * 45), reason: hit ? "fits" : "", share_ask: hit ? "S1" : "", hidden_only: false, mutual: false }; };
+  const inserts2: any[][] = [];
+  (pool as any).query = async (sql: string, p: any[] = []) => {
+    if (/FROM co_profiles WHERE user_id = \$1/.test(sql) && /long_term_direction/.test(sql)) return { rows: [{ intent: [{ id: "a1", type: "seeking", status: "active", shareable: true, text: ASK, embedding: [0.1, 0.2] }], goals: [], blockers: [] }] };
+    if (/ORDER BY dist/.test(sql)) return { rows: [noor] };
+    if (/SELECT first_name FROM users WHERE id = \$1/.test(sql)) return { rows: [{ first_name: "Jordan" }] };
+    if (/INSERT INTO relevance_edges/.test(sql)) { inserts2.push(p); return { rows: [] }; }
+    return realQ(sql, p);
+  };
+  prompts.length = 0;
+  await Rel.sweepAskAgainstNetwork("A");
+  (pool as any).query = realQ;
+  check("network (decided (c)): the reviewer's divorce case shows the scorer nothing of the divorce", prompts.length === 1 && !/divorce/i.test(digestOf(prompts[0])), digestOf(prompts[0] ?? ""));
+  check("network (decided (c)): ... and produces no edge with a share reason, so no intro", !inserts2.some((p) => (p[7] ?? []).some((x: string) => x)), inserts2);
   answer = (index) => ({ index, score: 80, reason: "internal", share_ask: "S1", hidden_only: false, mutual: false });
 }
 
@@ -331,7 +356,8 @@ const ask = { id: "a1", type: "seeking" as const, status: "active", text: "a see
   check("every scorer hands runAskScoring the lines it showed", (m.match(/runAskScoring\("matching\.\w+", [^\n]*, (toScore|candidates), lines(, hidden)?\);/g) ?? []).length === 3, m.match(/runAskScoring\([^\n]*/g));
   check("the room's stored ranking reason is the scorer's reason as runAskScoring returns it", /reason: s\.reason,/.test(src("src/services/eventScoring.ts")) && /loggable\.map\(\(s\) => s\.reason\)/.test(src("src/services/relevance.ts")));
   check("the ask check-in counts only edges with a share reason as possible leads", /WHERE status = 'open' AND share_reason IS NOT NULL AND share_reason <> ''\n\s*GROUP BY person_id, ask_id/.test(src("src/jobs/index.ts")));
-  check("every scorer builds its digest from candidateLines, with the asker's name", (m.match(/const lines = candidateLinesWithLabels\((toScore|candidates), (hints|undefined), (hidden|undefined), \{ askerFirstName: opts\.askerFirstName \}\);\n\s*const digest = lines\.map\(\(l, i\) => `\$\{i\}\. \$\{l\.line\}`\)\.join\("\\n"\);/g) ?? []).length === 3 && !/const digest = (?!lines\.map)/.test(m));
+  check("every scorer builds its digest from candidateLines, with the asker's name", (m.match(/const lines = candidateLinesWithLabels\((toScore|candidates), (hints|undefined), (hidden|undefined), \{ askerFirstName: opts\.askerFirstName(, withHidden: false)? \}\);\n\s*const digest = lines\.map\(\(l, i\) => `\$\{i\}\. \$\{l\.line\}`\)\.join\("\\n"\);/g) ?? []).length === 3 && !/const digest = (?!lines\.map)/.test(m));
+  check("the two network scorers get no hidden part; the room scorer does", (m.match(/candidateLinesWithLabels\((toScore|candidates), (hints|undefined), undefined, \{ askerFirstName: opts\.askerFirstName, withHidden: false \}\)/g) ?? []).length === 2 && /candidateLinesWithLabels\(toScore, hints, hidden, \{ askerFirstName: opts\.askerFirstName \}\)/.test(m));
 }
 
 console.log(`matching member-safe: ${total - failed}/${total} passed`);
