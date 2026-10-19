@@ -5,6 +5,7 @@ import { claimReaction, confirmReaction, releaseReaction } from "./tapbacks.js";
 import { createHash, timingSafeEqual } from "crypto";
 import { SendblueAPI } from "sendblue";
 import { capitalizeSentences, looksLikeMetaReply, paragraphize } from "./textStyle.js";
+import { sentinelRule } from "./sentinelBody.js";
 
 const client = new SendblueAPI({
   apiKey: process.env.SENDBLUE_API_KEY!,
@@ -166,6 +167,12 @@ const sendblue = {
     ...client.messages,
     send: (body: Parameters<typeof client.messages.send>[0], options?: Parameters<typeof client.messages.send>[1]) => {
       const content = body.content ? cleanCoMessage(body.content) : body.content;
+      // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused, whatever path it came from. A media-only
+      // send (a voice note, a card) may have no words.
+      const placeholder = sentinelRule(content ?? "");
+      if (placeholder && !(placeholder === "empty" && (body as { media_url?: string }).media_url)) {
+        return Promise.reject(new Error(`sendblue: outbound content is ${placeholder}, not a text, refusing to send`));
+      }
       if (content && isLeakedMetaCommentary(content)) {
         return Promise.reject(
           new Error(`sendblue: outbound content looked like leaked model meta-commentary, refusing to send: ${content}`),

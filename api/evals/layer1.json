@@ -19,6 +19,7 @@
     "evals/plan/rules.ts",
     "evals/rhythm/rules.ts",
     "evals/delivery/rules.ts",
+    "evals/delivery/sentinelSends.ts",
     "evals/discretion/rules.ts",
     "evals/payloadFirst/rules.ts",
     "evals/threads/rules.ts",
