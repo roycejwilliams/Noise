@@ -182,7 +182,8 @@ export async function syncOpenLoops(userId: string, now = new Date()): Promise<{
     await client.query("BEGIN");
     await client.query(`SELECT pg_advisory_xact_lock(hashtext('open_loops:' || $1))`, [userId]);
     // 'answered': an offer loop their reply settled (settleOfferLoop); like Co's own close, a tombstone the next sync keeps closed.
-    const { rows: existing } = await client.query(`SELECT * FROM open_loops WHERE user_id = $1 AND (closed_at IS NULL OR closed_reason IN ('co', 'expired', 'date_passed', 'answered'))`, [userId]);
+    // 'removed': a loop whose subject they had Cue forget (closeRemovedLoop); kept closed the same way.
+    const { rows: existing } = await client.query(`SELECT * FROM open_loops WHERE user_id = $1 AND (closed_at IS NULL OR closed_reason IN ('co', 'expired', 'date_passed', 'answered', 'removed'))`, [userId]);
     const byKey = new Map(existing.map((r: any) => [`${r.source}:${r.source_ref}`, r]));
     for (const d of derived) {
       const key = `${d.source}:${d.sourceRef}`;
@@ -374,15 +375,49 @@ export async function runLoopSync(): Promise<void> {
 export const MAX_ASKS_PER_PASS = 10;
 export type DecayDeps = {
   live: () => Promise<LoopRow[]>;
-  close: (id: number, reason: "date_passed") => Promise<void>;
+  close: (id: number, reason: "date_passed" | "removed") => Promise<void>;
   expire: (id: number) => Promise<void>;
   ask: (l: LoopRow) => Promise<boolean>; // true when an ask is queued (or already pending)
+  // A member's live removals (services/whatCoKnows.ts forgottenRows, removed only); null when they can't be read.
+  removals?: (userId: string) => Promise<ForgottenRow[] | null>;
 };
-export async function runLoopDecay(now = new Date(), deps: DecayDeps = realDecayDeps()): Promise<{ closed: number; asked: number; expired: number }> {
+
+// ---------------------------------------------------------------- loops whose subject they had Cue forget
+type ForgottenRow = import("./whatCoKnows.js").ForgottenRow;
+// Pure: whether a loop's words (its title, detail, or a note that came with it) say something they had Cue forget (whatCoKnows.ts
+// guardText over the removals: any part it would cut counts).
+export function loopSaysRemoved(l: { title: string; detail?: string | null; note?: string | null }, removed: ForgottenRow[], W: Pick<typeof import("./whatCoKnows.js"), "guardText">): boolean {
+  const rows = removed.filter((r) => r.removed);
+  if (!rows.length) return false;
+  return [l.title, l.detail, l.note].some((t) => typeof t === "string" && t.trim() !== "" && W.guardText(t, rows) !== t);
+}
+// A member's removals for the loop readers: null when they can't be read (the caller then asks nothing: fails closed).
+export async function loopRemovals(userId: string): Promise<ForgottenRow[] | null> {
+  return import("./whatCoKnows.js").then(async (W) => (await W.forgottenRows(userId)).filter((r) => r.removed)).catch(() => null);
+}
+// Closed as removed: their choice, not a mood or a cancel. No text goes about it; the sync keeps it closed (a tombstone).
+export async function closeRemovedLoop(userId: string, id: number): Promise<void> {
+  await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = 'removed', closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND user_id = $2 AND closed_at IS NULL`, [id, userId]);
+}
+
+export async function runLoopDecay(now = new Date(), deps: DecayDeps = realDecayDeps()): Promise<{ closed: number; asked: number; expired: number; removed: number }> {
   // Each member's own day (a loop row carries its member's zone; none: the fallback).
-  const out = { closed: 0, asked: 0, expired: 0 };
+  const out = { closed: 0, asked: 0, expired: 0, removed: 0 };
+  const W = deps.removals ? await import("./whatCoKnows.js") : null;
+  const removals = new Map<string, ForgottenRow[] | null>();
   for (const l of await deps.live()) {
+    // A loop whose subject they had Cue forget is closed as removed, never asked about. If their removals can't be read, nothing
+    // is asked about that member's loops this pass (date and expiry closes still run: they send nothing).
+    const userId = (l as LoopRow & { userId?: string }).userId;
+    let unread = false;
+    if (W && deps.removals && userId) {
+      if (!removals.has(userId)) removals.set(userId, await deps.removals(userId).catch(() => null));
+      const rows = removals.get(userId) ?? null;
+      if (rows === null) unread = true;
+      else if (loopSaysRemoved(l, rows, W)) { await deps.close(l.id, "removed"); out.removed++; continue; }
+    }
     const a = decayAction(l as LifecycleRow, now, localDay(now, (l as LoopRow & { zone?: string | null }).zone ?? null));
+    if (unread && a.kind === "ask") continue;
     if (a.kind === "close_date_passed") { await deps.close(l.id, "date_passed"); out.closed++; }
     else if (a.kind === "expire") { await deps.expire(l.id); out.expired++; }
     else if (a.kind === "ask" && out.asked < MAX_ASKS_PER_PASS) { if (await deps.ask(l)) out.asked++; }
@@ -405,6 +440,7 @@ function realDecayDeps(): DecayDeps {
           for (const id of new Set<string>(r.rows.map((x: any) => x.user_id))) zones.set(id, await memberZone(id));
           return r.rows.map((x: any) => ({ ...toRow(x), inMotion: !!x.in_motion, userId: x.user_id, zone: zones.get(x.user_id) ?? null }));
         }),
+    removals: (userId) => loopRemovals(userId),
     close: async (id, reason) => { await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = $2, closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND closed_at IS NULL`, [id, reason]); },
     expire: async (id) => { await pool.query(`UPDATE open_loops SET status = 'dropped', status_by = 'code', closed_reason = 'expired', closed_at = NOW(), updated_at = NOW() WHERE id = $1 AND closed_at IS NULL`, [id]); },
     ask: async (l) => {

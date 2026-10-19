@@ -24,7 +24,7 @@ const handle = async (sql: string, args: any[] = []): Promise<{ rows: Row[] }> =
   if (/SELECT status FROM co_tasks/.test(sql)) return { rows: tasks.filter((t) => t.id === args[1]) };
   if (/FROM search_briefs|FROM ask_checkins|FROM proactive_candidates/.test(sql)) return { rows: [] };
   if (/^\s*(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return { rows: [] };
-  if (/SELECT \* FROM open_loops WHERE user_id = \$1 AND \(closed_at IS NULL OR closed_reason IN \('co', 'expired', 'date_passed', 'answered'\)\)/.test(sql)) return { rows: loops.filter((r) => !r.closed_at || ["co", "expired", "date_passed", "answered"].includes(r.closed_reason)) };
+  if (/SELECT \* FROM open_loops WHERE user_id = \$1 AND \(closed_at IS NULL OR closed_reason IN \('co', 'expired', 'date_passed', 'answered', 'removed'\)\)/.test(sql)) return { rows: loops.filter((r) => !r.closed_at || ["co", "expired", "date_passed", "answered", "removed"].includes(r.closed_reason)) };
   if (/SELECT \* FROM open_loops WHERE user_id = \$1 AND closed_at IS NULL AND task_id IS NOT NULL/.test(sql)) return { rows: loops.filter((r) => !r.closed_at && r.task_id && (!r.seen_at || r.changed_at > r.seen_at)) };
   if (/SELECT \* FROM open_loops WHERE user_id = \$1 AND closed_at IS NULL/.test(sql)) return { rows: loops.filter((r) => !r.closed_at) };
   if (/FROM open_loops o LEFT JOIN co_tasks t ON t\.id = o\.task_id WHERE o\.user_id = \$1 AND o\.closed_at IS NULL/.test(sql)) return { rows: loops.filter((r) => !r.closed_at) };
