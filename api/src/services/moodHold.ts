@@ -98,6 +98,11 @@ export function noteMoodHold(rule: MoodRule, kind: string, ref: string, read: Mo
   if (line) log(line);
   return line;
 }
+// The held recap's own text (jobs/postCallFollowUp.ts HELD_RECAP_TASK) waits on Royce reading its prompt (2026-10-19: "keep it unwired
+// until I've read the prompt"). Until this is true a held recap is queued and held as usual, but at release it stays pending, is never
+// drafted or sent, and expires on its own clock (harness/proactive.ts awaiting_prompt_approval). A code constant: no env switch.
+export const HELD_RECAP_APPROVED: boolean = false;
+
 // Tests only.
 export function resetMoodHoldLog(): void {
   seen.clear();

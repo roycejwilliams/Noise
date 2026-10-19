@@ -8,7 +8,7 @@ import { KINDS } from "../services/factLabels.js";
 import { memberKnowledge, memberRules, type MemberKnowledge } from "../services/memberKnowledge.js";
 import { localStamp } from "../services/memberTime.js";
 import { saidDay, uncorrectedClaims } from "../harness/callGrounding.js";
-import { MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
+import { HELD_RECAP_APPROVED, MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 
 // Relationship text after a call: one real thought from what they said.
 //
@@ -243,8 +243,11 @@ export async function holdRecapForMood(userId: string, followUpId: string, now =
 // The held recap, once the hold lets go: the facts re-checked (once per call, the fortnight cooldown, a waiting offer, a document since
 // the call, the confirmation, a commitment), then one or two gentle lines offering it, tied to that call. Night defers it (never
 // dropped for the hour); any other fact that no longer holds ends it. Whether the call settled anything is Co's read: SKIP if not.
+// Not wired yet: HELD_RECAP_TASK waits on Royce reading it (services/moodHold.ts HELD_RECAP_APPROVED). Until then the dispatch never
+// picks a released held recap (awaiting_prompt_approval), and this draft, if reached, reads nothing, calls no model and defers.
 export const HELD_RECAP_TASK = "You already sent your follow-up after this call. The offer to put what they settled on a one-page recap waited, because they were having a hard time then. Only if they settled a decision or a plan in their own words on that call: write one or two short, gentle lines that name the call plainly (the day, and what it was about in a few words of theirs) and offer once to put what they decided on a one-page recap. Easy to pass on, no pressure. Never write the recap itself, never say the offer waited or why, and never bring up anything else from the call. If they settled nothing on that call, return SKIP.";
-export async function draftHeldRecap(userId: string, firstName: string, followUpId: string, now = new Date()): Promise<DraftResult> {
+export async function draftHeldRecap(userId: string, firstName: string, followUpId: string, now = new Date(), approved: boolean = HELD_RECAP_APPROVED): Promise<DraftResult> {
+  if (!approved) return { defer: new Date(now.getTime() + 24 * 3_600_000), reason: "the held recap's prompt is waiting on Royce's approval" };
   const f = await recapCallFacts(userId, followUpId);
   if (!f) return { skip: "the call's record is gone" };
   const [{ loadOfferHistory, postCallRecapAllowed }, { localOf }] = await Promise.all([import("../services/documentOffer.js"), import("../services/memberTime.js")]);
