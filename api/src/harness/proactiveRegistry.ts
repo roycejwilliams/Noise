@@ -10,9 +10,10 @@ import { draftKnowledge, draftProactive, nameTokens, nextLocalHour, type Candida
 import { draftEventReveal } from "../agent/eventDiscoverySurfacing.js";
 import { draftAskCheckin, type AskCheckinPayload } from "../agent/askCheckin.js";
 import { draftCompanionCheckin } from "../agent/companionCheckin.js";
+import { solicitationGoals } from "../agent/eventAskSolicitation.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
-import { draftAskSolicitation, solicitationGoals } from "../agent/eventAskSolicitation.js";
+import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
 import { draftPostCall, markPostCallDropped, markPostCallSent, recordRecapOffer } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
