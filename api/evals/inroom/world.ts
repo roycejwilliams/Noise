@@ -357,6 +357,11 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     W.memoriesWritten.push({ user_id: p[0], memory_type: p[1], content: p[2] });
     return R([{ id: W.memoriesWritten.length }]);
   }
+  // The asker's note that an intro ask Cue said it would send didn't go out (services/deferredSends.ts noteIntroAskNotSent).
+  if (has("INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)")) {
+    W.memoriesWritten.push({ user_id: p[0], memory_type: "system", content: p[1] });
+    return R([]);
+  }
   if (has("UPDATE co_memories SET content_embedding")) return R([]);
   if (has("SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent'")) {
     const m = W.members.get(p[0]);
