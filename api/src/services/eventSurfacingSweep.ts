@@ -462,7 +462,7 @@ async function findFreshPending(candidate: SurfacingCandidate, timezone: string 
     trace: {
       searchText: candidate.askText,
       sources: result?.sources,
-      frustratedWithCo: result?.frustratedWithCo ?? false,
+      frustratedWithCo: result?.frustratedWithCo ?? false, // mood: carries the read
       found: matches.map((m) => ({ name: m.name, tier: m.tier, date: relevantDate(m) })),
       staleOrRepeat: matches.flatMap((m, i) => (repeats[i].action === "blocked" ? [`${m.name}: ${repeats[i].reason}`] : [])),
       resurfaced: [...again].map((m) => m.name),
@@ -854,7 +854,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       match,
       // Frustrated with what Co has found: send the real thing, not a tease
       // they have to answer before seeing it.
-      ...(trace.frustratedWithCo ? { revealNow: true } : {}),
+      ...(trace.frustratedWithCo ? { revealNow: true } : {}), // mood: raises a find, never holds one
       ...(item.reminder ? { reminder: true } : {}),
       ...(item.again ? { again: true } : {}),
     };
@@ -871,7 +871,7 @@ export async function attemptEventSurfacing(candidate: SurfacingCandidate): Prom
       // deadline's, in local time); an undated opportunity gets two weeks.
       expiresAt: offerExpiresAt(match, zone),
       // Short notice is the most time-bound thing Co can send.
-      priority: isShortNotice(item.match, zone) ? 95 : trace.frustratedWithCo ? 85 : undefined,
+      priority: isShortNotice(item.match, zone) ? 95 : trace.frustratedWithCo ? 85 : undefined, // mood: raises a find, never holds one
     });
     if (ok) {
       await log("act", "queued", { queued: { name: item.match.name, tier: item.match.tier, date }, skipped });

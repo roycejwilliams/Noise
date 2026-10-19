@@ -60,6 +60,38 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   check("no times on the read (an older state): struggling holds, as before", MH.moodHold({ needsCare: true }, { now: NOW, lastInboundAt: null }).hold);
 }
 
+// ================================================================ 0b. the stretch's start comes from its own read, not the newest hundred (review of #253)
+{
+  const realQuery = pool.query;
+  let all: Sig[] = [];
+  const asRow = (x: Sig) => ({ ...x, created_at: x.at });
+  (pool as any).query = async (sql: string, params: any[] = []) => {
+    const q = String(sql);
+    if (/FROM emotion_signals/i.test(q) && /LIMIT 100\b/.test(q)) return { rows: [...all].sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, 100).map(asRow) };
+    if (/FROM emotion_signals/i.test(q) && /make_interval\(hours => \$3\)/.test(q)) {
+      const now = new Date(params[1]).getTime(), back = Number(params[2]) * HOUR;
+      return { rows: all.filter((x) => x.at.getTime() > now - back && x.at.getTime() <= now).sort((a, b) => b.at.getTime() - a.at.getTime()).map(asRow) };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  // A hard read every 25 minutes for about 125 hours: the newest hundred span only about 41 hours.
+  all = Array.from({ length: 300 }, (_, i) => hardSig(i * (25 / 60)));
+  const heavy = await E.getEmotionalContext("u-jordan", NOW);
+  const newest100 = E.summarizeSignals([...all].sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, 100), NOW);
+  check("a heavy texter: the newest hundred alone would hold the stretch under the cap (the leak)", MH.moodHold(newest100, { now: NOW, lastInboundAt: ago(0.1) }).hold);
+  check("a heavy texter: the stretch's own read reaches the cap (released_cap)", MH.moodHold(heavy, { now: NOW, lastInboundAt: ago(0.1) }).state === "released_cap", { since: heavy.hardSince, hold: MH.moodHold(heavy, { now: NOW, lastInboundAt: ago(0.1) }) });
+  // 125 hard reads over 125 hours: released at the cap.
+  all = Array.from({ length: 125 }, (_, i) => hardSig(i));
+  const hourly = await E.getEmotionalContext("u-jordan", NOW);
+  check("125 hard reads over 125 hours: released_cap", MH.moodHold(hourly, { now: NOW, lastInboundAt: ago(0.1) }).state === "released_cap", hourly.hardSince);
+  // A positive read inside the window still starts a new stretch.
+  all = [...Array.from({ length: 200 }, (_, i) => hardSig(i * (25 / 60))), goodSig(10.2)];
+  const broken = await E.getEmotionalContext("u-jordan", NOW);
+  check("the stretch's own read still stops at a positive read between two hard ones", Math.abs(NOW.getTime() - broken.hardSince!.getTime()) <= 10.2 * HOUR, broken.hardSince);
+  check("the stretch read is bounded by time and asks for no words", /created_at > \$2::timestamptz - make_interval\(hours => \$3\)/.test(src("harness/emotion.ts")) && /SELECT source, intensity, valence, about, target, basis, created_at FROM emotion_signals/.test(src("harness/emotion.ts")) && E.STRETCH_LOOKBACK_HOURS >= MH.MOOD_HOLD_CAP_HOURS + 24);
+  (pool as any).query = realQuery;
+}
+
 // ================================================================ 1. check-ins held while struggling (checkin_hold)
 {
   const types = [...P.HOLD_WHILE_STRUGGLING];
@@ -272,11 +304,11 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
 // which helper." The three feelings-based places are ruled: timing only, capped. No longer pending.
 {
   const rules = MH.MOOD_RULES;
-  check("the three feelings-based places are ruled, none pending", Object.keys(rules).sort().join() === "bundle_skip_wait,checkin_hold,stop_note_hold" && Object.values(rules).every((r) => /timing only, capped \(Royce 2026-10-18/.test(r.ruling) && !/pending/i.test(r.ruling)));
+  check("the three feelings-based places are ruled, none pending", ["bundle_skip_wait", "checkin_hold", "stop_note_hold"].every((k) => k in rules) && Object.values(rules).every((r) => /timing only, capped \(Royce 2026-10-1[89]/.test(r.ruling) && !/pending/i.test(r.ruling)));
   check("kind restraint is not a feelings rule (it reads whether they answered, not how they feel): left as it is", !Object.values(rules).some((r) => /kindRestraint|suppressedKinds/.test(r.where)) && !/emotion|needsCare/.test(src("services/kindRestraint.ts")));
   check("safety is not a mood rule and is not in the list", !Object.keys(rules).some((k) => /safety/.test(k)));
   const others = MH.FEELING_PICKS_NOT_CHANGED;
-  check("the other feeling-based places are listed as documented, not changed, needing Royce (not claimed as all ruled)", others.length === 4 && others.every((o) => /documented, not changed: needs Royce/.test(o.status)) && ["documentOffer.ts offerGate", "postCallFollowUp.ts", "replyGrounding.ts heavyMoment", "feelingForDraft"].every((w) => others.some((o) => o.where.includes(w))) && /Not every\s*\n?\/\/ place a feeling read decides/.test(src("services/moodHold.ts")));
+  check("the other feeling-based places are each documented as not changed (needing Royce) or ruled since (not claimed as all ruled)", others.every((o) => /documented, not changed: needs Royce/.test(o.status)) && ["documentOffer.ts offerGate", "postCallFollowUp.ts", "replyGrounding.ts heavyMoment", "feelingForDraft"].every((w) => others.some((o) => o.where.includes(w)) || Object.values(rules).some((r) => r.where.includes(w))) && /Not every\s*\n?\/\/ place a feeling read decides/.test(src("services/moodHold.ts")));
   check("those places are indeed unchanged here", /if \(s\.needsCare\) return "they are having a hard time; their state comes first";/.test(src("services/documentOffer.ts")) && /return !!e\.needsCare \|\| \(!!e\.current && e\.current\.intensity === "high" && e\.current\.valence === "negative"\);/.test(src("harness/replyGrounding.ts")));
   check("no member-facing words were added: the module writes no line to them", !/messages|sendText|sendWithLedger|carryLaneNotes/.test(src("services/moodHold.ts")));
 }

@@ -581,8 +581,8 @@ export function restraintOf(r: RawRestraint, now: Date): Fact<Restraint> {
     holdUntil: ahead(r.holdUntil),
     spaceUntil: ahead(r.spaceUntil),
     safetyHold: r.safetyHold,
-    needsCare: !!r.emotional?.needsCare,
-    frustratedWithCo: !!r.emotional?.withCo?.frustrated,
+    needsCare: !!r.emotional?.needsCare, // mood: carries the read
+    frustratedWithCo: !!r.emotional?.withCo?.frustrated, // mood: carries the read
     feeling: cur ? `${cur.emotion}${cur.about ? ` about ${cur.about}` : ""} (${cur.intensity}, from a ${cur.source})` : null,
     suppressedKinds: [...r.suppressed],
     trialKinds: [...r.trial],

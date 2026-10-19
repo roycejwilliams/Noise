@@ -171,7 +171,7 @@ export function sweepRecord(k: MemberKnowledge, askText: string): SweepRecord {
     learned: [...k.corrections.map((c) => `Corrected ${c.field}: ${c.now ?? "(removed)"}`), ...k.lessons.map((l) => `Lesson: ${l.text}`)].slice(0, L.learned),
     claims: k.claims.map((c) => `${c.text}${c.expiresOn ? ` (until ${c.expiresOn})` : ""}`).slice(0, L.claims),
     feeling: k.restraint?.feeling ?? null,
-    frustratedWithCo: !!k.restraint?.frustratedWithCo,
+    frustratedWithCo: !!k.restraint?.frustratedWithCo, // mood: carries the read (search wider, never less)
     shown: k.delivered.map((d) => d.what).slice(0, L.shown),
     goalWords: k.goals.map((g) => g.text),
   };
@@ -500,5 +500,5 @@ export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | n
   if (opts.allSources) for (const s of SWEEP_SOURCES) if (!called.has(s.source)) sourceFailures.push(`${s.source}: not reached (the search ended before it)`);
   const tried = { events: did.some((d) => d.startsWith("events: ")), web: did.some((d) => d.startsWith("web: ")), x: did.some((d) => d.startsWith("x: ")) };
   await recordDecision({ layer: 5, decision: "sweep.find", userId: c.userId, outcome: gated.length ? "act" : "skip", action: `kept ${gated.length}`, proposal: { ask: c.askText.slice(0, 200), did, tried, kept: kept.map((m) => m.name), passedGate: gated.map((m) => m.name), limitsOut: limits.out.map((o) => ({ name: o.match.name, why: o.why })), ...(limits.read ? { limitsRead: limits.read } : {}), xPosts, xKept: gated.filter((m) => (m as any).source === "x" || (m as any).via === "x").length, ...(xError ? { xError } : {}), lookedAt: { x: lookedAt.filter((l) => l.source === "x").length, web: lookedAt.filter((l) => l.source === "web").length, events: lookedAt.filter((l) => l.source === "events").length }, passedOver: passed, queries, keptBy, ...(opts.allSources ? { allSources: true } : {}), ...(sourceFailures.length ? { sourceFailures } : {}) } }).catch(() => {});
-  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures } };
+  return { matches: gated, did, searched: searched || !blocked, frustratedWithCo: record.frustratedWithCo, sources: { ...tried, failures: sourceFailures } }; // mood: carries the read
 }
