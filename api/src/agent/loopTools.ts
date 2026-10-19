@@ -338,8 +338,9 @@ export function loopTools(
         }
         if (outOfTime()) return OUT_OF_TIME;
         await hold(whileLooking);
-        // Where it looks comes from the ask (services/askPlace.ts): a place its words or their message name, else the city passed,
-        // else their home city. The profile city never decides it when the ask names a place.
+        // Where it looks (services/askPlace.ts): the city passed, unless it's just their home city and "what" names another place
+        // ("in/near/around X", or SF/NYC-style short names; "visiting Lisbon" or lowercase isn't seen); else that named place; else their
+        // home city.
         const where = replySearchPlace({ kind: "events", words: what, toolCity: city, message: askWords(), home: ctx.turn?.profile?.city ?? null });
         const [r, earlier] = await Promise.all([
           eventCandidates(what, where.place, { when: when ?? null, userId: ctx.userId, limit: 8 }),
@@ -409,9 +410,9 @@ export function loopTools(
         loop.webQueries += run.length;
         await hold(whileLooking);
         const { taskWebSearch } = await import("../services/taskWeb.js");
-        // Each search looks where its ask is (services/askPlace.ts): a query that names a place gets nothing added on top; else the
-        // place they gave (theirs.city), else their home city, unless the query is for no place (online, remote). The profile city
-        // never decides it when the ask names a place.
+        // Where each search looks (services/askPlace.ts): a query that names a place ("in/near/around X", or SF/NYC-style short names;
+        // "visiting Lisbon" or lowercase isn't seen) gets nothing added on top; else theirs.city; else their home city, unless the query
+        // says it's for no place (online, remote).
         const home = ctx.turn?.profile?.city ?? null;
         const cityFor = (q: string) => webSearchCity(replySearchPlace({ kind: "web", words: q, toolCity: theirs?.city ?? null, message: askWords(), home }));
         const siteList = (sites ?? []).filter((s) => /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)).slice(0, 4);

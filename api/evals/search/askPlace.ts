@@ -102,6 +102,28 @@ check("'founders in AI', 'talks in Spanish', 'in October' are not places", !A.pl
   check("pin: across 8 asks naming a place x 6 home cities x both searches x city passed or not: the ask's place every time, the home city never", bad.length === 0, bad.slice(0, 3));
 }
 
+// Review of #252: a topic after "in" is not a place, and on the event search it never overrides the city the model passed. The
+// words win over the model's city only when that city is just their home city (the case this PR fixes).
+{
+  const rows: [string, string][] = [
+    ["women in Venture", "Austin"], ["meetups in Robotics", "Austin"], ["panels in Healthcare", "Boston"], ["workshops in Python", "Seattle"],
+    ["talks in Real Estate", "Miami"], ["speed dating for people in Love", "Chicago"], ["jazz in Williamsburg", "New York"], ["jazz near Union Square", "New York"],
+  ];
+  for (const [what, city] of rows) {
+    const p = events(what, { toolCity: city });
+    check(`events: "${what}" with the model's city ${city} (profile SF): ${city}`, p.place === city && p.from === "tool", p);
+  }
+  for (const [what] of rows.slice(0, 6)) {
+    check(`"${what}": the topic is not a place (no city passed: their home city; web: the home city is added)`, events(what).place === SF && events(what).from === "home" && A.webSearchCity(web(what)) === SF, { e: events(what), w: web(what) });
+  }
+  check("events: the model fell back to their home city while 'what' names Lisbon: Lisbon (the fix)", events("founder runs in Lisbon", { toolCity: SF }).place === "Lisbon" && events("founder runs in Lisbon", { toolCity: "SF" }).place === "Lisbon");
+  check("events: the model's city that isn't their home wins over a place in the words", events("founder runs in Lisbon", { toolCity: "Porto" }).place === "Porto");
+  // What the comments say isn't seen, isn't: no "in/near/around" ("visiting Lisbon"), or lowercase ("in lisbon"): the home city.
+  check("not seen as a place: 'visiting Lisbon' and 'in lisbon' (lowercase): the home city stands in", web("founder dinners visiting Lisbon").place === SF && events("founder runs in lisbon").place === SF);
+  // Known, not fixed here (web query words read as an alias city): "Washington Post internships" reads Washington, "DC comics
+  // events" reads DC, so nothing is added on top of those queries.
+}
+
 // ================================================================ 2. the tools themselves (the wiring)
 // Exa, the model, Luma and geocoding answer from here; every outside call and every database statement is recorded.
 const calls: string[] = [];
@@ -170,6 +192,10 @@ try {
   await make(ctxFor("any founder runs in Lisbon Saturday?", SF)).searchEvents.execute({ what: "founder runs in Lisbon", when: "Saturday" }, { toolCallId: "e1", messages: [] });
   const seen = [...calls, ...sqlParams].join("\n");
   check("searchEvents: Lisbon asked, no city passed, profile SF: the feed is looked up for Lisbon, never San Francisco", /Lisbon/.test(seen) && !/San Francisco/.test(seen), seen.slice(0, 600));
+  reset();
+  await make(ctxFor("anything for women in Venture in Austin?", SF)).searchEvents.execute({ what: "women in Venture", city: "Austin" }, { toolCallId: "e3", messages: [] });
+  const seen3 = [...calls, ...sqlParams].join("\n");
+  check("searchEvents: 'women in Venture' with the model's Austin: the feed is Austin's, never 'Venture' or San Francisco", /Austin/.test(seen3) && !/Venture"/.test(sqlParams.join("\n")) && !/San Francisco/.test(seen3), seen3.slice(0, 600));
   reset();
   await make(ctxFor("any founder runs this weekend?", SF)).searchEvents.execute({ what: "founder runs", when: "this weekend" }, { toolCallId: "e2", messages: [] });
   const seen2 = [...calls, ...sqlParams].join("\n");
