@@ -22,6 +22,7 @@
     "evals/calls/recapMoodHold.ts",
     "evals/proactive/moodDraftSkips.ts",
     "evals/proactive/moodFrustration.ts",
+    "evals/proactive/moodFollowUps.ts",
     "evals/events/audience.ts",
     "evals/plan/rules.ts",
     "evals/rhythm/rules.ts",

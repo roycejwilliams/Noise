@@ -20,6 +20,7 @@ import type { EnqueueInput } from "../harness/proactive.js";
 import type { CoTask } from "./coTasks.js";
 import { localStamp, memberZone } from "./memberTime.js";
 import { memberKnowledge, memberRules, type Exchange, type Fact, type KnowledgeDeps, type MemberKnowledge } from "./memberKnowledge.js";
+import { MOOD_HOLD_CAP_HOURS, OKAY_AFTER_HOURS, moodHold, noteMoodHold, type MoodHold } from "./moodHold.js";
 
 export const FOLLOWUP_LIMITS = { minHours: 2, maxHours: 7 * 24, maxWakes: 5, maxDays: 14, quietAfterClosedDays: 14 };
 
@@ -43,7 +44,36 @@ export function followUpAction(existing: { status: string; closedAt: Date | null
   return "create";
 }
 
-type Stored = { type: string; targetKey: string; topicKey?: string; summary: string; payload: any; expiresAt?: string | null; priority?: number };
+type Stored = { type: string; targetKey: string; topicKey?: string; summary: string; payload: any; expiresAt?: string | null; priority?: number; moodWaitAt?: string | null };
+
+// A follow-up the decider skipped while they're struggling (Royce, 2026-10-19: "feelings change timing and tone, never cancel"). The
+// decider sees "they've been having a hard time lately", and a skip used to close the follow-up for good. Now a skip while the hard
+// day's hold is on (services/moodHold.ts, capped) is one wait instead (followup.moodWaitAt): the task sleeps, wakes again once they're
+// okay or the hard stretch reaches the cap, never more than MOOD_HOLD_CAP_HOURS after the skip, and the decider looks again with the
+// feeling as tone only (FOLLOWUP_GENTLE). A skip because they asked for space is their own ask and is never a mood: closed as before.
+// So is a second skip, and a skip when they're not struggling. The waiting wakes don't use up the task's looks (unspendWake); its own
+// clock (FOLLOWUP_LIMITS.maxDays) still ends it.
+export const FOLLOWUP_SKIP_BECAUSE = ["answered", "asked_for_space", "no_longer_matters"] as const;
+// Pure: whether this skip is the follow-up's one mood wait.
+export function followUpMoodWait(o: { waitedAt: string | null | undefined; because?: string | null; read: MoodHold }): boolean {
+  return !o.waitedAt && o.because !== "asked_for_space" && o.read.hold;
+}
+// Pure: a follow-up waiting out a hard day (null: not waiting). Held while the hold is on and under the cap since the skip.
+export function followUpStillWaiting(o: { waitedAt: string | null | undefined; read: MoodHold; now: Date }): MoodHold | null {
+  const at = Date.parse(String(o.waitedAt ?? ""));
+  if (!at) return null;
+  const heldHours = Math.max(0, (o.now.getTime() - at) / 3_600_000);
+  if (!o.read.hold) return { state: o.read.state === "held" ? "none" : o.read.state, hold: false, heldHours };
+  if (heldHours >= MOOD_HOLD_CAP_HOURS) return { state: "released_cap", hold: false, heldHours };
+  return { state: "held", hold: true, heldHours };
+}
+// Pure: when a waiting follow-up looks again: the okay window, never past the cap after the skip.
+export function followUpWakeHours(o: { waitedAt: string; now: Date }): number {
+  const left = MOOD_HOLD_CAP_HOURS - (o.now.getTime() - Date.parse(o.waitedAt)) / 3_600_000;
+  return Math.max(FOLLOWUP_LIMITS.minHours, Math.min(OKAY_AFTER_HOURS, Math.ceil(left)));
+}
+// Model-facing: the decider's look after a wait (never a line for the member).
+export const FOLLOWUP_GENTLE = "This waited for a hard stretch of theirs: if you check in, keep it soft and easy to pass on, never a push.";
 
 // Called by enqueueCandidate for the four handed-over types.
 export async function startFollowUp(input: EnqueueInput): Promise<{ queued: boolean }> {
@@ -117,7 +147,7 @@ export type FollowUpDeps = {
   zone?: string | null; // their zone (services/memberTime.ts): "Now:" is shown in it, named
   checkInNow: () => Promise<boolean>;
   later: (hours: number, why: string) => Promise<void>;
-  skip: (why: string) => Promise<void>;
+  skip: (why: string, because?: string | null) => Promise<void>;
   // How long it has been due, in words ("3h ago"), so the decider knows it's due.
   dueSince?: string | null;
   // What Co knows about them that bears on the decision (services/memberKnowledge.ts, followUpKnowledge) and the member-level
@@ -174,7 +204,7 @@ What isn't yours to weigh: their hours, how many texts they've had, and the paus
 ${o.task.followup?.payload?.until ? `It has to go out by ${localStamp(o.task.followup.payload.until, o.zone ?? null)} (an hour before the event starts). Pick the best moment before then.\n` : ""}Decide with one tool:
 - checkInNow: the thread doesn't already answer it and it still matters to them. For a follow-up that's due, that's usually the case.
 ${lastLook ? "" : `- later: only for a reason you can point to in the thread: you're mid-conversation with them right now (their last text is minutes old), or the date it's about is still ahead. Pick when, in hours (${FOLLOWUP_LIMITS.minHours} to ${FOLLOWUP_LIMITS.maxHours}). Never "later" because they asked for space: that is skip.\n`}- If they asked for space, a break, a pause, or to hear less from you ("give me some space", "I need a break", "not right now", "too many texts"), that is skip, never later: respecting it means not coming back to this one.
-- skip: the thread already answers it or it no longer makes sense: they already told you how it went (even if there is more you could ask, this follow-up is answered), they sorted it themselves, they asked for space, or it was cancelled or is long past mattering.
+- skip: the thread already answers it or it no longer makes sense: they already told you how it went (even if there is more you could ask, this follow-up is answered), they sorted it themselves, they asked for space, or it was cancelled or is long past mattering. Say which in "because": answered, asked_for_space, or no_longer_matters. How they feel is never a reason to skip: it shapes when and how you check in.
 ${lastLook ? "This is the last look: check in now or skip.\n" : ""}Say why in one plain line.`;
 }
 
@@ -184,7 +214,7 @@ export async function runFollowUpTurnWith(task: CoTask, deps: FollowUpDeps): Pro
   let why = "";
   const checkInNow = tool({ description: "Check in now.", inputSchema: z.object({ why: z.string() }), execute: async (i) => { action = "now"; why = i.why; return { ok: await deps.checkInNow() }; } });
   const later = tool({ description: "Check in later.", inputSchema: z.object({ inHours: z.number(), why: z.string() }), execute: async (i) => { action = "later"; why = i.why; await deps.later(i.inHours, i.why); return { ok: true }; } });
-  const skip = tool({ description: "Don't check in about this.", inputSchema: z.object({ why: z.string() }), execute: async (i) => { action = "skip"; why = i.why; await deps.skip(i.why); return { ok: true }; } });
+  const skip = tool({ description: "Don't check in about this.", inputSchema: z.object({ why: z.string(), because: z.enum(FOLLOWUP_SKIP_BECAUSE).optional() }), execute: async (i) => { action = "skip"; why = i.why; await deps.skip(i.why, i.because ?? null); return { ok: true }; } });
   // The last look decides: there's no "later" to put it off past the end (it used to expire as "never found the right moment").
   const tools: Record<string, typeof checkInNow | typeof later> = task.wakes >= FOLLOWUP_LIMITS.maxWakes ? { checkInNow, skip } : { checkInNow, later, skip };
   try {
@@ -228,6 +258,7 @@ export function followUpKnowledge(k: Pick<MemberKnowledge, "restraint" | "delive
     r?.safetyHold ? "a safety hold is on (only care, no offers or nudges)" : null,
     r?.needsCare ? "they've been having a hard time lately" : null,
     r?.frustratedWithCo ? "they've been frustrated with Cue lately" : null,
+    r?.needsCare || r?.frustratedWithCo ? "how they feel shapes when and how you check in, never whether" : null,
     r?.feeling ? `their latest feeling: ${r.feeling}` : null,
   ].filter(Boolean);
   return [
@@ -283,6 +314,43 @@ export async function loadFollowUpContext(userId: string, task: Pick<CoTask, "cr
   };
 }
 
+// The hard day's hold for a follow-up's look: the one emotion read and their last message (timestamps only).
+async function followUpMoodRead(userId: string, now: Date): Promise<MoodHold> {
+  const [E, P] = await Promise.all([import("../harness/emotion.js"), import("../harness/proactive.js")]);
+  const [e, last] = await Promise.all([E.getEmotionalContext(userId, now).catch(() => null), P.lastInboundAt(userId).catch(() => null)]);
+  return moodHold(e, { now, lastInboundAt: last });
+}
+// The wait's sleep: the next look in the okay window, never past the cap; the plan line stays as it was, and the wake isn't spent.
+async function sleepThroughHardDay(userId: string, task: CoTask, waitedAt: string, now: Date): Promise<void> {
+  const { scheduleTaskAt, unspendWake } = await import("./coTasks.js");
+  await scheduleTaskAt(userId, task.id, new Date(now.getTime() + followUpWakeHours({ waitedAt, now }) * 3_600_000), task.planNext ?? "");
+  await unspendWake(userId, task.id);
+}
+
+// A follow-up waiting out a hard day sleeps instead of looking (no model call); true when it slept. Logged once, rule and kind.
+export async function followUpWaitGate(userId: string, task: CoTask, mood: MoodHold, now: Date = new Date()): Promise<boolean> {
+  const f = task.followup as Stored | null;
+  const waiting = followUpStillWaiting({ waitedAt: f?.moodWaitAt, read: mood, now });
+  if (waiting) noteMoodHold("followup_skip_wait", `followup:${f?.type ?? "followup"}`, `${userId}:${task.id}`, waiting);
+  if (!waiting?.hold) return false;
+  await sleepThroughHardDay(userId, task, f!.moodWaitAt!, now);
+  return true;
+}
+// The decider's skip: its one mood wait while the hard day's hold is on (not a skip for space), otherwise closed as before.
+export async function handleFollowUpSkip(userId: string, task: CoTask, why: string, because: string | null | undefined, mood: MoodHold, now: Date = new Date()): Promise<"waits" | "closed"> {
+  const f = task.followup as Stored | null;
+  if (followUpMoodWait({ waitedAt: f?.moodWaitAt, because, read: mood })) {
+    const at = now.toISOString();
+    await pool.query(`UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{moodWaitAt}', to_jsonb($3::text)), updated_at = NOW() WHERE user_id = $1 AND id = $2 AND status = 'open'`, [userId, task.id, at]);
+    await sleepThroughHardDay(userId, task, at, now);
+    noteMoodHold("followup_skip_wait", `followup:${f?.type ?? "followup"}`, `${userId}:${task.id}`, mood);
+    return "waits";
+  }
+  const { closeTask } = await import("./coTasks.js");
+  await closeTask(userId, task.id, "dropped", why);
+  return "closed";
+}
+
 export async function runFollowUpTurn(task: CoTask): Promise<void> {
   const userId = task.userId;
   const { closeTask, scheduleTask, noteOnTask } = await import("./coTasks.js");
@@ -315,12 +383,19 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
     await recordDecision({ layer: 7, decision: "task.followup", userId, outcome: "act", action: "now_window_end", reason: "last moment in its window", proposal: { taskId: task.id, type: f?.type, queued: q } }).catch(() => {});
     return;
   }
+  // Waiting out a hard day (followUpStillWaiting): no look until they're okay or the cap; logged once, rule and kind.
+  const mood = await followUpMoodRead(userId, new Date());
+  if (await followUpWaitGate(userId, task, mood)) {
+    await recordDecision({ layer: 7, decision: "task.followup", userId, outcome: "skip", action: "mood_wait", reason: "waiting out a hard stretch (followup_skip_wait)", proposal: { taskId: task.id, type: f?.type } }).catch(() => {});
+    return;
+  }
   const r = await runFollowUpTurnWith(task, {
     firstName: u[0].first_name || "them",
     recent: ctx.recent,
     recentSends: ctx.recentSends,
     dueSince: ctx.dueSince,
-    knowledge: ctx.knowledge,
+    // After its wait: the feeling as tone only (model-facing).
+    knowledge: f?.moodWaitAt ? [ctx.knowledge, FOLLOWUP_GENTLE].filter(Boolean).join("\n") : ctx.knowledge,
     rules: ctx.rules,
     zone,
     now: () => new Date(),
@@ -335,8 +410,9 @@ export async function runFollowUpTurn(task: CoTask): Promise<void> {
       const h = Math.min(FOLLOWUP_LIMITS.maxHours, Math.max(FOLLOWUP_LIMITS.minHours, Number(hours) || 24));
       await scheduleTask(userId, task.id, h, why);
     },
-    skip: async (why) => {
-      await closeTask(userId, task.id, "dropped", why);
+    // While the hard day's hold is on, a skip (not one for space) is its one wait, never a close (handleFollowUpSkip).
+    skip: async (why, because) => {
+      await handleFollowUpSkip(userId, task, why, because, mood);
     },
   });
   await recordDecision({ layer: 7, decision: "task.followup", userId, outcome: r.action === "now" ? "act" : "skip", action: r.action, reason: r.why.slice(0, 300), proposal: { taskId: task.id, type: f?.type, targetKey: f?.targetKey } }).catch(() => {});
