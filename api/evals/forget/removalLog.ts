@@ -89,6 +89,28 @@ check("refused removal: no word of it or of their message, no hash", !!ref && !s
 check("logKind: a known kind gets its words; a made-up ref is 'an item'; an odd profile field is generic", W.logKind("claim:c1") === "what they told Cue" && W.logKind("the custody hearing") === "an item" && W.logKind("profile:custody hearing") === "a profile field" && W.logKind("profile:city") === "city");
 check("removalLog: kind, day, id; a missing id is null", JSON.stringify(W.removalLog("goals", "12", new Date("2026-10-18T12:00:00Z"))) === '{"kind":"goals","on":"2026-10-18","id":12}' && W.removalLog("goals", undefined).id === null);
 
+// ---- 6. the tool guard's own receipt (agent/toolGuard.ts tool.correctWhatCoKnows)
+{
+  const TG = await import("../../src/agent/toolGuard.js");
+  (await import("../../src/services/theirYes.js")).setYesJudgeForTests(async () => ({ yes: true, why: "stub: they asked to forget the custody hearing", read: true }));
+  const { createConversationTools } = await import("../../src/agent/conversationTools.js");
+  const tools = (message: string) => createConversationTools({ userId: U, phoneNumber: "+15550000000", resolvedContent: message, isVoice: false, hasPendingOffer: false, recentOfferBurstActive: false, dryRun: false, sendCoReply: async () => true, facts: { add: () => {}, text: () => "" } } as any);
+  reset();
+  const t = tools(theirWords);
+  const out = await (t.tools as any).correctWhatCoKnows.execute({ changes: [{ refs: ["claim:c1"], action: "remove" }], theirYes: theirWords, why: "they asked to forget the custody hearing" }, {});
+  const receipt = decisions.find((d) => d.decision === "tool.correctWhatCoKnows");
+  check("tool receipt for a removal: written, the removal done", !!out?.ok && !!receipt && receipt.action === "done");
+  check("tool receipt for a removal: kinds and counts only (no message, theirYes, why, refs, judge words)", !!receipt && JSON.stringify(Object.keys(receipt.proposal).sort()) === JSON.stringify(["ability", "changes", "kinds", "removal"]) && receipt.proposal.changes.remove === 1 && receipt.proposal.kinds[0] === "what they told Cue" && receipt.reason === "");
+  check("tool receipt for a removal: no word of it or of their message, no hash", !!receipt && !says(receipt, "custody hearing") && !hashy(receipt));
+  // A correction alone: the receipt as before (message, input, why).
+  reset();
+  const c = tools("actually I moved to Berkeley");
+  await (c.tools as any).correctWhatCoKnows.execute({ changes: [{ refs: ["claim:c2"], action: "correct", now: "Ellis moved to Berkeley" }], theirYes: "actually I moved to Berkeley", why: "they moved" }, {});
+  const cr = decisions.find((d) => d.decision === "tool.correctWhatCoKnows");
+  check("tool receipt for a correction alone: unchanged (message, input and why kept)", !!cr && /Berkeley/.test(cr.proposal.message) && Array.isArray(cr.proposal.input?.changes) && cr.reason === "they moved");
+  check("removalReceipt: other tools and no-removal calls are null; a mixed call counts both", TG.removalReceipt("saveAsk", { changes: [{ action: "remove", refs: ["x"] }] }) === null && TG.removalReceipt("correctWhatCoKnows", { changes: [{ action: "correct", refs: ["claim:c2"] }] }) === null && JSON.stringify(TG.removalReceipt("correctWhatCoKnows", { changes: [{ action: "remove", refs: ["claim:c1", "the custody hearing"] }, { action: "correct", refs: ["profile:city"] }] })) === '{"removal":true,"changes":{"remove":1,"correct":1},"kinds":["what they told Cue","an item","city"]}');
+}
+
 console.log(`removal log: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;
 process.exit();
