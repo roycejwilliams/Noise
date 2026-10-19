@@ -311,7 +311,7 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   check("safety is not a mood rule and is not in the list", !Object.keys(rules).some((k) => /safety/.test(k)));
   const others = MH.FEELING_PICKS_NOT_CHANGED;
   check("the other feeling-based places are each documented as not changed (needing Royce) or ruled since (not claimed as all ruled)", others.every((o) => /documented, not changed: needs Royce/.test(o.status)) && ["documentOffer.ts offerGate", "postCallFollowUp.ts", "replyGrounding.ts heavyMoment", "feelingForDraft"].every((w) => others.some((o) => o.where.includes(w)) || Object.values(rules).some((r) => r.where.includes(w))) && /Not every\s*\n?\/\/ place a feeling read decides/.test(src("services/moodHold.ts")));
-  check("those places are indeed unchanged here", /if \(s\.needsCare\) return "they are having a hard time; their state comes first";/.test(src("services/documentOffer.ts")) && /return !!e\.needsCare \|\| \(!!e\.current && e\.current\.intensity === "high" && e\.current\.valence === "negative"\);/.test(src("harness/replyGrounding.ts")));
+  check("those places are indeed unchanged here", /return !!e\.needsCare \|\| \(!!e\.current && e\.current\.intensity === "high" && e\.current\.valence === "negative"\);/.test(src("harness/replyGrounding.ts")));
   check("no member-facing words were added: the module writes no line to them", !/messages|sendText|sendWithLedger|carryLaneNotes/.test(src("services/moodHold.ts")));
 }
 

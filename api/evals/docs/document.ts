@@ -119,7 +119,7 @@ const GUIDE = "seeking guidance on how to split the cofounder roles with Jacquel
   check("frustration alone is not 'needs direction' (it is usually at Cue)", O.documentOfferDue(state({ recurring: [{ about: "Cue's replies", emotions: ["frustrated"], count: 5 }] })).due === false);
   check("an open thread they feel unsure about, a few days old, is a moment", O.documentOfferDue(state({ threads: [{ text: "deciding how to position the concept", feeling: "uncertain (medium)", ageDays: 4 }] })).due === true);
   check("grief and exhaustion are care, not direction: no offer", O.documentOfferDue(state({ threads: [{ text: "the business", feeling: "grief, exhausted (high)", ageDays: 6 }], recurring: [{ about: "work", emotions: ["grief", "exhaustion"], count: 4 }] })).due === false);
-  check("when they are having a hard time, their state comes first: never, whatever else is true", O.documentOfferDue(state({ needsCare: true, helpAsks: [{ text: GUIDE, ageDays: 5 }] })).due === false);
+  check("when they are having a hard time it waits (not now; capped and never cancelled: evals/docs/offerMoodHold.ts)", O.documentOfferDue(state({ needsCare: true, helpAsks: [{ text: GUIDE, ageDays: 5 }] })).due === false);
   check("nothing unsettled: nothing to offer", O.documentOfferDue(state()).due === false);
   const hist = (topic: string, d: number, status: "offered" | "accepted" = "offered", source: "offered" | "asked" = "offered") => ({ topic, source, status, at: ago(d) });
   const ask = { helpAsks: [{ text: GUIDE, ageDays: 5 }] };
