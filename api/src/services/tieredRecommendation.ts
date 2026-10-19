@@ -272,7 +272,7 @@ export async function eventCandidates(
   const coIds = new Set(coEvents.map((e) => e.api_id).filter(Boolean));
   const ours = await filterByRadius(coEvents.filter((e) => inRange(e.start_at)), city, src.near);
   // Exa's events join the feed's before anything else (deduped by Luma slug and event id, the feed's copy kept), so they get the same
-  // window, nearby filter, ranking, page read, gate and start check as a feed event.
+  // window, nearby filter, ranking, gate and start check as a feed event (with Luma API details in place of a page read).
   const merged = withExaEvents<DiscoveredEvent & { online?: boolean }>(feed, exa?.events ?? []);
   const fromExa = new Set(merged.slice(feed.length).map((e) => e.url));
   const theirs = await filterByRadius(merged.filter((e) => !coIds.has(e.api_id) && inRange(e.start_at)), city, src.near);
@@ -299,9 +299,11 @@ export async function eventCandidates(
   // online flag, so a festival under way (offerable until it ends) and an online event (15 minutes, not 60) are only known from the page,
   // and a start the page moved goes by the page (review of #229). The gate then judges the start with everything known, so a late event
   // is turned away and logged as a skip, never as offered (second review of #229: the morning review read those as offers).
+  // An event Exa found already carries its details from Luma's API (services/lumaViaExa.ts): its page is never read.
+  const fromApi = new Map((exa?.events ?? []).map((e) => [e.url, e.details]));
   const read = await Promise.all(
     raw.map(async (m) => {
-      const details = "url" in m && m.url ? ((await src.page(m.url).catch(() => null)) ?? undefined) : undefined;
+      const details = "url" in m && m.url ? (fromApi.get(m.url) ?? (await src.page(m.url).catch(() => null)) ?? undefined) : undefined;
       return { ...m, ...(details?.startAt ? { startAt: details.startAt } : {}), details } as TierMatch;
     }),
   );

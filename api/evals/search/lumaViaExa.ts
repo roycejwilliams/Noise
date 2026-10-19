@@ -45,7 +45,38 @@ const exaDep = async (query: string): Promise<any> => {
   if (world.exa === "error") return { pages: [], cost: null, error: "Exa timed out" };
   return { pages: world.exa.map((p) => exaPage(p.url, p.title)), cost: 0.022, error: null };
 };
-const pageDep = async (url: string) => world.pages[V.lumaEventSlug(url) ?? ""] ?? null;
+// A page read: only the feed's events may be read this way. Every read is counted, so a test can say an Exa-found event never was.
+let pageReads: string[] = [];
+const pageDep = async (url: string) => {
+  pageReads.push(url);
+  return world.pages[V.lumaEventSlug(url) ?? ""] ?? null;
+};
+// Luma's official API, answered from the same world: a slug in world.pages is a public Luma event Luma's API knows; "refused" is a
+// 429; "calendar:..." is a calendar page. The event's API record is built from the page fixture (its visibility, place, times).
+let apiCalls: string[] = [];
+const idOf = (slug: string) => world.pages[slug]?.apiId ?? `evt-${slug}`;
+const lookupDep = async (slug: string): Promise<any> => {
+  apiCalls.push(`lookup ${slug}`);
+  const p = world.pages[slug];
+  if (p === "refused") return "refused";
+  if (p === "limited") return "limited";
+  if (typeof p === "string" && p.startsWith("calendar:")) return { type: "calendar", id: p.slice(9) };
+  if (!p) return null;
+  // lookupStartAt: what the lookup says, when a test needs it to differ from the event's own record (a start the host moved).
+  return { type: "event", id: idOf(slug), slug, startAt: p.lookupStartAt !== undefined ? p.lookupStartAt : p.startAt, endAt: p.endAt };
+};
+const eventDep = async (id: string): Promise<any> => {
+  apiCalls.push(`event ${id}`);
+  const slug = Object.keys(world.pages).find((k) => idOf(k) === id);
+  const p = slug ? world.pages[slug] : null;
+  if (!p || typeof p === "string") return null;
+  return {
+    id, name: p.name ?? "", slug, startAt: p.startAt, endAt: p.endAt, timezone: p.timezone, visibility: p.visibility ?? null,
+    locationType: p.online ? "zoom" : p.city ? "offline" : "missing", locationVisibility: p.addressHidden || !(p.venue || p.address) ? "guests-only" : "public",
+    city: p.city ?? null, address: p.venue ?? null, fullAddress: p.address ?? null, hosts: p.hosts ?? [], description: p.description ?? null,
+    registrationOpen: p.soldOut ? false : true, requireApproval: p.requiresApproval ?? null, spotsRemaining: p.spotsRemaining ?? null,
+  };
+};
 // The daily budget: every reservation, with its share; room unless a test says otherwise. Luma isn't refusing unless a test says so.
 let reserves: { userId: string | null; source: string }[] = [];
 let budgetSays: { ok: boolean; reason: string | null } = { ok: true, reason: null };
@@ -62,7 +93,7 @@ const CATALOG = [
   { apiId: "discplace-nyc", name: "New York", slug: "nyc", lat: 40.7128, lng: -74.006 },
 ];
 const placeDep = async (city: string | null) => V.catalogCity(CATALOG, city);
-const viaDeps = (configured = true) => ({ exa: exaDep, page: pageDep, configured: () => configured, now: () => new Date(), refusing: () => lumaRefusing, pauseMinutes: 10, reserve: reserveDep, place: placeDep });
+const viaDeps = (configured = true) => ({ exa: exaDep, lookup: lookupDep, event: eventDep, lumaApi: () => true, configured: () => configured, now: () => new Date(), refusing: () => lumaRefusing, pauseMinutes: 10, reserve: reserveDep, place: placeDep });
 // eventCandidates with every outside source stubbed. Nearby: San Francisco and Oakland are near each other, nothing else is.
 const BAY = new Set(["san francisco", "oakland"]);
 const sources = (o: { configured?: boolean; viaExa?: any } = {}) => ({
@@ -82,6 +113,8 @@ const reset = (w: Partial<World>) => {
   world = { exa: [], pages: {}, feed: [], ...w };
   exaCalls = [];
   logs = [];
+  pageReads = [];
+  apiCalls = [];
   reserves = [];
   budgetSays = { ok: true, reason: null };
   lumaRefusing = false;
@@ -131,8 +164,36 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   const r = await V.lumaEventsViaExa("founder dinners", "San Francisco", { inRange, dates: "now to then", deps: viaDeps() });
   check("only the upcoming, in-window event survives: past, a start outside the window and one already started are dropped (by its page, not Exa's title)", r?.events.map((e) => e.url).join() === "https://lu.ma/good1", r);
   check("...its start, city and Luma id come from its own page, and its link is the plain lu.ma one", r?.events[0]?.start_at === world.pages.good1.startAt && r?.events[0]?.city === "San Francisco" && r?.events[0]?.api_id === "evt-good1", r?.events[0]);
-  check("...the report counts it: 5 event pages (Discover and a repeat aren't), 4 read, 1 kept", r?.report.pages === 5 && r?.report.read === 4 && r?.report.kept === 1 && r?.report.cached === false, r?.report);
+  check("...the report counts it: 5 event links (Discover and a repeat aren't), 4 Luma knows, 3 over or outside the window by the lookup alone, 1 read, 1 kept", r?.report.pages === 5 && r?.report.looked === 4 && r?.report.past === 3 && r?.report.read === 1 && r?.report.kept === 1 && r?.report.cached === false, r?.report);
+  check("...and the 3 the lookup showed over or outside the window were never read further (one events/get, for the kept one)", apiCalls.filter((c) => c.startsWith("event ")).length === 1 && apiCalls.filter((c) => c.startsWith("lookup ")).length === 5 && pageReads.length === 0, apiCalls);
   check("the search is built from fixed parts only: the kinds, the city (dates not in Cue's own form are left out)", exaCalls[0] === "startup founder, dinner events in San Francisco", exaCalls);
+}
+
+// ================================================================ what Luma's API says decides
+{
+  reset({
+    exa: [
+      { url: "https://lu.ma/moved1", title: "Moved dinner" },
+      { url: "https://lu.ma/nodate1", title: "No date at lookup" },
+      { url: "https://lu.ma/acal", title: "A calendar" },
+      { url: "https://lu.ma/noplace1", title: "Nowhere dinner" },
+      { url: "https://lu.ma/online2", title: "Online talk" },
+    ],
+    pages: {
+      // The lookup still had the old date; the event's own record says it moved to last week.
+      moved1: page({ startAt: at(-24 * 7), lookupStartAt: at(40) }),
+      // The lookup gave no start; the record says it's past.
+      nodate1: page({ startAt: at(-3), lookupStartAt: null }),
+      acal: "calendar:cal-abc",
+      noplace1: page({ startAt: at(40), city: null }),
+      online2: page({ startAt: at(42), city: null, online: true }),
+    },
+  });
+  const r = await V.lumaEventsViaExa("founder dinners", "San Francisco", { inRange: () => true, dates: "October 20 to October 26, 2026", deps: viaDeps() });
+  const got = r?.events.map((e) => e.url) ?? [];
+  check("a start the event's own record moved into the past drops it, whatever the lookup said", !got.includes("https://lu.ma/moved1") && !got.includes("https://lu.ma/nodate1"), got);
+  check("a calendar link is skipped (counted), and never read as an event", r?.report.calendars === 1 && !apiCalls.includes("event cal-abc"), { report: r?.report, apiCalls });
+  check("no place and not online: dropped and counted; online with no city: kept", r?.report.noLocation === 1 && !got.includes("https://lu.ma/noplace1") && got.includes("https://lu.ma/online2"), { got, report: r?.report });
 }
 
 // ================================================================ no key, no search
@@ -249,8 +310,6 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   check("...nor one whose page doesn't say (unknown is not public: fails closed)", !got.includes("https://lu.ma/unk1"), got);
   check("...the public one goes out, and the feed's events are untouched", got.includes("https://lu.ma/pub1") && got.includes("https://lu.ma/feed1") && got.includes("https://lu.ma/feed2"), got);
   check("...and the log counts the three dropped as not public", r.viaExa?.notPublic === 3 && r.viaExa?.kept === 1 && logs[0]?.proposal?.notPublic === 3, r.viaExa);
-  const parse = (v: unknown) => D.parseLumaEventPage(`<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-x", start_at: at(40), ...(v === undefined ? {} : { visibility: v }) } } } } } })}</script></html>`)?.visibility;
-  check("a Luma page's visibility is read as written, and missing is null", parse("public") === "public" && parse("private") === "private" && parse(undefined) === null);
 }
 
 // ================================================================ the reply's event searches are capped per turn, like web searches
@@ -278,6 +337,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
     throw new Error("no network in this test");
   }) as any;
   process.env.EXA_API_KEY = "test-key";
+  process.env.LUMA_API_KEY = "test-luma-key";
   // The daily budget's lock and count, answered by a fake client: room for the search (nothing reaches a database).
   const { default: pool } = await import("../../src/db/db.js");
   const realConnect = (pool as any).connect;
@@ -294,6 +354,7 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   const onCall = exaCalls.length;
   const text = await turn(false, "jazz by text");
   delete process.env.EXA_API_KEY;
+  delete process.env.LUMA_API_KEY;
   globalThis.fetch = realFetch;
   (pool as any).connect = realConnect;
   check("a call's searchEvents (isVoice) makes no Exa call; a text turn's does", voice.ok === true && onCall === 0 && text.ok === true && exaCalls.length === 1 && /^jazz events/.test(exaCalls[0]) && !/by text/.test(exaCalls[0]), { onCall, exaCalls, voice: JSON.stringify(voice).slice(0, 120) });
@@ -340,7 +401,12 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
   const r = await search();
   const c = r.candidates.find(({ match }) => "url" in match && match.url === "https://lu.ma/mixer1");
   check("an Exa-found event is named as its own page names it, not by Exa's page title", c?.match.name === "GP/LP Mixer at AngelList", c?.match.name);
-  check("its lines are the feed's lines: the same renderer on its own page (name, start, place, host, price), nothing else", JSON.stringify(c?.lines) === JSON.stringify(D.renderEventDetails("GP/LP Mixer at AngelList", world.pages.mixer1)) && /starts .* at /.test(c?.lines[0] ?? "") && c!.lines.some((l) => /is at AngelList, 45 Fremont St/.test(l)), c?.lines);
+  check("its lines are the feed's renderer on what Luma's API gave (name, start, place, host), nothing else", JSON.stringify(c?.lines) === JSON.stringify(D.renderEventDetails("GP/LP Mixer at AngelList", (c!.match as any).details)) && /starts .* at /.test(c?.lines[0] ?? "") && c!.lines.some((l) => /is at AngelList, 45 Fremont St/.test(l)) && c!.lines.some((l) => /Hosted by Ada/.test(l)), c?.lines);
+  reset({ feed: FEED, exa: [{ url: "https://lu.ma/hid1", title: "Supper" }, { url: "https://lu.ma/full1", title: "Closed dinner" }], pages: { ...FEED_PAGES, hid1: page({ startAt: at(40), name: "Supper", venue: "A home", address: "1 Private Rd, San Francisco", addressHidden: true }), full1: page({ startAt: at(41), name: "Closed dinner", soldOut: true }) } });
+  const r2 = await search();
+  const hid = r2.candidates.find(({ match }) => "url" in match && match.url === "https://lu.ma/hid1");
+  check("an address the host shows only to guests is never in the lines (the city alone, as the event page does)", !!hid && !hid.lines.some((l) => /Private Rd|A home/.test(l)) && hid.lines.some((l) => /is in San Francisco; the exact address is only shown to registered guests/.test(l)), hid?.lines);
+  check("registration closed (from the API) is turned away like a sold-out page, with why", !links(r2).includes("https://lu.ma/full1") && r2.turnedAway.some((g) => g.url === "https://lu.ma/full1"), r2.turnedAway);
   check("no internal ids in what the model reads (no evt-, no luma: ids) and the link is the plain Luma one", !/evt-|luma:/.test(JSON.stringify(r.candidates.map((x) => x.lines))) && ("url" in c!.match && c!.match.url === "https://lu.ma/mixer1"));
   const lt = src("agent/loopTools.ts");
   check("the reply's tool gives the model name, link, own-event flag and lines per event, no ids (pinned)", /return \{ name: match\.name, link: url \|\| null, ownEvent: match\.tier === 1, details: lines \};/.test(lt));
@@ -383,12 +449,9 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
   const r = await X.exaSearch("founder dinners in San Francisco", { purpose: "luma_events", pages: V.LUMA_VIA_EXA.results, text: false, includeDomains: V.LUMA_DOMAINS, fetchImpl, env: { EXA_API_KEY: "k" } as any });
   check("Exa is asked for 25 results on lu.ma and luma.com, with no page text", body?.numResults === 25 && JSON.stringify(body?.includeDomains) === '["lu.ma","luma.com"]' && body?.contents === undefined, body);
   check("...and its links come back without tracking tags (#235), so the slug and the link are clean", r.pages[0]?.url === "https://luma.com/mixer1" && V.lumaEventSlug(r.pages[0].url) === "mixer1", r.pages);
-  const html = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-r6tazveGHPqyaFv", name: " ElevenLabs Funded Founders Three Course Private Dinner ", start_at: "2026-10-23T01:00:00.000Z", geo_address_info: { city: "San Francisco" } } } } } } })}</script></html>`;
-  check("a Luma page gives its event id (the feed's evt- id), so the same event is one event however it was found", D.parseLumaEventPage(html)?.apiId === "evt-r6tazveGHPqyaFv");
-  check("...and its own name, trimmed", D.parseLumaEventPage(html)?.name === "ElevenLabs Funded Founders Three Course Private Dinner");
 }
 
-// ================================================================ Luma refusing page reads (429): said, and the Exa search pauses
+// ================================================================ Luma's API refusing (429): said, and the Exa search pauses
 {
   reset({
     feed: FEED,
@@ -396,36 +459,108 @@ check("the sweep's own log (sweep.find) carries what Exa added on each of its ev
     pages: { ...FEED_PAGES, r1: page({ startAt: at(40) }), r2: page({ startAt: at(41) }), r3: "refused", r4: "refused", r5: "refused" },
   });
   const r = await search();
-  check("Luma refused 3 of the 5 page reads: the log says exactly that, and what happens next", r.viaExa?.refused === 3 && /^Luma refused 3 of 5 page reads \(429\): those events couldn't be checked, so they were left out; the Luma search through Exa pauses for 10 minutes/.test(logs[0]?.reason ?? ""), { viaExa: r.viaExa, reason: logs[0]?.reason });
+  check("Luma's API refused 3 of the 5 checks: the log says exactly that, and what happens next", r.viaExa?.refused === 3 && /^Luma's API refused 3 of 5 checks \(429\): those events couldn't be checked, so they were left out; the Luma search through Exa pauses for 10 minutes$/.test(logs[0]?.reason ?? ""), { viaExa: r.viaExa, reason: logs[0]?.reason });
   check("...the two it did serve still go out, and the feed's events are untouched", ["https://lu.ma/r1", "https://lu.ma/r2", "https://lu.ma/feed1", "https://lu.ma/feed2"].every((u) => links(r).includes(u)) && !links(r).includes("https://lu.ma/r3"), links(r));
 
   reset({ feed: FEED, pages: FEED_PAGES });
   const alone = links(await search({ exaOn: false }));
   reset({ feed: FEED, pages: { ...FEED_PAGES, good1: page({ startAt: at(40) }) }, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
   lumaRefusing = true;
-  let exaPageReads = 0;
-  const countingVia = (w: string, c: string | null, opt: any) => V.lumaEventsViaExa(w, c, { ...opt, deps: { ...viaDeps(), page: async (url: string) => { exaPageReads++; return pageDep(url); } } });
-  const s = await search({ viaExa: countingVia });
-  check("while Luma is refusing: no Exa search, no budget taken, no page reads of Exa's results", exaCalls.length === 0 && reserves.length === 0 && exaPageReads === 0, { exaCalls, reserves, exaPageReads });
-  check("...logged with why, and the member's results are exactly the feed's", /^Luma refused page reads \(429\) in the last 10 minutes, so no Luma search through Exa/.test(logs[0]?.reason ?? "") && JSON.stringify(links(s)) === JSON.stringify(alone), { reason: logs[0]?.reason, got: links(s), alone });
+  const s = await search();
+  check("while Luma's API is refusing: no Exa search, no budget taken, no API checks", exaCalls.length === 0 && reserves.length === 0 && apiCalls.length === 0, { exaCalls, reserves, apiCalls });
+  check("...logged with why, and the member's results are exactly the feed's", /^Luma's API refused a request \(429\) in the last 10 minutes, so no Luma search through Exa/.test(logs[0]?.reason ?? "") && JSON.stringify(links(s)) === JSON.stringify(alone), { reason: logs[0]?.reason, got: links(s), alone });
+  // Our own per-minute stop: said apart from Luma's refusals.
+  reset({ feed: FEED, exa: [{ url: "https://lu.ma/l1", title: "Founder dinner" }, { url: "https://lu.ma/l2", title: "Founder dinner 2" }], pages: { ...FEED_PAGES, l1: page({ startAt: at(40) }), l2: "limited" } });
+  const lim = await search();
+  check("a check left unread at our own per-minute stop is said as that, and the rest go out", lim.viaExa?.limited === 1 && /^1 of 2 were left unchecked at the per-minute stop: those events couldn't be checked, so they were left out$/.test(logs[0]?.reason ?? "") && links(lim).includes("https://lu.ma/l1"), { viaExa: lim.viaExa, reason: logs[0]?.reason });
+  // No Luma API key: Exa isn't asked (its links couldn't be checked).
+  reset({ feed: FEED, pages: FEED_PAGES, exa: [{ url: "https://lu.ma/good1", title: "GP/LP mixer" }] });
+  const noApi = await search({ viaExa: (w: string, c: string | null, opt: any) => V.lumaEventsViaExa(w, c, { ...opt, deps: { ...viaDeps(), lumaApi: () => false } }) });
+  check("no LUMA_API_KEY: no Exa call, no budget, the feed alone, and the log says how to turn it on", exaCalls.length === 0 && reserves.length === 0 && /^LUMA_API_KEY isn't set on this service, so Exa's Luma links can't be checked/.test(logs[0]?.reason ?? "") && JSON.stringify(links(noApi)) === JSON.stringify(alone), { reason: logs[0]?.reason });
 }
 {
-  // The page read itself: a 429 is noted and said; any other read is exactly as before.
-  const E = D as any;
-  const ok = async () => true;
-  const html = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { initialData: { data: { event: { api_id: "evt-ok", name: "OK", start_at: at(40), visibility: "public" } } } } } })}</script></html>`;
-  const f = (status: number) => (async () => new Response(status === 200 ? html : "", { status })) as any;
-  E.noteLumaRefusal(0);
-  const fine = await E.readLumaEventPage("https://lu.ma/t-ok-1", { fetchImpl: f(200), isPublic: ok });
-  check("a page Luma serves: its details, not refused, and no pause", fine.details?.apiId === "evt-ok" && fine.refused === false && E.lumaRefusedRecently() === false);
-  const no = await E.readLumaEventPage("https://lu.ma/t-429-1", { fetchImpl: f(429), isPublic: ok });
-  check("a 429: no details, said as refused, and Luma counts as refusing for 10 minutes", no.details === null && no.refused === true && E.lumaRefusedRecently() === true && E.lumaRefusedRecently(Date.now() + 11 * 60_000) === false && E.LUMA_REFUSAL_PAUSE_MINUTES === 10);
-  const again = await E.readLumaEventPage("https://lu.ma/t-429-1", { fetchImpl: f(200), isPublic: ok });
-  check("...a refused read, cached for its 2 minutes like any failed read, still says refused", again.refused === true && again.details === null);
-  const gone = await E.readLumaEventPage("https://lu.ma/t-404-1", { fetchImpl: f(404), isPublic: ok });
-  check("a 404 is a page with nothing on it, not a refusal", gone.details === null && gone.refused === false);
-  E.noteLumaRefusal(0);
-  check("the feed's own page reads are unchanged: fetchLumaEventDetails is the same read, details only (pinned)", /export async function fetchLumaEventDetails\(url: string, opts: \{ maxAgeMs\?: number \} = \{\}\): Promise<EventDetails \| null> \{\n  return \(await readLumaEventPage\(url, opts\)\)\.details;\n\}/.test(src("services/eventDetails.ts")));
+  // Luma's official API client (services/luma.ts), against a fake fetch. The records are shaped like the live answers of 2026-10-19
+  // (lu.ma/16nclyz5, a public event Noise doesn't manage: access "view"), with invented names and ids.
+  const A = await import("../../src/services/luma.js");
+  const env = { LUMA_API_KEY: "test-luma-key" } as any;
+  const calls: string[] = [];
+  let status = 200;
+  const VIEW = {
+    platform: "luma", id: "evt-test123", user_id: "usr-x", calendar_id: "cal-test", start_at: at(30), duration_interval: "PT3H", end_at: at(33), created_at: at(-200),
+    timezone: "America/Los_Angeles", name: " Founders Dinner in San Francisco ", cover_url: "https://images.lumacdn.com/x.png", url: "https://luma.com/abc12xyz", visibility: "public",
+    location_type: "offline", location_visibility: "guests-only", waitlist_status: "enabled", registration_open: true, require_approval: true, spots_remaining: 11, display_price: null,
+    access: "view", geo_address_json: { address: "", city: "San Francisco", region: "California", country: "United States", city_state: "San Francisco, California", full_address: null },
+    coordinate: { latitude: 37.77, longitude: -122.42 }, description: "A dinner for founders.", description_md: "A dinner for founders.", hosts: [{ name: "Noor" }, { name: "Ellis" }],
+  };
+  const fetchImpl = (async (u: any, init: any) => {
+    const url = new URL(String(u));
+    calls.push(`${url.pathname}?${url.searchParams} key=${init?.headers?.["x-luma-api-key"] ? "yes" : "no"}`);
+    if (status !== 200) return new Response("{}", { status });
+    if (url.pathname === "/v1/entities/lookup") {
+      const slug = url.searchParams.get("slug");
+      if (slug === "abc12xyz") return new Response(JSON.stringify({ entity: { type: "event", event: { id: "evt-test123", name: "Founders Dinner", slug: "abc12xyz", cover_url: "x", start_at: VIEW.start_at, end_at: VIEW.end_at } } }), { status: 200 });
+      if (slug === "somecal") return new Response(JSON.stringify({ entity: { type: "calendar", calendar: { id: "cal-test", name: "A calendar", slug: "somecal", avatar_url: null } } }), { status: 200 });
+      return new Response(JSON.stringify({ entity: null }), { status: 200 });
+    }
+    if (url.pathname === "/v1/events/get") return new Response(JSON.stringify(VIEW), { status: 200 });
+    return new Response("{}", { status: 404 });
+  }) as any;
+  A.resetLumaPublicApi();
+  const ent = await A.lookupLumaEntity("abc12xyz", { fetchImpl, env });
+  check("lookup: GET public-api /v1/entities/lookup?slug=, with the key, gives the event's id, slug, start and end", JSON.stringify(ent) === JSON.stringify({ type: "event", id: "evt-test123", slug: "abc12xyz", startAt: VIEW.start_at, endAt: VIEW.end_at }) && calls[0] === "/v1/entities/lookup?slug=abc12xyz key=yes", { ent, calls });
+  await A.lookupLumaEntity("abc12xyz", { fetchImpl, env });
+  check("...the same slug again is cached (no second request)", calls.length === 1, calls);
+  const cal = await A.lookupLumaEntity("somecal", { fetchImpl, env });
+  const none = await A.lookupLumaEntity("nothing-here", { fetchImpl, env });
+  check("...a calendar is said as a calendar; an unknown slug is nothing", (cal as any)?.type === "calendar" && none === null);
+  const ev = await A.getPublicLumaEvent("evt-test123", { fetchImpl, env });
+  check("events/get: GET /v1/events/get?event_id=, read into the visitor's fields (name trimmed, city, guests-only address, hosts, registration)", !!ev && typeof ev !== "string" && ev.name === "Founders Dinner in San Francisco" && ev.slug === "abc12xyz" && ev.visibility === "public" && ev.locationType === "offline" && ev.locationVisibility === "guests-only" && ev.city === "San Francisco" && ev.fullAddress === null && JSON.stringify(ev.hosts) === '["Noor","Ellis"]' && ev.spotsRemaining === 11 && ev.registrationOpen === true && calls.includes("/v1/events/get?event_id=evt-test123 key=yes"), ev);
+  const n0 = calls.length;
+  await A.getPublicLumaEvent("evt-test123", { fetchImpl, env });
+  check("...read again within the hour: cached", calls.length === n0);
+  check("...and nothing in this client reads an event's page (only public-api.luma.com)", calls.every((c) => c.startsWith("/v1/")));
+  // A 429 is said as refused, pauses for 10 minutes, and isn't cached.
+  A.resetLumaPublicApi();
+  status = 429;
+  const r429 = await A.lookupLumaEntity("abc12xyz", { fetchImpl, env });
+  check("a 429: 'refused', and Luma's API counts as refusing for 10 minutes", r429 === "refused" && A.lumaApiRefusedRecently() === true && A.lumaApiRefusedRecently(Date.now() + 11 * 60_000) === false && A.LUMA_PUBLIC_API.refusalPauseMinutes === 10);
+  status = 200;
+  const after429 = await A.lookupLumaEntity("abc12xyz", { fetchImpl, env });
+  check("...a refusal isn't cached: the next ask asks again", (after429 as any)?.type === "event");
+  // Our own per-minute stop, below Luma's 200 a minute (the key is shared with Noise's own calendar calls).
+  A.resetLumaPublicApi();
+  const t = Date.now();
+  let limited = 0;
+  for (let i = 0; i < A.LUMA_PUBLIC_API.perMinute + 5; i++) if ((await A.lookupLumaEntity(`s${i}`, { fetchImpl, env, now: () => t })) === "limited") limited++;
+  check(`no more than ${A.LUMA_PUBLIC_API.perMinute} API calls a minute (under Luma's 200); the rest are 'limited', not sent`, A.LUMA_PUBLIC_API.perMinute === 150 && limited === 5);
+  const later = await A.lookupLumaEntity("s-later", { fetchImpl, env, now: () => t + 61_000 });
+  check("...a minute later there's room again", later === null);
+  A.resetLumaPublicApi();
+  check("no LUMA_API_KEY: nothing is sent ('off')", (await A.lookupLumaEntity("abc12xyz", { fetchImpl, env: {} as any })) === "off" && !A.lumaApiConfigured({} as any) && A.lumaApiConfigured(env));
+  A.resetLumaPublicApi();
+}
+{
+  // No per-event page reads anywhere on this path: through the whole search, with the real ranking (its embeddings stubbed), every
+  // fetch counted. Exa's events are checked through the API only; nothing reads lu.ma or luma.com.
+  const realFetch = globalThis.fetch;
+  const hosts: string[] = [];
+  globalThis.fetch = (async (u: any, init: any) => {
+    const url = String(u?.url ?? u);
+    hosts.push(new URL(url).host);
+    if (/api\.openai\.com/.test(url)) {
+      const body = JSON.parse(init?.body ?? "{}");
+      const inputs = Array.isArray(body.input) ? body.input : [body.input];
+      return new Response(JSON.stringify({ object: "list", data: inputs.map((_: unknown, index: number) => ({ object: "embedding", index, embedding: new Array(1536).fill(0.01) })), usage: { prompt_tokens: 0, total_tokens: 0 } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`no network in this test (${url})`);
+  }) as any;
+  const { rankEventsByDescription } = await import("../../src/services/eventRanking.js");
+  reset({ feed: [], exa: [{ url: "https://lu.ma/apiev1", title: "Founder dinner" }, { url: "https://luma.com/apiev2", title: "Founder mixer" }], pages: { apiev1: page({ startAt: at(40), name: "Founder dinner" }), apiev2: page({ startAt: at(44), name: "Founder mixer" }) } });
+  const r = await T.eventCandidates("founder dinners", "San Francisco", { userId: null, timezone: "America/Los_Angeles", limit: 8, sources: { ...sources(), rank: rankEventsByDescription } });
+  globalThis.fetch = realFetch;
+  check("through the whole search (real ranking): both Exa events go out, read from the API only, and no page is read anywhere", links(r).length === 2 && pageReads.length === 0 && !hosts.some((h) => /(^|\.)(lu\.ma|luma\.com)$/.test(h)) && apiCalls.filter((c) => c.startsWith("event ")).length === 2, { links: links(r), pageReads, hosts, apiCalls });
+  check("the ranking and the gate take an Exa event's details from the API (pinned)", /\(c as \{ details\?: EventDetails \}\)\.details \? Promise\.resolve/.test(src("services/eventRanking.ts")) && /const details = "url" in m && m\.url \? \(fromApi\.get\(m\.url\) \?\? \(await src\.page\(m\.url\)/.test(src("services/tieredRecommendation.ts")));
+  check("the Exa path's checks are Luma's official API, never a page read (pinned)", /lookup: d\.lookup \?\? \(\(slug\) => A\.lookupLumaEntity\(slug\)\)/.test(src("services/lumaViaExa.ts")) && /event: d\.event \?\? \(\(id\) => A\.getPublicLumaEvent\(id\)\)/.test(src("services/lumaViaExa.ts")) && !/fetchLumaEventDetails|readLumaEventPage|parseLumaEventPage/.test(src("services/lumaViaExa.ts")));
 }
 
 // ================================================================ the daily budget: 60 a day, 20 held for member asks
