@@ -312,7 +312,7 @@
     "kind": "hold",
     "type": "ask_solicitation",
     "needsCare": true,
-    "expectHeld": false
+    "expectHeld": true
   },
   {
     "id": "t01",
