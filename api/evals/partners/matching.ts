@@ -209,7 +209,8 @@ try {
   check("the value read records no prompt or output in tracing", /functionId: "partnerMatching\.valueLine", recordInputs: false, recordOutputs: false/.test(svc));
   const guests = code("src/services/partnerGuests.ts");
   check("close: pairs still waiting expire with the room", /UPDATE co_pairs SET state = 'expired'[\s\S]{0,120}state IN \('suggested', 'asked'\)/.test(guests));
-  check("forget: the value lines about a forgotten guest's pairs are wiped, the pair's state kept", /UPDATE co_pairs SET value_line_a = NULL, value_line_b = NULL, value_why = NULL[\s\S]{0,120}\(a_id = \$2 OR b_id = \$2\)/.test(guests));
+  // The exact statement and its arguments (review of #216: a shape match passed with "AND FALSE" added, which wipes nothing).
+  check("forget: the value lines about a forgotten guest's pairs are wiped, the pair's state kept", guests.includes("await client.query(`UPDATE co_pairs SET value_line_a = NULL, value_line_b = NULL, value_why = NULL, updated_at = NOW() WHERE event_id = $1 AND (a_id = $2 OR b_id = $2)`, [eventId, r.user_id]);"));
   const jobs = src("src/jobs/index.ts");
   check("job: the pass runs before the close, every 5 minutes", jobs.indexOf("runPartnerMatchPasses()") > 0 && jobs.indexOf("runPartnerMatchPasses()") < jobs.indexOf("runPartnerNightCloses()"));
   check("table: one last-pass row per night", /CREATE TABLE IF NOT EXISTS partner_match_passes \(event_api_id TEXT PRIMARY KEY/.test(src("src/db/migrations.ts")));
