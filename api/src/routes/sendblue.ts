@@ -264,6 +264,9 @@ async function transcribeVoiceMemo(audioUrl: string): Promise<string> {
 
 // A phone number as the logs may show it: the last four digits only.
 export const phoneTail = (n: unknown) => `…${String(n ?? "").replace(/\D/g, "").slice(-4)}`;
+// Any phone number inside text we log (an error from Sendblue can echo the number it was sending to): last four digits only.
+// A run of 10 or more digits, with the usual +, spaces, dots, dashes and brackets; dates and short codes are left alone.
+export const withoutPhones = (t: unknown) => String(t ?? "").replace(/\+?\(?\d[\d\s().-]{8,}\d/g, (m) => (m.replace(/\D/g, "").length >= 10 ? phoneTail(m) : m));
 
 // A voice memo's words. The log line says one came, whose (by user id), how
 // long it was and whether it worked, never the words or the phone number:
@@ -286,7 +289,8 @@ export async function voiceMemoText(audioUrl: string, userId: string, transcribe
 const inlineRefused = new Set<string>();
 
 // Send Co's reply — voice note if user sent audio, text if they sent text
-async function sendCoReply(params: {
+// Exported for evals/logs/voiceMemo.ts (its failure lines never print the number).
+export async function sendCoReply(params: {
   phone: string;
   message: string;
   asVoice: boolean;
@@ -327,10 +331,10 @@ async function sendCoReply(params: {
       return true;
     } catch (err: any) {
       if (/send breaker|meta-commentary/.test(String(err?.message))) {
-        console.error(`sendCoReply failed for ${phone}:`, err?.message ?? err);
+        console.error(`sendCoReply failed for ${phoneTail(phone)}:`, withoutPhones(err?.message ?? err));
         return false;
       }
-      console.error("sendCoReply: inline reply refused, sending it plain (non-fatal):", err?.status ?? "", err?.message ?? err);
+      console.error("sendCoReply: inline reply refused, sending it plain (non-fatal):", err?.status ?? "", withoutPhones(err?.message ?? err));
       inlineRefused.add(phone);
       recordDecision({ layer: 7, decision: "reply.inline", userId: null, outcome: "skip", action: "refused", reason: String(err?.message ?? err).slice(0, 200) }).catch(() => {});
     }
@@ -342,7 +346,7 @@ async function sendCoReply(params: {
     // never crash the whole request — the reply was already generated and
     // stored; this only means Sendblue couldn't deliver it. Confirmed: this
     // was previously an uncaught 500, unlike every other send in this file.
-    console.error(`sendCoReply failed for ${phone}:`, err?.message ?? err);
+    console.error(`sendCoReply failed for ${phoneTail(phone)}:`, withoutPhones(err?.message ?? err));
     // Callers need to know (2026-09-17 code review): a refused send used to
     // look like success, so callers logged "Co replied", skipped the
     // fallback, and the person got nothing.
@@ -702,7 +706,7 @@ export function sendblueRouter(io: Server): Router {
         if (is_outbound) {
           if (status === "ERROR") {
             console.error(
-              `Message to ${phoneTail(number)} failed: ${error_code} — ${error_message}`,
+              `Message to ${phoneTail(number)} failed: ${error_code} — ${withoutPhones(error_message)}`,
             );
             const userResult = await pool.query(
               `SELECT id FROM users WHERE phone_number = $1`,
@@ -2419,7 +2423,7 @@ Return ONLY valid JSON, no preamble: {"date": "YYYY-MM-DD or null", "time": "HH:
                 from_number: process.env.SENDBLUE_PHONE_NUMBER!,
               });
             } catch (smsErr: any) {
-              console.error(`Sendblue call-confirmation send failed for user ${user.id} (non-fatal):`, smsErr?.message ?? smsErr);
+              console.error(`Sendblue call-confirmation send failed for user ${user.id} (non-fatal):`, withoutPhones(smsErr?.message ?? smsErr));
             }
             return res.status(200).send({ received: true, action: "call_triggered", call_sid: callResult.call_sid });
           }
