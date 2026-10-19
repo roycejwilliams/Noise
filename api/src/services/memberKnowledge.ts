@@ -574,7 +574,7 @@ export function carryingOf(o: { tasks: CoTask[]; briefs: BriefView[]; receipts: 
 // Pure: restraint state from its raw reads, against now.
 export function restraintOf(r: RawRestraint, now: Date): Fact<Restraint> {
   const ahead = (d: Date | null) => (d && d.getTime() > now.getTime() ? d.toISOString() : null);
-  const cur = r.emotional?.current ?? null;
+  const cur = r.emotional?.current ?? null; // mood: carries the read (the feeling line below is wording)
   const count = r.unansweredSends.length;
   const last = count ? r.unansweredSends[count - 1] : null;
   return {
