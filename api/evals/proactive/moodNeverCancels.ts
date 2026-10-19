@@ -375,6 +375,7 @@ export const PINNED: Pin[] = [
   { file: "src/harness/replyGrounding.ts", line: "if (!w?.frustrated) return { state: \"none\", hold: false, heldHours: null }; // mood: the capped hold itself", why: "frustrationHold, the capped hold itself: frustration with Cue holds only until they're okay again or the 48h cap" },
   { file: "src/harness/replyGrounding.ts", line: "const since = (w.reads ?? []).filter((t) => !owedSince || t.getTime() >= owedSince.getTime()).reduce<Date | null>((m, t) => (!m || t < m ? t : m), null);", why: "frustrationHold: the wait runs from the first frustration read since the item was owed (one capped wait per item)" },
   { file: "src/harness/replyGrounding.ts", line: "if (w.at && now.getTime() - w.at.getTime() >= OKAY_AFTER_HOURS * 3_600_000) return { state: \"released_okay\", hold: false, heldHours };", why: "frustrationHold: released once they're okay again (texting 6h or more after the last frustration read)" },
+  { file: "src/services/followUps.ts", line: "r?.needsCare || r?.frustratedWithCo ? \"how they feel shapes when and how you check in, never whether\" : null,", why: "wording for the follow-up decider (model-facing): the line shows while they are struggling or frustrated with Cue; decides nothing" },
 ];
 const files: string[] = [];
 const walk = (d: string) => { for (const e of fs.readdirSync(path.join(root, d), { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith(".ts")) files.push(p); } };
