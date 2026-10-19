@@ -3,13 +3,16 @@
 // cap. A check-in in the middle of a bad week can land wrong, and the cap stops it from being skipped forever. The risk is Cue
 // guessing a member's mood wrong and waiting too long."). And the older rule: feelings shape how Cue says it, never whether a member
 // gets events or people.
-// Three places held something while they were struggling (harness/emotion.ts needsCare), with nothing to end the hold but the read
+// These places held something while they were struggling (harness/emotion.ts needsCare), with nothing to end the hold but the read
 // clearing:
 //   checkin_hold      the check-ins and nudges in harness/proactive.ts HOLD_WHILE_STRUGGLING (the emotional_timing check);
 //   stop_note_hold    the stopped-looking line (services/askRetire.ts): in a reply (harness/replyGrounding.ts) and riding a paced
 //                     text (noteMayRide in proactive.ts dispatch);
 //   bundle_skip_wait  a find the bundle composer skipped in the prompt that sees how they feel (harness/bundleComposer.ts): it was
 //                     dropped (a lead, or a morning tier pick skipped twice) or offered again into the same read.
+//   recap_hold        the offer of a one-page recap after a call (jobs/postCallFollowUp.ts recapOfferFor): a hard time or a heavy
+//                     call blocked it, and it rode only the post-call text, so it never came back for that call (Royce, 2026-10-19:
+//                     "feelings change timing and tone, never cancel"). Now it's held for that call and goes on its own, gently.
 // Each one now waits and is never dropped for a mood read: it goes once they're okay again (the read clears, or they text normally),
 // and at the latest MOOD_HOLD_CAP_HOURS after the hard stretch began, whatever the read says then. What goes then is drafted the way
 // it always is, from the same feeling read, so a hard week still shapes how it's said. Only the send waits: searches, plans and
@@ -18,7 +21,7 @@
 // Safety holds are not mood and are not here (services/safety.ts; proactive.ts safety_hold, safetyFollowUp).
 import { RIGHT_NOW_HOURS, type EmotionalContext } from "../harness/emotion.js";
 
-// 48 hours, one value for all three. needsCare lasts a day after the last hard read, so a hold reaches the cap only after at least
+// 48 hours, one value for every hold here. needsCare lasts a day after the last hard read, so a hold reaches the cap only after at least
 // two days of hard reads. Shorter than 72 because the check-ins it holds that expire soonest (calendar_follow, goal_recheck) live 3
 // days from when they're queued: at 72 a held one could run out on its own clock before the cap let it go.
 export const MOOD_HOLD_CAP_HOURS = 48;
@@ -27,8 +30,8 @@ export const MOOD_HOLD_CAP_HOURS = 48;
 // "thanks" right after hard news doesn't count.
 export const OKAY_AFTER_HOURS = RIGHT_NOW_HOURS;
 
-export type MoodRule = "checkin_hold" | "stop_note_hold" | "bundle_skip_wait" | "heavy_offer_hold";
-// The three feeling-based holds this module rules on, and Royce's ruling on each (pinned in evals/proactive/moodHolds.ts). Not every
+export type MoodRule = "checkin_hold" | "stop_note_hold" | "bundle_skip_wait" | "heavy_offer_hold" | "recap_hold";
+// The feeling-based holds this module rules on, and Royce's ruling on each (pinned in evals/proactive/moodHolds.ts). Not every
 // place a feeling read decides whether something runs: FEELING_PICKS_NOT_CHANGED lists the others found, documented, not changed.
 // test: the layer 1 file that proves it waits, never cancels (evals/proactive/moodNeverCancels.ts checks each is registered).
 export const MOOD_RULES: Record<MoodRule, { where: string; ruling: string; test: string }> = {
@@ -40,11 +43,11 @@ export const MOOD_RULES: Record<MoodRule, { where: string; ruling: string; test:
   // The document offer's own gate (services/documentOffer.ts offerGate, #260) waits on the same cap (offerMoodHeld): the offerDocument
   // tool's re-check and any caller without the reply's moment; the notice stays owed. One log rule: a reply logs it here.
   heavy_offer_hold: { where: "harness/replyGrounding.ts heavyMoment -> heavyHold (door, cold-start steer, document offer moment); services/documentOffer.ts offerGate (offerMoodHeld)", ruling: "timing only, capped (Royce 2026-10-19)", test: "evals/proactive/moodHeavyOffers.ts" },
+  recap_hold: { where: "jobs/postCallFollowUp.ts recapOfferFor, holdRecapForMood; harness/proactive.ts recapWaitRead (recap_mood_wait)", ruling: "timing only, capped (Royce 2026-10-19: feelings change timing and tone, never cancel)", test: "evals/calls/recapMoodHold.ts" },
 };
 
 // Other places a feeling read decides whether something runs (review of #253). Documented only, not changed here: each needs Royce.
 export const FEELING_PICKS_NOT_CHANGED: { where: string; what: string; status: string }[] = [
-  { where: "jobs/postCallFollowUp.ts post-call recap", what: "the recap offer is gated on needsCare and heavyNow, a high-intensity negative moment on the call (intensity, valence) (documentOffer postCallRecapAllowed)", status: "documented, not changed: needs Royce" },
   { where: "harness/replyGrounding.ts frustrated (door, cold-start steer)", what: "the door and the cold-start question wait while they're frustrated with Cue (withCo, 48 hours after the last such read), with no cap of their own", status: "documented, not changed: needs Royce" },
   { where: "harness/proactive.ts drafting (feelingForDraft)", what: "a draft sees 'struggling in the last day' and can return SKIP, which drops the item (dropCandidate), released hold or not", status: "documented, not changed: needs Royce" },
 ];

@@ -14,7 +14,7 @@ import { solicitationGoals } from "../agent/eventAskSolicitation.js";
 import { draftWindowFollowUp, type WindowFollowUpPayload } from "../agent/windowFollowUp.js";
 import { draftCalendarFollow } from "../agent/calendarFollowReachOut.js";
 import { draftAskSolicitation } from "../agent/eventAskSolicitation.js";
-import { draftPostCall, markPostCallDropped, markPostCallSent, recordRecapOffer } from "../jobs/postCallFollowUp.js";
+import { draftHeldRecap, draftPostCall, holdRecapForMood, isHeldRecap, markPostCallDropped, markPostCallSent, recordRecapOffer } from "../jobs/postCallFollowUp.js";
 import { askStillOpen, isShortNotice, onEventOfferDropped, onEventOfferSent, type EventOfferPayload } from "../services/eventSurfacingSweep.js";
 import { endOfLocalDay, followUpDate, type DebriefPayload } from "../services/recommendationOutcome.js";
 import { itemDays, localToday, offerable, readDates } from "../services/dateGuard.js";
@@ -898,16 +898,28 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // The text after a call, and (isHeldRecap) the recap offer for that call held while they were struggling (jobs/postCallFollowUp.ts,
+  // Royce 2026-10-19: a hard time decides when, never whether).
   post_call: {
     async draft(c, person) {
+      if (isHeldRecap(c)) return draftHeldRecap(c.userId, person.firstName, c.payload.followUpId);
       const r = await draftPostCall(c.userId, person.firstName, c.payload.followUpId);
       return r ? { messages: [r.text], ...r } : skip("model chose SKIP");
     },
     async onSent(c, _p, messages) {
+      if (isHeldRecap(c)) {
+        await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => false);
+        return;
+      }
       await markPostCallSent(c.payload.followUpId);
-      await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => false);
+      const offered = await recordRecapOffer(c.userId, c.payload.followUpId, messages ?? []).catch(() => null);
+      // Went without the recap (known: a failed record is not "without"): if a hard time was the only thing in the way, it's held for
+      // this call, never dropped for it.
+      if (offered === false) await holdRecapForMood(c.userId, c.payload.followUpId).catch((err: any) => console.error("postCallFollowUp: holding the recap failed (non-fatal):", err?.message ?? err));
     },
     async onDropped(c, status) {
+      // A held recap ending (its own lifetime, or a fact that no longer holds) leaves the call's own record alone: its text went.
+      if (isHeldRecap(c)) return;
       await markPostCallDropped(c.payload.followUpId, status);
     },
   },
