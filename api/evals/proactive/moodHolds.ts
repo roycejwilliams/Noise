@@ -205,8 +205,16 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   check("not held (okay, the cap, or not struggling): a skip is a fit skip, dropped as before", JSON.stringify(P.failedBundleActions({ leadSkipped: true }, 0, false)) === JSON.stringify(["drop_skipped"]) && JSON.stringify(P.failedBundleActions({ leadSkipped: true, tierSkipped: true }, 0, false)) === JSON.stringify(["drop_skipped", "queue_tier_next"]));
   check("a failure that isn't a skip is unchanged by the hold", JSON.stringify(P.failedBundleActions({}, 0, true)) === JSON.stringify(["count_attempt"]));
   const ps = src("harness/proactive.ts");
-  check("dispatch: the lead's actions read the capped hold, and mood_wait stamps it", /failedBundleActions\(res, c\.attempts, heldForMood\(state\)\)/.test(ps) && /if \(a === "mood_wait"\) await markMoodSkip\(userId, \[c\], state\.now\);/.test(ps));
-  check("dispatch: a sibling or tier pick the composer left out while held is stamped, never dropped, no tier next", /if \(heldForMood\(state\) && res\.dropped\.length && !opts\.dryRun\) await markMoodSkip\(userId, res\.dropped\.map\(\(d\) => d\.item\.candidate\), state\.now\);/.test(ps) && /if \(!d\.tierSkipped \|\| opts\.dryRun \|\| heldForMood\(state\)\) continue;/.test(ps));
+  check("dispatch: the lead's actions read the capped hold (its one wait), and mood_wait stamps it", /failedBundleActions\(res, c\.attempts, firstMoodWait\(c, state\)\)/.test(ps) && /if \(a === "mood_wait"\) await markMoodSkip\(userId, \[c\], state\.now\);/.test(ps));
+  check("dispatch: a sibling or tier pick the composer left out while held is stamped (its one wait), never dropped, no tier next", /const moodWaits = res\.dropped\.filter\(\(d\) => firstMoodWait\(d\.item\.candidate, state\)\);\s*if \(moodWaits\.length && !opts\.dryRun\) await markMoodSkip\(userId, moodWaits\.map\(\(d\) => d\.item\.candidate\), state\.now\);/.test(ps) && /if \(!d\.tierSkipped \|\| opts\.dryRun \|\| moodWaits\.includes\(d\)\) continue;/.test(ps));
+  // One wait per find (review of #253): a find that already waited, skipped again under a later hard stretch, is a fit skip.
+  const waited = cand("event_offer", { payload: { moodSkipAt: ago(60).toISOString() } });
+  const fresh = cand("event_offer");
+  const laterStretch = { needsCare: true, moodHold: held };
+  check("one wait per find: a fresh find skipped while held gets its wait", P.firstMoodWait(fresh, laterStretch));
+  check("one wait per find: a find that already waited, skipped again under a new hard stretch, does not wait again", !P.firstMoodWait(waited, laterStretch) && !failsOn(P.candidateChecks(waited, baseState(laterStretch)), "mood_wait"));
+  check("one wait per find: its second skip drops it as a fit skip (a tier pick also queues its next best)", JSON.stringify(P.failedBundleActions({ leadSkipped: true }, 0, P.firstMoodWait(waited, laterStretch))) === JSON.stringify(["drop_skipped"]) && JSON.stringify(P.failedBundleActions({ leadSkipped: true, tierSkipped: true }, 0, P.firstMoodWait(waited, laterStretch))) === JSON.stringify(["drop_skipped", "queue_tier_next"]));
+  check("one wait per find: not held, no wait at all", !P.firstMoodWait(fresh, { needsCare: true, moodHold: okay }) && !P.firstMoodWait(fresh, { needsCare: false }));
   check("the composer's prompt is unchanged: the feeling shapes how, never whether", /HOW THEY'VE BEEN FEELING \(it shapes how you say this, never whether/.test(src("harness/bundleComposer.ts")));
 
   const stamped = (h: number) => cand("event_offer", { payload: { moodSkipAt: ago(h).toISOString() } });
@@ -267,6 +275,9 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   check("the three feelings-based places are ruled, none pending", Object.keys(rules).sort().join() === "bundle_skip_wait,checkin_hold,stop_note_hold" && Object.values(rules).every((r) => /timing only, capped \(Royce 2026-10-18/.test(r.ruling) && !/pending/i.test(r.ruling)));
   check("kind restraint is not a feelings rule (it reads whether they answered, not how they feel): left as it is", !Object.values(rules).some((r) => /kindRestraint|suppressedKinds/.test(r.where)) && !/emotion|needsCare/.test(src("services/kindRestraint.ts")));
   check("safety is not a mood rule and is not in the list", !Object.keys(rules).some((k) => /safety/.test(k)));
+  const others = MH.FEELING_PICKS_NOT_CHANGED;
+  check("the other feeling-based places are listed as documented, not changed, needing Royce (not claimed as all ruled)", others.length === 4 && others.every((o) => /documented, not changed: needs Royce/.test(o.status)) && ["documentOffer.ts offerGate", "postCallFollowUp.ts", "replyGrounding.ts heavyMoment", "feelingForDraft"].every((w) => others.some((o) => o.where.includes(w))) && /Not every\s*\n?\/\/ place a feeling read decides/.test(src("services/moodHold.ts")));
+  check("those places are indeed unchanged here", /if \(s\.needsCare\) return "they are having a hard time; their state comes first";/.test(src("services/documentOffer.ts")) && /return !!e\.needsCare \|\| \(!!e\.current && e\.current\.intensity === "high" && e\.current\.valence === "negative"\);/.test(src("harness/replyGrounding.ts")));
   check("no member-facing words were added: the module writes no line to them", !/messages|sendText|sendWithLedger|carryLaneNotes/.test(src("services/moodHold.ts")));
 }
 

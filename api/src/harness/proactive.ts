@@ -340,6 +340,12 @@ export function moodWaitRead(c: Pick<Candidate, "payload">, s: Pick<PickState, "
   return { state: "held", hold: true, heldHours };
 }
 
+// Pure: whether a composer skip of this find now is its one mood wait (review of #253): the hard day holds, and it hasn't had its wait.
+// A find that already waited (payload.moodSkipAt) and is skipped again, in this stretch or a later one, is a fit skip: as before.
+export function firstMoodWait(c: Pick<Candidate, "payload">, s: Pick<PickState, "needsCare" | "moodHold">): boolean {
+  return heldForMood(s) && !(c.payload as { moodSkipAt?: string } | null)?.moodSkipAt;
+}
+
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
 
 export type Evaluation = {
@@ -893,7 +899,8 @@ export function pickSiblingOffers(primary: Candidate, eligible: Candidate[]): Ca
 // Pure: what a failed bundle does to its lead. A lead the composer skipped is dropped (a skipped tier pick also queues its tier's next
 // best); any other failure counts an attempt and drops it at the last one (as before the tier PR: review, the tier-next branch had
 // captured this else). moodHeld: the composer skipped it in the prompt that saw they've been struggling, while the hard day still
-// holds (heldForMood): it waits instead (mood_wait), never dropped for that, and no tier next is queued beside it (Royce, 2026-10-18).
+// holds (heldForMood) and it hasn't had its one wait (firstMoodWait): it waits instead (mood_wait), never dropped for that, and no tier
+// next is queued beside it (Royce, 2026-10-18).
 export function failedBundleActions(res: { leadSkipped?: boolean; tierSkipped?: boolean }, attempts: number, moodHeld = false): ("drop_skipped" | "queue_tier_next" | "count_attempt" | "drop_failed" | "mood_wait")[] {
   if (res.leadSkipped && moodHeld) return ["mood_wait"];
   if (res.leadSkipped) return res.tierSkipped ? ["drop_skipped", "queue_tier_next"] : ["drop_skipped"];
@@ -2442,7 +2449,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     }
     if ("fail" in res) {
       if (!opts.dryRun) {
-        for (const a of failedBundleActions(res, c.attempts, heldForMood(state))) {
+        for (const a of failedBundleActions(res, c.attempts, firstMoodWait(c, state))) {
           if (a === "mood_wait") await markMoodSkip(userId, [c], state.now);
           if (a === "drop_skipped") await dropCandidate(registry, c, "skipped", `draft skipped: ${res.fail}`);
           // A morning tier pick is never left out for fit without its tier's next best going (review of the tier PR).
@@ -2452,7 +2459,7 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
         }
       }
       // Logged the way every failed draft is, so the proactive_blocked monitor counts composed bundles too (review of #135).
-      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `${res.leadSkipped && heldForMood(state) ? "draft skipped while they were struggling, so it waits (mood_wait)" : "draft skipped"}: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id, composerCalls: res.calls, notes: res.notes }, checks: [...ev.userChecks, ...pickChecks], reason: res.leadSkipped ? `${res.leadSkipped && firstMoodWait(c, state) ? "draft skipped while they were struggling, so it waits (mood_wait)" : "draft skipped"}: ${res.fail}` : `draft failed checks: composer: ${res.fail}` });
       done(c.type);
       return;
     }
@@ -2477,10 +2484,12 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     for (const d of res.dropped) if (!opts.dryRun) recordDecision({ layer: 7, decision: "proactive.sibling_dropped", userId, outcome: "skip", action: "composer", reason: d.why, proposal: { candidate: d.item.candidate.id } }).catch(() => {});
     // A morning tier pick left out after being told it goes: its tier's next best is queued (review of the tier PR).
     // The skipped pick itself comes out (skipped twice for fit), so its tier never sends two.
-    // While they're struggling, a find the composer left out waits instead (mood_wait): never dropped for it, no tier next beside it.
-    if (heldForMood(state) && res.dropped.length && !opts.dryRun) await markMoodSkip(userId, res.dropped.map((d) => d.item.candidate), state.now);
+    // While they're struggling, a find the composer left out waits instead (mood_wait), once per find: never dropped for it, no tier
+    // next beside it. One that already had its wait is a fit skip, as before.
+    const moodWaits = res.dropped.filter((d) => firstMoodWait(d.item.candidate, state));
+    if (moodWaits.length && !opts.dryRun) await markMoodSkip(userId, moodWaits.map((d) => d.item.candidate), state.now);
     for (const d of res.dropped) {
-      if (!d.tierSkipped || opts.dryRun || heldForMood(state)) continue;
+      if (!d.tierSkipped || opts.dryRun || moodWaits.includes(d)) continue;
       await dropCandidate(registry, d.item.candidate, "skipped", d.why).catch(() => {});
       await import("../services/sweepShadow.js").then((S) => S.queueTierNext(userId, d.item.candidate, d.why)).catch(() => null);
     }
