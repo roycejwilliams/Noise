@@ -264,7 +264,7 @@ check("any other ask still gets the kind it's read as", L.askKindAfter({ kind: "
   const db = {
     query: async (sql: string, args: any[] = []) => {
       sqls.push(sql);
-      if (/^\s*SELECT id, ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND \(kind_checked_at IS NULL/.test(sql)) return { rows: rows.filter((r) => !r.resolved_at && (r.kind_checked_at === null || (r.kind === "find" && r.kind_version < args[1]))) };
+      if (/^\s*SELECT id, (?:user_id, )?ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND \(kind_checked_at IS NULL/.test(sql)) return { rows: rows.filter((r) => !r.resolved_at && (r.kind_checked_at === null || (r.kind === "find" && r.kind_version < args[1]))) };
       if (/^\s*SELECT id, ask_text, kind, intent FROM ask_checkins WHERE resolved_at IS NULL AND kind = 'find' AND intent IS DISTINCT FROM 'lookout'/.test(sql)) return { rows: rows.filter((r) => !r.resolved_at && r.kind === "find" && r.intent !== "lookout") };
       if (/^\s*UPDATE ask_checkins SET kind = COALESCE\(\$2, kind\)/.test(sql)) {
         const [id, next, version, , readKind, readIntent] = args;

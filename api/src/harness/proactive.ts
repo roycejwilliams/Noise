@@ -157,6 +157,7 @@ export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_
 // ./proactivePurpose.ts, dependency-free so model-free checks can read it.
 export { PROACTIVE_PURPOSE, typesWithPurpose, type ProactivePurpose } from "./proactivePurpose.js";
 import { PROACTIVE_PURPOSE as PROACTIVE_PURPOSE_MAP } from "./proactivePurpose.js";
+import { withTraceUser } from "../services/llmTraceText.js";
 
 export type TypePolicy = {
   priority: number;
@@ -2659,7 +2660,8 @@ export async function runProactiveDispatch(registry: ProactiveRegistry): Promise
     while (cursor < ids.length) {
       const id = ids[cursor++];
       try {
-        await dispatchForUser(registry, id);
+        // Their drafts under their own trace-text mark (services/llmTraceText.ts), never another worker's member.
+        await withTraceUser(id, () => dispatchForUser(registry, id));
       } catch (err: any) {
         console.error(`proactive: dispatch failed for ${id} (non-fatal):`, err?.message ?? err);
       }

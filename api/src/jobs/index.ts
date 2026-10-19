@@ -38,6 +38,7 @@ import { gapDescription, lastLearned, QUIET_UNDERSTANDING_DAYS, understandingGap
 import { recordDecision } from "../harness/core.js";
 import { missedCallText } from "../harness/callGate.js";
 import { runAdviceFollowUps, runWeeklyReflections } from "../harness/memberReflection.js";
+import { perMember, withTraceUser } from "../services/llmTraceText.js";
 
 // Bounded-concurrency worker pool (Royce, 2026-08-30) — the event surfacing
 // sweep now runs for every open ask daily (see below), and a plain
@@ -601,7 +602,8 @@ export function registerJobs(io: Server) {
       }
 
       const { claimMember, releaseMember } = await import("../services/dailySweep.js");
-      await runWithConcurrency(Array.from(rowsByUser.values()), 5, async (userRows) => {
+      // Each member's rows under that member's trace-text mark (services/llmTraceText.ts): their matching prompts are theirs.
+      await perMember(runWithConcurrency, (userRows: any[]) => userRows[0]?.user_id)(Array.from(rowsByUser.values()), 5, async (userRows) => {
         // The 9am daily sweep is on this member right now (services/dailySweep.ts): their hourly pass waits for the next tick.
         if (!claimMember(userRows[0].user_id)) {
           await recordDecision({ layer: 5, decision: "sweep.held", userId: userRows[0].user_id, outcome: "skip", action: "daily_sweep_running", proposal: { asks: userRows.length } }).catch(() => {});
@@ -740,7 +742,7 @@ export function registerJobs(io: Server) {
       const D = await import("../services/dailySweep.js");
       // Windows past on every clock end first, with their words (wantWhen.ts endPastWindows; each search also ends its own on time).
       await import("../services/wantWhen.js").then((W) => W.endPastWindows()).catch((err: any) => console.error("Ending past want windows failed (retried next hour):", err?.message ?? err));
-      await D.runDailySweepAll(runWithConcurrency);
+      await D.runDailySweepAll(perMember(runWithConcurrency)); // each member's run under their own trace-text mark
     } catch (err: any) {
       console.error("Daily sweep failed (members retried next hour):", err?.message ?? err);
     }
@@ -754,7 +756,7 @@ export function registerJobs(io: Server) {
     try {
       // Goal-based discovery (services/goalSweep.ts): every member with a direction has their own budget; open asks neither block it
       // nor boost it (2026-10-06: it used to run only for members with NO open ask, so engaged members got less discovery).
-      await runGoalSweep(runWithConcurrency);
+      await runGoalSweep(perMember(runWithConcurrency)); // each member's run under their own trace-text mark
       await runDispatch();
     } catch (error) {
       console.error("Goal sweep cron error:", error);
@@ -969,7 +971,7 @@ export function registerJobs(io: Server) {
       const userIds = await findUsersDueForRecap();
       await runWithConcurrency(userIds, 5, async (userId) => {
         try {
-          await buildRecap(userId);
+          await withTraceUser(userId, () => buildRecap(userId));
         } catch (err: any) {
           console.error(`Memory compaction failed for ${userId}:`, err?.message ?? err);
         }

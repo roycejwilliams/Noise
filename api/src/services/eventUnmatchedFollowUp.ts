@@ -9,6 +9,7 @@ import { inRoomSendAllowed, recordInRoomSend } from "../harness/proactive.js";
 import { draftWithConsent, eventPromptLine } from "../harness/introConsent.js";
 import { MATCH_NUDGE_END_CUTOFF_MINUTES, withEnd } from "../harness/introConsent.js";
 import { wasAlreadyNudgedForMatch, scoreMatchedGroup, type ScorableGuest } from "./eventScoring.js";
+import { withTraceUser } from "./llmTraceText.js";
 
 // "No one should feel left out" (Royce, 2026-09-22). Two things, both
 // scoped to people the real scoring pass (eventScoring.ts's
@@ -187,7 +188,7 @@ async function processOneEvent(eventId: string, eventName: string): Promise<void
       await markNoticed(eventId, person.user_id, nudgeRow);
       continue;
     }
-    await sendSoloAcknowledgment(eventId, eventName, person, {});
+    await withTraceUser(person.user_id, () => sendSoloAcknowledgment(eventId, eventName, person, {})); // under their own trace-text mark
     await markNoticed(eventId, person.user_id, null);
   }
 

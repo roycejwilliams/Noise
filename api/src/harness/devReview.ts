@@ -38,6 +38,7 @@ import { CO_VOICE } from "../services/coVoice.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "./core.js";
 import { signalTarget } from "./emotion.js";
+import { withTraceUser } from "../services/llmTraceText.js";
 
 export function reviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test") return false;
@@ -728,7 +729,8 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     names[userId] = data.firstName;
     flags.push(...logFlags(data), ...conversationFlags(data), ...reactionFlags(data));
     flags.push(...heldBackFlags(await loadHeldBack(userId, until).catch(() => ({ userId, now: until, held: [], lastSendAt: null, picks: [] }))));
-    if (opts.model !== false) flags.push(...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => [])));
+    // The model reads of one member's day, under that member's trace-text mark (services/llmTraceText.ts).
+    if (opts.model !== false) flags.push(...(await withTraceUser(userId, async () => [...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => []))])));
   }
   return { flags: flags.sort((a, b) => ms(a.at) - ms(b.at)), names };
 }
