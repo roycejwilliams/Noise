@@ -143,7 +143,10 @@ export type ProactiveType =
   | "goal_nudge"
   | "commitment_nudge"
   // The one "I'm going by Cue now" text (services/nameChange.ts, 2026-10-14). Usually it rides in another text instead.
-  | "name_change";
+  | "name_change"
+  // An update announcement (services/announcements.ts, 2026-10-19): fixed, approved words, once per member per key, its own text on a
+  // quiet day, never riding in another.
+  | "announcement";
 
 // co_event: Co's own event, announced to nearby users on creation (services/coEventAnnouncement.ts).
 // direct_ask: a reply-triggered direct ask to a THIRD person who didn't just
@@ -217,6 +220,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   goal_recheck: { priority: 10, typeGapDays: 3 },
   // Lowest of all: on its own only on a day nothing else is ready (it rides in whatever goes first otherwise).
   name_change: { priority: 1 },
+  // Just above it: only on a day nothing else is ready (announcements.ts quietDayOnly), and a week apart at least, so two never land close.
+  announcement: { priority: 2, typeGapDays: 7 },
   // Member-state nudges: once per state (their own target key carries the state's fingerprint). Time-bound first.
   // One deadline heads-up a day at most (final review of #108).
   deadline_nudge: { priority: 75, typeGapDays: 1 },
@@ -327,6 +332,7 @@ export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
   "commitment_nudge",
   "goal_recheck",
   "name_change",
+  "announcement",
 ]);
 
 // Pure: whether a hard day holds what waits on it now (the emotional_timing check, the stopped-looking line riding a paced text, a find
@@ -768,7 +774,7 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (c.type === "network_tease" && state.undeliveredYes) {
     checks.push({ name: "no_undelivered_yes", pass: false, reason: "they said yes to hearing who and nothing was delivered; no new tease until that clears" });
   }
-  if (state.safetyHold && (PROACTIVE_PURPOSE_MAP[c.type] === "offer" || c.type === "name_change")) {
+  if (state.safetyHold && (PROACTIVE_PURPOSE_MAP[c.type] === "offer" || c.type === "name_change" || c.type === "announcement")) {
     checks.push({ name: "safety_hold", pass: false, reason: "they may not have been safe in the last few days; no offers" });
   }
   // Away from home, in their own words (services/away.ts, 2026-10-11: Jacqueline said she was traveling and SF finds kept coming):
@@ -2417,9 +2423,11 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
   // eligible; the guards below (last day first, the draft's checks, the send-time ledger) keep their veto after it.
   // A find on its last chance goes before what can wait (expiringFind); otherwise Co picks.
   // The name notice never competes for the day's text (services/nameChange.ts): it rides in whatever goes, and goes on its own only
-  // when nothing else is ready.
+  // when nothing else is ready. An update announcement (services/announcements.ts) goes only when nothing but the name notice is ready,
+  // and then carries it.
   const nameNotice = ev.eligible.find((x) => x.type === "name_change") ?? null;
-  const pickable = nameNotice && ev.eligible.length > 1 ? ev.eligible.filter((x) => x.type !== "name_change") : ev.eligible;
+  const withoutName = nameNotice && ev.eligible.length > 1 ? ev.eligible.filter((x) => x.type !== "name_change") : ev.eligible;
+  const pickable = (await import("../services/announcements.js")).quietDayOnly(withoutName);
   const urgent = expiringFind(pickable, { now: state.now, zone: person.timezone, sends: state.sends });
   const chosen = urgent ? null : await choosePick(pickable, { recentConversation: recentStamped, feeling: feelingText, taste, statedTaste, person: known?.person?.text ?? null, zone: person.timezone, now: state.now });
   let decision: DraftDecision = judgeDailyPick({
@@ -2795,6 +2803,17 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
       nameRide = { candidate: nameNotice, without: sending };
       sending = A.rideAlong(sending, N.NAME_CHANGE_RIDE, (d, p) => carryLaneNotes(d, p));
     }
+  }
+  // An announcement that opens with the name notice's words (a member it hasn't reached yet) claims the notice's key with it, inside
+  // the send lock, and goes with its own lead instead if another text took the key first (services/announcements.ts nameFold).
+  if (!composed && c.type === "announcement") {
+    const fold = (await import("../services/announcements.js")).nameFold(c, sending, state.candidates);
+    if (fold === "unfoldable") {
+      if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `send:${c.type}`, proposal: { ...proposal, picked: c.id }, checks: [...ev.userChecks, ...pickChecks, ...draftChecks], reason: "the announcement carries the name notice but its text without it couldn't be built; nothing sent" });
+      done(c.type);
+      return;
+    }
+    if (fold) nameRide = fold;
   }
   const extras: { candidate: Candidate; messages: string[] }[] = composed ? composed.perItem.slice(1) : [];
 

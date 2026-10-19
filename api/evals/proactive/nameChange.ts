@@ -158,10 +158,12 @@ const told = (outbox: { content: string }[], phone: string) => outbox.filter((m)
 // The dispatcher's wiring (harness/proactive.ts): it never competes for the pick, rides on the stop-note terms, and its key is
 // claimed inside the send lock.
 const pr = src("harness/proactive.ts");
-check("dispatch: never in the pick while anything else is ready", /const pickable = nameNotice && ev\.eligible\.length > 1 \? ev\.eligible\.filter\(\(x\) => x\.type !== "name_change"\) : ev\.eligible;/.test(pr) && /choosePick\(pickable,/.test(pr));
+check("dispatch: never in the pick while anything else is ready", /const withoutName = nameNotice && ev\.eligible\.length > 1 \? ev\.eligible\.filter\(\(x\) => x\.type !== "name_change"\) : ev\.eligible;/.test(pr) && /const pickable = \(await import\("\.\.\/services\/announcements\.js"\)\)\.quietDayOnly\(withoutName\);/.test(pr) && /choosePick\(pickable,/.test(pr));
 check("dispatch: rides only where a stopped-looking line may, never with one, never in a composed bundle", /if \(!composed && !rideNote && nameNotice && c\.type !== "name_change"\)/.test(pr) && /A\.noteMayRide\(c, heldForMood\(member\.state\)\) && !N\.carriesNameChange/.test(pr));
 check("send: the riding key is claimed inside the lock, and the text goes without the line if it was taken", pr.indexOf("The riding note's key, claimed first") > pr.indexOf("pg_advisory_xact_lock(hashtext($1))`, [`proactive:${person.userId}`]") && /else messages = ride\.without;/.test(pr));
-const ncSrc = src("services/nameChange.ts");
+// The queue is the update announcements' (services/announcements.ts RENAME), the same SQL it always ran.
+const ncSrc = src("services/announcements.ts");
+check("queue: the rename's queue is the registry's rename entry", /return A\.queueAnnouncement\(A\.RENAME, now\);/.test(src("services/nameChange.ts")));
 check("queue: only members who knew it as Co, never archived, opted out, without a number or unfinished", /u\.created_at < \$1 AND u\.archived_at IS NULL AND COALESCE\(u\.sms_opted_out, false\) = false/.test(ncSrc) && /u\.phone_number IS NOT NULL AND u\.identity_captured = true/.test(ncSrc));
 check("queue: the cutoff is fixed by the first queued notice, so a member who joins later never gets it", /SELECT MIN\(created_at\) AS at FROM proactive_candidates WHERE type = 'name_change'/.test(ncSrc));
 check("queue: runs daily and once after start, through the normal dispatch", /queueNameChange\(\)/.test(src("jobs/index.ts")) && /cron\.schedule\("40 9 \* \* \*", queueNames/.test(src("jobs/index.ts")));

@@ -1076,7 +1076,13 @@ export function registerJobs(io: Server) {
     import("../services/nameChange.js")
       .then((m) => m.queueNameChange())
       .then((n) => { if (n) console.log(`name change: queued for ${n} member(s)`); })
-      .catch((err: any) => console.error("name change queue error:", err?.message ?? err));
+      .catch((err: any) => console.error("name change queue error:", err?.message ?? err))
+      // Then the update announcements after it (services/announcements.ts), each once per member; one whose wording isn't approved
+      // queues nothing. After the rename, so a member's rename notice is queued before a follow-up that carries it.
+      .then(() => import("../services/announcements.js"))
+      .then((a) => a.queueUpdateAnnouncements())
+      .then((n) => { if (n) console.log(`announcements: queued for ${n} member(s)`); })
+      .catch((err: any) => console.error("announcements queue error:", err?.message ?? err));
   setTimeout(queueNames, 60_000);
   cron.schedule("40 9 * * *", queueNames, { timezone: "America/Los_Angeles" });
 
