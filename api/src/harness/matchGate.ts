@@ -486,8 +486,9 @@ export async function gateMatches(
 // pass; a match on any of these means the ask is not shared. When in doubt, don't share.
 export const SENSITIVE: RegExp[] = [
   /\b(?:burn(?:ed|t)? ?out|burnout|quit|quitting|unemployed|laid off|fired|lost (?:a |their |my )?co ?founder|co ?founder conflict|almost quit|hit a wall|goalposts)\b/,
-  /\b(?:anxiety|anxious|depress\w*|therap\w*|psychiatr\w*|psycholog\w*|counsel(?:or|ors|ing|ling)|mental health|adhd|ocd|bipolar|ptsd|grief|griev\w*|lonely|loneliness|isolated|isolation|struggling|stuck|doubt|debating whether)\b/,
-  /\b(?:illness|sick|cancer|chemo\w*|diagnos\w*|disease|chronic|surgery|disabilit\w*|health (?:issue|issues|problem|problems|scare)|pregnan\w*|fertility|ivf|miscarr\w*)\b/,
+  // Joined forms too, in this line and the next (review of #245, 2026-10-19): "antidepressants", "antianxiety", "psychotherapist", "neuropsychiatrist", "misdiagnosed".
+  /\b(?:(?:anti)?anxiety|anxious|(?:anti)?depress\w*|\w*therap\w*|\w*psychiatr\w*|\w*psycholog\w*|counsel(?:or|ors|ing|ling)|mental health|adhd|ocd|bipolar|ptsd|grief|griev\w*|lonely|loneliness|isolated|isolation|struggling|stuck|doubt|debating whether)\b/,
+  /\b(?:illness|sick|cancer|chemo\w*|\w*diagnos\w*|disease|chronic|surgery|disabilit\w*|health (?:issue|issues|problem|problems|scare)|pregnan\w*|fertility|ivf|miscarr\w*)\b/,
   /\b(?:sober|sobriety|rehab|addict\w*|alcoholi\w*|recovering)\b/,
   /\b(?:debt|debts|bankrupt\w*|broke|running out of money|money (?:trouble|problems)|evict\w*|homeless|salary|months unemployed)\b/,
   /\b(?:divorc\w*|breakup|broke up|separation|custody|couples?)\b/,

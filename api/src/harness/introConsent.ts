@@ -373,7 +373,9 @@ export async function hiddenEchoCheck(draft: string, ctx: Pick<ConsentContext, "
     } catch {
       return { name: "no_hidden_echo", pass: false, reason: "couldn't read what the other member keeps private, so nothing is sent" };
     }
-    const why = hiddenEcho(draft, side.hidden, [...side.shared, ...(ctx.said ?? []), ...(ctx.facts?.otherStatedAsks ?? [])], names, SENSITIVE);
+    // A sensitive word gets through only from this member's own shareable asks (side.shared, read here per member), never
+    // from ctx.said or the facts: those may hold someone else's words (decided 2026-10-19).
+    const why = hiddenEcho(draft, side.hidden, [...(ctx.said ?? []), ...(ctx.facts?.otherStatedAsks ?? [])], names, SENSITIVE, side.shared);
     if (why) return { name: "no_hidden_echo", pass: false, reason: why };
   }
   return { name: "no_hidden_echo", pass: true };
