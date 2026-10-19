@@ -49,7 +49,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext } from "./emotion.js";
-import { MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
+import { HELD_RECAP_APPROVED, MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
@@ -650,7 +650,7 @@ export function watchOfferMatches(logged: string, lastCoLine: string): boolean {
 // (the first look, today or tomorrow, a task that texts them itself); a check-in before then talks over that promise. A safety
 // follow-up is never held by it.
 export const NEW_MEMBER_QUIET_HOURS = 24;
-export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "moodHold" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away" | "joinedAt">, opts: { answering?: boolean } = {}): GateCheck[] {
+export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "sends" | "lastInboundAt" | "needsCare" | "moodHold" | "safetyHold" | "undeliveredYes" | "suppressedKinds" | "away" | "joinedAt">, opts: { answering?: boolean; recapApproved?: boolean } = {}): GateCheck[] {
   const policy = TYPE_POLICY[c.type];
   const sameTarget = state.sends.find((s) => s.targetKey === c.targetKey);
   const unansweredTopic = state.sends.find((s) => s.topicKey && s.topicKey === c.topicKey && unansweredSince(s, state.lastInboundAt));
@@ -719,8 +719,13 @@ export function candidateChecks(c: Candidate, state: Pick<PickState, "now" | "se
   if (moodWaitRead(c, state)?.hold) {
     checks.push({ name: "mood_wait", pass: false, reason: `skipped in a find text while they were struggling; it waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h` });
   }
-  if (recapWaitRead(c, state)?.hold) {
+  const recapWait = recapWaitRead(c, state);
+  if (recapWait?.hold) {
     checks.push({ name: "recap_mood_wait", pass: false, reason: `a call's recap offer held while they were struggling; it waits until they're okay, at most ${MOOD_HOLD_CAP_HOURS}h` });
+  } else if (recapWait && !(opts.recapApproved ?? HELD_RECAP_APPROVED)) {
+    // Released, but its own text's prompt waits on Royce (services/moodHold.ts HELD_RECAP_APPROVED): it stays pending, never drafted or
+    // sent, and expires on its own clock.
+    checks.push({ name: "awaiting_prompt_approval", pass: false, reason: "the held recap's prompt is waiting on Royce's approval; it stays pending and expires on its own clock" });
   }
   // Restraint with memory (services/kindRestraint.ts): a kind of text they let pass twice in a row isn't sent again until they answer
   // one. An answer to their own explicit ask (an event offer for an open ask) is never held back: they asked.
@@ -791,7 +796,7 @@ export function pacedByEngagement(c: Pick<Candidate, "type" | "payload">): boole
   return !((c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true);
 }
 
-export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean } = {}): Evaluation {
+export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean; recapApproved?: boolean } = {}): Evaluation {
   // Opt-out and local hours apply to the person; caps and the unanswered
   // pause apply per lane, so each candidate is checked against its own lane.
   const byLane: Record<Lane, GateCheck[]> = {
@@ -810,7 +815,7 @@ export function evaluateCandidates(state: PickState, opts: { ignorePacing?: bool
     const laneChecks = (pacedByEngagement(candidate) ? byLane : legacyByLane)[laneOf(candidate.type)].filter(
       (k) => !PERSON_CHECKS.has(k.name) && !(answering && QUOTA_CHECKS.has(k.name)) && !(morning && MORNING_SKIPS.has(k.name)) && !(candidate.type === "companion" && k.name === "weekly_cap") && !safetyPassesHold(k, candidate),
     );
-    const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering })];
+    const checks = [...laneChecks, ...candidateChecks(candidate, state, { answering, recapApproved: opts.recapApproved })];
     return { candidate, checks, ok: gate(checks).ok };
   });
   const eligible = userOk ? perCandidate.filter((p) => p.ok).map((p) => p.candidate) : [];
@@ -2256,7 +2261,8 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     const waiting = moodWaitRead(p.candidate, state);
     if (waiting) noteMoodHold("bundle_skip_wait", p.candidate.type, ref, waiting);
     const recapWait = recapWaitRead(p.candidate, state);
-    if (recapWait) noteMoodHold("recap_hold", "post_call_recap", `${userId}:${String((p.candidate.payload as { followUpId?: string } | null)?.followUpId ?? p.candidate.id)}`, recapWait);
+    // Released while its prompt waits on approval: logged under that kind, so the release reads as "still not sent".
+    if (recapWait) noteMoodHold("recap_hold", recapWait.hold || HELD_RECAP_APPROVED ? "post_call_recap" : "awaiting_prompt_approval", `${userId}:${String((p.candidate.payload as { followUpId?: string } | null)?.followUpId ?? p.candidate.id)}`, recapWait);
   }
   const proposal = {
     candidates: ev.perCandidate.map((p) => ({
