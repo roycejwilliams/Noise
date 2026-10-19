@@ -82,6 +82,8 @@ export function outcomeOf(r: { sent: boolean; reason?: string }, alreadyCounts: 
   if (r.reason === "outside local hours") return "retry_hours";
   if (r.reason === "proactive outreach is paused") return "retry_paused";
   if (r.reason === "opted out" || r.reason === "already sent" || r.reason === "archived" || r.reason === "event over" || r.reason === "no longer valid") return "skipped";
+  // A placeholder body ("SKIP", empty) refused at send time (services/sentinelBody.ts): it would be refused again, so never retried.
+  if (/^sentinel body:/.test(r.reason ?? "")) return "skipped";
   // It says something they corrected since it was queued (runDueDeferredSends' recheck): skipped, never retried.
   if (/^corrected since queued:/.test(r.reason ?? "")) return "skipped";
   return "failed";

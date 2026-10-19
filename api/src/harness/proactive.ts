@@ -48,6 +48,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext } from "./emotion.js";
+import { sentinelIn } from "../services/sentinelBody.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
@@ -1662,6 +1663,12 @@ async function sendWithLedger(
   // A note riding in this text with its own once-only key (the name notice): claimed here, inside the lock, or the text goes without it.
   ride: { candidate: Candidate; without: string[] } | null = null,
 ): Promise<{ sent: true; delivered: string[] } | { sent: false; failed: GateCheck[] }> {
+  // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused before anything is claimed, and logged.
+  const placeholder = sentinelIn([...messages, ...extras.flatMap((e) => e.messages)]);
+  if (placeholder) {
+    await recordDecision({ layer: 7, decision: "proactive.sentinelBody", userId: person.userId, outcome: "skip", action: c.type, reason: placeholder.rule, proposal: { kind: c.type, targetKey: c.targetKey, rule: placeholder.rule, message: placeholder.index + 1 } }).catch(() => {});
+    return { sent: false, failed: [{ name: "sentinel_body", pass: false, reason: `message ${placeholder.index + 1} is ${placeholder.rule}, not a text` }] };
+  }
   const client = await pool.connect();
   const delivered: string[] = [];
   try {
@@ -1813,6 +1820,12 @@ export async function sendExempt(opts: {
   coInitiated?: { kind: ProactiveKind | null };
 }): Promise<{ sent: boolean; reason?: string; delivered?: string[]; retryAt?: Date }> {
   if (proactivePaused()) return { sent: false, reason: "proactive outreach is paused" };
+  // Never a placeholder (services/sentinelBody.ts): an empty or "SKIP" body is refused before anything is claimed, and logged.
+  const placeholder = sentinelIn(opts.messages);
+  if (placeholder) {
+    await recordDecision({ layer: 7, decision: "proactive.sentinelBody", userId: opts.userId, outcome: "skip", action: opts.type, reason: placeholder.rule, proposal: { kind: opts.type, targetKey: opts.targetKey, rule: placeholder.rule, message: placeholder.index + 1 } }).catch(() => {});
+    return { sent: false, reason: `sentinel body: message ${placeholder.index + 1} is ${placeholder.rule}` };
+  }
   // Monitoring visibility (code review, 2026-09-17): send failures and
   // hours/opt-out blocks at send time had nothing writing a decision at
   // all, so harness/monitor.ts had no signal that could ever see them.
