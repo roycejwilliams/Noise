@@ -27,7 +27,7 @@ export const MOOD_HOLD_CAP_HOURS = 48;
 // "thanks" right after hard news doesn't count.
 export const OKAY_AFTER_HOURS = RIGHT_NOW_HOURS;
 
-export type MoodRule = "checkin_hold" | "stop_note_hold" | "bundle_skip_wait";
+export type MoodRule = "checkin_hold" | "stop_note_hold" | "bundle_skip_wait" | "heavy_offer_hold";
 // The three feeling-based holds this module rules on, and Royce's ruling on each (pinned in evals/proactive/moodHolds.ts). Not every
 // place a feeling read decides whether something runs: FEELING_PICKS_NOT_CHANGED lists the others found, documented, not changed.
 // test: the layer 1 file that proves it waits, never cancels (evals/proactive/moodNeverCancels.ts checks each is registered).
@@ -35,13 +35,15 @@ export const MOOD_RULES: Record<MoodRule, { where: string; ruling: string; test:
   checkin_hold: { where: "harness/proactive.ts HOLD_WHILE_STRUGGLING (emotional_timing)", ruling: "timing only, capped (Royce 2026-10-18, option a)", test: "evals/proactive/moodHolds.ts" },
   stop_note_hold: { where: "harness/replyGrounding.ts stopNote, proactive.ts noteMayRide", ruling: "timing only, capped (Royce 2026-10-18, option a)", test: "evals/proactive/moodHolds.ts" },
   bundle_skip_wait: { where: "harness/proactive.ts composer skips (moodSkipAt, mood_wait)", ruling: "timing only, capped (Royce 2026-10-18, option a)", test: "evals/proactive/moodHolds.ts" },
+  // Royce, 2026-10-19: "feelings change timing and tone, never cancel." The door, the cold-start question and a document offer in a
+  // heavy moment wait for a later reply, at most the cap (harness/replyGrounding.ts heavyHold).
+  heavy_offer_hold: { where: "harness/replyGrounding.ts heavyMoment -> heavyHold (door, cold-start steer, document offer moment)", ruling: "timing only, capped (Royce 2026-10-19)", test: "evals/proactive/moodHeavyOffers.ts" },
 };
 
 // Other places a feeling read decides whether something runs (review of #253). Documented only, not changed here: each needs Royce.
 export const FEELING_PICKS_NOT_CHANGED: { where: string; what: string; status: string }[] = [
   { where: "services/documentOffer.ts offerGate", what: "no document offer while needsCare, or in a heavyNow moment", status: "documented, not changed: needs Royce" },
   { where: "jobs/postCallFollowUp.ts post-call recap", what: "the recap offer is gated on needsCare and heavyNow, a high-intensity negative moment on the call (intensity, valence) (documentOffer postCallRecapAllowed)", status: "documented, not changed: needs Royce" },
-  { where: "harness/replyGrounding.ts heavyMoment", what: "no offer, door or cold-start steer in a heavy moment (needsCare, or a strong hard feeling now: the current read's intensity high, valence negative; the document offer's heavyNow)", status: "documented, not changed: needs Royce" },
   { where: "harness/replyGrounding.ts frustrated (door, cold-start steer)", what: "the door and the cold-start question wait while they're frustrated with Cue (withCo, 48 hours after the last such read), with no cap of their own", status: "documented, not changed: needs Royce" },
   { where: "harness/proactive.ts drafting (feelingForDraft)", what: "a draft sees 'struggling in the last day' and can return SKIP, which drops the item (dropCandidate), released hold or not", status: "documented, not changed: needs Royce" },
 ];
