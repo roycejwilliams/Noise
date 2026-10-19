@@ -49,7 +49,7 @@ import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
 import { renderEmotionalContext } from "./emotion.js";
-import { HELD_RECAP_APPROVED, MOOD_HOLD_CAP_HOURS, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
+import { HELD_RECAP_APPROVED, MOOD_FALLBACK_KEY, MOOD_FALLBACK_LINE, MOOD_HOLD_CAP_HOURS, moodFallbackLogLine, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
 import type { KnowledgeSection, MemberKnowledge, MemberRules } from "../services/memberKnowledge.js";
@@ -356,25 +356,45 @@ export function firstMoodWait(c: Pick<Candidate, "payload">, s: Pick<PickState, 
 
 // A draft that saw how they've been feeling (draftProactive's feeling block) and chose SKIP while they're struggling (Royce, 2026-10-19:
 // "feelings change timing and tone, never cancel"): it waits once instead of being dropped (payload.moodDraftSkipAt, the
-// mood_draft_wait check), then is written again, the feeling as tone only (the block already says it's never a reason to SKIP). It
-// waits while the read still says struggling, including after a hard day's hold was released at the cap (a check-in released at the cap
-// and skipped gets its one wait too); it goes once they're okay again, or MOOD_HOLD_CAP_HOURS after the skip. Only the model's own SKIP
-// waits: a skip code decided (the state changed, Cue owns the thread, a guard) is never a mood. A second SKIP is a normal skip.
+// mood_draft_wait check), then is written again, the feeling as tone only (the block already says it's never a reason to SKIP). One mood
+// wait per item in total (review of the mood stack): only while the hard day's hold is on (heldForMood, so it never runs past the
+// stretch's cap), and never for an item that already waited (a composer skip's moodSkipAt, or its own moodDraftSkipAt). A check-in the
+// hold kept until the cap has had its wait. It goes once they're okay again, or when the stretch reaches the cap. Only the model's own
+// SKIP waits: a skip code decided (the state changed, Cue owns the thread, a guard) is never a mood. Past its wait, a SKIP while they're
+// still struggling sends the approved fallback line instead (moodFallbackDecision); otherwise it's a normal skip.
 const MODEL_SKIP = /^model chose SKIP/;
 // Pure: whether this skip is the draft's one mood wait.
 export function firstDraftMoodWait(c: Pick<Candidate, "payload">, skip: string, s: Pick<PickState, "needsCare" | "moodHold">): boolean {
-  return MODEL_SKIP.test(skip) && !!s.needsCare && s.moodHold?.state !== "released_okay" && !(c.payload as { moodDraftSkipAt?: string } | null)?.moodDraftSkipAt;
+  const p = (c.payload ?? {}) as { moodDraftSkipAt?: string; moodSkipAt?: string };
+  return MODEL_SKIP.test(skip) && heldForMood(s) && !p.moodDraftSkipAt && !p.moodSkipAt;
 }
-// Pure: a draft-skip wait (null: none). Held while they're struggling and the wait is under the cap; released when they're okay again,
-// the read clears, or the cap after the skip.
+// Pure: a draft-skip wait (null: none). Held while the hard day's hold is on and the wait is under the cap; released when they're okay
+// again, the read clears, the stretch reaches its cap, or the cap after the skip.
 export function draftWaitRead(c: Pick<Candidate, "payload">, s: Pick<PickState, "now" | "needsCare" | "moodHold">): MoodHold | null {
   const at = Date.parse(String((c.payload as { moodDraftSkipAt?: string } | null)?.moodDraftSkipAt ?? ""));
   if (!at) return null;
   const heldHours = Math.max(0, (s.now.getTime() - at) / HOUR);
-  if (!s.needsCare) return { state: "none", hold: false, heldHours };
-  if (s.moodHold?.state === "released_okay") return { state: "released_okay", hold: false, heldHours };
+  if (!heldForMood(s)) return { state: s.moodHold?.state && s.moodHold.state !== "held" ? s.moodHold.state : "none", hold: false, heldHours };
   if (heldHours >= MOOD_HOLD_CAP_HOURS) return { state: "released_cap", hold: false, heldHours };
   return { state: "held", hold: true, heldHours };
+}
+
+// Pure: after an item's one wait, its draft says SKIP again while they're still struggling: the approved fallback line goes in its place
+// (MOOD_FALLBACK_LINE, Royce 2026-10-19) instead of nothing. At most once a hard stretch a member (the ledger key carries the stretch's
+// start), never twice in a row, never under a safety hold; the send itself keeps the usual hours, caps, spacing and opt-out
+// (sendWithLedger). Anything else is a normal skip: a skip code decided, a first SKIP (that's the wait), not struggling, or the fallback
+// already used this stretch (a second item in the same stretch drops as before).
+export function moodFallbackDecision(o: { candidate: Pick<Candidate, "payload">; skip: string; state: Pick<PickState, "needsCare" | "moodHold" | "safetyHold" | "sends">; hardSince: Date | null }): { send: true; key: string } | { send: false; why: string } {
+  if (!MODEL_SKIP.test(o.skip)) return { send: false, why: "a skip code decided, not the draft's" };
+  if (firstDraftMoodWait(o.candidate, o.skip, o.state)) return { send: false, why: "its one wait comes first" };
+  if (!o.state.needsCare || o.state.moodHold?.state === "released_okay") return { send: false, why: "not struggling: a normal skip" };
+  if (o.state.safetyHold) return { send: false, why: "a safety hold: nothing goes" };
+  if (!o.hardSince) return { send: false, why: "no hard stretch on the read" };
+  const key = `${MOOD_FALLBACK_KEY}${o.hardSince.toISOString()}`;
+  if (o.state.sends.some((s) => s.targetKey === key)) return { send: false, why: "the fallback already went this hard stretch" };
+  const last = [...o.state.sends].sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+  if (last?.targetKey.startsWith(MOOD_FALLBACK_KEY)) return { send: false, why: "never twice in a row" };
+  return { send: true, key };
 }
 
 export type CandidateEvaluation = { candidate: Candidate; checks: GateCheck[]; ok: boolean };
@@ -2133,6 +2153,22 @@ export async function markDraftMoodSkip(userId: string, c: Candidate, now: Date)
   noteMoodHold("draft_skip_wait", c.type, `${userId}:${c.id}`, { state: "held", hold: true, heldHours: 0 });
 }
 
+// The fallback line, sent through the send-time ledger (hours, caps, spacing, opt-out, the conversation hold, all read again inside the
+// lock) under the stretch's key, after one more safety read. The item it replaces is then closed as skipped, the way its SKIP always
+// closed it (its onDropped runs with the draft's own reason), never marked as sent. False: nothing went, and the caller drops it as before.
+export async function sendMoodFallback(registry: ProactiveRegistry, c: Candidate, person: Person, key: string, skip: string, opts: { ignorePacing?: boolean; suppressedKinds?: ProactiveKind[] } = {}): Promise<boolean> {
+  const { safetyHoldActive } = await import("../services/safety.js");
+  if (await safetyHoldActive(person.userId).catch(() => true)) return false;
+  const went = await sendWithLedger({ ...c, targetKey: key, topicKey: "mood_fallback", payload: {} }, person, [MOOD_FALLBACK_LINE], opts).catch(() => ({ sent: false as const, failed: [] }));
+  if (!went.sent) return false;
+  for (const m of went.delivered) await writeMemory(person.userId, "text_exchange", `Co replied: ${m}`).catch(() => {});
+  if (went.delivered.length) await recordProactiveText(person.userId, c.type, went.delivered.join(" "), c.id).catch(() => {});
+  await pool.query(`UPDATE proactive_candidates SET status = 'skipped', skip_reason = $2, decided_at = NOW(), updated_at = NOW() WHERE id = $1`, [c.id, `${skip}; the mood fallback line went in its place`]);
+  await registry[c.type].onDropped?.(c, "skipped", skip).catch((err: any) => console.error(`proactive: onDropped(${c.type}) failed (non-fatal):`, err?.message ?? err));
+  console.log(moodFallbackLogLine({ kind: c.type, ref: `${person.userId}:${c.id}` }));
+  return true;
+}
+
 // Records a blocked/skip decision only when the blocking reason changed, so
 // an every-15-minutes tick outside someone's hours doesn't flood the log.
 async function recordSkipOnce(userId: string, reason: string, decision: Parameters<typeof recordDecision>[0]): Promise<void> {
@@ -2606,6 +2642,15 @@ export async function dispatchForUser(registry: ProactiveRegistry, userId: strin
     if (firstDraftMoodWait(c, draft.skip, state)) {
       if (!opts.dryRun) await markDraftMoodSkip(userId, c, state.now);
       if (!opts.dryRun) await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "skip", action: `mood_wait:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: "the draft skipped while they were struggling; it waits and is written again (mood_draft_wait)" });
+      done(c.type);
+      return;
+    }
+    // After its one wait, still struggling: the approved fallback line goes in its place, once a hard stretch (moodFallbackDecision).
+    const fallback = moodFallbackDecision({ candidate: c, skip: draft.skip, state, hardSince: member.raw.emotional?.hardSince ?? null });
+    if (fallback.send && opts.dryRun) console.log(`[dispatch dryRun] would send the mood fallback line in place of ${c.targetKey}`);
+    // Bound like any send: only when the decision delivers this candidate (brain/index.ts sends).
+    if (fallback.send && !opts.dryRun && sends(decision, c.id) && (await sendMoodFallback(registry, c, person, fallback.key, draft.skip, { ignorePacing: opts.ignorePacing, suppressedKinds: state.suppressedKinds }))) {
+      await recordDecision({ layer: 7, decision: "proactive.dailyPick", userId, outcome: "act", action: `mood_fallback:${c.type}`, proposal: { ...proposal, picked: c.id, pickSource: picked.source }, checks: [...ev.userChecks, ...pickChecks], reason: "its draft skipped again after its one mood wait while they're still struggling; the approved fallback line went in its place" });
       done(c.type);
       return;
     }
