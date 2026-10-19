@@ -27,15 +27,21 @@ const uniq = (text: string, i: number) => `${text} (ref ${i})`;
 
 // The clock is pinned to 18:00 UTC (as evals/inroom/flow.ts): members with no zone may be texted 16:00-24:00 UTC.
 // advance(ms) moves the pinned clock forward (the end of the night runs later than the arrivals).
+// repin() puts it back at 18:00 at the start of each night: advance() adds up, and without it the 120-guest night ran past 24:00 UTC,
+// outside the window the pin is for (review of #218).
 const clock = { offset: 0 };
 const advance = (ms: number) => {
   clock.offset += ms;
 };
+let repin = () => {};
 {
   const RealDate = Date;
-  const pinned = new RealDate();
-  pinned.setUTCHours(18, 0, 0, 0);
-  clock.offset = pinned.getTime() - RealDate.now();
+  repin = () => {
+    const pinned = new RealDate();
+    pinned.setUTCHours(18, 0, 0, 0);
+    clock.offset = pinned.getTime() - RealDate.now();
+  };
+  repin();
   class PinnedDate extends RealDate {
     constructor(...a: any[]) {
       super(...((a.length ? a : [RealDate.now() + clock.offset]) as [any]));
@@ -168,6 +174,7 @@ function scorerFrom(p: Planted, r: () => number) {
 
 // ---------------------------------------------------------------- one night
 type Card = {
+  unbound: number;
   size: number;
   nudges: number;
   namedBeforeYes: number;
@@ -199,6 +206,7 @@ type Card = {
   closeDuplicates: number;
   closeToStopped: number;
   closeToNoShow: number;
+  closeUnowed: number;
   closeMatchTalk: number;
   roomClosed: boolean;
   openAfterClose: number;
@@ -210,6 +218,7 @@ type Card = {
 };
 
 async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }): Promise<Card> {
+  repin();
   reset();
   const r = rng(seed * 7 + 1);
   const p = plant(size, seed);
@@ -394,6 +403,7 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   for (const m of p.members) for (const t of textsOf(m)) for (const o of p.members) if (o.id !== m.id && new RegExp(`^${esc(o.first_name)} from .* would like an intro`).test(t)) directAsks.set(`${m.id}|${o.id}`, (directAsks.get(`${m.id}|${o.id}`) ?? 0) + 1);
 
   return {
+    unbound,
     size,
     nudges: W.nudges.filter((n) => n.event_id === evId).length,
     namedBeforeYes: W.nudges.filter((n) => n.event_id === evId && n.candidate_id && !n.anonymous).length,
@@ -428,9 +438,11 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
     walkIns: walkIns.length,
     walkInsProposed: walkIns.filter((m) => W.nudges.some((n) => n.event_id === evId && n.candidate_id && (n.person_id === m.id || n.candidate_id === m.id))).length,
     ...(() => {
-      // Who should get the goodbye: in the room at close time, with evidence they came (arrived, or texted Cue tonight), and
-      // still reachable. One each, never to a no-show or someone who said stop.
-      const evidence = (m: Member) => Boolean(W.presence.get(`${evId}|${m.id}`)?.arrived_at) || W.memoriesWritten.some((x) => x.user_id === m.id && /^User said:/.test(String(x.content)));
+      // Who should get the goodbye: in the room at close time, with evidence they came, and still reachable. One each, never to a
+      // no-show or someone who said stop. Evidence is arrival, a walk-in check-in or Luma's door check-in, never a text (Royce,
+      // 2026-10-19; services/eventUnmatchedFollowUp.ts cameTonight).
+      const lumaIn = new Set(((W.events.get(evId)?.guests as any[]) ?? []).filter((g) => g.checked_in_at).map((g) => g.email));
+      const evidence = (m: Member) => Boolean(W.presence.get(`${evId}|${m.id}`)?.arrived_at) || W.walkins.some((w) => w.event_api_id === evId && w.person_id === m.id) || lumaIn.has(m.email);
       const owed = p.members.filter((m) => roomAtClose.has(m.id) && evidence(m) && !stoppedAt.has(m.id) && !m.sms_opted_out);
       const closesTo = (m: Member) => closeTexts.filter((x) => x.to === m.phone_number).length;
       return {
@@ -439,6 +451,8 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
         closeDuplicates: p.members.filter((m) => closesTo(m) > 1).length,
         closeToStopped: stoppers.filter((m) => closesTo(m) > 0).length,
         closeToNoShow: noShows.filter((m) => closesTo(m) > 0).length,
+        // A goodbye to someone with no evidence they came (in the room by the RSVP list, never arrived or checked in).
+        closeUnowed: p.members.filter((m) => closesTo(m) > 0 && !evidence(m)).length,
         closeMatchTalk: closeTexts.filter((x) => U.MATCH_TALK.test(x.content)).length,
       };
     })(),
@@ -463,7 +477,11 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
       `near misses proposed ${c.nearProposed}, hard traps proposed ${c.trapsProposed} (introduced ${c.trapsIntroduced}), most texts to one member ${c.textsMax}, ` +
       `askers left with nothing ${c.leftWithNothing}, ${Math.round(performance.now() - t0)}ms`,
   );
-  console.log(`  the night: ${c.walkIns} walk-in(s), ${c.walkInsProposed} of them in a proposed pair; ${c.stoppers} texted stop partway through`);
+  console.log(`  the night: ${c.walkIns} walk-in(s), ${c.walkInsProposed} of them in a proposed pair; ${c.stoppers} texted stop partway through; ${c.unbound} answer(s) with no open question to bind to`);
+  // Per room only in the largest room, like the direct-ask check below (Royce's option (a), 2026-10-19): with real timing, the end of
+  // the night and one in five asks never answered, rooms of 25 and 60 can end a night with no true pair by chance; the total across
+  // the nights is checked after them.
+  if (size >= 120) check(`room ${size}: some true pairs are introduced`, c.trueFound > 0, c);
   console.log(`  end of night: ${c.closeSent} goodbye(s), room closed ${c.roomClosed} (${c.expiredAtClose} unanswered question(s) expired), ${c.debriefsScheduled} debrief(s) scheduled; after close: ${c.lateTexts} text(s), ${c.lateIntros} intro(s) from late yeses`);
   // Must hold today.
   check(`room ${size}: everyone in the room who came gets exactly one goodbye`, c.closeSent > 0 && c.closeOwed === 0 && c.closeDuplicates === 0, c);
@@ -479,6 +497,7 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
   check(`room ${size}: a no-show is never texted (no direct ask, no goodbye)`, c.noShowsTexted === 0, c);
   check(`room ${size}: a no-show is never proposed to someone mid-night`, c.noShowsProposed === 0, c);
   check(`room ${size}: a no-show never gets the goodbye (only arrival or a check-in is evidence they came)`, c.closeToNoShow === 0, c);
+  check(`room ${size}: no goodbye without evidence they came (a registered guest who never arrived or checked in gets none)`, c.closeUnowed === 0, c);
   // A walk-in who only scans the door QR is never in the room (inRoomPool counts walk-ins only once arrived). Ruled 10-14: the door
   // code counts as arriving (P2, #212). This sim's walk-ins still check in the old way (no door code), so they're counted, not checked.
   console.log(`  counted: ${c.walkIns - c.walkInsProposed} of ${c.walkIns} QR-only walk-in(s) (no door code) never matched`);
@@ -492,8 +511,9 @@ for (const [size, seed] of [[25, 11], [60, 23], [120, 37]] as const) {
   check(`room ${size}: no pair is introduced twice`, c.duplicateIntros === 0, c);
   check(`room ${size}: nobody gets the same direct ask twice (replies answered all at once)`, c.duplicateAsks === 0, c);
   check(`room ${size}: a near miss scored under the bar is never proposed`, c.nearProposed === 0, c);
-  // Per room only where the room is big enough to be steady (room 25 has one or two of these, and unrelated changes move it).
-  if (size >= 60) check(`room ${size}: some intros come through a direct ask that reached the other person (not only two nudges crossing)`, c.introsViaAsk > 0, c);
+  // Per room only in the largest room (Royce, 2026-10-19, option (a)): in rooms of 25 and 60 a night has a handful of direct asks, so
+  // none landing as a yes is chance, not a regression (room 60 had 4 yeses and one delivered ask); across the nights it's checked below.
+  if (size >= 120) check(`room ${size}: some intros come through a direct ask that reached the other person (not only two nudges crossing)`, c.introsViaAsk > 0, c);
   check(`room ${size}: every query the night runs is one the fake world knows (nothing silently unanswered)`, c.unknownSql === 0, { unknown: [...W.unknownSql].slice(0, 5) });
   // Baselines for the strict double opt-in work (printed, never failing yet).
   console.log(`  baseline (double opt-in must make this 0): ${c.namedBeforeYes} nudge(s) named the other person before they said yes`);
@@ -509,6 +529,7 @@ check("across the nights, some true pairs are introduced", cards.reduce((n, c) =
 // match. Members get silence; the shortfall goes to the host read as what the room is thin on")
 const PR = await import("../../src/services/partnerReadout.js");
 async function sparseNight(label: string, trueCount: number, seed: number) {
+  repin();
   reset();
   const r = rng(seed);
   const members: Member[] = [];
