@@ -53,7 +53,7 @@ import {
 import { isOptInKeyword, isOptOutKeyword } from "../services/optOut.js";
 import { coverageNudgeFrom, coveragePriorContext, getCoverageNudge, RAPPORT_TOPIC_DESCRIPTIONS } from "../services/profileExtraction.js";
 import { recordOfferReaction, reactionFact, type OfferReaction } from "../services/offerReactions.js";
-import { detectCheckinPhrase, recordCheckin, hasActiveAsk, recordWalkinAsk } from "../services/eventWalkinCheckin.js";
+import { detectCheckinPhrase, recordCheckin, recordWalkinAsk, walkinAskDue, noteWalkinAsked } from "../services/eventWalkinCheckin.js";
 import { scheduleOutcomeFollowUp, recordOutcome } from "../services/recommendationOutcome.js";
 import { recordEventCheckinOutcome } from "../services/eventCheckinFollowUp.js";
 import { handleAdditiveReply, handleMatchNudgeReply } from "../services/eventGuestMatchHandoff.js";
@@ -816,6 +816,7 @@ export function sendblueRouter(io: Server): Router {
         // capture has happened yet. Fire-and-forget on the write; never let
         // this block or fail the real reply below.
         let walkinCheckinEventName: string | null = null;
+        let walkinCheckinEventId: string | null = null;
         if (hasText) {
           const checkin = await detectCheckinPhrase(content).catch((err: any) => {
             console.error("sendblue: detectCheckinPhrase failed (non-fatal):", err?.message ?? err);
@@ -826,6 +827,7 @@ export function sendblueRouter(io: Server): Router {
               console.error("sendblue: recordCheckin failed (non-fatal):", err?.message ?? err),
             );
             walkinCheckinEventName = checkin.eventName;
+            walkinCheckinEventId = checkin.eventApiId;
           }
           // A member saying they've arrived is Co's call now
           // (conversationTools.ts markArrived, 2026-09-25).
@@ -1477,12 +1479,16 @@ export function sendblueRouter(io: Server): Router {
 
         const pendingWalkinCheckin = pendingWalkinCheckinResult.rows[0] ?? null;
         let walkinAskInstruction = "";
-        if (pendingWalkinCheckin && walkinCheckinEventName) {
-          const alreadyHasAsk = await hasActiveAsk(user.id).catch((err: any) => {
-            console.error("sendblue: hasActiveAsk failed (non-fatal):", err?.message ?? err);
-            return true; // fail toward not re-asking rather than risk a duplicate ask on error
+        if (pendingWalkinCheckin && walkinCheckinEventName && walkinCheckinEventId) {
+          // One ask per member per event (services/eventWalkinCheckin.ts walkinAskDue): not when they have an ask, or the scoring pass's
+          // ask for this event already went out.
+          const due = await walkinAskDue(walkinCheckinEventName, user.id).catch((err: any) => {
+            console.error("sendblue: walkinAskDue failed (non-fatal):", err?.message ?? err);
+            return false; // fail toward not re-asking rather than risk a duplicate ask on error
           });
-          if (!alreadyHasAsk) {
+          if (due) {
+            // A pending ask for this event is dropped and the event marked asked, so the scoring pass doesn't queue another.
+            await noteWalkinAsked(walkinCheckinEventId, walkinCheckinEventName, user.id).catch((err: any) => console.error("sendblue: noteWalkinAsked failed (non-fatal):", err?.message ?? err));
             walkinAskInstruction = `They just checked in at "${walkinCheckinEventName}" and don't have a stated ask on file yet. Ask them directly, once, in their own words: "what are you hoping to find here / who'd be good to meet?" Keep it to that one question this turn, don't pad it with anything else.`;
           }
         }

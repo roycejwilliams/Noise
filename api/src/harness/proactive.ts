@@ -303,10 +303,11 @@ export type PickState = {
 // out (Royce, 2026-09-18: "we can't isolate them until the perfect event is
 // right"). Holding event offers on bad days meant a member frustrated about
 // getting nothing kept getting nothing; the draft carries their feelings.
-// ask_solicitation is never held: it's only queued for an event guest with no
-// stated ask, and without an answer they're never scored for a match, so
-// holding it would isolate them from the room.
+// ask_solicitation (asking an event guest with no stated ask what they'd like from it) follows the same rules as any other text
+// Cue starts (decided 2026-10-19 on Royce's delegation, review of #254): it waits while they're struggling, is paced by engagement,
+// and isn't "can't wait". It used to be exempt from all three; since #254 it also reaches members who have goals but no ask.
 export const HOLD_WHILE_STRUGGLING = new Set<ProactiveType>([
+  "ask_solicitation",
   "ask_checkin",
   "goal_checkin",
   "product_update",
@@ -742,10 +743,10 @@ export function isAnswering(c: Pick<Candidate, "type" | "payload">): boolean {
   return false;
 }
 
-// What the engagement pace never holds: a safety follow-up, and the ask sent to an
-// event guest who hasn't stated one (never held, so they aren't left out of the room).
+// What the engagement pace never holds: a safety follow-up. (The ask sent to an event guest with no stated ask was exempt too, until
+// 2026-10-19: it's paced like any text Cue starts.)
 export function pacedByEngagement(c: Pick<Candidate, "type" | "payload">): boolean {
-  return !(c.type === "ask_solicitation" || (c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true);
+  return !((c.payload as { safetyFollowUp?: boolean } | null)?.safetyFollowUp === true);
 }
 
 export function evaluateCandidates(state: PickState, opts: { ignorePacing?: boolean } = {}): Evaluation {
@@ -898,8 +899,9 @@ export function codePick(eligible: Candidate[]): Candidate | null {
 // itself expires sooner.
 const FIND_TYPES = new Set(["event_offer", "event_match_nudge", "deadline_nudge"]);
 // Real candidates that can't wait for tomorrow either: a post-call text (they just hung up), what goes before an event (the note, the
-// brief, the brief's name ask, a guest's ask before it), and a lapse notice. A find never jumps these (review of #132).
-const CANT_WAIT = new Set(["post_call", "pre_arrival", "event_brief", "brief_name_ask", "room_share_ask", "ask_solicitation", "artifact_expiry"]);
+// brief, the brief's name ask), and a lapse notice. A find never jumps these (review of #132). The ask to an event guest with no stated
+// ask isn't one of them since 2026-10-19: it follows the rules of any text Cue starts.
+const CANT_WAIT = new Set(["post_call", "pre_arrival", "event_brief", "brief_name_ask", "room_share_ask", "artifact_expiry"]);
 
 // Pure: when a find's useful life ends: its own expiry, or the end of the last day the picker gave it, whichever is first.
 export function findEndsAt(c: Pick<Candidate, "expiresAt" | "payload">, zone: string | null): Date | null {
