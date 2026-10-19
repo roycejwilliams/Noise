@@ -48,7 +48,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { repeatQuestionCheck } from "./repeatAsk.js";
 import { payloadFirst, theirAskOf } from "./payloadFirst.js";
 import { afterComposeWait, afterPayloadFirst, afterRelevance, judgeDailyPick, lastDayVeto, logDraftDecision, sends, type DraftDecision } from "../brain/index.js";
-import { renderEmotionalContext } from "./emotion.js";
+import { renderEmotionalContext, STRETCH_LOOKBACK_HOURS } from "./emotion.js";
 import { HELD_RECAP_APPROVED, MOOD_FALLBACK_KEY, MOOD_FALLBACK_LINE, MOOD_HOLD_CAP_HOURS, moodFallbackLogLine, moodHold, noteMoodHold, type MoodHold } from "../services/moodHold.js";
 import { kindOf, loadKindRestraint, RESTRAINT, suppressedKinds, syncKindPreferences, type ProactiveKind } from "../services/kindRestraint.js";
 import { captionNumbersBacked, sendCheckDryRun } from "../services/sendCheck.js";
@@ -379,21 +379,38 @@ export function draftWaitRead(c: Pick<Candidate, "payload">, s: Pick<PickState, 
   return { state: "held", hold: true, heldHours };
 }
 
+// A SKIP the draft gave its reason for ("model chose SKIP: nothing settled on the call, or they have moved on to something else", "...: no
+// specific open thread") is a fit skip: the draft decided the content doesn't belong, whatever the mood (review of #261).
+const FIT_SKIP = /^model chose SKIP:\s*\S/;
+// The held recap (jobs/postCallFollowUp.ts isHeldRecap): its prompt's own SKIP rule (Royce, with its approval) is a fit rule.
+const heldRecapCandidate = (c: Pick<Candidate, "type" | "payload">) => c.type === "post_call" && !!(c.payload as { recapHeldAt?: string } | null)?.recapHeldAt;
+// Pure: whether they've been okay at some point since their last fallback, from the stretch they're in now: it began after that fallback.
+// The stretch's start (emotion.ts hardStretchSince) counts only when the read found a real break before it, a day with no hard read or a
+// positive read, which needs it more than a day inside the lookback; a start at the lookback's edge is only how far back the read went
+// (a stretch longer than STRETCH_LOOKBACK_HOURS drifts forward with it), so it never reads as a new stretch (review of #261).
+export function okaySinceFallback(fallbackAt: Date, hardSince: Date, now: Date): boolean {
+  const realBreak = now.getTime() - hardSince.getTime() < (STRETCH_LOOKBACK_HOURS - 24) * HOUR;
+  return realBreak && hardSince.getTime() > fallbackAt.getTime();
+}
 // Pure: after an item's one wait, its draft says SKIP again while they're still struggling: the approved fallback line goes in its place
-// (MOOD_FALLBACK_LINE, Royce 2026-10-19) instead of nothing. At most once a hard stretch a member (the ledger key carries the stretch's
-// start), never twice in a row, never under a safety hold; the send itself keeps the usual hours, caps, spacing and opt-out
-// (sendWithLedger). Anything else is a normal skip: a skip code decided, a first SKIP (that's the wait), not struggling, or the fallback
-// already used this stretch (a second item in the same stretch drops as before).
-export function moodFallbackDecision(o: { candidate: Pick<Candidate, "payload">; skip: string; state: Pick<PickState, "needsCare" | "moodHold" | "safetyHold" | "sends">; hardSince: Date | null }): { send: true; key: string } | { send: false; why: string } {
+// (MOOD_FALLBACK_LINE, Royce 2026-10-19) instead of nothing. Only for a skip the hard day caused: a bare model SKIP, never a fit skip the
+// draft gave its reason for, never the held recap. Once a stretch a member, on the ledger: no second fallback while they haven't been
+// okay since their last one (okaySinceFallback); never twice in a row, never under a safety hold; the send itself keeps the usual hours,
+// caps, spacing and opt-out (sendWithLedger). Anything else is a normal skip: a skip code decided, a fit skip, a first SKIP (that's the
+// wait), not struggling, or the fallback already used this stretch (a second item in the same stretch drops as before).
+export function moodFallbackDecision(o: { candidate: Pick<Candidate, "type" | "payload">; skip: string; state: Pick<PickState, "now" | "needsCare" | "moodHold" | "safetyHold" | "sends">; hardSince: Date | null }): { send: true; key: string } | { send: false; why: string } {
   if (!MODEL_SKIP.test(o.skip)) return { send: false, why: "a skip code decided, not the draft's" };
+  if (heldRecapCandidate(o.candidate)) return { send: false, why: "the held recap: its SKIP is its own fit rule, never the mood" };
+  if (FIT_SKIP.test(o.skip)) return { send: false, why: "a fit skip: the draft gave its reason the content doesn't belong" };
   if (firstDraftMoodWait(o.candidate, o.skip, o.state)) return { send: false, why: "its one wait comes first" };
   if (!o.state.needsCare || o.state.moodHold?.state === "released_okay") return { send: false, why: "not struggling: a normal skip" };
   if (o.state.safetyHold) return { send: false, why: "a safety hold: nothing goes" };
   if (!o.hardSince) return { send: false, why: "no hard stretch on the read" };
   const key = `${MOOD_FALLBACK_KEY}${o.hardSince.toISOString()}`;
-  if (o.state.sends.some((s) => s.targetKey === key)) return { send: false, why: "the fallback already went this hard stretch" };
-  const last = [...o.state.sends].sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
-  if (last?.targetKey.startsWith(MOOD_FALLBACK_KEY)) return { send: false, why: "never twice in a row" };
+  const byNewest = [...o.state.sends].sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+  const lastFallback = byNewest.find((s) => s.targetKey.startsWith(MOOD_FALLBACK_KEY));
+  if (lastFallback && (lastFallback.targetKey === key || !okaySinceFallback(lastFallback.sentAt, o.hardSince, o.state.now))) return { send: false, why: "the fallback already went, and they haven't been okay since" };
+  if (byNewest[0]?.targetKey.startsWith(MOOD_FALLBACK_KEY)) return { send: false, why: "never twice in a row" };
   return { send: true, key };
 }
 

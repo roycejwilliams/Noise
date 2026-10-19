@@ -3,6 +3,8 @@
 // day's hold had just released at the cap. Now a model SKIP while they're struggling waits once (moodDraftSkipAt, mood_draft_wait) and is
 // written again once they're okay, or at the cap after the skip, the feeling as tone only. A skip code decides is never a mood and is
 // dropped as before, and so is a second SKIP or a SKIP when they're not struggling. Safety is unchanged. Logs: rule and kind, no words.
+// The fallback line after the one wait goes only for a skip the hard day caused: never a fit skip the draft gave its reason for, never
+// the held recap; and once a stretch on the ledger, even for a stretch longer than the read's 96h lookback (review of #261).
 // Layer 1: pure functions, then dispatchForUser on a fake store with a stubbed draft model. Zero tokens, no DB, nothing sent.
 //   npx tsx evals/proactive/moodDraftSkips.ts
 process.env.SENDBLUE_API_API_KEY ||= "unused-in-tests";
@@ -132,16 +134,25 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   check("the line keeps the voice rules: no dash, no exclamation, no question, short", !/[—–!?]/.test(MH.MOOD_FALLBACK_LINE) && MH.MOOD_FALLBACK_LINE.length < 100);
   const since = ago(30);
   const waited = cand("companion", { moodDraftSkipAt: ago(49).toISOString() });
-  const dec = (o: Record<string, unknown>, c: any = waited, skip = "model chose SKIP") => P.moodFallbackDecision({ candidate: c, skip, state: { sends: [], safetyHold: false, ...CAP, ...o } as any, hardSince: since });
+  const dec = (o: Record<string, unknown>, c: any = waited, skip = "model chose SKIP") => P.moodFallbackDecision({ candidate: c, skip, state: { now: NOW, sends: [], safetyHold: false, ...CAP, ...o } as any, hardSince: since });
   const key = `${MH.MOOD_FALLBACK_KEY}${since.toISOString()}`;
   check("past its one wait, still struggling: the fallback goes, keyed to the stretch", JSON.stringify(dec({})) === JSON.stringify({ send: true, key }));
   check("a check-in the hold kept to the cap (no stamp), skipping while still struggling: the fallback goes", dec({}, cand("ask_checkin")).send === true);
   check("once a hard stretch a member: a second item in the same stretch drops as before", dec({ sends: [{ type: "companion", targetKey: key, topicKey: "mood_fallback", sentAt: ago(3), exempt: false }, { type: "companion", targetKey: "companion:9", topicKey: "x", sentAt: ago(1), exempt: false }] }, cand("goal_checkin", { moodDraftSkipAt: ago(49).toISOString() })).send === false);
-  check("never twice in a row (even across stretches)", dec({ sends: [{ type: "companion", targetKey: `${MH.MOOD_FALLBACK_KEY}${ago(100).toISOString()}`, topicKey: "mood_fallback", sentAt: ago(1), exempt: false }] }).send === false);
+  // The last fallback went before this stretch began (okay since), and nothing went after it: only "twice in a row" decides.
+  const prev = [{ type: "companion", targetKey: `${MH.MOOD_FALLBACK_KEY}${ago(100).toISOString()}`, topicKey: "mood_fallback", sentAt: ago(40), exempt: false }];
+  check("never twice in a row (even across stretches)", (dec({ sends: prev }) as any).why === "never twice in a row" && dec({ sends: [...prev, { type: "companion", targetKey: "companion:9", topicKey: "x", sentAt: ago(20), exempt: false }] }).send === true);
   check("never under a safety hold", dec({ safetyHold: true }).send === false);
   check("not struggling, or okay again: a normal skip", dec({ ...CALM }).send === false && dec({ ...OKAY }).send === false);
   check("a skip code decided: a normal skip", dec({}, waited, "Cue owns this thread: an open task delivers it").send === false);
   check("while its one wait is still to give: the wait, not the fallback", dec({ ...HELD }, cand("companion")).send === false);
+  // Only a skip the hard day caused (review of #261): a fit skip, where the draft gave its reason the content doesn't belong, never gets
+  // the line; nor does the held recap, whose SKIP is its own approved fit rule.
+  check("a fit skip the draft gave its reason for: a normal skip, never the fallback", dec({}, waited, "model chose SKIP: no specific open thread").send === false);
+  const heldRecap = cand("post_call", { followUpId: "f1", recapHeldAt: ago(49).toISOString(), moodDraftSkipAt: ago(49).toISOString() });
+  check("the held recap's own SKIP (nothing settled, or they moved on): never the fallback", dec({}, heldRecap, "model chose SKIP: nothing settled on the call, or they have moved on to something else").send === false);
+  check("the held recap is excluded whatever its SKIP says", dec({}, heldRecap, "model chose SKIP").send === false);
+  check("a plain post-call text (not the held recap) past its wait still can", dec({}, cand("post_call", { followUpId: "f2", moodDraftSkipAt: ago(49).toISOString() })).send === true);
 
   // The send: through the ledger's own gates (hours, caps, opt-out) after one more safety read; the item closed as skipped, never sent.
   const { default: sendblue } = await import("../../src/services/sendblue.js");
@@ -179,6 +190,51 @@ const failsOn = (checks: { name: string; pass: boolean }[], name: string) => che
   globalThis.Date = RealD;
   const px = src("harness/proactive.ts");
   check("dispatch: the one wait first, then the fallback, then the drop as before", /if \(firstDraftMoodWait\(c, draft\.skip, state\)\) \{[\s\S]{0,900}const fallback = moodFallbackDecision\(\{ candidate: c, skip: draft\.skip, state, hardSince: member\.raw\.emotional\?\.hardSince \?\? null \}\);[\s\S]{0,300}\n    if \(fallback\.send && !opts\.dryRun && sends\(decision, c\.id\) && \(await sendMoodFallback\(registry, c, person, fallback\.key, draft\.skip, [\s\S]{0,600}\n      done\(c\.type\);\n      return;\n    \}\n    if \(!opts\.dryRun\) await dropCandidate\(registry, c, "skipped", draft\.skip\);/.test(px));
+}
+
+
+// ================================================================ 5. once a stretch, on the ledger, for a stretch longer than the read's lookback
+// The review's case: one continuous hard stretch from hour 0, a read every 45 minutes (more than a hundred), the fallback at hour 120;
+// the stretch's start drifts forward with the 96h lookback, so a key built on it changed and a second fallback went at 150h and 200h.
+{
+  const T0 = FIXED - 300 * HOUR;
+  const at = (h: number) => new Date(T0 + h * HOUR);
+  const steady: Sig[] = [];
+  for (let h = 0; h <= 260; h += 0.75) steady.push({ ...hard(0), at: at(h) });
+  // getEmotionalContext's own two reads on a fake store: the newest hundred in 14 days, then every hard or positive read in the lookback.
+  const realQuery = pool.query;
+  let sigs: Sig[] = steady;
+  (pool as any).query = async (sql: string, params: any[] = []) => {
+    const q = String(sql);
+    if (/FROM emotion_signals/i.test(q) && /LIMIT 100\b/.test(q)) return { rows: sigs.filter((x) => x.at.getTime() <= FIXED_AT).sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, 100).map((x) => ({ ...x, created_at: x.at })) };
+    if (/FROM emotion_signals/i.test(q) && /make_interval/.test(q)) {
+      const end = Date.parse(params[1]), from = end - Number(params[2]) * HOUR;
+      return { rows: sigs.filter((x) => x.at.getTime() > from && x.at.getTime() <= end && (x.valence === "positive" || (x.valence === "negative" && x.intensity !== "low"))).sort((a, b) => b.at.getTime() - a.at.getTime()).map((x) => ({ ...x, created_at: x.at })) };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  let FIXED_AT = 0;
+  const readAt = async (h: number) => { FIXED_AT = at(h).getTime(); return E.getEmotionalContext("u-jordan", at(h)); };
+  const decideAt = async (h: number, sends: any[]) => {
+    const e = await readAt(h);
+    const state = { now: at(h), sends, safetyHold: false, needsCare: e.needsCare, moodHold: MH.moodHold(e, { now: at(h), lastInboundAt: at(h - 0.5) }) };
+    return { e, d: P.moodFallbackDecision({ candidate: cand("goal_checkin", { moodDraftSkipAt: at(h - 49).toISOString() }), skip: "model chose SKIP", state: state as any, hardSince: e.hardSince ?? null }) };
+  };
+  const first = await decideAt(120, []);
+  check("120h into one stretch (over a hundred reads): the first fallback goes", first.d.send === true && steady.filter((x) => x.at <= at(120)).length > 100, first.d);
+  const fell = first.d.send ? first.d.key : "";
+  // Another text went after it, so "never twice in a row" isn't what decides below: only the ledger rule.
+  const ledger = [{ type: "goal_checkin", targetKey: fell, topicKey: "mood_fallback", sentAt: at(120), exempt: false }, { type: "companion", targetKey: "companion:9", topicKey: "x", sentAt: at(126), exempt: false }];
+  // 230h too: the drifted start is past the fallback by then, so only the edge rule tells it from a new stretch.
+  const later = await Promise.all([150, 200, 230].map((h) => decideAt(h, ledger)));
+  check("the stretch's start drifts with the lookback (why a key on it failed)", later.every((x) => x.e.hardSince !== null && x.e.hardSince.getTime() > Date.parse(fell.slice(MH.MOOD_FALLBACK_KEY.length))), later.map((x) => x.e.hardSince));
+  check("150h, 200h and 230h, still the same stretch, never okay since: no second fallback", later.every((x) => x.d.send === false && /haven't been okay since/.test((x.d as any).why)), later.map((x) => x.d));
+  // Okay in between (a good moment at 130h, then a new hard stretch from 140h): a later fallback may go again.
+  sigs = [...steady.filter((x) => x.at <= at(128)), { ...hard(0), valence: "positive", intensity: "medium", emotion: "relieved", at: at(130) }, ...steady.filter((x) => x.at >= at(140))];
+  const after = await decideAt(200, ledger);
+  check("okay since the last fallback (a good moment, then a new stretch): it may go again", after.d.send === true && after.e.hardSince?.getTime() === steady.find((x) => x.at >= at(140))!.at.getTime(), { d: after.d, since: after.e.hardSince });
+  check("okaySinceFallback: a start at the lookback's edge is not a break; one inside it, after the fallback, is", !P.okaySinceFallback(at(120), at(104), at(200)) && !P.okaySinceFallback(at(120), at(134), at(230)) && P.okaySinceFallback(at(120), at(140), at(200)) && !P.okaySinceFallback(at(120), at(110), at(150)));
+  (pool as any).query = realQuery;
 }
 
 console.log(`\ndraft skips wait: ${total - failed}/${total} passed`);
