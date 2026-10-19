@@ -40,8 +40,8 @@ export const MOOD_RULES: Record<MoodRule, { where: string; ruling: string; test:
 // Other places a feeling read decides whether something runs (review of #253). Documented only, not changed here: each needs Royce.
 export const FEELING_PICKS_NOT_CHANGED: { where: string; what: string; status: string }[] = [
   { where: "services/documentOffer.ts offerGate", what: "no document offer while needsCare, or in a heavyNow moment", status: "documented, not changed: needs Royce" },
-  { where: "jobs/postCallFollowUp.ts post-call recap", what: "the recap offer is gated on needsCare and heavyNow (documentOffer postCallRecapAllowed)", status: "documented, not changed: needs Royce" },
-  { where: "harness/replyGrounding.ts heavyMoment", what: "no offer, door or cold-start steer in a heavy moment (needsCare, or a strong hard feeling now; the document offer's heavyNow)", status: "documented, not changed: needs Royce" },
+  { where: "jobs/postCallFollowUp.ts post-call recap", what: "the recap offer is gated on needsCare and heavyNow, a high-intensity negative moment on the call (intensity, valence) (documentOffer postCallRecapAllowed)", status: "documented, not changed: needs Royce" },
+  { where: "harness/replyGrounding.ts heavyMoment", what: "no offer, door or cold-start steer in a heavy moment (needsCare, or a strong hard feeling now: the current read's intensity high, valence negative; the document offer's heavyNow)", status: "documented, not changed: needs Royce" },
   { where: "harness/replyGrounding.ts frustrated (door, cold-start steer)", what: "the door and the cold-start question wait while they're frustrated with Cue (withCo, 48 hours after the last such read), with no cap of their own", status: "documented, not changed: needs Royce" },
   { where: "harness/proactive.ts drafting (feelingForDraft)", what: "a draft sees 'struggling in the last day' and can return SKIP, which drops the item (dropCandidate), released hold or not", status: "documented, not changed: needs Royce" },
 ];
