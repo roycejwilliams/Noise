@@ -54,6 +54,8 @@ const removal = { field: "claim", old_value: "the custody hearing in May", new_v
 const guarded = await A.recentAskCheckins(U, fakeQ(["Still prepping for the custody hearing in May, or has that passed?", RECENT[0]], [removal]));
 check("recentAskCheckins: a check-in that says something they had Cue forget isn't shown again; the other is", guarded.length === 1 && guarded[0] === RECENT[0]);
 check("recentAskCheckins: a failed read is none", (await A.recentAskCheckins(U, { query: async () => { throw new Error("db down"); } })).length === 0);
+const guardDown = await A.recentAskCheckins(U, { query: async (sql: string) => { if (/FROM proactive_sends/.test(sql)) return { rows: [{ message: "Still prepping for the custody hearing in May, or has that passed?" }] }; throw new Error("guard read failed"); } });
+check("recentAskCheckins: a failed guard read is none (fails closed), never the unguarded lines", guardDown.length === 0);
 
 // ---- wiring
 check("wiring: the registry passes the recent check-ins, after the send-time gate", /if \(!gate\.ok\) return skip\(gate\.why\);\s*const r = await draftAskCheckin\(person\.firstName, c\.payload as AskCheckinPayload, await recentAskCheckins\(c\.userId\)\);/.test(src("harness/proactiveRegistry.ts")));
