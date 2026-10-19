@@ -76,6 +76,37 @@ check("the failure log has no phone", !leaks(logged));
 
 globalThis.fetch = guardFetch;
 
+// ---------------------------------------------------------------- a failed reply never logs the number (sendCoReply)
+{
+  const { withoutPhones, sendCoReply } = await import("../../src/routes/sendblue.js");
+  check("withoutPhones: +1 number", withoutPhones(`invalid number ${PHONE}`) === "invalid number …0147");
+  check("withoutPhones: formatted numbers", !/5550147|555-0147/.test(withoutPhones("call (503) 555-0147 or 503.555.0147 or +1 503 555 0147")));
+  check("withoutPhones: dates, statuses and short numbers stay", withoutPhones("2026-10-18 status 400 code 10002") === "2026-10-18 status 400 code 10002");
+  const { default: sendblue } = await import("../../src/services/sendblue.js");
+  const realSend = sendblue.messages.send;
+  const run = async (errs: Error[], replyTo: string | null, phone: string) => {
+    let i = 0;
+    (sendblue.messages as any).send = async () => {
+      throw errs[Math.min(i++, errs.length - 1)];
+    };
+    logged.length = 0;
+    capture();
+    const ok = await sendCoReply({ phone, message: "See you Thursday.", asVoice: false, replyTo });
+    release();
+    return ok;
+  };
+  // Sendblue's error can echo the number it was sending to.
+  const echo = new Error(`Sendblue 400: ${PHONE} is not a valid iMessage recipient`);
+  check("a failed plain reply returns false", (await run([echo], null, PHONE)) === false);
+  check("a failed plain reply logs no full number (from the phone or from Sendblue's error)", logged.length > 0 && !leaks(logged) && logged.some((l) => l.includes("…0147")));
+  const other = "+15035550188";
+  await run([echo, echo], "handle-1", other);
+  check("an inline reply refused, then the plain send failing: no full number in either line", logged.length >= 2 && !logged.some((l) => l.replace(/\D/g, "").includes("5035550188") || l.replace(/\D/g, "").includes("5035550147")));
+  await run([new Error(`send breaker open for ${PHONE}`)], "handle-2", "+15035550199");
+  check("the send-breaker line logs no full number", logged.length > 0 && !logged.some((l) => /5035550199|5035550147/.test(l.replace(/\D/g, ""))));
+  (sendblue.messages as any).send = realSend;
+}
+
 // ---------------------------------------------------------------- the webhook handler's own log lines
 check("a phone shows as its last four digits", phoneTail(PHONE) === "…0147" && phoneTail(null) === "…");
 const src = readFileSync(new URL("../../src/routes/sendblue.ts", import.meta.url), "utf8");
@@ -103,6 +134,30 @@ for (const m of handler.matchAll(/console\.(log|error|warn|info|debug)\(/g)) {
 check("the handler has log lines to check", calls.length > 20);
 const leaky = calls.filter((c) => /\$\{\s*(number|phone|phone_number|user\.phone_number|resolvedContent|content|transcript|text)\s*\}|,\s*(number|resolvedContent|content|transcript)\s*\)\s*$/.test(c));
 check(`no handler log line prints the number or the member's words${leaky.length ? `: ${leaky.map((c) => c.slice(0, 90)).join(" || ")}` : ""}`, leaky.length === 0);
+// Every log line in the whole file, not just the handler: none prints a number, a phone or the member's words.
+{
+  const all: string[] = [];
+  for (const m of src.matchAll(/console\.(log|error|warn|info|debug)\(/g)) {
+    let i = m.index! + m[0].length;
+    let depth = 1;
+    let q: string | null = null;
+    while (i < src.length && depth > 0) {
+      const c = src[i];
+      if (q) {
+        if (c === "\\") i++;
+        else if (c === q) q = null;
+      } else if (c === '"' || c === "'" || c === "`") q = c;
+      else if (c === "(") depth++;
+      else if (c === ")") depth--;
+      i++;
+    }
+    all.push(src.slice(m.index!, i));
+  }
+  const bad = all.filter((c) => /\$\{\s*(number|phone|phone_number|user\.phone_number|resolvedContent|content|transcript|text)\s*\}|,\s*(number|phone|resolvedContent|content|transcript)\s*\)\s*$/.test(c));
+  check(`no log line in routes/sendblue.ts prints the number or the member's words${bad.length ? `: ${bad.map((c) => c.slice(0, 90)).join(" || ")}` : ""}`, bad.length === 0);
+  // Error text that can echo the number goes through withoutPhones.
+  check("Sendblue's delivery error_message is logged through withoutPhones", /failed: \$\{error_code\} — \$\{withoutPhones\(error_message\)\}/.test(src));
+}
 check("the voice branch goes through voiceMemoText", /if \(isVoice\) \{\s*resolvedContent = await voiceMemoText\(media_url, user\.id\);/.test(handler));
 check("the old transcript line is gone", !/Transcribed voice memo from/.test(src));
 
