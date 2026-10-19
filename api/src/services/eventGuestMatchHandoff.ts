@@ -563,7 +563,9 @@ export async function sendNextQueued(personId: string): Promise<void> {
 // After a restart cut a direct ask off mid-draft: the dead ask goes back in line and each person's line moves again (jobs/index.ts).
 export async function drainStaleAsks(): Promise<number> {
   const O = await import("./inRoomOffers.js");
-  const people = await O.requeueStaleAsks();
+  // ... and anyone whose waiting ask sits behind a question unanswered past OPEN_SLOT_MINUTES (sendNextQueued sends only once the slot
+  // is free, so a fresh open question still holds it).
+  const people = [...new Set([...(await O.requeueStaleAsks()), ...(await O.peopleWithQueuedAsks())])];
   for (const personId of people) await sendNextQueued(personId).catch((err: any) => console.error(`drainStaleAsks: ${personId} (non-fatal, next run tries again):`, err?.message ?? err));
   return people.length;
 }
