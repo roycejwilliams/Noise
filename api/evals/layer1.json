@@ -29,6 +29,7 @@
     "evals/presence/rules.ts",
     "evals/partners/config.ts",
     "evals/partners/guests.ts",
+    "evals/partners/walkinFollowup.ts",
     "evals/outsideEvents/rules.ts",
     "evals/texting/rules.ts",
     "evals/shutdown/rules.ts",

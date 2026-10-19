@@ -888,6 +888,7 @@ export function registerJobs(io: Server) {
          JOIN users u ON u.id = ewc.person_id
          LEFT JOIN co_profiles cp ON cp.user_id = ewc.person_id
          WHERE ewc.followup_sent_at IS NULL
+           AND ewc.event_api_id NOT LIKE 'partner-%'
            AND NOT EXISTS (
              SELECT 1 FROM proactive_candidates pc
              WHERE pc.user_id = ewc.person_id AND pc.target_key = 'debrief:' || ewc.event_api_id
@@ -906,6 +907,9 @@ export function registerJobs(io: Server) {
       }
 
       for (const [eventApiId, eventRows] of rowsByEvent) {
+        // A member's check-in at a partner night (routes/sendblue.ts) is not a Luma event: Luma would never answer, and the row would
+        // be polled every 15 minutes forever. Partner nights are left out here (the query skips them too); no walk-in debrief.
+        if (eventApiId.startsWith("partner-")) continue;
         const details = await getEventDetails(eventApiId).catch((err: any) => {
           console.error(`Walk-in follow-up: getEventDetails failed for ${eventApiId} (non-fatal):`, err?.message ?? err);
           return null;
