@@ -264,7 +264,7 @@ export type EmotionalContext = {
   hardSince?: Date | null;
   // Frustrated with Co itself in the last 48 hours (what it has or hasn't
   // found, its replies). Makes Co search wider and try harder; not a hard day.
-  withCo: { frustrated: boolean; about: string | null; count: number };
+  withCo: { frustrated: boolean; about: string | null; count: number; at?: Date | null; reads?: Date[] };
   // Moments on their latest call where their voice said more than their words
   // (services/voiceFlags.ts). Beside the call's text read, never in it: only
   // the render shows them, nothing above is computed from them.
@@ -322,7 +322,9 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
     needsCare: !!recentNeg && !positiveAfter,
     hardAt: recentNeg && !positiveAfter ? recentNeg.at : null,
     hardSince: recentNeg && !positiveAfter ? hardSince : null,
-    withCo: { frustrated: coNeg.length > 0 && !coPositiveAfter, about: coNeg[0]?.about ?? null, count: coNeg.length },
+    // at: the latest frustration read; reads: every one in the window, newest first (timestamps only; services/moodHold.ts, the
+    // frustration hold's one capped wait).
+    withCo: { frustrated: coNeg.length > 0 && !coPositiveAfter, about: coNeg[0]?.about ?? null, count: coNeg.length, at: coNeg[0]?.at ?? null, reads: aboutCo.filter((s) => s.valence === "negative" && s.intensity !== "low").map((s) => s.at) },
   };
 }
 
