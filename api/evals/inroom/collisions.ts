@@ -142,6 +142,33 @@ async function threeYeses(seed: number, blockFirst = false) {
   check("... and once they answer, the ask that was waiting behind it goes", JSON.stringify(toB()) === JSON.stringify(["Ellis", "Jordan"]), toB());
   check("... and a second drain finds nothing to do", (await H.drainStaleAsks()) === 0);
 }
+// A member who never answers doesn't hold every intro behind it all night (Royce, 2026-10-19; the room sim's Kai and Tess, room 60):
+// past OPEN_SLOT_MINUTES unanswered, the next waiting ask goes, and the earlier question stays open, so it can still be answered.
+{
+  reset();
+  const tess = addMember({ first_name: "Tess", intent: [ask("backing climate hardware founders at seed", "offering")] });
+  const kai = addMember({ first_name: "Kai", intent: [ask("a seed investor for climate hardware")] });
+  const remy = addMember({ first_name: "Remy", intent: [ask("a sailing crew")] });
+  W.scorer = () => ({ score: 20, share: true });
+  addEvent({ api_id: "ev", name: "Noise Supper" }, [{ m: tess }, { m: kai }, { m: remy }]);
+  const ago = (mins: number) => new Date(Date.now() - mins * 60_000);
+  // Tess's question about Remy, never answered; Kai said yes to Tess, and his ask waits behind it.
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: tess.id, candidate_key: remy.id, kind: "nudge", candidate_id: remy.id, candidate_ids: [], asker_id: null, status: "open", opened_at: ago(10), created_at: ago(10) });
+  W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id: tess.id, candidate_key: kai.id, kind: "direct_ask", candidate_id: kai.id, candidate_ids: [], asker_id: kai.id, status: "queued", opened_at: null, created_at: ago(9) });
+  W.optIns.push({ event_id: "ev", person_id: kai.id, candidate_id: tess.id, status: "interested" });
+  const before = W.sent.filter((x) => x.to === tess.phone_number).length;
+  const toTess = () => askedBy(W.sent.filter((x) => x.to === tess.phone_number).slice(before).map((x) => x.content));
+  await H.drainStaleAsks();
+  await settle();
+  check("an unanswered question under OPEN_SLOT_MINUTES still holds the slot: Kai's ask waits", toTess().length === 0 && W.offers.find((o) => o.candidate_key === kai.id)?.status === "queued", { asked: toTess(), offers: W.offers.map((o) => [o.candidate_key === kai.id ? "Kai" : "Remy", o.status]) });
+  // Royce's 20 minutes (2026-10-19): 21 minutes unanswered.
+  W.offers.find((o) => o.candidate_key === remy.id)!.opened_at = ago(21);
+  await H.drainStaleAsks();
+  await settle();
+  check("past OPEN_SLOT_MINUTES unanswered, the next waiting ask goes (Kai's ask reaches Tess)", JSON.stringify(toTess()) === JSON.stringify(["Kai"]), { asked: toTess(), offers: W.offers.map((o) => [o.candidate_key === kai.id ? "Kai" : "Remy", o.status]) });
+  check("... and Tess's earlier question isn't expired: it stays open, so it can still be answered", W.offers.find((o) => o.candidate_key === remy.id)?.status === "open");
+  check("... and only one ask went (the freed slot is taken again by Kai's)", toTess().length === 1 && W.offers.filter((o) => o.person_id === tess.id && o.status === "queued").length === 0);
+}
 // A queued ask that won't go never holds the line (review of #211): the next one goes.
 {
   reset();

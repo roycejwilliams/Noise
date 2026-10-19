@@ -29,8 +29,12 @@ export type Offer = {
 const REPLY_EXPIRY_DAYS = 7;
 // A slot taken for a send that never confirmed (the server died while drafting) stops holding the slot after this long.
 export const SLOT_CLAIM_MINUTES = 10;
-// The one slot: an open question, or a direct ask on its way.
-const SLOT_TAKEN = `((status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval))`;
+// An unanswered question holds the member's one slot this long (Royce, 2026-10-19: a member who never answers shouldn't block every
+// intro behind it all night). After that the next waiting ask goes; the earlier question isn't expired and stays answerable for
+// REPLY_EXPIRY_DAYS (a bare "yes" binds to their most recent open question, as always).
+export const OPEN_SLOT_MINUTES = 20;
+// The one slot: a question opened in the last OPEN_SLOT_MINUTES, or a direct ask on its way.
+const SLOT_TAKEN = `((status = 'open' AND opened_at > NOW() - ($2 || ' minutes')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval))`;
 const keyOf = (kind: OfferKind, candidateId: string | null) => (kind === "additive" ? "additive" : String(candidateId));
 
 export async function openOffer(o: { eventId: string; eventName?: string | null; personId: string; kind: OfferKind; candidateId?: string | null; candidateIds?: string[]; askerId?: string | null }): Promise<void> {
@@ -54,7 +58,7 @@ export async function queueOffer(o: { eventId: string; eventName?: string | null
 
 // Their one slot is taken: an open question, or a direct ask on its way to them.
 export async function hasOpenOffer(personId: string): Promise<boolean> {
-  const { rows } = await pool.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [personId, REPLY_EXPIRY_DAYS, SLOT_CLAIM_MINUTES]);
+  const { rows } = await pool.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [personId, OPEN_SLOT_MINUTES, SLOT_CLAIM_MINUTES]);
   return rows.length > 0;
 }
 
@@ -65,7 +69,7 @@ export async function claimAskSlot(o: { eventId: string; eventName?: string | nu
   try {
     await client.query("BEGIN");
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`offer-slot:${o.personId}`]);
-    const { rows } = await client.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [o.personId, REPLY_EXPIRY_DAYS, SLOT_CLAIM_MINUTES]);
+    const { rows } = await client.query(`SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ${SLOT_TAKEN} LIMIT 1`, [o.personId, OPEN_SLOT_MINUTES, SLOT_CLAIM_MINUTES]);
     if (rows.length) {
       await client.query(
         `INSERT INTO event_match_offers (event_id, person_id, candidate_key, kind, candidate_id, asker_id, event_name, status)
@@ -137,6 +141,12 @@ export async function nextQueued(personId: string): Promise<Offer | null> {
 // Direct asks whose send never confirmed (the server died while drafting; SLOT_CLAIM_MINUTES on): each goes back in line, where it
 // was, and is returned so its person's queue is drained (review of #211: after a restart, the asks queued behind a dead one stayed
 // queued, and the dead one was never retried). One UPDATE, so two instances never take the same one. A room that's closed has none.
+export async function peopleWithQueuedAsks(): Promise<string[]> {
+  // Everyone with a direct ask waiting: once their open question is past OPEN_SLOT_MINUTES unanswered, the drain sends the next one.
+  const { rows } = await pool.query(`SELECT DISTINCT person_id FROM event_match_offers WHERE status = 'queued'`);
+  return rows.map((r: any) => String(r.person_id));
+}
+
 export async function requeueStaleAsks(): Promise<string[]> {
   const { rows } = await pool.query(
     `UPDATE event_match_offers SET status = 'queued', opened_at = NULL

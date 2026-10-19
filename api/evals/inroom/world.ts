@@ -248,10 +248,10 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
   // Only the exact one-slot predicate (inRoomOffers.ts SLOT_TAKEN) is answered: a changed query is unknown and fails the sim, so the
   // real SQL is what's tested (review of #211).
-  if (has("SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ((status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval)) LIMIT 1")) {
-    const days = Number(p[1]) * 86_400_000;
+  if (has("SELECT 1 FROM event_match_offers WHERE person_id = $1 AND ((status = 'open' AND opened_at > NOW() - ($2 || ' minutes')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval)) LIMIT 1")) {
+    const openMs = Number(p[1]) * 60_000; // OPEN_SLOT_MINUTES
     const mins = Number(p[2]) * 60_000;
-    return R(W.offers.filter((o) => o.person_id === p[0] && ((o.status === "open" && now() - +o.opened_at < days) || (o.status === "sending" && now() - +o.opened_at < mins))).slice(0, 1).map(() => ({ "?column?": 1 })));
+    return R(W.offers.filter((o) => o.person_id === p[0] && ((o.status === "open" && now() - +o.opened_at < openMs) || (o.status === "sending" && now() - +o.opened_at < mins))).slice(0, 1).map(() => ({ "?column?": 1 })));
   }
   if (has("INSERT INTO event_match_offers") && has("'queued'")) {
     const [event_id, person_id, candidate_key, candidate_id, asker_id, event_name] = p;
@@ -265,6 +265,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     for (const o of W.offers) if (o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2]) Object.assign(o, { status: "answered", answer: p[3] });
     return R([]);
   }
+  if (has("SELECT DISTINCT person_id FROM event_match_offers WHERE status = 'queued'")) return R([...new Set(W.offers.filter((o) => o.status === "queued").map((o) => o.person_id))].map((person_id) => ({ person_id })));
   if (has("UPDATE event_match_offers SET status = 'queued', opened_at = NULL") && has("WHERE status = 'sending' AND opened_at <= NOW() - ($1 || ' minutes')::interval RETURNING person_id")) {
     const mins = Number(p[0]) * 60_000;
     const out: Row[] = [];
