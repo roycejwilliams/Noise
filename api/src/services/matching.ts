@@ -88,11 +88,13 @@ type ScorableCandidate = {
 //   - a HIDDEN part: their private asks and their blockers (Royce, 2026-10-18: "It should never be mentioned to another user
 //     what that person is going through"). The scorer may use it to judge fit and is told never to mention or cite it; code
 //     acts on the scorer's own report that it isn't the only basis (shareReasonFor: hidden_only must be false and a reason
-//     given, or there is no share reason and nothing is proposed). That is the scorer's word, not an independent check: on the
-//     network path nothing else checks it yet (rooms add the value gate, which sees only the other member's shared asks). Code
-//     does make sure no intro text echoes the hidden part (harness/matchGate.ts hiddenEcho, on share reasons, value lines, drafts and
-//     the network intro email). On every path, rooms included: the room path passes its private asks in `hidden`, since it
-//     scores on intent with private asks taken out (roomMatching.ts matchableIntent). The Jev prune reads lines without the
+//     given, or there is no share reason and nothing is proposed). That is the scorer's word, not an independent check, so the
+//     hidden part goes only where something independent checks the fit: rooms, behind the value gate (which sees only the
+//     other member's shared asks). The network path gets no hidden part (decided 2026-10-19, interim; an independent fit
+//     check there, which needs a model call, could bring it back later). Code does make sure no intro text echoes the hidden
+//     part (harness/hiddenEcho.ts, on value lines, consent drafts and the network intro email; a share reason is a shared ask
+//     word for word). The room path passes its private asks in `hidden`, since it scores on intent with private asks taken
+//     out (roomMatching.ts matchableIntent). The Jev prune reads lines without the
 //     hidden part: a fit only the hidden part supports can never be proposed, so the prune needs nothing of it.
 // Never on the line: any co_memories row (call transcripts, text exchanges, Cue's own records), and no field outside the list.
 // An item that names another person in the same prompt is left out (nameFinder below: whole word, any case, accents folded).
@@ -350,7 +352,9 @@ export async function scoreAgainstStatedAsk<T extends ScorableCandidate>(
     }
   }
   if (!toScore.length) return dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>);
-  const lines = candidateLinesWithLabels(toScore, hints, undefined, { askerFirstName: opts.askerFirstName });
+  // The network path: no hidden part (decided 2026-10-19, interim). Nothing independent checks the scorer's hidden_only here, so
+  // a private ask or blocker could quietly be a network match's real basis (review of #245). Rooms keep it behind the value gate.
+  const lines = candidateLinesWithLabels(toScore, hints, undefined, { askerFirstName: opts.askerFirstName, withHidden: false });
   const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
   const scored = await runAskScoring("matching.scoreAgainstStatedAsk", buildStatedAskPrompt(ask.text, digest, askerContext), toScore, lines);
   return [...scored, ...dropped.map((c) => ({ candidate: c, score: 0, reason: "", shareReason: "", mutual: false }) as AskScore<T>)];
@@ -388,7 +392,8 @@ export async function scoreOfferingAgainstCandidates<T extends ScorableCandidate
 ): Promise<AskScore<T>[]> {
   if (!candidates.length || !offering.text) return [];
 
-  const lines = candidateLinesWithLabels(candidates, undefined, undefined, { askerFirstName: opts.askerFirstName });
+  // The network path: no hidden part (decided 2026-10-19, interim; see scoreAgainstStatedAsk).
+  const lines = candidateLinesWithLabels(candidates, undefined, undefined, { askerFirstName: opts.askerFirstName, withHidden: false });
   const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
 
   const prompt = `Someone has this to offer others: "${offering.text}"

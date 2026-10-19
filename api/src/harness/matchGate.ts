@@ -11,7 +11,7 @@ import { geocodeCity, haversineMiles, SAME_METRO_MAX_MILES } from "../services/g
 import type { TierMatch } from "../services/tieredRecommendation.js";
 import { gate, recordDecision, type GateCheck } from "./core.js";
 import { isOpenAsk } from "./profileWrite.js";
-import { joinHyphens } from "./hiddenEcho.js";
+import { PREFIX_SAFE } from "./hiddenEcho.js";
 import { localToday } from "../services/eventOrder.js";
 
 export const TIER_LOOKAHEAD_DAYS: Record<1 | 2, number> = { 1: 30, 2: 14 };
@@ -495,10 +495,19 @@ export const SENSITIVE: RegExp[] = [
   /\b(?:new job|job search|interviewing|quietly|secretly|while still employed|without my (?:boss|employer) knowing)\b/,
   // Review of #245 (2026-10-18), a backstop only: health, identity, work loss, harm, relationships. Narrowed on re-review so a
   // shared ask isn't refused for "coming out of stealth", "came out last month", "trans-pacific", "anti-abuse tooling", "let go
-  // of perfectionism" or "after layoffs at big tech". Read with hyphens joined (hiddenEcho.ts joinHyphens), so a prefix is
-  // never the word. "gay" and "severance" stay as they are ("when in doubt, don't share"), Royce's call.
+  // of perfectionism" or "after layoffs at big tech". Read with hyphens joined (hiddenEcho.ts PREFIX_SAFE), so a prefix is
+  // never the word. A member's own shareable ask quoted word for word may carry these (OWN_ASK_CONSENTED, below).
   /\b(?:hiv|dui|gay|trans|transgender|transitioning|(?:coming|came) out (?:as|to)|laid off|(?:got|was|been|being|get|getting) let go|severance|between jobs|suicid\w*|abus(?:e|ed|es|ing|ive)|abortion|affair)\b/,
 ];
+
+// The words a share reason may carry when it is the member's own shareable ask, word for word (decided 2026-10-19 under
+// Royce's rulings: "a member's own shareable ask is consented", e.g. "a gay founders dinner", "a severance lawyer"). Only the
+// 2026-10-18 additions: the older words stay refused even in their own ask, per the 2026-09-15 rule ("they told Co, not
+// everyone they might be introduced to"). Every other check (an echo of someone's hidden part, any non-verbatim mention) still
+// reads all of SENSITIVE.
+export const OWN_ASK_CONSENTED: RegExp = SENSITIVE[SENSITIVE.length - 1];
+// Read with hyphens joined wherever it's tested ("trans-pacific", "anti-abuse" are never the word).
+PREFIX_SAFE.add(OWN_ASK_CONSENTED);
 
 
 const STOP = new Set(["a", "an", "the", "and", "or", "to", "of", "in", "on", "for", "with", "who", "that", "is", "are", "their", "they", "them", "at", "as", "by", "be", "it", "this"]);
@@ -555,9 +564,10 @@ export function checkShareReason(f: NetworkFacts): GateCheck {
   // The control: the quoted words must be one of the asks they marked shareable, word for word.
   const quoted = reason.replace(TEMPLATE_PREFIX, "").replace(/^"|"$/g, "").trim();
   if (!f.candidateStatedAsks.some((a) => norm(a) === norm(quoted))) return { name, pass: false, reason: "not an ask they marked shareable" };
-  // The backstop: a private topic in an ask they marked anyway.
-  const n = norm(joinHyphens(reason));
-  const sensitive = SENSITIVE.map((re) => n.match(re)?.[0]).find(Boolean);
+  // The backstop: a private topic in an ask they marked anyway. The reason is their own shareable ask word for word (checked
+  // just above), so the consented words are not refused here.
+  const n = norm(reason);
+  const sensitive = SENSITIVE.filter((re) => re !== OWN_ASK_CONSENTED).map((re) => n.match(re)?.[0]).find(Boolean);
   if (sensitive) return { name, pass: false, reason: `mentions "${sensitive}", which is too personal to share in an intro` };
 
   const allowedShingles = shingles(contentWords(f.candidateStatedAsks.join(" . ")), 3);
