@@ -30,7 +30,7 @@ export const MOOD_HOLD_CAP_HOURS = 48;
 // "thanks" right after hard news doesn't count.
 export const OKAY_AFTER_HOURS = RIGHT_NOW_HOURS;
 
-export type MoodRule = "checkin_hold" | "stop_note_hold" | "bundle_skip_wait" | "heavy_offer_hold" | "recap_hold" | "draft_skip_wait" | "frustration_hold";
+export type MoodRule = "checkin_hold" | "stop_note_hold" | "bundle_skip_wait" | "heavy_offer_hold" | "recap_hold" | "draft_skip_wait" | "frustration_hold" | "followup_skip_wait";
 // The feeling-based holds this module rules on, and Royce's ruling on each (pinned in evals/proactive/moodHolds.ts). Not every
 // place a feeling read decides whether something runs: FEELING_PICKS_NOT_CHANGED lists the others found, documented, not changed.
 // test: the layer 1 file that proves it waits, never cancels (evals/proactive/moodNeverCancels.ts checks each is registered).
@@ -50,6 +50,9 @@ export const MOOD_RULES: Record<MoodRule, { where: string; ruling: string; test:
   // Frustration with Cue holds the door and the cold-start question for one capped wait per item, measured from the first frustration
   // read since the item was owed (harness/replyGrounding.ts frustrationHold).
   frustration_hold: { where: "harness/replyGrounding.ts frustrated (door, cold-start steer) -> frustrationHold", ruling: "timing only, capped (Royce 2026-10-19)", test: "evals/proactive/moodFrustration.ts" },
+  // Royce, 2026-10-19: "feelings change timing and tone, never cancel." The follow-up decider's skip while they're struggling is one
+  // capped wait (services/followUps.ts followUpMoodWait), then a gentle second look.
+  followup_skip_wait: { where: "services/followUps.ts follow-up decider skip -> followUpMoodWait (followup.moodWaitAt)", ruling: "timing only, capped (Royce 2026-10-19)", test: "evals/proactive/moodFollowUps.ts" },
 };
 
 // Other places a feeling read decides whether something runs (review of #253). Documented only, not changed here: each needs Royce.
