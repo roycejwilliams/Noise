@@ -33,6 +33,8 @@ check("an event with no end time is taken as four hours long", S.readoutDue({ st
 
 // ---- the leak check: nothing that could point at a member
 check("a member's name in the readout is a leak", S.readoutLeak("Priya came and met 3 people.", "Founders Night", MEMBERS) === "a member's name (Priya)");
+check("a name right before a period is a leak ('Thanks, Ellis.'), and one ending the text", S.readoutLeak("Thanks, Ellis. The room was lively.", "Founders Night", ["Ellis"]) === "a member's name (Ellis)" && S.readoutLeak("Most of the room met Ellis.", "Founders Night", ["Ellis"]) === "a member's name (Ellis)");
+check("the thin-on line with a dot still passes, and an email is still read as one", S.readoutLeak("The room was thin on: investors or funding.", "Founders Night", MEMBERS) === null && S.readoutLeak("write to ellis.k@b.co.", "X", []) === "an email address");
 check("an email, a phone number or a link is a leak", S.readoutLeak("write to a@b.co", "X", []) === "an email address" && S.readoutLeak("call 415 555 0123", "X", []) === "a phone number" && S.readoutLeak("see https://x.test", "X", []) === "a link");
 check("the event's own name is not a leak (a member named in it is the host's title, shown by design)", S.readoutLeak(R.renderText({ ...stats, eventName: "Dinner with Noor" }), "Dinner with Noor", MEMBERS) === null);
 check("a name that is one of the readout's own fixed words (Will, Hope) can't block every readout", S.readoutLeak(R.renderText(stats), "Founders Night", ["Few", "Else", "Hope", "Will", "Members"]) === null);
