@@ -304,11 +304,59 @@ async function twoOpen() {
   await settle();
   check("... and the drain never sends it while two are open", W.sent.filter((x) => x.to === t.tess.phone_number).length === before && W.offers.filter((o) => o.person_id === t.tess.id && o.status === "open").length === 2 && W.offers.find((o) => o.candidate_key === ellis.id)?.status === "queued");
   const src = (await import("node:fs")).readFileSync(new URL("../../src/services/eventScoring.ts", import.meta.url), "utf8");
-  check("... and a match nudge or an additive offer waits too (the same cap, read before it's claimed)", (src.match(/if \(\(await O\.openQuestionCount\(person\.user_id\)\) >= O\.MAX_OPEN_QUESTIONS\)/g) ?? []).length === 2);
+  check("... and a match nudge or an additive offer waits too (each claims its place under the slot lock before drafting)", /O\.claimOfferSlot\(\{[^}]*kind: "nudge"/.test(src) && /O\.claimOfferSlot\(\{[^}]*kind: "additive"/.test(src) && !/openQuestionCount/.test(src) && !(await O.claimOfferSlot({ eventId: "ev", personId: t.tess.id, kind: "nudge", candidateId: ellis.id })));
   // Tess answers one by name: the slot frees and Ellis's ask goes.
   await memberTurn(t.tess.id, () => H.handleMatchNudgeReply("ev", "Noise Supper", "not_interested", asM(t.tess), asM(t.remy)));
   await settle();
   check("... once she answers one, the waiting ask goes", W.sent.filter((x) => x.to === t.tess.phone_number).length === before + 1 && W.offers.find((o) => o.candidate_key === ellis.id)?.status === "open");
+}
+// A nudge or an additive heads-up takes its place under the same lock as a direct ask, counting what's open AND on its way (review of
+// #211: one open, one direct ask on its way and a nudge made three; the nudge only counted open rows, then opened after its send).
+const offer = (person_id: string, candidate_key: string, status: string, kind = "direct_ask", minsAgo = 1) => W.offers.push({ event_id: "ev", event_name: "Noise Supper", person_id, candidate_key, kind, candidate_id: kind === "additive" ? null : candidate_key, candidate_ids: [], asker_id: null, status, opened_at: new Date(Date.now() - minsAgo * 60_000), created_at: new Date() });
+const inPlay = (id: string) => W.offers.filter((o) => o.person_id === id && (o.status === "open" || o.status === "sending")).length;
+{
+  reset();
+  const tess = addMember({ first_name: "Tess" });
+  offer(tess.id, "remy", "open", "direct_ask", 45);
+  offer(tess.id, "ellis", "sending");
+  check("one open + one direct ask on its way + a match nudge: the nudge gets no place (never three)", (await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "nudge", candidateId: "kai" })) === null && inPlay(tess.id) === 2);
+  check("... nor an additive offer", (await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "additive", candidateIds: ["kai"] })) === null && inPlay(tess.id) === 2);
+}
+let raceMax = 0;
+for (let seed = 1; seed <= TIMINGS; seed++) {
+  // The same at the same moment: one open, then a direct ask and two nudges race for her places.
+  reset();
+  timing(seed);
+  const tess = addMember({ first_name: "Tess" });
+  offer(tess.id, "remy", "open", "direct_ask", 45);
+  await Promise.all([
+    O.claimAskSlot({ eventId: "ev", personId: tess.id, candidateId: "ellis", askerId: "ellis" }),
+    O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "nudge", candidateId: "kai" }),
+    O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "nudge", candidateId: "jo" }),
+  ]);
+  raceMax = Math.max(raceMax, inPlay(tess.id));
+}
+latency.next = () => 0;
+check(`a direct ask and two nudges racing beside one open question: never more than two open or on their way (${TIMINGS} timings)`, raceMax === 2, raceMax);
+{
+  reset();
+  const tess = addMember({ first_name: "Tess" });
+  offer(tess.id, "remy", "open", "direct_ask", 45);
+  check("an additive offer (it names no one) doesn't open while another question is open", (await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "additive", candidateIds: ["kai"] })) === null && !W.offers.some((o) => o.candidate_key === "additive"));
+  W.offers.find((o) => o.candidate_key === "remy")!.status = "answered";
+  offer(tess.id, "ellis", "sending");
+  check("... nor while a direct ask is on its way", (await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "additive", candidateIds: ["kai"] })) === null);
+  W.offers.splice(W.offers.findIndex((o) => o.candidate_key === "ellis"), 1);
+  offer(tess.id, "additive", "answered", "additive", 90);
+  const claim = await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "additive", candidateIds: ["kai"] });
+  check("... with nothing else open it takes its place (its own earlier, answered heads-up doesn't count)", !!claim && W.offers.find((o) => o.candidate_key === "additive")?.status === "sending");
+  await O.releaseOfferSlot(claim!);
+  check("... and a send that doesn't happen puts the earlier heads-up back as it was", W.offers.find((o) => o.candidate_key === "additive")?.status === "answered");
+  const nudge = await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "nudge", candidateId: "kai" });
+  await O.releaseOfferSlot(nudge!);
+  check("... a released nudge place with nothing before it is gone", !!nudge && !W.offers.some((o) => o.candidate_key === "kai"));
+  offer(tess.id, "kai", "sending", "nudge", 30);
+  check("a nudge claim that never confirmed is never put in the direct-ask line", (await O.requeueStaleAsks()).length === 0 && W.offers.find((o) => o.candidate_key === "kai")?.status === "sending");
 }
 check("every query the cases ran is one the fake world knows exactly (a changed slot query fails here)", W.unknownSql.size === 0, [...W.unknownSql].slice(0, 5));
 

@@ -232,6 +232,27 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     else W.offers.push({ event_id, person_id, candidate_key, kind, candidate_id, candidate_ids: candidate_ids ?? [], asker_id, event_name, status: "open", opened_at, created_at: new Date() });
     return R([]);
   }
+  // A nudge's or heads-up's place (claimOfferSlot), exact queries only: what's open or on its way, the row it takes, and its release.
+  if (has("SELECT event_id, candidate_key FROM event_match_offers WHERE person_id = $1 AND ((status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval))")) {
+    const days = Number(p[1]) * 86_400_000, mins = Number(p[2]) * 60_000;
+    return R(W.offers.filter((o) => o.person_id === p[0] && ((o.status === "open" && now() - +o.opened_at < days) || (o.status === "sending" && now() - +o.opened_at < mins))).map((o) => ({ event_id: o.event_id, candidate_key: o.candidate_key })));
+  }
+  if (has("SELECT status, opened_at, kind, candidate_id, candidate_ids FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3")) {
+    return R(W.offers.filter((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2]).map((o) => ({ status: o.status, opened_at: o.opened_at, kind: o.kind, candidate_id: o.candidate_id, candidate_ids: o.candidate_ids })));
+  }
+  if (has("INSERT INTO event_match_offers (event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, event_name, status, opened_at)") && has("'sending', NOW()")) {
+    const [event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, event_name] = p;
+    const row = W.offers.find((o) => o.event_id === event_id && o.person_id === person_id && o.candidate_key === candidate_key);
+    const opened_at = new Date(Date.now() + W.offers.length);
+    if (row) Object.assign(row, { kind, candidate_id, candidate_ids: candidate_ids ?? [], status: "sending", opened_at });
+    else W.offers.push({ event_id, person_id, candidate_key, kind, candidate_id, candidate_ids: candidate_ids ?? [], asker_id: null, event_name, status: "sending", opened_at, created_at: new Date() });
+    return R([]);
+  }
+  if (has("UPDATE event_match_offers SET status = $4, opened_at = $5, kind = $6, candidate_id = $7, candidate_ids = $8::uuid[] WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'sending'")) {
+    const row = W.offers.find((o) => o.event_id === p[0] && o.person_id === p[1] && o.candidate_key === p[2] && o.status === "sending");
+    if (row) Object.assign(row, { status: p[3], opened_at: p[4], kind: p[5], candidate_id: p[6], candidate_ids: p[7] ?? [] });
+    return R([]);
+  }
   // The one question slot (claimAskSlot): a direct ask on its way holds it ('sending'); a queued ask being sent takes it in place.
   if (has("INSERT INTO event_match_offers") && has("'sending', NOW()")) {
     const [event_id, person_id, candidate_key, candidate_id, asker_id, event_name] = p;
@@ -273,10 +294,10 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     return R([]);
   }
   if (has("SELECT DISTINCT person_id FROM event_match_offers WHERE status = 'queued'")) return R([...new Set(W.offers.filter((o) => o.status === "queued").map((o) => o.person_id))].map((person_id) => ({ person_id })));
-  if (has("UPDATE event_match_offers SET status = 'queued', opened_at = NULL") && has("WHERE status = 'sending' AND opened_at <= NOW() - ($1 || ' minutes')::interval RETURNING person_id")) {
+  if (has("UPDATE event_match_offers SET status = 'queued', opened_at = NULL") && has("WHERE status = 'sending' AND kind = 'direct_ask' AND opened_at <= NOW() - ($1 || ' minutes')::interval RETURNING person_id")) {
     const mins = Number(p[0]) * 60_000;
     const out: Row[] = [];
-    for (const o of W.offers) if (o.status === "sending" && now() - +o.opened_at >= mins) { Object.assign(o, { status: "queued", opened_at: null }); out.push({ person_id: o.person_id }); }
+    for (const o of W.offers) if (o.status === "sending" && o.kind === "direct_ask" && now() - +o.opened_at >= mins) { Object.assign(o, { status: "queued", opened_at: null }); out.push({ person_id: o.person_id }); }
     return R(out);
   }
   if (has("UPDATE event_match_offers SET status = 'expired' WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'queued'")) {

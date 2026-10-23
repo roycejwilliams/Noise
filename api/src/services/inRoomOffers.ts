@@ -120,6 +120,54 @@ export async function claimAskSlot(o: { eventId: string; eventName?: string | nu
   }
 }
 
+// A match nudge or an additive heads-up is a question about people too: it takes its place under the same lock as a direct ask
+// (claimAskSlot) before it is drafted, counting every question open or on its way, so one open, one on its way and a nudge can't
+// make three (review of #211: the nudge and the additive offer only counted open rows, then opened after the send). An additive
+// offer names no one, so it goes only when no other question about people is open or on its way: a bare "yes" then has one thing
+// to answer. The question's own row (same event and key) doesn't count against it. Returns the claim, or null when there's no room.
+const IN_PLAY_SQL = `SELECT event_id, candidate_key FROM event_match_offers WHERE person_id = $1 AND ((status = 'open' AND opened_at > NOW() - ($2 || ' days')::interval) OR (status = 'sending' AND opened_at > NOW() - ($3 || ' minutes')::interval))`;
+export type OfferClaim = { eventId: string; personId: string; key: string; prior: { status: string; opened_at: Date | null; kind: string; candidate_id: string | null; candidate_ids: string[] } | null };
+export async function claimOfferSlot(o: { eventId: string; eventName?: string | null; personId: string; kind: "nudge" | "additive"; candidateId?: string | null; candidateIds?: string[] }): Promise<OfferClaim | null> {
+  const key = keyOf(o.kind, o.candidateId ?? null);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`offer-slot:${o.personId}`]);
+    const { rows } = await client.query(IN_PLAY_SQL, [o.personId, REPLY_EXPIRY_DAYS, SLOT_CLAIM_MINUTES]);
+    const others = rows.filter((r: any) => !(r.event_id === o.eventId && r.candidate_key === key)).length;
+    if (o.kind === "additive" ? others > 0 : others >= MAX_OPEN_QUESTIONS) {
+      await client.query("COMMIT");
+      return null;
+    }
+    const prior = await client.query(`SELECT status, opened_at, kind, candidate_id, candidate_ids FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3`, [o.eventId, o.personId, key]);
+    await client.query(
+      `INSERT INTO event_match_offers (event_id, person_id, candidate_key, kind, candidate_id, candidate_ids, event_name, status, opened_at)
+       VALUES ($1, $2, $3, $4, $5, $6::uuid[], $7, 'sending', NOW())
+       ON CONFLICT (event_id, person_id, candidate_key) DO UPDATE SET kind = EXCLUDED.kind, candidate_id = EXCLUDED.candidate_id, candidate_ids = EXCLUDED.candidate_ids, status = 'sending', opened_at = NOW()`,
+      [o.eventId, o.personId, key, o.kind, o.candidateId ?? null, o.candidateIds ?? [], o.eventName ?? null],
+    );
+    await client.query("COMMIT");
+    return { eventId: o.eventId, personId: o.personId, key, prior: (prior.rows[0] as OfferClaim["prior"]) ?? null };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+// The nudge or heads-up isn't going (no draft, throttled, the send failed): the place is free again, and a row that was there
+// before the claim (an earlier heads-up's answer) is put back as it was.
+export async function releaseOfferSlot(c: OfferClaim): Promise<void> {
+  if (!c.prior) {
+    await pool.query(`DELETE FROM event_match_offers WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'sending'`, [c.eventId, c.personId, c.key]);
+    return;
+  }
+  await pool.query(
+    `UPDATE event_match_offers SET status = $4, opened_at = $5, kind = $6, candidate_id = $7, candidate_ids = $8::uuid[] WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3 AND status = 'sending'`,
+    [c.eventId, c.personId, c.key, c.prior.status, c.prior.opened_at, c.prior.kind, c.prior.candidate_id, c.prior.candidate_ids ?? []],
+  );
+}
+
 // The ask isn't going now (blocked, moved on, held for their morning or the pause, or failed): the slot is free again.
 // Once it reaches them, afterDirectAskSent opens it instead (openOffer).
 export async function releaseAskSlot(eventId: string, personId: string, candidateId: string): Promise<void> {
@@ -164,6 +212,7 @@ export async function nextQueued(personId: string): Promise<Offer | null> {
 // Direct asks whose send never confirmed (the server died while drafting; SLOT_CLAIM_MINUTES on): each goes back in line, where it
 // was, and is returned so its person's queue is drained (review of #211: after a restart, the asks queued behind a dead one stayed
 // queued, and the dead one was never retried). One UPDATE, so two instances never take the same one. A room that's closed has none.
+// Only direct asks: a nudge's or heads-up's claim that never confirmed just stops counting after SLOT_CLAIM_MINUTES (it was never in line).
 export async function peopleWithQueuedAsks(): Promise<string[]> {
   // Everyone with a direct ask waiting: once their open question is past OPEN_SLOT_MINUTES unanswered, the drain sends the next one.
   const { rows } = await pool.query(`SELECT DISTINCT person_id FROM event_match_offers WHERE status = 'queued'`);
@@ -173,7 +222,7 @@ export async function peopleWithQueuedAsks(): Promise<string[]> {
 export async function requeueStaleAsks(): Promise<string[]> {
   const { rows } = await pool.query(
     `UPDATE event_match_offers SET status = 'queued', opened_at = NULL
-      WHERE status = 'sending' AND opened_at <= NOW() - ($1 || ' minutes')::interval RETURNING person_id`,
+      WHERE status = 'sending' AND kind = 'direct_ask' AND opened_at <= NOW() - ($1 || ' minutes')::interval RETURNING person_id`,
     [SLOT_CLAIM_MINUTES],
   );
   return [...new Set(rows.map((r: any) => String(r.person_id)))];

@@ -477,13 +477,16 @@ async function maybeSendMatchNudge(
       return false;
     }
     if (!(await passValueGate())) return false;
-    // At most two questions about people open for them at once (services/inRoomOffers.ts MAX_OPEN_QUESTIONS): with two open, this
-    // nudge waits for a later pass.
+    // At most two questions about people open or on their way to them at once (services/inRoomOffers.ts claimOfferSlot, under the
+    // same lock as a direct ask): with two, this nudge waits for a later pass. Its place is taken now, before drafting, and freed on
+    // every way out below that doesn't send.
     const O = await import("./inRoomOffers.js");
-    if ((await O.openQuestionCount(person.user_id)) >= O.MAX_OPEN_QUESTIONS) {
-      console.log(`eventScoring: match nudge for ${person.user_id} at ${eventId} waits (${O.MAX_OPEN_QUESTIONS} questions already open)`);
+    const slot = await O.claimOfferSlot({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: candidate.user_id });
+    if (!slot) {
+      console.log(`eventScoring: match nudge for ${person.user_id} at ${eventId} waits (${O.MAX_OPEN_QUESTIONS} questions already open or on their way)`);
       return false;
     }
+    const freeSlot = () => O.releaseOfferSlot(slot).catch((err: any) => console.error("eventScoring: freeing the nudge's question slot failed (non-fatal):", err?.message ?? err));
 
     // Claim atomically before drafting (code review, 2026-09-17): the
     // scoring debounce only coalesces webhooks that arrive within its 15s
@@ -494,18 +497,21 @@ async function maybeSendMatchNudge(
     // doing it first and atomically means only one pass ever wins the row.
     if (!(await tryClaimMatchNudge(eventId, person.user_id, candidate.user_id, top.score))) {
       console.log(`eventScoring: match nudge for ${person.user_id} at ${eventId} already claimed by another pass`);
+      await freeSlot();
       return false;
     }
 
     const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote, event: introEvent, said: [...candidateShared, valueLine || top.shareReason!, ...recipientOwn] }, draftFn);
     if (!message) {
       await releaseMatchNudgeClaim(eventId, person.user_id); // free it up so a later pass can retry
+      await freeSlot();
       return false;
     }
 
     if (!(await inRoomSendAllowed(person.user_id, eventId))) {
       console.log(`eventScoring: match nudge throttled for ${person.user_id} (in-room text limit for this event reached)`);
       await releaseMatchNudgeClaim(eventId, person.user_id);
+      await freeSlot();
       return false;
     }
 
@@ -514,6 +520,7 @@ async function maybeSendMatchNudge(
     } catch (err: any) {
       console.error(`eventScoring: match nudge send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
       await releaseMatchNudgeClaim(eventId, person.user_id); // send failed — free the claim so a later pass can retry
+      await freeSlot();
       return false;
     }
 
@@ -522,8 +529,9 @@ async function maybeSendMatchNudge(
       .query(`UPDATE event_guest_match_nudges SET pending = false WHERE event_id = $1 AND person_id = $2`, [eventId, person.user_id])
       .catch((err: any) => console.error("eventScoring: clearing pending failed (non-fatal):", err?.message ?? err));
     await recordInRoomSend(person.user_id, `in_room:match:${eventId}`, message);
-    // The question they now have open about this one person (services/inRoomOffers.ts): their reply binds to it.
-    await (await import("./inRoomOffers.js")).openOffer({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: candidate.user_id }).catch((err: any) => console.error("eventScoring: opening the nudge offer failed (non-fatal):", err?.message ?? err));
+    // The question they now have open about this one person (services/inRoomOffers.ts): their reply binds to it. It opens in the
+    // place claimed above.
+    await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "nudge", candidateId: candidate.user_id }).catch((err: any) => console.error("eventScoring: opening the nudge offer failed (non-fatal):", err?.message ?? err));
     await RM.notePairAsked(eventId, person.user_id, candidate.user_id);
     // No markMatchNudgeSent call needed here — the claim above already
     // wrote the row with the final candidate_id/score.
@@ -667,13 +675,18 @@ async function maybeSendAdditiveOffer(
     );
     return false;
   }
-  // At most two questions about people open for them at once (services/inRoomOffers.ts MAX_OPEN_QUESTIONS).
+  // It names no one, so it goes only when no other question about people is open or on its way to them (services/inRoomOffers.ts
+  // claimOfferSlot): a bare "yes" then answers it alone. Its place is taken now, before drafting, and freed on every way out below
+  // that doesn't send.
   const O = await import("./inRoomOffers.js");
-  if ((await O.openQuestionCount(person.user_id)) >= O.MAX_OPEN_QUESTIONS) return false;
+  const slot = await O.claimOfferSlot({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds: newCandidates.map((c) => c.user_id) });
+  if (!slot) return false;
+  const freeSlot = () => O.releaseOfferSlot(slot).catch((err: any) => console.error("eventScoring: freeing the additive offer's question slot failed (non-fatal):", err?.message ?? err));
   if (!(await tryClaimAdditiveOfferDebounce(eventId, person.user_id))) {
     console.log(
       `eventScoring: additive offer debounced for ${person.user_id} at ${eventId} (sent one within the last ${ADDITIVE_OFFER_DEBOUNCE_MINUTES}m)`,
     );
+    await freeSlot();
     return false;
   }
 
@@ -698,12 +711,16 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
       return cleanCoMessage(text.trim());
     },
   );
-  if (!message) return false;
+  if (!message) {
+    await freeSlot();
+    return false;
+  }
 
   // Proactive-nudge cap still applies — this is still one of today's
   // discretionary outbound texts, same as the original match nudge.
   if (!(await inRoomSendAllowed(person.user_id, eventId))) {
     console.log(`eventScoring: additive offer throttled for ${person.user_id} (in-room text limit for this event reached)`);
+    await freeSlot();
     return false;
   }
 
@@ -715,13 +732,14 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
     });
   } catch (err: any) {
     console.error(`eventScoring: additive offer send failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+    await freeSlot();
     return false;
   }
 
   await recordInRoomSend(person.user_id, `in_room:additive:${eventId}:${Date.now()}`, message);
   // Who arrived lives only on the offer (services/inRoomOffers.ts), never in their notes: they haven't been told, and
   // after their yes each person is named only through the share gate (eventGuestMatchHandoff.ts handleAdditiveReply).
-  await (await import("./inRoomOffers.js")).openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds: newCandidates.map((c) => c.user_id) }).catch((err: any) => console.error("eventScoring: opening the additive offer failed (non-fatal):", err?.message ?? err));
+  await O.openOffer({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds: newCandidates.map((c) => c.user_id) }).catch((err: any) => console.error("eventScoring: opening the additive offer failed (non-fatal):", err?.message ?? err));
   await writeMemory(
     person.user_id,
     "event_guest_match_nudge",
