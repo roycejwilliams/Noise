@@ -51,6 +51,7 @@ const CALM = read([], null);
   const w0 = F.followUpWakeHours({ waitedAt: NOW.toISOString(), now: NOW, until: inH(2) });
   check("a window ending in 2h: a skip at 0h wakes at its last moment (10 minutes before), never past it", Math.abs(w0 - (2 - 10 / 60)) < 1e-9, w0);
   check("its last moment already here or past: it looks now, no extra wait", F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: inH(5 / 60) }) === 0 && F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: ago(1).toISOString() }) === 0);
+  check("an until that doesn't parse: no clamp, the okay window as before (never NaN)", F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: "not a date" }) === hours && Number.isFinite(F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: "2026-13-45T99:00" })));
   check("a window far off, or none: the okay window as before", F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: inH(72) }) === hours && F.followUpWakeHours({ waitedAt: ago(1).toISOString(), now: NOW, until: null }) === hours);
 }
 
