@@ -75,6 +75,8 @@ export function followUpWakeHours(o: { waitedAt: string; now: Date; until?: stri
   const hours = Math.max(FOLLOWUP_LIMITS.minHours, Math.min(OKAY_AFTER_HOURS, Math.ceil(left)));
   if (!o.until) return hours;
   const toLastMoment = (Date.parse(o.until) - 10 * 60_000 - o.now.getTime()) / 3_600_000;
+  // An until that doesn't parse clamps nothing (Math.min with NaN would make the wake NaN, an invalid date for the scheduler).
+  if (!Number.isFinite(toLastMoment)) return hours;
   return Math.max(0, Math.min(hours, toLastMoment));
 }
 // Model-facing: the decider's look after a wait (never a line for the member).
