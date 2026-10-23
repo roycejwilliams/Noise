@@ -356,7 +356,8 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
   advance(endAt - 35 * 60_000 - Date.now());
   const roomAtClose = new Set((await RM.inRoomNow(evId)).people.map((g) => g.user_id));
   const beforeClose = W.sent.length;
-  await U.processDueUnmatchedFollowUps();
+  // The close's copy waits on Royce (CLOSE_APPROVED false): the sim runs it as approved, to check who it would reach.
+  await U.processDueUnmatchedFollowUps({ approved: true });
   await new Promise((res) => setTimeout(res, 20));
   const closeTexts = W.sent.slice(beforeClose);
   advance(endAt + 20 * 60_000 - Date.now());
@@ -443,7 +444,10 @@ async function night(size: number, seed: number, rates = { yes: 0.6, no: 0.2 }):
       // 2026-10-19; services/eventUnmatchedFollowUp.ts cameTonight).
       const lumaIn = new Set(((W.events.get(evId)?.guests as any[]) ?? []).filter((g) => g.checked_in_at).map((g) => g.email));
       const evidence = (m: Member) => Boolean(W.presence.get(`${evId}|${m.id}`)?.arrived_at) || W.walkins.some((w) => w.event_api_id === evId && w.person_id === m.id) || lumaIn.has(m.email);
-      const owed = p.members.filter((m) => roomAtClose.has(m.id) && evidence(m) && !stoppedAt.has(m.id) && !m.sms_opted_out);
+      // In the room at close, or a QR walk-in who checked in and hasn't left (the check-in counts as attendance for the close, though
+      // matching waits for arrival: review of #208).
+      const walkedIn = (m: Member) => W.walkins.some((w) => w.event_api_id === evId && w.person_id === m.id) && !W.presence.get(`${evId}|${m.id}`)?.left_at && !W.presence.get(`${evId}|${m.id}`)?.not_going_at;
+      const owed = p.members.filter((m) => (roomAtClose.has(m.id) || walkedIn(m)) && evidence(m) && !stoppedAt.has(m.id) && !m.sms_opted_out);
       const closesTo = (m: Member) => closeTexts.filter((x) => x.to === m.phone_number).length;
       return {
         closeSent: closeTexts.length,
