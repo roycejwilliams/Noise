@@ -358,6 +358,9 @@ export const PINNED: Pin[] = [
   { file: "src/jobs/postCallFollowUp.ts", line: "const care = k.restraint ? k.restraint.needsCare : !!emo?.needsCare; // mood: carries the read into recapMoodRead, which waits on the capped moodHold", why: "carries the hard-day read into recapMoodRead, which waits on the capped moodHold" },
   { file: "src/jobs/postCallFollowUp.ts", line: "const mood = care && emo?.needsCare ? moodHold(emo, { now, lastInboundAt: inbound }) : null;", why: "the capped moodHold for the recap, read only while they're having a hard time" },
   { file: "src/jobs/postCallFollowUp.ts", line: "return { offer: r.ok && !m.held, held: r.ok && m.held, gentle: r.ok && m.gentle, heldHours: mood?.heldHours ?? null, why: r.ok ? null : r.why };", why: "the recap goes now or is held (capped) for that call; heldHours is the capped hold's own count" },
+  { file: "src/jobs/postCallFollowUp.ts", line: "const m = recapMoodRead({ care, mood, heavyCall });", why: "recapMoodRead takes the capped moodHold read ('mood' is that MoodHold, made on the line above); it decides when the recap goes, never whether" },
+  { file: "src/jobs/postCallFollowUp.ts", line: "const held = o.heavyCall || (o.care && (o.mood ? o.mood.hold : true));", why: "recapMoodRead itself: the recap waits while the capped moodHold says hold (or for a heavy call, held for that call); a held recap is kept, never lost" },
+  { file: "src/jobs/postCallFollowUp.ts", line: "return { held, gentle: !held && o.care };", why: "recapMoodRead's result: held (it waits, capped) or gentle (it goes now, softer); nothing is cancelled" },
 ];
 const files: string[] = [];
 const walk = (d: string) => { for (const e of fs.readdirSync(path.join(root, d), { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (p.endsWith(".ts")) files.push(p); } };
