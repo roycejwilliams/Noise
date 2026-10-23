@@ -613,6 +613,41 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   check("luma fail: past the window it expires unsent", sentTo(b).length === 0 && !!W.unmatchedFollowups.find((r) => r.user_id === b.id)?.sent_at);
 }
 
+{
+  // A scorer failure is not "nobody fits" (lifted from #216's review). The model call fails on the real scorer path: the person's last
+  // ranking stays, nothing is sent, and the next pass scores them again. Before, the failure stored an empty ranking, so the next pass
+  // saw everyone as newly arrived and sent an "more people just got here" offer about people who'd been there all along.
+  reset();
+  const a = addMember({ first_name: "Jordan", intent: [ask("a seed investor for a climate hardware startup")] });
+  const b = addMember({ first_name: "Ellis", intent: [ask("climate hardware founders to back at seed", "offering")] });
+  const n = addMember({ first_name: "Noor", intent: [ask("climate hardware founders to back too", "offering")] });
+  addEvent({ api_id: "evt-sf", name: "Cue Supper" }, [{ m: a }, { m: b }, { m: n }]);
+  scores({ "seed investor": { Ellis: 85, Noor: 80 } });
+  await freshPass("evt-sf");
+  const ranked = () => JSON.stringify(W.rankings.get(`evt-sf|${a.id}`)?.ranked_candidates ?? null);
+  const before = ranked();
+  const textsBefore = sentTo(a).length;
+  check("scorer failure: the first pass ranks Jordan and nudges him", nudgeOf("evt-sf", a)?.candidate_id === b.id && before !== "null" && before.includes(n.id));
+  W.scorerFail = true;
+  const scoreCalls = W.llmCalls.filter((c) => c.kind === "score").length;
+  await freshPass("evt-sf");
+  check("scorer failure: the scorer really was called and failed", W.llmCalls.filter((c) => c.kind === "score").length > scoreCalls);
+  check("scorer failure: Jordan's last ranking stays as it was, and nothing is sent", ranked() === before && sentTo(a).length === textsBefore, { before, after: ranked() });
+  W.scorerFail = false;
+  await freshPass("evt-sf");
+  check("scorer failure: the next pass scores again, and no 'more people just got here' offer goes about people who were there all along", sentTo(a).length === textsBefore && !W.llmCalls.some((c) => c.kind === "additiveDraft" || /more (people|person) (has|have) checked in/.test(c.prompt)), sentTo(a).slice(textsBefore));
+  const M2 = await import("../../src/services/matching.js");
+  W.scorerFail = true;
+  const cands = [{ user_id: b.id, first_name: "Ellis", intent: b.intent } as any];
+  const quiet = await Promise.all([
+    M2.scoreAgainstRoomFrame({ asks: [{ type: "seeking", text: "a seed investor" } as any], goal: null }, cands).then((x) => x.length === 0, () => false),
+    M2.scoreAgainstStatedAsk({ type: "seeking", text: "a seed investor" } as any, cands).then((x) => x.length === 0, () => false),
+  ]);
+  const loud = await M2.scoreAgainstRoomFrame({ asks: [{ type: "seeking", text: "a seed investor" } as any], goal: null }, cands, undefined, undefined, undefined, { failLoudly: true }).then(() => "no throw", (e: any) => e?.name);
+  W.scorerFail = false;
+  check("scorer failure: every other caller still gets no matches, never a throw; only failLoudly gets ScoringFailed", quiet.every(Boolean) && loud === "ScoringFailed", { quiet, loud });
+}
+
 // ============================================================ 11. PROACTIVE_PAUSED
 {
   reset();

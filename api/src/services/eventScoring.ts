@@ -881,6 +881,9 @@ export async function scoreMatchedGroup(
       if (h) hints.set(id, h);
     }
     // This person's scoring and drafts under their own trace-text mark (services/llmTraceText.ts).
+    // A scorer failure is not "nobody fits" (lifted from #216's review): their last ranking stays as it was (it is the basis for the
+    // additive offer, so an empty one stored here made everyone look newly arrived next pass), nothing is decided or sent for them
+    // this pass, and the next room pass (an arrival, a Luma update, the start-time retry) scores them again.
     const scored = await withTraceUser(person.user_id, () =>
       scoreAgainstRoomFrame(
         frame,
@@ -888,9 +891,14 @@ export async function scoreMatchedGroup(
         askerContextParts.length ? askerContextParts.join("; ") : undefined,
         hints,
         hiddenAsks,
-        { askerFirstName: person.first_name },
+        { askerFirstName: person.first_name, failLoudly: true },
       ),
-    );
+    ).catch((err: any) => {
+      if (err?.name !== "ScoringFailed") throw err;
+      recordDecision({ layer: 6, decision: "match.score", userId: person.user_id, outcome: "skip", action: "eventScoring.score", proposal: { eventId }, checks: [{ name: "scorer_answered", pass: false, reason: "the scorer failed; ranking kept, scored again next pass" }] }).catch(() => {});
+      return null;
+    });
+    if (!scored) continue;
     const ranked: RankedCandidate[] = scored
       .map((s) => {
         const e = edges.get(s.candidate.user_id);

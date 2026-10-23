@@ -251,6 +251,17 @@ export function hiddenTextsOf(c: ScorableCandidate, hidden?: Map<string, string[
   return [...new Set([...privateAskTexts(c.intent), ...(hidden?.get(c.user_id) ?? []), ...(Array.isArray(c.blockers) ? c.blockers.map(String) : [])])];
 }
 
+// A scorer call that failed (the model call, or an answer that isn't the JSON asked for), told apart from an honest empty result.
+// Only a caller that acts on "no match" asks for it (scoreAgainstRoomFrame's failLoudly: the room pass, services/eventScoring.ts);
+// every other caller still gets no matches, fail closed. Lifted from #216's review: a failure read as "nobody fits" was stored as
+// the person's ranking.
+export class ScoringFailed extends Error {
+  constructor(readonly functionId: string, cause: unknown) {
+    super(`${functionId} failed: ${(cause as any)?.message ?? String(cause)}`);
+    this.name = "ScoringFailed";
+  }
+}
+
 async function runAskScoring<T extends ScorableCandidate>(
   functionId: string,
   prompt: string,
@@ -261,7 +272,7 @@ async function runAskScoring<T extends ScorableCandidate>(
   // (services/llmTraceText.ts, kept 14 days) is filed under the member the scoring ran for, so a private ask removed by its owner
   // would have outlived its removal in someone else's trace (review of #245 x #247). recordInputs/recordOutputs false: the span
   // carries no prompt or answer, so neither Langfuse nor our trace text keeps one.
-  opts: { noTraceText?: boolean } = {},
+  opts: { noTraceText?: boolean; failLoudly?: boolean } = {},
 ): Promise<AskScore<T>[]> {
   try {
     const { hiddenEcho } = await import("../harness/hiddenEcho.js");
@@ -273,6 +284,8 @@ async function runAskScoring<T extends ScorableCandidate>(
     });
 
     const parsed = parseModelJson(raw);
+    // No results list at all is a malformed answer, not "nobody fits" (an honest empty list is `"results": []`).
+    if (opts.failLoudly && !Array.isArray(parsed?.results)) throw new Error("no results list in the scorer's answer");
     const results = Array.isArray(parsed.results) ? parsed.results : [];
     return results
       .filter((r: any) => Number.isInteger(r.index) && r.index >= 0 && r.index < candidates.length)
@@ -297,6 +310,10 @@ async function runAskScoring<T extends ScorableCandidate>(
         };
       });
   } catch (err) {
+    if (opts.failLoudly) {
+      console.error(`${functionId} failed (the caller keeps what it had and tries again):`, (err as any)?.message ?? err);
+      throw new ScoringFailed(functionId, err);
+    }
     // Fail closed — an explicit stated requirement that we can't verify is
     // treated as unmet, same as any other hard filter falling short, rather
     // than silently ignoring what the person asked for.
@@ -481,7 +498,8 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   askerContext?: string,
   hints?: Map<string, string>,
   hidden?: Map<string, string[]>,
-  opts: { askerFirstName?: string } = {},
+  // failLoudly: a scorer failure throws ScoringFailed instead of returning no matches.
+  opts: { askerFirstName?: string; failLoudly?: boolean } = {},
 ): Promise<AskScore<T>[]> {
   // A frame is its asks (roomFrame never makes one without): none, nothing to score.
   if (!candidates.length || !f.asks.length) return [];
@@ -507,7 +525,7 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
   // A line with a hidden part (a private ask or a blocker) means the prompt holds it: no text is recorded for the call.
   const noTraceText = toScore.some((c) => hiddenTextsOf(c, hidden).length > 0);
-  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden, { noTraceText });
+  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden, { noTraceText, failLoudly: opts.failLoudly });
   return [...scored, ...zero];
 }
 
