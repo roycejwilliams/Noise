@@ -73,6 +73,8 @@ export const W = {
   roomClosures: new Map<string, Row>(), // event_room_closures
   // Scorer: (askText, candidate) => score/share/mutual. Default: keyword overlap.
   scorer: null as null | ((ask: string, cand: Member) => { score: number; share: boolean; mutual?: boolean }),
+  // The scorer's model call fails (a 400) while true.
+  scorerFail: false,
   // Consent read verdict (the model half of introConsent): default no violation.
   consentViolation: (_msg: string) => false,
   // The end-of-night close drafter (null: a warm default naming them).
@@ -95,6 +97,7 @@ export function reset(): void {
   W.pairs.length = 0;
   W.roomClosures.clear();
   W.scorer = null;
+  W.scorerFail = false;
   W.consentViolation = () => false;
   W.closeDraft = null;
   W.lumaGuestListFail = false;
@@ -688,6 +691,7 @@ function fakeAnthropic(init: any): Response {
   const prompt = promptOf(init);
   if (prompt.startsWith("Someone wants to be connected with people who match this:")) {
     W.llmCalls.push({ kind: "score", prompt });
+    if (W.scorerFail) return json({ type: "error", error: { type: "invalid_request_error", message: "scorer down" } }, 400);
     const askText = prompt.match(/match this: "([\s\S]*?)"\n/)?.[1] ?? "";
     const digest = prompt.split("one per line:\n")[1]?.split("\n\nFor each candidate")[0] ?? "";
     const results = digest
