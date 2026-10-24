@@ -292,7 +292,9 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   const calls = sorted.filter((s) => s.source === "call" && age(s) <= 7 * 24 * HOUR);
   const lastCallAt = calls[0]?.at ?? null;
   const lastCallMoments = lastCallAt ? calls.filter((s) => Math.abs(s.at.getTime() - lastCallAt.getTime()) < 10 * 60_000) : [];
-  const strongestCall = [...lastCallMoments].sort((a, b) => rank(b.intensity) - rank(a.intensity))[0] ?? null;
+  // A score of how they sounded (isScoreBasis) stays in lastCall.moments for tone, but is never their "current" feeling:
+  // current feeds heavyMoment (replyGrounding.ts), which holds the door, the cold-start question and doc offers (review of #269).
+  const strongestCall = lastCallMoments.filter((s) => !isScoreBasis(s.basis)).sort((a, b) => rank(b.intensity) - rank(a.intensity))[0] ?? null;
   const current = latestText ?? (strongestCall && age(strongestCall) <= 48 * HOUR ? strongestCall : null);
 
   // A frustration score alone doesn't mark a hard day: it can't tell frustration

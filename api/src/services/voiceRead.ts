@@ -331,13 +331,15 @@ export const momentSignals = (m: VoiceMoment[]): Omit<EmotionSignal, "at">[] => 
 // ---------------------------------------------------------------- who it runs for
 
 // No switch (Royce: gate on what the feature needs). It needs the Hume key, a public URL for Twilio to stream to, and
-// Twilio's auth token to check the stream's signature. During the audit (until the phase 3 test passes and Royce says
-// yes) it runs only off production, and only for a test member (a 555-01xx number, services/testNumbers.ts) or a team
-// member (users.mo_approver, services/extensions.ts isTeamMember), so the live test can run from a founder's own phone.
-export function voiceReadAllowed(o: { memberPhone: unknown; team: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (!env.HUME_API_KEY || !env.API_URL || !env.TWILIO_AUTH) return false;
-  if (!testNumbersEnabled(env)) return false;
-  return isTestNumber(o.memberPhone, env) || o.team === true;
+// Twilio's auth token to check the stream's signature (voiceReadPrereqs), and runs only off production. Who: a test
+// member (a 555-01xx number, services/testNumbers.ts), or a member who agreed to it, one by one (users.voice_read_ok,
+// default false; nobody is opted in by code, review of #269). Being on the team is not consent.
+export function voiceReadPrereqs(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !!env.HUME_API_KEY && !!env.API_URL && !!env.TWILIO_AUTH && testNumbersEnabled(env);
+}
+export function voiceReadAllowed(o: { memberPhone: unknown; consented: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (!voiceReadPrereqs(env)) return false;
+  return isTestNumber(o.memberPhone, env) || o.consented === true;
 }
 
 // ---------------------------------------------------------------- the fork in the call's TwiML
@@ -361,12 +363,14 @@ export function voiceStreamUrl(apiUrl: string | undefined): string | null {
 // Pure: ElevenLabs' TwiML with a listen-only fork of the caller's audio added before it. <Start><Stream> is unidirectional
 // and non-blocking (Twilio starts it and goes straight on to ElevenLabs' <Connect><Stream>); track="inbound_track" is the
 // caller only. The call's own verbs are untouched; anything we can't place the fork in comes back exactly as it was.
-export function withVoiceFork(twiml: string, o: { streamUrl: string; userId: string; callToken: string }): string {
+// The fork carries one opaque, one-time stream id (services/voiceStreamLink.ts): never the member's id or the call token,
+// since Twilio keeps the TwiML in its logs.
+export function withVoiceFork(twiml: string, o: { streamUrl: string; streamId: string }): string {
   const open = /<Response(?:\s[^>]*)?>/.exec(twiml);
   if (!open || /\/>$/.test(open[0])) return twiml;
   const fork =
     `<Start><Stream name="${VOICE_STREAM_NAME}" url="${xmlAttr(o.streamUrl)}" track="inbound_track">` +
-    `<Parameter name="user_id" value="${xmlAttr(o.userId)}"/><Parameter name="call_token" value="${xmlAttr(o.callToken)}"/>` +
+    `<Parameter name="stream" value="${xmlAttr(o.streamId)}"/>` +
     `</Stream></Start>`;
   const at = open.index + open[0].length;
   return twiml.slice(0, at) + fork + twiml.slice(at);

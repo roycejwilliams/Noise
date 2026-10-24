@@ -30,7 +30,9 @@ import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import { memberZone } from "./memberTime.js";
 import { TEAM_BUILDER_LINE, isTeamMember } from "./extensions.js";
-import { voiceReadAllowed, voiceStreamUrl, withVoiceFork } from "./voiceRead.js";
+import { voiceReadAllowed, voiceReadPrereqs, voiceStreamUrl, withVoiceFork } from "./voiceRead.js";
+import { issueVoiceStreamLink, type VoiceStreamLinkStore } from "./voiceStreamLink.js";
+import { isTestNumber } from "./testNumbers.js";
 
 let client: ElevenLabsClient | null = null;
 export function elevenLabs(): ElevenLabsClient {
@@ -134,19 +136,32 @@ export async function registerElevenLabsCall(o: {
     },
   } as any)) as unknown as string;
   // The voice read's listen-only fork of the caller's audio (services/voiceRead.ts), only where it may run.
-  return withVoiceReadFork(twiml, { userId: o.userId, callToken, memberPhone: o.direction === "inbound" ? o.from : o.to, team });
+  return withVoiceReadFork(twiml, { userId: o.userId, callToken, memberPhone: o.direction === "inbound" ? o.from : o.to });
 }
 
 // ElevenLabs' TwiML, with the voice read's fork added when it may run for this member (voiceReadAllowed: the Hume key,
-// our URL and Twilio's token are set, off production, and a test or team member). Anything that goes wrong returns the
-// TwiML exactly as ElevenLabs gave it: the call never depends on the read.
-export function withVoiceReadFork(twiml: string, o: { userId: string; callToken: string; memberPhone: unknown; team: boolean }, env: NodeJS.ProcessEnv = process.env): string {
+// our URL and Twilio's token are set, off production, and a test member or one who agreed, users.voice_read_ok). The fork
+// carries a one-time stream id, never the member's id or token (services/voiceStreamLink.ts). Anything that goes wrong
+// returns the TwiML exactly as ElevenLabs gave it: the call never depends on the read.
+export async function voiceReadConsented(userId: string): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT voice_read_ok FROM users WHERE id = $1`, [userId]);
+  return rows[0]?.voice_read_ok === true;
+}
+export async function withVoiceReadFork(
+  twiml: string,
+  o: { userId: string; callToken: string; memberPhone: unknown },
+  env: NodeJS.ProcessEnv = process.env,
+  d: { consented?: (userId: string) => Promise<boolean>; links?: VoiceStreamLinkStore } = {},
+): Promise<string> {
   try {
-    if (typeof twiml !== "string" || !voiceReadAllowed({ memberPhone: o.memberPhone, team: o.team }, env)) return twiml;
+    if (typeof twiml !== "string" || !voiceReadPrereqs(env)) return twiml;
+    const consented = isTestNumber(o.memberPhone, env) ? false : await (d.consented ?? voiceReadConsented)(o.userId).catch(() => false);
+    if (!voiceReadAllowed({ memberPhone: o.memberPhone, consented }, env)) return twiml;
     const streamUrl = voiceStreamUrl(env.API_URL);
-    if (!streamUrl) return twiml;
-    const forked = withVoiceFork(twiml, { streamUrl, userId: o.userId, callToken: o.callToken });
-    console.log(`voiceRead: fork ${forked === twiml ? "not placed (no <Response>)" : "added"} for ${o.userId.slice(0, 8)}`);
+    if (!streamUrl || !/<Response(?:\s[^>]*)?>/.test(twiml)) return twiml;
+    const streamId = await issueVoiceStreamLink(o.userId, `${o.userId}:${o.callToken}`, d.links);
+    const forked = withVoiceFork(twiml, { streamUrl, streamId });
+    console.log(`voiceRead: fork ${forked === twiml ? "not placed" : "added"} for ${o.userId.slice(0, 8)}`);
     return forked;
   } catch {
     return twiml;

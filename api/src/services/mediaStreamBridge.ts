@@ -4,9 +4,9 @@
 //
 // Rebuilt from the Hume EVI bridge removed in 48e970a6 (the stream protocol, the frame buffering cap, the per-call
 // stats line), cut down to one direction. What changed: Hume's v1 endpoint, not EVI; 16 kHz s16le in
-// (services/audioCodec.ts); who the stream belongs to comes from the call token in the stream's <Parameter>s, checked
-// with verifyCallToken, on top of Twilio's signature on the WebSocket handshake (voiceStreamSignatureOk, checked in
-// server.ts before the upgrade).
+// (services/audioCodec.ts); who the stream belongs to comes only from its one-time stream link (the opaque id in the
+// fork's <Parameter>, services/voiceStreamLink.ts: never the member's id or call token, since Twilio logs TwiML), on top
+// of Twilio's signature on the WebSocket handshake (voiceStreamSignatureOk, checked in server.ts before the upgrade).
 //
 // Never in the way of the call:
 // - Hume is opened when the stream starts and never awaited by anything on the call's path. The call brain reads
@@ -18,7 +18,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import WebSocket from "ws";
 import { mulaw8kToPcm16k, pcm16kMs } from "./audioCodec.js";
-import { verifyCallToken } from "./elevenLabsCalls.js";
+import { sessionHashOf, takeVoiceStreamLink } from "./voiceStreamLink.js";
 import {
   newSessionStats,
   rollingRead,
@@ -90,7 +90,8 @@ export type SocketLike = {
 };
 export type BridgeDeps = {
   connectHume: (apiKey: string) => SocketLike;
-  verifyToken: (userId: string, token: string) => boolean;
+  // The stream's one-time link: who it is for and its session, or null (services/voiceStreamLink.ts).
+  takeLink: (streamId: string) => Promise<{ userId: string; sessionHash: string } | null>;
   now: () => number;
   log: (line: string) => void;
   // The session's summary, for the audit (harness_decisions). Never audio, never their words.
@@ -101,8 +102,9 @@ export type BridgeDeps = {
 const OPEN = 1;
 
 type Session = {
-  key: string;
+  key: string; // the session hash (voiceStreamLink.ts sessionHashOf)
   userId: string;
+  verified: boolean; // its stream link was taken; until then nothing is sent or logged
   stats: VoiceSessionStats;
   windows: VoiceWindow[];
   openUtterances: Map<number, number>;
@@ -122,6 +124,7 @@ type Session = {
 };
 
 const sessions = new Map<string, Session>();
+// The call's key, as routes/callLlm.ts builds it; sessions are held under its hash (voiceStreamLink.ts sessionHashOf).
 export const callKeyOf = (userId: string, callToken: string): string => `${userId}:${callToken}`;
 
 function prune(now: number) {
@@ -131,7 +134,7 @@ function prune(now: number) {
 function defaultDeps(): BridgeDeps {
   return {
     connectHume: (apiKey) => new WebSocket(HUME_REALTIME_URL, { headers: { "X-Hume-Api-Key": apiKey }, handshakeTimeout: BRIDGE.openTimeoutMs }) as unknown as SocketLike,
-    verifyToken: (userId, token) => verifyCallToken(userId, token),
+    takeLink: (id) => takeVoiceStreamLink(id),
     now: Date.now,
     log: (l) => console.log(l),
     record: (userId, summary) => {
@@ -301,6 +304,9 @@ function finish(s: Session, by: string) {
   if (s.finishedAt != null) return;
   const d = D();
   s.finishedAt = d.now();
+  // Finished sessions older than the post-call wait go now, so one whose webhook never comes doesn't linger.
+  prune(s.finishedAt);
+  if (!s.verified) { endHume(s); s.resolveDone(); return; }
   s.stats.closedBy ??= by;
   let closedOnce = false;
   const close = () => {
@@ -325,49 +331,59 @@ function finish(s: Session, by: string) {
 // One Twilio stream (the fork). Everything about who it is comes from the token in its own start message.
 export function handleTwilioStream(ws: SocketLike): void {
   let s: Session | null = null;
+  let ended = false;
   ws.on("message", (raw: unknown) => {
     try {
       const m = JSON.parse(typeof raw === "string" ? raw : Buffer.isBuffer(raw) ? raw.toString("utf8") : String(raw));
       if (m?.event === "start") {
         if (s) return;
-        const p = m.start?.customParameters ?? {};
-        const userId = String(p.user_id ?? "");
-        const token = String(p.call_token ?? "");
         const d = D();
-        if (!userId || !token || !d.verifyToken(userId, token)) { d.log("voiceRead: stream refused (no valid call token)"); ws.close(); return; }
-        prune(d.now());
-        const key = callKeyOf(userId, token);
-        // One stream per call: a second stream with the same token is a replay.
-        if (sessions.has(key)) { d.log("voiceRead: stream refused (this call already has one)"); ws.close(); return; }
         let resolveDone = () => {};
         const done = new Promise<void>((r) => (resolveDone = r));
         const stats = newSessionStats(d.now());
         stats.callSid = typeof m.start?.callSid === "string" ? m.start.callSid : null;
         stats.streamSid = typeof m.streamSid === "string" ? m.streamSid : null;
-        s = { key, userId, stats, windows: [], openUtterances: new Map(), hume: null, ready: false, closed: false, finishedAt: null, batch: [], batchBytes: 0, pending: [], sent: [], noisy: null, done, resolveDone, openTimer: null };
-        sessions.set(key, s);
-        openHume(s);
+        // Audio that arrives while the link is checked waits in the capped buffer; nothing is sent until it is.
+        const pendingSession: Session = { key: "", userId: "", verified: false, stats, windows: [], openUtterances: new Map(), hume: null, ready: false, closed: false, finishedAt: null, batch: [], batchBytes: 0, pending: [], sent: [], noisy: null, done, resolveDone, openTimer: null };
+        s = pendingSession;
+        // Who the stream is for comes only from its one-time link (services/voiceStreamLink.ts), never from the stream.
+        const refuse = (why: string) => { d.log(`voiceRead: stream refused (${why})`); endHume(pendingSession); s = null; ended = true; try { ws.close(); } catch { /* gone */ } };
+        d.takeLink(String(m.start?.customParameters?.stream ?? ""))
+          .then((link) => {
+            if (!link) return refuse("no live stream link");
+            if (ended || s !== pendingSession) return;
+            prune(d.now());
+            // One stream per call.
+            if (sessions.has(link.sessionHash)) return refuse("this call already has one");
+            pendingSession.userId = link.userId;
+            pendingSession.key = link.sessionHash;
+            pendingSession.verified = true;
+            sessions.set(link.sessionHash, pendingSession);
+            openHume(pendingSession);
+          })
+          .catch(() => refuse("link check failed"));
       } else if (m?.event === "media" && s) {
         // Only the caller's side (the fork asks for inbound_track; anything else is ignored, never sent).
         if (m.media?.track && m.media.track !== "inbound") return;
         if (typeof m.media?.payload === "string") onMedia(s, m.media.payload);
       } else if (m?.event === "stop" && s) {
+        ended = true;
         finish(s, "call ended");
       }
     } catch (err: any) {
       if (s && !s.stats.error) s.stats.error = `stream: ${String(err?.message ?? err).slice(0, 80)}`;
     }
   });
-  ws.on("close", () => { if (s) finish(s, "stream closed"); });
-  ws.on("error", () => { if (s) finish(s, "stream error"); });
+  ws.on("close", () => { ended = true; if (s) finish(s, "stream closed"); });
+  ws.on("error", () => { ended = true; if (s) finish(s, "stream error"); });
 }
 
 // ---------------------------------------------------------------- readers
 
 // The call brain's line for this turn (routes/callLlm.ts). Synchronous: reads only what Hume has already sent.
 // `callerLines` are the member's lines so far (for the noisy-call rule); once noisy, the read stays off for the call.
-export function voiceReadLineFor(key: string, turnWords: string, callerLines: string[], o: { safety: boolean }): LineDecision | null {
-  const s = sessions.get(key);
+export function voiceReadLineFor(callKey: string, turnWords: string, callerLines: string[], o: { safety: boolean }): LineDecision | null {
+  const s = sessions.get(sessionHashOf(callKey));
   if (!s || s.finishedAt != null) return null;
   const d = D();
   if (!s.noisy) {
@@ -383,7 +399,8 @@ export function voiceReadLineFor(key: string, turnWords: string, callerLines: st
 
 // After the call (routes/co.ts post-call): the moments to keep, once. Waits a few seconds at most for the session to
 // finish (its last scores land just after the call ends); a call without a session, or a noisy one, gives none.
-export async function takeVoiceMoments(key: string, callerTurns: CallerTurn[], waitMs = 5000, judge: VoiceMomentJudge = voiceMomentJudge()): Promise<VoiceMoment[]> {
+export async function takeVoiceMoments(callKey: string, callerTurns: CallerTurn[], waitMs = 5000, judge: VoiceMomentJudge = voiceMomentJudge()): Promise<VoiceMoment[]> {
+  const key = sessionHashOf(callKey);
   const s = sessions.get(key);
   if (!s) return [];
   if (s.finishedAt == null || !s.closed) {
@@ -402,8 +419,8 @@ export async function takeVoiceMoments(key: string, callerTurns: CallerTurn[], w
 }
 
 // For tests and the audit: what a session holds (never audio; the buffers are listed by size only).
-export function sessionShape(key: string): { pendingBytes: number; batchBytes: number; windows: number; finished: boolean } | null {
-  const s = sessions.get(key);
+export function sessionShape(callKey: string): { pendingBytes: number; batchBytes: number; windows: number; finished: boolean } | null {
+  const s = sessions.get(sessionHashOf(callKey));
   if (!s) return null;
   return { pendingBytes: s.pending.reduce((a, b) => a + b.length, 0), batchBytes: s.batchBytes, windows: s.windows.length, finished: s.finishedAt != null };
 }
