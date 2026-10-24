@@ -19,6 +19,10 @@ export function isTestNumber(number: unknown, env: NodeJS.ProcessEnv = process.e
   return /^1?\d{3}55501\d{2}$/.test(digits);
 }
 
+// The clean live-test member's numbers (scripts/testMember.ts reset: +1 415 555-0100 to -0199). The newest unarchived one is the
+// member deliberate live tests run through; it keeps paid searches the other test members skip (services/testMemberSpend.ts).
+export const LIVE_TEST_PHONE_LIKE = "+141555501%";
+
 // The simulation tool sends a REAL inbound through the real webhook, and Co's reply is really texted. It may only ever be pointed at a
 // test member (2026-10-06: a 9/29 run through Royce's own number left 16 test messages, their asks, tasks and a week-later chest-tightness
 // check-in in his real account). Returns why a number is refused, or null when it may be used.

@@ -27,6 +27,7 @@ import { exaConfigured, exaSearch, fromPagesPrompt, onePage } from "./exaSearch.
 import { MODELS } from "../models.js";
 import type { TierMatch } from "./tieredRecommendation.js";
 import { checkGrounding } from "../harness/matchGate.js";
+import { skipsPaidSearch } from "./testMemberSpend.js";
 
 // Judgment call (does this real, current thing actually fit, or is it just
 // a real thing that exists), not narrow extraction — same policy reasoning
@@ -44,6 +45,7 @@ const WEB_SEARCH_REQUEST_RESERVE = Number(process.env.WEB_SEARCH_REQUEST_RESERVE
 // share a cap. Fails closed on any error — no web search if the budget
 // can't be checked.
 export async function reserveWebSearch(userId: string | null, source: "sweep" | "request", query: string): Promise<{ ok: boolean; reason: string | null }> {
+  if (await skipsPaidSearch(userId, "web_search_budget")) return { ok: false, reason: "this is a test account, so paid search is off for it" };
   let client: PoolClient | null = null;
   try {
     client = await pool.connect();
@@ -228,6 +230,7 @@ Return ONLY valid JSON: {"reason": "...", "deadline": "YYYY-MM-DD" or null}`,
 // place: for a place rather than a program (a venue found on a guide), where it is and which of its pages to find
 // ("private events or private dining page").
 export async function findOfficialPage(name: string, timeout: number, place?: { near: string | null; page: string }, userId: string | null = null): Promise<string | null> {
+  if (await skipsPaidSearch(userId, "findOfficialPage")) return null;
   const want = place
     ? `Find the official website page for "${name}"${place.near ? ` in ${place.near}` : ""} (the place's own site, ideally its ${place.page}, not a guide, list, review, booking site or directory about it).`
     : `Find the official website page for "${name}" (the program's or organization's own site, ideally its apply or program page, not a blog, news story, or directory about it).`;

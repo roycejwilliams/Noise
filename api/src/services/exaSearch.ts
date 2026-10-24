@@ -8,6 +8,7 @@
 // (co-test); member wants are the query text, and Exa's answer on data retention is still open.
 // Cost: about $0.005 a search plus $0.001 a page of text (Exa's pricing, 2026-10); each search's reported cost is logged.
 import { recordDecision } from "../harness/core.js";
+import { skipsPaidSearch } from "./testMemberSpend.js";
 
 export const EXA = {
   url: "https://api.exa.ai/search",
@@ -31,6 +32,7 @@ export async function exaSearch(
 ): Promise<ExaSearch> {
   const env = o.env ?? process.env;
   if (!exaConfigured(env)) return { pages: [], cost: null, error: "Exa isn't configured" };
+  if (await skipsPaidSearch(o.userId, `exa.${o.purpose}`)) return { pages: [], cost: null, error: "a test account: paid search is off for it" };
   const text = o.text !== false;
   const body: Record<string, unknown> = {
     query: scrubQuery(query).slice(0, 600),

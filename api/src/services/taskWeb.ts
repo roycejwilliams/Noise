@@ -19,6 +19,7 @@ import type { TierMatch } from "./tieredRecommendation.js";
 import { findOfficialPage, looksOfficial, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { parseModelJson } from "./modelJson.js";
 import { exaConfigured, exaSearches, fromPagesPrompt, onePage } from "./exaSearch.js";
+import { skipsPaidSearch } from "./testMemberSpend.js";
 
 export type RawDetail = { label: string; value: string };
 export type RawResult = { name: string; url: string; details: RawDetail[]; date?: string | null; deadline?: string | null };
@@ -261,6 +262,8 @@ export async function taskWebSearch(
   //   own page whose name checked out is kept even when none of the search model's details did; anything else still needs one.
   opts: { city?: string | null; zone?: string | null; taskId?: number | null; recentHours?: number; skipBudget?: boolean; log?: boolean; sites?: string[]; source?: "sweep" | "request"; background?: boolean; max?: number; searches?: number; ownPage?: string; readsPageItself?: boolean } = {},
 ): Promise<TaskWebResult> {
+  // Before the budget, so skipBudget callers are covered too (services/testMemberSpend.ts).
+  if (await skipsPaidSearch(userId, "taskWeb.search")) return { kept: [], dropped: [], droppedDetails: [], note: "No web search right now: this is a test account, so paid search is off for it." };
   if (!opts.skipBudget) {
     const budget = await reserveWebSearch(userId, opts.source ?? "sweep", what);
     if (!budget.ok) return { kept: [], dropped: [], droppedDetails: [], note: `No web search right now: ${budget.reason}.` };
