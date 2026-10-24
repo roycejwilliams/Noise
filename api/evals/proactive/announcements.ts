@@ -45,13 +45,13 @@ const renameCand = (userId: string, id = "n1") => cand({ id, userId, type: "name
 // ---------------------------------------------------------------- 1. the registry
 check("registry: one key each, every key unique", new Set(AN.ANNOUNCEMENTS.map((a) => a.key)).size === AN.ANNOUNCEMENTS.length);
 check("registry: the rename is ported as it was (its key, words, end, approved)", AN.RENAME.key === "name_change:cue" && AN.RENAME.type === "name_change" && AN.RENAME.lead === NC.NAME_CHANGE_TEXT && "at" in AN.RENAME.expires && AN.RENAME.expires.at.getTime() === NC.NAME_CHANGE_EXPIRES.getTime() && AN.RENAME.approved === true && AN.RENAME.summary === "Tell them, once, that it goes by Cue now");
-check("registry: the shift waits on Royce (approval constant false, a code constant)", AN.SHIFT_APPROVED === false && AN.SHIFT.approved === false && !/process\.env/.test(src("services/announcements.ts")));
+check("registry: the shift is approved by Royce (2026-10-23), a code constant", AN.SHIFT_APPROVED === true && AN.SHIFT.approved === true && !/process\.env/.test(src("services/announcements.ts")));
 check("registry: the shift is its own key, its own type, ends 21 days after it starts", AN.SHIFT.key === "announcement:shift" && AN.SHIFT.type === "announcement" && "daysAfterFirstQueued" in AN.SHIFT.expires && AN.SHIFT.expires.daysAfterFirstQueued === 21);
 check("registry: the rename goes first, so a follow-up that carries it finds it queued", AN.ANNOUNCEMENTS[0] === AN.RENAME);
 
 // ---------------------------------------------------------------- 2. the words (proposed, option A), and the try line
-check("the shift's words are the proposed copy, as written", AN.SHIFT_LEAD === "A bit more on the new name." && AN.SHIFT_BODY === "Noise is for the stretches when life is shifting: a new city, a new role, starting something. My part is knowing what you're in the middle of and finding the person worth meeting for it, at a Noise night or between them. I only introduce you when you both say yes.");
-check("the try lines are the proposed copy", AN.SHIFT_TRY_DEFAULT === "If something's shifting for you right now, tell me and I'll start looking for who you should meet." && AN.SHIFT_TRY_GOAL === "Tell me where things stand with what you're working on, and I'll look for someone who's been through it.");
+check("the shift's words are Royce's approved copy, as written", AN.SHIFT_LEAD === "We're Noise now, and I'm Cue." && AN.SHIFT_BODY === "Noise is for the stretches when life is shifting: a new city, a new role, starting something. My part is knowing what you're in the middle of and finding the person worth meeting for it, at a Noise night or between them. I only introduce you when you both say yes.");
+check("the try lines are Royce's approved copy", AN.SHIFT_TRY_DEFAULT === "If something's shifting for you right now, tell me who'd be good to meet for it and I'll start looking." && AN.SHIFT_TRY_GOAL === "Tell me who'd be good to meet for what you're working on, and I'll start looking.");
 check("the visible-knowledge line is not wired (dropped: not fully true on co-test, see the PR)", !/what I know about you/i.test(src("services/announcements.ts").replace(/^\s*\/\/.*$/gm, "")));
 check("try line: a member with a goal of their own gets the goal line", AN.pickTryLine(AN.SHIFT, { hasOwnGoal: true }) === AN.SHIFT_TRY_GOAL);
 check("try line: everyone else gets the default", AN.pickTryLine(AN.SHIFT, { hasOwnGoal: false }) === AN.SHIFT_TRY_DEFAULT);
@@ -59,8 +59,8 @@ check("try line: the same situation always picks the same line", [1, 2, 3].every
 check("try line: the rename has none (its words are unchanged)", AN.pickTryLine(AN.RENAME, { hasOwnGoal: true }) === null && AN.announcementText(AN.RENAME, { hasOwnGoal: true }, { nameTold: false }) === NC.NAME_CHANGE_TEXT);
 const variants = [true, false].flatMap((hasOwnGoal) => [true, false].map((nameTold) => ({ hasOwnGoal, nameTold, text: AN.announcementText(AN.SHIFT, { hasOwnGoal }, { nameTold }) })));
 check("shape: what changed, what it means, one thing to try, in that order", variants.every((v) => v.text.indexOf(AN.SHIFT_BODY) > 0 && v.text.endsWith(AN.pickTryLine(AN.SHIFT, v)!)), variants);
-check("told already: it opens 'A bit more on the new name.'", variants.filter((v) => v.nameTold).every((v) => v.text.startsWith(AN.SHIFT_LEAD) && !NC.carriesNameChange(v.text)));
-check("not told yet: it opens with the rename's own words instead, once", variants.filter((v) => !v.nameTold).every((v) => v.text.startsWith(NC.NAME_CHANGE_TEXT) && !v.text.includes(AN.SHIFT_LEAD) && (v.text.match(/going by Cue now/g) ?? []).length === 1));
+check("told already: it opens 'We're Noise now, and I'm Cue.'", variants.filter((v) => v.nameTold).every((v) => v.text.startsWith(AN.SHIFT_LEAD) && !/going by Cue now/.test(v.text)));
+check("not told yet: the same opening, which says the new name once (and claims the rename)", variants.filter((v) => !v.nameTold).every((v) => v.text.startsWith(AN.SHIFT_LEAD) && NC.carriesNameChange(v.text) && (v.text.match(/I'm Cue/g) ?? []).length === 1 && !/going by Cue now/.test(v.text)));
 for (const v of variants) {
   const sent = capitalizeSentences(v.text);
   const bad = P.checkDraft(sent, AN.ANNOUNCEMENT_RULES).filter((k) => !k.pass);
@@ -115,7 +115,7 @@ check("dispatch: the only thing an announcement claims with it is the rename it 
 {
   let reads = 0;
   const counting = { told: async () => (reads++, false), situation: async () => (reads++, { hasOwnGoal: false }), now: () => day };
-  const d = await AN.draftAnnouncement(shiftCand("u"), counting);
+  const d = await AN.draftAnnouncement(shiftCand("u"), { ...counting, approved: false });
   check("unapproved: the draft waits a day and reads nothing", "defer" in d && d.defer.getTime() === day.getTime() + D && reads === 0, d);
   const told = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async (_u, k) => k === AN.SHIFT_KEY, situation: async () => ({ hasOwnGoal: true }), now: () => day });
   check("told already: nothing goes", "skip" in told, told);
@@ -124,7 +124,7 @@ check("dispatch: the only thing an announcement claims with it is the rename it 
   const renamed = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async (_u, k) => k === NC.NAME_CHANGE_KEY, situation: async () => ({ hasOwnGoal: true }), now: () => day });
   check("rename reached them: the follow-up lead and their goal line", "messages" in renamed && renamed.messages.length === 1 && renamed.messages[0] === `${AN.SHIFT_LEAD} ${AN.SHIFT_BODY} ${AN.SHIFT_TRY_GOAL}`, renamed);
   const fresh = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async () => false, situation: async () => ({ hasOwnGoal: false }), now: () => day });
-  check("rename hasn't reached them: one text, the rename's words first", "messages" in fresh && fresh.messages.length === 1 && fresh.messages[0] === `${NC.NAME_CHANGE_TEXT} ${AN.SHIFT_BODY} ${AN.SHIFT_TRY_DEFAULT}`, fresh);
+  check("rename hasn't reached them: one text, the same opening (it says the new name)", "messages" in fresh && fresh.messages.length === 1 && fresh.messages[0] === `${AN.SHIFT_LEAD} ${AN.SHIFT_BODY} ${AN.SHIFT_TRY_DEFAULT}`, fresh);
   const odd = await AN.draftAnnouncement(cand({ id: "z", userId: "u", type: "announcement", targetKey: "announcement:unknown" }), { approved: true });
   check("an unknown key is never drafted", "skip" in odd);
   const sitFails = await AN.draftAnnouncement(shiftCand("u"), { approved: true, told: async () => true, situation: async () => { throw new Error("db down"); }, now: () => day }).catch(() => "threw");
@@ -170,7 +170,7 @@ const quiet = () => {};
 {
   const e = enq(), f = fakeDb({ renameFirst: cutoff });
   const lines: string[] = [];
-  const n = await AN.queueAnnouncement(AN.SHIFT, day, { db: f.db, enqueue: e.enqueue, log: (l) => lines.push(l) });
+  const n = await AN.queueAnnouncement(AN.SHIFT, day, { db: f.db, enqueue: e.enqueue, log: (l) => lines.push(l), approved: false });
   check("unapproved: nothing queued, nothing read, said once in the log", n === 0 && e.calls.length === 0 && f.seen.length === 0 && lines.length === 1 && /waiting on Royce's approval/.test(lines[0]), { n, lines });
 }
 {
@@ -227,10 +227,10 @@ function zoneAtHour(hour: number): string {
 }
 const person = (name: string, phone: string) => ({ userId: `u-${name.toLowerCase().replace(/\s+/g, "")}`, firstName: name, phoneNumber: phone, city: "San Francisco", timezone: zoneAtHour(13) });
 const leadA = `${AN.SHIFT_LEAD} ${AN.SHIFT_BODY} ${AN.SHIFT_TRY_DEFAULT}`;
-const folded = `${NC.NAME_CHANGE_TEXT} ${AN.SHIFT_BODY} ${AN.SHIFT_TRY_DEFAULT}`;
-check("fold: the text without the rename is the follow-up lead's", JSON.stringify(AN.unfolded(AN.SHIFT, [folded])) === JSON.stringify([leadA]) && AN.unfolded(AN.SHIFT, [leadA]) === null && AN.unfolded(AN.RENAME, [folded]) === null);
-check("fold: a text that doesn't carry the rename claims nothing", AN.nameFold(shiftCand("u-x"), [leadA], [renameCand("u-x")]) === null);
-check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(shiftCand("u-x"), [`${NC.NAME_CHANGE_TEXT} something else`, "x"], []) === "unfoldable");
+const folded = leadA; // the opening says the new name, so every shift text carries the rename
+check("fold: every shift text carries the rename, and its fallback is the same text", NC.carriesNameChange(leadA) && JSON.stringify(AN.unfolded(AN.SHIFT, [leadA])) === JSON.stringify([leadA]) && AN.unfolded(AN.RENAME, [leadA]) === null);
+check("fold: a text that doesn't carry the rename claims nothing", AN.nameFold(shiftCand("u-x"), [`${AN.SHIFT_BODY} ${AN.SHIFT_TRY_DEFAULT}`], [renameCand("u-x")]) === null);
+check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(shiftCand("u-x"), [`${AN.SHIFT_LEAD} something else`, "x"], []) === "unfoldable");
 {
   const f0 = AN.nameFold(shiftCand("u-x"), [folded], [renameCand("u-x", "n9"), renameCand("u-other", "n8")]);
   check("fold: claims the member's own queued rename notice", typeof f0 === "object" && f0 !== null && f0.candidate.id === "n9" && f0.candidate.type === "name_change" && JSON.stringify(f0.without) === JSON.stringify([leadA]), f0);
@@ -311,9 +311,12 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
       const withLine = AR.rideAlong(without, NC.NAME_CHANGE_RIDE, (d, q2) => carryLaneNotes(d, q2));
       const sends = [() => P.sendWithLedgerForTests(checkin, p, withLine, {}, [], { candidate: notice, without }), () => P.sendWithLedgerForTests(c, p, [folded], {}, [], AN.nameFold(c, [folded], [notice]) as any)];
       await Promise.all(i % 2 ? sends.reverse().map((s) => s()) : sends.map((s) => s()));
-      const n = told(f.ledger.outbox, p.phoneNumber);
-      if (n > 1) twice++;
-      if (n === 0) never++;
+      // The rename's own line ("going by Cue now") at most once; the shift's opening says the name too, by Royce's approved wording,
+      // so a shift that lands after a riding rename line restates it once (allowed). Never lost: something said the name.
+      const mine = f.ledger.outbox.filter((m: any) => m.to === p.phoneNumber);
+      const renameLines = mine.filter((m: any) => /going by Cue now/i.test(m.content)).length;
+      if (renameLines > 1) twice++;
+      if (told(f.ledger.outbox, p.phoneNumber) === 0) never++;
       // Whatever went: only the two allowed shapes of the shift, and the check-in with or without the line.
       const ok = f.ledger.outbox.every((m: any) => [folded, leadA, without[0], withLine[0]].includes(m.content));
       if (!ok) wrong++;
@@ -321,7 +324,7 @@ check("fold: a carried rename that can't be unfolded never goes", AN.nameFold(sh
       f.restore();
     }
   }
-  check("race, 20 runs either way round: the name told once, never twice, never lost, and only allowed texts", twice === 0 && never === 0 && wrong === 0, { twice, never, wrong });
+  check("race, 20 runs either way round: the rename line at most once, the name never lost, and only allowed texts", twice === 0 && never === 0 && wrong === 0, { twice, never, wrong });
 }
 
 console.log(`announcements: ${total - failed}/${total} passed`);

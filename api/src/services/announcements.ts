@@ -64,15 +64,16 @@ export const RENAME: Announcement = {
   expires: { at: NAME_CHANGE_EXPIRES },
 };
 
-// "The shift": the follow-up to the rename for members who knew Co. PROPOSED wording (option A), waiting on Royce. Until he approves
-// it word for word, nothing is queued (SHIFT_APPROVED). The claims in it were checked against the code on 2026-10-19; see the PR.
-export const SHIFT_APPROVED = false;
+// "The shift": the follow-up to the rename for members who knew Co. Wording approved by Royce 2026-10-23 (option A; opening "We're
+// Noise now, and I'm Cue."; "Noise night"; both try lines reworded so every claim is true in code). SHIFT_APPROVED false stops it.
+// The claims were checked against the code on 2026-10-19; see the PR.
+export const SHIFT_APPROVED = true;
 export const SHIFT_KEY = "announcement:shift";
-export const SHIFT_LEAD = "A bit more on the new name.";
+export const SHIFT_LEAD = "We're Noise now, and I'm Cue.";
 export const SHIFT_BODY =
   "Noise is for the stretches when life is shifting: a new city, a new role, starting something. My part is knowing what you're in the middle of and finding the person worth meeting for it, at a Noise night or between them. I only introduce you when you both say yes.";
-export const SHIFT_TRY_DEFAULT = "If something's shifting for you right now, tell me and I'll start looking for who you should meet.";
-export const SHIFT_TRY_GOAL = "Tell me where things stand with what you're working on, and I'll look for someone who's been through it.";
+export const SHIFT_TRY_DEFAULT = "If something's shifting for you right now, tell me who'd be good to meet for it and I'll start looking.";
+export const SHIFT_TRY_GOAL = "Tell me who'd be good to meet for what you're working on, and I'll start looking.";
 export const SHIFT_LIVE_DAYS = 21;
 export const SHIFT: Announcement = {
   key: SHIFT_KEY,
@@ -86,7 +87,9 @@ export const SHIFT: Announcement = {
     { when: "own_goal", line: SHIFT_TRY_GOAL },
     { when: "default", line: SHIFT_TRY_DEFAULT },
   ],
-  foldLead: NAME_CHANGE_TEXT,
+  // The opening already says the new name, so a member the rename hasn't reached gets the same opening; the rename's key is still
+  // claimed with it (carriesNameChange knows this opening), so the old notice never follows as a second text.
+  foldLead: SHIFT_LEAD,
   audience: "knew_co",
   expires: { daysAfterFirstQueued: SHIFT_LIVE_DAYS },
 };

@@ -19,7 +19,8 @@ export const NAME_CHANGE_EXPIRES = new Date(`${CO_ALIAS_UNTIL}T23:59:59-08:00`);
 
 // Pure: whether the line has already been said in a text going out (so a second one never carries it).
 export function carriesNameChange(text: string): boolean {
-  return /\bgoing by Cue now\b/i.test(text);
+  // The rename's own line, or the shift announcement's opening (services/announcements.ts SHIFT_LEAD), which says the new name too.
+  return /\bgoing by Cue now\b/i.test(text) || /\bWe['’]re Noise now, and I['’]m Cue\b/i.test(text);
 }
 
 // Who should hear it: members who knew it as Co. The first time this runs fixes the cutoff (the earliest queued notice), so a
