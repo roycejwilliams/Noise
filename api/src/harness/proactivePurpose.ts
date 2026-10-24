@@ -25,6 +25,8 @@ export const PROACTIVE_PURPOSE: Record<ProactiveType | ExemptType | "in_room", P
   brief_name_ask: "offer",
   room_share_ask: "offer",
   event_followthrough: "companion",
+  // The no-show note carries an offer (an intro or the next table), so a safety hold holds it like any offer (services/eventNoShow.ts).
+  noshow_note: "offer",
   loop_check: "companion",
   goal_checkin: "companion",
   goal_closed: "companion",

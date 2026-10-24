@@ -158,6 +158,7 @@
     "evals/discovery/placeOnTheWant.ts",
     "evals/inroom/noShows.ts",
     "evals/inroom/collisions.ts",
+    "evals/inroom/noShowFlow.ts",
     "evals/roomsim/night.ts",
     "evals/bounce/wants.ts",
     "evals/bounce/calendar.ts",

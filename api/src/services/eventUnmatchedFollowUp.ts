@@ -102,8 +102,9 @@ export async function cameTonight(eventId: string, person: Pick<ScorableGuest, "
   return presence || walkin;
 }
 
-// Who Luma's door check-in has, by email and phone (the stored E.164 form), from the guest list this pass already read.
-function lumaCheckedIn(guests: LumaGuest[] | undefined): CheckedIn {
+// Who Luma's door check-in has, by email and phone (the stored E.164 form), from the guest list this pass already read. Also read
+// by the no-show flow (services/eventNoShow.ts).
+export function lumaCheckedIn(guests: LumaGuest[] | undefined): CheckedIn {
   const out: CheckedIn = { emails: new Set(), phones: new Set() };
   for (const g of (guests ?? []).filter((x) => x.checked_in_at)) {
     if (g.email) out.emails.add(g.email.toLowerCase());

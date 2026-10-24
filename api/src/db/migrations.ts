@@ -129,6 +129,8 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS name_asked_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok BOOLEAN, ADD COLUMN IF NOT EXISTS name_ok_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ok_quote TEXT, ADD COLUMN IF NOT EXISTS brief_sent_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS name_ask_until TIMESTAMPTZ`))
     // The shareable-asks question beside it at RSVP (services/askSharing.ts): which asks were offered, in the order shown.
     .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS share_asked_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS share_ask_ids TEXT[], ADD COLUMN IF NOT EXISTS share_answered_at TIMESTAMPTZ`))
+    // The no-show flow (services/eventNoShow.ts, 2026-10-23): when they were asked if they made it, and how that settled.
+    .then(() => pool.query(`ALTER TABLE event_presence ADD COLUMN IF NOT EXISTS noshow_asked_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS noshow_settled_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS noshow_outcome TEXT`))
     .then(() => pool.query(`CREATE TABLE IF NOT EXISTS event_follow_throughs (
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         event_id TEXT NOT NULL,
