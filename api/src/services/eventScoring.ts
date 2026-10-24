@@ -56,6 +56,9 @@ export type RankedCandidate = {
   // The people graph's link, internal only (peopleGraph.ts): why they were
   // likely worth each other, for review and for explaining a ranking.
   graph?: { score: number; want: string | null; offer: string | null; mutual: boolean } | null;
+  // A newly qualifying person whose additive heads-up is waiting for their other open question to be answered: the next pass
+  // still counts them as new, so the heads-up goes once the slot frees instead of being lost (review of #211).
+  additivePending?: boolean;
 };
 
 // Luma gives us email/phone/name, never a user_id — this is the only place
@@ -213,13 +216,14 @@ async function tryClaimScoringDebounce(eventId: string): Promise<boolean> {
 // maybeSendAdditiveOffer diffs the new ranking against, to find candidates
 // that are genuinely new since last time rather than the whole re-ranked
 // list (which includes everyone already considered, not just fresh arrivals).
+// The previous pass's ranking: who was in it, less anyone whose additive heads-up is still waiting (additivePending), who stays new.
 async function getPreviousRankedCandidateIds(eventId: string, personId: string): Promise<Set<string>> {
   const { rows } = await pool.query(
     `SELECT ranked_candidates FROM event_guest_rankings WHERE event_id = $1 AND person_id = $2`,
     [eventId, personId],
   );
   const prior = rows[0]?.ranked_candidates as RankedCandidate[] | undefined;
-  return new Set((prior ?? []).map((c) => c.candidate_id));
+  return new Set((prior ?? []).filter((c) => !c.additivePending).map((c) => c.candidate_id));
 }
 
 async function storeRanking(eventId: string, personId: string, ranked: RankedCandidate[], methodSummary: string): Promise<void> {
@@ -642,7 +646,7 @@ async function maybeSendAdditiveOffer(
   newCandidates: ScorableGuest[],
   eventTiming: { start_at: string; end_at: string | null } | null,
   opts: { dryRun?: boolean },
-): Promise<boolean> {
+): Promise<boolean | "waiting"> {
   if (!newCandidates.length) return false;
   if (eventTiming) {
     const RM = await import("./roomMatching.js");
@@ -680,7 +684,7 @@ async function maybeSendAdditiveOffer(
   // that doesn't send.
   const O = await import("./inRoomOffers.js");
   const slot = await O.claimOfferSlot({ eventId, eventName, personId: person.user_id, kind: "additive", candidateIds: newCandidates.map((c) => c.user_id) });
-  if (!slot) return false;
+  if (!slot) return "waiting";
   const freeSlot = () => O.releaseOfferSlot(slot).catch((err: any) => console.error("eventScoring: freeing the additive offer's question slot failed (non-fatal):", err?.message ?? err));
   if (!(await tryClaimAdditiveOfferDebounce(eventId, person.user_id))) {
     console.log(
@@ -930,9 +934,15 @@ export async function scoreMatchedGroup(
         .map((r) => others.find((o) => o.user_id === r.candidate_id))
         .filter((c): c is ScorableGuest => Boolean(c));
       if (newCandidates.length) {
-        await withTraceUser(person.user_id, () => maybeSendAdditiveOffer(eventId, eventName, person, newCandidates, eventTiming, opts)).catch((err: any) =>
-          console.error(`eventScoring: maybeSendAdditiveOffer failed for ${person.user_id} (non-fatal):`, err?.message ?? err),
-        );
+        const r = await withTraceUser(person.user_id, () => maybeSendAdditiveOffer(eventId, eventName, person, newCandidates, eventTiming, opts)).catch((err: any) => {
+          console.error(`eventScoring: maybeSendAdditiveOffer failed for ${person.user_id} (non-fatal):`, err?.message ?? err);
+          return false;
+        });
+        // Waiting on their other open question: they stay new for the next pass, so the heads-up isn't lost.
+        if (r === "waiting") {
+          const waiting = new Set(newCandidates.map((c) => c.user_id));
+          await storeRanking(eventId, person.user_id, ranked.map((x) => (waiting.has(x.candidate_id) ? { ...x, additivePending: true } : x)), `asks: ${frame.asks.map((a) => `"${a.text}"`).join(" / ") || "(none about people)"}${frame.goal ? `; goal: "${frame.goal.text}"` : ""}`);
+        }
       }
     }
   }
