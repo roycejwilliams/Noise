@@ -3,10 +3,10 @@
 // sweep's search loop, task web searches, official-page lookups, Exa, X and the web search budget) now skip them, gated on the
 // fact (who the member is), not on a switch.
 //
-// One exception: the clean live-test member (scripts/testMember.ts: the newest unarchived +1 415 555-01xx account, made fresh by each
-// `testMember.js reset`) keeps every search, so a deliberate live test still runs the real path. Real members and team accounts are
+// One exception: the clean live-test member (scripts/testMember.ts: the newest unarchived +1 415 555-01xx account with the email
+// each `testMember.js reset` writes) keeps every search, so a deliberate live test still runs the real path. Real members and team accounts are
 // never skipped, and a lookup that fails never skips (it can't tell, so it spends as before).
-import { isTestNumber, LIVE_TEST_PHONE_LIKE } from "./testNumbers.js";
+import { isTestNumber, LIVE_TEST_CANDIDATES_SQL, pickLiveTestMember } from "./testNumbers.js";
 
 export type MemberFacts = { phone_number: string | null; archived_phone: string | null; archived_at: Date | string | null; live_test_id: string | null };
 export type FactsLookup = (userId: string) => Promise<MemberFacts | null>;
@@ -24,13 +24,11 @@ export function skipsForFacts(userId: string, f: MemberFacts | null, env: NodeJS
 
 const realLookup: FactsLookup = async (userId) => {
   const { default: pool } = await import("../db/db.js");
-  const { rows } = await pool.query(
-    `SELECT u.phone_number, u.archived_phone, u.archived_at,
-            (SELECT l.id FROM users l WHERE l.phone_number LIKE $2 AND l.archived_at IS NULL ORDER BY l.created_at DESC LIMIT 1) AS live_test_id
-       FROM users u WHERE u.id = $1`,
-    [userId, LIVE_TEST_PHONE_LIKE],
-  );
-  return rows[0] ?? null;
+  const [{ rows }, live] = await Promise.all([
+    pool.query(`SELECT phone_number, archived_phone, archived_at FROM users WHERE id = $1`, [userId]),
+    pool.query(LIVE_TEST_CANDIDATES_SQL),
+  ]);
+  return rows[0] ? { ...rows[0], live_test_id: pickLiveTestMember(live.rows)?.id ?? null } : null;
 };
 let lookup: FactsLookup = realLookup;
 export function setTestMemberLookupForTests(fn: FactsLookup | null): void {
@@ -42,7 +40,7 @@ export function setTestMemberLookupForTests(fn: FactsLookup | null): void {
 const cache = new Map<string, { skip: boolean; at: number }>();
 const TTL_MS = 10 * 60_000;
 
-// True when this member's paid search should be skipped; logs one line (ids only) each time it is.
+// True when this member's paid search should be skipped; logs one line (an 8-character id prefix only) each time it is.
 export async function skipsPaidSearch(userId: string | null | undefined, path: string): Promise<boolean> {
   if (!userId || !UUID.test(userId)) return false;
   const now = Date.now();
@@ -57,6 +55,6 @@ export async function skipsPaidSearch(userId: string | null | undefined, path: s
     if (cache.size > 2000) cache.clear();
     cache.set(userId, hit);
   }
-  if (hit.skip) console.log(`paid search skipped: test member ${userId} (${path})`);
+  if (hit.skip) console.log(`paid search skipped: test member ${userId.slice(0, 8)} (${path})`);
   return hit.skip;
 }

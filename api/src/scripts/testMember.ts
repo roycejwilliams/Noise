@@ -6,14 +6,16 @@
 //
 // Archived, never deleted (the reset-keeps-test-data rule). Co-test and local only.
 import pool from "../db/db.js";
-import { LIVE_TEST_PHONE_LIKE, testNumbersEnabled } from "../services/testNumbers.js";
+import { LIVE_TEST_CANDIDATES_SQL, LIVE_TEST_PHONE_LIKE, liveTestEmail, pickLiveTestMember, testNumbersEnabled } from "../services/testNumbers.js";
 
-// One definition, shared with the paid-search exception (services/testMemberSpend.ts): the newest unarchived one is the live-test member.
+// One definition, shared with the paid-search exception (services/testMemberSpend.ts): the live-test member is the newest
+// unarchived account with both the number range and the email reset writes.
 const TEST_PHONE_LIKE = LIVE_TEST_PHONE_LIKE;
 
 async function current(): Promise<{ id: string; phone_number: string; first_name: string } | null> {
-  const { rows } = await pool.query(`SELECT id, phone_number, first_name FROM users WHERE phone_number LIKE $1 AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1`, [TEST_PHONE_LIKE]);
-  return rows[0] ?? null;
+  const { rows } = await pool.query(LIVE_TEST_CANDIDATES_SQL);
+  const r = pickLiveTestMember(rows as any[]);
+  return r ? { id: r.id, phone_number: r.phone_number, first_name: r.first_name } : null;
 }
 
 async function reset(): Promise<void> {
@@ -32,7 +34,7 @@ async function reset(): Promise<void> {
   const { rows } = await pool.query(
     `INSERT INTO users (first_name, last_name, email, phone_number, username, contact_verified, identity_captured, intake_asked, invite_verified, invite_asked)
      VALUES ('Jordan', 'Test', $1, $2, $3, true, true, true, true, true) RETURNING id`,
-    [`jordan.test${tag}@example.test`, phone, `jordan_test_${tag}`],
+    [liveTestEmail(tag), phone, `jordan_test_${tag}`],
   );
   await pool.query(`INSERT INTO co_profiles (user_id, city, updated_at) VALUES ($1, 'San Francisco', NOW()) ON CONFLICT (user_id) DO UPDATE SET city = EXCLUDED.city`, [rows[0].id]);
   console.log(JSON.stringify({ archived: archived.rows.map((r: any) => r.phone_number), created: { id: rows[0].id, phone, name: "Jordan Test", city: "San Francisco" } }));

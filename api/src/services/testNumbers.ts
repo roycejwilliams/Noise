@@ -19,9 +19,19 @@ export function isTestNumber(number: unknown, env: NodeJS.ProcessEnv = process.e
   return /^1?\d{3}55501\d{2}$/.test(digits);
 }
 
-// The clean live-test member's numbers (scripts/testMember.ts reset: +1 415 555-0100 to -0199). The newest unarchived one is the
+// The clean live-test member (scripts/testMember.ts reset): a +1 415 555-0100..0199 number AND the email reset writes,
+// jordan.testNN@example.test. The number alone isn't enough (review of #271): a simulated inbound, a sim guest or a Luma guest can
+// get a 415-555-01xx account too, and must never take the live-test member's place. The newest unarchived account with both is the
 // member deliberate live tests run through; it keeps paid searches the other test members skip (services/testMemberSpend.ts).
 export const LIVE_TEST_PHONE_LIKE = "+141555501%";
+export const liveTestEmail = (tag: string): string => `jordan.test${tag}@example.test`;
+export type LiveTestCandidate = { id: string; phone_number: string | null; email: string | null; archived_at: Date | string | null };
+export const isLiveTestRow = (r: LiveTestCandidate): boolean =>
+  !r.archived_at && /^\+141555501\d{2}$/.test(r.phone_number ?? "") && /^jordan\.test\d{2}@example\.test$/.test(r.email ?? "");
+// Rows newest first (ORDER BY created_at DESC): the first with the marker, or null.
+export const pickLiveTestMember = <T extends LiveTestCandidate>(rows: T[]): T | null => rows.find(isLiveTestRow) ?? null;
+// One query for both readers (testMember.ts current(), testMemberSpend.ts): the candidates, newest first.
+export const LIVE_TEST_CANDIDATES_SQL = `SELECT id, phone_number, email, archived_at, first_name FROM users WHERE phone_number LIKE '${LIVE_TEST_PHONE_LIKE}' AND archived_at IS NULL ORDER BY created_at DESC LIMIT 50`;
 
 // The simulation tool sends a REAL inbound through the real webhook, and Co's reply is really texted. It may only ever be pointed at a
 // test member (2026-10-06: a 9/29 run through Royce's own number left 16 test messages, their asks, tasks and a week-later chest-tightness
