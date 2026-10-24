@@ -103,12 +103,12 @@ const said = (m: Member, content: string) => W.memoriesWritten.push({ user_id: m
   const jordan = addMember({ first_name: "Jordan" });
   night("ev2", [jordan]);
   const src = readFileSync(new URL("../../src/services/eventNoShow.ts", import.meta.url), "utf8");
-  check("approval: the constant is false in code, no env switch", N.NOSHOW_COPY_APPROVED === false && /export const NOSHOW_COPY_APPROVED: boolean = false;/.test(src) && !/process\.env[^\n]*NOSHOW/.test(src));
-  check("approval: unapproved, no ask", (await N.runNoShowAsks()) === 0 && W.sent.length === 0 && !W.presence.get(`ev2|${jordan.id}`)?.noshow_asked_at);
+  check("approval: the constant is true (Royce approved 2026-10-23), in code, no env switch", N.NOSHOW_COPY_APPROVED === true && /export const NOSHOW_COPY_APPROVED: boolean = true;/.test(src) && !/process\.env[^\n]*NOSHOW/.test(src));
+  check("approval: unapproved (false), no ask", (await N.runNoShowAsks(new Date(), { approved: false })) === 0 && W.sent.length === 0 && !W.presence.get(`ev2|${jordan.id}`)?.noshow_asked_at);
   W.presence.set(`ev2|${jordan.id}`, { sharing_seen_at: null, arrived_at: null, noshow_asked_at: new Date(Date.now() - 5 * MIN) });
   checkIn("ev2", jordan);
   W.events.get("ev2")!.guests[0].email = "someone.else@example.test"; // the check-in is someone else's: the door was tracked
-  check("approval: unapproved, no note queued and nothing settled", (await N.runNoShowNotes(later(2))) === 0 && !W.candidates.length && !W.presence.get(`ev2|${jordan.id}`)?.noshow_settled_at);
+  check("approval: unapproved, no note queued and nothing settled", (await N.runNoShowNotes(later(2), { approved: false })) === 0 && !W.candidates.length && !W.presence.get(`ev2|${jordan.id}`)?.noshow_settled_at);
   const r = await N.draftNoShowNote(asCandidate({ user_id: jordan.id, type: "noshow_note", target_key: "noshow_note:ev2", payload: { eventId: "ev2", name: "Noise Supper", startAt: W.events.get("ev2")!.start_at, timezone: null } }), person(jordan), deps({ approved: false }));
   check("approval: unapproved, a queued note waits (nothing drafted)", "defer" in r && !W.llmCalls.some((c) => c.kind === "noshowDraft"));
 }
@@ -262,11 +262,14 @@ for (const [label, o] of [
   const { r } = await noteNight({ shareable: false, nextTable: true, soft: true });
   const t = textOf(r);
   const prompt = W.llmCalls.filter((x) => x.kind === "noshowDraft").at(-1)?.prompt ?? "";
-  check("hard week: still sent, softer, and no next-table pitch", !!r && !("skip" in r) && !/Noise Table Two/.test(t) && /hard time/.test(prompt) && !/next_table/.test(prompt), { t });
+  check("hard week: still sent, gentler, and the next table is still offered (feelings change tone, never cancel)", !!r && !("skip" in r) && /Noise Table Two/.test(t) && /hard time/.test(prompt) && /never say or hint that you know how they've been/.test(prompt) && /next_table/.test(prompt), { t });
 }
 {
   const { r } = await noteNight({ soft: true, draft: () => "SKIP" });
-  check("hard week, the draft skips: the fixed gentle note still goes, never cancelled", N.noShowFallback("Noise Supper", { kind: "intro" }, true) === textOf(r) && /taking good care/.test(textOf(r)), textOf(r));
+  check("hard week, the draft skips: the fixed gentle note still goes, never cancelled", N.noShowFallback("Noise Supper", { kind: "intro" }, true) === textOf(r) && /whenever you feel up to it/.test(textOf(r)), textOf(r));
+  const nt = { kind: "next_table", name: "Noise Table Two", startAt: iso(9 * 86_400_000), timezone: null, url: null } as const;
+  const soft = [N.noShowFallback("Noise Supper", { kind: "none" }, true), N.noShowFallback("Noise Supper", { kind: "intro" }, true), N.noShowFallback("Noise Supper", nt, true)];
+  check("hard week: the fixed lines never say Cue knows how they've been, and keep the next table", soft.every((f) => f.startsWith("Sorry you couldn't make it to Noise Supper.") && !/take (good )?care|hope you|been (rough|hard)|tough|feeling/i.test(f)) && /Noise Table Two/.test(soft[2]), soft);
 }
 {
   const leaky = [
