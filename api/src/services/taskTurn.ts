@@ -32,6 +32,7 @@ import { localStamp, memberZone, missesWindow, nextSendable, rescheduledWindow, 
 import { toolUse } from "./capabilities.js";
 import { WRITE_DOCUMENT_INPUT, type WriteDocumentInput } from "./documentSheet.js";
 import type { GateCheck } from "../harness/core.js";
+import { withMember } from "./llmUsage.js";
 
 export const TASK_MODEL = MODELS.sonnet;
 
@@ -862,7 +863,11 @@ async function saveTaskFound(userId: string, taskId: number, items: OnFile[]): P
   await pool.query(`UPDATE co_tasks SET followup = jsonb_set(COALESCE(followup, '{}'::jsonb), '{found}', $3::jsonb, true), updated_at = NOW() WHERE user_id = $1 AND id = $2 AND kind = 'work'`, [userId, taskId, JSON.stringify(merged.slice(0, 15))]);
 }
 
-export async function runTaskTurn(task: CoTask, opts: { now?: () => Date; override?: Partial<TaskTurnDeps> } = {}): Promise<{ action: string; did?: string[]; warning?: string | null }> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function runTaskTurn(...a: Parameters<typeof runTaskTurnInScope>): ReturnType<typeof runTaskTurnInScope> {
+  return withMember(a[0].userId, () => runTaskTurnInScope(...a));
+}
+async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; override?: Partial<TaskTurnDeps> } = {}): Promise<{ action: string; did?: string[]; warning?: string | null }> {
   const userId = task.userId;
   const clock = opts.now ?? (() => new Date());
   if (isExhausted(task, clock())) {

@@ -20,6 +20,7 @@ import { dayOf, loadAsks, loadKnowledge, loadMemberContext, type Q } from "./swe
 import { memberZone } from "./memberTime.js";
 import { exitKey } from "./findForm.js";
 import { closedAskRefs, servesClosedAsk } from "./askLifecycle.js";
+import { withMember } from "./llmUsage.js";
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 export const shadowKey = (name: string, date: string | null) => `${norm(name)}|${date ?? ""}`;
@@ -627,7 +628,11 @@ export async function rerunPickerForTaste(userId: string): Promise<void> {
 // The picker for one member, after one of their sweeps finishes (the 9am floor, the hourly ask sweep, the goal sweep), so a find from
 // noon never waits until tomorrow. Everyone, the 10am review account too (Royce, 2026-10-13: "I want the sweeps to run for everyone");
 // that account's 10am run stays on top. A failure is logged as that member's picker error; their next sweep runs it again.
-export async function runPickerAfterSweep(userId: string, after: "daily" | "hourly" | "goal" | "call" | "new_ask"): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function runPickerAfterSweep(...a: Parameters<typeof runPickerAfterSweepInScope>): ReturnType<typeof runPickerAfterSweepInScope> {
+  return withMember(a[0], () => runPickerAfterSweepInScope(...a));
+}
+async function runPickerAfterSweepInScope(userId: string, after: "daily" | "hourly" | "goal" | "call" | "new_ask"): Promise<void> {
   if (!pickerLive()) return;
   // The 9am floor's run is the morning send: one find per tier (Royce, 2026-10-14). Hourly, goal, call and new-ask runs are unchanged.
   await runSweepShadow(userId, new Date(), { trigger: "after_sweep", ...(after === "daily" ? { morning: true } : {}) }).then((r) => {
@@ -642,7 +647,7 @@ export async function runPickerAfterSweep(userId: string, after: "daily" | "hour
 export async function runSweepShadowAll(now = new Date(), trigger?: "retry"): Promise<void> {
   if (!reviewEnabled()) return;
   for (const id of await shadowUserIds()) {
-    await runSweepShadow(id, now, trigger ? { trigger } : {}).catch((err: any) => console.error(`sweep shadow failed for ${id} (non-fatal):`, err?.message ?? err));
+    await withMember(id, () => runSweepShadow(id, now, trigger ? { trigger } : {})).catch((err: any) => console.error(`sweep shadow failed for ${id} (non-fatal):`, err?.message ?? err));
   }
 }
 

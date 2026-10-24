@@ -55,7 +55,7 @@ export async function learnTextingStyle(userId: string, coSaid: string | null, t
     const { text } = await generateText({
       model: anthropic(MODELS.haiku),
       maxOutputTokens: 300,
-      experimental_telemetry: { isEnabled: true, functionId: "textingStyle.learn" },
+      experimental_telemetry: { isEnabled: true, functionId: "textingStyle.learn", metadata: { userId } },
       prompt: styleLearningPrompt(current, coSaid, theySaid),
     });
     return await applyStyleUpdate(userId, current, parseModelJson<{ changed?: boolean; notes?: unknown }>(text), theySaid);

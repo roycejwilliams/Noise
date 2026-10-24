@@ -1649,7 +1649,7 @@ export async function extractPlannedEventMention(user_id: string, transcript: st
       () =>
         generateText({
           model: anthropic(NARROW_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention" },
+          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention", metadata: { userId: user_id } },
           prompt: `Read this transcript. Only include what the user (the "user:" lines) actually stated — never guess or infer, never treat something Cue said as if the user said it.
 
 Did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering — not a vague "I should get out more")? If so extract:

@@ -32,6 +32,7 @@ import { stockLine } from "../harness/stockLines.js";
 import { cuesIn } from "./voiceCues.js";
 import { narratesInternalState, selfContradiction } from "./speakable.js";
 import { SENSITIVE, heldCallReason, leadsWithCoHomework, renderCallReason, type CallReason } from "./callReason.js";
+import { recordAnthropicUsage } from "./llmUsage.js";
 
 export const OPENING_WRITER = {
   minContext: 300,
@@ -193,6 +194,7 @@ export async function writeOpening(o: { firstName: string; direction: "inbound" 
       ? await (async () => {
           const Anthropic = (await import("@anthropic-ai/sdk")).default;
           const r: any = await new Anthropic().messages.create({ model, max_tokens: 120, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal });
+          recordAnthropicUsage("call.writeOpening", r.model ?? model, r.usage);
           return (r.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
         })()
       : (
@@ -203,7 +205,7 @@ export async function writeOpening(o: { firstName: string; direction: "inbound" 
             // nor takes an effort option.
             ...(/^claude-sonnet-4/.test(model) ? {} : { providerOptions: { anthropic: { effort: "low" as const } } }),
             abortSignal: signal,
-            experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening" },
+            experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening", metadata: { userId: o.userId ?? "" } },
             prompt,
           })
         ).text;

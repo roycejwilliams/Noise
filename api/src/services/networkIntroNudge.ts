@@ -228,7 +228,7 @@ async function draftReveal(userId: string, firstName: string, candidate: Network
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft" },
+        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.reveal.draft", metadata: { userId } },
         prompt: networkRevealPrompt({ recipientFirstName: firstName, otherFirstName: candidate.first_name, shareReason: candidate.match_reason, feedback }),
       });
       return cleanCoMessage(text.trim());
@@ -631,7 +631,8 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft" },
+        // The text goes to the candidate: theirs.
+        experimental_telemetry: { isEnabled: true, functionId: "networkIntroNudge.directAsk.draft", metadata: { userId: candidate.user_id } },
         prompt: networkDirectAskPrompt({ recipientFirstName: candidate.first_name, askerFirstName: asker.first_name, feedback }),
       });
       return cleanCoMessage(text.trim());

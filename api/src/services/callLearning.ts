@@ -209,7 +209,7 @@ export async function learnFromCall(input: {
     // effort used the budget before any JSON was written.
     maxOutputTokens: 6000,
     providerOptions: { anthropic: { effort: "medium" } },
-    experimental_telemetry: { isEnabled: true, functionId: "callLearning.learn" },
+    experimental_telemetry: { isEnabled: true, functionId: "callLearning.learn", metadata: { userId: input.userId } },
     prompt: callLearningPrompt({
       transcript: input.transcript,
       today: new Date().toISOString().slice(0, 10),

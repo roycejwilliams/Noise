@@ -40,6 +40,7 @@
     "evals/langfuse/noText.ts",
     "evals/langfuse/traceText.ts",
     "evals/langfuse/roomTrace.ts",
+    "evals/llmUsage/attribution.ts",
     "evals/silence/rules.ts",
     "evals/corrections/rules.ts",
     "evals/member/knowledge.ts",

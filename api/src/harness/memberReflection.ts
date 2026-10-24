@@ -22,6 +22,7 @@ import { listThreads, renderThreads, type MemberThread } from "./memberThreads.j
 import { localStamp, memberZone } from "../services/memberTime.js";
 import type { KnowledgeSection, MemberKnowledge } from "../services/memberKnowledge.js";
 import { withTraceUser } from "../services/llmTraceText.js";
+import { withMember } from "../services/llmUsage.js";
 
 export type WeekFacts = {
   sends: { type: string; purpose: string; at: string; message: string }[];
@@ -124,7 +125,11 @@ async function weekFacts(userId: string, known: MemberKnowledge | null = null, r
   };
 }
 
-export async function reflectOnMember(userId: string): Promise<ReflectionMove | null> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function reflectOnMember(...a: Parameters<typeof reflectOnMemberInScope>): ReturnType<typeof reflectOnMemberInScope> {
+  return withMember(a[0], () => reflectOnMemberInScope(...a));
+}
+async function reflectOnMemberInScope(userId: string): Promise<ReflectionMove | null> {
   try {
     // What Co knows about them, one read (services/memberKnowledge.ts). A failed read reflects on the week alone, as before.
     const MK = await import("../services/memberKnowledge.js");
@@ -142,7 +147,7 @@ export async function reflectOnMember(userId: string): Promise<ReflectionMove | 
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "proactive.reflection" },
+      experimental_telemetry: { isEnabled: true, functionId: "proactive.reflection", metadata: { userId } },
       prompt: reflectionPrompt(rows[0]?.first_name || "them", facts),
     });
     const { move, checks } = gateReflection(parseModelJson<Partial<ReflectionMove>>(text), facts);

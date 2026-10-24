@@ -24,6 +24,7 @@ import { isCoCommitment } from "./askKind.js";
 import { retiredBy } from "./callContext.js";
 import { memberTerms, queryProblems } from "./sweepQuery.js";
 import { avoidHits } from "./memberLimits.js";
+import { recordAnthropicUsage } from "./llmUsage.js";
 
 // What goal planning reads from the member record (Phase A4, 2026-10-10 audit: it saw goal text and city only, so it planned searches
 // for a room they'd said they don't want, for kinds they'd ruled out, and for things an open ask was already searching).
@@ -434,6 +435,7 @@ export const realGoalDeps: GoalDeps = {
     const t = setTimeout(() => ctl.abort(), EDGE_LIMITS.timeoutMs);
     try {
       const r: any = await new Anthropic().messages.create({ model: MODELS.haiku, max_tokens: EDGE_LIMITS.maxTokens, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal: ctl.signal });
+      recordAnthropicUsage("goal.edges", r.model ?? MODELS.haiku, r.usage);
       return (r.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
     } finally {
       clearTimeout(t);

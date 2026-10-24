@@ -912,7 +912,7 @@ export async function summarizeCallForTextContext(userId: string, transcript: st
   try {
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
+      experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText", metadata: { userId } },
       prompt: callSummaryPrompt(transcript),
     });
     // The prompt already says "they"; the model still wrote "he" on all

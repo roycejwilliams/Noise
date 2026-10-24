@@ -10,6 +10,7 @@ import { generateText } from "ai";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
 import type { EntryKind } from "../harness/profileWrite.js";
+import { NO_MEMBER } from "./llmUsage.js";
 
 export const KIND_DEFINITIONS = `ASK: an errand with an end. Something Cue can find, answer, write or do, after which it is done. "Find me weekend events." "Send me the link to Pitch Protocol." "Draft an intro to a VC I met." "How do I start the equity conversation with my cofounder?" "Who should I meet at tech week?"
 GOAL: direction with no end of its own. Where they are headed, or a role or mission they are taking on: "Get Cue in front of users." "Plan out the event and take lead." "Build a community of founders." "Raise a pre-seed round before the new year." "Make friends who build things." A goal is never finished by one answer.
@@ -64,7 +65,8 @@ export async function reclassify(items: ReclassifyItem[]): Promise<{ n: string; 
   const out: { n: string; kind: EntryKind; why: string }[] = [];
   for (let i = 0; i < items.length; i += 30) {
     const batch = items.slice(i, i + 30);
-    const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, experimental_telemetry: { isEnabled: true, functionId: "entryKind.reclassify", recordInputs: false, recordOutputs: false }, prompt: reclassifyPrompt(batch) });
+    // Not about one member: a backfill across members' entries.
+    const { text } = await generateText({ model: anthropic(MODELS.sonnet), providerOptions: { anthropic: { effort: "low" } }, experimental_telemetry: { isEnabled: true, functionId: "entryKind.reclassify", recordInputs: false, recordOutputs: false, metadata: NO_MEMBER }, prompt: reclassifyPrompt(batch) });
     const got = parseModelJson<{ entries?: { n?: string; kind?: string; why?: string }[] }>(text).entries ?? [];
     for (const b of batch) {
       const g = got.find((x) => x.n === b.n);

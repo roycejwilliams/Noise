@@ -10,6 +10,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "./modelJson.js";
+import { recordAnthropicUsage } from "./llmUsage.js";
 
 const words = (s: unknown) =>
   String(s ?? "")
@@ -114,6 +115,7 @@ const haikuJudge: YesJudge = async (r) => {
   const t = setTimeout(() => ctl.abort(), YES_LIMITS.timeoutMs);
   try {
     const out: any = await new Anthropic().messages.create({ model: MODELS.haiku, max_tokens: YES_LIMITS.maxTokens, thinking: { type: "disabled" }, messages: [{ role: "user", content: yesPrompt(r) }] } as any, { signal: ctl.signal });
+    recordAnthropicUsage("theirYes.read", out.model ?? MODELS.haiku, out.usage);
     return parseYes((out.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join(""));
   } catch (err: any) {
     return { yes: false, why: `the read failed: ${String(err?.message ?? err).slice(0, 120)}`, read: false };

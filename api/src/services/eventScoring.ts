@@ -21,6 +21,7 @@ import { arrivalWaitCheck, getPresence } from "./eventPresence.js";
 import { MODELS } from "../models.js";
 import { isOpenAsk } from "../harness/profileWrite.js";
 import { withTraceUser } from "./llmTraceText.js";
+import { withMember } from "./llmUsage.js";
 
 // Model policy (Royce, 2026-09-14): a draft that names another person is
 // Sonnet 5; the additive offer names no one (checked in code) and stays Haiku.
@@ -441,7 +442,7 @@ async function maybeSendMatchNudge(
   const draftFn = async (feedback: string | null) => {
     const { text } = await generateText({
       model: anthropic(NAMING_DRAFT_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
+      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft", metadata: { userId: person.user_id } },
       prompt: matchNudgePrompt({
         recipientFirstName: person.first_name,
         otherFirstName: candidate.first_name,
@@ -598,7 +599,7 @@ async function maybeSendMatchNudge(
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft" },
+        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft", metadata: { userId: person.user_id } },
         prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: valueLine || top.shareReason!, feedback, event: introEvent }),
       });
       return cleanCoMessage(text.trim());
@@ -713,7 +714,7 @@ async function maybeSendAdditiveOffer(
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(PLAIN_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
+        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft", metadata: { userId: person.user_id } },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. ${eventPromptLine({ name: eventName, ...eventTiming }, eventName)} Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
 
 Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match. Don't say what anyone wants or said. This is just the offer to see more, nothing more. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
@@ -884,7 +885,8 @@ export async function scoreMatchedGroup(
     // A scorer failure is not "nobody fits" (lifted from #216's review): their last ranking stays as it was (it is the basis for the
     // additive offer, so an empty one stored here made everyone look newly arrived next pass), nothing is decided or sent for them
     // this pass, and the next room pass (an arrival, a Luma update, the start-time retry) scores them again.
-    const scored = await withTraceUser(person.user_id, () =>
+    // Its cost is theirs too (llm_usage, services/llmUsage.ts withMember).
+    const scored = await withTraceUser(person.user_id, () => withMember(person.user_id, () =>
       scoreAgainstRoomFrame(
         frame,
         others,
@@ -893,7 +895,7 @@ export async function scoreMatchedGroup(
         hiddenAsks,
         { askerFirstName: person.first_name, failLoudly: true },
       ),
-    ).catch((err: any) => {
+    )).catch((err: any) => {
       if (err?.name !== "ScoringFailed") throw err;
       recordDecision({ layer: 6, decision: "match.score", userId: person.user_id, outcome: "skip", action: "eventScoring.score", proposal: { eventId }, checks: [{ name: "scorer_answered", pass: false, reason: "the scorer failed; ranking kept, scored again next pass" }] }).catch(() => {});
       return null;

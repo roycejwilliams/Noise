@@ -67,12 +67,12 @@ Return ONLY valid JSON: {"found": true, "name": "...", "url": "the page you actu
       const found = await exaSearch(`${name} ${todayStr.slice(0, 4)} official site${city ? ` ${city}` : ""}`, { purpose: "named_event", userId: opts.userId, timeoutMs: 6_000 });
       if (!found.pages.length) return { ...NOTHING, name, rejected: found.error ? "the web lookup failed or timed out" : "the web lookup found no official page" };
       pages = found.pages;
-      raw = (await generateText({ model: anthropic(MODELS.sonnet), experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.pick" }, timeout: LOOKUP_TIMEOUT_MS - 6_000, prompt: fromPagesPrompt(prompt, found.pages) })).text;
+      raw = (await generateText({ model: anthropic(MODELS.sonnet), experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.pick", metadata: { userId: opts.userId ?? "" } }, timeout: LOOKUP_TIMEOUT_MS - 6_000, prompt: fromPagesPrompt(prompt, found.pages) })).text;
     } else {
       raw = (
         await generateText({
           model: anthropic(MODELS.sonnet),
-          experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.search" },
+          experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.search", metadata: { userId: opts.userId ?? "" } },
           // Same tool version the opportunity search uses; the newer one hung (2026-09-18).
           tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
           stopWhen: stepCountIs(3),

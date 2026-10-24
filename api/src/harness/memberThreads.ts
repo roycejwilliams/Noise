@@ -31,6 +31,7 @@ import { localStamp, memberZone, wordsZone } from "../services/memberTime.js";
 import { recordDecision, type GateCheck } from "./core.js";
 import { enqueueCandidate, nextLocalHour } from "./proactive.js";
 import type { WindowFollowUpPayload } from "../agent/windowFollowUp.js";
+import { withMember } from "../services/llmUsage.js";
 
 export type ThreadStatus = "open" | "waiting" | "resolved" | "changed";
 export type NextStep = "check_in" | "look_up" | "remember" | "suggest_someone";
@@ -296,7 +297,11 @@ export async function queueCommitmentFollowUp(userId: string, threadId: string, 
 
 // Called after the person snapshot rebuilds (same throttle: after they've
 // said something new). Non-fatal.
-export async function updateMemberThreads(userId: string): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function updateMemberThreads(...a: Parameters<typeof updateMemberThreadsInScope>): ReturnType<typeof updateMemberThreadsInScope> {
+  return withMember(a[0], () => updateMemberThreadsInScope(...a));
+}
+async function updateMemberThreadsInScope(userId: string): Promise<void> {
   try {
     const [lines, onFile, user] = await Promise.all([
       ownLines(userId),
@@ -308,7 +313,7 @@ export async function updateMemberThreads(userId: string): Promise<void> {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update" },
+      experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update", metadata: { userId } },
       prompt: threadsPrompt(firstName, onFile, lines.slice(-80), await memberZone(userId)),
     });
     await applyThreadProposal(userId, parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text), onFile, lines);

@@ -21,6 +21,7 @@ import type { CoTask } from "./coTasks.js";
 import { localStamp, memberZone } from "./memberTime.js";
 import { memberKnowledge, memberRules, type Exchange, type Fact, type KnowledgeDeps, type MemberKnowledge } from "./memberKnowledge.js";
 import { MOOD_HOLD_CAP_HOURS, OKAY_AFTER_HOURS, moodHold, noteMoodHold, type MoodHold } from "./moodHold.js";
+import { withMember } from "./llmUsage.js";
 
 export const FOLLOWUP_LIMITS = { minHours: 2, maxHours: 7 * 24, maxWakes: 5, maxDays: 14, quietAfterClosedDays: 14 };
 
@@ -360,7 +361,11 @@ export async function handleFollowUpSkip(userId: string, task: CoTask, why: stri
   return "closed";
 }
 
-export async function runFollowUpTurn(task: CoTask): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function runFollowUpTurn(...a: Parameters<typeof runFollowUpTurnInScope>): ReturnType<typeof runFollowUpTurnInScope> {
+  return withMember(a[0].userId, () => runFollowUpTurnInScope(...a));
+}
+async function runFollowUpTurnInScope(task: CoTask): Promise<void> {
   const userId = task.userId;
   const { closeTask, scheduleTask, noteOnTask } = await import("./coTasks.js");
   const age = Date.now() - new Date(task.createdAt).getTime();

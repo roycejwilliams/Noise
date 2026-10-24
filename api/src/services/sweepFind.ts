@@ -18,6 +18,7 @@ import type { KnowledgeSection, MemberKnowledge } from "./memberKnowledge.js";
 import { eventCandidates, reserveXSearch, type TierMatch } from "./tieredRecommendation.js";
 import { memberTerms, QueryLedger, SWEEP_QUERY_RULES } from "./sweepQuery.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
+import { withMember } from "./llmUsage.js";
 
 export const SWEEP_BUDGET = { steps: 7, allSourcesSteps: 9, webQueries: 2, xSearches: 1, pageReads: 3, keep: 3 };
 
@@ -224,7 +225,11 @@ export function shownDate(date: string | undefined | null, text: string, today: 
   return named.test(t) || numeric.test(t) ? `${m[1]}-${mm}-${dd}` : null;
 }
 
-export async function sweepFind(c: SweepCandidate, opts: { timezone?: string | null; knowledge?: (userId: string) => Promise<MemberKnowledge>; allSources?: boolean; today?: string } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean; frustratedWithCo: boolean; sources?: SweepSources }> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function sweepFind(...a: Parameters<typeof sweepFindInScope>): ReturnType<typeof sweepFindInScope> {
+  return withMember(a[0].userId, () => sweepFindInScope(...a));
+}
+async function sweepFindInScope(c: SweepCandidate, opts: { timezone?: string | null; knowledge?: (userId: string) => Promise<MemberKnowledge>; allSources?: boolean; today?: string } = {}): Promise<{ matches: TierMatch[]; did: string[]; searched: boolean; frustratedWithCo: boolean; sources?: SweepSources }> {
   const did: string[] = [];
   // A test member's sweep spends nothing: no search loop, no paid search (services/testMemberSpend.ts; the live-test member still runs).
   if (await skipsPaidSearch(c.userId, "sweep.find")) return { matches: [], did: ["skipped: test member (no paid search)"], searched: false, frustratedWithCo: false };

@@ -25,6 +25,7 @@ import { randomUUID } from "crypto";
 import { MODELS } from "../models.js";
 import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "./core.js";
+import { withMember } from "../services/llmUsage.js";
 
 export type PersonSnapshot = {
   work: string | null; // what they do and at what stage
@@ -227,7 +228,7 @@ async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check" },
+      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check", metadata: { userId } },
       prompt: snapshotCheckPrompt(snapshot, recent, await memberZone(userId)),
     });
     return (parseModelJson<{ problems?: SnapshotProblem[] }>(text).problems ?? []).filter((p) => p && p.kind);
@@ -292,7 +293,11 @@ export async function releaseRebuild(userId: string, token: string): Promise<boo
 }
 
 // Non-blocking callers: fire and forget. Returns whether it rebuilt.
-export async function refreshPersonSnapshot(userId: string, opts: { force?: boolean } = {}): Promise<boolean> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function refreshPersonSnapshot(...a: Parameters<typeof refreshPersonSnapshotInScope>): ReturnType<typeof refreshPersonSnapshotInScope> {
+  return withMember(a[0], () => refreshPersonSnapshotInScope(...a));
+}
+async function refreshPersonSnapshotInScope(userId: string, opts: { force?: boolean } = {}): Promise<boolean> {
   let token: string | null = null;
   let again = false;
   try {
@@ -320,7 +325,7 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
-        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild" },
+        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild", metadata: { userId } },
         prompt: snapshotPrompt(input) + (feedback ? `\n\nYour last picture had these problems; fix them:\n${feedback}` : ""),
       });
       return parseSnapshot(text);
@@ -332,7 +337,7 @@ export async function refreshPersonSnapshot(userId: string, opts: { force?: bool
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
-        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads" },
+        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads", metadata: { userId } },
         prompt: snapshotAndThreadsPrompt(snapshotPrompt(input), threads.threadsPrompt(input.firstName, onFile, lines.slice(-80), input.zone ?? null)),
       });
       let both: any = null;
