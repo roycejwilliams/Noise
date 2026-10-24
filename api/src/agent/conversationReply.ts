@@ -54,6 +54,8 @@ export type ConversationReplyInput = {
   ackSent?: string | null;
   // Thread the next text under theirs (routes/sendblue.ts threadedSend).
   threadNext?: () => void;
+  // The walk-in question due this turn and Cue's receipt that it asked it (agent/conversationTools.ts askedWalkin).
+  walkinAsk?: { eventId: string; asked: boolean } | null;
   // For a tapback instead of a reply (conversationTools.ts
   // reactInsteadOfReplying): their message's handle, and whether Co still
   // owes them an answer from before.
@@ -324,6 +326,7 @@ export async function runConversationReplyAgent(
     recentExchange: exchangeFromLog(input.recentConversation),
     sendCoReply: input.sendCoReply,
     threadNext: input.threadNext,
+    walkinAsk: input.walkinAsk ?? null,
     ackSent: input.ackSent ?? null,
     facts: {
       add: (kind, text) => addFact(input.facts, kind, text),
