@@ -330,7 +330,13 @@ const run = async (body: any, events: any[], o: { clean?: boolean } = {}) => {
     const slow = scripted([[...text("On it."), ...tool("sl", "startTask", '{"goal":"slow"}')], text("It'll come by text.")]);
     let finished = false;
     const t0 = Date.now();
-    const r2 = await go(baseBody(), { stream: slow.stream, toolBudgetMs: 60, tools: fakeSet(() => new Promise((res) => setTimeout(() => { finished = true; res({ ok: true }); }, 400))) });
+    const rounds: any[] = [];
+    const r2 = await go(baseBody(), { stream: slow.stream, toolBudgetMs: 60, onToolRound: (x: any) => rounds.push(x), tools: fakeSet(() => new Promise((res) => setTimeout(() => { finished = true; res({ ok: true }); }, 400))) });
+    // The after-call health check's slow_turn (services/callHealth.ts, via routes/callLlm.ts call.turn_health).
+    check("a round past the time budget says so (overBudget), for the after-call health check", rounds.length === 1 && rounds[0].overBudget === true && rounds[0].last === true, rounds);
+    const fastRounds: any[] = [];
+    await go(baseBody(), { stream: scripted([[...text("On it."), ...tool("f1", "startTask", '{"goal":"quick"}')], text("Done.")]).stream, onToolRound: (x: any) => fastRounds.push(x), tools: fakeSet(async () => ({ ok: true })) });
+    check("a round inside the budget is not overBudget", fastRounds.length === 1 && fastRounds[0].overBudget === false, fastRounds);
     const fed = slow.reqs[1]?.messages.at(-1).content[0]?.content ?? "";
     check("the time budget: a slow tool doesn't hold the voice past it; the model is told it isn't back yet", Date.now() - t0 < 350 && /stillRunning/.test(fed) && slow.reqs[1].tool_choice?.type === "none" && /It'll come by text/.test(r2.content), { ms: Date.now() - t0, fed });
     await new Promise((res) => setTimeout(res, 450));

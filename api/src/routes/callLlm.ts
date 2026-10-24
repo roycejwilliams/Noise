@@ -131,6 +131,9 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     const commitments: string[] = [];
     let timing: { upstreamFirstTokenMs: number; firstSentenceMs: number } | null = null;
     let spoken = 0, dropped = 0;
+    // The after-call health check reads these (services/callHealth.ts): the turn hit its time budget or a tool was still running at
+    // it, or the model failed. Codes only.
+    let slow = false, brainError = false;
     const deps: ProxyDeps = {
       stream: upstream,
       clean: process.env.CALL_LLM_CLEAN !== "off",
@@ -143,6 +146,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       tools,
       onTool: (t) => {
         toolRuns++;
+        if (t.timedOut) slow = true;
         if (!t.timedOut && (t.result as any)?.ok !== false) toolOk++;
         console.log(`co/el/llm: tool ${t.name} ${t.timedOut ? "still running at the budget" : (t.result as any)?.ok === false ? "not done" : "done"} in ${t.ms}ms`);
         // What the tool changed (a task, a loop, what Co knows about them) is read fresh for the next turn.
@@ -153,6 +157,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
         dropped++;
         if (userId) recordDecision({ layer: 8, decision: "call.offer_unsourced", userId, outcome: "skip", action: "dropped_sentence", proposal: { sentence: s.slice(0, 240) }, reason: why }).catch(() => {});
       },
+      onToolRound: (r) => { if (r.overBudget) slow = true; },
       onFirstText: (t) => { timing = t; },
       // The turn ended on the last-resort line: a member who didn't get help (harness/failureCount.ts counts it).
       onLastResort: (line) => {
@@ -202,6 +207,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       res.end();
     } catch (err: any) {
       console.error("co/el/llm failed:", err?.message ?? err);
+      brainError = true;
       if (!res.headersSent) return res.status(502).json({ error: "upstream model failed" });
       // Mid-reply: close the stream cleanly with what was already said.
       res.write(`data: ${JSON.stringify({ id: "chatcmpl-co", object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "co", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
@@ -209,6 +215,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       res.end();
     } finally {
       if (userId && !toolOk) for (const s of commitments) trackCallCommitment({ userId, sentence: s, theirLine, coBefore }).catch(() => {});
+      if (userId && (slow || brainError)) recordDecision({ layer: 8, decision: "call.turn_health", userId, outcome: "skip", action: [slow ? "slow" : null, brainError ? "error" : null].filter(Boolean).join(","), proposal: { slow, error: brainError } }).catch(() => {});
       const t = timing as { upstreamFirstTokenMs: number; firstSentenceMs: number } | null;
       console.log(`co/el/llm: ${userId ? "call" : "anon"} first_token=${t?.upstreamFirstTokenMs ?? "-"}ms first_sentence=${t?.firstSentenceMs ?? "-"}ms total=${Date.now() - t0}ms spoken=${spoken} dropped=${dropped} tools=${(body.tools ?? []).map((x) => x?.function?.name).filter(Boolean).join(",") || "none"}${tools ? `+co(${tools.defs.length})` : ""} co_tool_runs=${toolRuns}${process.env.CALL_LLM_CLEAN === "off" ? " (clean off)" : ""}`);
     }

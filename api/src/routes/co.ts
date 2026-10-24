@@ -50,6 +50,7 @@ import { callerTurnsFrom, momentSignals } from "../services/voiceRead.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { forgetAfterCall, transcriptHash } from "../services/elevenLabsForget.js";
+import { recordCallHealth } from "../services/callHealth.js";
 import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
 
@@ -512,7 +513,7 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // Whether every event, place and time Co named had a source row (the grader above can't see the finds list).
     import("../services/offerGuard.js").then((m) => m.recordOfferSourceCheck(userId, conversationId, Array.isArray(data.transcript) ? data.transcript : [], { firstName: String(vars.first_name ?? ""), contextSummary: String(vars.context_summary ?? ""), findsNow: String(vars.finds_now ?? ""), rightNow: String(vars.right_now ?? "") })).catch(() => {});
     const turns = Array.isArray(data.transcript) ? data.transcript : [];
-    const { rows: u } = await pool.query(`SELECT id, first_name, phone_number, call_sid FROM users WHERE id = $1`, [userId]);
+    const { rows: u } = await pool.query(`SELECT id, first_name, phone_number, call_sid, mo_approver FROM users WHERE id = $1`, [userId]);
     // The call's own sid: ElevenLabs sends it on Twilio calls. Never the member's
     // latest call_sid (it can belong to a later call); without one, key on the conversation.
     const callSid: string = data.metadata?.phone_call?.call_sid ?? vars.system__call_sid ?? `el:${conversationId}`;
@@ -553,10 +554,23 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // Moments where their voice said more than their words, beside the text
     // read (services/voiceFlags.ts). Test members only for now; never fails the call.
     if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
-    // Forget by default (services/elevenLabsForget.ts): with the transcript stored on our side and the call's processing
-    // completed, ElevenLabs' copy (audio and transcript) is deleted. Not awaited and never throws: the member-facing steps
-    // above are done and nothing here changes them. Held for a call voice flags will listen to.
-    if (ended.stored && u[0]) forgetAfterCall({ userId, conversationId, transcriptSha256: ended.stored.transcriptSha256, phone: u[0].phone_number }).catch(() => {});
+    // The after-call health check (services/callHealth.ts): facts only, codes stored, never anyone's words. A flagged call is held at
+    // ElevenLabs until reviewed and shows in the morning review. Not awaited and never throws.
+    if (u[0])
+      recordCallHealth({
+        userId,
+        conversationId,
+        turns,
+        durationSecs: Number.isFinite(Number(data.metadata?.call_duration_secs)) && data.metadata?.call_duration_secs != null ? Number(data.metadata.call_duration_secs) : null,
+        terminationReason: typeof data.metadata?.termination_reason === "string" ? data.metadata.termination_reason : null,
+        status: typeof data.status === "string" ? data.status : null,
+        startedAt: Number(data.metadata?.start_time_unix_secs) ? new Date(Number(data.metadata.start_time_unix_secs) * 1000) : null,
+        endedAt: Number(data.metadata?.start_time_unix_secs) && Number(data.metadata?.call_duration_secs) ? new Date((Number(data.metadata.start_time_unix_secs) + Number(data.metadata.call_duration_secs)) * 1000) : null,
+      }).catch(() => {});
+    // Forget by default (services/elevenLabsForget.ts): with the transcript stored on our side and the call's processing completed,
+    // ElevenLabs' copy (audio and transcript) is queued for deletion: 7 days for a member, 30 for the team and test numbers, held
+    // while the health check's flag is unreviewed. Not awaited and never throws: the member-facing steps above are done.
+    if (ended.stored && u[0]) forgetAfterCall({ userId, conversationId, transcriptSha256: ended.stored.transcriptSha256, phone: u[0].phone_number, team: u[0].mo_approver === true }).catch(() => {});
     // Co never tells a member what they feel. Speech can't be filtered mid-call
     // (ElevenLabs speaks its model's reply directly), so every call is checked
     // after: a line that names their feeling is logged for the review.

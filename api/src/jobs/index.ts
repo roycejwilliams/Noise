@@ -278,14 +278,17 @@ export function registerJobs(io: Server) {
     }
   });
 
-  // Calls whose ElevenLabs copy wasn't deleted right after the call (services/elevenLabsForget.ts): verified again and retried,
-  // a bounded number of times. Sends nothing to anyone.
+  // Calls' copies at ElevenLabs (services/elevenLabsForget.ts): first the after-call health check's late signals (an unkept promise
+  // from the call, a report from the member: services/callHealth.ts), then the deletes that are due, with failures retried. Sends
+  // nothing to anyone.
   cron.schedule("*/30 * * * *", async () => {
     try {
-      const { retryPendingDeletes } = await import("../services/elevenLabsForget.js");
-      await retryPendingDeletes();
+      const { refreshLateHealth } = await import("../services/callHealth.js");
+      await refreshLateHealth();
+      const { runDeletionPass } = await import("../services/elevenLabsForget.js");
+      await runDeletionPass();
     } catch (err: any) {
-      console.error("elevenlabs delete retry error (non-fatal):", err?.message ?? err);
+      console.error("elevenlabs delete pass error (non-fatal):", err?.message ?? err);
     }
   });
 

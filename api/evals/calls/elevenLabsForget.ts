@@ -1,5 +1,6 @@
-// Model-free checks for deleting ElevenLabs' copy of a call (services/elevenLabsForget.ts, 2026-10-18). A stubbed ElevenLabs
-// client and an in-memory database: no API calls, nothing deleted, nothing fetched, no database.
+// Model-free checks for deleting ElevenLabs' copy of a call on a schedule (services/elevenLabsForget.ts, 2026-10-18; schedule
+// approved 2026-10-23). A stubbed ElevenLabs client and an in-memory database with its own clock: no API calls, nothing deleted,
+// nothing fetched, no database.
 //   npx tsx evals/calls/elevenLabsForget.ts
 import { readFileSync } from "fs";
 import {
@@ -8,15 +9,20 @@ import {
   attemptDelete,
   backfillMode,
   backfillReport,
+  callKind,
   deleteAtElevenLabs,
   forgetAfterCall,
+  forgetCallsNow,
+  keepDays,
   linkFor,
   planBackfill,
-  retryPendingDeletes,
   runBackfill,
+  runDeletionPass,
   transcriptHash,
   type ForgetDeps,
 } from "../../src/services/elevenLabsForget.js";
+import { markCallReviewed } from "../../src/services/callHealth.js";
+import { callSaysRemoved, removalRows } from "../../src/services/whatCoKnows.js";
 import { conversationLink } from "../../src/services/elevenLabsCalls.js";
 
 let total = 0;
@@ -33,37 +39,47 @@ const check = (label: string, ok: boolean) => {
 const SECRET = "user: my sister's diagnosis came back and I haven't told anyone";
 const TRANSCRIPT = `assistant: Hey Jordan.\n${SECRET}\nassistant: I'm here.`;
 const USER = "00000000-0000-0000-0000-000000000001";
-const PHONE = "+14155550123"; // a test member (555-01xx): voice flags may run for it
-const REAL_PHONE = "+14152223333"; // a member's number: voice flags never run for it
+const TEST_PHONE = "+14155550123"; // a test member (555-01xx, off production only)
+const REAL_PHONE = "+14152223333";
+const MIN = 60_000;
+const DAY = 86_400_000;
+const T0 = 1_800_000_000_000;
 
-type Row = { conversation_id: string; user_id: string; transcript_sha256: string; status: string; attempts: number; last_error: string | null; last_attempt_at: number | null; deleted_at: number | null; created_at: number };
-type Mem = { user_id: string; memory_type: string; content: string; audio_url: string | null };
+type Row = { conversation_id: string; user_id: string; transcript_sha256: string; status: string; window_kind: string; due_at: number; forget_requested_at: number | null; attempts: number; last_error: string | null; last_attempt_at: number | null; deleted_at: number | null; created_at: number };
+type Mem = { user_id: string; memory_type: string; content: string; audio_url: string | null; created_at?: number };
+type Health = { conversation_id: string; flagged: boolean; reviewed_at: number | null; late_done_at: number | null };
 
-// An in-memory stand-in for the three tables the module reads, answering the module's own queries by shape.
-function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; throwOn?: RegExp; users?: Record<string, string> } = {}) {
+// An in-memory stand-in for the tables the module reads, answering the module's own queries by shape. NOW() is the fake's clock.
+function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; throwOn?: RegExp; users?: Record<string, { phone: string; team?: boolean }> } = {}) {
   const rows = new Map<string, Row>();
+  const health = new Map<string, Health>();
   const memories = o.memories ?? [];
   const processing = new Map(Object.entries(o.processing ?? {}));
   const queries: string[] = [];
-  let now = 1_800_000_000_000;
-  const min = 60_000;
+  let now = T0;
+  const t = (x: unknown) => (x instanceof Date ? x.getTime() : Number(x));
+  const held = (id: string) => {
+    const h = health.get(id);
+    return !!h && ((h.flagged && h.reviewed_at === null) || h.late_done_at === null);
+  };
   const db = {
     async query(sql: string, params: unknown[] = []): Promise<{ rows: any[] }> {
       queries.push(sql);
       if (o.throwOn && o.throwOn.test(sql)) throw new Error("connection refused");
       const p = params as any[];
       if (/INSERT INTO elevenlabs_deletions/.test(sql)) {
-        if (!rows.has(p[0])) rows.set(p[0], { conversation_id: p[0], user_id: p[1], transcript_sha256: p[2], status: /'held'/.test(sql) ? "held" : "pending", attempts: 0, last_error: /'held'/.test(sql) ? p[3] : null, last_attempt_at: null, deleted_at: null, created_at: now });
+        if (!rows.has(p[0])) rows.set(p[0], { conversation_id: p[0], user_id: p[1], transcript_sha256: p[2], status: "pending", window_kind: p[3], due_at: t(p[4]) + Number(p[5]) * DAY, forget_requested_at: null, attempts: 0, last_error: null, last_attempt_at: null, deleted_at: null, created_at: now });
         return { rows: [] };
       }
-      if (/UPDATE elevenlabs_deletions SET status = 'deleting'/.test(sql)) {
+      if (/UPDATE elevenlabs_deletions d SET status = 'deleting'/.test(sql)) {
         const r = rows.get(p[0]);
-        const stale = r && r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[2] * min;
+        const stale = r && r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[2] * MIN;
         if (!r || r.attempts >= p[1] || !(r.status === "pending" || stale)) return { rows: [] };
+        if (!(r.forget_requested_at !== null || (r.due_at <= now && !held(r.conversation_id)))) return { rows: [] };
         r.status = "deleting";
         r.attempts++;
         r.last_attempt_at = now;
-        return { rows: [{ user_id: r.user_id, transcript_sha256: r.transcript_sha256, attempts: r.attempts }] };
+        return { rows: [{ user_id: r.user_id, transcript_sha256: r.transcript_sha256, attempts: r.attempts, forget_requested_at: r.forget_requested_at }] };
       }
       if (/UPDATE elevenlabs_deletions SET status = 'deleted'/.test(sql)) {
         const r = rows.get(p[0])!;
@@ -78,11 +94,40 @@ function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; t
         r.last_error = p[2];
         return { rows: [] };
       }
+      if (/UPDATE elevenlabs_deletions SET forget_requested_at/.test(sql)) {
+        const r = rows.get(p[0]);
+        if (r && r.user_id === p[1] && r.status !== "deleted") {
+          r.forget_requested_at ??= now;
+          if (r.status === "gave_up") {
+            r.attempts = 0;
+            r.status = "pending";
+          }
+        }
+        return { rows: [] };
+      }
       if (/SELECT content FROM co_memories/.test(sql)) return { rows: memories.filter((m) => m.user_id === p[0] && m.memory_type === "call_transcript" && m.audio_url === p[1]).map((m) => ({ content: m.content })) };
       if (/SELECT status FROM call_processing/.test(sql)) return { rows: processing.has(p[0]) ? [{ status: processing.get(p[0]) }] : [] };
-      if (/SELECT conversation_id FROM elevenlabs_deletions/.test(sql)) {
-        const due = [...rows.values()].filter((r) => r.attempts < p[0] && ((r.status === "pending" && (r.last_attempt_at === null || r.last_attempt_at < now - p[1] * min)) || (r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[2] * min)));
-        return { rows: due.sort((a, b) => a.created_at - b.created_at).slice(0, p[3]).map((r) => ({ conversation_id: r.conversation_id })) };
+      if (/SELECT d\.conversation_id, m\.content FROM elevenlabs_deletions d/.test(sql)) {
+        const out: any[] = [];
+        for (const r of rows.values())
+          if (r.user_id === p[0] && r.status !== "deleted")
+            for (const m of memories) if (m.user_id === r.user_id && m.memory_type === "call_transcript" && m.audio_url === p[1] + r.conversation_id) out.push({ conversation_id: r.conversation_id, content: m.content });
+        return { rows: out };
+      }
+      if (/SELECT d\.conversation_id FROM elevenlabs_deletions d/.test(sql)) {
+        const due = [...rows.values()].filter(
+          (r) =>
+            r.attempts < p[0] &&
+            (r.forget_requested_at !== null || (r.due_at <= now && !held(r.conversation_id))) &&
+            ((r.status === "pending" && (r.last_attempt_at === null || r.last_attempt_at < now - p[1] * MIN)) || (r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[2] * MIN)),
+        );
+        return { rows: due.sort((a, b) => (a.forget_requested_at === null ? 1 : 0) - (b.forget_requested_at === null ? 1 : 0) || a.due_at - b.due_at).slice(0, p[3]).map((r) => ({ conversation_id: r.conversation_id })) };
+      }
+      if (/UPDATE call_health SET reviewed_at = NOW\(\)/.test(sql)) {
+        const h = health.get(p[0]);
+        if (!h || !h.flagged) return { rows: [] };
+        h.reviewed_at = now;
+        return { rows: [{ conversation_id: p[0] }] };
       }
       if (/FROM co_memories m/.test(sql)) {
         const prefix = p[0] as string;
@@ -95,16 +140,18 @@ function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; t
             .filter((m) => m.memory_type === "call_transcript" && (m.audio_url ?? "").startsWith(prefix))
             .map((m) => {
               const id = positional ? m.audio_url!.slice(Number(p[1]) - 1) : null;
-              return { user_id: m.user_id, content: m.content, conversation_id: id, phone_number: o.users?.[m.user_id] ?? REAL_PHONE, deletion_status: id ? (rows.get(id)?.status ?? null) : null, processing_status: id ? (processing.get(`el:${id}`) ?? null) : null };
+              const u = o.users?.[m.user_id] ?? { phone: REAL_PHONE };
+              return { user_id: m.user_id, content: m.content, created_at: new Date(m.created_at ?? now), conversation_id: id, phone_number: u.phone, mo_approver: u.team ?? false, deletion_status: id ? (rows.get(id)?.status ?? null) : null, processing_status: id ? (processing.get(`el:${id}`) ?? null) : null };
             }),
         };
       }
       throw new Error(`fake db: unexpected query ${sql.slice(0, 60)}`);
     },
   };
-  return { db, rows, queries, processing, advance: (minutes: number) => (now += minutes * min) };
+  return { db, rows, health, queries, processing, advance: (minutes: number) => (now += minutes * MIN), now: () => new Date(now) };
 }
 
+const ENV = { ELEVENLABS_API_KEY: "ci", NODE_ENV: "test" } as NodeJS.ProcessEnv;
 function fakeDeps(world: ReturnType<typeof fakeWorld>, o: { fail?: number | "always"; gone?: boolean; env?: NodeJS.ProcessEnv; throwWith?: string } = {}) {
   const removed: string[] = [];
   const logs: string[] = [];
@@ -118,164 +165,301 @@ function fakeDeps(world: ReturnType<typeof fakeWorld>, o: { fail?: number | "alw
       return o.gone ? "gone" : "deleted";
     },
     log: (l) => logs.push(l),
-    env: o.env ?? ({ ELEVENLABS_API_KEY: "ci", NODE_ENV: "test" } as NodeJS.ProcessEnv),
+    env: o.env ?? ENV,
+    now: world.now,
   };
   return { deps, removed, logs, calls: () => calls };
 }
 
 const storedWorld = (extra: Parameters<typeof fakeWorld>[0] = {}) =>
   fakeWorld({ memories: [{ user_id: USER, memory_type: "call_transcript", content: TRANSCRIPT, audio_url: conversationLink("conv_a") }], processing: { "el:conv_a": "completed" }, ...extra });
-const call = (id = "conv_a", sha = transcriptHash(TRANSCRIPT), phone: string = REAL_PHONE) => ({ userId: USER, conversationId: id, transcriptSha256: sha, phone });
+const call = (o: { id?: string; sha?: string; phone?: string; team?: boolean } = {}) => ({ userId: USER, conversationId: o.id ?? "conv_a", transcriptSha256: o.sha ?? transcriptHash(TRANSCRIPT), phone: o.phone ?? REAL_PHONE, team: o.team ?? false });
 const noSecret = (logs: string[]) => logs.every((l) => !l.includes("diagnosis") && !l.includes(SECRET) && !l.includes("Jordan"));
+// Runs the pass every 30 minutes for this many hours.
+const passFor = async (w: ReturnType<typeof fakeWorld>, deps: ForgetDeps, hours: number) => {
+  for (let i = 0; i < hours * 2; i++) {
+    w.advance(30);
+    await runDeletionPass(deps);
+  }
+};
 
-// 1. Order: delete only after a confirmed store.
+// 1. Windows: 7 days for a member, 30 for the team and test numbers, counted from when our copy was stored.
+{
+  check("1a who: a test number is test, the team flag is team, anyone else is a member", callKind({ phone: TEST_PHONE, team: false }, ENV) === "test" && callKind({ phone: REAL_PHONE, team: true }, ENV) === "team" && callKind({ phone: REAL_PHONE, team: false }, ENV) === "member");
+  check("1b a 555-01xx number is never 'test' on production", callKind({ phone: TEST_PHONE, team: false }, { NODE_ENV: "production" } as NodeJS.ProcessEnv) === "member");
+  check("1c the windows are 7 and 30 days", keepDays("member") === 7 && keepDays("team") === 30 && keepDays("test") === 30 && FORGET.memberDays === 7 && FORGET.teamDays === 30);
+}
 {
   const w = storedWorld();
   const f = fakeDeps(w);
   const out = await forgetAfterCall(call(), f.deps);
-  check("1a stored, verified and processing completed: deleted once", out === "deleted" && f.removed.join() === "conv_a" && w.rows.get("conv_a")?.status === "deleted");
-  const order = w.queries.map((q) => (/INSERT/.test(q) ? "queue" : /'deleting'/.test(q) ? "claim" : /co_memories/.test(q) ? "verify-stored" : /call_processing/.test(q) ? "verify-finished" : /'deleted'/.test(q) ? "mark-deleted" : "?"));
-  check("1b order: queue, claim, verify stored, verify finished, then delete and mark", order.join(",") === "queue,claim,verify-stored,verify-finished,mark-deleted");
-  check("1c the log names the conversation, never the transcript", f.logs.some((l) => /deleted conv_a/.test(l)) && noSecret(f.logs));
+  check("1d after the call: queued, nothing deleted", out === "queued" && f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && w.rows.get("conv_a")?.window_kind === "member");
+  check("1e due 7 days after our copy was stored", w.rows.get("conv_a")!.due_at === T0 + 7 * DAY);
+  await passFor(w, f.deps, 7 * 24 - 1);
+  check("1f a member's call: still kept at day 6 and 23 hours", f.calls() === 0 && w.rows.get("conv_a")?.status === "pending");
+  await passFor(w, f.deps, 1);
+  check("1g a member's call: deleted on the first pass after day 7", f.removed.join() === "conv_a" && w.rows.get("conv_a")?.status === "deleted");
+  check("1h logs name the conversation and the window, never the transcript", f.logs.some((l) => /queued conv_a \(member, due in 7 days\)/.test(l)) && f.logs.some((l) => /deleted conv_a at ElevenLabs/.test(l)) && noSecret(f.logs));
   const again = await forgetAfterCall(call(), f.deps);
-  check("1d a redelivered webhook for a deleted conversation deletes nothing more", again === "not_due" && f.calls() === 1);
-  check("1e the link we verify against is the one stored with the transcript", linkFor("conv_a") === conversationLink("conv_a"));
+  await passFor(w, f.deps, 2);
+  check("1i a redelivered webhook for a deleted conversation deletes nothing more", again === "queued" && f.calls() === 1 && w.rows.get("conv_a")?.status === "deleted");
+}
+for (const [label, o] of [["the team", { team: true }], ["a test number", { phone: TEST_PHONE }]] as const) {
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(o), f.deps);
+  await passFor(w, f.deps, 29 * 24);
+  const kept = f.calls() === 0;
+  await passFor(w, f.deps, 25);
+  check(`1j ${label}: kept through day 29, deleted after day 30`, kept && f.removed.join() === "conv_a" && w.rows.get("conv_a")!.window_kind === (label === "the team" ? "team" : "test"));
+}
+{
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  check("1k a direct attempt before the window is refused by the claim itself", (await attemptDelete("conv_a", f.deps)) === "not_due" && f.calls() === 0 && w.rows.get("conv_a")?.attempts === 0);
 }
 
-// 2. Never delete what we haven't stored.
+// 2. Held: a flagged call (or one the member reported) is kept until reviewed, then normal deletion applies.
+{
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  w.health.set("conv_a", { conversation_id: "conv_a", flagged: true, reviewed_at: null, late_done_at: T0 + 2 * DAY });
+  await passFor(w, f.deps, 20 * 24);
+  check("2a flagged and unreviewed: held well past its 7 days", f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && w.rows.get("conv_a")?.attempts === 0);
+  check("2b marking it reviewed", (await markCallReviewed("conv_a", { db: w.db })) === true && w.health.get("conv_a")!.reviewed_at !== null);
+  await passFor(w, f.deps, 1);
+  check("2c reviewed, window long past: deleted on the next pass", f.removed.join() === "conv_a");
+  check("2d marking a call that isn't flagged does nothing", (await markCallReviewed("conv_none", { db: w.db })) === false);
+}
+{
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  w.health.set("conv_a", { conversation_id: "conv_a", flagged: true, reviewed_at: null, late_done_at: T0 + 2 * DAY });
+  await passFor(w, f.deps, 2 * 24);
+  await markCallReviewed("conv_a", { db: w.db });
+  await passFor(w, f.deps, 4 * 24);
+  const early = f.calls() === 0;
+  await passFor(w, f.deps, 25);
+  check("2e reviewed early (day 2): still waits out its 7 days, then deleted", early && f.removed.join() === "conv_a");
+}
+{
+  // The member reported it: the late pass flags it (callHealth.ts refreshLateHealth, tested in callHealth.ts); same hold.
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  w.health.set("conv_a", { conversation_id: "conv_a", flagged: false, reviewed_at: null, late_done_at: null });
+  await passFor(w, f.deps, 8 * 24);
+  const waited = f.calls() === 0;
+  w.health.get("conv_a")!.late_done_at = w.now().getTime();
+  await passFor(w, f.deps, 1);
+  check("2f a clean call whose late signals are still being looked for waits; once closed it goes", waited && f.removed.join() === "conv_a");
+}
+{
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  w.health.set("conv_a", { conversation_id: "conv_a", flagged: false, reviewed_at: null, late_done_at: T0 + 2 * DAY });
+  await passFor(w, f.deps, 7 * 24 + 1);
+  check("2g a clean call (not flagged, late signals closed) goes at its window", f.removed.join() === "conv_a");
+}
+
+{
+  // More held rows than one batch holds never keep a due, unheld one waiting.
+  const mems: Mem[] = [];
+  const processing: Record<string, string> = {};
+  for (let i = 0; i <= FORGET.batch + 1; i++) {
+    const id = `conv_${i}`;
+    mems.push({ user_id: USER, memory_type: "call_transcript", content: `${TRANSCRIPT} ${i}`, audio_url: conversationLink(id) });
+    processing[`el:${id}`] = "completed";
+  }
+  const w = fakeWorld({ memories: mems, processing });
+  const f = fakeDeps(w);
+  for (let i = 0; i <= FORGET.batch + 1; i++) {
+    await forgetAfterCall(call({ id: `conv_${i}`, sha: transcriptHash(`${TRANSCRIPT} ${i}`) }), f.deps);
+    if (i <= FORGET.batch) w.health.set(`conv_${i}`, { conversation_id: `conv_${i}`, flagged: true, reviewed_at: null, late_done_at: T0 });
+  }
+  await passFor(w, f.deps, 7 * 24 + 1);
+  check("2h a batch's worth of held calls never starves a due one", f.removed.join() === `conv_${FORGET.batch + 1}`);
+  const svc = readFileSync(new URL("../../src/services/elevenLabsForget.ts", import.meta.url), "utf8");
+  const pass = svc.slice(svc.indexOf("export async function runDeletionPass("), svc.indexOf("export async function forgetCallsNow("));
+  check("2i the pass's own SQL leaves held rows out", /d\.due_at <= NOW\(\) AND NOT EXISTS \(\s*SELECT 1 FROM call_health h WHERE h\.conversation_id = d\.conversation_id AND \(\(h\.flagged AND h\.reviewed_at IS NULL\) OR h\.late_done_at IS NULL\)/.test(pass));
+}
+
+// 3. Forget: a removal their call says deletes at once, whatever the window or hold.
+{
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  w.health.set("conv_a", { conversation_id: "conv_a", flagged: true, reviewed_at: null, late_done_at: null });
+  const out = await forgetCallsNow(USER, (t) => t.includes("diagnosis"), f.deps);
+  check("3a forgotten: deleted immediately, on day 0, though flagged", out.deleted === 1 && f.removed.join() === "conv_a" && w.rows.get("conv_a")?.status === "deleted");
+  check("3b the log says it was at their request, without their words", f.logs.some((l) => /forgotten at their request/.test(l)) && noSecret(f.logs));
+}
+{
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  const out = await forgetCallsNow(USER, () => false, f.deps);
+  check("3c a removal their call doesn't say: nothing deleted, the window stands", Object.keys(out).length === 0 && f.calls() === 0 && w.rows.get("conv_a")?.forget_requested_at === null);
+}
+{
+  const w = storedWorld();
+  const f = fakeDeps(w, { fail: 1 });
+  await forgetAfterCall(call(), f.deps);
+  const first = await forgetCallsNow(USER, () => true, f.deps);
+  await passFor(w, f.deps, 1);
+  check("3d a forget whose delete fails is retried by the next pass, before its window", first.delete_failed === 1 && f.removed.join() === "conv_a" && w.now().getTime() < T0 + DAY);
+}
+{
+  const w = storedWorld();
+  const f = fakeDeps(w, { fail: "always" });
+  await forgetAfterCall(call(), f.deps);
+  w.rows.get("conv_a")!.status = "gave_up";
+  w.rows.get("conv_a")!.attempts = FORGET.maxAttempts;
+  const f2 = fakeDeps(w);
+  check("3e a forget gives a gave_up conversation a fresh set of attempts", (await forgetCallsNow(USER, () => true, f2.deps)).deleted === 1 && f2.removed.join() === "conv_a");
+}
+{
+  // The forget skips the stored-copy verify (they asked for it gone): our copy may already be gone too.
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall(call(), f.deps);
+  w.processing.set("el:conv_a", "failed");
+  check("3f a forget doesn't need the verify to pass", (await forgetCallsNow(USER, () => true, f.deps)).deleted === 1);
+}
+{
+  const w = storedWorld({ throwOn: /SELECT d\.conversation_id, m\.content/ });
+  const f = fakeDeps(w);
+  check("3g a forget whose read fails never throws", Object.keys(await forgetCallsNow(USER, () => true, f.deps)).length === 0);
+}
+{
+  // The guard that decides "their call says it": the raw-words guard, specific removals only.
+  const gone = removalRows([{ ref: "claim:9", source: "claim", was: "sister's diagnosis came back", now: null }, { ref: "claim:10", source: "claim", was: "moved to Oakland", now: "moved to Berkeley" }]);
+  check("3h a removal is a guard row; a correction isn't", gone.length === 1 && gone[0].removed && gone[0].now === null);
+  check("3i a call line of theirs saying the removed thing matches", callSaysRemoved(TRANSCRIPT, gone));
+  check("3j Cue's own line saying it doesn't, nor an unrelated call", !callSaysRemoved("assistant: How's your sister's diagnosis came back thing?\nuser: fine, work is busy", gone) && !callSaysRemoved("user: the weather is lovely", gone));
+  const city = removalRows([{ ref: "profile:city", source: "profile", was: "San Francisco", now: null }]);
+  check("3k a one-kind removal (a city) never deletes a call", !callSaysRemoved("user: I live in San Francisco now", city));
+  const wck = readFileSync(new URL("../../src/services/whatCoKnows.ts", import.meta.url), "utf8");
+  const apply = wck.slice(wck.indexOf("export async function applyKnowledgeChanges("), wck.indexOf("// ---------------------------------------------------------------- what's queued on what changed"));
+  check("3l applyKnowledgeChanges forgets calls on a removal, after the change committed, without waiting", apply.indexOf("F.forgetCallsNow(userId") > apply.indexOf('await client.query("COMMIT")') && /if \(applied\.some\(\(a\) => a\.now == null\)\)/.test(apply) && /void import\("\.\/elevenLabsForget\.js"\)/.test(apply));
+}
+
+// 4. Never delete what we haven't stored (the scheduled path verifies every time).
 {
   const w = fakeWorld({ processing: { "el:conv_a": "completed" } });
   const f = fakeDeps(w);
-  const out = await forgetAfterCall(call(), f.deps);
-  check("2a transcript never stored (store failed): nothing deleted, kept for the next pass", out === "not_stored" && f.calls() === 0 && w.rows.get("conv_a")?.status === "pending");
-  check("2b its reason is logged without text", f.logs.some((l) => /kept conv_a \(attempt 1\/5\): no stored transcript/.test(l)) && noSecret(f.logs));
+  await forgetAfterCall(call(), f.deps);
+  await passFor(w, f.deps, 7 * 24 + 1);
+  check("4a due, but the transcript was never stored: nothing deleted, reason logged", f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && f.logs.some((l) => /kept conv_a \(attempt 1\/5\): no stored transcript/.test(l)) && noSecret(f.logs));
 }
-{
-  const w = fakeWorld({ memories: [{ user_id: USER, memory_type: "call_transcript", content: "assistant: a different call", audio_url: conversationLink("conv_a") }], processing: { "el:conv_a": "completed" } });
+for (const [label, mem] of [
+  ["a different transcript (hash differs)", { user_id: USER, memory_type: "call_transcript", content: "assistant: a different call", audio_url: conversationLink("conv_a") }],
+  ["an empty stored row", { user_id: USER, memory_type: "call_transcript", content: "   ", audio_url: conversationLink("conv_a") }],
+  ["another member's row", { user_id: "someone-else", memory_type: "call_transcript", content: TRANSCRIPT, audio_url: conversationLink("conv_a") }],
+  ["a row that isn't a call_transcript", { user_id: USER, memory_type: "text_exchange", content: TRANSCRIPT, audio_url: conversationLink("conv_a") }],
+] as const) {
+  const w = fakeWorld({ memories: [mem as Mem], processing: { "el:conv_a": "completed" } });
   const f = fakeDeps(w);
-  check("2c a stored row that isn't this transcript (hash differs): nothing deleted", (await forgetAfterCall(call(), f.deps)) === "not_stored" && f.calls() === 0);
+  await forgetAfterCall(call(), f.deps);
+  w.advance(7 * 24 * 60 + 1);
+  await runDeletionPass(f.deps);
+  check(`4b ${label}: not stored, nothing deleted`, f.calls() === 0 && w.rows.get("conv_a")?.status === "pending");
 }
-{
-  const w = fakeWorld({ memories: [{ user_id: USER, memory_type: "call_transcript", content: "   ", audio_url: conversationLink("conv_a") }], processing: { "el:conv_a": "completed" } });
-  const f = fakeDeps(w);
-  check("2d an empty stored row: nothing deleted", (await forgetAfterCall(call("conv_a", transcriptHash("   ")), f.deps)) === "not_stored" && f.calls() === 0);
-}
-{
-  const w = fakeWorld({ memories: [{ user_id: "someone-else", memory_type: "call_transcript", content: TRANSCRIPT, audio_url: conversationLink("conv_a") }], processing: { "el:conv_a": "completed" } });
-  const f = fakeDeps(w);
-  check("2e the same transcript under another member's id doesn't count as stored", (await forgetAfterCall(call(), f.deps)) === "not_stored" && f.calls() === 0);
-}
-{
-  const w = fakeWorld({ memories: [{ user_id: USER, memory_type: "text_exchange", content: TRANSCRIPT, audio_url: conversationLink("conv_a") }], processing: { "el:conv_a": "completed" } });
-  const f = fakeDeps(w);
-  check("2f only a call_transcript row counts as stored", (await forgetAfterCall(call(), f.deps)) === "not_stored" && f.calls() === 0);
-}
-
-// 3. Verify failures: processing not finished, or the check itself failed.
 for (const status of ["processing", "failed", undefined]) {
   const w = storedWorld({ processing: status ? { "el:conv_a": status } : {} });
   const f = fakeDeps(w);
-  const out = await forgetAfterCall(call(), f.deps);
-  check(`3a processing ${status ?? "not on file"}: nothing deleted`, out === "not_finished" && f.calls() === 0 && w.rows.get("conv_a")?.status === "pending");
+  await forgetAfterCall(call(), f.deps);
+  w.advance(7 * 24 * 60 + 1);
+  await runDeletionPass(f.deps);
+  check(`4c processing ${status ?? "not on file"}: nothing deleted`, f.calls() === 0 && w.rows.get("conv_a")?.status === "pending");
 }
 {
   const w = storedWorld({ throwOn: /SELECT content FROM co_memories/ });
   const f = fakeDeps(w);
-  const out = await forgetAfterCall(call(), f.deps);
-  check("3b the stored-check query fails: nothing deleted, kept pending, reason logged", out === "error" && f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && f.logs.some((l) => /verify failed \(connection refused\)/.test(l)));
-}
-{
-  const w = storedWorld({ throwOn: /call_processing/ });
-  const f = fakeDeps(w);
-  check("3c the processing check fails: nothing deleted", (await forgetAfterCall(call(), f.deps)) === "error" && f.calls() === 0);
+  await forgetAfterCall(call(), f.deps);
+  w.advance(7 * 24 * 60 + 1);
+  check("4d the stored-check query fails: nothing deleted, kept pending", (await attemptDelete("conv_a", f.deps)) === "error" && f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && f.logs.some((l) => /verify failed \(connection refused\)/.test(l)));
 }
 {
   const w = storedWorld({ throwOn: /INSERT INTO elevenlabs_deletions/ });
   const f = fakeDeps(w);
-  const out = await forgetAfterCall(call(), f.deps);
-  check("3d queueing fails: nothing deleted, never throws", out === "error" && f.calls() === 0);
+  check("4e queueing fails: nothing queued or deleted, never throws", (await forgetAfterCall(call(), f.deps)) === "error" && f.calls() === 0);
+}
+{
+  const f = fakeDeps(storedWorld());
+  check("4f no conversation id: nothing", (await forgetAfterCall(call({ id: "" }), f.deps)) === "no_id" && f.calls() === 0);
 }
 
-// 4. Delete failures: kept, retried on the next pass, bounded.
+// 5. Failures are retried on the next run, bounded.
 {
   const w = storedWorld();
   const f = fakeDeps(w, { fail: "always" });
-  const first = await forgetAfterCall(call(), f.deps);
-  check("4a delete fails: kept pending with the attempt counted", first === "delete_failed" && w.rows.get("conv_a")?.status === "pending" && w.rows.get("conv_a")?.attempts === 1);
-  const early = await retryPendingDeletes(f.deps);
-  check("4b the next pass waits its interval before trying again", Object.keys(early).length === 0 && f.calls() === 1);
-  for (let i = 0; i < 10; i++) {
-    w.advance(FORGET.retryAfterMinutes + 1);
-    await retryPendingDeletes(f.deps);
-  }
-  check(`4c bounded: exactly ${FORGET.maxAttempts} attempts, then gave_up`, f.calls() === FORGET.maxAttempts && w.rows.get("conv_a")?.status === "gave_up" && w.rows.get("conv_a")?.attempts === FORGET.maxAttempts);
-  check("4d the last attempt says it gives up and the conversation stays", f.logs.some((l) => /attempt 5\/5\).*giving up, it stays at ElevenLabs/.test(l)));
-  w.advance(1000);
-  await retryPendingDeletes(f.deps);
-  check("4e a gave_up row is never tried again", f.calls() === FORGET.maxAttempts);
-  // The delete gets only the id, and the real client throws the status only (6b): no failure can carry their words.
-  check("4f every failure logged with its reason and never the transcript", f.logs.length >= FORGET.maxAttempts && f.logs.every((l) => /answered 503/.test(l)) && noSecret(f.logs));
+  await forgetAfterCall(call(), f.deps);
+  w.advance(7 * 24 * 60);
+  await runDeletionPass(f.deps);
+  check("5a delete fails: kept pending with the attempt counted", w.rows.get("conv_a")?.status === "pending" && w.rows.get("conv_a")?.attempts === 1);
+  w.advance(30);
+  await runDeletionPass(f.deps);
+  check("5b the very next run (30 minutes on) retries it", f.calls() === 2);
+  await passFor(w, f.deps, 10);
+  check(`5c bounded: exactly ${FORGET.maxAttempts} attempts, then gave_up`, f.calls() === FORGET.maxAttempts && w.rows.get("conv_a")?.status === "gave_up");
+  check("5d the last attempt says it gives up; every failure logged without text", f.logs.some((l) => /attempt 5\/5\).*giving up, it stays at ElevenLabs/.test(l)) && noSecret(f.logs));
 }
 {
   const w = storedWorld();
   const f = fakeDeps(w, { fail: 2 });
   await forgetAfterCall(call(), f.deps);
-  w.advance(FORGET.retryAfterMinutes + 1);
-  await retryPendingDeletes(f.deps);
-  w.advance(FORGET.retryAfterMinutes + 1);
-  const third = await retryPendingDeletes(f.deps);
-  check("4g a transient failure clears on a later pass", third.deleted === 1 && w.rows.get("conv_a")?.status === "deleted" && f.removed.length === 1 && noSecret(f.logs));
+  w.advance(7 * 24 * 60);
+  await passFor(w, f.deps, 2);
+  check("5e a transient failure clears on a later run", f.removed.join() === "conv_a" && w.rows.get("conv_a")?.status === "deleted");
 }
 {
   const w = storedWorld();
   const f = fakeDeps(w, { gone: true });
-  check("4h ElevenLabs already lost it (404): marked deleted, said so", (await forgetAfterCall(call(), f.deps)) === "gone" && w.rows.get("conv_a")?.last_error === "already gone at ElevenLabs");
+  await forgetAfterCall(call(), f.deps);
+  w.advance(7 * 24 * 60);
+  check("5f ElevenLabs already lost it (404): marked deleted, said so", (await attemptDelete("conv_a", f.deps)) === "gone" && w.rows.get("conv_a")?.last_error === "already gone at ElevenLabs");
 }
 {
-  // A pass that crashed mid-delete leaves 'deleting': taken over only once stale.
   const w = storedWorld();
   const f = fakeDeps(w);
-  await w.db.query(`INSERT INTO elevenlabs_deletions (conversation_id, user_id, transcript_sha256, status) VALUES ($1, $2, $3, 'pending')`, ["conv_a", USER, transcriptHash(TRANSCRIPT)]);
+  await forgetAfterCall(call(), f.deps);
+  w.advance(7 * 24 * 60);
   const r = w.rows.get("conv_a")!;
   r.status = "deleting";
   r.attempts = 1;
-  r.last_attempt_at = 1_800_000_000_000;
-  check("4i a fresh 'deleting' claim is left alone", (await attemptDelete("conv_a", f.deps)) === "not_due" && f.calls() === 0);
+  r.last_attempt_at = w.now().getTime();
+  check("5g a fresh 'deleting' claim is left alone", (await attemptDelete("conv_a", f.deps)) === "not_due" && f.calls() === 0);
   w.advance(FORGET.staleClaimMinutes + 1);
-  await retryPendingDeletes(f.deps);
-  check("4j a stale claim is taken over and verified again before deleting", f.removed.join() === "conv_a" && r.attempts === 2);
+  await runDeletionPass(f.deps);
+  check("5h a stale claim is taken over and verified again before deleting", f.removed.join() === "conv_a" && r.attempts === 2);
 }
 
-// 5. Switches and holds.
+// 6. Switches.
 {
   const w = storedWorld();
   const f = fakeDeps(w, { env: { ELEVENLABS_API_KEY: "ci", ELEVENLABS_DELETE: "off" } as NodeJS.ProcessEnv });
-  const out = await forgetAfterCall(call(), f.deps);
-  const retried = await retryPendingDeletes(f.deps);
-  check("5a kill switch ELEVENLABS_DELETE=off: queued, nothing deleted, no attempt used", out === "paused" && f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && w.rows.get("conv_a")?.attempts === 0 && Object.keys(retried).length === 0);
+  await forgetAfterCall(call(), f.deps);
+  await passFor(w, f.deps, 8 * 24);
+  const forgot = await forgetCallsNow(USER, () => true, f.deps);
+  check("6a kill switch ELEVENLABS_DELETE=off: nothing deleted (forget included), no attempt used", f.calls() === 0 && w.rows.get("conv_a")?.attempts === 0 && forgot.paused === 1);
+  const on = fakeDeps(w);
+  await runDeletionPass(on.deps);
+  check("6b switched back on: the forgotten one goes first", on.removed.join() === "conv_a");
 }
 {
   const w = storedWorld();
   const f = fakeDeps(w, { env: {} as NodeJS.ProcessEnv });
-  check("5b no ElevenLabs key: nothing deleted", (await forgetAfterCall(call(), f.deps)) === "no_key" && f.calls() === 0);
-}
-{
-  const w = storedWorld();
-  const env = { ELEVENLABS_API_KEY: "ci", VOICE_FLAGS: "test", CO_GEMINI_KEY: "g", NODE_ENV: "test" } as NodeJS.ProcessEnv;
-  const f = fakeDeps(w, { env });
-  const out = await forgetAfterCall(call("conv_a", transcriptHash(TRANSCRIPT), PHONE), f.deps);
-  w.advance(1000);
-  await retryPendingDeletes(f.deps);
-  check("5c a call voice flags will listen to is held, never deleted, and the retry pass skips it", out === "held" && f.calls() === 0 && w.rows.get("conv_a")?.status === "held");
-  const f2 = fakeDeps(storedWorld(), { env });
-  check("5d voice flags on, but a real member's number: deleted as usual", (await forgetAfterCall(call(), f2.deps)) === "deleted");
-}
-{
-  const f = fakeDeps(storedWorld());
-  check("5e no conversation id: nothing", (await forgetAfterCall(call(""), f.deps)) === "no_id" && f.calls() === 0);
+  await forgetAfterCall(call(), f.deps);
+  w.advance(8 * 24 * 60);
+  check("6c no ElevenLabs key: nothing deleted", Object.keys(await runDeletionPass(f.deps)).length === 0 && (await attemptDelete("conv_a", f.deps)) === "no_key" && f.calls() === 0);
 }
 
-// 6. The real client: the DELETE it sends and what it throws (global fetch faked for this block; nothing leaves the machine).
+// 7. The real client: the DELETE it sends and what it throws (global fetch faked for this block; nothing leaves the machine).
 {
   const realFetch = globalThis.fetch;
   const seen: { url: string; init: any }[] = [];
@@ -286,98 +470,98 @@ for (const status of ["processing", "failed", undefined]) {
   }) as typeof fetch;
   try {
     const ok = await deleteAtElevenLabs("conv/x", { ELEVENLABS_API_KEY: "k1" } as NodeJS.ProcessEnv);
-    check("6a DELETE /v1/convai/conversations/{id}, id encoded, with the xi-api-key header", ok === "deleted" && seen[0].url === "https://api.elevenlabs.io/v1/convai/conversations/conv%2Fx" && seen[0].init.method === "DELETE" && seen[0].init.headers["xi-api-key"] === "k1");
+    check("7a DELETE /v1/convai/conversations/{id}, id encoded, with the xi-api-key header", ok === "deleted" && seen[0].url === "https://api.elevenlabs.io/v1/convai/conversations/conv%2Fx" && seen[0].init.method === "DELETE" && seen[0].init.headers["xi-api-key"] === "k1");
     answer = 500;
     const err = await deleteAtElevenLabs("conv_x").then(() => null, (e) => e as Error);
-    check("6b a failure throws the status only, never the body", !!err && err.message === "ElevenLabs answered 500");
+    check("7b a failure throws the status only, never the body", !!err && err.message === "ElevenLabs answered 500");
     answer = 404;
-    check("6c 404 is 'gone'", (await deleteAtElevenLabs("conv_x")) === "gone");
+    check("7c 404 is 'gone'", (await deleteAtElevenLabs("conv_x")) === "gone");
   } finally {
     globalThis.fetch = realFetch;
   }
 }
 
-// 7. The member-facing post-call flow never waits on, or fails from, the delete.
+// 8. The post-call route: queues (never deletes) after the store, never waits on it.
 {
   const w = storedWorld({ throwOn: /./ });
   const f = fakeDeps(w, { fail: "always" });
   let threw = false;
-  const t0 = Date.now();
   const out = await forgetAfterCall(call(), f.deps).catch(() => {
     threw = true;
   });
-  check("7a every step failing: forgetAfterCall still resolves, never throws", !threw && out === "error" && Date.now() - t0 < 1000);
-  const broken: ForgetDeps = { ...f.deps, db: null as any };
-  check("7b even a missing database resolves", (await forgetAfterCall(call(), broken)) === "error");
+  check("8a every step failing: forgetAfterCall still resolves, never throws", !threw && out === "error");
+  check("8b even a missing database resolves", (await forgetAfterCall(call(), { ...f.deps, db: null as any })) === "error");
   const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
   const route = co.slice(co.indexOf('router.post("/el/post-call"'), co.indexOf("// Root-cause guard"));
   const at = route.indexOf("forgetAfterCall(");
-  check("7c the route calls it after processEndedCall and before answering the webhook", at > route.indexOf("await processEndedCall(") && at < route.indexOf("return res.status(ended.status)"));
-  check("7d not awaited, and its promise is caught", /\n\s*if \(ended\.stored && u\[0\]\) forgetAfterCall\([^\n]*\)\.catch\(\(\) => \{\}\);/.test(route) && !/await forgetAfterCall/.test(co));
-  check("7e only when the processing stored the transcript", /if \(ended\.stored && u\[0\]\) forgetAfterCall/.test(route));
+  check("8c the route queues after processEndedCall and before answering the webhook", at > route.indexOf("await processEndedCall(") && at < route.indexOf("return res.status(ended.status)"));
+  check("8d not awaited, caught, only when the processing stored the transcript, with the team flag", /\n\s*if \(ended\.stored && u\[0\]\) forgetAfterCall\(\{[^\n]*team: u\[0\]\.mo_approver === true \}\)\.catch\(\(\) => \{\}\);/.test(route) && !/await forgetAfterCall/.test(co) && /SELECT id, first_name, phone_number, call_sid, mo_approver FROM users/.test(route));
   const pe = co.slice(co.indexOf("async function processEndedCall("), co.indexOf("async function scheduleFollowUpText("));
   const storedAt = pe.indexOf("stored: { transcriptSha256: transcriptHash(transcript) }");
-  check("7f processEndedCall sets stored once, on the path that stored the transcript and marked the call completed", storedAt > 0 && pe.split("stored: {").length === 2 && storedAt > pe.indexOf("storeTranscriptMemory(") && storedAt > pe.indexOf(`finishCallProcessing(chat_id, "completed");\n\n      // Profile is fully extracted`));
-  check("7g the frustration fallback (the one fetch of ElevenLabs' copy) is awaited inside processing, before completed", pe.indexOf("await emotionDone;") > 0 && pe.indexOf("await emotionDone;") < storedAt);
-  check("7h voice flags start before the delete is considered", route.indexOf("flagVoiceMoments(") > 0 && route.indexOf("flagVoiceMoments(") < at);
+  check("8e processEndedCall sets stored once, on the path that stored the transcript and marked the call completed", storedAt > 0 && pe.split("stored: {").length === 2 && storedAt > pe.indexOf("storeTranscriptMemory(") && storedAt > pe.indexOf(`finishCallProcessing(chat_id, "completed");\n\n      // Profile is fully extracted`));
+  const svc = readFileSync(new URL("../../src/services/elevenLabsForget.ts", import.meta.url), "utf8");
+  const fac = svc.slice(svc.indexOf("export async function forgetAfterCall("), svc.indexOf("// The claim:"));
+  check("8f forgetAfterCall only queues: it never calls the delete", !/attemptDelete|deps\.remove/.test(fac));
 }
 
-// 8. Backfill: dry run counts and deletes nothing.
+// 9. Backfill: dry run counts and writes nothing; apply queues with windows from when our copy was stored.
 {
   const mems: Mem[] = [
-    { user_id: USER, memory_type: "call_transcript", content: TRANSCRIPT, audio_url: conversationLink("conv_ready") },
+    { user_id: USER, memory_type: "call_transcript", content: TRANSCRIPT, audio_url: conversationLink("conv_old"), created_at: T0 - 30 * DAY },
+    { user_id: USER, memory_type: "call_transcript", content: "assistant: hi\nuser: a recent one", audio_url: conversationLink("conv_new"), created_at: T0 - 2 * DAY },
+    { user_id: "u-team", memory_type: "call_transcript", content: "assistant: hi\nuser: team call", audio_url: conversationLink("conv_team"), created_at: T0 - 10 * DAY },
     { user_id: USER, memory_type: "call_transcript", content: "assistant: hi\nuser: hello there friend", audio_url: conversationLink("conv_unfinished") },
-    { user_id: "u-test", memory_type: "call_transcript", content: "assistant: hi\nuser: test call here", audio_url: conversationLink("conv_voiceflag") },
     { user_id: USER, memory_type: "call_transcript", content: "", audio_url: conversationLink("conv_empty") },
     { user_id: USER, memory_type: "call_transcript", content: "assistant: old\nuser: an old one", audio_url: conversationLink("conv_done") },
     { user_id: USER, memory_type: "call_transcript", content: "hume era", audio_url: "https://hume.example/audio/1" },
     { user_id: USER, memory_type: "call_transcript", content: "no link", audio_url: null },
   ];
-  const processing = { "el:conv_ready": "completed", "el:conv_unfinished": "failed", "el:conv_voiceflag": "completed", "el:conv_empty": "completed", "el:conv_done": "completed" };
-  const env = { ELEVENLABS_API_KEY: "ci", VOICE_FLAGS: "test", CO_GEMINI_KEY: "g", NODE_ENV: "test" } as NodeJS.ProcessEnv;
-  const w = fakeWorld({ memories: mems, processing, users: { "u-test": PHONE } });
-  await w.db.query(`INSERT INTO elevenlabs_deletions (conversation_id, user_id, transcript_sha256, status) VALUES ($1, $2, $3, 'pending')`, ["conv_done", USER, "x"]);
+  const processing = { "el:conv_old": "completed", "el:conv_new": "completed", "el:conv_team": "completed", "el:conv_unfinished": "failed", "el:conv_empty": "completed", "el:conv_done": "completed" };
+  const w = fakeWorld({ memories: mems, processing, users: { "u-team": { phone: REAL_PHONE, team: true } } });
+  await w.db.query(`INSERT INTO elevenlabs_deletions`, ["conv_done", USER, "x", "member", new Date(T0), 7]);
   w.rows.get("conv_done")!.status = "deleted";
   w.queries.length = 0;
-  const f = fakeDeps(w, { env });
-  const { plan, outcomes } = await runBackfill(f.deps, backfillMode([]));
-  check("8a dry run is the default; --apply is the only way to delete", backfillMode([]) === "dry-run" && backfillMode(["--dry-run"]) === "dry-run" && backfillMode(["--apply"]) === "apply");
-  check("8b dry run: nothing deleted", f.calls() === 0 && Object.keys(outcomes).length === 0);
-  check("8c dry run: nothing written (one read, no INSERT/UPDATE/DELETE)", w.queries.length === 1 && w.queries.every((q) => !/\b(INSERT|UPDATE|DELETE)\b/.test(q)));
-  check("8d it counts each kind", plan.storedConversations === 5 && plan.wouldDelete === 1 && plan.notFinished === 1 && plan.held === 1 && plan.notStored === 1 && plan.alreadyDeleted === 1);
+  const f = fakeDeps(w);
+  const { plan, queued } = await runBackfill(f.deps, backfillMode([]));
+  check("9a dry run is the default; --apply is the only way to queue", backfillMode([]) === "dry-run" && backfillMode(["--dry-run"]) === "dry-run" && backfillMode(["--apply"]) === "apply");
+  check("9b dry run: nothing deleted, nothing written (one read)", f.calls() === 0 && queued === 0 && w.queries.length === 1 && w.queries.every((q) => !/\b(INSERT|UPDATE|DELETE)\b/.test(q)));
+  check("9c it counts each kind, and which are past their window", plan.storedConversations === 6 && plan.wouldQueue === 3 && plan.dueNow === 1 && plan.notFinished === 1 && plan.notStored === 1 && plan.alreadyDeleted === 1);
   const report = f.logs.join("\n");
-  check("8e the report is counts only: no conversation ids, no text", /would delete \(stored, processing completed\): 1/.test(report) && !/conv_/.test(report) && noSecret(f.logs));
-  // Apply, on the fake only: just the ready one goes, through the same verify.
-  const f2 = fakeDeps(w, { env });
+  check("9d the report is counts only: no conversation ids, no text", /would queue \(stored, processing completed\): 3/.test(report) && !/conv_/.test(report) && noSecret(f.logs));
+  const f2 = fakeDeps(w);
   const applied = await runBackfill(f2.deps, "apply");
-  check("8f apply deletes only stored, completed, unheld conversations, verified the same way", f2.removed.join() === "conv_ready" && applied.outcomes.deleted === 1 && w.rows.get("conv_ready")?.status === "deleted");
-  check("8g backfillReport reads 'to delete' on apply", /to delete \(stored, processing completed\)/.test(backfillReport(plan, "apply")));
-  const again = await planBackfill(f2.deps);
-  check("8h a second run finds nothing more to delete", again.wouldDelete === 0 && again.alreadyDeleted === 2);
+  check("9e apply queues, deletes nothing itself", applied.queued === 3 && f2.calls() === 0);
+  check("9f windows count from when our copy was stored, by who it was with", w.rows.get("conv_old")!.due_at === T0 - 23 * DAY && w.rows.get("conv_new")!.due_at === T0 + 5 * DAY && w.rows.get("conv_team")!.due_at === T0 + 20 * DAY && w.rows.get("conv_team")!.window_kind === "team");
+  await passFor(w, f2.deps, 1);
+  check("9g the next pass deletes only what is past its window, verified", f2.removed.join() === "conv_old");
+  check("9h backfillReport reads 'to queue' on apply", /to queue \(stored, processing completed\)/.test(backfillReport(plan, "apply")));
+  const again = await planBackfill(f2.deps, w.now());
+  check("9i a second run queues nothing more", again.wouldQueue === 0 && again.alreadyQueued === 2 && again.alreadyDeleted === 2);
   // Review of #244: substring(... from $2) with an untyped parameter is Postgres' regex form, so every id came back NULL.
   const svcSrc = readFileSync(new URL("../../src/services/elevenLabsForget.ts", import.meta.url), "utf8");
   const subs = [...svcSrc.matchAll(/substring\(([^)]*)\)/g)].map((m) => m[1]);
-  check("8j every substring in the backfill query takes its position as $2::int (never the regex form)", subs.length === 3 && subs.every((x) => x === "m.audio_url from $2::int"));
+  check("9j every substring in the backfill query takes its position as $2::int (never the regex form)", subs.length === 3 && subs.every((x) => x === "m.audio_url from $2::int"));
   const offset = CONVERSATION_LINK_PREFIX.length + 1;
-  check("8k the position passed is the prefix length + 1, and 1-based slicing there gives back the id", /\[CONVERSATION_LINK_PREFIX, CONVERSATION_LINK_PREFIX\.length \+ 1\]/.test(svcSrc) && linkFor("conv_a1b2").slice(offset - 1) === "conv_a1b2" && conversationLink("x9").slice(offset - 1) === "x9");
+  check("9k the position passed is the prefix length + 1, and 1-based slicing there gives back the id", /\[CONVERSATION_LINK_PREFIX, CONVERSATION_LINK_PREFIX\.length \+ 1\]/.test(svcSrc) && linkFor("conv_a1b2").slice(offset - 1) === "conv_a1b2" && conversationLink("x9").slice(offset - 1) === "x9");
   const script = readFileSync(new URL("../../src/scripts/forgetElevenLabsBackfill.ts", import.meta.url), "utf8");
-  check("8i the script takes its mode from the arguments only (dry run unless --apply)", /backfillMode\(process\.argv\.slice\(2\)\)/.test(script) && !/"apply"/.test(script));
+  check("9l the script takes its mode from the arguments only (dry run unless --apply)", /backfillMode\(process\.argv\.slice\(2\)\)/.test(script) && !/"apply"/.test(script));
 }
 
-// 9. Wiring.
+// 10. Wiring and the SQL the fake can't prove.
 {
   const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
-  check("9a the table exists, with a hash and no transcript column", /CREATE TABLE IF NOT EXISTS elevenlabs_deletions \(/.test(mig) && /transcript_sha256 TEXT NOT NULL/.test(mig) && !/elevenlabs_deletions \([^)]*\bcontent\b/.test(mig));
+  check("10a the table has due_at, window_kind and forget_requested_at, a hash and no transcript column", /CREATE TABLE IF NOT EXISTS elevenlabs_deletions \(/.test(mig) && /due_at TIMESTAMPTZ NOT NULL/.test(mig) && /forget_requested_at TIMESTAMPTZ/.test(mig) && /transcript_sha256 TEXT NOT NULL/.test(mig) && !/elevenlabs_deletions \([^)]*\bcontent\b/.test(mig));
   const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
-  check("9b the retry pass is scheduled", /retryPendingDeletes\(\)/.test(jobs));
+  const job = jobs.slice(jobs.indexOf("refreshLateHealth"), jobs.indexOf("refreshLateHealth") + 400);
+  check("10b scheduled: the late health signals, then the deletion pass", /cron\.schedule\("\*\/30 \* \* \* \*"/.test(jobs) && job.indexOf("await refreshLateHealth()") < job.indexOf("await runDeletionPass()") && job.includes("await runDeletionPass()"));
   const svc = readFileSync(new URL("../../src/services/elevenLabsForget.ts", import.meta.url), "utf8");
-  check("9c no switch turns it on: the only env read besides the key is the off switch", [...svc.matchAll(/env\.([A-Z_]+)/g)].every((m) => ["ELEVENLABS_API_KEY", "ELEVENLABS_DELETE"].includes(m[1])) && /ELEVENLABS_DELETE === "off"/.test(svc));
+  check("10c no switch turns it on: the only env read besides the key is the off switch", [...svc.matchAll(/env\.([A-Z_]+)/g)].every((m) => ["ELEVENLABS_API_KEY", "ELEVENLABS_DELETE"].includes(m[1])) && /ELEVENLABS_DELETE === "off"/.test(svc));
+  const claim = svc.slice(svc.indexOf("const CLAIM_SQL"), svc.indexOf("RETURNING d.user_id"));
+  check("10d the claim's SQL: attempts capped, due unless forgotten, held while flagged-unreviewed or late signals open", /d\.attempts < \$2/.test(claim) && /d\.forget_requested_at IS NOT NULL OR \(d\.due_at <= NOW\(\) AND NOT EXISTS/.test(claim) && /\(h\.flagged AND h\.reviewed_at IS NULL\) OR h\.late_done_at IS NULL/.test(claim));
+  check("10e the queue's due time is the stored time plus the window's days", /\$5::timestamptz \+ make_interval\(days => \$6\)/.test(svc));
+  check("10f the retry interval is shorter than the 30-minute run, so the next run always retries", FORGET.retryAfterMinutes < 30);
   const l1 = JSON.parse(readFileSync(new URL("../layer1.json", import.meta.url), "utf8"));
-  check("9d registered in layer 1", l1.files.includes("evals/calls/elevenLabsForget.ts"));
-  // The fake database answers by shape, so the bound written in the SQL itself is checked here: both the claim and the retry
-  // pass's pick stop at FORGET.maxAttempts.
-  check("9e the claim's SQL caps attempts at FORGET.maxAttempts", /WHERE conversation_id = \$1 AND attempts < \$2\n[\s\S]{0,200}RETURNING user_id, transcript_sha256, attempts`,\n\s*\[conversationId, FORGET\.maxAttempts, FORGET\.staleClaimMinutes\]/.test(svc));
-  check("9f the retry pass's SQL caps attempts too", /WHERE attempts < \$1\n[\s\S]{0,300}LIMIT \$4`,\n\s*\[FORGET\.maxAttempts, /.test(svc));
+  check("10g registered in layer 1", l1.files.includes("evals/calls/elevenLabsForget.ts") && l1.files.includes("evals/calls/callHealth.ts"));
 }
 
 console.log(`elevenlabs forget rules: ${total - failed}/${total} passed`);

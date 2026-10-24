@@ -280,7 +280,8 @@ export type ProxyDeps = {
   toolBudgetMs?: number;
   // Each of Co's tools as it comes back (or doesn't, inside the budget), and each round fed back to the model.
   onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
-  onToolRound?: (r: { step: number; last: boolean }) => void;
+  // overBudget: the turn had used its whole time budget (CALL_TOOL_BUDGET_MS) when the round ended.
+  onToolRound?: (r: { step: number; last: boolean; overBudget: boolean }) => void;
   now?: () => number;
   // The live voice read's line for this turn (services/voiceRead.ts voiceLine, read by routes/callLlm.ts without waiting on
   // Hume): how they sound when it adds to their words, never a feeling's name. Absent when there is nothing strong.
@@ -551,7 +552,8 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     if (clean) sources = callSources(b, co?.records ?? "", toolCorpus);
     // ElevenLabs' own tool in the same message (a goodbye with end_call): Co's tools have run; the call's tool goes out as it is.
     if (elCalled) break;
-    const last = step + 1 >= maxSteps || now() - t0 >= budgetMs;
+    const overBudget = now() - t0 >= budgetMs;
+    const last = step + 1 >= maxSteps || overBudget;
     toolsOff = last;
     req = {
       ...req,
@@ -559,7 +561,7 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
       // At the cap the model answers from what it has: no more tool rounds this turn.
       ...(last ? { tool_choice: { type: "none" as const } } : {}),
     };
-    deps.onToolRound?.({ step: step + 1, last });
+    deps.onToolRound?.({ step: step + 1, last, overBudget });
   }
   // Everything this turn was going to say was kept back: say the one safe thing, never silence.
   // An event offer held back gets the safe line (as before); anything else held back, a plain acknowledgement, never a new promise.
