@@ -157,7 +157,7 @@ export async function recapOfferFor(
   known: Pick<MemberKnowledge, "identity" | "restraint" | "delivered"> | null = null,
 ): Promise<RecapRead> {
   const now = o.now ?? new Date();
-  const [{ loadOfferHistory, postCallRecapAllowed }, { getEmotionalContext }, { localOf }] = await Promise.all([
+  const [{ loadOfferHistory, postCallRecapAllowed }, { getEmotionalContext, isScoreBasis }, { localOf }] = await Promise.all([
     import("../services/documentOffer.js"),
     import("../harness/emotion.js"),
     import("../services/memberTime.js"),
@@ -169,7 +169,8 @@ export async function recapOfferFor(
     // Their last text or call (a timestamp only): "okay again" is a normal text after the hard read (services/moodHold.ts).
     lastInboundAt(userId).catch(() => null),
   ]);
-  const heavyCall = (emo?.lastCall?.moments ?? []).some((m) => m.intensity === "high" && m.valence === "negative");
+  // A score of how they sounded (voice, ElevenLabs' frustration score) alone never makes a heavy call (review of #269).
+  const heavyCall = (emo?.lastCall?.moments ?? []).some((m) => m.intensity === "high" && m.valence === "negative" && !isScoreBasis(m.basis));
   const care = k.restraint ? k.restraint.needsCare : !!emo?.needsCare; // mood: carries the read into recapMoodRead, which waits on the capped moodHold
   // The hold, from the read with its times; a hard time read without them holds, as before (until the held recap's own cap).
   const mood = care && emo?.needsCare ? moodHold(emo, { now, lastInboundAt: inbound }) : null;

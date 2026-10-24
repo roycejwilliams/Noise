@@ -294,7 +294,7 @@ function toMoment(c: Candidate, j: VoiceJudgement, judge: string): VoiceMoment |
   const dim = c.read.strongest ?? ([...VOICE_DIMS].sort((a, b) => c.read.dims[b] - c.read.dims[a])[0] as VoiceDim);
   if (!j.keep || !(c.read.dims[dim] > 0)) return null;
   const mismatch = j.kind === "mismatch";
-  const label = MOMENT_LABEL[dim];
+  const label = MOMENT_LABEL[dim]; // mood: builds the voice moment's record (its words), decides nothing
   const score = c.read.dims[dim];
   const intensity: Intensity = score >= VOICE_READ.highAt ? "high" : "medium";
   return { source: "call", emotion: mismatch ? label.mismatch : label.emotion, intensity, valence: label.valence, about: null, quote: c.callerText ? c.callerText.slice(0, 140) : null, target: "life", basis: "voice", dim, mismatch, score, judge, kind: j.kind, p: j.p };

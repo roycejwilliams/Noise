@@ -413,7 +413,7 @@ export async function takeVoiceMoments(callKey: string, callerTurns: CallerTurn[
   // One judge call for the whole call (services/voiceRead.ts judgeVoiceMoments; the rule unless a Jev judge is plugged in).
   const judged = noisy ? { moments: [] as VoiceMoment[], judgedBy: "none (noisy)", candidates: 0 } : await judgeVoiceMoments(s.windows, callerTurns, judge);
   const moments = judged.moments;
-  D().log(`voiceRead: after call ${JSON.stringify({ user: s.userId.slice(0, 8), callSid: s.stats.callSid, windows: s.windows.length, noisy: noisy ?? null, candidates: judged.candidates, judgedBy: judged.judgedBy, moments: moments.map((m) => ({ dim: m.dim, kind: m.kind, p: Math.round(m.p * 1000) / 1000, intensity: m.intensity, mismatch: m.mismatch, judge: m.judge })) })}`);
+  D().log(`voiceRead: after call ${JSON.stringify({ user: s.userId.slice(0, 8), callSid: s.stats.callSid, windows: s.windows.length, noisy: noisy ?? null, candidates: judged.candidates, judgedBy: judged.judgedBy, moments: moments.map((m) => ({ dim: m.dim, kind: m.kind, p: Math.round(m.p * 1000) / 1000, intensity: m.intensity, mismatch: m.mismatch, judge: m.judge })) })}`); // mood: logs which moments the judge kept (labels only, no words), decides nothing
   s.windows = [];
   return moments;
 }
