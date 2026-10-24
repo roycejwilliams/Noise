@@ -10,9 +10,11 @@
 //   3. No answer at all (no text from them after the ask): treated as not there, and the same note goes the next morning in
 //      their own time, but ONLY when the door was tracked that night (at least one Luma check-in recorded for the event). An
 //      untracked door and no answer gets nothing. Any other reply from them, with no evidence and no "no", is unclear: nothing.
-//   4. The note (proactive type noshow_note, harness/proactiveRegistry.ts): what the night was without any names (the event's
-//      name, and one line from its own page), then one offer: a double opt-in intro to one person from that night who fits what
-//      they're working on (a strong ranked fit who came and whose ask they agreed may be shared, through the network intro path:
+//   4. The note (proactive type noshow_note, harness/proactiveRegistry.ts), from the approved fixed lines only, no model draft
+//      (review of #272): what the night was without any names (the event's name, and one sentence verbatim from its own Luma
+//      description when that sentence is safe), then one offer: a double opt-in intro to one person from that night who fits what
+//      they're working on (a strong ranked fit who came, whose ask they agreed may be shared, AND who has already said yes to an
+//      intro with this member, since the reveal tells this member they came; through the network intro path:
 //      the note asks "want me to tell you who?", a yes reveals the name and asks about the intro, both yes sends the email), else
 //      the next Noise table if one is on the calendar. It never names or describes anyone who came, and never says who or how
 //      many came. A hard week (harness/emotion.ts needsCare) changes the tone, never whether it goes or what it offers: gentler
@@ -25,7 +27,7 @@
 import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
-import { checkDraft, draftProactive, enqueueCandidate, nameTokens, nextLocalHour, RULES, sendExempt, type Candidate, type DraftResult, type OutputRules, type Person } from "../harness/proactive.js";
+import { checkDraft, enqueueCandidate, nameTokens, nextLocalHour, RULES, sendExempt, type Candidate, type DraftResult, type OutputRules, type Person } from "../harness/proactive.js";
 import { effectiveEnd, roomPhase } from "../harness/introConsent.js";
 import { cameTonight, lumaCheckedIn, type CheckedIn } from "./eventUnmatchedFollowUp.js";
 import { getEventGuestList, type LumaGuest } from "./luma.js";
@@ -39,7 +41,7 @@ export const NOSHOW_NOTE_EXPIRY_HOURS = 48;
 // The same bar as an in-room match nudge and a network intro.
 export const NOSHOW_STRONG_SCORE = 60;
 
-// The ask's line, the note's brief and its fixed fallback lines are member-facing copy, approved by Royce 2026-10-23 (the hard-week
+// The ask's line and the note's fixed lines are member-facing copy, approved by Royce 2026-10-23 (the hard-week
 // line dropped: the gentleness is in the rest of the note, never a word saying Cue knows they're struggling). Set back to false,
 // nothing is asked, queued, drafted or sent, and nothing is marked done. A code constant, no env switch (the CLOSE_APPROVED pattern).
 export const NOSHOW_COPY_APPROVED: boolean = true;
@@ -78,44 +80,31 @@ export function nextTableDate(startAt: string, timezone: string | null): string 
   return DateTime.fromISO(startAt, { zone: zoneOf(timezone) }).toFormat("cccc, LLLL d");
 }
 
-// The fixed note: what goes when the drafted one can't (it failed a check, or the draft came back empty).
-export function noShowFallback(eventName: string, offer: NoShowOffer, soft: boolean): string {
+// The note, from the approved fixed lines only (Royce, 2026-10-23), never a model draft (review of #272: a draft check can't catch
+// every way a model describes who came, "Twelve of us filled the table", "The room was packed"). The sorry line, then the one line
+// on what the night was when the event's own Luma description gives a safe one verbatim (aboutLine), then the offer.
+export function noShowNote(eventName: string, offer: NoShowOffer, soft: boolean, about: string | null = null): string {
   // One sorry line whatever the week: a hard week is never named (Royce, 2026-10-23).
   const lines = [`Sorry you couldn't make it to ${eventName}.`];
+  if (about) lines.push(about);
   if (offer.kind === "intro") lines.push(soft ? "There was someone there I think you'd get a lot from knowing, whenever you feel up to it. Want me to tell you who?" : "There was someone there I think you'd get a lot from knowing. Want me to tell you who?");
   if (offer.kind === "next_table") lines.push(`The next table is ${offer.name} on ${nextTableDate(offer.startAt, offer.timezone)}, if you'd like to join.`);
   return lines.join(" ");
 }
 
-// The brief Cue drafts the note from, in its own words.
-export function noShowTask(eventName: string, offer: NoShowOffer, soft: boolean, hasAbout: boolean): string {
-  const offerLine =
-    offer.kind === "intro"
-      ? " Then offer to tell them about one person from that night you think they'd get a lot from knowing, as one yes/no question. Never who, never what they do, nothing that could point to them."
-      : offer.kind === "next_table"
-        ? " Then mention the next table (next_table and next_table_date only), with no question and no pressure."
-        : " Ask nothing.";
-  return `They registered for ${eventName} and didn't make it. Write a short, warm note: sorry they couldn't make it, then ${hasAbout ? "one line on what the night was, only from what_the_night_was" : "nothing about the night beyond its name"}.${offerLine} Never name, describe or hint at anyone who was there, never say who or how many came, and never recap the night's conversations. No guilt and no "you missed out".${soft ? " They've been having a hard time: keep it gentle and short; nothing pushy, and never say or hint that you know how they've been." : ""} No sign-off.`;
-}
+// Who came, or what the room was like, said any other way than a name: a count, "everyone", "were there", "the room was packed".
+export const WHO_CAME = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|a few|several|a handful of|a couple of|lots of|many|so many|a dozen|dozens of|some of the)\s+(of us|of you|people|guests|members|founders|folks|friends|strangers)\b|\b(everyone|everybody)\b|\bwho (came|was there|were there|showed up|made it)\b|\b(were|was) there\b|\bpeople (came|showed up|who came)\b|\b(room|table) (was|were) (packed|full)\b|\bfilled the (room|table)\b|\bpacked\b/i;
 
-// Who came, said any other way than a name: a count, "everyone", "the people who came".
-export const WHO_CAME = /\b(\d+|a few|several|a handful of|lots of|many|so many|a dozen) (people|guests|members|founders|folks|of us)\b|\b(everyone|everybody)\b|\bwho (came|was there|showed up|made it)\b|\bpeople (came|showed up|who came)\b/i;
-
-// Pure: the note that goes. The draft when it passes every check (the harness's own, no names, nothing about who came, a question
-// only when there's an intro to offer, never the candidate's name); otherwise the fixed fallback.
-export function noShowNoteText(draft: string | null, o: { eventName: string; offer: NoShowOffer; soft: boolean; names: string[]; rules: OutputRules }): { text: string; drafted: boolean } {
-  const fallback = noShowFallback(o.eventName, o.offer, o.soft);
-  const t = (draft ?? "").trim();
-  if (!t) return { text: fallback, drafted: false };
-  const asks = /\?/.test(t);
-  const ok =
-    checkDraft(t, o.rules).every((c) => c.pass) &&
-    !namesAnyone(t, o.names.filter((n) => !o.eventName.toLowerCase().includes(n.toLowerCase()))) &&
-    !WHO_CAME.test(t) &&
-    (o.offer.kind === "intro" ? asks : !asks) &&
-    // The next table, when that's the offer, is named (never left out, so the link that follows makes sense).
-    (o.offer.kind !== "next_table" || nameTokens(o.offer.name).concat(o.offer.name.toLowerCase()).some((w) => t.toLowerCase().includes(w)));
-  return ok ? { text: t, drafted: true } : { text: fallback, drafted: false };
+// Pure: the one line on what the night was, verbatim from the event's own Luma description (its first sentence), or null. It is
+// dropped, never edited, when it could say anything about who came or names anyone on the night's list, asks something, carries a
+// link or a dash, or runs long. This is the seam for a future judge (a check that the line says nothing about the room or its
+// people); none is wired.
+export function aboutLine(description: string | null | undefined, names: string[]): string | null {
+  const text = (description ?? "").replace(/\s+/g, " ").trim();
+  const first = text.match(/^[^.!?]*[.!]/)?.[0]?.trim() ?? "";
+  if (first.length < 12 || first.length > 200) return null;
+  if (/[—–?]|https?:\/\/|www\./i.test(first) || WHO_CAME.test(first) || namesAnyone(first, names)) return null;
+  return first;
 }
 
 // Pure: when the ask goes. The room open (not its last 30 minutes, not over) and at least NOSHOW_ASK_AFTER_START_MINUTES in.
@@ -268,7 +257,8 @@ export async function runNoShowNotes(now = new Date(), opts: { approved?: boolea
           userId,
           type: "noshow_note",
           targetKey: `noshow_note:${eventId}`,
-          topicKey: `event:${eventId}`,
+          // Its own topic: the pre-arrival text's topic (event:<id>) would hold it as a re-ask of an unanswered text (review of #272).
+          topicKey: `noshow_note:${eventId}`,
           summary: `They didn't make it to "${timing.name}": a short note, what the night was (no names), and one offer`,
           payload: { eventId, name: timing.name, startAt: timing.start_at, timezone: timing.timezone ?? null, said: v },
           dueAt: due,
@@ -284,7 +274,7 @@ export async function runNoShowNotes(now = new Date(), opts: { approved?: boolea
   return queued;
 }
 
-// ---------------------------------------------------------------- 3. the note (drafted by the daily pick, harness/proactiveRegistry.ts)
+// ---------------------------------------------------------------- 3. the note (built when the daily pick picks it, harness/proactiveRegistry.ts)
 
 export type IntroPick = { askId: string | null; candidate: { edge_id: string; candidate_id: string; first_name: string; phone_number: string; email: string; match_score: number; match_reason: string; share_safe: true } };
 
@@ -325,14 +315,13 @@ async function nextTable(eventId: string, now: Date): Promise<NoShowOffer | null
   return next ? { kind: "next_table", name: next.name, startAt: next.start_at, timezone: next.timezone ?? null, url: next.url ?? null } : null;
 }
 
-// What the night was, from the event's own page only (its description): never the room, never who came.
+// The event's own Luma description (aboutLine takes one verbatim sentence from it): never the room, never who came.
 async function aboutTheNight(eventId: string): Promise<string | null> {
   const events = await (await import("./eventPresence.js")).presenceEvents().catch(() => []);
   const url = events.find((e) => e.api_id === eventId)?.url;
   if (!url) return null;
   const d = await (await import("./eventDetails.js")).fetchLumaEventDetails(url).catch(() => null);
-  const text = (d?.description ?? "").replace(/\s+/g, " ").trim();
-  return text ? text.slice(0, 300) : null;
+  return d?.description ?? null;
 }
 
 export type NoteDeps = {
@@ -340,8 +329,11 @@ export type NoteDeps = {
   struggling: (userId: string) => Promise<boolean>;
   about: (eventId: string) => Promise<string | null>;
   now: () => Date;
+  // The network reveal, drafted and gated before the offer goes (services/networkIntroNudge.ts prepareReveal).
+  reveal: (userId: string, firstName: string, candidate: IntroPick["candidate"]) => Promise<{ message: string; optedIn: boolean } | { why: string; retry: boolean }>;
 };
 const defaultDeps: NoteDeps = {
+  reveal: async (...a) => (await import("./networkIntroNudge.js")).prepareReveal(...a),
   struggling: async (userId) => !!(await (await import("../harness/emotion.js")).getEmotionalContext(userId).catch(() => null))?.needsCare,
   about: aboutTheNight,
   now: () => new Date(),
@@ -362,34 +354,24 @@ export async function draftNoShowNote(c: Candidate, person: Person, deps: NoteDe
   let offer: NoShowOffer = { kind: "none" };
   const pick = await strongConsentingFit(p.eventId, c.userId, lumaIn).catch(() => null);
   if (pick) {
-    const { prepareReveal } = await import("./networkIntroNudge.js");
-    const prepared = await prepareReveal(c.userId, person.firstName, pick.candidate).catch(() => null);
-    if (prepared && "message" in prepared) {
+    const prepared = await deps.reveal(c.userId, person.firstName, pick.candidate).catch(() => null);
+    // Only when that person has already said yes to being introduced to this member (review of #272): a yes to the note reveals
+    // their name, which tells this member they came, and agreeing to share their ask was never agreeing to share that.
+    if (prepared && "message" in prepared && prepared.optedIn === true) {
       offer = { kind: "intro" };
       c.payload.intro = { askId: pick.askId, candidate: pick.candidate, reveal: prepared.message, revealOptedIn: prepared.optedIn };
     }
   }
   if (offer.kind === "none") offer = (await nextTable(p.eventId, deps.now())) ?? offer;
   if (offer.kind !== "intro") delete c.payload.intro;
-  const about = await deps.about(p.eventId).catch(() => null);
   // Every name on the night's list, theirs aside: none may appear (the candidate's included).
   const members = await (await import("./eventPresence.js")).eventMembers(p.eventId).catch(() => [] as { user_id: string; first_name: string }[]);
   const names = [...members.filter((m) => m.user_id !== c.userId).map((m) => m.first_name), ...(pick ? [pick.candidate.first_name] : [])].filter(Boolean);
   const rules: OutputRules = { maxSentences: 4, maxChars: 420, mustIncludeAny: nameTokens(p.name).length ? nameTokens(p.name) : [p.name], mustNotInclude: pick ? [pick.candidate.first_name] : [] };
-  const draft = await draftProactive({
-    functionId: "eventNoShow.note",
-    firstName: person.firstName,
-    facts: {
-      event: p.name,
-      ...(about ? { what_the_night_was: about } : {}),
-      ...(offer.kind === "next_table" ? { next_table: offer.name, next_table_date: DateTime.fromISO(offer.startAt, { zone: zoneOf(offer.timezone) }).toISODate() ?? "", next_table_weekday: nextTableDate(offer.startAt, offer.timezone) } : {}),
-      ...(offer.kind === "intro" ? { the_offer: "one person from that night Cue thinks they'd get a lot from knowing (never who)" } : {}),
-    },
-    task: noShowTask(p.name, offer, soft, !!about),
-    maxSentences: 4,
-  }).catch(() => null);
-  const { text, drafted } = noShowNoteText(draft, { eventName: p.name, offer, soft, names, rules });
-  c.payload.drafted = drafted;
+  const about = aboutLine(await deps.about(p.eventId).catch(() => null), names.filter((n) => !p.name.toLowerCase().includes(n.toLowerCase())));
+  // The fixed lines pass the harness's checks on their own; a description line that tips the note over them is left out.
+  let text = noShowNote(p.name, offer, soft, about);
+  if (about && !checkDraft(text, rules).every((k) => k.pass)) text = noShowNote(p.name, offer, soft, null);
   const link = offer.kind === "next_table" && offer.url ? [offer.url] : [];
   return { messages: [text, ...link], text, rules };
 }

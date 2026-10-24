@@ -82,8 +82,6 @@ export const W = {
   closeDraft: null as null | ((name: string) => string),
   // Luma's guest list read fails (a 500) while true.
   lumaGuestListFail: false,
-  // The no-show note drafter (services/eventNoShow.ts): the prompt in, the draft out (null: a default warm note).
-  noshowDraft: null as null | ((prompt: string) => string),
   llmCalls: [] as { kind: string; prompt: string }[],
 };
 
@@ -104,7 +102,6 @@ export function reset(): void {
   W.consentViolation = () => false;
   W.closeDraft = null;
   W.lumaGuestListFail = false;
-  W.noshowDraft = null;
 }
 
 let seq = 0;
@@ -787,15 +784,6 @@ function fakeAnthropic(init: any): Response {
   if (u) {
     W.llmCalls.push({ kind: "unmatchedPairDraft", prompt });
     return anthropicText(`Might be worth a quick hello to ${u[1]} before you head out.`);
-  }
-  // The no-show note (services/eventNoShow.ts noShowTask).
-  if (prompt.includes("and didn't make it. Write a short, warm note")) {
-    W.llmCalls.push({ kind: "noshowDraft", prompt });
-    if (W.noshowDraft) return anthropicText(W.noshowDraft(prompt));
-    const ev = prompt.match(/They registered for (.+?) and didn't make it\./)?.[1] ?? "the night";
-    const intro = prompt.includes("offer to tell them about one person");
-    const next = prompt.match(/next_table: ([^\n]+)/)?.[1]?.trim();
-    return anthropicText(`Sorry you couldn't make it to ${ev}. It was a warm, easy night.${intro ? " There's someone from it I think you'd really get on with. Want me to tell you who?" : next ? ` The next table is ${next}, if you'd like to join.` : ""}`);
   }
   // The network reveal (services/networkIntroNudge.ts networkRevealPrompt), drafted before an intro offer goes out.
   const rv = prompt.match(/they said yes, they want to hear who\. Draft a short, warm text \(2-3 sentences, no em dashes, normal sentence capitalization\) naming ([^ ]+) and explaining in your own words why they're worth meeting: ([^\n]*?)\. Use only that reason/);

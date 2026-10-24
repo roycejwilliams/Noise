@@ -515,7 +515,7 @@ export const proactiveRegistry: ProactiveRegistry = {
   },
 
   // After a Noise event they didn't make it to (services/eventNoShow.ts): what the night was, never who came, and one offer. The
-  // words are Cue's from a brief, checked in code, with a fixed fallback; nothing goes until NOSHOW_COPY_APPROVED.
+  // words are Royce's approved fixed lines (no model draft); nothing goes while NOSHOW_COPY_APPROVED is false.
   noshow_note: {
     async draft(c, person) {
       return (await import("../services/eventNoShow.js")).draftNoShowNote(c, person);
