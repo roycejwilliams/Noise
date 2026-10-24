@@ -222,6 +222,9 @@ export async function rescoreIfAdditiveWaiting(eventId: string, personId: string
   const { rows } = await pool.query(`SELECT ranked_candidates FROM event_guest_rankings WHERE event_id = $1 AND person_id = $2`, [eventId, personId]);
   const ranked = (rows[0]?.ranked_candidates ?? []) as { additivePending?: boolean }[];
   if (!ranked.some((r) => r?.additivePending)) return false;
+  // A late answer never re-scores a room that's over (or not open yet).
+  const RM = await import("./roomMatching.js");
+  if (!(await RM.inRoomNow(eventId)).open) return false;
   const S = await import("./eventScoring.js");
   const r = await S.scoreGuestListForEvent(eventId);
   if (r.debounced && retry) {

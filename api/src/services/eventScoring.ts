@@ -506,7 +506,11 @@ async function maybeSendMatchNudge(
     }
 
     // A draft that throws frees the place too (O.draftingInSlot), or it would hold their slot until SLOT_CLAIM_MINUTES.
-    const message = await O.draftingInSlot(slot, () => draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote, event: introEvent, said: [...candidateShared, valueLine || top.shareReason!, ...recipientOwn] }, draftFn));
+    const message = await O.draftingInSlot(slot, () => draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote, event: introEvent, said: [...candidateShared, valueLine || top.shareReason!, ...recipientOwn] }, draftFn)).catch(async (err: any) => {
+      // The nudge's own claim goes too, so a later pass can retry (draftingInSlot already freed the place).
+      await releaseMatchNudgeClaim(eventId, person.user_id).catch(() => {});
+      throw err;
+    });
     if (!message) {
       await releaseMatchNudgeClaim(eventId, person.user_id); // free it up so a later pass can retry
       await freeSlot();

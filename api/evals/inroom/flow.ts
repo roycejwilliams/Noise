@@ -353,6 +353,13 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   const rev = pending?.kind === "additive" ? await H.handleAdditiveReply(pending.event_id, "Cue Night", "interested", { user_id: a.id, first_name: a.first_name, phone_number: a.phone_number!, email: a.email }, pending.candidate_ids ?? []) : { revealed: null };
   finding("additive: there is no code path that ever reveals the new people Jordan said yes to hearing about", rev.revealed?.first_name !== "Sarah Hao", rev);
   check("additive: after the reveal, Jordan's open question is Sarah Hao (their next yes binds to her)", (await H.findPendingMatchNudge(a.id))?.candidate_id === late.id);
+  // A late answer never re-scores a room that's over.
+  const rk = W.rankings.get(`evt-late-reg|${a.id}`)!;
+  rk.ranked_candidates = rk.ranked_candidates.map((r: any) => ({ ...r, additivePending: true }));
+  ev.start_at = new Date(Date.now() - 5 * 3_600_000).toISOString();
+  ev.end_at = new Date(Date.now() - 3_600_000).toISOString();
+  W.scoringDebounce.clear();
+  check("late: a heads-up still waiting when the room has closed: answering starts no pass", !(await OF.rescoreIfAdditiveWaiting("evt-late-reg", a.id)) && !W.scoringDebounce.has("evt-late-reg"));
 }
 {
   // Walk-in by text, with no presence check: anyone who texts the phrase during the event joins the pool.
