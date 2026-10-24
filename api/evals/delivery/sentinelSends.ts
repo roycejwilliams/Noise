@@ -114,7 +114,7 @@ check("a send with one placeholder among real messages is refused, naming which"
   check("4g. ... but not on Sendblue refusing the inline reply itself (that one goes again plain)", !SB.refusedBySendLayer(Object.assign(new Error("reply_to not supported on this line"), { status: 400 })) && !SB.refusedBySendLayer(null));
   const route = src("routes/sendblue.ts");
   const inlineCatch = route.slice(route.indexOf("await sendblue.messages.send({ ...body, reply_to:"), route.indexOf("inlineRefused.add(phone);"));
-  check("4h. sendCoReply's inline catch gives up on a send-layer refusal before it turns inline replies off or retries plain", /if \(refusedBySendLayer\(err\)\) \{\n\s+console\.error\(`sendCoReply failed for \$\{phone\}:`, err\?\.message \?\? err\);\n\s+return false;\n\s+\}/.test(inlineCatch));
+  check("4h. sendCoReply's inline catch gives up on a send-layer refusal before it turns inline replies off or retries plain", /if \(refusedBySendLayer\(err\)\) \{\n\s+console\.error\(`sendCoReply failed for \$\{phoneTail\(phone\)\}:`, withoutPhones\(err\?\.message \?\? err\)\);\n\s+return false;\n\s+\}/.test(inlineCatch));
   check("4d. the guard runs before the meta-commentary check and the number check", src("services/sendblue.ts").indexOf("const placeholder = sentinelRule(content") < src("services/sendblue.ts").indexOf("if (content && isLeakedMetaCommentary(content))"));
 }
 
