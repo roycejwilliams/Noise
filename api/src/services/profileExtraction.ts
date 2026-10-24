@@ -107,6 +107,7 @@ export type ExtractedIntent = {
 export { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { RAPPORT_TOPICS, RAPPORT_TOPIC_DESCRIPTIONS, type RapportTopic } from "./profileTopics.js";
 import { understandingGaps, type Gap } from "./understanding.js";
+import { withMember } from "./llmUsage.js";
 
 export type CoverageAssessment = {
   missing_topics: RapportTopic[];
@@ -1641,7 +1642,11 @@ export type CapturedEventMentionData = {
 // itself rather than a separate date-parsing step — genuinely ambiguous ones
 // come back null rather than a guessed date, since a wrong date would
 // silently break the date-window matching in eventMatching.ts.
-export async function extractPlannedEventMention(user_id: string, transcript: string): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function extractPlannedEventMention(...a: Parameters<typeof extractPlannedEventMentionInScope>): ReturnType<typeof extractPlannedEventMentionInScope> {
+  return withMember(a[0], () => extractPlannedEventMentionInScope(...a));
+}
+async function extractPlannedEventMentionInScope(user_id: string, transcript: string): Promise<void> {
   try {
     const today = new Date().toISOString().slice(0, 10);
     const { text: raw } = await propagateAttributes(
@@ -1649,7 +1654,7 @@ export async function extractPlannedEventMention(user_id: string, transcript: st
       () =>
         generateText({
           model: anthropic(NARROW_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention", metadata: { userId: user_id } },
+          experimental_telemetry: { isEnabled: true, functionId: "profileExtraction.extractPlannedEventMention" },
           prompt: `Read this transcript. Only include what the user (the "user:" lines) actually stated — never guess or infer, never treat something Cue said as if the user said it.
 
 Did the user mention a specific real-world event they're planning to attend (a conference, meetup, party, gathering — not a vague "I should get out more")? If so extract:

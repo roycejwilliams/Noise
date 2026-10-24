@@ -313,7 +313,7 @@ async function updateMemberThreadsInScope(userId: string): Promise<void> {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update", metadata: { userId } },
+      experimental_telemetry: { isEnabled: true, functionId: "memberThreads.update" },
       prompt: threadsPrompt(firstName, onFile, lines.slice(-80), await memberZone(userId)),
     });
     await applyThreadProposal(userId, parseModelJson<{ open?: ProposedOpen[]; close?: ProposedClose[] }>(text), onFile, lines);

@@ -49,10 +49,10 @@ export type UsageRow = {
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 // ---------------------------------------------------------------- who a call was for
-// A call site that has the member's id says so in its telemetry (`metadata: { userId }`); one that is deliberately about no
-// single member says `metadata: NO_MEMBER` (an id that may be missing passes `?? ""`, which means "the scope's"). Everything else (the many small readers that only see text) is
-// attributed by the scope it runs in: the inbound text, the call, a member's task or dispatch each run inside withMember, and
-// every model call started inside it (awaited or fire-and-forget) belongs to that member.
+// Who a call was for comes from the member scope it runs in: the inbound text, the call, a member's task, dispatch, sweep or
+// snapshot each run inside withMember, and every model call started inside it (awaited or fire-and-forget) belongs to that member.
+// Member ids are not added to telemetry metadata for this (review of #270: Langfuse gets no more member ids than it had); the few
+// sites that already passed `metadata: { userId }` still win. A call deliberately about no single member says `metadata: NO_MEMBER`.
 // A separate key, not a fake id, so Langfuse never shows a made-up "user" for these.
 export const NO_MEMBER = { noMember: true } as const;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

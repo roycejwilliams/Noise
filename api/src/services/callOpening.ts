@@ -32,7 +32,7 @@ import { stockLine } from "../harness/stockLines.js";
 import { cuesIn } from "./voiceCues.js";
 import { narratesInternalState, selfContradiction } from "./speakable.js";
 import { SENSITIVE, heldCallReason, leadsWithCoHomework, renderCallReason, type CallReason } from "./callReason.js";
-import { recordAnthropicUsage } from "./llmUsage.js";
+import { recordAnthropicUsage, scopeMember, withMember } from "./llmUsage.js";
 
 export const OPENING_WRITER = {
   minContext: 300,
@@ -178,7 +178,11 @@ export function openingSource(summary: string, direction: "inbound" | "outbound"
   return direction === "outbound" && reason ? `${base}\n\nWhy Cue is calling: ${renderCallReason(reason)}` : base;
 }
 
-export async function writeOpening(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number; userId?: string; reason?: CallReason | null }): Promise<{ line: string | null; why?: string }> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function writeOpening(...a: Parameters<typeof writeOpeningInScope>): ReturnType<typeof writeOpeningInScope> {
+  return withMember(a[0].userId ?? scopeMember(), () => writeOpeningInScope(...a));
+}
+async function writeOpeningInScope(o: { firstName: string; direction: "inbound" | "outbound"; summary: string; timeoutMs?: number; userId?: string; reason?: CallReason | null }): Promise<{ line: string | null; why?: string }> {
   if (o.summary.trim().length < OPENING_WRITER.minContext) return { line: null, why: "no context yet (a first call)" };
   // Written from, and checked against, the same trimmed context.
   const summary = openingSource(o.summary, o.direction, o.reason);
@@ -205,7 +209,7 @@ export async function writeOpening(o: { firstName: string; direction: "inbound" 
             // nor takes an effort option.
             ...(/^claude-sonnet-4/.test(model) ? {} : { providerOptions: { anthropic: { effort: "low" as const } } }),
             abortSignal: signal,
-            experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening", metadata: { userId: o.userId ?? "" } },
+            experimental_telemetry: { isEnabled: true, functionId: "call.writeOpening" },
             prompt,
           })
         ).text;

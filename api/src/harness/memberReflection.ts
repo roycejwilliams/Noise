@@ -147,7 +147,7 @@ async function reflectOnMemberInScope(userId: string): Promise<ReflectionMove | 
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "proactive.reflection", metadata: { userId } },
+      experimental_telemetry: { isEnabled: true, functionId: "proactive.reflection" },
       prompt: reflectionPrompt(rows[0]?.first_name || "them", facts),
     });
     const { move, checks } = gateReflection(parseModelJson<Partial<ReflectionMove>>(text), facts);

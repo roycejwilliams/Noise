@@ -111,7 +111,11 @@ function validateTwilioSignature(req: Request, path: string): boolean {
 // ElevenLabs is the "heavy worker" that turns it into a voice note (Hume is
 // only ever used for the live call itself), falling back to plain text if
 // voice generation fails so this never blocks the follow-up from sending.
-async function sendMissedCallFollowUp(
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+async function sendMissedCallFollowUp(...a: Parameters<typeof sendMissedCallFollowUpInScope>): ReturnType<typeof sendMissedCallFollowUpInScope> {
+  return withMember(a[0].id, () => sendMissedCallFollowUpInScope(...a));
+}
+async function sendMissedCallFollowUpInScope(
   user: { id: string; first_name: string; phone_number: string },
   CallSid: string,
   CallStatus: string,
@@ -124,7 +128,7 @@ async function sendMissedCallFollowUp(
       () =>
         generateText({
           model: anthropic(DRAFT_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp", metadata: { userId: user.id } },
+          experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
           prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No em dashes. 2 sentences max.`,
         }),
     );

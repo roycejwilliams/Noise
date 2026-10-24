@@ -442,7 +442,7 @@ async function maybeSendMatchNudge(
   const draftFn = async (feedback: string | null) => {
     const { text } = await generateText({
       model: anthropic(NAMING_DRAFT_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft", metadata: { userId: person.user_id } },
+      experimental_telemetry: { isEnabled: true, functionId: "eventScoring.matchNudge.draft" },
       prompt: matchNudgePrompt({
         recipientFirstName: person.first_name,
         otherFirstName: candidate.first_name,
@@ -599,7 +599,7 @@ async function maybeSendMatchNudge(
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft", metadata: { userId: person.user_id } },
+        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.anonymousHeadsUp.draft" },
         prompt: anonymousHeadsUpPrompt({ recipientFirstName: person.first_name, eventName, shareReason: valueLine || top.shareReason!, feedback, event: introEvent }),
       });
       return cleanCoMessage(text.trim());
@@ -714,7 +714,7 @@ async function maybeSendAdditiveOffer(
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(PLAIN_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft", metadata: { userId: person.user_id } },
+        experimental_telemetry: { isEnabled: true, functionId: "eventScoring.additiveOffer.draft" },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} about "${eventName}," an event they're already going to and already have a match at. ${eventPromptLine({ name: eventName, ...eventTiming }, eventName)} Since then, ${newCandidates.length} more ${newCandidates.length === 1 ? "person has" : "people have"} checked in who could also be worth ${person.first_name} meeting.
 
 Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sentence capitalization) letting them know you found ${newCandidates.length === 1 ? "someone else" : `${newCandidates.length} more people`} who just checked in that could be good for them, and ask if they want to hear who. Do NOT name anyone yet or mention their existing match. Don't say what anyone wants or said. This is just the offer to see more, nothing more. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
@@ -780,7 +780,12 @@ export function pairOrder(personId: string, candidateId: string): number {
   return h;
 }
 
-export async function scoreMatchedGroup(
+// A room pass is about no single member: it never runs in the scope of whoever triggered it (a texter's arrival, a guest
+// update). Each person's part opens its own scope inside (services/llmUsage.ts withMember).
+export async function scoreMatchedGroup(...a: Parameters<typeof scoreMatchedGroupInScope>): ReturnType<typeof scoreMatchedGroupInScope> {
+  return withMember(null, () => scoreMatchedGroupInScope(...a));
+}
+async function scoreMatchedGroupInScope(
   eventId: string,
   eventName: string,
   matched: ScorableGuest[],
@@ -831,7 +836,8 @@ export async function scoreMatchedGroup(
     const texts = [...new Set(matched.flatMap((g) => (Array.isArray(g.intent) ? (g.intent as any[]) : []).filter((e) => isOpenAsk(e)).map(askLine)))];
     if (texts.length) await withTraceUser(null, () => readPeopleAsks(texts)).catch(() => []);
   }
-  for (const person of matched) {
+  // Each person's pass is theirs in llm_usage (their frame, solicitation, nudges); the room-level work around it belongs to no one.
+  for (const person of matched) await withMember(person.user_id, async () => {
     const others = matched.filter((m) => m.user_id !== person.user_id);
     // What they said they're looking for or can offer decides who they're scored against; asks write the specific reason (a
     // candidate's own ask is the share reason). Someone with only an OFFERING ("climate hardware founders to back at seed") is
@@ -847,7 +853,7 @@ export async function scoreMatchedGroup(
 
     if (!frame) {
       if (await wasRecentlySolicited(eventId, person.user_id)) {
-        continue; // already asked within the cooldown window — wait for a reply or the next window
+        return; // already asked within the cooldown window — wait for a reply or the next window
       }
       const { sent: solicitationSent } = await withTraceUser(person.user_id, () =>
         runEventAskSolicitationAgent(
@@ -868,7 +874,7 @@ export async function scoreMatchedGroup(
         await markSolicited(eventId, person.user_id);
         solicitedCount++;
       }
-      continue;
+      return;
     }
 
     const askerContextParts = [
@@ -885,8 +891,7 @@ export async function scoreMatchedGroup(
     // A scorer failure is not "nobody fits" (lifted from #216's review): their last ranking stays as it was (it is the basis for the
     // additive offer, so an empty one stored here made everyone look newly arrived next pass), nothing is decided or sent for them
     // this pass, and the next room pass (an arrival, a Luma update, the start-time retry) scores them again.
-    // Its cost is theirs too (llm_usage, services/llmUsage.ts withMember).
-    const scored = await withTraceUser(person.user_id, () => withMember(person.user_id, () =>
+    const scored = await withTraceUser(person.user_id, () =>
       scoreAgainstRoomFrame(
         frame,
         others,
@@ -895,12 +900,12 @@ export async function scoreMatchedGroup(
         hiddenAsks,
         { askerFirstName: person.first_name, failLoudly: true },
       ),
-    )).catch((err: any) => {
+    ).catch((err: any) => {
       if (err?.name !== "ScoringFailed") throw err;
       recordDecision({ layer: 6, decision: "match.score", userId: person.user_id, outcome: "skip", action: "eventScoring.score", proposal: { eventId }, checks: [{ name: "scorer_answered", pass: false, reason: "the scorer failed; ranking kept, scored again next pass" }] }).catch(() => {});
       return null;
     });
-    if (!scored) continue;
+    if (!scored) return;
     const ranked: RankedCandidate[] = scored
       .map((s) => {
         const e = edges.get(s.candidate.user_id);
@@ -961,7 +966,7 @@ export async function scoreMatchedGroup(
         }
       }
     }
-  }
+  });
 
   return { scoredCount, solicitedCount, matchedCount: matched.length };
 }
@@ -999,7 +1004,12 @@ async function resolveEventName(
 // webhook. It's now also called from guest.registered/guest.updated (see
 // routes/luma.ts) so someone solicited for an ask actually gets picked back
 // up once they reply, instead of being solicited once and never re-scored.
-export async function scoreGuestListForEvent(
+// A room pass is about no single member: it never runs in the scope of whoever triggered it (a texter's arrival, a guest
+// update). Each person's part opens its own scope inside (services/llmUsage.ts withMember).
+export async function scoreGuestListForEvent(...a: Parameters<typeof scoreGuestListForEventInScope>): ReturnType<typeof scoreGuestListForEventInScope> {
+  return withMember(null, () => scoreGuestListForEventInScope(...a));
+}
+async function scoreGuestListForEventInScope(
   eventId: string,
   eventName?: string,
   opts: { dryRun?: boolean } = {},

@@ -243,7 +243,7 @@ export async function findOfficialPage(name: string, timeout: number, place?: { 
   try {
     const { text: raw } = await generateText({
       model: anthropic(WEB_SEARCH_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.findOfficialPage", metadata: { userId: userId ?? "" } },
+      experimental_telemetry: { isEnabled: true, functionId: "webOpportunitySearch.findOfficialPage" },
       tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 1 }) },
       stopWhen: stepCountIs(2),
       timeout,

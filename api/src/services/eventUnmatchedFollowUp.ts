@@ -12,6 +12,7 @@ import { getEventGuestList, type LumaGuest } from "./luma.js";
 import { matchablePhone } from "../utils/phone.js";
 import type { ScorableGuest } from "./eventScoring.js";
 import { withTraceUser } from "./llmTraceText.js";
+import { withMember } from "./llmUsage.js";
 
 // The end-of-night close (Royce, 2026-10-14). "Everyone gets the same end-of-night close, and it says nothing about matching. A real
 // host finds the person before they leave and says 'glad you came' - they don't add 'sorry nobody was right for you.' Same warmth for
@@ -115,7 +116,11 @@ export function lumaCheckedIn(guests: LumaGuest[] | undefined): CheckedIn {
 }
 
 // "held" (paused, matching stopped, or a dry run) and "failed" are tried again by a later pass while the room is open.
-async function sendClose(eventId: string, eventName: string, person: ScorableGuest, opts: { dryRun?: boolean }): Promise<"sent" | "held" | "failed"> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+async function sendClose(...a: Parameters<typeof sendCloseInScope>): ReturnType<typeof sendCloseInScope> {
+  return withMember(a[2].user_id, () => sendCloseInScope(...a));
+}
+async function sendCloseInScope(eventId: string, eventName: string, person: ScorableGuest, opts: { dryRun?: boolean }): Promise<"sent" | "held" | "failed"> {
   if (opts.dryRun) {
     console.log(`[eventUnmatchedFollowUp dryRun] would send the end-of-night close to ${person.user_id} at ${eventId}`);
     return "held";
@@ -140,7 +145,7 @@ async function sendClose(eventId: string, eventName: string, person: ScorableGue
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(MODELS.haiku),
-        experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.close.draft", metadata: { userId: person.user_id } },
+        experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.close.draft" },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} near the end of "${eventName}." ${eventPromptLine(introEvent, eventName)} Every guest gets this same close tonight.
 
 Write the goodbye a good host gives at the door: one short, warm line (no em dashes, normal sentence capitalization), glad they came. Say nothing about matches, introductions, who they met or how the night went for them, and ask nothing. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,

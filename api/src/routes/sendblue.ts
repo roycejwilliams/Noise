@@ -983,7 +983,7 @@ export function sendblueRouter(io: Server): Router {
           try {
             const { text: rawExtraction } = await generateText({
               model: anthropic(INTAKE_EXTRACT_MODEL),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity", metadata: { userId: user.id } },
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
               prompt: buildIntakeExtractionPrompt(intakeState, hasText ? content : null),
             });
             extracted = parseIntakeProposal(rawExtraction);
@@ -2325,7 +2325,7 @@ export function sendblueRouter(io: Server): Router {
             const nowUtc = DateTime.now().toUTC();
             const { text: rawSchedule } = await generateText({
               model: anthropic(MODELS.haiku),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.scheduleCallExtract", metadata: { userId: user.id } },
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.scheduleCallExtract" },
               prompt: `A user is texting Cue to schedule a call for later. The date, time, and timezone can be spread across several messages (e.g. they gave a time earlier and are only now confirming the date/timezone Cue asked for) — read the whole conversation, not just the latest message, to piece it together.
 
 Recent conversation, in order:

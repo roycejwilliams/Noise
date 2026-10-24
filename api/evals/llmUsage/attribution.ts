@@ -161,8 +161,27 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   for (const [f, re] of scoped) check(`${f}: its model calls run in the member's scope`, re.test(src(f)));
   const sb = src("routes/sendblue.ts");
   check("routes/sendblue.ts: the inbound text opens a scope and names the member once looked up", /const run = \(\) => withMember\(null, runTurn\);\n\s+const runTurn = async \(\) => \{/.test(sb) && /let user = await findOrCreateUserByPhone\(number\);\n\s+setScopeMember\(user\.id\);/.test(sb));
-  // The four the report named, now marked at the call itself.
-  check("turnLearning, followUp, personSnapshot and matching are attributed", /functionId: "turnLearning\.learn", metadata: \{ userId: input\.userId \}/.test(src("services/turnLearning.ts")) && /functionId: "personSnapshot\.check", metadata: \{ userId \}/.test(src("harness/personSnapshot.ts")) && /withMember\(person\.user_id, \(\) =>\s*scoreAgainstRoomFrame/.test(src("services/eventScoring.ts")));
+  // Scopes opened where none existed (no member id is added to telemetry metadata for this: review of #270).
+  const opened: [string, string, string][] = [
+    ["services/askLifecycle.ts", "readIntents", "a[0]"],
+    ["services/callOpening.ts", "writeOpening", "a[0].userId ?? scopeMember()"],
+    ["services/profileExtraction.ts", "extractPlannedEventMention", "a[0]"],
+    ["services/callContext.ts", "summarizeCallForTextContext", "a[0]"],
+    ["services/eventUnmatchedFollowUp.ts", "sendSoloAcknowledgment", "a[2].user_id"],
+    ["services/namedEventLookup.ts", "lookupNamedEvent", "a[3].userId ?? scopeMember()"],
+    ["routes/co.ts", "sendMissedCallFollowUp", "a[0].id"],
+    ["services/eventScoring.ts", "scoreMatchedGroup", "null"],
+    ["services/eventScoring.ts", "scoreGuestListForEvent", "null"],
+  ];
+  for (const [f, fn, id] of opened) check(`${f}: ${fn} runs in its scope (${id})`, src(f).includes(`async function ${fn}(...a: Parameters<typeof ${fn}InScope>): ReturnType<typeof ${fn}InScope> {\n  return withMember(${id}, () => ${fn}InScope(...a));`));
+  check("services/eventScoring.ts: each person's part of a room pass runs in their own scope", /for \(const person of matched\) await withMember\(person\.user_id, async \(\) => \{/.test(src("services/eventScoring.ts")));
+  check("services/taskTurn.ts: each due task runs in its own member's scope", /for \(const t of await claim\(\)\) await withMember\(t\.userId, \(\) => runOne\(t\)\);/.test(src("services/taskTurn.ts")));
+  // Langfuse gets no new member ids: the only telemetry metadata ids are the five that were there before.
+  {
+    const { execSync } = await import("node:child_process");
+    const hits = execSync(`grep -rn "metadata: { userId" src || true`, { cwd: new URL("../..", import.meta.url).pathname, encoding: "utf8" }).trim().split("\n").filter((h) => h.includes("experimental_telemetry"));
+    check(`no member ids added to telemetry metadata (${hits.length} sites, the 5 pre-existing)`, hits.length === 5 && hits.every((h) => /sweepFind|sweepSelect|taskWeb|profileExtraction/.test(h)));
+  }
   // Member-less calls say so in a comment beside NO_MEMBER.
   for (const f of ["harness/devReview.ts", "services/partnerReadout.ts", "services/roomMatching.ts", "services/entryKind.ts", "scripts/notifyTesters.ts"]) {
     check(`${f}: its member-less call is marked NO_MEMBER with a reason`, /\/\/ Not about one member: [^\n]+\n[^\n]*metadata: NO_MEMBER/.test(src(f)));
@@ -170,6 +189,40 @@ check("setScopeMember outside a scope does nothing", scopeMember() === null);
   const m = src("db/migrations.ts");
   check("migration: nullable user_id added idempotently", /ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS user_id UUID`/.test(m));
   check("the writer inserts user_id", /cost_usd, user_id\) VALUES/.test(src("services/llmUsage.ts")));
+}
+
+// ---------------------------------------------------------------- wrong-member cases from review
+const TEXTER = "99999999-9999-4999-8999-999999999999";
+{
+  // The wake after a reply runs the due list inside the texter's scope; each task must still be its own member's.
+  const { runDueTasks } = await import("../../src/services/taskTurn.js");
+  const seen: [string, string | null][] = [];
+  await withMember(TEXTER, () =>
+    runDueTasks({
+      claim: async () => [{ id: 1, userId: A } as any, { id: 2, userId: B } as any],
+      runOne: async (t) => {
+        await Promise.resolve();
+        seen.push([t.userId, scopeMember()]);
+      },
+    }),
+  );
+  check("two members' due tasks run under one texter's scope: each runs as its own member", seen.length === 2 && seen.every(([owner, scope]) => owner === scope));
+}
+{
+  // A room pass started from a texter's turn (an arrival): room-level reads belong to no one, each person's to them, none to the texter.
+  const { trace } = await import("@opentelemetry/api");
+  trace.setGlobalTracerProvider(new BasicTracerProvider({ spanProcessors: [new LlmUsageSpanProcessor()] }));
+  const S = await import("../../src/services/eventScoring.js");
+  const guest = (id: string, n: string, ask: string) => ({ user_id: id, first_name: n, phone_number: "+14155550000", email: "", intent: [{ type: "seeking", kind: "ask", text: ask, status: "active", shareable: true, embedding: [0.1, 0.2], created_at: new Date().toISOString() }] }) as any;
+  rows.length = 0;
+  const [l, e] = [console.log, console.error];
+  console.log = () => {};
+  console.error = () => {};
+  await withMember(TEXTER, () => S.scoreMatchedGroup("evt-scope", "Night", [guest(A, "Ann", "a technical cofounder for climate hardware"), guest(B, "Ben", "seed investors in climate")], null, { dryRun: true } as any)).catch(() => {});
+  [console.log, console.error] = [l, e];
+  check("room pass in a texter's scope: no row lands on the texter", rows.length > 0 && rows.every((r) => r.userId !== TEXTER));
+  check("room pass: the room-level ask read is no one's", rows.some((r) => r.functionId === "peopleAsks.read" && r.userId === null));
+  check("room pass: a person's frame scoring is theirs", rows.some((r) => r.functionId === "matching.scoreAgainstRoomFrame" && r.userId === A));
 }
 
 // ---------------------------------------------------------------- the report

@@ -16,6 +16,7 @@ import type { SentItem } from "./turnContext.js";
 import type { Exchange, Fact, KnowledgeDeps, KnowledgeSection, MemberKnowledge, MemberRules } from "./memberKnowledge.js";
 import { plainCorrected } from "./memberKnowledge.js";
 import { DateTime } from "luxon";
+import { withMember } from "./llmUsage.js";
 
 // A 1-2 sentence call summary: narrow work, Haiku.
 const SUMMARY_MODEL = MODELS.haiku;
@@ -908,11 +909,15 @@ export function fillMemberName(text: string, memberFirstName: string | null): st
   return neutralMemberPronouns(filled, memberFirstName);
 }
 
-export async function summarizeCallForTextContext(userId: string, transcript: string): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function summarizeCallForTextContext(...a: Parameters<typeof summarizeCallForTextContextInScope>): ReturnType<typeof summarizeCallForTextContextInScope> {
+  return withMember(a[0], () => summarizeCallForTextContextInScope(...a));
+}
+async function summarizeCallForTextContextInScope(userId: string, transcript: string): Promise<void> {
   try {
     const { text: raw } = await generateText({
       model: anthropic(SUMMARY_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText", metadata: { userId } },
+      experimental_telemetry: { isEnabled: true, functionId: "callContext.summarizeCallForText" },
       prompt: callSummaryPrompt(transcript),
     });
     // The prompt already says "they"; the model still wrote "he" on all

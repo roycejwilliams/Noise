@@ -228,7 +228,7 @@ async function checkSnapshot(userId: string, snapshot: PersonSnapshot, recent: {
     const { text } = await generateText({
       model: anthropic(MODELS.sonnet),
       providerOptions: { anthropic: { effort: "low" } },
-      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check", metadata: { userId } },
+      experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.check" },
       prompt: snapshotCheckPrompt(snapshot, recent, await memberZone(userId)),
     });
     return (parseModelJson<{ problems?: SnapshotProblem[] }>(text).problems ?? []).filter((p) => p && p.kind);
@@ -325,7 +325,7 @@ async function refreshPersonSnapshotInScope(userId: string, opts: { force?: bool
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
-        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild", metadata: { userId } },
+        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuild" },
         prompt: snapshotPrompt(input) + (feedback ? `\n\nYour last picture had these problems; fix them:\n${feedback}` : ""),
       });
       return parseSnapshot(text);
@@ -337,7 +337,7 @@ async function refreshPersonSnapshotInScope(userId: string, opts: { force?: bool
       const { text } = await generateText({
         model: anthropic(MODELS.sonnet),
         providerOptions: { anthropic: { effort: "low" } },
-        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads", metadata: { userId } },
+        experimental_telemetry: { isEnabled: true, functionId: "personSnapshot.rebuildWithThreads" },
         prompt: snapshotAndThreadsPrompt(snapshotPrompt(input), threads.threadsPrompt(input.firstName, onFile, lines.slice(-80), input.zone ?? null)),
       });
       let both: any = null;

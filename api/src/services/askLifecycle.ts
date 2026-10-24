@@ -29,6 +29,7 @@ import { stateOf, type LoopState } from "./loopLifecycle.js";
 import { closeAsk } from "./askKind.js";
 import { localDay, localStamp, memberZone } from "./memberTime.js";
 import { notToTeammate } from "./teamLines.js";
+import { withMember } from "./llmUsage.js";
 
 export type AskRow = {
   id: string;
@@ -253,7 +254,11 @@ export function memberSideOf(transcript: string): string[] {
 // Each ask as a question or a lookout, read once (kept on the row, logged as ask.intent with why). The member's own words are the
 // texts they sent in the minutes up to the ask (Co's ask_text is its summary, which loses "keep an eye out"). A read that fails
 // leaves the ask unread (null), which closes only at their word, and it's read again next time.
-async function readIntents(userId: string, asks: AskRow[]): Promise<Map<string, AskIntent | null>> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+async function readIntents(...a: Parameters<typeof readIntentsInScope>): ReturnType<typeof readIntentsInScope> {
+  return withMember(a[0], () => readIntentsInScope(...a));
+}
+async function readIntentsInScope(userId: string, asks: AskRow[]): Promise<Map<string, AskIntent | null>> {
   const out = new Map<string, AskIntent | null>();
   const todo: AskRow[] = [];
   for (const a of asks) {
@@ -284,7 +289,7 @@ async function readIntents(userId: string, asks: AskRow[]): Promise<Map<string, 
   const toRead = numbered.filter((y) => y.words.length);
   if (!toRead.length) return out;
   try {
-    const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 800, experimental_telemetry: { isEnabled: true, functionId: "ask.intent", recordInputs: false, recordOutputs: false, metadata: { userId } }, prompt: intentPrompt(toRead.map((x) => ({ n: x.n, ask: x.row.ask_text, words: x.words }))) });
+    const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 800, experimental_telemetry: { isEnabled: true, functionId: "ask.intent", recordInputs: false, recordOutputs: false }, prompt: intentPrompt(toRead.map((x) => ({ n: x.n, ask: x.row.ask_text, words: x.words }))) });
     const raw = parseModelJson<{ asks?: { ask?: unknown; intent?: unknown; why?: unknown }[] }>(text).asks ?? [];
     for (const x of toRead) {
       const r = raw.find((y) => String(y.ask) === x.n);
