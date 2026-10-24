@@ -146,5 +146,38 @@ check("a send with one placeholder among real messages is refused, naming which"
   check("5e. the dispatch drops it when the send refused a placeholder (no re-draft next tick)", /if \(result\.placeholderOf\) await dropPlaceholder\(registry, userId, result\.placeholderOf\);/.test(src("harness/proactive.ts")));
 }
 
+// ================================================================ 6. a placeholder draft is the model's SKIP (review of #265)
+// generate() reads every placeholder with the same rule (sentinelRule), so "**SKIP**" or "N/A" is the registry's "model chose SKIP"
+// and gets its handling (with #261: one capped mood wait, never a cancel), not the send layer's placeholder drop.
+{
+  const { default: pool } = await import("../../src/db/db.js");
+  const { proactiveRegistry } = await import("../../src/harness/proactiveRegistry.js");
+  const real = (pool as any).query;
+  for (const draft of ["**SKIP**", "N/A", "SKIP: nothing specific"]) {
+    const writes: { sql: string; params: any[] }[] = [];
+    const cand = { id: "c-ph", user_id: "ph-u", type: "companion", target_key: "companion:ph", topic_key: "companion:ph", summary: "check-in", priority: 50, due_at: new Date(Date.now() - 60_000), expires_at: null, payload: {}, attempts: 0, created_at: new Date(Date.now() - 3_600_000) };
+    (pool as any).query = async (sql: string, params: any[] = []) => {
+      const q = String(sql).trim();
+      if (/\bINSERT INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE FROM\b/i.test(q)) { writes.push({ sql: q.slice(0, 120), params }); return { rows: [], rowCount: 1 }; }
+      if (/FROM users u LEFT JOIN co_profiles/i.test(q)) return { rows: [{ first_name: "Noor", phone_number: "+14155550199", sms_opted_out: false, city: "Honolulu" }] };
+      if (/FROM proactive_candidates WHERE user_id = \$1 AND status = 'pending'/i.test(q)) return { rows: [cand] };
+      return { rows: [], rowCount: 0 };
+    };
+    const sentBefore = W.sent.length;
+    const log = console.log, err = console.error;
+    console.log = () => {};
+    console.error = () => {};
+    P.setProactiveModelForTests((async () => draft) as any);
+    let threw: string | null = null;
+    try { await P.dispatchForUser(proactiveRegistry, "ph-u", { ignorePacing: true }); } catch (e: any) { threw = String(e?.message ?? e); }
+    P.setProactiveModelForTests(null);
+    console.log = log;
+    console.error = err;
+    (pool as any).query = real;
+    const said = JSON.stringify(writes.map((w) => w.params));
+    check(`6. a draft of ${JSON.stringify(draft)} is the model's SKIP: nothing sent, logged as "model chose SKIP", never as a placeholder`, !threw && W.sent.length === sentBefore && /model chose SKIP/.test(said) && !/sentinel|placeholder/i.test(said) && !writes.some((w) => /proactive_sends/.test(w.sql)), { threw, writes: writes.map((w) => `${w.sql} ${JSON.stringify(w.params).slice(0, 160)}`) });
+  }
+}
+
 console.log(`\nsentinel sends: ${results.total - results.failed}/${results.total} passed`);
 process.exit(results.failed ? 1 : 0);

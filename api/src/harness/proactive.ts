@@ -25,7 +25,7 @@
 // outside this harness.
 import { awayHoldReason, awayHoldsCandidate, type AwayState } from "../services/away.js";
 import { inventedFailure } from "../services/speakable.js";
-import { sentinelIn } from "../services/sentinelBody.js";
+import { sentinelIn, sentinelRule } from "../services/sentinelBody.js";
 import { proactivePaused, pausedTypes, heldTypes } from "../services/proactivePause.js";
 import { brandSafe } from "../services/brandGuard.js";
 import { feedbackFor, unbackedSpecifics } from "./proactiveSpecifics.js";
@@ -1103,7 +1103,9 @@ Return ONLY the message text, or exactly SKIP.`;
     const prompt = build(own);
     const raw = testModel ? await testModel(prompt) : (await generateText({ model: anthropic(opts.model ?? DRAFT_MODEL), experimental_telemetry: { isEnabled: true, functionId: opts.functionId }, prompt })).text;
     const trimmed = raw.trim().replace(/^["']|["']$/g, "").trim();
-    if (!trimmed || /^skip\b[.!]?$/i.test(trimmed)) return null;
+    // Any placeholder ("**SKIP**", "N/A", "none", "SKIP: no reason") is the model choosing SKIP: the registry's own skip handles it
+    // (services/sentinelBody.ts is the same rule; the send layer's refusal stays as the backstop).
+    if (!trimmed || sentinelRule(trimmed)) return null;
     return brandSafe(cleanCoMessage(trimmed));
   };
   const first = await generate(null);
