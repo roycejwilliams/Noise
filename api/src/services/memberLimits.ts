@@ -12,6 +12,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { MODELS } from "../models.js";
 import { availabilityConflict } from "./availability.js";
+import { recordAnthropicUsage } from "./llmUsage.js";
 
 export type Limits = { avoid: string[]; availability: string | null };
 
@@ -114,6 +115,7 @@ export const realJudgeDeps: JudgeDeps = {
     const t = setTimeout(() => ctl.abort(), 20000);
     try {
       const r: any = await new Anthropic().messages.create({ model: MODELS.haiku, max_tokens: 400, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal: ctl.signal });
+      recordAnthropicUsage("memberLimits.judge", r.model ?? MODELS.haiku, r.usage);
       return (r.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
     } finally {
       clearTimeout(t);

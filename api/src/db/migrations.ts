@@ -61,6 +61,10 @@ export async function runMigrations(): Promise<void> {
       )`,
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_time ON llm_usage (created_at DESC, function_id)`))
+    // Who each call was for (2026-10-23, cost per member): nullable, no foreign key, so a usage row never blocks removing a
+    // member and a row for a call about no single member stays null.
+    .then(() => pool.query(`ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS user_id UUID`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_llm_usage_user ON llm_usage (user_id, created_at DESC) WHERE user_id IS NOT NULL`))
     .catch((err: Error) => console.error("llm_usage table init failed:", err));
 
   // Each model request's prompt and answer, ours only (2026-10-18): Langfuse gets no text, so the trace id it shows is

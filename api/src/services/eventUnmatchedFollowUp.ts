@@ -140,7 +140,7 @@ async function sendClose(eventId: string, eventName: string, person: ScorableGue
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(MODELS.haiku),
-        experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.close.draft" },
+        experimental_telemetry: { isEnabled: true, functionId: "eventUnmatchedFollowUp.close.draft", metadata: { userId: person.user_id } },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${person.first_name} near the end of "${eventName}." ${eventPromptLine(introEvent, eventName)} Every guest gets this same close tonight.
 
 Write the goodbye a good host gives at the door: one short, warm line (no em dashes, normal sentence capitalization), glad they came. Say nothing about matches, introductions, who they met or how the night went for them, and ask nothing. Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,

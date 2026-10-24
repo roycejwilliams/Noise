@@ -274,7 +274,8 @@ async function maybeAskCandidateDirectly(
     async (feedback) => {
       const { text } = await generateText({
         model: anthropic(NAMING_DRAFT_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft" },
+        // The text goes to the candidate: theirs.
+        experimental_telemetry: { isEnabled: true, functionId: "eventGuestMatchHandoff.directAsk.draft", metadata: { userId: candidate.user_id } },
         prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} You're texting ${candidate.first_name} about "${eventName}." ${askerFirstName}, who's also going, said they'd like to be introduced. ${eventPromptLine(introEvent, eventName)} Draft a short, warm text (1-2 sentences, no em dashes) letting ${candidate.first_name} know and asking if they'd be open to it too. Low-pressure, genuinely a question, not an assumption. Don't share any contact details.${valueLine ? ` Why it could be worth it for ${candidate.first_name}, in your own words (say nothing else about ${askerFirstName}): ${valueLine}` : ""} Return ONLY the message text.${feedback ? `\n\n${feedback}` : ""}`,
       });
       return cleanCoMessage(text.trim());

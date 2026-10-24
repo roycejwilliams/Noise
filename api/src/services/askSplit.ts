@@ -25,6 +25,7 @@ import { parseModelJson } from "./modelJson.js";
 import { isCoTaskGoal } from "./goalEdges.js";
 import { isCoCommitment } from "./askKind.js";
 import { meaningWords } from "./profileExtraction.js";
+import { recordAnthropicUsage } from "./llmUsage.js";
 
 export type SplitKind = "work" | "find" | "mixed";
 export type Split = { work: string; find: string; findIsLookout: boolean };
@@ -78,6 +79,7 @@ const haikuReader = async (prompt: string): Promise<string> => {
   const t = setTimeout(() => ctl.abort(), SPLIT_LIMITS.timeoutMs);
   try {
     const out: any = await new Anthropic().messages.create({ model: MODELS.haiku, max_tokens: SPLIT_LIMITS.maxTokens, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal: ctl.signal });
+    recordAnthropicUsage("askSplit.read", out.model ?? MODELS.haiku, out.usage);
     return (out.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("");
   } finally {
     clearTimeout(t);

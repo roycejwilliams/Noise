@@ -8,7 +8,8 @@ import { recordDecision } from "../harness/core.js";
 import { exchangeText } from "../services/theirYes.js";
 import { verifyCallToken } from "../services/elevenLabsCalls.js";
 import { noteTraceUser } from "../services/llmTraceText.js";
-import { anthropicStream, runCallLlm, safetyCall, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
+import { anthropicStream, runCallLlm, safetyCall, type ARequest, type AnthropicEvent, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
+import { setScopeMember, withMember } from "../services/llmUsage.js";
 import { commitmentProblem, trackCallCommitment } from "../services/callCommitments.js";
 import type { CallToolset, MemberOnCall } from "../services/callTools.js";
 import { voiceReadLineFor } from "../services/mediaStreamBridge.js";
@@ -98,9 +99,15 @@ const lastUserLine = (b: OaiRequest): string => {
   return typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m!.content.map((p: any) => p?.text ?? "").join("") : "";
 };
 
-export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStream): Router {
+// The upstream gets the call's member so each turn's cost row names them (llm_usage "call.turn").
+export type CallUpstream = (req: ARequest, userId: string | null) => AsyncIterable<AnthropicEvent>;
+const realUpstream: CallUpstream = (req, userId) => anthropicStream(req, undefined, undefined, userId);
+
+export function createCallLlmRouter(upstream: CallUpstream = realUpstream): Router {
   const router = Router();
-  const handler = async (req: Request, res: Response) => {
+  // Every model call a turn makes (its tools, a task it starts) is the call's member's (services/llmUsage.ts withMember).
+  const handler = (req: Request, res: Response) => withMember(null, () => handleTurn(req, res));
+  const handleTurn = async (req: Request, res: Response) => {
     if (!process.env.CALL_LLM_PROXY_SECRET) return res.status(503).json({ error: "the call brain endpoint is not configured" });
     if (!proxyAuthorized(req.headers.authorization)) return res.status(401).json({ error: "unauthorized" });
     const body = req.body as OaiRequest;
@@ -108,6 +115,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     const extra = body.elevenlabs_extra_body ?? {};
     const userId = verifyCallToken(String(extra.user_id ?? ""), extra.call_token) ? String(extra.user_id) : null;
     noteTraceUser(userId); // this call turn's model calls, under them in our trace text (services/llmTraceText.ts)
+    setScopeMember(userId);
     const theirLine = lastUserLine(body);
     const coBefore = coLineBefore(body);
     const t0 = Date.now();
@@ -135,7 +143,7 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
     // it, or the model failed. Codes only.
     let slow = false, brainError = false;
     const deps: ProxyDeps = {
-      stream: upstream,
+      stream: (r) => upstream(r, userId),
       clean: process.env.CALL_LLM_CLEAN !== "off",
       voiceOnly,
       onSpoken: (s) => {

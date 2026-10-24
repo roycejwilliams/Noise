@@ -166,6 +166,7 @@ export type ExemptType = "event_change" | "call_reminder" | "missed_call" | "co_
 export { PROACTIVE_PURPOSE, typesWithPurpose, type ProactivePurpose } from "./proactivePurpose.js";
 import { PROACTIVE_PURPOSE as PROACTIVE_PURPOSE_MAP } from "./proactivePurpose.js";
 import { withTraceUser } from "../services/llmTraceText.js";
+import { withMember } from "../services/llmUsage.js";
 
 export type TypePolicy = {
   priority: number;
@@ -2318,7 +2319,11 @@ export async function sweepHold(userId: string, kind: SweepKind, now = new Date(
 }
 
 // dryRun drafts and composes what would go out, prints it, and stops before the ledger and the send.
-export async function dispatchForUser(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function dispatchForUser(...a: Parameters<typeof dispatchForUserInScope>): ReturnType<typeof dispatchForUserInScope> {
+  return withMember(a[1], () => dispatchForUserInScope(...a));
+}
+async function dispatchForUserInScope(registry: ProactiveRegistry, userId: string, opts: { ignorePacing?: boolean; dryRun?: boolean } = {}): Promise<void> {
   // A dry run's drafts and relevance reads re-read finds but write nothing (Phase B, services/sendCheck.ts sendCheckDryRun).
   if (opts.dryRun && !sendCheckDryRun.getStore()) return sendCheckDryRun.run(true, () => dispatchForUser(registry, userId, opts));
   const person = await loadPerson(userId);

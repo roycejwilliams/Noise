@@ -2,6 +2,7 @@ import pool from "../db/db.js";
 import { isOpenAsk } from "../harness/profileWrite.js";
 import { getActiveOfferingAsk, getActiveSeekingAsk, getOpenAsksOfType, scoreAgainstStatedAsk, scoreOfferingAgainstCandidates, type StatedIntent } from "./matching.js";
 import { withTraceUser } from "./llmTraceText.js";
+import { withMember } from "./llmUsage.js";
 
 // Co Loop Stage 3 — "identify relevance." Runs scoreAgainstStatedAsk
 // standalone against the whole network — no eligibility gating of any kind,
@@ -131,7 +132,11 @@ async function logRelevanceEdges(
 // The daily sweep covers a member's open asks, not just the newest one.
 const MAX_ASKS_PER_SWEEP = 5;
 
-export async function sweepAskAgainstNetwork(userId: string, opts: { all?: boolean } = {}): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function sweepAskAgainstNetwork(...a: Parameters<typeof sweepAskAgainstNetworkInScope>): ReturnType<typeof sweepAskAgainstNetworkInScope> {
+  return withMember(a[0], () => sweepAskAgainstNetworkInScope(...a));
+}
+async function sweepAskAgainstNetworkInScope(userId: string, opts: { all?: boolean } = {}): Promise<void> {
   const { rows } = await pool.query(
     `SELECT intent, goals, blockers, long_term_direction FROM co_profiles WHERE user_id = $1`,
     [userId],
@@ -175,7 +180,11 @@ async function sweepOneSeekingAsk(userId: string, ask: StatedIntent, profile: an
 // is logged from the OFFERER's side (person_id = offerer, candidate_id =
 // the person who'd likely want it), same as every other relevance_edges row
 // is logged from the ask-holder's side.
-export async function sweepOfferingAgainstNetwork(userId: string, opts: { all?: boolean } = {}): Promise<void> {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function sweepOfferingAgainstNetwork(...a: Parameters<typeof sweepOfferingAgainstNetworkInScope>): ReturnType<typeof sweepOfferingAgainstNetworkInScope> {
+  return withMember(a[0], () => sweepOfferingAgainstNetworkInScope(...a));
+}
+async function sweepOfferingAgainstNetworkInScope(userId: string, opts: { all?: boolean } = {}): Promise<void> {
   const { rows } = await pool.query(
     `SELECT intent, goals, blockers, long_term_direction FROM co_profiles WHERE user_id = $1`,
     [userId],

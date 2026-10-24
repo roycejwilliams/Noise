@@ -9,6 +9,7 @@
 // Cost: about $0.005 a search plus $0.001 a page of text (Exa's pricing, 2026-10); each search's reported cost is logged.
 import { recordDecision } from "../harness/core.js";
 import { skipsPaidSearch } from "./testMemberSpend.js";
+import { scopeMember } from "./llmUsage.js";
 
 export const EXA = {
   url: "https://api.exa.ai/search",
@@ -61,7 +62,7 @@ export async function exaSearch(
     out = { pages: [], cost: null, error: err?.name === "TimeoutError" || err?.name === "AbortError" ? "Exa timed out" : "Exa couldn't be reached" };
   }
   // Counts and cost only: the query is the member's want, and what was kept is logged by the caller's own record.
-  await recordDecision({ layer: 7, decision: "exa.search", userId: o.userId ?? null, outcome: out.error ? "skip" : "act", action: o.purpose, reason: out.error, proposal: { pages: out.pages.length, cost: out.cost } }).catch(() => {});
+  await recordDecision({ layer: 7, decision: "exa.search", userId: o.userId ?? scopeMember(), outcome: out.error ? "skip" : "act", action: o.purpose, reason: out.error, proposal: { pages: out.pages.length, cost: out.cost } }).catch(() => {});
   return out;
 }
 

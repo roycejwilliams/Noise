@@ -284,7 +284,7 @@ async function readIntents(userId: string, asks: AskRow[]): Promise<Map<string, 
   const toRead = numbered.filter((y) => y.words.length);
   if (!toRead.length) return out;
   try {
-    const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 800, experimental_telemetry: { isEnabled: true, functionId: "ask.intent", recordInputs: false, recordOutputs: false }, prompt: intentPrompt(toRead.map((x) => ({ n: x.n, ask: x.row.ask_text, words: x.words }))) });
+    const { text } = await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 800, experimental_telemetry: { isEnabled: true, functionId: "ask.intent", recordInputs: false, recordOutputs: false, metadata: { userId } }, prompt: intentPrompt(toRead.map((x) => ({ n: x.n, ask: x.row.ask_text, words: x.words }))) });
     const raw = parseModelJson<{ asks?: { ask?: unknown; intent?: unknown; why?: unknown }[] }>(text).asks ?? [];
     for (const x of toRead) {
       const r = raw.find((y) => String(y.ask) === x.n);

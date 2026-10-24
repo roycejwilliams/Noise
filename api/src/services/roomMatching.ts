@@ -117,6 +117,7 @@ import { effectiveEnd, roomPhase, type RoomPhase } from "../harness/introConsent
 import { isOpenAsk } from "../harness/profileWrite.js";
 import { proactivePaused } from "./proactivePause.js";
 import type { ScorableGuest } from "./eventScoring.js";
+import { NO_MEMBER } from "./llmUsage.js";
 
 export { roomPhase, type RoomPhase };
 
@@ -691,7 +692,8 @@ export async function valueGate(eventId: string, eventName: string, x: string, y
     try {
       const r = await generateText({
         model: anthropic(VALUE_MODEL),
-        experimental_telemetry: { isEnabled: true, functionId: "roomMatching.valueLine" },
+        // Not about one member: a pair's value line, read from both sides.
+        experimental_telemetry: { isEnabled: true, functionId: "roomMatching.valueLine", metadata: NO_MEMBER },
         prompt: sideLinePrompt(eventName, reader, { firstName: other.firstName, shared: other.shared, kinds: other.ownAsks.map((x) => x.type) }),
       });
       const j = parseSideJudgment(r.text);

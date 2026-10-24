@@ -13,6 +13,7 @@ import { stockSentence } from "../harness/stockLines.js";
 import { HELD_LINE, SAFE_LINE, SPOKEN_COMMON, knownSections, prepareSource, sourceCorpus, spokenProblem, type SpokenSources } from "./offerGuard.js";
 import { memberStateSignal } from "./memberState.js";
 import { judgeCallTurn, ruledOut, type CallTurnDecision } from "../brain/index.js";
+import { recordAnthropicUsage } from "./llmUsage.js";
 
 // Co's own tools on a call, built for the call's member by services/callTools.ts (kept there, so this file stays free of the
 // database and the tools' imports). One turn's bounds: at most CALL_TOOL_STEPS rounds of Co's tools, inside CALL_TOOL_BUDGET_MS from
@@ -650,7 +651,9 @@ async function runTool(co: CallToolset, id: string, name: string, input: unknown
 }
 
 // The real upstream: Anthropic's streaming Messages API.
-export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHROPIC_API_KEY, fetchImpl: typeof fetch = fetch): AsyncGenerator<AnthropicEvent> {
+// Each request's usage (message_start carries the input side, message_delta the running output count) is written to llm_usage as
+// "call.turn" when the stream ends, however it ends (2026-10-23: call turns were the one path with no cost row).
+export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHROPIC_API_KEY, fetchImpl: typeof fetch = fetch, userId: string | null = null): AsyncGenerator<AnthropicEvent> {
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
   const res = await fetchImpl("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -661,17 +664,38 @@ export async function* anthropicStream(req: ARequest, apiKey = process.env.ANTHR
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let i: number;
-    while ((i = buf.indexOf("\n\n")) >= 0) {
-      const raw = buf.slice(0, i);
-      buf = buf.slice(i + 2);
-      const data = raw.split("\n").find((l) => l.startsWith("data:"))?.slice(5).trim();
-      if (!data) continue;
-      try { yield JSON.parse(data) as AnthropicEvent; } catch { /* a partial or keep-alive line */ }
+  let usage: Record<string, any> | null = null;
+  let model = req.model;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const raw = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const data = raw.split("\n").find((l) => l.startsWith("data:"))?.slice(5).trim();
+        if (!data) continue;
+        let ev: AnthropicEvent;
+        try { ev = JSON.parse(data) as AnthropicEvent; } catch { continue; /* a partial or keep-alive line */ }
+        usage = usageFromEvent(ev, usage);
+        if ((ev as any).type === "message_start" && typeof (ev as any).message?.model === "string") model = (ev as any).message.model;
+        yield ev;
+      }
     }
+  } finally {
+    if (usage) recordAnthropicUsage("call.turn", model, usage, userId);
   }
+}
+
+// message_start holds the request's input counts (and output so far); each message_delta holds the running totals, so the last
+// one wins field by field.
+export function usageFromEvent(ev: AnthropicEvent, acc: Record<string, any> | null): Record<string, any> | null {
+  const e = ev as any;
+  const u = e?.type === "message_start" ? e.message?.usage : e?.type === "message_delta" ? e.usage : null;
+  if (!u || typeof u !== "object") return acc;
+  const next: Record<string, any> = { ...(acc ?? {}) };
+  for (const [k, v] of Object.entries(u)) if (v !== null && v !== undefined) next[k] = v;
+  return next;
 }

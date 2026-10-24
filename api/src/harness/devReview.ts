@@ -41,6 +41,7 @@ import { signalTarget } from "./emotion.js";
 import { withTraceUser } from "../services/llmTraceText.js";
 import { HIGH_REASONS, flaggedCalls, type FlaggedCall } from "../services/callHealth.js";
 import { stuckDeletes, type StuckDelete } from "../services/elevenLabsForget.js";
+import { NO_MEMBER } from "../services/llmUsage.js";
 
 export function reviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test") return false;
@@ -458,7 +459,8 @@ export async function modelFlags(data: ReviewData): Promise<ReviewFlag[]> {
       // tests) with no effort set, so it's medium now, like the learning reads.
       maxOutputTokens: 16_000,
       providerOptions: { anthropic: { effort: "medium" } },
-      experimental_telemetry: { isEnabled: true, functionId: "devReview.modelFlags" },
+      // Not about one member: the morning review reads across everyone.
+      experimental_telemetry: { isEnabled: true, functionId: "devReview.modelFlags", metadata: NO_MEMBER },
       prompt: modelReviewPrompt(data),
     });
     if (finishReason === "length") console.error(`devReview: model review ran out of room for ${data.userId}; its flags are missing today`);

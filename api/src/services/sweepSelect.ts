@@ -22,6 +22,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { MODELS } from "../models.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { parseModelJson } from "./modelJson.js";
+import { recordAnthropicUsage } from "./llmUsage.js";
 
 export const SELECT_MODEL = MODELS.sonnet;
 export const SELECT_LIMITS = { maxPool: 40, maxSends: 3, texts: 40, sent: 20 };
@@ -384,6 +385,7 @@ export const realClaimJudge: ClaimJudge = async (prompt) => {
   try {
     // Haiku with thinking off, through the SDK (the ai-sdk drops "thinking disabled", memberLimits.ts realJudgeDeps).
     const r: any = await new Anthropic().messages.create({ model: CLAIM_CHECK_MODEL, max_tokens: 800, thinking: { type: "disabled" }, messages: [{ role: "user", content: prompt }] } as any, { signal: ctl.signal });
+    recordAnthropicUsage("sweep.select.claimCheck", r.model ?? CLAIM_CHECK_MODEL, r.usage);
     return { text: (r.content ?? []).filter((x: any) => x.type === "text").map((x: any) => x.text).join(""), input: Number(r.usage?.input_tokens ?? 0), output: Number(r.usage?.output_tokens ?? 0) };
   } finally {
     clearTimeout(t);

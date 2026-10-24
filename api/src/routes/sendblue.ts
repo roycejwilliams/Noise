@@ -89,6 +89,7 @@ import { recordSuggestionOutcome, resultFromNamedOutcome } from "../services/out
 import { isShuttingDown, track } from "../services/shutdown.js";
 import { sendLimiter } from "../services/sendLimiter.js";
 import { refusedBySendLayer } from "../services/sendblue.js";
+import { setScopeMember, withMember } from "../services/llmUsage.js";
 
 // Serializes webhook processing per phone number. Without this, two
 // messages sent seconds apart from the same person can be handled
@@ -670,7 +671,10 @@ export function sendblueRouter(io: Server): Router {
         }
       }
 
-      const run = async () => {
+      // Every model call this text causes (the reply, its readers, learning, the snapshot, fire-and-forget work) is this member's
+      // in llm_usage: the scope opens with the turn and the member is named once the number is looked up (services/llmUsage.ts).
+      const run = () => withMember(null, runTurn);
+      const runTurn = async () => {
       try {
         const {
           number,
@@ -764,6 +768,7 @@ export function sendblueRouter(io: Server): Router {
         let user = await findOrCreateUserByPhone(number);
         // Every model call in this turn is filed under them in our trace text (services/llmTraceText.ts).
         noteTraceUser(user?.id);
+        setScopeMember(user.id);
 
         // STOP/START handling — checked before anything else (intake,
         // duplicate/debounce, the real reply) so it works regardless of
@@ -978,7 +983,7 @@ export function sendblueRouter(io: Server): Router {
           try {
             const { text: rawExtraction } = await generateText({
               model: anthropic(INTAKE_EXTRACT_MODEL),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity" },
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.intake.extractIdentity", metadata: { userId: user.id } },
               prompt: buildIntakeExtractionPrompt(intakeState, hasText ? content : null),
             });
             extracted = parseIntakeProposal(rawExtraction);
@@ -2320,7 +2325,7 @@ export function sendblueRouter(io: Server): Router {
             const nowUtc = DateTime.now().toUTC();
             const { text: rawSchedule } = await generateText({
               model: anthropic(MODELS.haiku),
-              experimental_telemetry: { isEnabled: true, functionId: "sendblue.scheduleCallExtract" },
+              experimental_telemetry: { isEnabled: true, functionId: "sendblue.scheduleCallExtract", metadata: { userId: user.id } },
               prompt: `A user is texting Cue to schedule a call for later. The date, time, and timezone can be spread across several messages (e.g. they gave a time earlier and are only now confirming the date/timezone Cue asked for) — read the whole conversation, not just the latest message, to piece it together.
 
 Recent conversation, in order:

@@ -53,6 +53,7 @@ import { forgetAfterCall, transcriptHash } from "../services/elevenLabsForget.js
 import { flagNotStored, recordCallHealth } from "../services/callHealth.js";
 import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
 import { OPENING_WRITER, recordOpening, takeOpening, writeOpening } from "../services/callOpening.js";
+import { withMember } from "../services/llmUsage.js";
 
 // One-line drafts (missed-call text, voicemail line): narrow work, Haiku.
 const DRAFT_MODEL = MODELS.haiku;
@@ -123,7 +124,7 @@ async function sendMissedCallFollowUp(
       () =>
         generateText({
           model: anthropic(DRAFT_MODEL),
-          experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp" },
+          experimental_telemetry: { isEnabled: true, functionId: "co.sendMissedCallFollowUp", metadata: { userId: user.id } },
           prompt: `${CO_VOICE}\n\n${CO_TEXT_CHANNEL} ${situationPrompt} Send a short iMessage letting ${user.first_name} know, and that they can reply here whenever they're ready or expect another call soon. Tone: calm, unhurried, like a private members club. No em dashes. 2 sentences max.`,
         }),
     );
@@ -726,7 +727,11 @@ type EndedCallData = {
   // read, or it was noisy.
   voice?: () => Promise<Omit<EmotionSignal, "at">[]>;
 };
-async function processEndedCall(o: {
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+async function processEndedCall(...a: Parameters<typeof processEndedCallInScope>): ReturnType<typeof processEndedCallInScope> {
+  return withMember(a[0].userId, () => processEndedCallInScope(...a));
+}
+async function processEndedCallInScope(o: {
   userId: string;
   callKey: string;
   twilioMetadata?: { call_sid?: string } | null;

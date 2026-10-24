@@ -13,6 +13,7 @@
 import { isOpenAsk } from "../harness/profileWrite.js";
 import pool from "../db/db.js";
 import { escapeHtml, quietEmail } from "./emailDesign.js";
+import { NO_MEMBER } from "./llmUsage.js";
 
 // minRoom: a readout for fewer members than this would let the host work out who is behind any number.
 // minOfferCoverage: "thin on" is a claim that nobody there offered something, so it needs Cue to know what most of the room can
@@ -149,7 +150,8 @@ export async function themeOfAsk(ask: string, side: Side = "seeks"): Promise<The
   const { MODELS } = await import("../models.js");
   const { text } = await generateText({
     model: anthropic(MODELS.haiku),
-    experimental_telemetry: { isEnabled: true, functionId: "agent.partnerReadout.theme", recordInputs: false, recordOutputs: false },
+    // Not about one member: a room-level theme for the host read.
+    experimental_telemetry: { isEnabled: true, functionId: "agent.partnerReadout.theme", recordInputs: false, recordOutputs: false, metadata: NO_MEMBER },
     prompt: `Label what this person ${side === "offers" ? "can offer others" : "is looking for"} with exactly one of: ${THEMES.join(" | ")}.\n\n"${ask.slice(0, 400)}"\n\nReturn ONLY the label.`,
   });
   const t = text.trim().replace(/^["']|["'.]+$/g, "");
