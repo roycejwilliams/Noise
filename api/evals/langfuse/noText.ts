@@ -45,7 +45,7 @@ sdk.start();
 
 // Member words that must never reach Langfuse.
 const SECRET = "MAPLE-ORCHID-7731";
-const SECRET_B = "QUINCE-HARBOR-4402"; // another member's private ask (matching)
+const SECRET_B = "QUINCE-HARBOR-4402"; // another member's private ask (room matching: the candidate's hidden part)
 const IMAGE = Buffer.from(`\x89PNG\r\n\x1a\n${"PHOTO-BYTES-".repeat(40)}${SECRET}`);
 const IMAGE_B64 = IMAGE.toString("base64").slice(0, 40);
 const USER = "00000000-0000-4000-8000-00000000c0de";
@@ -56,12 +56,16 @@ const finish = (unified: "stop" | "tool-calls") => ({ unified, raw: unified });
 // ---------------------------------------------------------------- real call sites (Anthropic, stubbed)
 const { captureIntent } = await import("../../src/services/profileExtraction.js");
 const { describeImage } = await import("../../src/services/imageRead.js");
-const { scoreAgainstStatedAsk } = await import("../../src/services/matching.js");
+const M = await import("../../src/services/matching.js");
 await captureIntent(USER, `user: I'm leaving my job in March and moving to Lisbon. ${SECRET}`);
 await describeImage(IMAGE, "image/png");
-await scoreAgainstStatedAsk({ type: "seeking", text: `someone who knows Lisbon rentals ${SECRET}` } as any, [
-  { user_id: "u-b", goals: [`open a bakery`], intent: [{ type: "seeking", text: `private: ${SECRET_B}`, status: "active" }] },
-]);
+// Room scoring is where another member's private ask reaches a prompt (stated-ask scoring leaves it out once #245 is in).
+await M.scoreAgainstRoomFrame({ asks: [{ type: "seeking", text: `someone who knows Lisbon rentals ${SECRET}`, status: "active" }], goal: null } as any, [
+  { user_id: "u-b", first_name: "Bea", goals: [`open a bakery`], intent: [{ type: "seeking", text: `private: ${SECRET_B}`, status: "active" }] },
+] as any);
+// With #245 the call carrying a hidden ask records no text at all (forget by default); before it, the private ask is on the
+// in-process span and the filter is what keeps it from Langfuse. Either way it is never sent.
+const hiddenFenced = typeof (M as any).hiddenTextsOf === "function";
 
 // ---------------------------------------------------------------- a tool loop, a stream, an error
 const toolSteps = [
@@ -127,7 +131,10 @@ check("spans were sent to the stub Langfuse at all", spans.length >= 8);
 // The words below really were on the spans in process, so "not sent" means filtered, not absent.
 const localText = local.map((s) => JSON.stringify(s.attributes) + JSON.stringify(s.events) + JSON.stringify(s.status)).join("\n");
 check("the in-process span still holds the member's words (the cost log reads it untouched)", localText.includes(SECRET));
-check("the in-process matching span holds the other member's private ask", localText.includes(SECRET_B));
+check(
+  hiddenFenced ? "the room scoring span with a hidden ask records no text, even in process (#245)" : "the in-process room scoring span holds the other member's private ask",
+  hiddenFenced ? !localText.includes(SECRET_B) && local.some((s) => s.attributes["ai.telemetry.functionId"] === "matching.scoreAgainstRoomFrame") : localText.includes(SECRET_B),
+);
 check("the in-process image span holds the photo", localText.includes(IMAGE_B64));
 check("the in-process tool span holds its args and result", local.some((s) => s.name === "ai.toolCall" && String(s.attributes["ai.toolCall.args"]).includes(SECRET) && String(s.attributes["ai.toolCall.result"]).includes(SECRET)));
 check("the in-process error span holds the message", local.some((s) => String(s.status?.message).includes(SECRET)));
@@ -157,7 +164,7 @@ for (const k of [
   check(`no ${k} attribute is sent`, !body.includes(`"key":"${k}"`));
 
 // ---------------------------------------------------------------- what Langfuse still gets
-for (const fn of ["profileExtraction.captureIntent", "sendblue.describeImage", "matching.scoreAgainstStatedAsk", "eval.toolLoop", "eval.stream", "eval.error"])
+for (const fn of ["profileExtraction.captureIntent", "sendblue.describeImage", "matching.scoreAgainstRoomFrame", "eval.toolLoop", "eval.stream", "eval.error"])
   check(`${fn}: still traced by name`, byFn(fn).length > 0);
 check("trace and span ids are sent", spans.every((s: any) => /^[0-9a-f]{32}$/.test(s.traceId) && /^[0-9a-f]{16}$/.test(s.spanId)));
 check("latency is sent (start and end times)", spans.every((s: any) => Number(s.endTimeUnixNano) >= Number(s.startTimeUnixNano) && Number(s.startTimeUnixNano) > 0));
