@@ -111,6 +111,7 @@
     "evals/tasks/rules.ts",
     "evals/tasks/web.ts",
     "evals/testmember/rules.ts",
+    "evals/testmember/searchSpend.ts",
     "evals/tasks/followups.ts",
     "evals/tasks/memberKnowledge.ts",
     "evals/presence/preArrival.ts",

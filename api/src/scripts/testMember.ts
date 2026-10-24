@@ -6,9 +6,10 @@
 //
 // Archived, never deleted (the reset-keeps-test-data rule). Co-test and local only.
 import pool from "../db/db.js";
-import { testNumbersEnabled } from "../services/testNumbers.js";
+import { LIVE_TEST_PHONE_LIKE, testNumbersEnabled } from "../services/testNumbers.js";
 
-const TEST_PHONE_LIKE = "+141555501%";
+// One definition, shared with the paid-search exception (services/testMemberSpend.ts): the newest unarchived one is the live-test member.
+const TEST_PHONE_LIKE = LIVE_TEST_PHONE_LIKE;
 
 async function current(): Promise<{ id: string; phone_number: string; first_name: string } | null> {
   const { rows } = await pool.query(`SELECT id, phone_number, first_name FROM users WHERE phone_number LIKE $1 AND archived_at IS NULL ORDER BY created_at DESC LIMIT 1`, [TEST_PHONE_LIKE]);

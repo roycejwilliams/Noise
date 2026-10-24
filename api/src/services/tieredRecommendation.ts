@@ -10,6 +10,7 @@ import { withinRadius } from "./geocoding.js";
 import { gateMatches, START_LEAD_MINUTES, type GatedOut } from "../harness/matchGate.js";
 import pool from "../db/db.js";
 import type { PoolClient } from "pg";
+import { skipsPaidSearch } from "./testMemberSpend.js";
 
 
 // Co's three tiers, as candidates for its own loop (agent/loop.ts, 2026-10-01):
@@ -169,6 +170,7 @@ const X_SEARCH_REQUEST_RESERVE = Number(process.env.X_SEARCH_REQUEST_RESERVE ?? 
 // checked (table missing, database error) there is no X search, where it used
 // to allow unlimited ones.
 export async function reserveXSearch(userId: string | null, source: "sweep" | "request", query: string): Promise<{ ok: boolean; reason: string | null }> {
+  if (await skipsPaidSearch(userId, "x_search_budget")) return { ok: false, reason: "this is a test account, so paid search is off for it" };
   let client: PoolClient | null = null;
   try {
     client = await pool.connect();
