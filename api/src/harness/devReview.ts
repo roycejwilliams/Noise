@@ -39,6 +39,7 @@ import { parseModelJson } from "../services/modelJson.js";
 import { recordDecision } from "./core.js";
 import { signalTarget } from "./emotion.js";
 import { withTraceUser } from "../services/llmTraceText.js";
+import { HIGH_REASONS, flaggedCalls, type FlaggedCall } from "../services/callHealth.js";
 
 export function reviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test") return false;
@@ -87,7 +88,8 @@ export type FlagType =
   | "held_back"
   | "cold_start_miss"
   | "goal_read_failed"
-  | "goals_starved";
+  | "goals_starved"
+  | "call_flagged";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -113,6 +115,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   member_called_out_miss: "Member called out a miss",
   questionable_tool_choice: "Questionable tool choice (Jev's read of Cue's judgment)",
   held_back: "Ready texts held 2+ days with nothing sent",
+  call_flagged: "Call flagged by the after-call check (held at ElevenLabs until reviewed)",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -721,6 +724,22 @@ export async function loadHeldBack(userId: string, now: Date): Promise<{ userId:
   };
 }
 
+// Calls the after-call health check flagged and nobody has reviewed yet (services/callHealth.ts), one flag each, every morning until
+// reviewed: reason codes only, ranked (high when any reason is in HIGH_REASONS). Marking one reviewed: scripts/callReviewed.ts.
+export function callHealthFlags(calls: FlaggedCall[]): ReviewFlag[] {
+  return calls.map((c) => ({
+    userId: c.userId,
+    at: c.endedAt,
+    type: "call_flagged" as const,
+    severity: c.reasons.some((r) => HIGH_REASONS.has(r)) ? ("high" as const) : ("medium" as const),
+    snippet: clip(`call ${c.conversationId}: ${c.reasons.join(", ")}`),
+    decisionIds: [],
+    cause: `after-call check: ${c.reasons.join(", ")}; mark reviewed with scripts/callReviewed.ts ${c.conversationId}`,
+    causeConfirmed: true,
+    source: "log" as const,
+  }));
+}
+
 export async function reviewWindow(since: Date, until: Date, opts: { model?: boolean; userIds?: string[] } = {}): Promise<{ flags: ReviewFlag[]; names: Record<string, string> }> {
   const flags: ReviewFlag[] = [];
   const names: Record<string, string> = {};
@@ -729,6 +748,7 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     names[userId] = data.firstName;
     flags.push(...logFlags(data), ...conversationFlags(data), ...reactionFlags(data));
     flags.push(...heldBackFlags(await loadHeldBack(userId, until).catch(() => ({ userId, now: until, held: [], lastSendAt: null, picks: [] }))));
+    flags.push(...callHealthFlags(await flaggedCalls({ userId, until }).catch(() => [] as FlaggedCall[])));
     // The model reads of one member's day, under that member's trace-text mark (services/llmTraceText.ts).
     if (opts.model !== false) flags.push(...(await withTraceUser(userId, async () => [...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => []))])));
   }

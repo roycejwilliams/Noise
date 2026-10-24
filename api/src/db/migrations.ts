@@ -2007,9 +2007,10 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE voice_flag_runs ADD COLUMN IF NOT EXISTS raw JSONB`))
     .catch((err: Error) => console.error("voice_flags table init failed:", err));
 
-  // ElevenLabs deletes (2026-10-18) — see src/services/elevenLabsForget.ts. One row per conversation we stored: whether its copy
-  // at ElevenLabs is deleted yet, how many attempts it took, and the last reason it was kept. No transcript text: only a hash of
-  // what we received, so a later pass can check our stored copy is that transcript.
+  // ElevenLabs deletes (2026-10-18; schedule 2026-10-23) — see src/services/elevenLabsForget.ts. One row per conversation we stored:
+  // when its copy at ElevenLabs falls due (due_at: 7 days for a member, 30 for the team and test numbers, from when ours was stored),
+  // whether the member asked for it forgotten, whether it's deleted yet, how many attempts it took, and the last reason it was kept.
+  // No transcript text: only a hash of what we received, so a later pass can check our stored copy is that transcript.
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS elevenlabs_deletions (
@@ -2017,6 +2018,9 @@ export async function runMigrations(): Promise<void> {
         user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         transcript_sha256 TEXT NOT NULL,
         status TEXT NOT NULL,
+        window_kind TEXT NOT NULL DEFAULT 'member',
+        due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        forget_requested_at TIMESTAMPTZ,
         attempts INT NOT NULL DEFAULT 0,
         last_error TEXT,
         last_attempt_at TIMESTAMPTZ,
@@ -2025,8 +2029,33 @@ export async function runMigrations(): Promise<void> {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )`,
     )
-    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_elevenlabs_deletions_due ON elevenlabs_deletions (status, last_attempt_at)`))
+    .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS window_kind TEXT NOT NULL DEFAULT 'member'`))
+    .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`))
+    .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS forget_requested_at TIMESTAMPTZ`))
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_elevenlabs_deletions_due ON elevenlabs_deletions (status, due_at)`))
     .catch((err: Error) => console.error("elevenlabs_deletions table init failed:", err));
+
+  // The after-call health check (2026-10-23) — see src/services/callHealth.ts. One row per call: flagged, the reasons as codes (never
+  // anyone's words), when someone marked it reviewed, and when its late signals stopped being looked for. A flagged call is held at
+  // ElevenLabs until reviewed.
+  await pool
+    .query(
+      `CREATE TABLE IF NOT EXISTS call_health (
+        conversation_id TEXT PRIMARY KEY,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        started_at TIMESTAMPTZ NOT NULL,
+        ended_at TIMESTAMPTZ NOT NULL,
+        flagged BOOLEAN NOT NULL DEFAULT false,
+        reasons TEXT[] NOT NULL DEFAULT '{}',
+        judged_by TEXT,
+        reviewed_at TIMESTAMPTZ,
+        late_done_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`,
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_call_health_open ON call_health (flagged, reviewed_at, ended_at)`))
+    .catch((err: Error) => console.error("call_health table init failed:", err));
 
   // Tier 3 (paid X search) budget log (2026-09-15) — tieredRecommendation.ts.
   await pool

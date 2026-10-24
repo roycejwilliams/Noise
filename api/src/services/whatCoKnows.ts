@@ -379,6 +379,19 @@ export function forgets(text: string, rows: ForgottenRow[], what: Guarded, opts:
   return null;
 }
 
+// Pure: what was just removed, as guard rows (the shape forgottenRows reads back).
+export function removalRows(applied: Applied[]): ForgottenRow[] {
+  return applied.filter((a) => a.now == null).map((a) => ({ field: fieldFor(a.ref), old: a.was, now: null, ref: a.ref, removed: true }));
+}
+
+// Pure: a stored call transcript has a line of theirs that says a removed thing (the raw-words guard: specific removals only).
+export function callSaysRemoved(transcript: string, rows: ForgottenRow[]): boolean {
+  return transcript
+    .split("\n")
+    .filter((l) => /^user:/i.test(l.trim()))
+    .some((l) => !!forgets(l.trim().replace(/^user:\s*/i, ""), rows, "their_words"));
+}
+
 // Pure: a rebuilt snapshot with what they corrected away or removed taken out. Place and work are only ever changed by their own
 // kind's rows (a corrected city gives the place its new value; a removed one empties it); lists drop what was removed.
 export function forgetInSnapshot<T extends { work: string | null; place: string | null; wantsNow: string[]; weighingOn: string[]; valuesInPeople: string[] }>(s: T, rows: ForgottenRow[]): T {
@@ -1001,6 +1014,12 @@ export async function applyKnowledgeChanges(userId: string, changes: Change[], o
     await recordDecision({ layer: 3, decision: "knowledge.change_refused", userId, outcome: "skip", action: "refused", proposal: removing ? { refused: kinds, on: new Date().toISOString().slice(0, 10) } : { refused, theirWords: clean(o.theirWords).slice(0, 300) }, checks: removing ? kinds.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.kind}: ${r.why}` })) : refused.map((r) => ({ name: "change_allowed", pass: false, reason: `${r.ref}: ${r.why}` })) }).catch(() => {});
   }
   if (applied.length) void refreshDerived(userId, applied).catch((err: any) => console.error("whatCoKnows: refreshing derived copies failed (non-fatal):", err?.message ?? err));
+  // A removal their kept calls say: those calls' copies at ElevenLabs are deleted at once, whatever their window or hold
+  // (services/elevenLabsForget.ts forgetCallsNow). Decided from our stored transcript by the same guard the raw lines go through.
+  if (applied.some((a) => a.now == null)) {
+    const gone = removalRows(applied);
+    void import("./elevenLabsForget.js").then((F) => F.forgetCallsNow(userId, (t) => callSaysRemoved(t, gone))).catch(() => {});
+  }
   // What else still says it, from the fresh read (stripped like the view).
   const after = await whatCoKnows(userId).catch(() => null);
   return { ok: applied.length > 0, applied, refused, alsoSays: after ? stillSaying(after.view, applied, changedRefs) : [], cancelled: cancelled.map((c) => ({ ...c, what: clean(c.what) })) };
