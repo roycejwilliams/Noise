@@ -391,6 +391,18 @@ clock += B.BRIDGE.keepFinishedMs + 1000;
 const pb = await openStream("u-prune-b"); pb.emit("message", JSON.stringify({ event: "stop" }));
 check("past the wait, it's pruned when another session finishes", B.sessionShape(paKey) === null);
 
+// The recap's heavy call and the hard stretch (the mood stack) never count a voice score alone (final review of #269).
+const pcf = readFileSync(new URL("../../src/jobs/postCallFollowUp.ts", import.meta.url), "utf8");
+check("a voice moment alone never makes a heavy call (the recap isn't held for it)", /const heavyCall = \(emo\?\.lastCall\?\.moments \?\? \[\]\)\.some\(\(m\) => m\.intensity === "high" && m\.valence === "negative" && !isScoreBasis\(m\.basis\)\);/.test(pcf) && /\{ getEmotionalContext, isScoreBasis \}/.test(pcf));
+const hAt = new Date("2026-10-23T12:00:00Z");
+const hrs = (h: number) => new Date(hAt.getTime() - h * 3_600_000);
+const textHard = (h: number) => ({ valence: "negative" as const, intensity: "high" as const, basis: null, at: hrs(h) });
+const voiceSig = (h: number, valence: "negative" | "positive") => ({ valence, intensity: "high" as const, basis: "voice" as const, at: hrs(h) });
+check("a voice moment never extends a hard stretch", E.hardStretchSince([textHard(0), voiceSig(20, "negative"), textHard(40)], hAt).getTime() === hAt.getTime());
+check("a voice moment never breaks one either", E.hardStretchSince([textHard(0), voiceSig(5, "positive"), textHard(10)], hAt).getTime() === hrs(10).getTime());
+check("a frustration score never extends one", E.hardStretchSince([textHard(0), { ...voiceSig(20, "negative"), basis: "frustration_score" as const }, textHard(40)], hAt).getTime() === hAt.getTime());
+check("the stretch's own read leaves score reads out, both branches", /AND \(basis IS NULL OR basis NOT IN \('frustration_score', 'voice'\)\)\s*AND \(valence = 'positive' OR \(valence = 'negative' AND intensity <> 'low'\)\)/.test(emoSrc) && !/DISTINCT FROM 'frustration_score'/.test(emoSrc));
+
 B.setBridgeDeps(null);
 console.log(`voice read rules: ${total - failed}/${total} passed`);
 if (failed) process.exitCode = 1;

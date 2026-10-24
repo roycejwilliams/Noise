@@ -96,10 +96,17 @@ const callIn = { callAt: ago(1), confirmed: false, coCommitted: false, now: NOW 
     reset();
     const calm = await PC.recapOfferFor("u-jordan", FID, callIn, known(false));
     check("not struggling: offered as before, no hard-stretch tone", calm.offer && !calm.held && !calm.gentle, calm);
-    // A frustration score on the call: a heavy call moment that isn't a hard day (needsCare stays off).
-    reset({ sigs: [{ ...hardSig(1, NOW, "call"), basis: "frustration_score" }] });
+    // A heavy call: a high hard moment read from what they said on it.
+    reset({ sigs: [hardSig(1, NOW, "call")] });
     const heavy = await PC.recapOfferFor("u-jordan", FID, callIn, known(false));
     check("a heavy call (a high hard moment on it): held, not offered and not dropped", !heavy.offer && heavy.held, heavy);
+    // A score of how they sounded alone (ElevenLabs' frustration score, the voice read) is never a heavy call (review of #269).
+    reset({ sigs: [{ ...hardSig(1, NOW, "call"), basis: "frustration_score" }] });
+    const scored = await PC.recapOfferFor("u-jordan", FID, callIn, known(false));
+    check("a frustration score alone on the call: offered, not held", scored.offer && !scored.held, scored);
+    reset({ sigs: [{ ...hardSig(1, NOW, "call"), basis: "voice" }] });
+    const voiced = await PC.recapOfferFor("u-jordan", FID, callIn, known(false));
+    check("a voice moment alone on the call: offered, not held", voiced.offer && !voiced.held, voiced);
     // Non-mood reasons: unchanged, and never turned into a hold.
     reset({ sigs: [hardSig(2)], inbound: ago(2.1) });
     const night = await PC.recapOfferFor("u-jordan", FID, { ...callIn, now: new Date("2026-10-20T06:00:00Z") }, known(true));

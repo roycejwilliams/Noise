@@ -337,8 +337,8 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   };
 }
 
-// A hard read: a medium or high negative feeling about their life (a frustration score alone never is one).
-const isHard = (s: Pick<EmotionSignal, "valence" | "intensity" | "basis">) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score";
+// A hard read: a medium or high negative feeling about their life (a score of how they sounded alone never is one: isScoreBasis).
+const isHard = (s: Pick<EmotionSignal, "valence" | "intensity" | "basis">) => s.valence === "negative" && s.intensity !== "low" && !isScoreBasis(s.basis);
 // Pure: when the hard stretch ending at hardAt began: back through hard reads at most a day apart, stopping at a positive read between
 // two. lifeSignals: their reads about their life, any order.
 export function hardStretchSince(lifeSignals: Pick<EmotionSignal, "valence" | "intensity" | "basis" | "at">[], hardAt: Date): Date {
@@ -346,7 +346,8 @@ export function hardStretchSince(lifeSignals: Pick<EmotionSignal, "valence" | "i
   let since = hardAt;
   for (const s of desc.filter((x) => isHard(x) && x.at < hardAt)) {
     const later = since;
-    if (later.getTime() - s.at.getTime() > 24 * HOUR || desc.some((p) => p.valence === "positive" && p.at > s.at && p.at < later)) break;
+    // A voice score never breaks a stretch either (voice never dismisses what they said).
+    if (later.getTime() - s.at.getTime() > 24 * HOUR || desc.some((p) => p.valence === "positive" && !isScoreBasis(p.basis) && p.at > s.at && p.at < later)) break;
     since = s.at;
   }
   return since;
@@ -379,7 +380,8 @@ export async function getEmotionalContext(userId: string, now = new Date()): Pro
       .query(
         `SELECT source, intensity, valence, about, target, basis, created_at FROM emotion_signals
          WHERE user_id = $1 AND created_at > $2::timestamptz - make_interval(hours => $3) AND created_at <= $2::timestamptz
-           AND (valence = 'positive' OR (valence = 'negative' AND intensity <> 'low' AND basis IS DISTINCT FROM 'frustration_score'))
+           AND (basis IS NULL OR basis NOT IN ('frustration_score', 'voice'))
+           AND (valence = 'positive' OR (valence = 'negative' AND intensity <> 'low'))
          ORDER BY created_at DESC LIMIT 5000`,
         [userId, now.toISOString(), STRETCH_LOOKBACK_HOURS],
       )
