@@ -22,7 +22,7 @@ import { withTraceUser } from "./llmTraceText.js";
 //   - "Glad you came" is a fact, so it only goes to someone with evidence they came: arrived (event_presence.arrived_at), checked in
 //     by the QR phrase as a walk-in, or checked in at Luma's door. A text is not evidence. A registered no-show gets nothing (Royce's
 //     ruling: a registered guest with no arrival, check-in or door scan gets silence).
-//   - Its copy waits on Royce: CLOSE_APPROVED (below) is false until he approves it, and nothing drafts or sends until then.
+//   - Its copy is approved (Royce 2026-10-23): CLOSE_APPROVED (below); false would stop everything, nothing drafts or sends.
 //   - The below-the-bar pairing ("worth a quick hello") and the "nothing stood out" text are gone. What the room was thin on goes to
 //     the host readout instead (services/partnerReadout.ts thinOn), as a category, never a member.
 // (The file keeps its name and tables: event_unmatched_followups schedules the close, event_unmatched_notices records it once.)
@@ -165,11 +165,11 @@ Write the goodbye a good host gives at the door: one short, warm line (no em das
   return "sent";
 }
 
-// The close's own text (CLOSE_FALLBACK and the goodbye brief in sendClose) waits on Royce's approval (review of #208, 2026-10-19), the
-// same way the held recap's did (services/moodHold.ts HELD_RECAP_APPROVED). While false nothing is drafted or sent and nothing is
-// marked done, so the closes still due go once it's approved; one whose room is over by then simply expires (no late goodbye). A code
-// constant: no env switch.
-export const CLOSE_APPROVED: boolean = false;
+// The close's own text (CLOSE_FALLBACK and the goodbye brief in sendClose) needed Royce's approval (review of #208, 2026-10-19), the
+// same way the held recap's did (services/moodHold.ts HELD_RECAP_APPROVED). Approved by Royce 2026-10-23 (both as written). Setting it
+// back to false stops everything: nothing drafted, sent or marked done; a close whose room is over by then expires (no late goodbye).
+// A code constant: no env switch.
+export const CLOSE_APPROVED: boolean = true;
 let awaitingApprovalNoted = false;
 
 // Cron entry point (jobs/index.ts, */15 * * * *, same lightweight-polling cadence as eventCheckinFollowUp.ts's own due-queue). Grouped
