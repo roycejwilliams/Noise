@@ -479,6 +479,11 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
     const hit = [...W.presence.entries()].filter(([k, r]) => k.endsWith(`|${p[0]}`) && r.noshow_asked_at && !r.noshow_settled_at && now() - +r.noshow_asked_at < Number(p[1]) * 3_600_000).sort((a, b) => +b[1].noshow_asked_at - +a[1].noshow_asked_at);
     return R(hit.slice(0, 1).map(([k]) => ({ event_api_id: k.split("|")[0] })));
   }
+  // services/eventBrief.ts presenceFlags: their brief-name answer for this event.
+  if (has("SELECT name_asked_at, name_ok, brief_sent_at, not_going_at FROM event_presence WHERE event_api_id = $1 AND user_id = $2")) {
+    const r = W.presence.get(`${p[0]}|${p[1]}`);
+    return R(r ? [{ name_asked_at: r.name_asked_at ?? null, name_ok: r.name_ok ?? null, brief_sent_at: r.brief_sent_at ?? null, not_going_at: r.not_going_at ?? null }] : []);
+  }
   if (sql === "SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2") return R(W.presence.has(`${p[0]}|${p[1]}`) ? [{ x: 1 }] : []);
   if (has("UPDATE co_memories SET content_embedding")) return R([]);
   if (has("SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent'")) {

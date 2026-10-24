@@ -226,7 +226,7 @@ const DESC = "A long supper about building things that last. Doors at seven, foo
 const ABOUT = "A long supper about building things that last.";
 const NT = (soft = false) => N.noShowNote("Noise Supper", { kind: "next_table", name: "Noise Table Two", startAt: iso(9 * 86_400_000), timezone: null, url: null }, soft, ABOUT);
 const realReveal = (await import("../../src/services/networkIntroNudge.js")).prepareReveal;
-async function noteNight(o: { shareable?: boolean; score?: number; ellisCame?: boolean; nextTable?: boolean; soft?: boolean; paired?: boolean; optedIn?: boolean; about?: string | null } = {}) {
+async function noteNight(o: { shareable?: boolean; score?: number; ellisCame?: boolean; nextTable?: boolean; soft?: boolean; paired?: boolean; optedIn?: boolean; about?: string | null; brief?: "yes" | "no" | "unanswered" | "yes_other_event" } = {}) {
   fresh();
   const jordan = addMember({ first_name: "Jordan", intent: [ask("a seed investor for climate hardware")] });
   const ellis = addMember({ first_name: "Ellis", intent: [climb(o.shareable ?? true)] });
@@ -236,6 +236,11 @@ async function noteNight(o: { shareable?: boolean; score?: number; ellisCame?: b
   if (o.ellisCame ?? true) checkIn("evn", ellis);
   if (o.nextTable) addEvent({ api_id: "evnext", name: "Noise Table Two", start_at: iso(9 * 86_400_000), end_at: iso(9 * 86_400_000 + 3 * 3_600_000) });
   W.rankings.set(`evn|${jordan.id}`, { ranked_candidates: [{ candidate_id: ellis.id, score: o.score ?? 85, reason: "internal", shareReason: why, mutual: false, method: "ask" }] });
+  // Ellis's answer to being named in a member brief (services/eventBrief.ts): for this event, or for another one.
+  if (o.brief) {
+    const k = o.brief === "yes_other_event" ? `evother|${ellis.id}` : `evn|${ellis.id}`;
+    W.presence.set(k, { sharing_seen_at: null, arrived_at: null, ...(W.presence.get(k) ?? {}), name_asked_at: new Date(), name_ok: o.brief === "yes" || o.brief === "yes_other_event" ? true : o.brief === "no" ? false : null });
+  }
   if (o.paired) W.nudges.push({ event_id: "evn", person_id: jordan.id, candidate_id: ellis.id, score: 85, pending: false, anonymous: false, sent_at: Date.now() });
   P.clearPresenceCache();
   await N.runNoShowAsks(new Date(), { approved: true });
@@ -269,6 +274,16 @@ async function noteNight(o: { shareable?: boolean; score?: number; ellisCame?: b
   const { c, r } = await noteNight({ optedIn: false, nextTable: true });
   const t = textOf(r);
   check("leak: the fit hasn't said yes to an intro with them: no intro offer, no name anywhere, the next table instead", t === NT() && !c.payload.intro && !/Ellis/.test(JSON.stringify({ t, payload: c.payload })), { t, payload: c?.payload });
+}
+{
+  const { c, r } = await noteNight({ optedIn: false, brief: "yes" });
+  const t = textOf(r);
+  check("brief consent: the fit said yes to being named in this event's member brief: the intro is offered, no name in the note", t === N.noShowNote("Noise Supper", { kind: "intro" }, false, ABOUT) && c.payload.intro?.candidate?.candidate_id && !/Ellis/.test(t), { t, intro: c?.payload?.intro });
+}
+for (const [label, brief] of [["said no to being named", "no"], ["never answered the brief question", "unanswered"], ["said yes for a different event", "yes_other_event"]] as const) {
+  const { c, r } = await noteNight({ optedIn: false, brief, nextTable: true });
+  const t = textOf(r);
+  check(`brief consent: the fit ${label}: the next table, name nowhere`, t === NT() && !c.payload.intro && !/Ellis/.test(JSON.stringify({ t, payload: c.payload })), { t, payload: c?.payload });
 }
 for (const [label, o] of [
   ["the fit hasn't said yes to them", { optedIn: false }],
