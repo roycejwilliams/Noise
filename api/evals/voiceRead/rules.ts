@@ -13,6 +13,8 @@ const C = await import("../../src/services/audioCodec.js");
 const E = await import("../../src/harness/emotion.js");
 const H = await import("../../src/services/heavyMoment.js");
 const EL = await import("../../src/services/elevenLabsCalls.js");
+const L = await import("../../src/services/voiceStreamLink.js");
+const RG = await import("../../src/harness/replyGrounding.js");
 const P = await import("../../src/services/callLlmProxy.js");
 
 let total = 0, failed = 0;
@@ -21,31 +23,51 @@ const check = (label: string, ok: boolean, detail?: unknown) => { total++; if (!
 // ---------------------------------------------------------------- the fork in the TwiML
 const EL_TWIML = `<?xml version="1.0" encoding="UTF-8"?>\n<Response><Connect><Stream url="wss://api.us.elevenlabs.io/v1/convai/conversation/twilio?agent_id=x"><Parameter name="a" value="b"/></Stream></Connect></Response>`;
 const STREAM = "wss://co-test.example.app/co/voice-stream";
-const forked = V.withVoiceFork(EL_TWIML, { streamUrl: STREAM, userId: "u-1", callToken: "123.abc" });
+const SID = "Zm9yLXRlc3RzLW9ubHktYW4tb3BhcXVlLXN0cmVhbS1pZA";
+const forked = V.withVoiceFork(EL_TWIML, { streamUrl: STREAM, streamId: SID });
 check("the fork is added", forked.includes(`<Start><Stream name="cue-voice-read" url="${STREAM}" track="inbound_track">`));
 check("caller only: inbound_track, never both_tracks or outbound", /track="inbound_track"/.test(forked) && !/both_tracks|outbound_track/.test(forked));
 check("the fork starts before ElevenLabs' <Connect> (Start doesn't block; Connect does)", forked.indexOf("<Start>") < forked.indexOf("<Connect>") && forked.indexOf("<Start>") > forked.indexOf("<Response>"));
 check("ElevenLabs' TwiML is untouched apart from the fork", forked.replace(/<Start>.*?<\/Start>/, "") === EL_TWIML);
-check("the stream carries the user and call token as Parameters (Twilio drops query strings)", /<Parameter name="user_id" value="u-1"\/><Parameter name="call_token" value="123.abc"\/>/.test(forked) && !/voice-stream\?/.test(forked));
-check("values are XML-escaped", V.withVoiceFork(EL_TWIML, { streamUrl: STREAM, userId: `a"><Hangup/>`, callToken: "t" }).includes("a&quot;&gt;&lt;Hangup/&gt;") && !V.withVoiceFork(EL_TWIML, { streamUrl: STREAM, userId: `a"><Hangup/>`, callToken: "t" }).includes("<Hangup/>"));
-check("no <Response> to place it in: returned exactly as given", V.withVoiceFork("<Say>hi</Say>", { streamUrl: STREAM, userId: "u", callToken: "t" }) === "<Say>hi</Say>" && V.withVoiceFork("<Response/>", { streamUrl: STREAM, userId: "u", callToken: "t" }) === "<Response/>");
+check("the stream carries one opaque id as its only Parameter (Twilio drops query strings)", (forked.match(/<Parameter /g) ?? []).length === 2 && forked.includes(`<Parameter name="stream" value="${SID}"/>`) && !/voice-stream\?/.test(forked));
+check("values are XML-escaped", V.withVoiceFork(EL_TWIML, { streamUrl: STREAM, streamId: `a"><Hangup/>` }).includes("a&quot;&gt;&lt;Hangup/&gt;") && !V.withVoiceFork(EL_TWIML, { streamUrl: STREAM, streamId: `a"><Hangup/>` }).includes("<Hangup/>"));
+check("no <Response> to place it in: returned exactly as given", V.withVoiceFork("<Say>hi</Say>", { streamUrl: STREAM, streamId: SID }) === "<Say>hi</Say>" && V.withVoiceFork("<Response/>", { streamUrl: STREAM, streamId: SID }) === "<Response/>");
 check("the stream URL comes from API_URL", V.voiceStreamUrl("https://co-test.example.app") === STREAM && V.voiceStreamUrl("https://co-test.example.app/") === STREAM && V.voiceStreamUrl(undefined) === null && V.voiceStreamUrl("not a url") === null);
 
 // ---------------------------------------------------------------- who it runs for
 const TEST = "+14155550123";
 const REAL = "+14155551234";
 const env = (e: Record<string, string | undefined> = {}) => ({ RAILWAY_ENVIRONMENT_NAME: "co-test", HUME_API_KEY: "dummy", API_URL: "https://co-test.example.app", TWILIO_AUTH: "dummy-auth", ...e }) as NodeJS.ProcessEnv;
-check("runs for a test number", V.voiceReadAllowed({ memberPhone: TEST, team: false }, env()));
-check("runs for a team member's call (the founders' own phones, for the live test)", V.voiceReadAllowed({ memberPhone: REAL, team: true }, env()));
-check("never for a real member's number", !V.voiceReadAllowed({ memberPhone: REAL, team: false }, env()));
-check("never in production, even for a test number or the team", !V.voiceReadAllowed({ memberPhone: TEST, team: true }, env({ RAILWAY_ENVIRONMENT_NAME: "production" })));
-check("not without the Hume key", !V.voiceReadAllowed({ memberPhone: TEST, team: true }, env({ HUME_API_KEY: "" })));
-check("not without API_URL or Twilio's token (it needs both)", !V.voiceReadAllowed({ memberPhone: TEST, team: true }, env({ API_URL: "" })) && !V.voiceReadAllowed({ memberPhone: TEST, team: true }, env({ TWILIO_AUTH: "" })));
+check("runs for a test number", V.voiceReadAllowed({ memberPhone: TEST, consented: false }, env()));
+check("runs for a member who agreed (users.voice_read_ok)", V.voiceReadAllowed({ memberPhone: REAL, consented: true }, env()));
+check("never for a real member who hasn't agreed", !V.voiceReadAllowed({ memberPhone: REAL, consented: false }, env()));
+check("never in production, even for a test number or a member who agreed", !V.voiceReadAllowed({ memberPhone: TEST, consented: true }, env({ RAILWAY_ENVIRONMENT_NAME: "production" })));
+check("not without the Hume key", !V.voiceReadAllowed({ memberPhone: TEST, consented: true }, env({ HUME_API_KEY: "" })));
+check("not without API_URL or Twilio's token (it needs both)", !V.voiceReadAllowed({ memberPhone: TEST, consented: true }, env({ API_URL: "" })) && !V.voiceReadAllowed({ memberPhone: TEST, consented: true }, env({ TWILIO_AUTH: "" })));
 check("no feature switch: only what it needs", !/VOICE_READ_ENABLED|VOICE_READ\s*===|env\.VOICE_READ\b/.test(readFileSync(new URL("../../src/services/voiceRead.ts", import.meta.url), "utf8")));
-check("the registered TwiML gets the fork only where it may run", EL.withVoiceReadFork(EL_TWIML, { userId: "u", callToken: "t", memberPhone: TEST, team: false }, env()).includes("<Start>") && EL.withVoiceReadFork(EL_TWIML, { userId: "u", callToken: "t", memberPhone: REAL, team: false }, env()) === EL_TWIML && EL.withVoiceReadFork(EL_TWIML, { userId: "u", callToken: "t", memberPhone: TEST, team: false }, env({ HUME_API_KEY: undefined })) === EL_TWIML);
-check("it never fails the TwiML", EL.withVoiceReadFork(undefined as any, { userId: "u", callToken: "t", memberPhone: TEST, team: false }, env()) === undefined);
+const links = L.memoryVoiceStreamLinks();
+const fork = (phone: string, consented: boolean, e = env()) => EL.withVoiceReadFork(EL_TWIML, { userId: "11111111-2222-3333-4444-555555555555", callToken: "1761200000.deadbeefcafe", memberPhone: phone }, e, { consented: async () => consented, links });
+const fTest = await fork(TEST, false);
+check("the registered TwiML gets the fork for a test member", fTest.includes("<Start>"));
+check("and for a member who agreed", (await fork(REAL, true)).includes("<Start>"));
+check("never for a member who hasn't agreed (the team flag is not consent)", (await fork(REAL, false)) === EL_TWIML);
+check("nothing without the key", (await fork(TEST, false, env({ HUME_API_KEY: undefined }))) === EL_TWIML);
+check("Twilio's TwiML carries no member id and no call token", !fTest.includes("11111111-2222-3333-4444-555555555555") && !fTest.includes("deadbeefcafe") && !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(fTest));
+const issuedId = /<Parameter name="stream" value="([^"]+)"/.exec(fTest)?.[1] ?? "";
+check("only the stream id's hash is stored, with the session's hash (never the token)", issuedId.length === 43 && !links.rows.has(issuedId) && links.rows.has(L.streamLinkHash(issuedId)) && [...links.rows.values()].every((r) => !JSON.stringify(r).includes("deadbeefcafe")));
+check("a failed consent read or link write leaves the TwiML as it was", (await EL.withVoiceReadFork(EL_TWIML, { userId: "u", callToken: "t", memberPhone: REAL }, env(), { consented: async () => { throw new Error("db down"); }, links })) === EL_TWIML && (await EL.withVoiceReadFork(EL_TWIML, { userId: "u", callToken: "t", memberPhone: TEST }, env(), { links: { put: async () => { throw new Error("db down"); }, take: async () => null } })) === EL_TWIML);
+check("it never fails the TwiML", (await EL.withVoiceReadFork(undefined as any, { userId: "u", callToken: "t", memberPhone: TEST }, env(), { links })) === undefined);
+const linkNow = new Date("2026-10-23T18:00:00Z");
+const lk = await L.issueVoiceStreamLink("u-x", "u-x:tok", links, linkNow);
+check("a link is taken once", JSON.stringify(await L.takeVoiceStreamLink(lk, links, linkNow)) === JSON.stringify({ userId: "u-x", sessionHash: L.sessionHashOf("u-x:tok") }) && (await L.takeVoiceStreamLink(lk, links, linkNow)) === null);
+const lk2 = await L.issueVoiceStreamLink("u-x", "u-x:tok", links, linkNow);
+check("an expired link is refused (and gone)", (await L.takeVoiceStreamLink(lk2, links, new Date(linkNow.getTime() + (L.VOICE_STREAM_LINK_TTL_SECS + 1) * 1000))) === null && !links.rows.has(L.streamLinkHash(lk2)));
+check("a malformed id is refused", (await L.takeVoiceStreamLink("u-x:tok", links, linkNow)) === null && (await L.takeVoiceStreamLink(undefined, links, linkNow)) === null);
+const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
+check("consent is a per-member column, default false, idempotent; nobody opted in by code", /ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_read_ok BOOLEAN NOT NULL DEFAULT false/.test(mig) && !/voice_read_ok\s*=\s*true/i.test(mig + readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8")));
+check("the link table keeps hashes only", /CREATE TABLE IF NOT EXISTS voice_stream_links \(\s*id_hash TEXT PRIMARY KEY,\s*user_id UUID NOT NULL REFERENCES users\(id\) ON DELETE CASCADE,\s*session_hash TEXT NOT NULL/.test(mig));
 const elSrc = readFileSync(new URL("../../src/services/elevenLabsCalls.ts", import.meta.url), "utf8");
-check("registerElevenLabsCall returns ElevenLabs' TwiML through the fork, with the member's own number per direction", /return withVoiceReadFork\(twiml, \{ userId: o\.userId, callToken, memberPhone: o\.direction === "inbound" \? o\.from : o\.to, team \}\)/.test(elSrc));
+check("registerElevenLabsCall returns ElevenLabs' TwiML through the fork, with the member's own number per direction", /return withVoiceReadFork\(twiml, \{ userId: o\.userId, callToken, memberPhone: o\.direction === "inbound" \? o\.from : o\.to \}\)/.test(elSrc));
 check("reads no old Hume EVI variables", !/HUME_CONFIG_ID|HUME_SIGNIN_KEY|HUME_SECRET_KEY|HUME_WEBHOOK|HUME_VOICE/.test(["voiceRead.ts", "mediaStreamBridge.ts", "audioCodec.ts", "elevenLabsCalls.ts"].map((f) => readFileSync(new URL(`../../src/services/${f}`, import.meta.url), "utf8")).join("\n")));
 
 // ---------------------------------------------------------------- Twilio's signature on the stream
@@ -139,21 +161,35 @@ const logs: string[] = [];
 const records: { userId: string; summary: any }[] = [];
 let humes: FakeSocket[] = [];
 let humeFactory: () => FakeSocket = () => { const h = new FakeSocket(); humes.push(h); return h; };
-B.setBridgeDeps({ connectHume: () => humeFactory() as any, verifyToken: (u, t) => t === `tok-${u}`, now: () => clock, log: (l) => logs.push(l), record: (userId, summary) => records.push({ userId, summary }), apiKey: () => "dummy" });
+const bridgeLinks = L.memoryVoiceStreamLinks();
+B.setBridgeDeps({ connectHume: () => humeFactory() as any, takeLink: (id) => L.takeVoiceStreamLink(id, bridgeLinks, new Date(clock)), now: () => clock, log: (l) => logs.push(l), record: (userId, summary) => records.push({ userId, summary }), apiKey: () => "dummy" });
 const mediaMsg = (payload = Buffer.alloc(160, 0xff).toString("base64"), track = "inbound") => JSON.stringify({ event: "media", streamSid: "MZ1", media: { track, chunk: "1", timestamp: "0", payload } });
-const startMsg = (userId: string, token: string) => JSON.stringify({ event: "start", streamSid: "MZ1", start: { callSid: "CA1", streamSid: "MZ1", tracks: ["inbound"], customParameters: { user_id: userId, call_token: token } } });
-const openStream = (userId: string, token = `tok-${userId}`) => { const tw = new FakeSocket(); B.handleTwilioStream(tw as any); tw.emit("message", startMsg(userId, token)); return tw; };
+const startMsg = (streamId: string) => JSON.stringify({ event: "start", streamSid: "MZ1", start: { callSid: "CA1", streamSid: "MZ1", tracks: ["inbound"], customParameters: { stream: streamId } } });
+const tick = () => new Promise((r) => setImmediate(r));
+const linkFor = (userId: string, now = clock) => L.issueVoiceStreamLink(userId, B.callKeyOf(userId, `tok-${userId}`), bridgeLinks, new Date(now));
+const openWith = async (streamId: string) => { const tw = new FakeSocket(); B.handleTwilioStream(tw as any); tw.emit("message", startMsg(streamId)); await tick(); return tw; };
+const openStream = async (userId: string) => openWith(await linkFor(userId));
 const humeReady = (h: FakeSocket) => { h.readyState = 1; h.emit("open"); h.emit("message", JSON.stringify({ type: "session.created", session_id: "sess-1" })); h.emit("message", JSON.stringify({ type: "session.updated", audio: {}, measurement_timer_ms: 3000 })); };
 const score = (h: FakeSocket, utt: number, s: number, e: number, ex: [string, number][], va: [string, number][] = []) => h.emit("message", JSON.stringify({ type: "measurement.result", measurement_id: 0, utterance_id: utt, audio_start_ms: s, audio_end_ms: e, trigger: "interval", expressions: ex.map(([name, probability]) => ({ name, probability })), voice_attributes: va.map(([name, probability]) => ({ name, probability })) }));
 
 // A bad token: refused, Hume never opened.
 B.resetVoiceSessions(); humes = [];
-const bad = openStream("u-bad", "forged");
-check("a stream without a valid call token is refused and Hume never opened", bad.closed && humes.length === 0);
+const bad = await openWith("Zm9yZ2VkLWZvcmdlZC1mb3JnZWQtZm9yZ2VkLWZvcmdlZA");
+check("a stream without a live link is refused and Hume never opened", bad.closed && humes.length === 0);
+const used = await linkFor("u-used");
+await openWith(used);
+const humesBefore = humes.length;
+const reuse = await openWith(used);
+check("a stream link used once is refused the second time", reuse.closed && humes.length === humesBefore);
+const expired = await linkFor("u-exp", clock - (L.VOICE_STREAM_LINK_TTL_SECS + 5) * 1000);
+const exp = await openWith(expired);
+check("an expired stream link is refused", exp.closed && humes.length === humesBefore);
+const early = new FakeSocket(); B.handleTwilioStream(early as any); early.emit("message", startMsg("Zm9yZ2VkLWZvcmdlZC1mb3JnZWQtZm9yZ2VkLWZvcmdlZA")); for (let i = 0; i < 40; i++) early.emit("message", mediaMsg()); await tick();
+check("audio before the link is checked is never sent, and dropped when refused", early.closed && humes.length === humesBefore);
 
 // Hume never answers: frames are taken without blocking, the buffer is capped, and the line is simply absent.
 B.resetVoiceSessions(); humes = [];
-const slow = openStream("u-slow");
+const slow = await openStream("u-slow");
 const key = B.callKeyOf("u-slow", "tok-u-slow");
 const t0 = performance.now();
 for (let i = 0; i < 400; i++) slow.emit("message", mediaMsg());
@@ -171,14 +207,14 @@ check("the call ending closes Hume and clears the buffers", humes[0].closed && B
 B.resetVoiceSessions(); humes = [];
 humeFactory = () => { throw new Error("ECONNREFUSED"); };
 let threw = false;
-try { const tw = openStream("u-down"); for (let i = 0; i < 50; i++) tw.emit("message", mediaMsg()); tw.emit("close"); } catch { threw = true; }
+try { const tw = await openStream("u-down"); for (let i = 0; i < 50; i++) tw.emit("message", mediaMsg()); tw.emit("close"); } catch { threw = true; }
 check("Hume down: the stream handler never throws", !threw);
 check("Hume down: the session is logged with the error", records.some((r) => r.userId === "u-down" && /connect/.test(String(r.summary.error))));
 humeFactory = () => { const h = new FakeSocket(); humes.push(h); return h; };
 
 // Hume errors mid-call: read stops, frames are dropped, no throw.
 B.resetVoiceSessions(); humes = [];
-const mid = openStream("u-mid");
+const mid = await openStream("u-mid");
 humeReady(humes[0]);
 for (let i = 0; i < 10; i++) mid.emit("message", mediaMsg());
 humes[0].emit("error", new Error("socket hang up"));
@@ -187,7 +223,7 @@ try { for (let i = 0; i < 10; i++) mid.emit("message", mediaMsg()); } catch { th
 check("Hume dropping mid-call: no throw, the read is just absent", !threw && B.voiceReadLineFor(B.callKeyOf("u-mid", "tok-u-mid"), "fine", [], { safety: false })?.line === null);
 // A send that throws: dropped, not thrown.
 B.resetVoiceSessions(); humes = [];
-const thr = openStream("u-thr"); humeReady(humes[0]); humes[0].throwOnSend = true;
+const thr = await openStream("u-thr"); humeReady(humes[0]); humes[0].throwOnSend = true;
 threw = false; try { for (let i = 0; i < 10; i++) thr.emit("message", mediaMsg()); } catch { threw = true; }
 check("a failed send to Hume is dropped, never thrown into the stream", !threw);
 thr.emit("message", JSON.stringify({ event: "stop" })); humes[0].emit("message", JSON.stringify({ type: "session.closed", reason: "client_request" }));
@@ -195,7 +231,7 @@ check("and counted as dropped in the session log", (records.find((r) => r.userId
 
 // The happy path: batching, session.update first, scores, the line, latency, the log.
 B.resetVoiceSessions(); humes = []; records.length = 0; logs.length = 0;
-const tw = openStream("u-ok");
+const tw = await openStream("u-ok");
 const h = humes[0];
 const okKey = B.callKeyOf("u-ok", "tok-u-ok");
 for (let i = 0; i < 3; i++) tw.emit("message", mediaMsg());
@@ -216,7 +252,7 @@ const l1 = B.voiceReadLineFor(okKey, "Yeah I'm fine, honestly it's all good.", [
 check("live: a flat voice under 'I'm fine' reaches the turn", /flat while the words stay positive/.test(l1?.line ?? ""), l1);
 check("another call's key sees nothing of this one", B.voiceReadLineFor(B.callKeyOf("u-other", "tok-u-other"), "I'm fine", [], { safety: false }) === null);
 check("the same user with another call token sees nothing either", B.voiceReadLineFor(B.callKeyOf("u-ok", "tok-other"), "I'm fine", [], { safety: false }) === null);
-const replay = openStream("u-ok");
+const replay = await openStream("u-ok");
 check("a second stream for the same call is refused (replay)", replay.closed && humes.length === 1);
 h.emit("message", JSON.stringify({ type: "utterance.end", utterance_id: 0, audio_start_ms: 0, audio_end_ms: 9000 }));
 tw.emit("message", JSON.stringify({ event: "stop" }));
@@ -287,7 +323,7 @@ check("far more speech heard than their words account for: noisy", V.voiceCrosst
 check("one person talking: not noisy", !V.voiceCrosstalk({ heardSpeechMs: 30_000, callerLines: ["I spent the whole weekend moving into the new place and it was a lot but it's done now and I'm happy with how it turned out honestly, the light is great and the neighbours seem kind"] }).noisy);
 check("too little heard to judge: not noisy", !V.voiceCrosstalk({ heardSpeechMs: 10_000, callerLines: ["hi"] }).noisy);
 B.resetVoiceSessions(); humes = []; records.length = 0;
-const nz = openStream("u-noisy"); const hn = humes[0]; humeReady(hn);
+const nz = await openStream("u-noisy"); const hn = humes[0]; humeReady(hn);
 for (let i = 0; i < 20; i++) nz.emit("message", mediaMsg());
 hn.emit("message", JSON.stringify({ type: "utterance.end", utterance_id: 0, audio_start_ms: 0, audio_end_ms: 45_000 }));
 for (let i = 0; i < 3; i++) score(hn, 0, i * 3000, i * 3000 + 3000, [["tiredness", 0.9]], [["monotone", 0.9]]);
@@ -336,6 +372,24 @@ const later = new Date("2026-10-23T05:00:00Z");
 check("and a bright voice never cancels one their words started", H.pickEpisode([hs(textHigh), hs({ ...voicePos, at: new Date("2026-10-23T03:00:00Z") })], later, "America/Los_Angeles") !== null);
 const heavySrc = readFileSync(new URL("../../src/services/heavyMoment.ts", import.meta.url), "utf8");
 check("the send-time check ignores a voice-only good moment too", /valence = 'positive' AND basis IS DISTINCT FROM 'voice'/.test(heavySrc));
+
+// One strong voice moment never makes a heavy moment (replyGrounding.ts heavyMoment holds the door, the cold-start question
+// and doc offers); the tone context still carries it (review of #269).
+const oneVoice = E.summarizeSignals([voiceNeg], now);
+check("one strong voice moment: heavyMoment is false", RG.heavyMoment(oneVoice) === false && oneVoice.current === null);
+check("and the tone context still carries it", oneVoice.lastCall?.moments.length === 1 && /their voice showed: flat under upbeat words/.test(E.renderEmotionalContext(oneVoice, now)));
+check("the same for ElevenLabs' frustration score", RG.heavyMoment(E.summarizeSignals([{ ...voiceNeg, emotion: "frustrated", basis: "frustration_score" as const }], now)) === false);
+const callRead = { ...voiceNeg, emotion: "overwhelmed", basis: null, quote: "it's a lot" };
+check("a call's text read still is (heavy on a strong hard moment)", RG.heavyMoment(E.summarizeSignals([callRead, voiceNeg], now)) === true && E.summarizeSignals([callRead, voiceNeg], now).current?.basis === null);
+
+// Finished sessions are pruned when another finishes, so one whose post-call webhook never comes doesn't linger.
+B.resetVoiceSessions(); humes = [];
+const pa = await openStream("u-prune-a"); humeReady(humes[0]); pa.emit("message", JSON.stringify({ event: "stop" })); humes[0].emit("message", JSON.stringify({ type: "session.closed", reason: "client_request" }));
+const paKey = B.callKeyOf("u-prune-a", "tok-u-prune-a");
+check("a finished session waits for its webhook", B.sessionShape(paKey)?.finished === true);
+clock += B.BRIDGE.keepFinishedMs + 1000;
+const pb = await openStream("u-prune-b"); pb.emit("message", JSON.stringify({ event: "stop" }));
+check("past the wait, it's pruned when another session finishes", B.sessionShape(paKey) === null);
 
 B.setBridgeDeps(null);
 console.log(`voice read rules: ${total - failed}/${total} passed`);

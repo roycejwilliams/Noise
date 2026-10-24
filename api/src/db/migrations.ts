@@ -2952,6 +2952,24 @@ export async function runMigrations(): Promise<void> {
     )
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS call_links_expires ON call_links (expires_at)`))
     .catch((err: Error) => console.error("call_links table init failed:", err));
+  // The voice read on calls (services/voiceRead.ts, 2026-10-23): runs only for a member who agreed to it, one by one
+  // (default false, nobody is opted in by code), plus test numbers. Its stream links: Twilio logs TwiML, so the fork's
+  // <Parameter> carries an opaque one-time id; only its hash is kept, with the member and the call's session on our side.
+  await pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_read_ok BOOLEAN NOT NULL DEFAULT false`)
+    .then(() =>
+      pool.query(
+        `CREATE TABLE IF NOT EXISTS voice_stream_links (
+          id_hash TEXT PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          session_hash TEXT NOT NULL,
+          expires_at TIMESTAMPTZ NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )`,
+      ),
+    )
+    .then(() => pool.query(`CREATE INDEX IF NOT EXISTS voice_stream_links_expires ON voice_stream_links (expires_at)`))
+    .catch((err: Error) => console.error("voice read init failed:", err));
   await concurrencyMigrations();
 }
 
