@@ -91,6 +91,7 @@
     "evals/emotion/callRules.ts",
     "evals/emotion/labels.ts",
     "evals/voiceFlags/rules.ts",
+    "evals/voiceRead/rules.ts",
     "evals/calls/sep23Bugs.ts",
     "evals/calls/pr46Review.ts",
     "evals/auth/rules.ts",

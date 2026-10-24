@@ -9,6 +9,7 @@ import express from "express";
 import helmut from "helmet";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import { WebSocketServer } from "ws";
 import { runMigrations } from "./db/migrations.js";
 import { registerJobs } from "./jobs/index.js";
 import { installGracefulShutdown, trackRequests } from "./services/shutdown.js";
@@ -31,6 +32,7 @@ import { reportUnfinishedTurns, sendblueRouter } from "./routes/sendblue.js";
 import { stripeRouter } from "./routes/stripe.js";
 import { createUsersRouter } from "./routes/users.js";
 import { getAudioEntry } from "./services/voiceNote.js";
+import { handleTwilioStream, isVoiceStreamPath, voiceStreamSignatureOk, type SocketLike } from "./services/mediaStreamBridge.js";
 import { configureSocket } from "./socket/index.js";
 import { buildCoVCard } from "./utils/vcard.js";
 import { createEmailOptOutRouter } from "./routes/emailOptOut.js";
@@ -48,6 +50,29 @@ const io = new Server(httpServer, { cors: corsOptions });
 
 //Web socket config
 configureSocket(io);
+
+// The voice read's listen-only fork of the caller's audio (services/mediaStreamBridge.ts): Twilio's own WebSocket
+// protocol, so a plain ws server in noServer mode beside socket.io (which handles only /socket.io/). Twilio's signature on
+// the handshake is checked before the upgrade; an unsigned or wrongly signed stream is refused, and the call goes on
+// without the read either way.
+const voiceStreamWss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
+httpServer.on("upgrade", (req, socket, head) => {
+  if (!isVoiceStreamPath(req.url)) return;
+  if (!voiceStreamSignatureOk(req.headers["x-twilio-signature"])) {
+    console.warn("voiceRead: stream refused (Twilio signature missing or invalid)");
+    socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  voiceStreamWss.handleUpgrade(req, socket, head, (ws) => {
+    try {
+      handleTwilioStream(ws as unknown as SocketLike);
+    } catch (err: any) {
+      console.error("voiceRead: stream handler failed (the call is unaffected):", err?.message ?? err);
+      ws.close();
+    }
+  });
+});
 
 //Security check to make sure the right tables/columns
 // are there when the server starts. Fixed 2026-09-17: runMigrations()

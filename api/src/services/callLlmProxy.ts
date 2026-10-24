@@ -282,6 +282,9 @@ export type ProxyDeps = {
   onTool?: (t: { name: string; input: unknown; result: unknown; ms: number; timedOut: boolean }) => void;
   onToolRound?: (r: { step: number; last: boolean }) => void;
   now?: () => number;
+  // The live voice read's line for this turn (services/voiceRead.ts voiceLine, read by routes/callLlm.ts without waiting on
+  // Hume): how they sound when it adds to their words, never a feeling's name. Absent when there is nothing strong.
+  voiceRead?: string | null;
 };
 
 // What the member last said, for the safety check on the question rule.
@@ -468,6 +471,9 @@ export async function* runCallLlm(b: OaiRequest, deps: ProxyDeps): AsyncGenerato
     // This turn's note goes after their words, past the cache breakpoint: the cached prefix (system and the call so far) is untouched.
     if (decision.turnNote) req.messages[req.messages.length - 1].content.push({ type: "text", text: decision.turnNote });
   }
+  // The voice read goes after their words too, past the cache breakpoint, like the turn note. Voice-only mode adds nothing,
+  // and on a safety call the voice is never used: it can't soften or outweigh serious words.
+  if (deps.voiceRead && !voiceOnly && !safetyCall(b)) req.messages[req.messages.length - 1].content.push({ type: "text", text: deps.voiceRead });
   // What Co's tools returned this turn also backs what Co says (an event searchEvents found can be named).
   let toolCorpus = "";
   let toolsOff = false;

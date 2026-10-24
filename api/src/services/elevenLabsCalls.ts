@@ -30,6 +30,7 @@ import pool from "../db/db.js";
 import { DateTime } from "luxon";
 import { memberZone } from "./memberTime.js";
 import { TEAM_BUILDER_LINE, isTeamMember } from "./extensions.js";
+import { voiceReadAllowed, voiceStreamUrl, withVoiceFork } from "./voiceRead.js";
 
 let client: ElevenLabsClient | null = null;
 export function elevenLabs(): ElevenLabsClient {
@@ -103,7 +104,8 @@ export async function registerElevenLabsCall(o: {
   const agentId = process.env.ELEVENLABS_AGENT_ID;
   if (!agentId) throw new Error("ELEVENLABS_AGENT_ID is not set");
   const callToken = issueCallToken(o.userId);
-  return elevenLabs().conversationalAi.twilio.registerCall({
+  const team = await isTeamMember(o.userId).catch(() => false);
+  const twiml = (await elevenLabs().conversationalAi.twilio.registerCall({
     agentId,
     fromNumber: o.from,
     toNumber: o.to,
@@ -122,7 +124,7 @@ export async function registerElevenLabsCall(o: {
         call_token: callToken,
         first_name: o.firstName,
         // Who placed the call and whether they're on the team, first (callSituation above).
-        context_summary: withCallSituation(o.contextSummary, { direction: o.direction, team: await isTeamMember(o.userId).catch(() => false) }),
+        context_summary: withCallSituation(o.contextSummary, { direction: o.direction, team }),
         direction: o.direction,
         right_now: o.rightNow ?? "",
         finds_now: o.findsNow ?? "Nothing to offer right now. Don't offer an event.",
@@ -130,7 +132,25 @@ export async function registerElevenLabsCall(o: {
         call_reason: await import("./callReason.js").then((m) => m.callReasonVariable(o.userId, o.direction)).catch(() => ""),
       },
     },
-  } as any) as unknown as Promise<string>;
+  } as any)) as unknown as string;
+  // The voice read's listen-only fork of the caller's audio (services/voiceRead.ts), only where it may run.
+  return withVoiceReadFork(twiml, { userId: o.userId, callToken, memberPhone: o.direction === "inbound" ? o.from : o.to, team });
+}
+
+// ElevenLabs' TwiML, with the voice read's fork added when it may run for this member (voiceReadAllowed: the Hume key,
+// our URL and Twilio's token are set, off production, and a test or team member). Anything that goes wrong returns the
+// TwiML exactly as ElevenLabs gave it: the call never depends on the read.
+export function withVoiceReadFork(twiml: string, o: { userId: string; callToken: string; memberPhone: unknown; team: boolean }, env: NodeJS.ProcessEnv = process.env): string {
+  try {
+    if (typeof twiml !== "string" || !voiceReadAllowed({ memberPhone: o.memberPhone, team: o.team }, env)) return twiml;
+    const streamUrl = voiceStreamUrl(env.API_URL);
+    if (!streamUrl) return twiml;
+    const forked = withVoiceFork(twiml, { streamUrl, userId: o.userId, callToken: o.callToken });
+    console.log(`voiceRead: fork ${forked === twiml ? "not placed (no <Response>)" : "added"} for ${o.userId.slice(0, 8)}`);
+    return forked;
+  } catch {
+    return twiml;
+  }
 }
 
 // ---------- after the call
