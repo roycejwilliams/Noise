@@ -362,6 +362,8 @@ check(`a direct ask and two nudges racing beside one open question: never more t
   const got = await O.draftingInSlot(kept!, async () => "a draft");
   check("... a draft that returns leaves it held for the send", got === "a draft" && W.offers.find((o) => o.candidate_key === "zed")?.status === "sending");
   await O.releaseOfferSlot(kept!);
+  const es = (await import("node:fs")).readFileSync(new URL("../../src/services/eventScoring.ts", import.meta.url), "utf8");
+  check("... and the match nudge's own claim is released when its draft throws, so a later pass can retry", /draftFn\)\)\.catch\(async \(err: any\) => \{\n[^\n]*\n\s+await releaseMatchNudgeClaim\(eventId, person\.user_id\)\.catch\(\(\) => \{\}\);\n\s+throw err;/.test(es));
   offer(tess.id, "kai", "sending", "nudge", 30);
   check("a nudge claim that never confirmed is never put in the direct-ask line", (await O.requeueStaleAsks()).length === 0 && W.offers.find((o) => o.candidate_key === "kai")?.status === "sending");
 }
