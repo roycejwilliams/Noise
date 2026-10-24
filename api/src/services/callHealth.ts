@@ -300,14 +300,15 @@ export async function markCallReviewed(conversationId: string, deps: Pick<Health
 }
 
 export type FlaggedCall = { conversationId: string; userId: string; endedAt: string; reasons: HealthReason[] };
-// Flagged and not yet reviewed, newest first: for the morning review and the script's list. Codes only.
+// Flagged and not yet reviewed, newest first: for the morning review and the script's list. Codes only. Every one still held is
+// shown, however old (on co-test a hold never expires; days narrows it only when asked).
 export async function flaggedCalls(o: { userId?: string; until?: Date; days?: number } = {}, deps: Pick<HealthDeps, "db"> = realHealthDeps()): Promise<FlaggedCall[]> {
   const until = o.until ?? new Date();
   const { rows } = await deps.db.query(
     `SELECT conversation_id, user_id, ended_at, reasons FROM call_health
-     WHERE flagged AND reviewed_at IS NULL AND ended_at <= $1 AND ended_at > $1::timestamptz - make_interval(days => $2) AND ($3::uuid IS NULL OR user_id = $3)
-     ORDER BY ended_at DESC LIMIT 100`,
-    [until, o.days ?? 30, o.userId ?? null],
+     WHERE flagged AND reviewed_at IS NULL AND ended_at <= $1 AND ($2::int IS NULL OR ended_at > $1::timestamptz - make_interval(days => $2)) AND ($3::uuid IS NULL OR user_id = $3)
+     ORDER BY ended_at DESC LIMIT 200`,
+    [until, o.days ?? null, o.userId ?? null],
   );
   return rows.map((r: any) => ({ conversationId: String(r.conversation_id), userId: String(r.user_id), endedAt: new Date(r.ended_at).toISOString(), reasons: rankReasons((r.reasons ?? []).filter(isReason)) }));
 }

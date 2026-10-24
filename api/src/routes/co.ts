@@ -523,11 +523,18 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     if (verdict !== "conversation") {
       recordDecision({ layer: 8, decision: "call.voicemail", userId, outcome: verdict === "voicemail" ? "act" : "skip", action: verdict, proposal: { conversationId: data.conversation_id, termination: data.metadata?.termination_reason ?? null } }).catch(() => {});
     }
+    // A call with nothing of ours stored still leaves a conversation at ElevenLabs: queued on the same window, nothing to verify.
+    const queueUnstored = () => {
+      if (u[0]) forgetAfterCall({ userId, conversationId, transcriptSha256: null, phone: u[0].phone_number, team: u[0].mo_approver === true }).catch(() => {});
+    };
     if (kind && u[0]) {
       const r = await handleMissedVoiceCall(u[0], callSid, kind, conversationId);
+      queueUnstored();
       return res.status(200).send({ success: true, missed: kind, ...r });
     }
-    const ended = await processEndedCall({
+    let ended: Awaited<ReturnType<typeof processEndedCall>>;
+    try {
+      ended = await processEndedCall({
       userId,
       callKey: `el:${conversationId}`,
       offered: typeof vars.finds_now === "string" ? vars.finds_now : undefined,
@@ -551,6 +558,11 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
         voice: async () => momentSignals(await takeVoiceMoments(callKeyOf(userId, String(vars.call_token ?? "")), callerTurnsFrom(turns))),
       }),
     });
+    } catch (err) {
+      // Processing failed: nothing stored yet. A retried delivery that stores it turns the row into a verified one.
+      queueUnstored();
+      throw err;
+    }
     // Moments where their voice said more than their words, beside the text
     // read (services/voiceFlags.ts). Test members only for now; never fails the call.
     if (u[0]) flagVoiceMoments({ userId, phone: u[0].phone_number, conversationId, turns }).catch(() => {});
@@ -571,6 +583,7 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
     // ElevenLabs' copy (audio and transcript) is queued for deletion: 7 days for a member, 30 for the team and test numbers, held
     // while the health check's flag is unreviewed. Not awaited and never throws: the member-facing steps above are done.
     if (ended.stored && u[0]) forgetAfterCall({ userId, conversationId, transcriptSha256: ended.stored.transcriptSha256, phone: u[0].phone_number, team: u[0].mo_approver === true }).catch(() => {});
+    else if (ended.unstored) queueUnstored();
     // Co never tells a member what they feel. Speech can't be filtered mid-call
     // (ElevenLabs speaks its model's reply directly), so every call is checked
     // after: a line that names their feeling is logged for the review.
@@ -718,7 +731,7 @@ async function processEndedCall(o: {
   // When the call started and ended (the webhook's metadata): which commitments were this call's, and the confirmation's latency.
   startedAt?: Date | null;
   endedAt?: Date | null;
-}): Promise<{ status: number; body: unknown; stored?: { transcriptSha256: string } }> {
+}): Promise<{ status: number; body: unknown; stored?: { transcriptSha256: string }; unstored?: true }> {
   const user_id = o.userId;
   const chat_id = o.callKey;
   const twilio_metadata = o.twilioMetadata ?? undefined;
@@ -743,7 +756,7 @@ async function processEndedCall(o: {
       const flagged = await pool.query(`SELECT 1 FROM voicemail_calls WHERE call_sid = $1`, [voicemailCallSid]);
       if (flagged.rows.length > 0) {
         console.log(`post-call: skipping extraction/follow-up for voicemail call ${voicemailCallSid}`);
-        return { status: 200, body: { success: true, skipped: "voicemail" } };
+        return { status: 200, body: { success: true, skipped: "voicemail" }, unstored: true };
       }
     }
 
@@ -800,7 +813,7 @@ async function processEndedCall(o: {
         console.error(`post-call: empty transcript for chat ${chat_id} (user ${user_id})`);
         await pool.query(`UPDATE users SET call_status = 'failed' WHERE id = $1`, [user_id]);
         if (chat_id) await finishCallProcessing(chat_id, "failed");
-        return { status: 200, body: { success: true, empty: true } };
+        return { status: 200, body: { success: true, empty: true }, unstored: true };
       }
 
       // Fixed 2026-09-17 (finding 2) — AMD-based voicemail detection only
@@ -846,7 +859,7 @@ async function processEndedCall(o: {
         await pool.query(`UPDATE users SET call_status = 'completed', call_status_updated_at = NOW() WHERE id = $1`, [user_id]);
         if (chat_id) await finishCallProcessing(chat_id, "completed");
         _io?.to(`user:${user_id}`).emit("co:profile_ready");
-        return { status: 200, body: { success: true, noRealConversation: true } };
+        return { status: 200, body: { success: true, noRealConversation: true }, unstored: true };
       }
 
       // The call ending is the trigger (services/callFollowThrough.ts): what Co said it would send is confirmed now, then done, and

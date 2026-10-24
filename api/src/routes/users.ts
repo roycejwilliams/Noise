@@ -126,6 +126,11 @@ export function createUsersRouter(authenticateToken: RequestHandler): Router {
             .send("Unauthorized: You can only delete your own account");
         }
 
+        // Their calls' copies at ElevenLabs go first (services/elevenLabsForget.ts): one that fails stays queued and is retried by the
+        // scheduled pass after the account is gone (the queue has no foreign key on users). Never throws.
+        const { forgetCallsNow } = await import("../services/elevenLabsForget.js");
+        await forgetCallsNow(req.params.id, () => true);
+
         const userDeletion = await pool.query(
           `DELETE FROM users WHERE id = $1 RETURNING *`,
           [req.params.id],
