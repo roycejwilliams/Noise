@@ -257,13 +257,18 @@ async function runAskScoring<T extends ScorableCandidate>(
   candidates: T[],
   shown: { labels: Set<string> }[],
   hidden?: Map<string, string[]>,
+  // The prompt carries other members' hidden asks: no text is recorded for this call (forget by default). The trace text
+  // (services/llmTraceText.ts, kept 14 days) is filed under the member the scoring ran for, so a private ask removed by its owner
+  // would have outlived its removal in someone else's trace (review of #245 x #247). recordInputs/recordOutputs false: the span
+  // carries no prompt or answer, so neither Langfuse nor our trace text keeps one.
+  opts: { noTraceText?: boolean } = {},
 ): Promise<AskScore<T>[]> {
   try {
     const { hiddenEcho } = await import("../harness/hiddenEcho.js");
     const { SENSITIVE } = await import("../harness/matchGate.js");
     const { text: raw } = await generateText({
       model: anthropic(SCORING_MODEL),
-      experimental_telemetry: { isEnabled: true, functionId },
+      experimental_telemetry: { isEnabled: true, functionId, ...(opts.noTraceText ? { recordInputs: false, recordOutputs: false } : {}) },
       prompt,
     });
 
@@ -495,7 +500,9 @@ export async function scoreAgainstRoomFrame<T extends ScorableCandidate>(
   if (!toScore.length) return zero;
   const lines = candidateLinesWithLabels(toScore, hints, hidden, { askerFirstName: opts.askerFirstName });
   const digest = lines.map((l, i) => `${i}. ${l.line}`).join("\n");
-  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden);
+  // A line with a hidden part (a private ask or a blocker) means the prompt holds it: no text is recorded for the call.
+  const noTraceText = toScore.some((c) => hiddenTextsOf(c, hidden).length > 0);
+  const scored = await runAskScoring("matching.scoreAgainstRoomFrame", buildRoomFramePrompt(f, digest, askerContext), toScore, lines, hidden, { noTraceText });
   return [...scored, ...zero];
 }
 
