@@ -110,10 +110,12 @@ export type ViaExaEvent = DiscoveredEvent & { online?: boolean; details: EventDe
 // Luma's location types that are a known online platform (its spec's enum: discord, meet, twitch, twitter, youtube, zoom; plus "online"
 // should Luma send it). Everything else is treated as not online.
 export const ONLINE_LOCATION_TYPES: ReadonlySet<string> = new Set(["online", "zoom", "meet", "google_meet", "discord", "twitch", "twitter", "youtube"]);
+// Luma's in-person location type. Only this, with a city, is a confirmed place; see the keep step in lumaEventsViaExa.
+export const IN_PERSON_LOCATION_TYPE = "offline";
 // What one search did, for the log (counts only: the query is the member's want).
 // pages: Luma links Exa returned. looked: links Luma's API resolved (lookup). calendars: links that were a calendar, not an event
 // (skipped). past: events the lookup already showed are over or outside the window (not read further). read: events read from the
-// API. notPublic: read but not listed as public by their host (dropped). noLocation: no place and not online (dropped). refused:
+// API. notPublic: read but not listed as public by their host (dropped). noLocation: no confirmed place (not a named online platform, nor in person with a city; dropped). refused:
 // lookups or reads Luma answered 429. limited: left unread because our own per-minute stop was reached. kept: public, upcoming,
 // inside the window, with a place.
 // error: what failed and what to do about it, for the log (never the member: they get the feed's events as before).
@@ -292,10 +294,13 @@ export async function lumaEventsViaExa(
       n.read++;
       // A host's private or members-only event never goes to strangers; unknown is not public (fails closed).
       if (e.visibility !== "public") return n.notPublic++, null;
-      // Online only for a meeting platform Luma's spec names (location_type enum, docs.luma.com Get Event). Anything else, "unknown"
-      // (an online link Luma doesn't recognize) and values outside the spec included, needs a city or is dropped: fails closed.
+      // A confirmed place only (Royce 2026-10-23, "unknown" ruling): online on a meeting platform Luma's spec names (location_type
+      // enum, docs.luma.com Get Event), or in person ("offline") with a city in its own record. Anything else ("unknown", which Luma
+      // uses for an online link it doesn't recognize; no type; values outside the spec) is dropped even when it carries a city: its
+      // place can't be confirmed, so it is never offered as in the member's city, and there is no "location unconfirmed" caption.
       const online = !!e.locationType && ONLINE_LOCATION_TYPES.has(e.locationType);
-      if (e.locationType === "missing" || (!online && !e.city)) return n.noLocation++, null;
+      const inPerson = e.locationType === IN_PERSON_LOCATION_TYPE && !!e.city;
+      if (!online && !inPerson) return n.noLocation++, null;
       const shown = e.locationVisibility === "public";
       const details: EventDetails = {
         startAt: e.startAt,

@@ -72,7 +72,7 @@ const eventDep = async (id: string): Promise<any> => {
   if (!p || typeof p === "string") return null;
   return {
     id, name: p.name ?? "", slug, startAt: p.startAt, endAt: p.endAt, timezone: p.timezone, visibility: p.visibility ?? null,
-    locationType: p.locationType ?? (p.online ? "zoom" : p.city ? "offline" : "missing"), locationVisibility: p.addressHidden || !(p.venue || p.address) ? "guests-only" : "public",
+    locationType: "locationType" in p ? p.locationType : (p.online ? "zoom" : p.city ? "offline" : "missing"), locationVisibility: p.addressHidden || !(p.venue || p.address) ? "guests-only" : "public",
     city: p.city ?? null, address: p.venue ?? null, fullAddress: p.address ?? null, hosts: p.hosts ?? [], description: p.description ?? null,
     registrationOpen: p.soldOut ? false : true, requireApproval: p.requiresApproval ?? null, spotsRemaining: p.spotsRemaining ?? null,
   };
@@ -199,18 +199,23 @@ const FEED_PAGES = { feed1: page({ startAt: FEED[0].start_at, apiId: "evt-feed1"
 {
   // Review of a0285221: a location type outside Luma's online platforms ("tba", "unknown") was read as online and said "is online".
   reset({
-    exa: ["tba1", "unk1", "zoom1", "tbacity1"].map((s) => ({ url: `https://lu.ma/${s}`, title: s })),
+    exa: ["tba1", "unk1", "zoom1", "tbacity1", "unkcity1", "nulltype1", "off1"].map((s) => ({ url: `https://lu.ma/${s}`, title: s })),
     pages: {
       tba1: page({ startAt: at(40), city: null, locationType: "tba" }),
       unk1: page({ startAt: at(41), city: null, locationType: "unknown" }),
       zoom1: page({ startAt: at(42), city: null, locationType: "zoom" }),
       tbacity1: page({ startAt: at(43), city: "San Francisco", locationType: "tba" }),
+      unkcity1: page({ startAt: at(44), city: "San Francisco", locationType: "unknown" }),
+      nulltype1: page({ startAt: at(45), city: "San Francisco", locationType: null }),
+      off1: page({ startAt: at(46), city: "San Francisco", locationType: "offline" }),
     },
   });
   const r = await V.lumaEventsViaExa("founder dinners", "San Francisco", { inRange: () => true, dates: "October 20 to October 26, 2026", deps: viaDeps() });
   const by = (u: string) => r?.events.find((e) => e.url === `https://lu.ma/${u}`);
-  check("a location type Luma doesn't name as an online platform ('tba', 'unknown') with no city: dropped and counted, never 'online'", !by("tba1") && !by("unk1") && r?.report.noLocation === 2, r?.report);
-  check("...zoom with no city is online; 'tba' with a city is in that city, not online", by("zoom1")?.online === true && by("zoom1")?.details.online === true && !!by("tbacity1") && !by("tbacity1")?.online && by("tbacity1")?.details.online === false, r?.events.map((e) => [e.url, e.online]));
+  check("a location type Luma doesn't name as an online platform ('tba', 'unknown') with no city: dropped and counted, never 'online'", !by("tba1") && !by("unk1"), r?.report);
+  check("...zoom with no city is online; 'offline' with a city is in that city, not online", by("zoom1")?.online === true && by("zoom1")?.details.online === true && !!by("off1") && !by("off1")?.online && by("off1")?.details.online === false && by("off1")?.city === "San Francisco", r?.events.map((e) => [e.url, e.online]));
+  // The "unknown" ruling (2026-10-23): a place that can't be confirmed is never offered as in the member's city, even with a city.
+  check("...'unknown', 'tba' or no type WITH a city: dropped and counted (place unconfirmed), never offered as in that city", !by("unkcity1") && !by("tbacity1") && !by("nulltype1") && r?.report.noLocation === 5 && r?.report.kept === 2, r?.report);
 }
 
 // ================================================================ no key, no search
