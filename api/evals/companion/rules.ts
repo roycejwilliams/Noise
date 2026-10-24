@@ -157,7 +157,7 @@ check("the one-incident kit instruction is gone (the replay showed it changed no
   const busy = C.capabilitySheet({ situation: C.situationFor({ kitFields: 2, message: "hi", openTasks: 1, eventToday: true }) }).join("\n").length;
   console.log(`  capability sheet: ${Math.round(full / 4)} tokens in full, ${Math.round(plain / 4)} on a plain turn`);
   check("situational entries are left out of a plain turn and kept when they apply", plain < full && busy === full);
-  check("a plain turn isn't offered task, location, going or kit tools", JSON.stringify(C.toolsOutOfSituation({ kit: false, tasks: false, eventToday: false }).sort()) === JSON.stringify(["closeTask", "saveKitFact", "shareLocationYes", "updateGoing", "updateTask"]));
+  check("a plain turn isn't offered task, location, going, kit or walk-in tools", JSON.stringify(C.toolsOutOfSituation({ kit: false, tasks: false, eventToday: false }).sort()) === JSON.stringify(["askedWalkin", "closeTask", "saveKitFact", "shareLocationYes", "updateGoing", "updateTask"]));
   check("a message about applying brings the kit back even with nothing saved", C.situationFor({ kitFields: 0, message: "help me apply to this fellowship", openTasks: 0, eventToday: false }).kit);
 }
 
