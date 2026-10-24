@@ -18,10 +18,12 @@ import {
   planBackfill,
   runBackfill,
   runDeletionPass,
+  stuckDeletes,
   transcriptHash,
   type ForgetDeps,
 } from "../../src/services/elevenLabsForget.js";
 import { markCallReviewed } from "../../src/services/callHealth.js";
+import { stuckDeleteFlags } from "../../src/harness/devReview.js";
 import { callSaysRemoved, removalRows } from "../../src/services/whatCoKnows.js";
 import { conversationLink } from "../../src/services/elevenLabsCalls.js";
 
@@ -45,9 +47,9 @@ const MIN = 60_000;
 const DAY = 86_400_000;
 const T0 = 1_800_000_000_000;
 
-type Row = { conversation_id: string; user_id: string; transcript_sha256: string; status: string; window_kind: string; due_at: number; forget_requested_at: number | null; attempts: number; last_error: string | null; last_attempt_at: number | null; deleted_at: number | null; created_at: number };
+type Row = { conversation_id: string; user_id: string; transcript_sha256: string | null; verify: boolean; last_outcome: string | null; status: string; window_kind: string; due_at: number; forget_requested_at: number | null; attempts: number; last_error: string | null; last_attempt_at: number | null; deleted_at: number | null; created_at: number };
 type Mem = { user_id: string; memory_type: string; content: string; audio_url: string | null; created_at?: number };
-type Health = { conversation_id: string; flagged: boolean; reviewed_at: number | null; late_done_at: number | null };
+type Health = { conversation_id: string; flagged: boolean; reviewed_at: number | null; late_done_at: number | null; ended_at?: number };
 
 // An in-memory stand-in for the tables the module reads, answering the module's own queries by shape. NOW() is the fake's clock.
 function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; throwOn?: RegExp; users?: Record<string, { phone: string; team?: boolean }> } = {}) {
@@ -58,9 +60,13 @@ function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; t
   const queries: string[] = [];
   let now = T0;
   const t = (x: unknown) => (x instanceof Date ? x.getTime() : Number(x));
-  const held = (id: string) => {
-    const h = health.get(id);
-    return !!h && ((h.flagged && h.reviewed_at === null) || h.late_done_at === null);
+  // holdSql: held when flagged-unreviewed (on production only until 30 days after the call), late signals open, or no health row
+  // while the row is under 48h old.
+  const held = (r: Row, prod: boolean) => {
+    const h = health.get(r.conversation_id);
+    if (!h) return r.created_at > now - FORGET.noHealthHoldHours * 60 * MIN;
+    const flagHold = h.flagged && h.reviewed_at === null && !(prod && (h.ended_at ?? T0) <= now - FORGET.prodHoldDays * DAY);
+    return flagHold || h.late_done_at === null;
   };
   const db = {
     async query(sql: string, params: unknown[] = []): Promise<{ rows: any[] }> {
@@ -68,60 +74,71 @@ function fakeWorld(o: { memories?: Mem[]; processing?: Record<string, string>; t
       if (o.throwOn && o.throwOn.test(sql)) throw new Error("connection refused");
       const p = params as any[];
       if (/INSERT INTO elevenlabs_deletions/.test(sql)) {
-        if (!rows.has(p[0])) rows.set(p[0], { conversation_id: p[0], user_id: p[1], transcript_sha256: p[2], status: "pending", window_kind: p[3], due_at: t(p[4]) + Number(p[5]) * DAY, forget_requested_at: null, attempts: 0, last_error: null, last_attempt_at: null, deleted_at: null, created_at: now });
+        const old = rows.get(p[0]);
+        if (old && p[2] != null && !old.verify && old.status !== "deleted") {
+          old.verify = true;
+          old.transcript_sha256 = p[2];
+        }
+        if (!old) rows.set(p[0], { conversation_id: p[0], user_id: p[1], transcript_sha256: p[2] ?? null, verify: p[2] != null, last_outcome: null, status: "pending", window_kind: p[3], due_at: t(p[4]) + Number(p[5]) * DAY, forget_requested_at: null, attempts: 0, last_error: null, last_attempt_at: null, deleted_at: null, created_at: now });
         return { rows: [] };
       }
       if (/UPDATE elevenlabs_deletions d SET status = 'deleting'/.test(sql)) {
         const r = rows.get(p[0]);
-        const stale = r && r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[2] * MIN;
-        if (!r || r.attempts >= p[1] || !(r.status === "pending" || stale)) return { rows: [] };
-        if (!(r.forget_requested_at !== null || (r.due_at <= now && !held(r.conversation_id)))) return { rows: [] };
+        const stale = r && r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[1] * MIN;
+        if (!r || !(r.status === "pending" || stale)) return { rows: [] };
+        if (!(r.forget_requested_at !== null || (r.due_at <= now && !held(r, p[2] === true)))) return { rows: [] };
         r.status = "deleting";
         r.attempts++;
         r.last_attempt_at = now;
-        return { rows: [{ user_id: r.user_id, transcript_sha256: r.transcript_sha256, attempts: r.attempts, forget_requested_at: r.forget_requested_at }] };
+        return { rows: [{ user_id: r.user_id, transcript_sha256: r.transcript_sha256, attempts: r.attempts, forget_requested_at: r.forget_requested_at, verify: r.verify }] };
       }
       if (/UPDATE elevenlabs_deletions SET status = 'deleted'/.test(sql)) {
         const r = rows.get(p[0])!;
         r.status = "deleted";
         r.deleted_at = now;
         r.last_error = p[1];
+        r.last_outcome = p[2];
         return { rows: [] };
       }
-      if (/UPDATE elevenlabs_deletions SET status = \$2/.test(sql)) {
+      if (/UPDATE elevenlabs_deletions SET status = 'pending', last_error = \$2, last_outcome = \$3/.test(sql)) {
         const r = rows.get(p[0])!;
-        r.status = p[1];
-        r.last_error = p[2];
+        r.status = "pending";
+        r.last_error = p[1];
+        r.last_outcome = p[2];
         return { rows: [] };
       }
+      if (/FROM elevenlabs_deletions\s+WHERE status <> 'deleted' AND attempts >= \$1/.test(sql))
+        return { rows: [...rows.values()].filter((r) => r.status !== "deleted" && r.attempts >= p[0] && (p[1] === null || r.user_id === p[1])).map((r) => ({ ...r, created_at: new Date(r.created_at) })) };
       if (/UPDATE elevenlabs_deletions SET forget_requested_at/.test(sql)) {
         const r = rows.get(p[0]);
         if (r && r.user_id === p[1] && r.status !== "deleted") {
           r.forget_requested_at ??= now;
-          if (r.status === "gave_up") {
-            r.attempts = 0;
-            r.status = "pending";
-          }
+          if (r.attempts >= p[2]) r.attempts = 0;
         }
         return { rows: [] };
       }
+      if (/SELECT content FROM co_memories WHERE user_id = \$1 AND memory_type = 'call_transcript' AND encode\(sha256/.test(sql))
+        return { rows: memories.filter((m) => m.user_id === p[0] && m.memory_type === "call_transcript" && transcriptHash(m.content) === p[1]).map((m) => ({ content: m.content })) };
       if (/SELECT content FROM co_memories/.test(sql)) return { rows: memories.filter((m) => m.user_id === p[0] && m.memory_type === "call_transcript" && m.audio_url === p[1]).map((m) => ({ content: m.content })) };
       if (/SELECT status FROM call_processing/.test(sql)) return { rows: processing.has(p[0]) ? [{ status: processing.get(p[0]) }] : [] };
       if (/SELECT d\.conversation_id, m\.content FROM elevenlabs_deletions d/.test(sql)) {
         const out: any[] = [];
         for (const r of rows.values())
-          if (r.user_id === p[0] && r.status !== "deleted")
-            for (const m of memories) if (m.user_id === r.user_id && m.memory_type === "call_transcript" && m.audio_url === p[1] + r.conversation_id) out.push({ conversation_id: r.conversation_id, content: m.content });
+          if (r.user_id === p[0] && r.status !== "deleted") {
+            const ms = memories.filter((m) => m.user_id === r.user_id && m.memory_type === "call_transcript" && m.audio_url === p[1] + r.conversation_id);
+            if (ms.length) for (const m of ms) out.push({ conversation_id: r.conversation_id, content: m.content });
+            else out.push({ conversation_id: r.conversation_id, content: null });
+          }
         return { rows: out };
       }
       if (/SELECT d\.conversation_id FROM elevenlabs_deletions d/.test(sql)) {
+        const retryMins = (r: Row) => (r.attempts >= p[0] ? FORGET.backoffMinutes : p[1]);
         const due = [...rows.values()].filter(
           (r) =>
-            r.attempts < p[0] &&
-            (r.forget_requested_at !== null || (r.due_at <= now && !held(r.conversation_id))) &&
-            ((r.status === "pending" && (r.last_attempt_at === null || r.last_attempt_at < now - p[1] * MIN)) || (r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[2] * MIN)),
+            (r.forget_requested_at !== null || (r.due_at <= now && !held(r, p[3] === true))) &&
+            ((r.status === "pending" && (r.last_attempt_at === null || r.last_attempt_at < now - retryMins(r) * MIN)) || (r.status === "deleting" && r.last_attempt_at !== null && r.last_attempt_at < now - p[2] * MIN)),
         );
-        return { rows: due.sort((a, b) => (a.forget_requested_at === null ? 1 : 0) - (b.forget_requested_at === null ? 1 : 0) || a.due_at - b.due_at).slice(0, p[3]).map((r) => ({ conversation_id: r.conversation_id })) };
+        return { rows: due.sort((a, b) => (a.forget_requested_at === null ? 1 : 0) - (b.forget_requested_at === null ? 1 : 0) || a.due_at - b.due_at).slice(0, p[4]).map((r) => ({ conversation_id: r.conversation_id })) };
       }
       if (/UPDATE call_health SET reviewed_at = NOW\(\)/.test(sql)) {
         const h = health.get(p[0]);
@@ -285,7 +302,7 @@ for (const [label, o] of [["the team", { team: true }], ["a test number", { phon
   check("2h a batch's worth of held calls never starves a due one", f.removed.join() === `conv_${FORGET.batch + 1}`);
   const svc = readFileSync(new URL("../../src/services/elevenLabsForget.ts", import.meta.url), "utf8");
   const pass = svc.slice(svc.indexOf("export async function runDeletionPass("), svc.indexOf("export async function forgetCallsNow("));
-  check("2i the pass's own SQL leaves held rows out", /d\.due_at <= NOW\(\) AND NOT EXISTS \(\s*SELECT 1 FROM call_health h WHERE h\.conversation_id = d\.conversation_id AND \(\(h\.flagged AND h\.reviewed_at IS NULL\) OR h\.late_done_at IS NULL\)/.test(pass));
+  check("2i the pass's own SQL leaves held rows out", /WHERE \$\{holdSql\("\$4"\)\}/.test(pass) && /isProduction\(deps\.env\), FORGET\.batch\]/.test(pass));
 }
 
 // 3. Forget: a removal their call says deletes at once, whatever the window or hold.
@@ -317,10 +334,10 @@ for (const [label, o] of [["the team", { team: true }], ["a test number", { phon
   const w = storedWorld();
   const f = fakeDeps(w, { fail: "always" });
   await forgetAfterCall(call(), f.deps);
-  w.rows.get("conv_a")!.status = "gave_up";
-  w.rows.get("conv_a")!.attempts = FORGET.maxAttempts;
+  w.rows.get("conv_a")!.attempts = FORGET.maxAttempts + 3;
+  w.rows.get("conv_a")!.last_attempt_at = w.now().getTime();
   const f2 = fakeDeps(w);
-  check("3e a forget gives a gave_up conversation a fresh set of attempts", (await forgetCallsNow(USER, () => true, f2.deps)).deleted === 1 && f2.removed.join() === "conv_a");
+  check("3e a forget gives a stuck conversation a fresh set of quick attempts", (await forgetCallsNow(USER, () => true, f2.deps)).deleted === 1 && f2.removed.join() === "conv_a" && w.rows.get("conv_a")!.attempts === 1);
 }
 {
   // The forget skips the stored-copy verify (they asked for it gone): our copy may already be gone too.
@@ -348,13 +365,82 @@ for (const [label, o] of [["the team", { team: true }], ["a test number", { phon
   check("3l applyKnowledgeChanges forgets calls on a removal, after the change committed, without waiting", apply.indexOf("F.forgetCallsNow(userId") > apply.indexOf('await client.query("COMMIT")') && /if \(applied\.some\(\(a\) => a\.now == null\)\)/.test(apply) && /void import\("\.\/elevenLabsForget\.js"\)/.test(apply));
 }
 
+// 3b. Review fixes (2026-10-23).
+{
+  // Production: a flagged, unreviewed call's hold ends 30 days after the call; on co-test it never does.
+  const PROD = { ELEVENLABS_API_KEY: "ci", NODE_ENV: "production" } as NodeJS.ProcessEnv;
+  for (const [label, env, gone] of [["production", PROD, true], ["co-test", ENV, false]] as const) {
+    const w = storedWorld();
+    const f = fakeDeps(w, { env });
+    await forgetAfterCall(call(), f.deps);
+    w.health.set("conv_a", { conversation_id: "conv_a", flagged: true, reviewed_at: null, late_done_at: T0 + 2 * DAY, ended_at: T0 });
+    await passFor(w, f.deps, 29 * 24);
+    const kept = f.calls() === 0;
+    await passFor(w, f.deps, 25);
+    check(`3m ${label}: a flagged call is held through day 29; after day 30 it ${gone ? "goes" : "is still held"}`, kept && (gone ? f.removed.join() === "conv_a" : f.calls() === 0));
+  }
+}
+{
+  // Nothing stored (voicemail, empty transcript, no real conversation, a processing failure): queued, nothing to verify.
+  const w = fakeWorld({ processing: { "el:conv_v": "failed" } });
+  const f = fakeDeps(w);
+  check("3n a call with nothing stored is queued, unverified", (await forgetAfterCall({ ...call({ id: "conv_v" }), transcriptSha256: null }, f.deps)) === "queued" && w.rows.get("conv_v")?.verify === false && w.rows.get("conv_v")?.transcript_sha256 === null && f.logs.some((l) => /nothing stored to verify/.test(l)));
+  await passFor(w, f.deps, 7 * 24 - 1);
+  const kept = f.calls() === 0;
+  await passFor(w, f.deps, 2);
+  check("3o deleted on the member's 7-day window with nothing to verify", kept && f.removed.join() === "conv_v");
+  const wt = fakeWorld();
+  const ft = fakeDeps(wt);
+  await forgetAfterCall({ ...call({ id: "conv_t", team: true }), transcriptSha256: null }, ft.deps);
+  check("3p and on 30 days for the team", wt.rows.get("conv_t")!.due_at === T0 + 30 * DAY && wt.rows.get("conv_t")!.window_kind === "team");
+}
+{
+  // A failed delivery queued unverified, then a retried one stores the transcript: the row becomes a verified one.
+  const w = storedWorld();
+  const f = fakeDeps(w);
+  await forgetAfterCall({ ...call(), transcriptSha256: null }, f.deps);
+  await forgetAfterCall(call({ sha: transcriptHash("assistant: not what we stored") }), f.deps);
+  check("3q a later store turns the unverified row verified", w.rows.get("conv_a")!.verify === true && w.rows.get("conv_a")!.transcript_sha256 === transcriptHash("assistant: not what we stored"));
+  await passFor(w, f.deps, 7 * 24 + 1);
+  check("3r and then it is verified like any stored call (a mismatch keeps it)", f.calls() === 0 && w.rows.get("conv_a")!.last_outcome === "not_stored");
+}
+{
+  // processEndedCall keeps one row for identical content: the transcript is stored under another call's link.
+  const w = fakeWorld({ memories: [{ user_id: USER, memory_type: "call_transcript", content: TRANSCRIPT, audio_url: conversationLink("conv_first") }], processing: { "el:conv_dup": "completed" } });
+  const f = fakeDeps(w);
+  await forgetAfterCall(call({ id: "conv_dup" }), f.deps);
+  await passFor(w, f.deps, 7 * 24 + 1);
+  check("3s the same transcript stored under another link still counts as stored", f.removed.join() === "conv_dup");
+}
+{
+  // Deleting the account: every call forgotten first, stored or not; a failure is retried after the account is gone.
+  const w = storedWorld();
+  const f = fakeDeps(w, { fail: 1 });
+  await forgetAfterCall(call(), f.deps);
+  await forgetAfterCall({ ...call({ id: "conv_v" }), transcriptSha256: null }, f.deps);
+  const out = await forgetCallsNow(USER, () => true, f.deps);
+  check("3t account deletion forgets every call at once, including one with nothing stored", out.deleted === 1 && out.delete_failed === 1 && w.rows.get("conv_a")!.forget_requested_at !== null && w.rows.get("conv_v")!.forget_requested_at !== null);
+  await passFor(w, f.deps, 1);
+  check("3u the one that failed is retried by the next pass", f.removed.length === 2 && [...w.rows.values()].every((r) => r.status === "deleted"));
+  const users = readFileSync(new URL("../../src/routes/users.ts", import.meta.url), "utf8");
+  const del = users.slice(users.indexOf('router.delete(\n    "/:id"'), users.indexOf("DELETE FROM users WHERE id = $1"));
+  check("3v the account delete forgets their calls before it deletes the user", /await forgetCallsNow\(req\.params\.id, \(\) => true\);/.test(del));
+}
+{
+  const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
+  const route = co.slice(co.indexOf('router.post("/el/post-call"'), co.indexOf("// Root-cause guard"));
+  check("3w the route queues unstored calls: missed calls, a processing failure, and processing that stored nothing", /handleMissedVoiceCall\(u\[0\], callSid, kind, conversationId\);\n\s*queueUnstored\(\);/.test(route) && /\} catch \(err\) \{[\s\S]{0,200}queueUnstored\(\);\n\s*throw err;/.test(route) && /else if \(ended\.unstored\) queueUnstored\(\);/.test(route) && /transcriptSha256: null/.test(route));
+  const pe = co.slice(co.indexOf("async function processEndedCall("), co.indexOf("async function scheduleFollowUpText("));
+  check("3x processEndedCall marks voicemail, empty and no-conversation as unstored (never the duplicate paths)", /skipped: "voicemail" \}, unstored: true/.test(pe) && /empty: true \}, unstored: true/.test(pe) && /noRealConversation: true \}, unstored: true/.test(pe) && !/duplicate: true \}, unstored/.test(pe));
+}
+
 // 4. Never delete what we haven't stored (the scheduled path verifies every time).
 {
   const w = fakeWorld({ processing: { "el:conv_a": "completed" } });
   const f = fakeDeps(w);
   await forgetAfterCall(call(), f.deps);
   await passFor(w, f.deps, 7 * 24 + 1);
-  check("4a due, but the transcript was never stored: nothing deleted, reason logged", f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && f.logs.some((l) => /kept conv_a \(attempt 1\/5\): no stored transcript/.test(l)) && noSecret(f.logs));
+  check("4a due, but the transcript was never stored: nothing deleted, reason logged", f.calls() === 0 && w.rows.get("conv_a")?.status === "pending" && f.logs.some((l) => /kept conv_a \(attempt 1\): no stored transcript/.test(l)) && noSecret(f.logs));
 }
 for (const [label, mem] of [
   ["a different transcript (hash differs)", { user_id: USER, memory_type: "call_transcript", content: "assistant: a different call", audio_url: conversationLink("conv_a") }],
@@ -406,8 +492,19 @@ for (const status of ["processing", "failed", undefined]) {
   await runDeletionPass(f.deps);
   check("5b the very next run (30 minutes on) retries it", f.calls() === 2);
   await passFor(w, f.deps, 10);
-  check(`5c bounded: exactly ${FORGET.maxAttempts} attempts, then gave_up`, f.calls() === FORGET.maxAttempts && w.rows.get("conv_a")?.status === "gave_up");
-  check("5d the last attempt says it gives up; every failure logged without text", f.logs.some((l) => /attempt 5\/5\).*giving up, it stays at ElevenLabs/.test(l)) && noSecret(f.logs));
+  check(`5c ${FORGET.maxAttempts} quick attempts, then it backs off (no more within the day)`, f.calls() === FORGET.maxAttempts && w.rows.get("conv_a")?.status === "pending");
+  await passFor(w, f.deps, 24);
+  check("5c2 then once a day, never given up", f.calls() === FORGET.maxAttempts + 1 && w.rows.get("conv_a")?.status === "pending");
+  check("5d the backing-off attempt says so; every failure logged without text", f.logs.some((l) => /attempt 5\).*retried once a day/.test(l)) && noSecret(f.logs));
+  const stuck = await stuckDeletes({}, { db: w.db });
+  check("5d2 it is stuck: listed with codes only (id, attempts, last outcome)", stuck.length === 1 && stuck[0].conversationId === "conv_a" && stuck[0].lastOutcome === "delete_failed" && stuck[0].attempts === FORGET.maxAttempts + 1);
+  const flags = stuckDeleteFlags(stuck);
+  check("5d3 the morning review shows it, codes only", flags.length === 1 && flags[0].type === "elevenlabs_delete_stuck" && flags[0].snippet === `call conv_a: ${FORGET.maxAttempts + 1} attempts, last delete_failed` && noSecret([JSON.stringify(flags)]));
+  const dr = readFileSync(new URL("../../src/harness/devReview.ts", import.meta.url), "utf8");
+  check("5d4 the review reads stuck deletes per member", /stuckDeleteFlags\(await stuckDeletes\(\{ userId \}\)\.catch\(\(\) => \[\] as StuckDelete\[\]\)\)/.test(dr));
+  const later = fakeDeps(w);
+  await passFor(w, later.deps, 24);
+  check("5d5 a stuck row that finally works is deleted and leaves the list", later.removed.join() === "conv_a" && (await stuckDeletes({}, { db: w.db })).length === 0);
 }
 {
   const w = storedWorld();
@@ -493,7 +590,7 @@ for (const status of ["processing", "failed", undefined]) {
   check("8b even a missing database resolves", (await forgetAfterCall(call(), { ...f.deps, db: null as any })) === "error");
   const co = readFileSync(new URL("../../src/routes/co.ts", import.meta.url), "utf8");
   const route = co.slice(co.indexOf('router.post("/el/post-call"'), co.indexOf("// Root-cause guard"));
-  const at = route.indexOf("forgetAfterCall(");
+  const at = route.indexOf("if (ended.stored && u[0]) forgetAfterCall(");
   check("8c the route queues after processEndedCall and before answering the webhook", at > route.indexOf("await processEndedCall(") && at < route.indexOf("return res.status(ended.status)"));
   check("8d not awaited, caught, only when the processing stored the transcript, with the team flag", /\n\s*if \(ended\.stored && u\[0\]\) forgetAfterCall\(\{[^\n]*team: u\[0\]\.mo_approver === true \}\)\.catch\(\(\) => \{\}\);/.test(route) && !/await forgetAfterCall/.test(co) && /SELECT id, first_name, phone_number, call_sid, mo_approver FROM users/.test(route));
   const pe = co.slice(co.indexOf("async function processEndedCall("), co.indexOf("async function scheduleFollowUpText("));
@@ -532,8 +629,10 @@ for (const status of ["processing", "failed", undefined]) {
   const applied = await runBackfill(f2.deps, "apply");
   check("9e apply queues, deletes nothing itself", applied.queued === 3 && f2.calls() === 0);
   check("9f windows count from when our copy was stored, by who it was with", w.rows.get("conv_old")!.due_at === T0 - 23 * DAY && w.rows.get("conv_new")!.due_at === T0 + 5 * DAY && w.rows.get("conv_team")!.due_at === T0 + 20 * DAY && w.rows.get("conv_team")!.window_kind === "team");
-  await passFor(w, f2.deps, 1);
-  check("9g the next pass deletes only what is past its window, verified", f2.removed.join() === "conv_old");
+  await passFor(w, f2.deps, 47);
+  const heldNoHealth = f2.calls() === 0;
+  await passFor(w, f2.deps, 2);
+  check("9g with no health row they wait out the 48h late window, then only what is past its window goes, verified", heldNoHealth && f2.removed.join() === "conv_old");
   check("9h backfillReport reads 'to queue' on apply", /to queue \(stored, processing completed\)/.test(backfillReport(plan, "apply")));
   const again = await planBackfill(f2.deps, w.now());
   check("9i a second run queues nothing more", again.wouldQueue === 0 && again.alreadyQueued === 2 && again.alreadyDeleted === 2);
@@ -550,15 +649,20 @@ for (const status of ["processing", "failed", undefined]) {
 // 10. Wiring and the SQL the fake can't prove.
 {
   const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
-  check("10a the table has due_at, window_kind and forget_requested_at, a hash and no transcript column", /CREATE TABLE IF NOT EXISTS elevenlabs_deletions \(/.test(mig) && /due_at TIMESTAMPTZ NOT NULL/.test(mig) && /forget_requested_at TIMESTAMPTZ/.test(mig) && /transcript_sha256 TEXT NOT NULL/.test(mig) && !/elevenlabs_deletions \([^)]*\bcontent\b/.test(mig));
+  check("10a the table has due_at, window_kind and forget_requested_at, a hash and no transcript column", /CREATE TABLE IF NOT EXISTS elevenlabs_deletions \(/.test(mig) && /due_at TIMESTAMPTZ NOT NULL/.test(mig) && /forget_requested_at TIMESTAMPTZ/.test(mig) && /transcript_sha256 TEXT,/.test(mig) && /verify BOOLEAN NOT NULL DEFAULT true/.test(mig) && !/elevenlabs_deletions \([^)]*\bcontent\b/.test(mig));
+  const tbl = mig.slice(mig.indexOf("CREATE TABLE IF NOT EXISTS elevenlabs_deletions ("), mig.indexOf("idx_elevenlabs_deletions_due"));
+  check("10a2 no foreign key on users (the queue outlives a deleted account), and an existing one is dropped", !/REFERENCES users/.test(tbl) && /DROP CONSTRAINT IF EXISTS elevenlabs_deletions_user_id_fkey/.test(tbl));
   const jobs = readFileSync(new URL("../../src/jobs/index.ts", import.meta.url), "utf8");
   const job = jobs.slice(jobs.indexOf("refreshLateHealth"), jobs.indexOf("refreshLateHealth") + 400);
   check("10b scheduled: the late health signals, then the deletion pass", /cron\.schedule\("\*\/30 \* \* \* \*"/.test(jobs) && job.indexOf("await refreshLateHealth()") < job.indexOf("await runDeletionPass()") && job.includes("await runDeletionPass()"));
   const svc = readFileSync(new URL("../../src/services/elevenLabsForget.ts", import.meta.url), "utf8");
   check("10c no switch turns it on: the only env read besides the key is the off switch", [...svc.matchAll(/env\.([A-Z_]+)/g)].every((m) => ["ELEVENLABS_API_KEY", "ELEVENLABS_DELETE"].includes(m[1])) && /ELEVENLABS_DELETE === "off"/.test(svc));
   const claim = svc.slice(svc.indexOf("const CLAIM_SQL"), svc.indexOf("RETURNING d.user_id"));
-  check("10d the claim's SQL: attempts capped, due unless forgotten, held while flagged-unreviewed or late signals open", /d\.attempts < \$2/.test(claim) && /d\.forget_requested_at IS NOT NULL OR \(d\.due_at <= NOW\(\) AND NOT EXISTS/.test(claim) && /\(h\.flagged AND h\.reviewed_at IS NULL\) OR h\.late_done_at IS NULL/.test(claim));
+  const hold = svc.slice(svc.indexOf("export const holdSql"), svc.indexOf("// After FORGET.maxAttempts quick tries"));
+  check("10d the claim's SQL carries the hold", /AND \$\{holdSql\("\$3"\)\}/.test(claim) && /CLAIM_SQL, \[conversationId, FORGET\.staleClaimMinutes, isProduction\(deps\.env\)\]/.test(svc));
+  check("10d2 the hold: due unless forgotten; flagged-unreviewed (expiring on production only), late signals open, or no health row under 48h", /d\.forget_requested_at IS NOT NULL OR \(d\.due_at <= NOW\(\)/.test(hold) && /\(h\.flagged AND h\.reviewed_at IS NULL AND NOT \(\$\{prod\}::boolean AND h\.ended_at <= NOW\(\) - make_interval\(days => \$\{FORGET\.prodHoldDays\}\)\)\) OR h\.late_done_at IS NULL/.test(hold) && /EXISTS \(SELECT 1 FROM call_health h2 WHERE h2\.conversation_id = d\.conversation_id\) OR d\.created_at <= NOW\(\) - make_interval\(hours => \$\{FORGET\.noHealthHoldHours\}\)/.test(hold) && FORGET.prodHoldDays === 30 && FORGET.noHealthHoldHours === 48);
   check("10e the queue's due time is the stored time plus the window's days", /\$5::timestamptz \+ make_interval\(days => \$6\)/.test(svc));
+  check("10e2 queueing: verified only with a hash; a later store upgrades an unverified row, never a deleted one", /\$3::text IS NOT NULL\)/.test(svc) && /ON CONFLICT \(conversation_id\) DO UPDATE SET verify = true, transcript_sha256 = EXCLUDED\.transcript_sha256, updated_at = NOW\(\)\n\s*WHERE EXCLUDED\.verify AND NOT elevenlabs_deletions\.verify AND elevenlabs_deletions\.status <> 'deleted'`/.test(svc));
   check("10f the retry interval is shorter than the 30-minute run, so the next run always retries", FORGET.retryAfterMinutes < 30);
   const l1 = JSON.parse(readFileSync(new URL("../layer1.json", import.meta.url), "utf8"));
   check("10g registered in layer 1", l1.files.includes("evals/calls/elevenLabsForget.ts") && l1.files.includes("evals/calls/callHealth.ts"));

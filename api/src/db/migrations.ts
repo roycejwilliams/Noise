@@ -2010,13 +2010,16 @@ export async function runMigrations(): Promise<void> {
   // ElevenLabs deletes (2026-10-18; schedule 2026-10-23) — see src/services/elevenLabsForget.ts. One row per conversation we stored:
   // when its copy at ElevenLabs falls due (due_at: 7 days for a member, 30 for the team and test numbers, from when ours was stored),
   // whether the member asked for it forgotten, whether it's deleted yet, how many attempts it took, and the last reason it was kept.
-  // No transcript text: only a hash of what we received, so a later pass can check our stored copy is that transcript.
+  // No transcript text: only a hash of what we received (null when nothing was stored: verify false), so a later pass can check our
+  // stored copy is that transcript. user_id is plain data, no foreign key: the row outlives a deleted account until its delete lands.
   await pool
     .query(
       `CREATE TABLE IF NOT EXISTS elevenlabs_deletions (
         conversation_id TEXT PRIMARY KEY,
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        transcript_sha256 TEXT NOT NULL,
+        user_id UUID NOT NULL,
+        transcript_sha256 TEXT,
+        verify BOOLEAN NOT NULL DEFAULT true,
+        last_outcome TEXT,
         status TEXT NOT NULL,
         window_kind TEXT NOT NULL DEFAULT 'member',
         due_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2032,6 +2035,11 @@ export async function runMigrations(): Promise<void> {
     .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS window_kind TEXT NOT NULL DEFAULT 'member'`))
     .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`))
     .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS forget_requested_at TIMESTAMPTZ`))
+    .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS verify BOOLEAN NOT NULL DEFAULT true`))
+    .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ADD COLUMN IF NOT EXISTS last_outcome TEXT`))
+    .then(() => pool.query(`ALTER TABLE elevenlabs_deletions ALTER COLUMN transcript_sha256 DROP NOT NULL`))
+    // No foreign key on users: deleting the account must not take the queue with it (a failed delete is retried after).
+    .then(() => pool.query(`ALTER TABLE elevenlabs_deletions DROP CONSTRAINT IF EXISTS elevenlabs_deletions_user_id_fkey`))
     .then(() => pool.query(`CREATE INDEX IF NOT EXISTS idx_elevenlabs_deletions_due ON elevenlabs_deletions (status, due_at)`))
     .catch((err: Error) => console.error("elevenlabs_deletions table init failed:", err));
 

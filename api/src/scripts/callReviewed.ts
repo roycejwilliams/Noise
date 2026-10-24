@@ -16,8 +16,7 @@ try {
   if (id) {
     console.log((await markCallReviewed(id)) ? `marked ${id} reviewed` : `no flagged call ${id}`);
   } else {
-    // Every one still held, however old (the morning review shows the last 30 days).
-    const calls = await flaggedCalls({ days: 3650 });
+    const calls = await flaggedCalls();
     if (!calls.length) console.log("No flagged calls waiting for review.");
     for (const c of calls) console.log(`${c.conversationId}  ${c.userId}  ${c.endedAt}  ${c.reasons.join(", ")}`);
   }

@@ -141,7 +141,7 @@ function healthWorld(o: { decisions?: { decision: string; outcome: string; actio
         return { rows: [{ conversation_id: p[0] }] };
       }
       if (/FROM call_health\s+WHERE flagged AND reviewed_at IS NULL/.test(sql))
-        return { rows: [...rows.values()].filter((r) => r.flagged && !r.reviewed_at && r.ended_at <= p[0] && (p[2] === null || r.user_id === p[2])).sort((a, b) => +b.ended_at - +a.ended_at) };
+        return { rows: [...rows.values()].filter((r) => r.flagged && !r.reviewed_at && r.ended_at <= p[0] && (p[1] === null || +r.ended_at > +p[0] - p[1] * 86_400_000) && (p[2] === null || r.user_id === p[2])).sort((a, b) => +b.ended_at - +a.ended_at) };
       throw new Error(`fake db: unexpected query ${sql.slice(0, 60)}`);
     },
   };
@@ -248,6 +248,10 @@ check("5a lateReasons maps counts to codes", JSON.stringify(lateReasons({ unkept
   check("6c codes only in the flag, with how to mark it reviewed", !JSON.stringify(flags).includes("sister") && /call conv_med: short_call/.test(med.snippet) && /scripts\/callReviewed\.ts conv_med/.test(med.cause));
   const digest = renderDigest(flags, { [U]: "Jordan" }, "last 24h").join("\n");
   check("6d it shows in the morning digest under its own label", digest.includes(FLAG_LABELS.call_flagged) && /×2 \(high\)/.test(digest));
+  await recordCallHealth(input({ conversationId: "conv_old", durationSecs: 12, startedAt: new Date(START.getTime() - 60 * 86_400_000), endedAt: new Date(END.getTime() - 60 * 86_400_000) }), { db: w.db, log: () => {} });
+  check("6d2 a call held 60 days still shows (the digest shows every held call)", (await flaggedCalls({ until: new Date(END.getTime() + 3_600_000) }, { db: w.db })).some((c) => c.conversationId === "conv_old"));
+  check("6d3 days narrows only when asked", !(await flaggedCalls({ until: new Date(END.getTime() + 3_600_000), days: 30 }, { db: w.db })).some((c) => c.conversationId === "conv_old"));
+  await markCallReviewed("conv_old", { db: w.db });
   await markCallReviewed("conv_hi", { db: w.db });
   check("6e reviewed: off the review", (await flaggedCalls({ until: new Date(END.getTime() + 3_600_000) }, { db: w.db })).map((c) => c.conversationId).join() === "conv_med");
   const dr = readFileSync(new URL("../../src/harness/devReview.ts", import.meta.url), "utf8");
@@ -267,7 +271,7 @@ check("5a lateReasons maps counts to codes", JSON.stringify(lateReasons({ unkept
   const mig = readFileSync(new URL("../../src/db/migrations.ts", import.meta.url), "utf8");
   check("7c the table: flagged, reasons as codes, reviewed_at, no words column", /CREATE TABLE IF NOT EXISTS call_health \(/.test(mig) && /reasons TEXT\[\] NOT NULL/.test(mig) && /reviewed_at TIMESTAMPTZ/.test(mig) && !/call_health \([^)]*\b(content|quote|message|transcript)\b/.test(mig));
   const script = readFileSync(new URL("../../src/scripts/callReviewed.ts", import.meta.url), "utf8");
-  check("7d the review script marks one reviewed or lists them", /markCallReviewed\(id\)/.test(script) && /flaggedCalls\(\{ days: 3650 \}\)/.test(script));
+  check("7d the review script marks one reviewed or lists them", /markCallReviewed\(id\)/.test(script) && /flaggedCalls\(\)/.test(script));
 }
 
 console.log(`call health rules: ${total - failed}/${total} passed`);

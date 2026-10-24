@@ -40,6 +40,7 @@ import { recordDecision } from "./core.js";
 import { signalTarget } from "./emotion.js";
 import { withTraceUser } from "../services/llmTraceText.js";
 import { HIGH_REASONS, flaggedCalls, type FlaggedCall } from "../services/callHealth.js";
+import { stuckDeletes, type StuckDelete } from "../services/elevenLabsForget.js";
 
 export function reviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.RAILWAY_ENVIRONMENT_NAME !== "dev" || env.RAILWAY_SERVICE_NAME !== "co-test") return false;
@@ -89,7 +90,8 @@ export type FlagType =
   | "cold_start_miss"
   | "goal_read_failed"
   | "goals_starved"
-  | "call_flagged";
+  | "call_flagged"
+  | "elevenlabs_delete_stuck";
 
 export const FLAG_LABELS: Record<FlagType, string> = {
   slow_reply: "Slow reply (over the latency budget)",
@@ -116,6 +118,7 @@ export const FLAG_LABELS: Record<FlagType, string> = {
   questionable_tool_choice: "Questionable tool choice (Jev's read of Cue's judgment)",
   held_back: "Ready texts held 2+ days with nothing sent",
   call_flagged: "Call flagged by the after-call check (held at ElevenLabs until reviewed)",
+  elevenlabs_delete_stuck: "ElevenLabs delete stuck (retried once a day)",
 };
 
 export type Severity = "low" | "medium" | "high";
@@ -740,6 +743,21 @@ export function callHealthFlags(calls: FlaggedCall[]): ReviewFlag[] {
   }));
 }
 
+// A call's ElevenLabs copy that still isn't deleted after its quick retries (services/elevenLabsForget.ts): codes only.
+export function stuckDeleteFlags(rows: StuckDelete[]): ReviewFlag[] {
+  return rows.map((r) => ({
+    userId: r.userId,
+    at: r.since,
+    type: "elevenlabs_delete_stuck" as const,
+    severity: "medium" as const,
+    snippet: clip(`call ${r.conversationId}: ${r.attempts} attempts, last ${r.lastOutcome ?? "unknown"}`),
+    decisionIds: [],
+    cause: `delete at ElevenLabs keeps failing (${r.lastOutcome ?? "unknown"}); retried once a day`,
+    causeConfirmed: true,
+    source: "log" as const,
+  }));
+}
+
 export async function reviewWindow(since: Date, until: Date, opts: { model?: boolean; userIds?: string[] } = {}): Promise<{ flags: ReviewFlag[]; names: Record<string, string> }> {
   const flags: ReviewFlag[] = [];
   const names: Record<string, string> = {};
@@ -749,6 +767,7 @@ export async function reviewWindow(since: Date, until: Date, opts: { model?: boo
     flags.push(...logFlags(data), ...conversationFlags(data), ...reactionFlags(data));
     flags.push(...heldBackFlags(await loadHeldBack(userId, until).catch(() => ({ userId, now: until, held: [], lastSendAt: null, picks: [] }))));
     flags.push(...callHealthFlags(await flaggedCalls({ userId, until }).catch(() => [] as FlaggedCall[])));
+    flags.push(...stuckDeleteFlags(await stuckDeletes({ userId }).catch(() => [] as StuckDelete[])));
     // The model reads of one member's day, under that member's trace-text mark (services/llmTraceText.ts).
     if (opts.model !== false) flags.push(...(await withTraceUser(userId, async () => [...(await modelFlags(data)), ...(await judgmentFlags(data).catch(() => []))])));
   }
