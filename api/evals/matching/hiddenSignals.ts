@@ -222,5 +222,28 @@ const BLOCKER = "my divorce is dragging on";
   check("... the event brief and the pre-arrival count too", /!r\.shareReason\?\.trim\(\)/.test(src("src/services/eventBrief.ts")) && /r\.score >= PRE_ARRIVAL\.strongScore && r\.shareReason/.test(src("src/services/preArrival.ts")));
 }
 
+// ================================================================ no trace text for a prompt with hidden asks (review of #245 x #247)
+// The room scoring prompt carries other members' hidden asks; our trace text (services/llmTraceText.ts, 14 days) is filed under
+// the member it ran for, so a private ask removed by its owner would outlive the removal there. The call records no text at all.
+{
+  const { NodeSDK } = await import("@opentelemetry/sdk-node");
+  const local: any[] = [];
+  const sdk = new NodeSDK({ spanProcessors: [{ onStart() {}, onEnd: (sp: any) => void local.push(sp), forceFlush: async () => {}, shutdown: async () => {} }] });
+  sdk.start();
+  const PRIVATE = "OSPREY-LANTERN-5120";
+  const frame: any = { asks: [{ type: "seeking", text: "a seed investor for climate hardware", status: "active", shareable: true }], goal: null };
+  const cand = (id: string, shareable: boolean) => ({ user_id: id, first_name: "Ellis", goals: ["back climate founders"], intent: [{ type: "offering", text: shareable ? "backing climate hardware at seed" : `going through ${PRIVATE}`, status: "active", shareable }] });
+  await M.scoreAgainstRoomFrame(frame, [cand("c-hidden", false)] as any);
+  await M.scoreAgainstRoomFrame(frame, [cand("c-shared", true)] as any, undefined, undefined, new Map([["c-shared", [`and ${PRIVATE}-2`]]]));
+  await M.scoreAgainstRoomFrame(frame, [cand("c-plain", true)] as any);
+  await sdk.shutdown();
+  const room = local.filter((sp) => sp.attributes?.["ai.telemetry.functionId"] === "matching.scoreAgainstRoomFrame" && /doGenerate|doStream/.test(sp.name));
+  const text = (sp: any) => JSON.stringify(sp.attributes);
+  check("room scoring with a hidden ask: the call ran (three request spans)", room.length === 3, room.length);
+  check("... a candidate's private ask in the prompt: no prompt or answer is recorded on the span", !!room[0] && !("ai.prompt.messages" in room[0].attributes) && !("ai.prompt" in room[0].attributes) && !("ai.response.text" in room[0].attributes) && !text(room[0]).includes(PRIVATE));
+  check("... a hidden ask handed in: the same", !!room[1] && !("ai.prompt.messages" in room[1].attributes) && !text(room[1]).includes(PRIVATE));
+  check("... nothing hidden in the prompt: recorded as before", !!room[2] && "ai.prompt.messages" in room[2].attributes);
+}
+
 console.log(`matching hidden signals: ${results.total - results.failed}/${results.total} passed`);
 process.exit(results.failed ? 1 : 0);
