@@ -196,7 +196,7 @@ async function markSolicited(eventId: string, personId: string): Promise<void> {
 // guest registrations, which are vanishingly unlikely to land within
 // seconds of each other in practice; even if they did, nothing is lost,
 // just picked up on the next trigger.
-const SCORING_DEBOUNCE_SECONDS = 15;
+export const SCORING_DEBOUNCE_SECONDS = 15;
 
 async function tryClaimScoringDebounce(eventId: string): Promise<boolean> {
   const { rows } = await pool.query(
@@ -505,7 +505,8 @@ async function maybeSendMatchNudge(
       return false;
     }
 
-    const message = await draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote, event: introEvent, said: [...candidateShared, valueLine || top.shareReason!, ...recipientOwn] }, draftFn);
+    // A draft that throws frees the place too (O.draftingInSlot), or it would hold their slot until SLOT_CLAIM_MINUTES.
+    const message = await O.draftingInSlot(slot, () => draftWithConsent({ decision: "eventScoring.matchNudge", recipientId: person.user_id, preChecks, facts: draftFacts, otherUserIds: [candidate.user_id], extraDraftChecks: noPrivateQuote, event: introEvent, said: [...candidateShared, valueLine || top.shareReason!, ...recipientOwn] }, draftFn));
     if (!message) {
       await releaseMatchNudgeClaim(eventId, person.user_id); // free it up so a later pass can retry
       await freeSlot();
@@ -694,7 +695,8 @@ async function maybeSendAdditiveOffer(
     return false;
   }
 
-  const message = await draftWithConsent(
+  // A draft that throws frees the place too (O.draftingInSlot).
+  const message = await O.draftingInSlot(slot, () => draftWithConsent(
     {
       decision: "eventScoring.additiveOffer",
       recipientId: person.user_id,
@@ -714,7 +716,7 @@ Draft a short, warm, low-pressure text (1-2 sentences, no em dashes, normal sent
       });
       return cleanCoMessage(text.trim());
     },
-  );
+  ));
   if (!message) {
     await freeSlot();
     return false;
@@ -987,10 +989,10 @@ export async function scoreGuestListForEvent(
   eventId: string,
   eventName?: string,
   opts: { dryRun?: boolean } = {},
-): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number }> {
+): Promise<{ scoredCount: number; solicitedCount: number; matchedCount: number; debounced?: true }> {
   if (!(await tryClaimScoringDebounce(eventId))) {
     console.log(`eventScoring: ${eventId} scored within the last ${SCORING_DEBOUNCE_SECONDS}s — skipping duplicate pass`);
-    return { scoredCount: 0, solicitedCount: 0, matchedCount: 0 };
+    return { scoredCount: 0, solicitedCount: 0, matchedCount: 0, debounced: true };
   }
 
   // One reader of an event's timing (services/roomMatching.ts eventTiming), test events included; Luma's guest list for Co's

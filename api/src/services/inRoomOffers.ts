@@ -155,6 +155,16 @@ export async function claimOfferSlot(o: { eventId: string; eventName?: string | 
     client.release();
   }
 }
+// Drafting while holding a place: a draft that throws frees it before the error goes on (review of #211), so a crash in drafting
+// never holds their slot for SLOT_CLAIM_MINUTES. A draft that returns (a text or nothing) leaves the place to the caller.
+export async function draftingInSlot<T>(c: OfferClaim, draft: () => Promise<T>): Promise<T> {
+  try {
+    return await draft();
+  } catch (err) {
+    await releaseOfferSlot(c).catch(() => {});
+    throw err;
+  }
+}
 // The nudge or heads-up isn't going (no draft, throttled, the send failed): the place is free again, and a row that was there
 // before the claim (an earlier heads-up's answer) is put back as it was.
 export async function releaseOfferSlot(c: OfferClaim): Promise<void> {
@@ -196,6 +206,29 @@ export async function answerOffer(eventId: string, personId: string, candidateKe
     `UPDATE event_match_offers SET status = 'answered', answered_at = NOW(), answer = $4 WHERE event_id = $1 AND person_id = $2 AND candidate_key = $3`,
     [eventId, personId, candidateKey, answer],
   );
+  // A question closed: an additive heads-up that was waiting for it (eventScoring.ts additivePending) goes now. Off the reply's path.
+  additiveRescore = rescoreIfAdditiveWaiting(eventId, personId).catch((err: any) => {
+    console.error("inRoomOffers: re-scoring for a waiting heads-up failed (non-fatal, the next room pass sends it):", err?.message ?? err);
+    return false;
+  });
+}
+
+// The re-score a closed question started, for tests to await.
+export let additiveRescore: Promise<boolean> = Promise.resolve(false);
+// Their stored ranking has someone whose additive heads-up waited on the question just closed: one room pass, which sends it (the
+// same path as an arrival; the pending mark makes those people new again). A pass that ran in the last SCORING_DEBOUNCE_SECONDS
+// skips this one, so it tries once more after that window. Returns whether a pass was started.
+export async function rescoreIfAdditiveWaiting(eventId: string, personId: string, retry = true): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT ranked_candidates FROM event_guest_rankings WHERE event_id = $1 AND person_id = $2`, [eventId, personId]);
+  const ranked = (rows[0]?.ranked_candidates ?? []) as { additivePending?: boolean }[];
+  if (!ranked.some((r) => r?.additivePending)) return false;
+  const S = await import("./eventScoring.js");
+  const r = await S.scoreGuestListForEvent(eventId);
+  if (r.debounced && retry) {
+    const t = setTimeout(() => void rescoreIfAdditiveWaiting(eventId, personId, false).catch(() => {}), (S.SCORING_DEBOUNCE_SECONDS + 1) * 1000);
+    t.unref?.();
+  }
+  return true;
 }
 
 // The next direct ask that was waiting on them, once nothing is open.
