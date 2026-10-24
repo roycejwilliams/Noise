@@ -39,6 +39,19 @@ check("the live-test member (newest unarchived +1 415 555-01xx) keeps its search
 check("an unknown member never skips", !skipsForFacts(REAL, null, env));
 check("production: a 555 number can't be a test member, so nothing unarchived skips", !skipsForFacts(TEST, facts[TEST], { RAILWAY_ENVIRONMENT_NAME: "production" } as NodeJS.ProcessEnv));
 
+// ---------------------------------------------------------------- who the live-test member is
+{
+  const { pickLiveTestMember, liveTestEmail, isLiveTestRow } = await import("../../src/services/testNumbers.js");
+  const reset = { id: LIVE, phone_number: "+14155550177", email: liveTestEmail("77"), archived_at: null };
+  const simInbound = { id: "sim-newer", phone_number: "+14155550188", email: null, archived_at: null };
+  const lumaGuest = { id: "luma-newer", phone_number: "+14155550199", email: "guest@luma.example", archived_at: null };
+  check("reset's own account is the live-test member", isLiveTestRow(reset) && liveTestEmail("77") === "jordan.test77@example.test");
+  check("a newer 555-01xx account without reset's marker (sim inbound, Luma guest) does NOT take the exemption", pickLiveTestMember([lumaGuest, simInbound, reset])?.id === LIVE);
+  check("no account with the marker: no live-test member at all", pickLiveTestMember([lumaGuest, simInbound]) === null);
+  check("the marker on another area code's 555 number doesn't count", !isLiveTestRow({ ...reset, phone_number: "+15035550177" }));
+  check("an archived reset account is no longer the live-test member", !isLiveTestRow({ ...reset, archived_at: new Date() }));
+}
+
 // ---------------------------------------------------------------- the gate
 let lookups = 0;
 setTestMemberLookupForTests(async (id) => {
@@ -53,7 +66,7 @@ console.log = (...a: unknown[]) => {
 const t1 = await skipsPaidSearch(TEST, "probe");
 const t2 = await skipsPaidSearch(TEST, "probe");
 console.log = origLog;
-check("the gate skips a test member and logs one line with ids only", t1 && t2 && logs.length === 2 && logs[0] === `paid search skipped: test member ${TEST} (probe)`);
+check("the gate skips a test member and logs one line with an 8-character id prefix only", t1 && t2 && logs.length === 2 && logs[0] === `paid search skipped: test member ${TEST.slice(0, 8)} (probe)` && !logs[0].includes(TEST));
 check("the lookup is cached (one read for two searches)", lookups === 1);
 check("no member id, or not an id: never skipped, never looked up", !(await skipsPaidSearch(null, "p")) && !(await skipsPaidSearch("u1", "p")) && lookups === 1);
 setTestMemberLookupForTests(async () => {
@@ -148,7 +161,10 @@ for (const [f, path] of [
 }
 const gate = src("services/testMemberSpend.ts");
 check("no switch: the gate reads no env flag of its own", !/process\.env\.[A-Z_]+/.test(gate));
-check("the live-test member is the one testMember.ts makes (one shared definition)", /const TEST_PHONE_LIKE = LIVE_TEST_PHONE_LIKE;/.test(src("scripts/testMember.ts")) && /LIVE_TEST_PHONE_LIKE/.test(gate));
+{
+  const tm = src("scripts/testMember.ts");
+  check("the live-test member is the one testMember.ts makes (one shared definition, both readers)", /pickLiveTestMember\(rows/.test(tm) && /LIVE_TEST_CANDIDATES_SQL/.test(tm) && /liveTestEmail\(tag\)/.test(tm) && /pickLiveTestMember\(live\.rows\)/.test(gate) && /LIVE_TEST_CANDIDATES_SQL/.test(gate));
+}
 
 setTestMemberLookupForTests(null);
 console.log(`test member search spend: ${total - failed}/${total} passed`);
