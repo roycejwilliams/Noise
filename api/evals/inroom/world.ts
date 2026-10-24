@@ -33,6 +33,7 @@ export type Member = {
   intent?: unknown[];
   memories?: string[]; // private memories (co_memories rows other than text the test writes)
   ownerFacts?: string[]; // owner-only co_facts
+  safetyHold?: boolean; // co_profiles.safety_hold_until in the future (services/safety.ts)
 };
 
 export type FakeEvent = {
@@ -81,6 +82,8 @@ export const W = {
   closeDraft: null as null | ((name: string) => string),
   // Luma's guest list read fails (a 500) while true.
   lumaGuestListFail: false,
+  // The no-show note drafter (services/eventNoShow.ts): the prompt in, the draft out (null: a default warm note).
+  noshowDraft: null as null | ((prompt: string) => string),
   llmCalls: [] as { kind: string; prompt: string }[],
 };
 
@@ -101,6 +104,7 @@ export function reset(): void {
   W.consentViolation = () => false;
   W.closeDraft = null;
   W.lumaGuestListFail = false;
+  W.noshowDraft = null;
 }
 
 let seq = 0;
@@ -411,7 +415,7 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
   }
   if (has("INSERT INTO proactive_candidates")) {
     if (W.candidates.some((c) => c.user_id === p[0] && c.target_key === p[2])) return R([]);
-    W.candidates.push({ user_id: p[0], type: p[1], target_key: p[2], summary: p[4], payload: JSON.parse(p[5]), status: "pending" });
+    W.candidates.push({ user_id: p[0], type: p[1], target_key: p[2], topic_key: p[3], summary: p[4], payload: JSON.parse(p[5]), due_at: new Date(p[6]), expires_at: p[7] ? new Date(p[7]) : null, status: "pending" });
     return R([{ id: W.candidates.length }]);
   }
 
@@ -426,14 +430,59 @@ function handle(sqlRaw: string, p: any[] = []): { rows: Row[]; rowCount: number 
 
   // memories
   if (has("INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, $2, $3) RETURNING id")) {
-    W.memoriesWritten.push({ user_id: p[0], memory_type: p[1], content: p[2] });
+    W.memoriesWritten.push({ user_id: p[0], memory_type: p[1], content: p[2], created_at: new Date() });
     return R([{ id: W.memoriesWritten.length }]);
   }
   // The asker's note that an intro ask Cue said it would send didn't go out (services/deferredSends.ts noteIntroAskNotSent).
   if (has("INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'system', $2)")) {
-    W.memoriesWritten.push({ user_id: p[0], memory_type: "system", content: p[1] });
+    W.memoriesWritten.push({ user_id: p[0], memory_type: "system", content: p[1], created_at: new Date() });
     return R([]);
   }
+  // ---------------------------------------------------------------- the no-show flow (services/eventNoShow.ts)
+  if (has("INSERT INTO co_memories (user_id, memory_type, content) VALUES ($1, 'network_offer_pending', $2)")) {
+    W.memoriesWritten.push({ user_id: p[0], memory_type: "network_offer_pending", content: p[1], created_at: new Date() });
+    return R([]);
+  }
+  // harness/proactive.ts lastInboundAt: their last text.
+  if (has("SELECT MAX(created_at) AS at FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange'")) {
+    const ats = W.memoriesWritten.filter((m) => m.user_id === p[0] && m.memory_type === "text_exchange" && /^(User |\[Call\])/.test(m.content)).map((m) => +m.created_at);
+    return R([{ at: ats.length ? new Date(Math.max(...ats)) : null }]);
+  }
+  if (has("SELECT 1 FROM co_profiles WHERE user_id = $1 AND safety_hold_until > NOW()")) return R(W.members.get(p[0])?.safetyHold ? [{ x: 1 }] : []);
+  const pres = (e: string, u: string) => {
+    const k = `${e}|${u}`;
+    if (!W.presence.has(k)) W.presence.set(k, { sharing_seen_at: null, arrived_at: null });
+    return W.presence.get(k)!;
+  };
+  if (has("INSERT INTO event_presence (event_api_id, user_id, noshow_asked_at)")) {
+    const r = pres(p[0], p[1]);
+    r.noshow_asked_at ??= new Date();
+    return R([]);
+  }
+  if (has("INSERT INTO event_presence (event_api_id, user_id, not_going_at)")) {
+    pres(p[0], p[1]).not_going_at = has("VALUES ($1, $2, NOW())") ? new Date() : null;
+    return R([]);
+  }
+  if (has("INSERT INTO event_presence (event_api_id, user_id, arrived_at, arrived_via)")) {
+    const r = pres(p[0], p[1]);
+    if (r.arrived_at) return R([]);
+    r.arrived_at = new Date();
+    r.arrived_via = p[2];
+    return R([{ user_id: p[1] }]);
+  }
+  if (has("SELECT event_api_id, user_id, noshow_asked_at, not_going_at FROM event_presence WHERE noshow_asked_at IS NOT NULL AND noshow_settled_at IS NULL")) {
+    return R([...W.presence.entries()].filter(([, r]) => r.noshow_asked_at && !r.noshow_settled_at).map(([k, r]) => ({ event_api_id: k.split("|")[0], user_id: k.split("|")[1], noshow_asked_at: r.noshow_asked_at, not_going_at: r.not_going_at ?? null })));
+  }
+  if (has("UPDATE event_presence SET noshow_settled_at = NOW(), noshow_outcome = $3")) {
+    const r = W.presence.get(`${p[0]}|${p[1]}`);
+    if (r && !r.noshow_settled_at) Object.assign(r, { noshow_settled_at: new Date(), noshow_outcome: p[2] });
+    return R([]);
+  }
+  if (has("SELECT event_api_id FROM event_presence WHERE user_id = $1 AND noshow_asked_at >")) {
+    const hit = [...W.presence.entries()].filter(([k, r]) => k.endsWith(`|${p[0]}`) && r.noshow_asked_at && !r.noshow_settled_at && now() - +r.noshow_asked_at < Number(p[1]) * 3_600_000).sort((a, b) => +b[1].noshow_asked_at - +a[1].noshow_asked_at);
+    return R(hit.slice(0, 1).map(([k]) => ({ event_api_id: k.split("|")[0] })));
+  }
+  if (sql === "SELECT 1 FROM event_presence WHERE event_api_id = $1 AND user_id = $2") return R(W.presence.has(`${p[0]}|${p[1]}`) ? [{ x: 1 }] : []);
   if (has("UPDATE co_memories SET content_embedding")) return R([]);
   if (has("SELECT content FROM co_memories WHERE user_id = $1 AND memory_type <> 'intent'")) {
     const m = W.members.get(p[0]);
@@ -738,6 +787,21 @@ function fakeAnthropic(init: any): Response {
   if (u) {
     W.llmCalls.push({ kind: "unmatchedPairDraft", prompt });
     return anthropicText(`Might be worth a quick hello to ${u[1]} before you head out.`);
+  }
+  // The no-show note (services/eventNoShow.ts noShowTask).
+  if (prompt.includes("and didn't make it. Write a short, warm note")) {
+    W.llmCalls.push({ kind: "noshowDraft", prompt });
+    if (W.noshowDraft) return anthropicText(W.noshowDraft(prompt));
+    const ev = prompt.match(/They registered for (.+?) and didn't make it\./)?.[1] ?? "the night";
+    const intro = prompt.includes("offer to tell them about one person");
+    const next = prompt.match(/next_table: ([^\n]+)/)?.[1]?.trim();
+    return anthropicText(`Sorry you couldn't make it to ${ev}. It was a warm, easy night.${intro ? " There's someone from it I think you'd really get on with. Want me to tell you who?" : next ? ` The next table is ${next}, if you'd like to join.` : ""}`);
+  }
+  // The network reveal (services/networkIntroNudge.ts networkRevealPrompt), drafted before an intro offer goes out.
+  const rv = prompt.match(/they said yes, they want to hear who\. Draft a short, warm text \(2-3 sentences, no em dashes, normal sentence capitalization\) naming ([^ ]+) and explaining in your own words why they're worth meeting: ([^\n]*?)\. Use only that reason/);
+  if (rv) {
+    W.llmCalls.push({ kind: "networkReveal", prompt });
+    return anthropicText(`${rv[1]} came to mind. ${rv[1]} is someone you'd get a lot from. Want me to see if ${rv[1]} is open to an intro too?`);
   }
   if (prompt.includes("Write the goodbye a good host gives at the door")) {
     W.llmCalls.push({ kind: "closeDraft", prompt });

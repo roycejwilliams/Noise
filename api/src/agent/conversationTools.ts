@@ -1025,6 +1025,15 @@ export function createConversationTools(ctx: ConversationToolContext) {
           return { ok: false, error: "Quote their own words." };
         }
         const today = await import("../services/eventPresence.js").then((e) => e.todayEventFor(ctx.userId)).catch(() => null);
+        // A "no, I didn't make it" after the night is over answers the no-show ask (services/eventNoShow.ts), so the note still follows.
+        if (!today && !going) {
+          const asked = await import("../services/eventNoShow.js").then((N) => N.openNoShowAsk(ctx.userId)).catch(() => null);
+          if (asked) {
+            if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(asked.eventApiId, ctx.userId, false));
+            ctx.facts?.add("did_this_turn", "Noted they didn't make it to the Noise event Cue asked about.");
+            return { ok: true };
+          }
+        }
         if (!today) return { ok: false, error: "No Noise event of theirs today." };
         if (!ctx.dryRun) await import("../services/preArrival.js").then((P) => P.setGoing(today.eventApiId, ctx.userId, going));
         ctx.facts?.add("did_this_turn", going ? `Noted they're going to "${today.name}".` : `Noted they can't make "${today.name}"; Cue won't send them anything more about it.`);

@@ -1122,6 +1122,14 @@ export function registerJobs(io: Server) {
     processDueUnmatchedFollowUps().catch((err: any) => console.error("eventUnmatchedFollowUp: process failed:", err?.message ?? err));
   });
 
+  // The no-show flow (services/eventNoShow.ts, 2026-10-23): the one "did you make it?" ask about 45 minutes in, and after the night
+  // the note for those who didn't. Both wait on NOSHOW_COPY_APPROVED; the note itself goes through the daily pick.
+  cron.schedule("*/15 * * * *", async () => {
+    const N = await import("../services/eventNoShow.js");
+    await N.runNoShowAsks().catch((err: any) => console.error("eventNoShow: asks failed:", err?.message ?? err));
+    await N.runNoShowNotes().catch((err: any) => console.error("eventNoShow: notes failed:", err?.message ?? err));
+  });
+
   // The next-day check-in after something hard (services/heavyMoment.ts):
   // queued here, sent by the proactive harness under its usual caps.
   cron.schedule("30 * * * *", () => {

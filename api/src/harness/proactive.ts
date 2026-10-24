@@ -125,6 +125,9 @@ export type ProactiveType =
   | "room_share_ask"
   // After the member tells Co who they met: what stood out, and a note per person for them to send (services/eventFollowThrough.ts).
   | "event_followthrough"
+  // After a Noise event they registered for and didn't make it to (services/eventNoShow.ts, 2026-10-23): what the night was, without
+  // names, and one offer (an intro to one person from that night, or the next table). Once per event.
+  | "noshow_note"
   // The one "still on your plate?" ask for a loop nobody has signalled on for a week (services/loopLifecycle.ts, 2026-10-06).
   | "loop_check"
   // Rare, seasonal check-in on a goal (services/goalJourney.ts): never on the 7-day ask clock.
@@ -203,6 +206,8 @@ export const TYPE_POLICY: Record<ProactiveType, TypePolicy> = {
   brief_name_ask: { priority: 92 },
   room_share_ask: { priority: 91 },
   event_followthrough: { priority: 93 },
+  // Once per event (its own target key), the morning after or once the night is over.
+  noshow_note: { priority: 88 },
   // Once per loop (its own target key); it is a question, so it is the lowest of the companion kind.
   loop_check: { priority: 12, typeGapDays: 3 },
   // Seasonal: one in eight weeks at most (also enforced where it is queued); the closing moment is a reply to what they said.

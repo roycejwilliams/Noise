@@ -514,6 +514,17 @@ export const proactiveRegistry: ProactiveRegistry = {
     },
   },
 
+  // After a Noise event they didn't make it to (services/eventNoShow.ts): what the night was, never who came, and one offer. The
+  // words are Cue's from a brief, checked in code, with a fixed fallback; nothing goes until NOSHOW_COPY_APPROVED.
+  noshow_note: {
+    async draft(c, person) {
+      return (await import("../services/eventNoShow.js")).draftNoShowNote(c, person);
+    },
+    async onSent(c) {
+      await (await import("../services/eventNoShow.js")).afterNoShowNoteSent(c);
+    },
+  },
+
   // The one question at RSVP that lets the member brief name them (services/eventBrief.ts). The words are fixed
   // in code: a yes or a no is all it takes, and no answer means no name.
   brief_name_ask: {
