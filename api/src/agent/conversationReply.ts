@@ -151,7 +151,7 @@ async function verifyAndRecordCallOffer(
   try {
     const { text: rawCheck } = await generateText({
       model: anthropic(LAYER3_MODELS.narrow),
-      experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.callOfferCheck", metadata: { userId: input.userId } },
+      experimental_telemetry: { isEnabled: true, functionId: "agent.conversationReply.callOfferCheck" },
       prompt: `Does this text message actually offer that CO will call THEM — Cue proposing to place an outbound call to the person, not just telling them how they can call Cue themselves — in any wording, even indirectly (e.g. "I'm here if you want to talk this through")? Not just related to talking or listening in general — specifically Cue offering to call them.
 
 Message: "${replyText}"

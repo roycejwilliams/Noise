@@ -330,6 +330,6 @@ export async function realBindDeps(userId: string, theirMessage: string): Promis
       const r = await T.startTask({ userId, goal: promiseGoal(sentence), theirWords: theirWordsFor(theirMessage), steps: [{ text: "Do what you said, or tell them plainly where it stands" }], firstPlan: "Do what you promised them; if there's nothing yet, say where it stands only if they'd want to hear it", inHours, source: "promise", window });
       return r.ok ? { ok: true, id: r.task.id } : { ok: false, why: r.why };
     },
-    read: async (prompt) => (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 500, abortSignal: AbortSignal.timeout(BINDING_LIMITS.readMs), experimental_telemetry: { isEnabled: true, functionId: "reply.promiseBinding", metadata: { userId } }, prompt })).text,
+    read: async (prompt) => (await generateText({ model: anthropic(MODELS.haiku), maxOutputTokens: 500, abortSignal: AbortSignal.timeout(BINDING_LIMITS.readMs), experimental_telemetry: { isEnabled: true, functionId: "reply.promiseBinding" }, prompt })).text,
   };
 }

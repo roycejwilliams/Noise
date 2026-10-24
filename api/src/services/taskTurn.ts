@@ -974,18 +974,23 @@ async function runTaskTurnInScope(task: CoTask, opts: { now?: () => Date; overri
   return { action: r.action, did: r.did, warning: r.warning ?? null };
 }
 
-export async function runDueTasks(): Promise<void> {
-  const { claimDueTasks } = await import("./coTasks.js");
-  const L = await import("./commitmentLog.js");
+// Each task runs in its own member's scope (llm_usage.user_id), never the caller's: the wake after a reply runs this inside the texter's
+// scope, and the due list holds other members' tasks too (review of #270).
+export async function runDueTasks(deps: { claim?: () => Promise<CoTask[]>; runOne?: (t: CoTask) => Promise<void> } = {}): Promise<void> {
+  const claim = deps.claim ?? (await import("./coTasks.js")).claimDueTasks;
+  const runOne = deps.runOne ?? runDueTask;
   const { withTraceUser } = await import("./llmTraceText.js");
-  // Each task's model calls under its own member, scoped to that task, never the caller's (services/llmTraceText.ts).
-  for (const t of await claimDueTasks()) await withTraceUser(t.userId, async () => {
-    // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
-    if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
-    // A goal's check-in or reminder (services/goalOwnership.ts): real state first, then one text through the task-update path.
-    if (t.kind === "work" && t.followup?.checkin) await import("./goalOwnership.js").then((g) => g.runGoalCheckin(t)).catch((err: any) => console.error("goal check-in failed (non-fatal):", err?.message ?? err));
-    else if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
-    else if (t.kind === "research_brief") await import("./researchBrief.js").then((r) => r.runResearchBriefTask(t)).catch((err: any) => console.error("research brief task failed (non-fatal):", err?.message ?? err));
-    else await runTaskTurn(t);
-  });
+  // And under that member in our trace text (services/llmTraceText.ts).
+  for (const t of await claim()) await withTraceUser(t.userId, () => withMember(t.userId, () => runOne(t)));
+}
+
+async function runDueTask(t: CoTask): Promise<void> {
+  const L = await import("./commitmentLog.js");
+  // A commitment's time came: logged as fired (services/commitmentLog.ts), whatever the turn then does.
+  if (L.isCommitment(t)) await L.logCommitment("fired", { userId: t.userId, taskId: t.id, goalId: t.followup?.goalId ?? null, what: t.goal, source: t.source ?? null, why: `wake ${t.wakes}` });
+  // A goal's check-in or reminder (services/goalOwnership.ts): real state first, then one text through the task-update path.
+  if (t.kind === "work" && t.followup?.checkin) await import("./goalOwnership.js").then((g) => g.runGoalCheckin(t)).catch((err: any) => console.error("goal check-in failed (non-fatal):", err?.message ?? err));
+  else if (t.kind === "followup") await import("./followUps.js").then((f) => f.runFollowUpTurn(t));
+  else if (t.kind === "research_brief") await import("./researchBrief.js").then((r) => r.runResearchBriefTask(t)).catch((err: any) => console.error("research brief task failed (non-fatal):", err?.message ?? err));
+  else await runTaskTurn(t);
 }

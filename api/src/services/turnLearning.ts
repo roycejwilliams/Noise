@@ -198,7 +198,7 @@ export async function learnFromTextTurn(input: TurnLearningInput): Promise<TurnL
       // fast but missed two of three.
       maxOutputTokens: 5000,
       providerOptions: { anthropic: { effort: "medium" } },
-      experimental_telemetry: { isEnabled: true, functionId: "turnLearning.learn", metadata: { userId: input.userId } },
+      experimental_telemetry: { isEnabled: true, functionId: "turnLearning.learn" },
       prompt: turnLearningPrompt({
         transcript,
         message: input.message,

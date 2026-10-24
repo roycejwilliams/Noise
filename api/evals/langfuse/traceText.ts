@@ -333,7 +333,7 @@ T.traceTextStore.db = async () => fakeDb;
   check("each task's mark is scoped: after the loop the timer is nobody's again", byFn("eval.task.afterLoop").length === 1 && u("eval.task.afterLoop") === null);
   check("A's turn keeps A after the timer", u("eval.turnAfterTimer") === USER);
   check("the reply turn's timer runs due tasks under nobody's mark", /setTimeout\(\(\) => withTraceUser\(null, \(\) => import\("\.\.\/services\/taskTurn\.js"\)\.then\(\(t\) => t\.runDueTasks\(\)\)\)/.test(src("routes/sendblue.ts")));
-  check("runDueTasks runs each task under its own member, scoped", /for \(const t of await claimDueTasks\(\)\) await withTraceUser\(t\.userId, async \(\) => \{/.test(src("services/taskTurn.ts")));
+  check("runDueTasks runs each task under its own member, scoped", /for \(const t of await claim\(\)\) await withTraceUser\(t\.userId, \(\) => withMember\(t\.userId, \(\) => runOne\(t\)\)\);/.test(src("services/taskTurn.ts")));
   check("every text turn runs inside traceTurn", /withPhoneLock\(lockKey, \(\) => traceTurn\(run\)\) : traceTurn\(run\)/.test(src("routes/sendblue.ts")));
 }
 

@@ -16,6 +16,7 @@ import { eventLookupFromModel, isTicketingHost, namedEventFromModel } from "./se
 import { looksOfficial, pageExcerpt, readPageText, reserveWebSearch } from "./webOpportunitySearch.js";
 import { checkGrounding } from "../harness/matchGate.js";
 import type { TierMatch } from "./tieredRecommendation.js";
+import { scopeMember, withMember } from "./llmUsage.js";
 
 const LOOKUP_TIMEOUT_MS = 15_000;
 
@@ -41,7 +42,11 @@ Return the name exactly as they wrote it. Return ONLY JSON: {"name": "AfroTech"}
   }
 }
 
-export async function lookupNamedEvent(
+// Every model call inside is this member's in llm_usage (services/llmUsage.ts withMember, cost per member 2026-10-23).
+export async function lookupNamedEvent(...a: Parameters<typeof lookupNamedEventInScope>): ReturnType<typeof lookupNamedEventInScope> {
+  return withMember(a[3].userId ?? scopeMember(), () => lookupNamedEventInScope(...a));
+}
+async function lookupNamedEventInScope(
   askText: string,
   city: string | null,
   todayStr: string,
@@ -67,12 +72,12 @@ Return ONLY valid JSON: {"found": true, "name": "...", "url": "the page you actu
       const found = await exaSearch(`${name} ${todayStr.slice(0, 4)} official site${city ? ` ${city}` : ""}`, { purpose: "named_event", userId: opts.userId, timeoutMs: 6_000 });
       if (!found.pages.length) return { ...NOTHING, name, rejected: found.error ? "the web lookup failed or timed out" : "the web lookup found no official page" };
       pages = found.pages;
-      raw = (await generateText({ model: anthropic(MODELS.sonnet), experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.pick", metadata: { userId: opts.userId ?? "" } }, timeout: LOOKUP_TIMEOUT_MS - 6_000, prompt: fromPagesPrompt(prompt, found.pages) })).text;
+      raw = (await generateText({ model: anthropic(MODELS.sonnet), experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.pick" }, timeout: LOOKUP_TIMEOUT_MS - 6_000, prompt: fromPagesPrompt(prompt, found.pages) })).text;
     } else {
       raw = (
         await generateText({
           model: anthropic(MODELS.sonnet),
-          experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.search", metadata: { userId: opts.userId ?? "" } },
+          experimental_telemetry: { isEnabled: true, functionId: "namedEventLookup.search" },
           // Same tool version the opportunity search uses; the newer one hung (2026-09-18).
           tools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 2 }) },
           stopWhen: stepCountIs(3),
