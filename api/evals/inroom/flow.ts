@@ -486,9 +486,9 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
 }
 
 {
-  // The close's copy waits on Royce (review of #208, 2026-10-19): while CLOSE_APPROVED is false nothing is drafted, sent or marked
-  // done; approved inside the window it goes; a close whose room is over by then expires unsent (no late goodbye).
-  check("close approval: the constant is false, in code, no env switch", U.CLOSE_APPROVED === false && /export const CLOSE_APPROVED: boolean = false;/.test((await import("node:fs")).readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8")) && !/process\.env[^\n]*CLOSE_APPROVED/.test((await import("node:fs")).readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8")));
+  // The close's copy was approved by Royce (2026-10-23). Unapproved (false) nothing is drafted, sent or marked done; approved inside
+  // the window it goes; a close whose room is over by then expires unsent (no late goodbye).
+  check("close approval: the constant is true (Royce approved 2026-10-23), in code, no env switch", U.CLOSE_APPROVED === true && /export const CLOSE_APPROVED: boolean = true;/.test((await import("node:fs")).readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8")) && !/process\.env[^\n]*CLOSE_APPROVED/.test((await import("node:fs")).readFileSync(new URL("../../src/services/eventUnmatchedFollowUp.ts", import.meta.url), "utf8")));
   reset();
   const a = addMember({ first_name: "Jordan", intent: [ask("a sailing crew")] });
   const end = new Date(Date.now() + 10 * 60_000).toISOString();
@@ -497,7 +497,7 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   W.presence.set(`evt-appr|${a.id}`, { sharing_seen_at: new Date(), arrived_at: new Date() });
   const before = sentTo(a).length;
   const callsBefore = W.llmCalls.length;
-  await U.processDueUnmatchedFollowUps();
+  await U.processDueUnmatchedFollowUps({ approved: false });
   await settle();
   const row = () => W.unmatchedFollowups.find((r) => r.event_api_id === "evt-appr" && r.user_id === a.id);
   check("close approval: unapproved, nothing is drafted or sent", sentTo(a).length === before && W.llmCalls.length === callsBefore, { sent: sentTo(a).slice(before), calls: W.llmCalls.slice(callsBefore).map((c) => c.kind) });
