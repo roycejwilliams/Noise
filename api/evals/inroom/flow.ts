@@ -332,11 +332,15 @@ for (const [s, expect] of [[59, false], [60, true], [100, true], [0, false]] as 
   await freshPass("evt-late-reg");
   check("late: the existing match is never swapped", nudgeOf("evt-late-reg", a)?.candidate_id === b.id);
   // The additive heads-up names no one, so it waits while Jordan's question about Ellis is open (review of #211), and isn't lost:
-  // once that's answered, the next pass sends it.
+  // answering that question starts a room pass (inRoomOffers.ts answerOffer → rescoreIfAdditiveWaiting), which sends it, once.
   check("late: while the question about Ellis is open, no additive heads-up goes beside it", sentTo(a).length === 1, sentTo(a).map((x) => x.content));
+  const OF = await import("../../src/services/inRoomOffers.js");
+  W.scoringDebounce.clear(); // the last pass was more than 15s ago
   await H.handleMatchNudgeReply("evt-late-reg", "Cue Night", "not_interested", { user_id: a.id, first_name: a.first_name, phone_number: a.phone_number!, email: a.email }, { user_id: b.id, first_name: b.first_name, phone_number: b.phone_number!, email: b.email });
+  check("late: answering the question about Ellis starts a room pass for the waiting heads-up", (await OF.additiveRescore) === true);
   await new Promise((r) => setTimeout(r, 30));
-  await freshPass("evt-late-reg");
+  check("... which sends it", sentTo(a).length === 2, sentTo(a).map((x) => x.content));
+  check("... once: nothing is waiting any more, and a later pass sends no second one", !(await OF.rescoreIfAdditiveWaiting("evt-late-reg", a.id)) && (await freshPass("evt-late-reg"), sentTo(a).length === 2));
   const add = sentTo(a)[1]?.content ?? "";
   check("late: a stronger late arrival produces one additive offer that names no one", sentTo(a).length === 2 && !/Sarah/.test(add), add);
   const addMem = W.memoriesWritten.find((m) => m.user_id === a.id && /Additive offer/.test(m.content))?.content ?? "";

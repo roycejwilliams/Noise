@@ -355,6 +355,13 @@ check(`a direct ask and two nudges racing beside one open question: never more t
   const nudge = await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "nudge", candidateId: "kai" });
   await O.releaseOfferSlot(nudge!);
   check("... a released nudge place with nothing before it is gone", !!nudge && !W.offers.some((o) => o.candidate_key === "kai"));
+  const held = await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "nudge", candidateId: "zed" });
+  const threw = await O.draftingInSlot(held!, async () => { throw new Error("draft crashed"); }).then(() => false, () => true);
+  check("a draft that throws frees the nudge's place (and the error still goes on)", threw && !W.offers.some((o) => o.candidate_key === "zed"));
+  const kept = await O.claimOfferSlot({ eventId: "ev", personId: tess.id, kind: "nudge", candidateId: "zed" });
+  const got = await O.draftingInSlot(kept!, async () => "a draft");
+  check("... a draft that returns leaves it held for the send", got === "a draft" && W.offers.find((o) => o.candidate_key === "zed")?.status === "sending");
+  await O.releaseOfferSlot(kept!);
   offer(tess.id, "kai", "sending", "nudge", 30);
   check("a nudge claim that never confirmed is never put in the direct-ask line", (await O.requeueStaleAsks()).length === 0 && W.offers.find((o) => o.candidate_key === "kai")?.status === "sending");
 }
