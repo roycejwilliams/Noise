@@ -110,7 +110,7 @@ const said = (m: Member, content: string) => W.memoriesWritten.push({ user_id: m
   W.events.get("ev2")!.guests[0].email = "someone.else@example.test"; // the check-in is someone else's: the door was tracked
   check("approval: unapproved, no note queued and nothing settled", (await N.runNoShowNotes(later(2), { approved: false })) === 0 && !W.candidates.length && !W.presence.get(`ev2|${jordan.id}`)?.noshow_settled_at);
   const r = await N.draftNoShowNote(asCandidate({ user_id: jordan.id, type: "noshow_note", target_key: "noshow_note:ev2", payload: { eventId: "ev2", name: "Noise Supper", startAt: W.events.get("ev2")!.start_at, timezone: null } }), person(jordan), deps({ approved: false }));
-  check("approval: unapproved, a queued note waits (nothing drafted)", "defer" in r && !W.llmCalls.some((c) => c.kind === "noshowDraft"));
+  check("approval: unapproved, a queued note waits (nothing built or sent)", "defer" in r && W.llmCalls.length === 0 && W.sent.length === 0);
 }
 
 // ============================================================ 3. "yes I'm here": arrived, the normal night and the goodbye
@@ -165,6 +165,16 @@ const said = (m: Member, content: string) => W.memoriesWritten.push({ user_id: m
   const local = due ? new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", hourCycle: "h23" }).format(due) : "";
   check("no answer + door tracked: the note is queued for their next morning (8am, their time)", !!c && !!due && due > end && Number(local) === 8 && +due === +PR.nextLocalHour(end, null, PR.RULES.startHour), { due, local });
   check("no answer: nobody who checked in is asked or noted", !noteFor(noor) && sentTo(noor).length === 0);
+  // End to end through the pick's gates at the due time, with the pre-arrival text (topic event:ev5) sent and never answered and
+  // the no-show ask on the ledger: nothing holds it (review of #272: it shared the pre-arrival text's topic and was held as a re-ask).
+  const cand = asCandidate(c);
+  const sends = [
+    { type: "pre_arrival", targetKey: "pre_arrival:ev5", topicKey: "event:ev5", sentAt: new Date(Date.now() - 3 * 3_600_000), exempt: false },
+    { type: "co_event", targetKey: "noshow_ask:ev5", topicKey: "noshow_ask:ev5", sentAt: new Date(), exempt: true },
+  ];
+  const st = { now: due!, sends, lastInboundAt: null, needsCare: false, safetyHold: false, undeliveredYes: false, suppressedKinds: [], away: null, joinedAt: null, timezone: null, optedOut: false, midConversation: false };
+  const held = [...PR.candidateChecks(cand, st), ...PR.userLevelChecks(st as any, { lane: PR.laneOf("noshow_note") })].filter((k) => !k.pass).map((k) => k.name);
+  check("no answer + door tracked: at its morning, nothing in the pick's gates holds the note", cand.topicKey === "noshow_note:ev5" && held.length === 0, held);
 }
 {
   fresh();
@@ -209,10 +219,14 @@ const said = (m: Member, content: string) => W.memoriesWritten.push({ user_id: m
   check("due: a no once it's over; silence the next morning only with the door tracked", +N.noteDueAt("said_no", { end, zone: null, doorTracked: false })! === +end && N.noteDueAt("no_answer", { end, zone: null, doorTracked: false }) === null && !!N.noteDueAt("no_answer", { end, zone: null, doorTracked: true }) && N.noteDueAt("unclear", { end, zone: null, doorTracked: true }) === null && N.noteDueAt("came", { end, zone: null, doorTracked: true }) === null);
 }
 
-// ============================================================ 6. the note: no names, the intro offer only with a strong consenting fit
+// ============================================================ 6. the note: fixed lines, no names, the intro only with the fit's own yes
 const climb = (shareable = true) => ask("backing climate hardware founders at seed", "offering", shareable);
 const why = `what they've said they can offer: "backing climate hardware founders at seed"`;
-async function noteNight(o: { shareable?: boolean; score?: number; ellisCame?: boolean; nextTable?: boolean; soft?: boolean; draft?: (p: string) => string; paired?: boolean } = {}) {
+const DESC = "A long supper about building things that last. Doors at seven, food at eight.";
+const ABOUT = "A long supper about building things that last.";
+const NT = (soft = false) => N.noShowNote("Noise Supper", { kind: "next_table", name: "Noise Table Two", startAt: iso(9 * 86_400_000), timezone: null, url: null }, soft, ABOUT);
+const realReveal = (await import("../../src/services/networkIntroNudge.js")).prepareReveal;
+async function noteNight(o: { shareable?: boolean; score?: number; ellisCame?: boolean; nextTable?: boolean; soft?: boolean; paired?: boolean; optedIn?: boolean; about?: string | null } = {}) {
   fresh();
   const jordan = addMember({ first_name: "Jordan", intent: [ask("a seed investor for climate hardware")] });
   const ellis = addMember({ first_name: "Ellis", intent: [climb(o.shareable ?? true)] });
@@ -223,27 +237,41 @@ async function noteNight(o: { shareable?: boolean; score?: number; ellisCame?: b
   if (o.nextTable) addEvent({ api_id: "evnext", name: "Noise Table Two", start_at: iso(9 * 86_400_000), end_at: iso(9 * 86_400_000 + 3 * 3_600_000) });
   W.rankings.set(`evn|${jordan.id}`, { ranked_candidates: [{ candidate_id: ellis.id, score: o.score ?? 85, reason: "internal", shareReason: why, mutual: false, method: "ask" }] });
   if (o.paired) W.nudges.push({ event_id: "evn", person_id: jordan.id, candidate_id: ellis.id, score: 85, pending: false, anonymous: false, sent_at: Date.now() });
-  if (o.draft) W.noshowDraft = o.draft;
   P.clearPresenceCache();
   await N.runNoShowAsks(new Date(), { approved: true });
   await N.runNoShowNotes(later(2), { approved: true });
   const row = noteFor(jordan);
   const c = row ? asCandidate(row) : null;
-  const r = c ? await N.draftNoShowNote(c, person(jordan), deps({ struggling: async () => !!o.soft })) : null;
-  return { jordan, ellis, noor, c, r: r as any };
+  const callsBefore = W.llmCalls.length;
+  // The real reveal and its gates run; only the fit's own earlier yes to an intro with Jordan is set here (the fake world keeps
+  // that yes on the same network_introductions row its "already suggested" gate reads, so it can't hold both).
+  const reveal = async (u: string, f: string, cand: any) => {
+    const r = await realReveal(u, f, cand);
+    return "message" in r ? { ...r, optedIn: o.optedIn ?? true } : r;
+  };
+  const r = c ? await N.draftNoShowNote(c, person(jordan), deps({ struggling: async () => !!o.soft, about: async () => (o.about === undefined ? DESC : o.about), reveal })) : null;
+  const calls = W.llmCalls.slice(callsBefore).map((x) => x.kind);
+  return { jordan, ellis, noor, c, r: r as any, calls };
 }
 {
-  const { jordan, ellis, c, r } = await noteNight({});
+  const { jordan, ellis, c, r, calls } = await noteNight({});
   const t = textOf(r);
-  check("intro: a strong fit who came and agreed to be shared: the note offers to tell them who", /\?/.test(t) && c.payload.intro?.candidate?.candidate_id === ellis.id, { t, intro: c?.payload?.intro });
+  check("intro: a strong fit who came, agreed to be shared and already said yes to Jordan: the fixed intro note", t === N.noShowNote("Noise Supper", { kind: "intro" }, false, ABOUT) && c.payload.intro?.candidate?.candidate_id === ellis.id, { t, intro: c?.payload?.intro });
   check("intro: never names or describes them in the note", !/Ellis/.test(t) && !/climate|seed|founder|backing/i.test(t) && !nameIn(t, "Jordan"), t);
-  check("intro: the reveal (the answer to their yes) is drafted and ready, naming them only then", /Ellis/.test(c.payload.intro?.reveal ?? ""));
-  check("intro: the draft passes the harness's own checks", PR.checkDraft(r.text, r.rules).every((k: any) => k.pass), PR.checkDraft(r.text, r.rules).filter((k: any) => !k.pass));
+  check("intro: the reveal (the answer to their yes) is ready, naming them only then", /Ellis/.test(c.payload.intro?.reveal ?? ""));
+  check("intro: the note passes the harness's own checks", PR.checkDraft(r.text, r.rules).every((k: any) => k.pass), PR.checkDraft(r.text, r.rules).filter((k: any) => !k.pass));
+  check("no model draft: the only model call is the reveal's (never the note's words)", calls.every((k) => k === "networkReveal" || k === "consent"), calls);
   await N.afterNoShowNoteSent(c);
   const pend = W.memoriesWritten.find((m) => m.user_id === jordan.id && m.memory_type === "network_offer_pending");
   check("intro: once sent, the offer is their open network question (the existing double opt-in path)", !!pend && JSON.parse(pend.content).candidate?.candidate_id === ellis.id && JSON.parse(pend.content).candidate?.share_safe === true);
 }
+{
+  const { c, r } = await noteNight({ optedIn: false, nextTable: true });
+  const t = textOf(r);
+  check("leak: the fit hasn't said yes to an intro with them: no intro offer, no name anywhere, the next table instead", t === NT() && !c.payload.intro && !/Ellis/.test(JSON.stringify({ t, payload: c.payload })), { t, payload: c?.payload });
+}
 for (const [label, o] of [
+  ["the fit hasn't said yes to them", { optedIn: false }],
   ["their ask isn't shareable (no consent to be shared)", { shareable: false }],
   ["a weak fit (score 50)", { score: 50 }],
   ["the fit didn't come", { ellisCame: false }],
@@ -251,45 +279,44 @@ for (const [label, o] of [
 ] as const) {
   const { c, r } = await noteNight(o);
   const t = textOf(r);
-  check(`intro: no offer when ${label}`, !!r && !("skip" in r) && !/\?/.test(t) && !c.payload.intro && !/Ellis/.test(t), { t, intro: c?.payload?.intro });
+  check(`intro: no offer when ${label}`, t === N.noShowNote("Noise Supper", { kind: "none" }, false, ABOUT) && !c.payload.intro && !/Ellis/.test(t), { t, intro: c?.payload?.intro });
 }
 {
-  const { c, r } = await noteNight({ shareable: false, nextTable: true });
-  const t = textOf(r);
-  check("next table: with no intro to offer, the next Noise table (no question)", /Noise Table Two/.test(t) && !/\?/.test(t) && !c.payload.intro, t);
+  const { r } = await noteNight({ shareable: false, nextTable: true });
+  check("next table: with no intro to offer, the approved next-table line (no question)", textOf(r) === NT() && !/\?/.test(textOf(r)), textOf(r));
 }
 {
   const { r } = await noteNight({ shareable: false, nextTable: true, soft: true });
-  const t = textOf(r);
-  const prompt = W.llmCalls.filter((x) => x.kind === "noshowDraft").at(-1)?.prompt ?? "";
-  check("hard week: still sent, gentler, and the next table is still offered (feelings change tone, never cancel)", !!r && !("skip" in r) && /Noise Table Two/.test(t) && /hard time/.test(prompt) && /never say or hint that you know how they've been/.test(prompt) && /next_table/.test(prompt), { t });
+  check("hard week: still sent and the next table still offered (feelings change tone, never cancel)", textOf(r) === NT(true) && /Noise Table Two/.test(textOf(r)), textOf(r));
+  const { r: r2 } = await noteNight({ soft: true });
+  check("hard week: the gentle intro line", textOf(r2) === N.noShowNote("Noise Supper", { kind: "intro" }, true, ABOUT) && /whenever you feel up to it/.test(textOf(r2)), textOf(r2));
+  const soft = [N.noShowNote("Noise Supper", { kind: "none" }, true), N.noShowNote("Noise Supper", { kind: "intro" }, true), NT(true)];
+  check("hard week: the fixed lines never say Cue knows how they've been", soft.every((f) => f.startsWith("Sorry you couldn't make it to Noise Supper.") && !/take (good )?care|hope you|been (rough|hard)|tough|feeling/i.test(f)), soft);
 }
 {
-  const { r } = await noteNight({ soft: true, draft: () => "SKIP" });
-  check("hard week, the draft skips: the fixed gentle note still goes, never cancelled", N.noShowFallback("Noise Supper", { kind: "intro" }, true) === textOf(r) && /whenever you feel up to it/.test(textOf(r)), textOf(r));
-  const nt = { kind: "next_table", name: "Noise Table Two", startAt: iso(9 * 86_400_000), timezone: null, url: null } as const;
-  const soft = [N.noShowFallback("Noise Supper", { kind: "none" }, true), N.noShowFallback("Noise Supper", { kind: "intro" }, true), N.noShowFallback("Noise Supper", nt, true)];
-  check("hard week: the fixed lines never say Cue knows how they've been, and keep the next table", soft.every((f) => f.startsWith("Sorry you couldn't make it to Noise Supper.") && !/take (good )?care|hope you|been (rough|hard)|tough|feeling/i.test(f)) && /Noise Table Two/.test(soft[2]), soft);
-}
-{
-  const leaky = [
-    "Sorry you couldn't make it to Noise Supper. Ellis and Noor were there and asked after you.",
-    "Sorry you couldn't make it to Noise Supper. 12 people came and it was lovely.",
-    "Sorry you couldn't make it to Noise Supper. Everyone stayed late.",
-    "Sorry you couldn't make it to Noise Supper. Want to come next time?",
-  ];
-  for (const d of leaky) {
-    const { r } = await noteNight({ shareable: false, draft: () => d });
-    check(`no names, nothing about who came: "${d.slice(29, 70)}..." is replaced by the fixed note`, textOf(r) === N.noShowFallback("Noise Supper", { kind: "none" }, false), textOf(r));
+  // What the night was: one sentence, verbatim from the event's own description, or nothing.
+  const names = ["Ellis", "Noor"];
+  check("about: the first sentence, verbatim", N.aboutLine(DESC, names) === ABOUT && DESC.includes(N.aboutLine(DESC, names)!));
+  for (const d of [
+    "Twelve of us filled the table and stayed late.",
+    "The room was packed with builders.",
+    "A couple of the founders you'd like were there.",
+    "An intimate dinner for 12 founders building climate hardware.",
+    "Supper with Ellis, who hosts the conversation.",
+    "Is this the best supper in town?",
+    "A supper — long and slow.",
+    "Details at https://lu.ma/x for the night.",
+    "Hi.",
+  ]) check(`about: "${d.slice(0, 40)}" is dropped, never edited`, N.aboutLine(d, names) === null, N.aboutLine(d, names));
+  const { r } = await noteNight({ shareable: false, about: "Twelve of us filled the table and stayed late. More soon." });
+  check("about: an unsafe description leaves the note with no line about the night", textOf(r) === N.noShowNote("Noise Supper", { kind: "none" }, false, null), textOf(r));
+  const { r: r3 } = await noteNight({ shareable: false, about: null });
+  check("about: no description, no line about the night", textOf(r3) === N.noShowNote("Noise Supper", { kind: "none" }, false, null), textOf(r3));
+  for (const kind of ["none", "intro"] as const) for (const soft of [false, true]) for (const about of [null, ABOUT]) {
+    const f = N.noShowNote("Noise Supper", { kind } as any, soft, about);
+    check(`fixed note (${kind}${soft ? ", soft" : ""}${about ? ", about" : ""}): no em dash, passes the harness checks`, !/[—–]/.test(f) && PR.checkDraft(f, { maxSentences: 4, maxChars: 420, mustIncludeAny: ["supper"] }).every((k) => k.pass), PR.checkDraft(f, { maxSentences: 4, maxChars: 420, mustIncludeAny: ["supper"] }).filter((k) => !k.pass));
   }
-  const { r } = await noteNight({ draft: () => "Sorry you couldn't make it to Noise Supper. Ellis was there and would be great for you. Want me to introduce you?" });
-  check("no names: a draft that names the fit is replaced by the fixed intro note", textOf(r) === N.noShowFallback("Noise Supper", { kind: "intro" }, false) && !/Ellis/.test(textOf(r)), textOf(r));
-  for (const kind of ["none", "intro"] as const) for (const soft of [false, true]) {
-    const f = N.noShowFallback("Noise Supper", { kind } as any, soft);
-    check(`fallback (${kind}${soft ? ", soft" : ""}): no em dash, passes the harness checks`, !/[—–]/.test(f) && PR.checkDraft(f, { maxSentences: 4, maxChars: 420, mustIncludeAny: ["supper"] }).every((k) => k.pass), PR.checkDraft(f, { maxSentences: 4, maxChars: 420, mustIncludeAny: ["supper"] }).filter((k) => !k.pass));
-  }
-  const nt = N.noShowFallback("Noise Supper", { kind: "next_table", name: "Noise Table Two", startAt: iso(9 * 86_400_000), timezone: null, url: null }, false);
-  check("fallback (next table): no em dash, passes the harness checks", !/[—–]/.test(nt) && PR.checkDraft(nt, { maxSentences: 4, maxChars: 420, mustIncludeAny: ["supper"] }).every((k) => k.pass));
+  check("fixed note (next table, about): no em dash, passes the harness checks", !/[—–]/.test(NT()) && PR.checkDraft(NT(), { maxSentences: 4, maxChars: 420, mustIncludeAny: ["supper"] }).every((k) => k.pass));
 }
 {
   const { jordan, r } = await noteNight({});
@@ -354,7 +381,7 @@ check("never a name: no text sent in this file names another member", W.sent.eve
   const src = readFileSync(new URL("../../src/services/eventNoShow.ts", import.meta.url), "utf8");
   const logs = [...src.matchAll(/console\.log\(([^;]*)\);/g)].map((m) => m[1]);
   check("logs: ids only (no names, no message text)", logs.every((l) => !/first_name|firstName|content|text\b|message/i.test(l)), logs);
-  const lines = [N.noShowAskText({ name: "Noise Supper", start_at: iso(0), timezone: null }), N.noShowFallback("Noise Supper", { kind: "intro" }, false), N.noShowFallback("Noise Supper", { kind: "intro" }, true), N.noShowTask("Noise Supper", { kind: "intro" }, true, true)];
+  const lines = [N.noShowAskText({ name: "Noise Supper", start_at: iso(0), timezone: null }), N.noShowNote("Noise Supper", { kind: "intro" }, false, ABOUT), N.noShowNote("Noise Supper", { kind: "intro" }, true), NT(true)];
   check("copy: no em dashes in any line or brief", lines.every((l) => !/[—–]/.test(l)), lines);
 }
 
