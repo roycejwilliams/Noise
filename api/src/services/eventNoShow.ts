@@ -13,8 +13,9 @@
 //   4. The note (proactive type noshow_note, harness/proactiveRegistry.ts), from the approved fixed lines only, no model draft
 //      (review of #272): what the night was without any names (the event's name, and one sentence verbatim from its own Luma
 //      description when that sentence is safe), then one offer: a double opt-in intro to one person from that night who fits what
-//      they're working on (a strong ranked fit who came, whose ask they agreed may be shared, AND who has already said yes to an
-//      intro with this member, since the reveal tells this member they came; through the network intro path:
+//      they're working on (a strong ranked fit who came, whose ask they agreed may be shared, AND who said yes to being named in
+//      that event's member brief or has already said yes to this intro, since the reveal tells this member they came; Royce
+//      2026-10-23; through the network intro path:
 //      the note asks "want me to tell you who?", a yes reveals the name and asks about the intro, both yes sends the email), else
 //      the next Noise table if one is on the calendar. It never names or describes anyone who came, and never says who or how
 //      many came. A hard week (harness/emotion.ts needsCare) changes the tone, never whether it goes or what it offers: gentler
@@ -355,9 +356,11 @@ export async function draftNoShowNote(c: Candidate, person: Person, deps: NoteDe
   const pick = await strongConsentingFit(p.eventId, c.userId, lumaIn).catch(() => null);
   if (pick) {
     const prepared = await deps.reveal(c.userId, person.firstName, pick.candidate).catch(() => null);
-    // Only when that person has already said yes to being introduced to this member (review of #272): a yes to the note reveals
-    // their name, which tells this member they came, and agreeing to share their ask was never agreeing to share that.
-    if (prepared && "message" in prepared && prepared.optedIn === true) {
+    // Only when that person agreed to be known as there: a yes to the note reveals their name, which tells this member they came,
+    // and agreeing to share their ask was never agreeing to share that (review of #272). Two yeses count (Royce, 2026-10-23,
+    // option a): their yes to being named in THIS event's member brief (services/eventBrief.ts name_ok, read for this event only),
+    // or their yes already on record to this very intro. Neither: no intro offer (the next table, or nothing).
+    if (prepared && "message" in prepared && (prepared.optedIn === true || (await namedInBrief(p.eventId, pick.candidate.candidate_id)))) {
       offer = { kind: "intro" };
       c.payload.intro = { askId: pick.askId, candidate: pick.candidate, reveal: prepared.message, revealOptedIn: prepared.optedIn };
     }
@@ -374,6 +377,13 @@ export async function draftNoShowNote(c: Candidate, person: Person, deps: NoteDe
   if (about && !checkDraft(text, rules).every((k) => k.pass)) text = noShowNote(p.name, offer, soft, null);
   const link = offer.kind === "next_table" && offer.url ? [offer.url] : [];
   return { messages: [text, ...link], text, rules };
+}
+
+// Their yes to being named in this event's member brief (event_presence.name_ok for this event): a no, no answer, or a yes for
+// another event doesn't count.
+async function namedInBrief(eventId: string, userId: string): Promise<boolean> {
+  const f = await (await import("./eventBrief.js")).presenceFlags(eventId, userId).catch(() => null);
+  return f?.nameOk === true;
 }
 
 async function emailOf(userId: string): Promise<string> {
