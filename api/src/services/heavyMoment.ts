@@ -14,7 +14,7 @@ import { DateTime } from "luxon";
 import pool from "../db/db.js";
 import { recordDecision } from "../harness/core.js";
 import { enqueueCandidate } from "../harness/proactive.js";
-import { signalTarget, type EmotionSignal } from "../harness/emotion.js";
+import { isScoreBasis, signalTarget, type EmotionSignal } from "../harness/emotion.js";
 import { memberZone } from "./memberTime.js";
 import { SELF_HARM } from "./safetyText.js";
 
@@ -65,8 +65,8 @@ export function pickEpisode(signals: HeavySignal[], now: Date, timezone: string 
   const life = signals
     .filter((s) => s.at.getTime() >= since && s.at <= now && signalTarget(s) === "life")
     .sort((a, b) => a.at.getTime() - b.at.getTime());
-  // Frustration with Co, and the voice score on its own, are not their life.
-  const negative = life.filter((s) => s.valence === "negative" && s.basis !== "frustration_score" && !ABOUT_CO_TOO.test(`${s.about ?? ""} ${s.quote ?? ""}`.slice(0, 400)));
+  // Frustration with Co, and a voice score on its own (ElevenLabs' frustration score, Hume's voice read), are not their life.
+  const negative = life.filter((s) => s.valence === "negative" && !isScoreBasis(s.basis) && !ABOUT_CO_TOO.test(`${s.about ?? ""} ${s.quote ?? ""}`.slice(0, 400)));
   if (!negative.length) return null;
   // The latest episode: walk back while readings are close together.
   const gap = HEAVY.episodeGapHours * 3_600_000;
@@ -81,7 +81,8 @@ export function pickEpisode(signals: HeavySignal[], now: Date, timezone: string 
   if (episode.some((s) => SELF_HARM.test(plain(`${s.about ?? ""} ${s.quote ?? ""}`)))) return null;
   const endedAt = episode[episode.length - 1].at;
   // They have since had a good moment: it already passed.
-  if (life.some((s) => s.valence === "positive" && s.at > endedAt)) return null;
+  // A voice score alone never clears it (voice never dismisses what they said).
+  if (life.some((s) => s.valence === "positive" && !isScoreBasis(s.basis) && s.at > endedAt)) return null;
   const zone = timezone && DateTime.now().setZone(timezone).isValid ? timezone : "America/Los_Angeles";
   const local = DateTime.fromJSDate(endedAt).setZone(zone);
   const due = local.plus({ days: 1 }).set({ hour: HEAVY.dueHour, minute: 0, second: 0, millisecond: 0 });
@@ -161,7 +162,7 @@ export function heavyStillFits(o: { endedAt: Date; lastInboundAt: Date | null; p
 export async function heavyFitsNow(userId: string, endedAt: Date, now = new Date()): Promise<{ ok: true } | { ok: false; why: string }> {
   const { rows } = await pool.query(
     `SELECT (SELECT MAX(created_at) FROM co_memories WHERE user_id = $1 AND memory_type = 'text_exchange' AND content LIKE 'User %') AS last_in,
-            EXISTS (SELECT 1 FROM emotion_signals WHERE user_id = $1 AND valence = 'positive' AND created_at > $2) AS positive`,
+            EXISTS (SELECT 1 FROM emotion_signals WHERE user_id = $1 AND valence = 'positive' AND basis IS DISTINCT FROM 'voice' AND created_at > $2) AS positive`,
     [userId, endedAt],
   );
   return heavyStillFits({ endedAt, lastInboundAt: rows[0]?.last_in ? new Date(rows[0].last_in) : null, positiveSince: Boolean(rows[0]?.positive), now });

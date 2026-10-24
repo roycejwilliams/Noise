@@ -44,7 +44,9 @@ import { surfaceNewAsksNow } from "../services/eventSurfacingSweep.js";
 import { refreshPersonSnapshot } from "../harness/personSnapshot.js";
 import { AUDIT_SECTIONS, auditCall, knownBeforeFrom } from "../harness/callGrounding.js";
 import { memberKnowledge } from "../services/memberKnowledge.js";
-import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frustrationScores, recordEmotionSignals, type ScoredLine } from "../harness/emotion.js";
+import { callEmotionMoments, checkNoEmotionLabelOnCall, frustrationMoments, frustrationScores, recordEmotionSignals, type EmotionSignal, type ScoredLine } from "../harness/emotion.js";
+import { callKeyOf, takeVoiceMoments } from "../services/mediaStreamBridge.js";
+import { callerTurnsFrom, momentSignals } from "../services/voiceRead.js";
 import { flagVoiceMoments } from "../services/voiceFlags.js";
 import { narratesInternalState } from "../services/speakable.js";
 import { CANT_CONNECT_LINE, chooseOpening, conversationLink, withTimeout, fetchConversationTurns, hitVoicemail, memberNumberOf, missedKind, voicemailLeft, noteCallFailure, takeCallContext, voicemailVerdict, registerElevenLabsCall, transcriptFromTurns, verifyCallToken, verifyPostCallWebhook } from "../services/elevenLabsCalls.js";
@@ -543,6 +545,8 @@ router.post("/el/post-call", async (req: Request, res: Response, next: NextFunct
           console.log(`post-call: ${scored.length} frustration scores for ${conversationId} from ${here.length ? "the webhook" : "the conversation fetch"}`);
           return scored;
         },
+        // The live voice read's moments for this call, by its own call token (services/mediaStreamBridge.ts).
+        voice: async () => momentSignals(await takeVoiceMoments(callKeyOf(userId, String(vars.call_token ?? "")), callerTurnsFrom(turns))),
       }),
     });
     // Moments where their voice said more than their words, beside the text
@@ -681,6 +685,9 @@ type EndedCallData = {
   // ElevenLabs' per-line frustration scores for the caller (harness/emotion.ts
   // frustrationMoments), read when the call's feelings are recorded.
   frustration?: () => Promise<ScoredLine[]>;
+  // The live voice read's strongest moments (services/voiceRead.ts voiceMoments, basis "voice"): none when the call had no
+  // read, or it was noisy.
+  voice?: () => Promise<Omit<EmotionSignal, "at">[]>;
 };
 async function processEndedCall(o: {
   userId: string;
@@ -768,7 +775,7 @@ async function processEndedCall(o: {
       // Let the app know the call ended and Co is now extracting the profile
       _io?.to(`user:${user_id}`).emit("co:processing");
 
-      const { transcript, recordingUrl: recording_url, frustration } = await o.load();
+      const { transcript, recordingUrl: recording_url, frustration, voice } = await o.load();
 
       if (!transcript) {
         console.error(`post-call: empty transcript for chat ${chat_id} (user ${user_id})`);
@@ -887,10 +894,13 @@ async function processEndedCall(o: {
         // Beside the text read: ElevenLabs' frustration score on lines it didn't
         // already call negative. Fetched alongside the read, not after it.
         const scoring = frustration ? frustration().catch(() => [] as ScoredLine[]) : Promise.resolve([] as ScoredLine[]);
+        // And the voice read's few moments, beside both (never in place of the text read).
+        const voicing = voice ? voice().catch(() => [] as Omit<EmotionSignal, "at">[]) : Promise.resolve([] as Omit<EmotionSignal, "at">[]);
         const moments = await callEmotionMoments(cleanTranscript);
         const scored = await scoring;
         const frustrated = frustrationMoments(scored, moments); // mood: records the read (call frustration moments)
-        await recordEmotionSignals(user_id, [...moments, ...frustrated].map((m) => ({ ...m, memoryId: transcriptMemoryId }))); // mood: records the read
+        const voiced = await voicing;
+        await recordEmotionSignals(user_id, [...moments, ...frustrated, ...voiced].map((m) => ({ ...m, memoryId: transcriptMemoryId }))); // mood: records the read
       })().catch((err: any) => console.error("post-call: reading the call's feelings failed (non-fatal):", err?.message ?? err));
 
       // Steps 2-5 — Extract psychographic data via Anthropic, sanitize against

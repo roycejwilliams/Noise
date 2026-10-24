@@ -50,10 +50,17 @@ export type EmotionSignal = {
   // Absent on signals recorded before the target existed; see signalTarget.
   target?: EmotionTarget | null;
   // Where a signal came from when it isn't a model's read of what they said:
-  // "frustration_score" is ElevenLabs' per-line score (frustrationMoments).
-  // Absent on everything else.
-  basis?: "frustration_score" | null;
+  // "frustration_score" is ElevenLabs' per-line score (frustrationMoments);
+  // "voice" is Hume's read of how they sounded (services/voiceRead.ts
+  // voiceMoments). Absent on everything else.
+  basis?: "frustration_score" | "voice" | null;
 };
+
+// A score of how they sounded, not a read of what they said. Supporting only:
+// it shows in the call's moments (tone, timing), but never marks a hard day,
+// starts a check-in, or clears one on its own (the plan's safety rule: voice
+// is never the sole trigger, and never used to dismiss serious words).
+export const isScoreBasis = (basis: EmotionSignal["basis"] | undefined): boolean => basis === "frustration_score" || basis === "voice";
 
 // Signals from before target was recorded are classified from what they
 // were about. Calls are always about their life (voice prosody can't tell).
@@ -291,8 +298,8 @@ export function summarizeSignals(allSignals: EmotionSignal[], now: Date): Emotio
   // A frustration score alone doesn't mark a hard day: it can't tell frustration
   // with Co from frustration with life, and needsCare holds some check-ins
   // (review of #61). Co still sees it as a call moment, with their words.
-  const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && s.basis !== "frustration_score" && age(s) <= 24 * HOUR);
-  const positiveAfter = recentNeg ? sorted.some((s) => s.valence === "positive" && s.at > recentNeg.at) : false;
+  const recentNeg = sorted.find((s) => s.valence === "negative" && s.intensity !== "low" && !isScoreBasis(s.basis) && age(s) <= 24 * HOUR);
+  const positiveAfter = recentNeg ? sorted.some((s) => s.valence === "positive" && !isScoreBasis(s.basis) && s.at > recentNeg.at) : false;
   // The hard stretch recentNeg belongs to (hardStretchSince). getEmotionalContext reads it again from its own window, so a member with
   // more than a hundred reads in it still reaches the cap.
   const hardSince = recentNeg && !positiveAfter ? hardStretchSince(sorted, recentNeg.at) : null;

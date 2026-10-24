@@ -8,9 +8,21 @@ import { recordDecision } from "../harness/core.js";
 import { exchangeText } from "../services/theirYes.js";
 import { verifyCallToken } from "../services/elevenLabsCalls.js";
 import { noteTraceUser } from "../services/llmTraceText.js";
-import { anthropicStream, runCallLlm, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
+import { anthropicStream, runCallLlm, safetyCall, type OaiChunk, type OaiRequest, type ProxyDeps } from "../services/callLlmProxy.js";
 import { commitmentProblem, trackCallCommitment } from "../services/callCommitments.js";
 import type { CallToolset, MemberOnCall } from "../services/callTools.js";
+import { voiceReadLineFor } from "../services/mediaStreamBridge.js";
+
+// This turn's voice line, if the call has a voice read and it found something strong (services/voiceRead.ts). Only this
+// call's own session (keyed by its user and call token) and only their own words; anything wrong means no line.
+export function voiceLineForTurn(callKey: string, body: OaiRequest): string | null {
+  try {
+    const w = callWordsOf(body);
+    return voiceReadLineFor(callKey, w.turnWords, w.callWords.split("\n"), { safety: safetyCall(body) })?.line ?? null;
+  } catch {
+    return null;
+  }
+}
 
 const textOfMsg = (m: OaiRequest["messages"][number] | undefined): string =>
   typeof m?.content === "string" ? m.content : Array.isArray(m?.content) ? m!.content.map((p: any) => p?.text ?? "").join("") : "";
@@ -148,6 +160,8 @@ export function createCallLlmRouter(upstream: ProxyDeps["stream"] = anthropicStr
       },
       // The brain's judgment of this turn (brain/index.ts judgeCallTurn), logged as brain.call without waiting.
       onDecision: (d) => { if (userId) import("../brain/index.js").then((B) => B.logCallTurn(userId, d)).catch(() => {}); },
+      // The live voice read (services/mediaStreamBridge.ts): whatever Hume has already scored, read synchronously, never awaited.
+      voiceRead: userId && !voiceOnly ? voiceLineForTurn(callKey, body) : null,
     };
     // The call's instructions through the live guards, every turn (services/whatCoKnows.ts guardCallMessages).
     if (userId) {

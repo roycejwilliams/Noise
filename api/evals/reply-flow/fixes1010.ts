@@ -180,7 +180,7 @@ const empty = { message: "", recentConversation: "", contextSummary: "", recentM
   check("team: the call says they build Cue", out.includes(X.TEAM_BUILDER_LINE) && /Never pitch Cue to them/.test(X.TEAM_BUILDER_LINE));
   check("not team: nothing about building Cue", !EL.callSituation({ direction: "inbound", team: false }).includes("builds you"));
   check("the situation leads the call's context", EL.withCallSituation("Recent: interviews.", { direction: "outbound", team: false }).startsWith("This call: you called them") && /Recent: interviews\.$/.test(EL.withCallSituation("Recent: interviews.", { direction: "outbound", team: false })));
-  check("registration writes it, from the team flag", /context_summary: withCallSituation\(o\.contextSummary, \{ direction: o\.direction, team: await isTeamMember\(o\.userId\)/.test(src("services/elevenLabsCalls.ts")));
+  check("registration writes it, from the team flag", /const team = await isTeamMember\(o\.userId\)/.test(src("services/elevenLabsCalls.ts")) && /context_summary: withCallSituation\(o\.contextSummary, \{ direction: o\.direction, team \}\)/.test(src("services/elevenLabsCalls.ts")));
   check("texts: a team member's reply is told they build Cue", /addInstruction\(rf, TEAM_BUILDER_LINE\)/.test(src("harness/replyGrounding.ts")));
   check("the team line has no em dash or exclamation point", !/—|!/.test(X.TEAM_BUILDER_LINE));
 }
