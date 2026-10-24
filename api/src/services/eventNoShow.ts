@@ -15,9 +15,9 @@
 //      they're working on (a strong ranked fit who came and whose ask they agreed may be shared, through the network intro path:
 //      the note asks "want me to tell you who?", a yes reveals the name and asks about the intro, both yes sends the email), else
 //      the next Noise table if one is on the calendar. It never names or describes anyone who came, and never says who or how
-//      many came. A hard week (harness/emotion.ts needsCare) changes the tone, never whether it goes: gentler words and no
-//      next-table pitch.
-//   5. The words are NEW copy and wait on Royce: NOSHOW_COPY_APPROVED (false) stops everything, nothing asked, queued or sent.
+//      many came. A hard week (harness/emotion.ts needsCare) changes the tone, never whether it goes or what it offers: gentler
+//      words, the same offer, and never a word saying Cue knows they've been struggling (Royce, 2026-10-23).
+//   5. The words were approved by Royce 2026-10-23 (NOSHOW_COPY_APPROVED); false would stop everything, nothing asked, queued or sent.
 //   6. Delivery: the ask through sendExempt (opt-out read at send time, their local hours, the pause, the ledger), held by the
 //      matching kill switch and a safety hold; the note through the daily pick (harness/proactive.ts dispatch: ledger once,
 //      local hours, opt-out, safety hold, pacing). A test-range number (555-01xx) never gets either outside tests. Logs carry
@@ -39,10 +39,10 @@ export const NOSHOW_NOTE_EXPIRY_HOURS = 48;
 // The same bar as an in-room match nudge and a network intro.
 export const NOSHOW_STRONG_SCORE = 60;
 
-// The ask's line, the note's brief and its fixed fallback lines are new member-facing copy (Royce, 2026-10-23: written by Cue,
-// behind an approval constant, listed for him in the PR). False: nothing is asked, queued, drafted or sent, and nothing is marked
-// done, so flipping it on later starts cleanly. A code constant, no env switch (the CLOSE_APPROVED pattern).
-export const NOSHOW_COPY_APPROVED: boolean = false;
+// The ask's line, the note's brief and its fixed fallback lines are member-facing copy, approved by Royce 2026-10-23 (the hard-week
+// line dropped: the gentleness is in the rest of the note, never a word saying Cue knows they're struggling). Set back to false,
+// nothing is asked, queued, drafted or sent, and nothing is marked done. A code constant, no env switch (the CLOSE_APPROVED pattern).
+export const NOSHOW_COPY_APPROVED: boolean = true;
 let awaitingApprovalNoted = false;
 function approved(o?: boolean): boolean {
   if (o ?? NOSHOW_COPY_APPROVED) return true;
@@ -80,9 +80,10 @@ export function nextTableDate(startAt: string, timezone: string | null): string 
 
 // The fixed note: what goes when the drafted one can't (it failed a check, or the draft came back empty).
 export function noShowFallback(eventName: string, offer: NoShowOffer, soft: boolean): string {
-  const lines = [soft ? `Sorry you couldn't make it to ${eventName}. I hope you're taking good care of yourself.` : `Sorry you couldn't make it to ${eventName}.`];
+  // One sorry line whatever the week: a hard week is never named (Royce, 2026-10-23).
+  const lines = [`Sorry you couldn't make it to ${eventName}.`];
   if (offer.kind === "intro") lines.push(soft ? "There was someone there I think you'd get a lot from knowing, whenever you feel up to it. Want me to tell you who?" : "There was someone there I think you'd get a lot from knowing. Want me to tell you who?");
-  if (offer.kind === "next_table" && !soft) lines.push(`The next table is ${offer.name} on ${nextTableDate(offer.startAt, offer.timezone)}, if you'd like to join.`);
+  if (offer.kind === "next_table") lines.push(`The next table is ${offer.name} on ${nextTableDate(offer.startAt, offer.timezone)}, if you'd like to join.`);
   return lines.join(" ");
 }
 
@@ -94,7 +95,7 @@ export function noShowTask(eventName: string, offer: NoShowOffer, soft: boolean,
       : offer.kind === "next_table"
         ? " Then mention the next table (next_table and next_table_date only), with no question and no pressure."
         : " Ask nothing.";
-  return `They registered for ${eventName} and didn't make it. Write a short, warm note: sorry they couldn't make it, then ${hasAbout ? "one line on what the night was, only from what_the_night_was" : "nothing about the night beyond its name"}.${offerLine} Never name, describe or hint at anyone who was there, never say who or how many came, and never recap the night's conversations. No guilt and no "you missed out".${soft ? " They've been having a hard time: keep it gentle and short, with nothing to sign up for." : ""} No sign-off.`;
+  return `They registered for ${eventName} and didn't make it. Write a short, warm note: sorry they couldn't make it, then ${hasAbout ? "one line on what the night was, only from what_the_night_was" : "nothing about the night beyond its name"}.${offerLine} Never name, describe or hint at anyone who was there, never say who or how many came, and never recap the night's conversations. No guilt and no "you missed out".${soft ? " They've been having a hard time: keep it gentle and short; nothing pushy, and never say or hint that you know how they've been." : ""} No sign-off.`;
 }
 
 // Who came, said any other way than a name: a count, "everyone", "the people who came".
@@ -357,7 +358,7 @@ export async function draftNoShowNote(c: Candidate, person: Person, deps: NoteDe
   if (await cameTonight(p.eventId, { user_id: c.userId, email: await emailOf(c.userId), phone_number: person.phoneNumber }, lumaIn)) return { skip: "they came after all" };
   const soft = await deps.struggling(c.userId).catch(() => false);
   // The offer: an intro to one person from that night, with its reveal drafted and checked now (the network tease's rule: never ask
-  // "want me to tell you who?" without the answer in hand); else the next table, unless it's been a hard week.
+  // "want me to tell you who?" without the answer in hand); else the next table. A hard week changes how it's said, never the offer.
   let offer: NoShowOffer = { kind: "none" };
   const pick = await strongConsentingFit(p.eventId, c.userId, lumaIn).catch(() => null);
   if (pick) {
@@ -368,7 +369,7 @@ export async function draftNoShowNote(c: Candidate, person: Person, deps: NoteDe
       c.payload.intro = { askId: pick.askId, candidate: pick.candidate, reveal: prepared.message, revealOptedIn: prepared.optedIn };
     }
   }
-  if (offer.kind === "none" && !soft) offer = (await nextTable(p.eventId, deps.now())) ?? offer;
+  if (offer.kind === "none") offer = (await nextTable(p.eventId, deps.now())) ?? offer;
   if (offer.kind !== "intro") delete c.payload.intro;
   const about = await deps.about(p.eventId).catch(() => null);
   // Every name on the night's list, theirs aside: none may appear (the candidate's included).
