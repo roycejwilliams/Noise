@@ -1,3 +1,4 @@
+import { withMember } from "./llmUsage.js";
 import { generateText } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { Resend } from "resend";
@@ -248,7 +249,8 @@ async function maybeAskCandidateDirectly(
   // The event as it really is: the only source of a day or time in the text (harness/introConsent.ts checkInventedSpecifics).
   const info = await RM.eventTiming(eventId).catch(() => null);
   const introEvent = { name: eventName, start_at: info?.start_at ?? null, end_at: info?.end_at ?? null, timezone: info?.timezone ?? null, venue: info?.venue ?? null };
-  const message = await draftWithConsent(
+  const message = await withMember(candidate.user_id, () =>
+    draftWithConsent(
     {
       decision: "eventGuestMatchHandoff.directAsk",
       recipientId: candidate.user_id,
@@ -280,7 +282,7 @@ async function maybeAskCandidateDirectly(
       });
       return cleanCoMessage(text.trim());
     },
-  );
+  ));
   if (!message) return;
 
   // Read the pair again right before the ask goes (concurrency audit finding 8, 2026-10-12): drafting takes seconds, and when

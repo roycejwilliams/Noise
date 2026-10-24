@@ -1,3 +1,4 @@
+import { withMember } from "./llmUsage.js";
 import { generateText } from "ai";
 import { discretionInstruction } from "../harness/discretion.js";
 import { anthropic } from "@ai-sdk/anthropic";
@@ -609,7 +610,8 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
   // The message tells the candidate the asker wants an intro, so that has
   // to be on record first.
   const askerOptedIn = await networkOptedIn(asker.user_id, candidate.user_id);
-  const message = await draftWithConsent(
+  const message = await withMember(candidate.user_id, () =>
+    draftWithConsent(
     {
       decision: "networkIntroNudge.directAsk",
       recipientId: candidate.user_id,
@@ -637,7 +639,7 @@ export async function askCandidateDirectly(candidate: MatchNudgeCandidate, asker
       });
       return cleanCoMessage(text.trim());
     },
-  );
+  ));
   if (!message) return;
 
   // Read the pair again right before the ask goes (concurrency audit finding 8, 2026-10-12): when both say yes at the same
